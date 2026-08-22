@@ -60,6 +60,14 @@ pub(crate) trait EventAiWorld {
 
     // Effects.
     fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8);
+    /// Apply one named, reversible creature presentation change for the active lifecycle.
+    fn apply_eventai_presentation(
+        &mut self,
+        creature_guid: u64,
+        lifecycle_id: u64,
+        revision: DefinitionRevision,
+        instruction: super::CreaturePresentationInstruction,
+    ) -> bool;
     /// Adopt one normalized definition and clear only reversible state owned by the old revision.
     fn adopt_eventai_revision(
         &mut self,
@@ -396,6 +404,19 @@ fn execute_instruction<W: EventAiWorld>(
         CreatureInstruction::ScaleSelectedThreat(_) | CreatureInstruction::ScaleAllThreat(_) => {
             super::threat::execute(world, context, instruction, linked_choice)
         }
+        CreatureInstruction::Presentation(instruction) => {
+            let state = world.eventai_creature_state(context.creature_guid);
+            if world.apply_eventai_presentation(
+                context.creature_guid,
+                state.lifecycle_id,
+                state.definition_revision,
+                *instruction,
+            ) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
     }
 }
 
@@ -608,7 +629,8 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 | CreatureInstruction::SetRangedPosture(_)
                 | CreatureInstruction::SetLethalDamageFloor(_)
                 | CreatureInstruction::ForceDeath
-                | CreatureInstruction::ScaleAllThreat(_) => false,
+                | CreatureInstruction::ScaleAllThreat(_)
+                | CreatureInstruction::Presentation(_) => false,
             })
 }
 
@@ -998,12 +1020,33 @@ impl EventAiWorld for DatabaseWorld<'_> {
         }
     }
 
+    fn apply_eventai_presentation(
+        &mut self,
+        creature_guid: u64,
+        lifecycle_id: u64,
+        revision: DefinitionRevision,
+        instruction: super::CreaturePresentationInstruction,
+    ) -> bool {
+        crate::creatures::presentation::apply_eventai_instruction(
+            self.ctx,
+            creature_guid,
+            lifecycle_id,
+            revision.value,
+            instruction,
+        )
+    }
+
     fn adopt_eventai_revision(
         &mut self,
         creature_guid: u64,
         revision: DefinitionRevision,
     ) -> CreatureState {
         crate::combat::clear_stale_lethal_damage_floor(self.ctx, creature_guid, revision.value);
+        crate::creatures::presentation::clear_for_definition_revision(
+            self.ctx,
+            creature_guid,
+            revision.value,
+        );
         let rule_state = self.ctx.db.game_creature_ai_rule_state();
         for row in rule_state
             .by_creature()

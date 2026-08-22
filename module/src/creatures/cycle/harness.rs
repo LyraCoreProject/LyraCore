@@ -7,14 +7,15 @@ use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
 use crate::creatures::eventai::{
     self, BroadcastLine, CallForHelpInstruction, CastInstruction, CreatureAiEvent,
-    CreatureHealthCondition, CreatureInstruction, CreatureState, CycleActor, DeathCondition,
-    DefinitionRevision, EmoteInstruction, EngagedFight, EventAiDefinition, EventAiRequest,
-    EventAiRule, EventAiSubject, EventAiUnit, EventAiWorld, EventCondition, EventContext,
-    EventKind, EventPredicate, ExecutionPolicy, FriendlyHealthDeficitCondition,
-    InstructionSelection, InstructionTarget, PhaseSet, PostureAdmission, RangedPostureInstruction,
-    RecurrencePolicy, RuleState, SetPhaseInstruction, SpawnCondition, SpeakInstruction, SpeechMode,
-    SpellCastTarget, SpellCasterAdmission, SpellCasterRole, SpellStartMode, SpellTargetRole,
-    SummonInstruction, SummonLocation, TargetRangeCondition, TimeWindow,
+    CreatureHealthCondition, CreatureInstruction, CreaturePresentationInstruction, CreatureState,
+    CycleActor, DeathCondition, DefinitionRevision, EmoteInstruction, EngagedFight,
+    EventAiDefinition, EventAiRequest, EventAiRule, EventAiSubject, EventAiUnit, EventAiWorld,
+    EventCondition, EventContext, EventKind, EventPredicate, ExecutionPolicy,
+    FriendlyHealthDeficitCondition, InstructionSelection, InstructionTarget, PhaseSet,
+    PostureAdmission, RangedPostureInstruction, RecurrencePolicy, RuleState, SetPhaseInstruction,
+    SpawnCondition, SpeakInstruction, SpeechMode, SpellCastTarget, SpellCasterAdmission,
+    SpellCasterRole, SpellStartMode, SpellTargetRole, SummonInstruction, SummonLocation,
+    TargetRangeCondition, TimeWindow,
 };
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
@@ -220,6 +221,15 @@ struct Scenario {
     eventai_text: RefCell<HashMap<u32, (String, u8, u32, u32)>>,
     eventai_creature_state: RefCell<HashMap<u64, CreatureState>>,
     eventai_rule_state: RefCell<HashMap<u64, HashMap<u64, RuleState>>>,
+    /// Typed EventAI projection calls, retained so behavior tests can inspect the world seam.
+    eventai_presentation: RefCell<
+        Vec<(
+            u64,
+            u64,
+            DefinitionRevision,
+            CreaturePresentationInstruction,
+        )>,
+    >,
     eventai_summons: RefCell<HashMap<u32, ScenarioSummon>>,
     eventai_templates: RefCell<HashSet<u32>>,
     eventai_exclude_caster_spells: RefCell<HashSet<u32>>,
@@ -1693,6 +1703,9 @@ impl EventAiWorld for Scenario {
         creature_guid: u64,
         revision: DefinitionRevision,
     ) -> CreatureState {
+        self.eventai_presentation
+            .borrow_mut()
+            .retain(|(guid, _, _, _)| *guid != creature_guid);
         self.eventai_rule_state.borrow_mut().remove(&creature_guid);
         self.eventai_lethal_floors
             .borrow_mut()
@@ -1713,6 +1726,28 @@ impl EventAiWorld for Scenario {
             .entry(creature_guid)
             .or_default()
             .phase = phase;
+    }
+
+    fn apply_eventai_presentation(
+        &mut self,
+        creature_guid: u64,
+        lifecycle_id: u64,
+        revision: DefinitionRevision,
+        instruction: CreaturePresentationInstruction,
+    ) -> bool {
+        if self.corpses.borrow().contains(&creature_guid)
+            || self.pet_owners.borrow().contains_key(&creature_guid)
+            || !self.creatures.borrow().contains_key(&creature_guid)
+        {
+            return false;
+        }
+        self.eventai_presentation.borrow_mut().push((
+            creature_guid,
+            lifecycle_id,
+            revision,
+            instruction,
+        ));
+        true
     }
 
     fn eventai_rule_state(&self, creature_guid: u64, rule_id: u64) -> Option<RuleState> {

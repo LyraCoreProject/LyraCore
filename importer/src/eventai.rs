@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::{bt, field, parse_table, sql_text, world_guid};
+use crate::{bt, eventai_presentation, field, parse_table, sql_text, world_guid};
 
 pub(crate) const SOURCE_PROFILE_NAME: &str = "cmangos-classic-z2815";
 pub(crate) const LOADER_CONTRACT: &str = "creature-ai-scripts-24-columns-ordered-by-id-v1";
@@ -54,9 +54,6 @@ const ACTION_THREAT_SINGLE: u32 = 13;
 const ACTION_THREAT_ALL_PCT: u32 = 14;
 const ACTION_QUEST_EVENT: u32 = 15;
 const ACTION_CAST_EVENT: u32 = 16;
-const ACTION_SET_UNIT_FIELD: u32 = 17;
-const ACTION_SET_UNIT_FLAG: u32 = 18;
-const ACTION_REMOVE_UNIT_FLAG: u32 = 19;
 const ACTION_SET_PHASE: u32 = 22;
 const ACTION_INCREMENT_PHASE: u32 = 23;
 const ACTION_FLEE_FOR_ASSIST: u32 = 25;
@@ -618,7 +615,19 @@ impl CompatibilityManifest {
 
 impl SourceProfile {
     fn check_census(&self) -> Result<(), String> {
-        let required = ["events", "actions", "targets", "event_flags", "cast_flags"];
+        let required = [
+            "events",
+            "actions",
+            "targets",
+            "event_flags",
+            "cast_flags",
+            "presentation_factions",
+            "presentation_display_templates",
+            "presentation_unit_fields",
+            "presentation_set_unit_flags",
+            "presentation_remove_unit_flags",
+            "presentation_mount_models",
+        ];
         for dimension in required {
             if !self.expected_source_census.contains_key(dimension) {
                 return Err(format!(
@@ -747,6 +756,7 @@ impl SourceProfile {
                 .raw_value
                 .parse()
                 .is_ok_and(|value| self.expected_threat_percent_census.contains_key(&value)),
+            "unit_flag" => true,
             "rule" => true,
             _ => false,
         }
@@ -810,6 +820,12 @@ struct Coverage {
     cast_flags: BTreeMap<u64, u64>,
     death_prevention_states: BTreeMap<u64, u64>,
     threat_percent: BTreeMap<i32, u64>,
+    presentation_factions: BTreeMap<u64, u64>,
+    presentation_display_templates: BTreeMap<u64, u64>,
+    presentation_unit_fields: BTreeMap<u64, u64>,
+    presentation_set_unit_flags: BTreeMap<u64, u64>,
+    presentation_remove_unit_flags: BTreeMap<u64, u64>,
+    presentation_mount_models: BTreeMap<u64, u64>,
     dropped: BTreeMap<String, u64>,
     dropped_values: BTreeMap<(String, u64), u64>,
     dropped_rule_values: BTreeMap<(String, u64), BTreeSet<u64>>,
@@ -923,6 +939,12 @@ impl Coverage {
             "event_flags" => self.flags.clone(),
             "cast_flags" => self.cast_flags.clone(),
             "death_prevention_states" => self.death_prevention_states.clone(),
+            "presentation_factions" => self.presentation_factions.clone(),
+            "presentation_display_templates" => self.presentation_display_templates.clone(),
+            "presentation_unit_fields" => self.presentation_unit_fields.clone(),
+            "presentation_set_unit_flags" => self.presentation_set_unit_flags.clone(),
+            "presentation_remove_unit_flags" => self.presentation_remove_unit_flags.clone(),
+            "presentation_mount_models" => self.presentation_mount_models.clone(),
             _ => BTreeMap::new(),
         }
     }
@@ -937,6 +959,12 @@ impl Coverage {
             "death_prevention_states": self.death_prevention_states,
             "threat_percents": self.threat_percent,
             "direct_threat_actions": self.direct_threat_actions,
+            "presentation_factions": self.presentation_factions,
+            "presentation_display_templates": self.presentation_display_templates,
+            "presentation_unit_fields": self.presentation_unit_fields,
+            "presentation_set_unit_flags": self.presentation_set_unit_flags,
+            "presentation_remove_unit_flags": self.presentation_remove_unit_flags,
+            "presentation_mount_models": self.presentation_mount_models,
         })
     }
 
@@ -990,10 +1018,10 @@ struct RawRule {
 }
 
 #[derive(Clone, Copy)]
-struct SourceNormalization {
-    dimension: &'static str,
-    raw_value: u64,
-    reason: &'static str,
+pub(super) struct SourceNormalization {
+    pub(super) dimension: &'static str,
+    pub(super) raw_value: u64,
+    pub(super) reason: &'static str,
 }
 
 #[derive(Clone, Copy)]
@@ -1058,12 +1086,12 @@ struct NativeAction {
     normalizations: Vec<SourceNormalization>,
 }
 
-struct Dependency {
-    kind: &'static str,
-    path: String,
+pub(super) struct Dependency {
+    pub(super) kind: &'static str,
+    pub(super) path: String,
 }
 
-struct MappingFailure {
+pub(super) struct MappingFailure {
     dimension: &'static str,
     raw_value: u64,
     reason: String,
@@ -1072,7 +1100,11 @@ struct MappingFailure {
 }
 
 impl MappingFailure {
-    fn source(dimension: &'static str, raw_value: u64, reason: impl Into<String>) -> Self {
+    pub(super) fn source(
+        dimension: &'static str,
+        raw_value: u64,
+        reason: impl Into<String>,
+    ) -> Self {
         Self {
             dimension,
             raw_value,
@@ -1082,7 +1114,7 @@ impl MappingFailure {
         }
     }
 
-    fn dependency(
+    pub(super) fn dependency(
         kind: &'static str,
         raw_value: u64,
         reason: impl Into<String>,
@@ -1286,6 +1318,7 @@ impl EventAiSource {
                 match map_action(
                     *action,
                     rule.id,
+                    rule.subject,
                     slot,
                     broadcasts,
                     summon_locations,
@@ -1837,6 +1870,7 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                     };
                     *value = parsed;
                 }
+                record_presentation_source_census(coverage, *action);
                 if let Some(parameter) = source_target_parameter(kind) {
                     Coverage::source_value(&mut coverage.source_target, action[parameter] as u64);
                 }
@@ -1875,6 +1909,43 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
         .collect()
 }
 
+fn record_presentation_source_census(coverage: &mut Coverage, action: [u32; 4]) {
+    match action[0] {
+        eventai_presentation::ACTION_SET_FACTION => {
+            Coverage::source_value(&mut coverage.presentation_factions, u64::from(action[1]));
+        }
+        eventai_presentation::ACTION_MORPH_TO_ENTRY_OR_MODEL
+        | eventai_presentation::ACTION_UPDATE_TEMPLATE => {
+            Coverage::source_value(
+                &mut coverage.presentation_display_templates,
+                u64::from(action[1]),
+            );
+        }
+        eventai_presentation::ACTION_SET_UNIT_FIELD => {
+            Coverage::source_value(&mut coverage.presentation_unit_fields, u64::from(action[1]));
+        }
+        eventai_presentation::ACTION_SET_UNIT_FLAG => {
+            Coverage::source_value(
+                &mut coverage.presentation_set_unit_flags,
+                u64::from(action[1]),
+            );
+        }
+        eventai_presentation::ACTION_REMOVE_UNIT_FLAG => {
+            Coverage::source_value(
+                &mut coverage.presentation_remove_unit_flags,
+                u64::from(action[1]),
+            );
+        }
+        eventai_presentation::ACTION_MOUNT_TO_ENTRY_OR_MODEL => {
+            Coverage::source_value(
+                &mut coverage.presentation_mount_models,
+                u64::from(action[2]),
+            );
+        }
+        _ => {}
+    }
+}
+
 fn effective_event_flags(rule: &RawRule) -> u32 {
     let mut flags = rule.flags & !FLAG_CLASSIC_RESERVED & !FLAG_DEBUG_ONLY;
     if rule.event == EVENT_RECEIVE_EMOTE {
@@ -1884,20 +1955,21 @@ fn effective_event_flags(rule: &RawRule) -> u32 {
 }
 
 fn source_target_parameter(action: u32) -> Option<usize> {
+    if let Some(parameter) = eventai_presentation::source_target_parameter(action) {
+        return Some(parameter);
+    }
     match action {
         ACTION_REMOVE_AURA | ACTION_ATTACK_START | ACTION_SET_FACING => Some(1),
         ACTION_CAST
         | ACTION_SPAWN
         | ACTION_THREAT_SINGLE
         | ACTION_QUEST_EVENT
-        | ACTION_SET_UNIT_FLAG
-        | ACTION_REMOVE_UNIT_FLAG
         | ACTION_SUMMON_ID
         | ACTION_KILLED_MONSTER
         | ACTION_SET_INSTANCE_DATA_GUID
         | ACTION_START_RELAY
         | ACTION_TEXT_NEW => Some(2),
-        ACTION_CAST_EVENT | ACTION_SET_UNIT_FIELD | ACTION_THROW_AI_EVENT => Some(3),
+        ACTION_CAST_EVENT | ACTION_THROW_AI_EVENT => Some(3),
         _ => None,
     }
 }
@@ -2325,12 +2397,29 @@ fn repeats_on_each_event(event: u32) -> bool {
 fn map_action(
     action: [u32; 4],
     rule_id: u64,
+    subject: i32,
     slot: usize,
     broadcasts: &BTreeMap<u32, Broadcast>,
     summon_locations: &BTreeMap<u32, SummonLocation>,
     importable_templates: &HashSet<u64>,
 ) -> Result<NativeAction, Vec<MappingFailure>> {
     let kind = action[0];
+    if let Some(mapped) =
+        eventai_presentation::map_action(action, rule_id, subject, slot, importable_templates)
+    {
+        return mapped.map(|mapped| NativeAction {
+            encoded: mapped.encoded,
+            raw_kind: kind,
+            raw_target: mapped.raw_target,
+            raw_cast_flags: None,
+            threat_percent: None,
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            dependencies: mapped.dependencies,
+            normalizations: mapped.normalizations,
+        });
+    }
     match kind {
         ACTION_TEXT => {
             let texts = action[1..]
@@ -3019,7 +3108,218 @@ mod tests {
             profile.expected_threat_percent_census,
             BTreeMap::from([(-100, 2), (-99, 1), (-75, 1), (-50, 2), (50, 1)])
         );
+        assert_eq!(
+            profile.expected_source_census["presentation_factions"],
+            BTreeMap::from([
+                (14, 3),
+                (17, 1),
+                (35, 6),
+                (54, 1),
+                (84, 1),
+                (104, 4),
+                (777, 1),
+            ])
+        );
+        assert_eq!(
+            profile.expected_source_census["presentation_mount_models"],
+            BTreeMap::from([(0, 2), (207, 1), (2_328, 1), (9_991, 2), (14_337, 1)])
+        );
         assert!(source_profile("z2815").is_err());
+    }
+
+    #[test]
+    fn presentation_actions_emit_only_named_compact_instructions() {
+        let mut rows = Vec::new();
+        let mut source_rule_id = 1;
+        let mut push = |subject, action| {
+            rows.push(rule(
+                source_rule_id,
+                subject,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [action, [0; 4], [0; 4]],
+            ));
+            source_rule_id += 1;
+        };
+        for faction in [14, 17, 35, 54, 84, 104, 777] {
+            push(100, [2, faction, 0, 0]);
+        }
+        for template in [
+            5_357, 5_358, 5_359, 5_360, 5_361, 9_621, 10_296, 11_284, 13_279, 13_738, 13_739,
+            13_740, 13_741, 13_742, 14_603, 14_604, 14_638, 14_639, 14_640,
+        ] {
+            push(100, [36, template, 0, 0]);
+        }
+        push(100, [3, 11_284, 0, 0]);
+        for action in [
+            [17, 147, 0, 0],
+            [17, 147, 3, 0],
+            [17, 37, 0, 0],
+            [17, 23, 0, 0],
+        ] {
+            push(100, action);
+        }
+        for action in [
+            [18, 256, 0, 0],
+            [18, 512, 0, 0],
+            [18, 768, 0, 0],
+            [18, 33_554_432, 0, 0],
+        ] {
+            push(100, action);
+        }
+        for action in [
+            [19, 2, 0, 0],
+            [19, 256, 0, 0],
+            [19, 512, 0, 0],
+            [19, 768, 0, 0],
+        ] {
+            push(100, action);
+        }
+        for action in [
+            [43, 0, 0, 0],
+            [43, 0, 207, 0],
+            [43, 0, 2_328, 0],
+            [43, 0, 9_991, 0],
+            [43, 0, 14_337, 0],
+        ] {
+            push(100, action);
+        }
+        rows.push(rule(
+            1_534_108,
+            -155_940,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[18, 832, 0, 0], [0; 4], [0; 4]],
+        ));
+
+        let source = parse(&dump(&rows));
+        let (entries, mut guids, mut templates) = scope();
+        guids.insert(155_940, 100);
+        templates.extend([
+            5_357, 5_358, 5_359, 5_360, 5_361, 9_621, 10_296, 11_284, 13_279, 13_738, 13_739,
+            13_740, 13_741, 13_742, 14_603, 14_604, 14_638, 14_639, 14_640,
+        ]);
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        assert!(manifest.is_apply_ready(), "{}", manifest.render());
+
+        let definitions = plan.definition_rows.join("\n");
+        for named in [
+            "faction:777",
+            "display-template:11284",
+            "npc-flags:clear",
+            "npc-flags:gossip-and-quest",
+            "virtual-main-hand:clear",
+            "mana:empty",
+            "unit-flags:set:immune-to-players-and-creatures",
+            "unit-flags:set:not-selectable",
+            "unit-flags:set:rajaxx-spawn-protection",
+            "unit-flags:clear:not-attackable",
+            "unit-flags:clear:immune-to-players-and-creatures",
+            "creature-mount:twilight-marauder",
+        ] {
+            assert!(
+                definitions.contains(named),
+                "missing {named}: {definitions}"
+            );
+        }
+        assert_eq!(
+            plan.coverage.source_census("presentation_unit_fields"),
+            BTreeMap::from([(23, 1), (37, 1), (147, 2)])
+        );
+        assert_eq!(
+            plan.coverage.source_census("presentation_set_unit_flags"),
+            BTreeMap::from([(256, 1), (512, 1), (768, 1), (832, 1), (33_554_432, 1)])
+        );
+    }
+
+    #[test]
+    fn presentation_action_parameters_outside_the_pinned_census_drop_the_rule() {
+        let source = parse(&dump(&[rule(
+            10,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[17, 999, 0, 0], [0; 4], [0; 4]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        let rendered = assert_refusal(
+            &manifest,
+            "unsupported_presentation_action_parameters_999_0_0",
+        );
+        assert_result(
+            &rendered,
+            "presentation_action",
+            "17",
+            "dropped",
+            "unsupported_presentation_action_parameters_999_0_0",
+        );
+    }
+
+    #[test]
+    fn rajaxx_client_projection_requires_the_pinned_rule_and_source_guid() {
+        let source = parse(&dump(&[rule(
+            1_534_108,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[18, 832, 0, 0], [0; 4], [0; 4]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        let rendered = assert_refusal(
+            &manifest,
+            "unsupported_presentation_action_parameters_832_0_0",
+        );
+        assert_result(
+            &rendered,
+            "presentation_action",
+            "18",
+            "dropped",
+            "unsupported_presentation_action_parameters_832_0_0",
+        );
+    }
+
+    #[test]
+    fn presentation_template_dependencies_remain_explicit() {
+        let source = parse(&dump(&[rule(
+            10,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[3, 11_284, 0, 0], [0; 4], [0; 4]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        let rendered = assert_refusal(&manifest, "missing:presentation_template");
+        assert_result(
+            &rendered,
+            "dependency",
+            "presentation_template",
+            "dropped",
+            "missing:presentation_template",
+        );
+        assert!(manifest
+            .render()
+            .contains("rule:10 -> action:0 -> creature_template:11284"));
     }
 
     #[test]

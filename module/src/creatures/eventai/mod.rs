@@ -4,6 +4,7 @@ mod engine;
 mod fixtures;
 mod loader;
 mod model;
+mod presentation;
 mod tables;
 
 mod combat;
@@ -41,6 +42,10 @@ pub(crate) use mobility::summon_lifetime_after;
 pub(crate) use mobility::{drop_summon_expiry, ranged_posture};
 pub use mobility::{expire_eventai_summon, CreatureAiSummonExpiry, CreatureAiSummonOrigin};
 pub(crate) use model::*;
+use presentation::import_verified_rajaxx_spawn_protection;
+pub(crate) use presentation::{
+    CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride,
+};
 pub use tables::*;
 
 use spacetimedb::ReducerContext;
@@ -72,6 +77,7 @@ mod architecture_tests {
             include_str!("edges.rs"),
             include_str!("fixtures.rs"),
             include_str!("loader.rs"),
+            include_str!("presentation.rs"),
             native_tables.as_str(),
         ];
         for forbidden in [
@@ -132,6 +138,7 @@ mod architecture_tests {
             "game_creature_ai_summon",
             "game_creature_ai_summon_expiry",
             "game_creature_ai_returning_home",
+            "game_creature_presentation",
         ] {
             assert!(
                 !subscriptions.contains(&format!("SELECT * FROM {table}")),

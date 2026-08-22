@@ -42,6 +42,7 @@
 mod collision;
 mod dbc;
 mod eventai;
+mod eventai_presentation;
 mod go_model;
 mod nav;
 mod pack_client;

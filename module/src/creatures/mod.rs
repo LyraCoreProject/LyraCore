@@ -18,6 +18,7 @@ mod hunter_pet;
 mod pet;
 mod pet_care;
 mod pet_progression;
+pub(crate) mod presentation;
 mod spawn;
 pub(crate) mod tick;
 
@@ -27,5 +28,6 @@ pub use hunter_pet::*;
 pub use pet::*;
 pub use pet_care::*;
 pub use pet_progression::*;
+pub use presentation::*;
 pub use spawn::*;
 pub use tick::*;

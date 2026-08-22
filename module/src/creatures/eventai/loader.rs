@@ -6,19 +6,20 @@ use spacetimedb::{reducer, ReducerContext, Table};
 
 use super::{
     AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
-    CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction, DeathCondition,
-    EmoteInstruction, EventAiRule, EventCondition, EventPredicate, ExecutionPolicy,
-    FacingCondition, FriendlyAuraSelection, FriendlyCrowdControlCondition,
-    FriendlyHealthDeficitCondition, FriendlyMissingAuraCondition, IncrementPhaseInstruction,
-    InstructionSelection, InstructionTarget, KillCondition, OutOfCombatSightCondition,
-    PercentageCondition, PhaseSet, PostureAdmission, QuestTakenPredicate, RandomPhaseInstruction,
-    RandomPhaseRangeInstruction, RangedPostureInstruction, ReceiveAiEventCondition,
-    ReceiveEmoteCondition, RecurrencePolicy, ScaleAllThreatInstruction,
-    ScaleSelectedThreatInstruction, SetLethalDamageFloorInstruction, SetPhaseInstruction,
-    SpawnCondition, SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode,
-    SpellCasterRole, SpellEventCondition, SpellStartMode, SpellTargetRole, SummonInstruction,
-    TargetRangeCondition, TimeWindow,
+    CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction,
+    CreaturePresentationInstruction, CreaturePresentationMount, DeathCondition, EmoteInstruction,
+    EventAiRule, EventCondition, EventPredicate, ExecutionPolicy, FacingCondition,
+    FriendlyAuraSelection, FriendlyCrowdControlCondition, FriendlyHealthDeficitCondition,
+    FriendlyMissingAuraCondition, IncrementPhaseInstruction, InstructionSelection,
+    InstructionTarget, KillCondition, OutOfCombatSightCondition, PercentageCondition, PhaseSet,
+    PostureAdmission, QuestTakenPredicate, RandomPhaseInstruction, RandomPhaseRangeInstruction,
+    RangedPostureInstruction, ReceiveAiEventCondition, ReceiveEmoteCondition, RecurrencePolicy,
+    ScaleAllThreatInstruction, ScaleSelectedThreatInstruction, SetLethalDamageFloorInstruction,
+    SetPhaseInstruction, SpawnCondition, SpawnMapCondition, SpawnZoneOrAreaCondition,
+    SpeakInstruction, SpeechMode, SpellCasterRole, SpellEventCondition, SpellStartMode,
+    SpellTargetRole, SummonInstruction, TargetRangeCondition, TimeWindow,
 };
+use crate::creatures::presentation::NpcFlagsProjection;
 use crate::game_creature_ai_definition;
 #[cfg(feature = "debug_reducers")]
 use crate::{
@@ -139,7 +140,7 @@ fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
 
     let rules: Vec<EventAiRule> = encoded_rules
         .split('~')
-        .map(parse_rule)
+        .map(|encoded| parse_rule_for_subject(encoded, creature_guid))
         .collect::<Result<_, _>>()?;
     if rules
         .windows(2)
@@ -156,7 +157,12 @@ fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
     })
 }
 
+#[cfg(test)]
 fn parse_rule(encoded: &str) -> Result<EventAiRule, String> {
+    parse_rule_for_subject(encoded, 0)
+}
+
+fn parse_rule_for_subject(encoded: &str, creature_guid: u64) -> Result<EventAiRule, String> {
     let fields: Vec<&str> = encoded.splitn(9, ',').collect();
     if !(8..=9).contains(&fields.len()) {
         return Err(format!(
@@ -193,7 +199,9 @@ fn parse_rule(encoded: &str) -> Result<EventAiRule, String> {
     };
     let instructions = encoded_instructions
         .split('+')
-        .map(parse_instruction)
+        .map(|instruction| {
+            parse_import_verified_instruction(instruction, source_rule_id, creature_guid)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if instructions.is_empty() {
         return Err("rule has no instructions".to_string());
@@ -217,6 +225,25 @@ fn parse_rule(encoded: &str) -> Result<EventAiRule, String> {
         posture,
         instructions,
     })
+}
+
+fn parse_import_verified_instruction(
+    encoded: &str,
+    source_rule_id: u64,
+    creature_guid: u64,
+) -> Result<CreatureInstruction, String> {
+    const RAJAXX_RULE_ID: u64 = 1_534_108;
+    const RAJAXX_CREATURE_GUID: u64 = 17_379_391_219_402_170_660;
+
+    if encoded != "unit-flags:set:rajaxx-spawn-protection" {
+        return parse_instruction(encoded);
+    }
+    if source_rule_id != RAJAXX_RULE_ID || creature_guid != RAJAXX_CREATURE_GUID {
+        return Err("Rajaxx client projection is reserved for its pinned source rule".to_string());
+    }
+    Ok(CreatureInstruction::Presentation(
+        super::import_verified_rajaxx_spawn_protection(),
+    ))
 }
 
 fn parse_event(encoded: &str) -> Result<EventCondition, String> {
@@ -577,6 +604,70 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 percent: parse_threat_percent(percent)?,
             },
         )),
+        ["faction", faction_template] => {
+            let faction_template = parse_u32(faction_template)?;
+            if faction_template == 0 {
+                return Err("faction template must be nonzero".to_string());
+            }
+            Ok(CreatureInstruction::Presentation(
+                CreaturePresentationInstruction::SetFaction { faction_template },
+            ))
+        }
+        ["display-template", template_entry] => {
+            let template_entry = parse_u32(template_entry)?;
+            if template_entry == 0 {
+                return Err("display template entry must be nonzero".to_string());
+            }
+            Ok(CreatureInstruction::Presentation(
+                CreaturePresentationInstruction::ShowTemplateDisplay { template_entry },
+            ))
+        }
+        ["creature-mount", mount] => Ok(CreatureInstruction::Presentation(
+            CreaturePresentationInstruction::SetCreatureMount {
+                mount: match *mount {
+                    "clear" => CreaturePresentationMount::Clear,
+                    "raider" => CreaturePresentationMount::Raider,
+                    "kerr" => CreaturePresentationMount::Kerr,
+                    "huntress" => CreaturePresentationMount::Huntress,
+                    "twilight-marauder" => CreaturePresentationMount::TwilightMarauder,
+                    value => return Err(format!("unknown creature mount: {value}")),
+                },
+            },
+        )),
+        ["npc-flags", flags] => Ok(CreatureInstruction::Presentation(
+            CreaturePresentationInstruction::SetNpcFlags {
+                flags: match *flags {
+                    "clear" => NpcFlagsProjection::Clear,
+                    "gossip-and-quest" => NpcFlagsProjection::GossipAndQuest,
+                    value => return Err(format!("unknown NPC flag projection: {value}")),
+                },
+            },
+        )),
+        ["mana", "empty"] => Ok(CreatureInstruction::Presentation(
+            CreaturePresentationInstruction::EmptyMana,
+        )),
+        ["virtual-main-hand", "clear"] => Ok(CreatureInstruction::Presentation(
+            CreaturePresentationInstruction::ClearVirtualMainHand,
+        )),
+        ["unit-flags", "set", flag] => Ok(CreatureInstruction::Presentation(match *flag {
+            "not-attackable" => CreaturePresentationInstruction::SetNotAttackable,
+            "immune-to-players" => CreaturePresentationInstruction::SetImmuneToPlayers,
+            "immune-to-creatures" => CreaturePresentationInstruction::SetImmuneToCreatures,
+            "immune-to-players-and-creatures" => {
+                CreaturePresentationInstruction::SetImmuneToPlayersAndCreatures
+            }
+            "not-selectable" => CreaturePresentationInstruction::SetNotSelectable,
+            value => return Err(format!("unknown set unit flag: {value}")),
+        })),
+        ["unit-flags", "clear", flag] => Ok(CreatureInstruction::Presentation(match *flag {
+            "not-attackable" => CreaturePresentationInstruction::ClearNotAttackable,
+            "immune-to-players" => CreaturePresentationInstruction::ClearImmuneToPlayers,
+            "immune-to-creatures" => CreaturePresentationInstruction::ClearImmuneToCreatures,
+            "immune-to-players-and-creatures" => {
+                CreaturePresentationInstruction::ClearImmuneToPlayersAndCreatures
+            }
+            value => return Err(format!("unknown clear unit flag: {value}")),
+        })),
         _ => Err(format!("unknown creature instruction: {encoded}")),
     }
 }
@@ -887,5 +978,48 @@ mod tests {
             CreatureInstruction::ScaleAllThreat(ScaleAllThreatInstruction { percent: -100 })
         ));
         assert!(parse_instruction("threat-all:-101").is_err());
+    }
+
+    #[test]
+    fn presentation_vocabulary_has_no_generic_unit_field_or_flag_form() {
+        let faction = parse_instruction("faction:777").unwrap();
+        assert!(matches!(
+            faction,
+            CreatureInstruction::Presentation(CreaturePresentationInstruction::SetFaction {
+                faction_template: 777
+            })
+        ));
+        let mount = parse_instruction("creature-mount:twilight-marauder").unwrap();
+        assert!(matches!(
+            mount,
+            CreatureInstruction::Presentation(CreaturePresentationInstruction::SetCreatureMount {
+                mount: CreaturePresentationMount::TwilightMarauder
+            })
+        ));
+        assert!(parse_instruction("unit-flags:set:rajaxx-spawn-protection").is_err());
+        let quarantine_rule =
+            "1534108,aggro,100,1,once,all,ordinary,unit-flags:set:rajaxx-spawn-protection";
+        let quarantine_subject = "guid:17379391219402170660";
+        let material = format!("{quarantine_subject}@{quarantine_rule}");
+        let quarantine = parse_definition(&format!(
+            "{quarantine_subject}@{}@{quarantine_rule}",
+            definition_revision(&material)
+        ))
+        .unwrap();
+        assert!(matches!(
+            quarantine.rules[0].instructions[0],
+            CreatureInstruction::Presentation(
+                CreaturePresentationInstruction::SetRajaxxSpawnProtection(_)
+            )
+        ));
+        let invalid_rule = quarantine_rule.replacen("1534108", "1534109", 1);
+        let material = format!("{quarantine_subject}@{invalid_rule}");
+        assert!(parse_definition(&format!(
+            "{quarantine_subject}@{}@{invalid_rule}",
+            definition_revision(&material)
+        ))
+        .is_err());
+        assert!(parse_instruction("unit-field:147:3").is_err());
+        assert!(parse_instruction("unit-flags:set:832").is_err());
     }
 }

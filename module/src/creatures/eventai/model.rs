@@ -1,3 +1,4 @@
+use super::presentation::CreaturePresentationInstruction;
 use super::CreatureAiState;
 use crate::creatures::ai::TickScope;
 
@@ -441,6 +442,7 @@ pub enum CreatureInstruction {
     ForceDeath,
     ScaleSelectedThreat(ScaleSelectedThreatInstruction),
     ScaleAllThreat(ScaleAllThreatInstruction),
+    Presentation(CreaturePresentationInstruction),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

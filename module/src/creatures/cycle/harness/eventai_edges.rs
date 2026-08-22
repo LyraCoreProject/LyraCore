@@ -1022,3 +1022,39 @@ fn receive_ai_event_keeps_invoker_and_sender_targets_distinct() {
         vec![(CREATURE, 701, invoker), (CREATURE, 702, sender)]
     );
 }
+
+#[test]
+fn native_presentation_instruction_reaches_the_creature_world_seam() {
+    let rule = EventAiRule {
+        source_rule_id: 81,
+        event: EventCondition::OnAggro,
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::Once,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: vec![CreatureInstruction::Presentation(
+            CreaturePresentationInstruction::SetNotSelectable,
+        )],
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let mut scenario = scenario().eventai_native_definition(definition);
+
+    edge(&mut scenario, EventKind::OnAggro, false);
+
+    let state = scenario.eventai_creature_state(CREATURE);
+    assert_eq!(
+        scenario.eventai_presentation.borrow().as_slice(),
+        &[(
+            CREATURE,
+            state.lifecycle_id,
+            state.definition_revision,
+            CreaturePresentationInstruction::SetNotSelectable,
+        )]
+    );
+}

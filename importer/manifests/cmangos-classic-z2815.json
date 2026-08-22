@@ -55,10 +55,15 @@
     ],
     "actions": [
       1,
+      2,
+      3,
       5,
       11,
       13,
       14,
+      17,
+      18,
+      19,
       22,
       23,
       25,
@@ -66,9 +71,11 @@
       30,
       31,
       32,
+      36,
       37,
       39,
       42,
+      43,
       54
     ],
     "targets": [
@@ -123,6 +130,7 @@
       "creature_subject",
       "event_condition",
       "quest_template",
+      "presentation_template",
       "source_guid_subject",
       "summon_creature",
       "summon_location"
@@ -138,6 +146,7 @@
       "normalized_no_effect",
       "force_target_self_implies_triggered",
       "normalized_random_phase_range",
+      "quarantined_rajaxx_client_projection",
       "debug_only_rule",
       "resolved"
     ],
@@ -153,7 +162,8 @@
       {"dimension": "cast_flag", "raw_value": "16", "reason": "force_target_self_implies_triggered"},
       {"dimension": "cast_flag", "raw_value": "48", "reason": "force_target_self_implies_triggered"},
       {"dimension": "cast_flag", "raw_value": "66", "reason": "normalized_no_effect"},
-      {"dimension": "phase_range", "raw_value": "21474836481", "reason": "normalized_random_phase_range"}
+      {"dimension": "phase_range", "raw_value": "21474836481", "reason": "normalized_random_phase_range"},
+      {"dimension": "unit_flag", "raw_value": "832", "reason": "quarantined_rajaxx_client_projection"}
     ]
   },
   "expected_threat_percent_census": {
@@ -312,6 +322,61 @@
     "death_prevention_states": {
       "0": 9,
       "1": 21
+    },
+    "presentation_factions": {
+      "14": 3,
+      "17": 1,
+      "35": 6,
+      "54": 1,
+      "84": 1,
+      "104": 4,
+      "777": 1
+    },
+    "presentation_display_templates": {
+      "5357": 1,
+      "5358": 1,
+      "5359": 1,
+      "5360": 1,
+      "5361": 1,
+      "9621": 1,
+      "10296": 1,
+      "11284": 1,
+      "13279": 4,
+      "13738": 1,
+      "13739": 1,
+      "13740": 1,
+      "13741": 1,
+      "13742": 1,
+      "14603": 1,
+      "14604": 1,
+      "14638": 1,
+      "14639": 1,
+      "14640": 1
+    },
+    "presentation_unit_fields": {
+      "23": 2,
+      "37": 1,
+      "147": 2
+    },
+    "presentation_set_unit_flags": {
+      "256": 1,
+      "512": 3,
+      "768": 3,
+      "832": 1,
+      "33554432": 1
+    },
+    "presentation_remove_unit_flags": {
+      "2": 2,
+      "256": 12,
+      "512": 1,
+      "768": 4
+    },
+    "presentation_mount_models": {
+      "0": 2,
+      "207": 1,
+      "2328": 1,
+      "9991": 2,
+      "14337": 1
     }
   }
 }

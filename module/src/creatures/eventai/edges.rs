@@ -466,6 +466,7 @@ fn beneficiary_guid(ctx: &ReducerContext, guid: u64) -> Option<u64> {
 }
 
 pub(crate) fn reset_creature_lifecycle(ctx: &ReducerContext, creature_guid: u64) {
+    crate::creatures::presentation::clear_eventai_presentation(ctx, creature_guid);
     ctx.db
         .game_creature_ai_returning_home()
         .creature_guid()
