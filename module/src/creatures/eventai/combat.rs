@@ -1,6 +1,6 @@
 //! Engaged EventAI conditions, target selection and combat actions. The decisions here are pure
-//! logic over the [`EventAiWorld`] Seam, shared by the durable world and the test Fake; only
-//! `rows_for` and `authored_combat` read durable state directly.
+//! logic over the [`EventAiWorld`] Seam, shared by the durable world and the test Scenario. Only
+//! `definition_for` and `authored_combat` read durable definitions directly.
 
 use std::cmp::Ordering;
 
@@ -8,13 +8,12 @@ use spacetimedb::ReducerContext;
 
 use super::engine::EventAiWorld;
 use super::{
-    ActionKind, ActionResult, EventAiUnit, EventContext, EventKind, Rule, RuleAction, TargetPolicy,
-    ACTION_CAST, ACTION_FLEE_FOR_ASSIST, CAST_AURA_ABSENT, CAST_INTERRUPT_PREVIOUS,
-    CAST_PLAYER_ONLY, CAST_TARGET_CASTING, CAST_TRIGGERED, EVENT_CREATURE_HP,
-    EVENT_FRIENDLY_HP_DEFICIT, EVENT_TARGET_RANGE, EVENT_TIMED_IN_COMBAT,
+    ActionResult, CastInstruction, CreatureInstruction, DefinitionRevision, EventAiDefinition,
+    EventAiRule, EventAiSubject, EventAiUnit, EventCondition, EventContext, EventKind,
+    InstructionTarget,
 };
 use crate::creatures::ai::{rout_close_ms, rout_window_open, TickScope};
-use crate::{game_creature_ai_event, game_world_entity};
+use crate::{game_creature_ai_definition, game_world_entity};
 
 pub(super) fn engaged_contexts<W: EventAiWorld>(world: &W, scope: &TickScope) -> Vec<EventContext> {
     let now_ms = world.eventai_now_ms();
@@ -46,56 +45,57 @@ pub(super) fn engaged_contexts<W: EventAiWorld>(world: &W, scope: &TickScope) ->
 pub(super) fn condition<W: EventAiWorld>(
     world: &W,
     context: &EventContext,
-    rule: &Rule,
+    rule: &EventAiRule,
 ) -> Option<EventContext> {
     let creature = world.eventai_unit(context.creature_guid)?;
-    match context.kind {
-        EventKind::TimedInCombat => Some(*context),
-        EventKind::CreatureHp => in_inclusive_pct(
+    match rule.event {
+        EventCondition::TimedInCombat(_) => Some(*context),
+        EventCondition::CreatureHealth(health) => in_inclusive_pct(
             creature.health,
             creature.max_health,
-            rule.event_params[0],
-            rule.event_params[1],
+            u32::from(health.min_pct),
+            u32::from(health.max_pct),
         )
         .then_some(*context),
-        EventKind::TargetRange => {
+        EventCondition::TargetRange(range) => {
             let target = world.eventai_unit(context.current_target_guid?)?;
             let distance = distance_yd(&creature, &target);
-            (distance >= rule.event_params[0] as f32 && distance <= rule.event_params[1] as f32)
-                .then_some(*context)
+            (distance >= range.min_yd as f32 && distance <= range.max_yd as f32).then_some(*context)
         }
-        EventKind::FriendlyHpDeficit => {
-            wounded_friendly(world, &creature, rule.event_params[1], rule.event_params[0]).map(
+        EventCondition::FriendlyHealthDeficit(deficit) => {
+            wounded_friendly(world, &creature, deficit.radius_yd, deficit.missing_health).map(
                 |guid| EventContext {
                     event_target_guid: Some(guid),
                     ..*context
                 },
             )
         }
-        EventKind::OnAggro | EventKind::OnDeath | EventKind::OnSpawn => Some(*context),
+        EventCondition::OnAggro | EventCondition::OnDeath | EventCondition::OnSpawn => {
+            Some(*context)
+        }
     }
 }
 
 pub(super) fn execute<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    action: &RuleAction,
+    instruction: &CreatureInstruction,
 ) -> ActionResult {
-    match action.kind {
-        ActionKind::Emote => {
-            let target_guid = target(world, context, action).unwrap_or(0);
-            if world.eventai_deliver_emote(context.creature_guid, action.params[0], target_guid) {
+    match instruction {
+        CreatureInstruction::Emote(emote) => {
+            let target_guid = target(world, context, emote.target, None).unwrap_or(0);
+            if world.eventai_deliver_emote(context.creature_guid, emote.emote_id, target_guid) {
                 ActionResult::Applied
             } else {
                 ActionResult::Refused
             }
         }
-        ActionKind::FleeForAssist => {
+        CreatureInstruction::FleeForAssist => {
             let Some(rout_ends_ms) = world.eventai_rout_ends_ms(context.creature_guid) else {
                 return ActionResult::Refused;
             };
             // A spent window bars the FIXED low-health rout, which is once per engagement. An
-            // authored flee is not: cmangos re-runs the action every time its rule fires, so the
+            // authored flee is not: the source re-runs the action every time its rule fires, so the
             // window re-opens once the previous run has finished. Re-stamping an OPEN window would
             // instead extend one flee forever.
             if !rout_window_open(context.now_ms as u32, rout_ends_ms) {
@@ -106,7 +106,7 @@ pub(super) fn execute<W: EventAiWorld>(
             }
             ActionResult::Applied
         }
-        ActionKind::CallForHelp => call_for_help(world, context, action.params[0]),
+        CreatureInstruction::CallForHelp(help) => call_for_help(world, context, help.radius_yd),
         _ => ActionResult::Unsupported,
     }
 }
@@ -114,25 +114,34 @@ pub(super) fn execute<W: EventAiWorld>(
 pub(super) fn target<W: EventAiWorld>(
     world: &W,
     context: &EventContext,
-    action: &RuleAction,
+    target_policy: InstructionTarget,
+    cast: Option<&CastInstruction>,
 ) -> Option<u64> {
     let creature = world.eventai_unit(context.creature_guid)?;
-    let target = match action.target {
-        TargetPolicy::Current => context.current_target_guid,
-        TargetPolicy::SelfActor => Some(context.creature_guid),
-        TargetPolicy::Invoker => context.invoker_guid,
-        TargetPolicy::EventTarget => context.event_target_guid,
-        TargetPolicy::TopThreat | TargetPolicy::TopThreatPlayer => {
-            ranked_threat(world, &creature, action).first().copied()
+    let target = match target_policy {
+        InstructionTarget::CurrentOpponent => context.current_target_guid,
+        InstructionTarget::SelfActor => Some(context.creature_guid),
+        InstructionTarget::Invoker => context.invoker_guid,
+        InstructionTarget::EventSubject => context.event_target_guid,
+        InstructionTarget::HighestThreat | InstructionTarget::HighestThreatCharacter => {
+            ranked_threat(world, &creature, target_policy, cast)
+                .first()
+                .copied()
         }
-        TargetPolicy::SecondThreat => ranked_threat(world, &creature, action).get(1).copied(),
-        TargetPolicy::RandomThreat | TargetPolicy::RandomThreatPlayer => {
-            pick(world, &ranked_threat(world, &creature, action))
+        InstructionTarget::SecondThreat => ranked_threat(world, &creature, target_policy, cast)
+            .get(1)
+            .copied(),
+        InstructionTarget::RandomThreat | InstructionTarget::RandomThreatCharacter => {
+            pick(world, &ranked_threat(world, &creature, target_policy, cast))
         }
-        TargetPolicy::NearestArea => nearest_area(world, &creature, action),
-        TargetPolicy::FarthestHostile => farthest_hostile(world, &creature, action),
+        InstructionTarget::EligibleCasterArea => {
+            nearest_area(world, &creature, target_policy, cast)
+        }
+        InstructionTarget::FarthestHostile => {
+            farthest_hostile(world, &creature, target_policy, cast)
+        }
     }?;
-    if action.cast_options.contains(CAST_PLAYER_ONLY) && !world.eventai_unit(target)?.is_player {
+    if cast.is_some_and(|cast| cast.character_only) && !world.eventai_unit(target)?.is_player {
         return None;
     }
     Some(target)
@@ -141,52 +150,40 @@ pub(super) fn target<W: EventAiWorld>(
 pub(super) fn cast<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    action: &RuleAction,
+    cast: &CastInstruction,
     target_guid: u64,
 ) -> ActionResult {
-    if action.cast_options.contains(CAST_TRIGGERED) {
+    if cast.triggered {
         return ActionResult::Refused;
     }
-    if action.cast_options.contains(CAST_PLAYER_ONLY)
+    if cast.character_only
         && !world
             .eventai_unit(target_guid)
             .is_some_and(|target| target.is_player)
     {
         return ActionResult::Refused;
     }
-    if action.cast_options.contains(CAST_AURA_ABSENT)
-        && world.eventai_has_aura(target_guid, action.params[0])
-    {
+    if cast.aura_absent && world.eventai_has_aura(target_guid, cast.spell_id) {
         return ActionResult::Refused;
     }
-    if action.cast_options.contains(CAST_TARGET_CASTING) && !world.eventai_is_casting(target_guid) {
+    if cast.target_must_be_casting && !world.eventai_is_casting(target_guid) {
         return ActionResult::Refused;
     }
     let Some(creature) = world.eventai_unit(context.creature_guid) else {
         return ActionResult::Refused;
     };
     if world.eventai_is_casting(creature.guid) {
-        if !action.cast_options.contains(CAST_INTERRUPT_PREVIOUS) {
+        if !cast.interrupt_previous {
             return ActionResult::Refused;
         }
         world.eventai_interrupt_cast(creature.guid);
     }
-    if world.eventai_begin_cast(&creature, action.params[0], target_guid) {
+    if world.eventai_begin_cast(&creature, cast.spell_id, target_guid) {
         ActionResult::Applied
     } else {
         ActionResult::Refused
     }
 }
-
-/// The event kinds the engaged pass can ever fire, as the raw column values `authored_combat` reads.
-/// An on-aggro, on-spawn or on-death row is an EDGE: it says nothing about how the creature fights
-/// between those moments, so it takes nothing over.
-const ENGAGED_EVENT_TYPES: [u8; 4] = [
-    EVENT_TIMED_IN_COMBAT,
-    EVENT_CREATURE_HP,
-    EVENT_TARGET_RANGE,
-    EVENT_FRIENDLY_HP_DEFICIT,
-];
 
 /// Which halves of a creature's fight an imported script has taken over. Both are properties of the
 /// SCRIPT, not of this instant: eligibility, phase and the rule's own condition are all deliberately
@@ -204,38 +201,58 @@ pub(crate) struct AuthoredCombat {
     pub flee: bool,
 }
 
-/// Read `AuthoredCombat` for one creature. Straight off the rows, with no decode, no rule state and
-/// no grouping, because the cast phase, the chase and the rout each ask per engaged creature per
-/// firing, and most creatures own no rows at all. `rows_for` answers the pet Gate, so an owned
-/// creature reads as unscripted.
+/// Read `AuthoredCombat` from one creature's composed definition. Most creatures have no definition
+/// and keep the default combat behavior.
 pub(crate) fn authored_combat(ctx: &ReducerContext, creature_guid: u64) -> AuthoredCombat {
     let mut authored = AuthoredCombat::default();
-    for row in rows_for(ctx, creature_guid) {
-        if !ENGAGED_EVENT_TYPES.contains(&row.event_type) {
+    for rule in definition_for(ctx, creature_guid).rules {
+        if !rule.event.kind().recurs() {
             continue;
         }
-        authored.casting |= row.action_type == ACTION_CAST;
-        authored.flee |= row.action_type == ACTION_FLEE_FOR_ASSIST;
+        for instruction in rule.instructions {
+            authored.casting |= matches!(instruction, CreatureInstruction::Cast(_));
+            authored.flee |= matches!(instruction, CreatureInstruction::FleeForAssist);
+        }
     }
     authored
 }
 
-/// Every EventAI row that governs one creature: its entry's rules plus any pinned to its own guid.
-/// The single row fetch behind the engine, the lifecycle edges and the cycle's authored-combat
-/// reads, so the "who runs EventAI at all" Gate is answered once, here.
-pub(super) fn rows_for(ctx: &ReducerContext, creature_guid: u64) -> Vec<super::CreatureAiEvent> {
+pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventAiDefinition {
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
-        return Vec::new();
+        return EventAiDefinition::empty(creature_guid);
     };
     if !super::runs_eventai(&creature) {
-        return Vec::new();
+        return EventAiDefinition::empty(creature_guid);
     }
-    let rules = ctx.db.game_creature_ai_event();
-    rules
+    let definitions = ctx.db.game_creature_ai_definition();
+    let mut rows = Vec::with_capacity(2);
+    if let Some(row) = definitions
         .by_entry()
         .filter(&creature.entry)
-        .chain(rules.by_guid().filter(&creature_guid))
-        .collect()
+        .min_by_key(|row| row.id)
+    {
+        rows.push(EventAiDefinition {
+            subject: EventAiSubject::Entry(row.creature_entry),
+            revision: DefinitionRevision {
+                value: row.definition_revision,
+            },
+            rules: row.rules,
+        });
+    }
+    if let Some(row) = definitions
+        .by_guid()
+        .filter(&creature_guid)
+        .min_by_key(|row| row.id)
+    {
+        rows.push(EventAiDefinition {
+            subject: EventAiSubject::Guid(row.creature_guid),
+            revision: DefinitionRevision {
+                value: row.definition_revision,
+            },
+            rules: row.rules,
+        });
+    }
+    EventAiDefinition::compose(creature_guid, rows)
 }
 
 fn in_inclusive_pct(value: u32, max: u32, min_pct: u32, max_pct: u32) -> bool {
@@ -276,7 +293,8 @@ fn wounded_friendly<W: EventAiWorld>(
 fn ranked_threat<W: EventAiWorld>(
     world: &W,
     creature: &EventAiUnit,
-    action: &RuleAction,
+    target: InstructionTarget,
+    cast: Option<&CastInstruction>,
 ) -> Vec<u64> {
     let mut ranked: Vec<(u64, i64)> = world
         .eventai_threat(creature.guid)
@@ -287,13 +305,14 @@ fn ranked_threat<W: EventAiWorld>(
                 && source.map_id == creature.map_id
                 && source.instance_id == creature.instance_id
                 && (!matches!(
-                    action.target,
-                    TargetPolicy::TopThreatPlayer | TargetPolicy::RandomThreatPlayer
+                    target,
+                    InstructionTarget::HighestThreatCharacter
+                        | InstructionTarget::RandomThreatCharacter
                 ) || source.is_player)
-                && (!action.cast_options.contains(CAST_PLAYER_ONLY) || source.is_player)
-                && (!action.cast_options.contains(CAST_AURA_ABSENT)
-                    || !world.eventai_has_aura(guid, action.params[0]))
-                && (!action.cast_options.contains(CAST_TARGET_CASTING)
+                && (!cast.is_some_and(|cast| cast.character_only) || source.is_player)
+                && (!cast.is_some_and(|cast| cast.aura_absent)
+                    || !world.eventai_has_aura(guid, cast.map_or(0, |cast| cast.spell_id)))
+                && (!cast.is_some_and(|cast| cast.target_must_be_casting)
                     || world.eventai_is_casting(guid)))
             .then_some((guid, threat))
         })
@@ -305,9 +324,10 @@ fn ranked_threat<W: EventAiWorld>(
 fn nearest_area<W: EventAiWorld>(
     world: &W,
     creature: &EventAiUnit,
-    action: &RuleAction,
+    target: InstructionTarget,
+    cast: Option<&CastInstruction>,
 ) -> Option<u64> {
-    ranked_threat(world, creature, action)
+    ranked_threat(world, creature, target, cast)
         .into_iter()
         .filter_map(|guid| {
             let target = world.eventai_unit(guid)?;
@@ -324,9 +344,10 @@ fn nearest_area<W: EventAiWorld>(
 fn farthest_hostile<W: EventAiWorld>(
     world: &W,
     creature: &EventAiUnit,
-    action: &RuleAction,
+    target: InstructionTarget,
+    cast: Option<&CastInstruction>,
 ) -> Option<u64> {
-    ranked_threat(world, creature, action)
+    ranked_threat(world, creature, target, cast)
         .into_iter()
         .filter_map(|guid| {
             let target = world.eventai_unit(guid)?;

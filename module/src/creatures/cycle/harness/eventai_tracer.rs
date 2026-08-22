@@ -75,6 +75,200 @@ fn world(now_micros: u64) -> Scenario {
         .player(TARGET, point(2.0))
 }
 
+fn native_definition(subject: EventAiSubject, mut rules: Vec<EventAiRule>) -> EventAiDefinition {
+    rules.sort_by_key(|rule| rule.source_rule_id);
+    EventAiDefinition {
+        subject,
+        revision: normalized_revision(subject, &rules),
+        rules,
+    }
+}
+
+fn aggro_rule(source_rule_id: u64, instructions: Vec<CreatureInstruction>) -> EventAiRule {
+    EventAiRule {
+        source_rule_id,
+        event: EventCondition::OnAggro,
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::Once,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        instructions,
+    }
+}
+
+fn say(broadcast_id: u32) -> CreatureInstruction {
+    CreatureInstruction::Speak(SpeakInstruction {
+        mode: SpeechMode::Say,
+        broadcast_ids: vec![broadcast_id],
+        legacy_text: String::new(),
+        target: InstructionTarget::SelfActor,
+    })
+}
+
+#[test]
+fn native_rule_runs_more_than_three_instructions_in_order() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(10, vec![say(1), say(2), say(3), say(4)])],
+    );
+    let mut scenario = world(0)
+        .eventai_native_definition(definition)
+        .eventai_broadcast(1, "one", 0)
+        .eventai_broadcast(2, "two", 0)
+        .eventai_broadcast(3, "three", 0)
+        .eventai_broadcast(4, "four", 0);
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![
+            (CREATURE, 0, "one".to_string()),
+            (CREATURE, 0, "two".to_string()),
+            (CREATURE, 0, "three".to_string()),
+            (CREATURE, 0, "four".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn changed_definition_cleans_only_the_next_visited_creature_without_edge_replay() {
+    let other = CREATURE + 10;
+    let old = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(
+            20,
+            vec![
+                say(5),
+                CreatureInstruction::SetPhase(SetPhaseInstruction { phase: 3 }),
+                CreatureInstruction::SetRangedPosture(RangedPostureInstruction {
+                    distance_yd: 18,
+                    angle_degrees: 0,
+                }),
+            ],
+        )],
+    );
+    let mut scenario = world(0)
+        .creature(other, point(1.0))
+        .entry(other, ENTRY)
+        .eventai_broadcast(5, "committed", 0)
+        .eventai_broadcast(6, "new edge", 0)
+        .eventai_native_definition(old.clone());
+    let old_effective_revision = scenario.eventai_definition(CREATURE).revision;
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+    EngageSink::engage(&mut scenario, other, TARGET, Pull::Noticed);
+    scenario
+        .fights
+        .borrow_mut()
+        .retain(|fight| fight.attacker == CREATURE);
+    let unchanged_rule_state = scenario.eventai_state(other, 20).unwrap();
+    let unchanged_creature_state = scenario.eventai_creature_state(other);
+    let stable_rule_state = scenario.eventai_state(CREATURE, 20).unwrap();
+
+    fire(&mut scenario);
+    assert_eq!(
+        scenario.eventai_state(CREATURE, 20),
+        Some(stable_rule_state)
+    );
+    assert_eq!(
+        scenario
+            .eventai_creature_state(CREATURE)
+            .definition_revision,
+        old_effective_revision
+    );
+
+    let changed = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(20, vec![say(6)])],
+    );
+    assert_ne!(old.revision, changed.revision);
+    scenario.replace_eventai_definition(changed.clone());
+    let changed_effective_revision = scenario.eventai_definition(CREATURE).revision;
+    let speech_before_visit = scenario.eventai_speech();
+
+    fire(&mut scenario);
+
+    let visited = scenario.eventai_creature_state(CREATURE);
+    assert_eq!(visited.definition_revision, changed_effective_revision);
+    assert_eq!(visited.phase, 0);
+    assert!(!visited.ranged_posture_active);
+    assert!(scenario.eventai_state(CREATURE, 20).is_none());
+    assert_eq!(scenario.eventai_speech(), speech_before_visit);
+    assert_eq!(
+        scenario.eventai_state(other, 20),
+        Some(unchanged_rule_state)
+    );
+    assert_eq!(
+        scenario.eventai_creature_state(other),
+        unchanged_creature_state
+    );
+}
+
+#[test]
+fn first_native_visit_cleans_reversible_legacy_state_without_a_definition() {
+    let mut scenario = world(0);
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+    scenario.eventai_creature_state.borrow_mut().insert(
+        CREATURE,
+        CreatureState {
+            phase: 4,
+            ranged_distance: 18.0,
+            ranged_angle: 1.0,
+            ranged_posture_active: true,
+            ..CreatureState::default()
+        },
+    );
+    scenario.eventai_rule_state.borrow_mut().insert(
+        CREATURE,
+        HashMap::from([(
+            99,
+            RuleState {
+                next_eligible_ms: 5_000,
+                consumed: true,
+                lifecycle_id: 1,
+                engagement_id: 1,
+            },
+        )]),
+    );
+
+    fire(&mut scenario);
+
+    let state = scenario.eventai_creature_state(CREATURE);
+    assert_eq!(state.phase, 0);
+    assert!(!state.ranged_posture_active);
+    assert_eq!(state.ranged_distance, 0.0);
+    assert_eq!(state.ranged_angle, 0.0);
+    assert!(scenario.eventai_state(CREATURE, 99).is_none());
+}
+
+#[test]
+fn entry_and_guid_definitions_compose_in_source_order() {
+    let entry = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(40, vec![say(8)])],
+    );
+    let guid = native_definition(
+        EventAiSubject::Guid(CREATURE),
+        vec![aggro_rule(30, vec![say(7)])],
+    );
+    let mut scenario = world(0)
+        .eventai_broadcast(7, "guid", 0)
+        .eventai_broadcast(8, "entry", 0)
+        .eventai_native_definition(entry)
+        .eventai_native_definition(guid);
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![
+            (CREATURE, 0, "guid".to_string()),
+            (CREATURE, 0, "entry".to_string()),
+        ]
+    );
+}
+
 #[test]
 fn zero_source_rule_uses_the_row_id() {
     let mut legacy = native_row(

@@ -30,6 +30,15 @@ by one World Import Profile. Accepted EventAI summons force their summoned templ
 scope, to a fixpoint. It decides spatial import membership for dump, terrain, navigation,
 and vmap modes.
 
+**EventAI Source Profile**:
+A named, pinned EventAI input contract. It binds exact decompressed SQL bytes, the source loader,
+source censuses, and approved compatibility results.
+
+**Compatibility Manifest**:
+The complete EventAI import account for one World Import Scope. It records each source value and
+dependency path as emitted, normalized, excluded, dropped, or unapproved. An unapproved result is a
+Refusal for apply and remains visible in dry run.
+
 **Bounded Map Slice**:
 A named rectangular or circular part of one map, with the anchor used for terrain and navigation
 selection. The anchor is a real ground point on the client heightmap inside the slice, not a WMO

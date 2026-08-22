@@ -6,23 +6,31 @@ use super::*;
 use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
 use crate::creatures::eventai::{
-    self, BroadcastLine, CreatureAiEvent, CreatureState, Diagnostic, EngagedFight, EventAiRequest,
-    EventAiUnit, EventAiWorld, EventContext, EventKind, RuleState, SummonLocation, EVENT_ON_DEATH,
-    EVENT_ON_SPAWN,
+    self, BroadcastLine, CallForHelpInstruction, CastInstruction, CreatureAiEvent,
+    CreatureHealthCondition, CreatureInstruction, CreatureState, DefinitionRevision,
+    EmoteInstruction, EngagedFight, EventAiDefinition, EventAiRequest, EventAiRule, EventAiSubject,
+    EventAiUnit, EventAiWorld, EventCondition, EventContext, EventKind, ExecutionPolicy,
+    FriendlyHealthDeficitCondition, InstructionSelection, InstructionTarget, PhaseSet,
+    RangedPostureInstruction, RecurrencePolicy, RuleState, SetPhaseInstruction, SpeakInstruction,
+    SpeechMode, SummonInstruction, SummonLocation, TargetRangeCondition, TimeWindow,
 };
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 #[path = "harness/eventai_combat.rs"]
 mod eventai_combat;
 #[path = "harness/eventai_edges.rs"]
 mod eventai_edges;
+#[path = "harness/eventai_legacy.rs"]
+mod eventai_legacy;
 #[path = "harness/eventai_mobility.rs"]
 mod eventai_mobility;
 #[path = "harness/eventai_tracer.rs"]
 mod eventai_tracer;
+
+pub(crate) use eventai_legacy::*;
 
 /// A creature's authoritative state, as the cycle writes it.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -190,6 +198,8 @@ struct Scenario {
     package_runs: Cell<u32>,
     /// Authored EventAI action rows, mirroring the Module-only static table.
     eventai_rows: RefCell<Vec<CreatureAiEvent>>,
+    /// Native definitions used by revision and instruction-boundary scenarios.
+    eventai_definitions: RefCell<Vec<EventAiDefinition>>,
     /// Imported broadcast text, keyed by its stable catalogue id.
     eventai_text: RefCell<HashMap<u32, (String, u8, u32, u32)>>,
     eventai_creature_state: RefCell<HashMap<u64, CreatureState>>,
@@ -260,6 +270,18 @@ impl Scenario {
     fn eventai_row(self, row: CreatureAiEvent) -> Self {
         self.eventai_rows.borrow_mut().push(row);
         self
+    }
+
+    fn eventai_native_definition(self, definition: EventAiDefinition) -> Self {
+        self.eventai_definitions.borrow_mut().push(definition);
+        self
+    }
+
+    fn replace_eventai_definition(&self, definition: EventAiDefinition) {
+        self.eventai_definitions
+            .borrow_mut()
+            .retain(|current| current.subject != definition.subject);
+        self.eventai_definitions.borrow_mut().push(definition);
     }
 
     fn eventai_broadcast(self, id: u32, text: &str, chat_type: u8) -> Self {
@@ -380,7 +402,59 @@ impl Scenario {
     fn remove_eventai_rule(&self, rule_id: u64) {
         self.eventai_rows
             .borrow_mut()
-            .retain(|row| eventai::effective_rule_id(row) != rule_id);
+            .retain(|row| effective_rule_id(row) != rule_id);
+    }
+
+    fn legacy_eventai_definitions(
+        &self,
+        creature_entry: u32,
+        creature_guid: u64,
+    ) -> Vec<EventAiDefinition> {
+        let mut by_subject: BTreeMap<(u8, u64), BTreeMap<u64, Vec<CreatureAiEvent>>> =
+            BTreeMap::new();
+        for row in self.eventai_rows.borrow().iter().filter(|row| {
+            (row.creature_guid == 0 && row.creature_entry == creature_entry)
+                || (row.creature_entry == 0 && row.creature_guid == creature_guid)
+        }) {
+            let subject = if row.creature_entry != 0 {
+                (0, u64::from(row.creature_entry))
+            } else {
+                (1, row.creature_guid)
+            };
+            by_subject
+                .entry(subject)
+                .or_default()
+                .entry(effective_rule_id(row))
+                .or_default()
+                .push(row.clone());
+        }
+
+        by_subject
+            .into_iter()
+            .filter_map(|((kind, value), groups)| {
+                let subject = if kind == 0 {
+                    EventAiSubject::Entry(value as u32)
+                } else {
+                    EventAiSubject::Guid(value)
+                };
+                let mut rules = Vec::new();
+                for rows in groups.into_values() {
+                    match Rule::decode(rows) {
+                        Ok(rule) => rules.push(native_test_rule(rule)),
+                        Err(diagnostic) => self.eventai_diagnostics.borrow_mut().push(diagnostic),
+                    }
+                }
+                if rules.is_empty() {
+                    return None;
+                }
+                rules.sort_by_key(|rule| rule.source_rule_id);
+                Some(EventAiDefinition {
+                    subject,
+                    revision: eventai::normalized_revision(subject, &rules),
+                    rules,
+                })
+            })
+            .collect()
     }
 
     /// The world's `eventai::authored_combat`: which halves of the fight the script has taken over,
@@ -390,19 +464,15 @@ impl Scenario {
         if self.pet_owners.borrow().contains_key(&creature_guid) {
             return eventai::AuthoredCombat::default();
         }
-        let engaged = [
-            eventai::EVENT_TIMED_IN_COMBAT,
-            eventai::EVENT_CREATURE_HP,
-            eventai::EVENT_TARGET_RANGE,
-            eventai::EVENT_FRIENDLY_HP_DEFICIT,
-        ];
         let mut authored = eventai::AuthoredCombat::default();
-        for row in self.eventai_rows(creature_guid) {
-            if !engaged.contains(&row.event_type) {
+        for rule in self.eventai_definition(creature_guid).rules {
+            if !rule.event.kind().recurs() {
                 continue;
             }
-            authored.casting |= row.action_type == eventai::ACTION_CAST;
-            authored.flee |= row.action_type == eventai::ACTION_FLEE_FOR_ASSIST;
+            for instruction in rule.instructions {
+                authored.casting |= matches!(instruction, CreatureInstruction::Cast(_));
+                authored.flee |= matches!(instruction, CreatureInstruction::FleeForAssist);
+            }
         }
         authored
     }
@@ -1050,6 +1120,117 @@ impl Scenario {
     }
 }
 
+fn native_test_rule(rule: Rule) -> EventAiRule {
+    let event = match rule.event {
+        EventKind::OnAggro => EventCondition::OnAggro,
+        EventKind::TimedInCombat => EventCondition::TimedInCombat(TimeWindow {
+            min_ms: rule.event_params[0],
+            max_ms: rule.event_params[1],
+        }),
+        EventKind::CreatureHp => EventCondition::CreatureHealth(CreatureHealthCondition {
+            min_pct: rule.event_params[0] as u8,
+            max_pct: rule.event_params[1] as u8,
+        }),
+        EventKind::OnDeath => EventCondition::OnDeath,
+        EventKind::TargetRange => EventCondition::TargetRange(TargetRangeCondition {
+            min_yd: rule.event_params[0],
+            max_yd: rule.event_params[1],
+        }),
+        EventKind::OnSpawn => EventCondition::OnSpawn,
+        EventKind::FriendlyHpDeficit => {
+            EventCondition::FriendlyHealthDeficit(FriendlyHealthDeficitCondition {
+                missing_health: rule.event_params[0],
+                radius_yd: rule.event_params[1],
+            })
+        }
+    };
+    EventAiRule {
+        source_rule_id: rule.id,
+        event,
+        chance_pct: rule.chance_pct,
+        allowed_phases: PhaseSet {
+            bits: rule.allowed_phase_mask,
+        },
+        recurrence: match rule.repeat {
+            RepeatPolicy::Once => RecurrencePolicy::Once,
+            RepeatPolicy::Repeat => RecurrencePolicy::Repeat(TimeWindow {
+                min_ms: rule.event_params[2],
+                max_ms: rule.event_params[3],
+            }),
+        },
+        selection: if rule.source_policy.contains(SOURCE_FLAG_RANDOM_ACTION) {
+            InstructionSelection::RandomOne
+        } else {
+            InstructionSelection::All
+        },
+        execution: if rule.source_policy.contains(SOURCE_FLAG_COMBAT_ACTION) {
+            ExecutionPolicy::CombatAction
+        } else {
+            ExecutionPolicy::Ordinary
+        },
+        instructions: rule.actions.iter().map(native_test_instruction).collect(),
+    }
+}
+
+fn native_test_instruction(action: &RuleAction) -> CreatureInstruction {
+    let target = match action.target {
+        TargetPolicy::Current => InstructionTarget::CurrentOpponent,
+        TargetPolicy::SelfActor => InstructionTarget::SelfActor,
+        TargetPolicy::TopThreat => InstructionTarget::HighestThreat,
+        TargetPolicy::SecondThreat => InstructionTarget::SecondThreat,
+        TargetPolicy::RandomThreat => InstructionTarget::RandomThreat,
+        TargetPolicy::Invoker => InstructionTarget::Invoker,
+        TargetPolicy::EventTarget => InstructionTarget::EventSubject,
+        TargetPolicy::TopThreatPlayer => InstructionTarget::HighestThreatCharacter,
+        TargetPolicy::RandomThreatPlayer => InstructionTarget::RandomThreatCharacter,
+        TargetPolicy::NearestArea => InstructionTarget::EligibleCasterArea,
+        TargetPolicy::FarthestHostile => InstructionTarget::FarthestHostile,
+    };
+    match action.kind {
+        ActionKind::Say | ActionKind::Yell => CreatureInstruction::Speak(SpeakInstruction {
+            mode: if action.kind == ActionKind::Yell {
+                SpeechMode::Yell
+            } else {
+                SpeechMode::Say
+            },
+            broadcast_ids: action.params.into_iter().filter(|id| *id != 0).collect(),
+            legacy_text: action.legacy_text.clone(),
+            target,
+        }),
+        ActionKind::Cast => CreatureInstruction::Cast(CastInstruction {
+            spell_id: action.params[0],
+            target,
+            interrupt_previous: action.cast_options.contains(CAST_INTERRUPT_PREVIOUS),
+            triggered: action.cast_options.contains(CAST_TRIGGERED),
+            aura_absent: action.cast_options.contains(CAST_AURA_ABSENT),
+            character_only: action.cast_options.contains(CAST_PLAYER_ONLY),
+            target_must_be_casting: action.cast_options.contains(CAST_TARGET_CASTING),
+        }),
+        ActionKind::Emote => CreatureInstruction::Emote(EmoteInstruction {
+            emote_id: action.params[0],
+            target,
+        }),
+        ActionKind::FleeForAssist => CreatureInstruction::FleeForAssist,
+        ActionKind::CallForHelp => CreatureInstruction::CallForHelp(CallForHelpInstruction {
+            radius_yd: action.params[0],
+        }),
+        ActionKind::SetPhase => CreatureInstruction::SetPhase(SetPhaseInstruction {
+            phase: action.params[0] as u8,
+        }),
+        ActionKind::Summon => CreatureInstruction::Summon(SummonInstruction {
+            creature_entry: action.params[0],
+            summon_location_id: action.params[2],
+            target,
+        }),
+        ActionKind::SetRangedPosture => {
+            CreatureInstruction::SetRangedPosture(RangedPostureInstruction {
+                distance_yd: action.params[0],
+                angle_degrees: action.params[1] as i32,
+            })
+        }
+    }
+}
+
 impl CreatureWorld for Scenario {
     fn awake_creatures(&self, _scope: &TickScope) -> TickSweep {
         *self.seen_by_sweep.borrow_mut() = self.snapshot();
@@ -1220,19 +1401,22 @@ impl EventAiWorld for Scenario {
         self.eventai_templates.borrow().contains(&entry)
     }
 
-    fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent> {
+    fn eventai_definition(&self, creature_guid: u64) -> EventAiDefinition {
         let Some(creature) = self.creatures.borrow().get(&creature_guid).copied() else {
-            return Vec::new();
+            return EventAiDefinition::empty(creature_guid);
         };
-        self.eventai_rows
+        let mut definitions: Vec<EventAiDefinition> = self
+            .eventai_definitions
             .borrow()
             .iter()
-            .filter(|row| {
-                (row.creature_guid == 0 && row.creature_entry == creature.entry)
-                    || (row.creature_entry == 0 && row.creature_guid == creature_guid)
+            .filter(|definition| {
+                definition.subject == EventAiSubject::Entry(creature.entry)
+                    || definition.subject == EventAiSubject::Guid(creature_guid)
             })
             .cloned()
-            .collect()
+            .collect();
+        definitions.extend(self.legacy_eventai_definitions(creature.entry, creature_guid));
+        EventAiDefinition::compose(creature_guid, definitions)
     }
 
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState {
@@ -1241,6 +1425,22 @@ impl EventAiWorld for Scenario {
             .get(&creature_guid)
             .copied()
             .unwrap_or_default()
+    }
+
+    fn adopt_eventai_revision(
+        &mut self,
+        creature_guid: u64,
+        revision: DefinitionRevision,
+    ) -> CreatureState {
+        self.eventai_rule_state.borrow_mut().remove(&creature_guid);
+        let mut states = self.eventai_creature_state.borrow_mut();
+        let state = states.entry(creature_guid).or_default();
+        state.phase = 0;
+        state.ranged_distance = 0.0;
+        state.ranged_angle = 0.0;
+        state.ranged_posture_active = false;
+        state.definition_revision = revision;
+        *state
     }
 
     fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8) {
@@ -1428,10 +1628,6 @@ impl EventAiWorld for Scenario {
 
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64) {
         EngageSink::engage(self, summon_guid, target_guid, Pull::Assisted);
-    }
-
-    fn eventai_diagnostic(&mut self, diagnostic: Diagnostic) {
-        self.eventai_diagnostics.borrow_mut().push(diagnostic);
     }
 }
 
@@ -1645,37 +1841,28 @@ impl EngageSink for Scenario {
             .collect()
     }
     fn leave_combat(&mut self, guid: u64) {
-        let rule_ids: HashSet<u64> = self
-            .eventai_rows
-            .borrow()
+        let definition = self.eventai_definition(guid);
+        let rule_ids: HashSet<u64> = definition
+            .rules
             .iter()
-            .filter(|row| {
-                (row.creature_guid == 0
-                    && self
-                        .creatures
-                        .borrow()
-                        .get(&guid)
-                        .is_some_and(|creature| creature.entry == row.creature_entry))
-                    || (row.creature_entry == 0 && row.creature_guid == guid)
+            .filter(|rule| {
+                !matches!(
+                    rule.event,
+                    EventCondition::OnDeath | EventCondition::OnSpawn
+                )
             })
-            .filter(|row| !matches!(row.event_type, EVENT_ON_DEATH | EVENT_ON_SPAWN))
-            .map(eventai::effective_rule_id)
+            .map(|rule| rule.source_rule_id)
             .collect();
-        let lifecycle_rule_ids: HashSet<u64> = self
-            .eventai_rows
-            .borrow()
+        let lifecycle_rule_ids: HashSet<u64> = definition
+            .rules
             .iter()
-            .filter(|row| {
-                (row.creature_guid == 0
-                    && self
-                        .creatures
-                        .borrow()
-                        .get(&guid)
-                        .is_some_and(|creature| creature.entry == row.creature_entry))
-                    || (row.creature_entry == 0 && row.creature_guid == guid)
+            .filter(|rule| {
+                matches!(
+                    rule.event,
+                    EventCondition::OnDeath | EventCondition::OnSpawn
+                )
             })
-            .filter(|row| matches!(row.event_type, EVENT_ON_DEATH | EVENT_ON_SPAWN))
-            .map(eventai::effective_rule_id)
+            .map(|rule| rule.source_rule_id)
             .collect();
         let engagement_id = self
             .eventai_creature_state

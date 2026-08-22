@@ -4,9 +4,7 @@ use std::collections::HashSet;
 
 use spacetimedb::ReducerContext;
 
-use super::{
-    effective_rule_id, EventAiRequest, EventContext, EventKind, EVENT_ON_DEATH, EVENT_ON_SPAWN,
-};
+use super::{EventAiRequest, EventCondition, EventContext, EventKind};
 use crate::{game_creature_ai_rule_state, game_creature_ai_state, game_world_entity, WorldEntity};
 
 /// Who runs its entry's EventAI at all. A Character carries no rules, and a pet answers its
@@ -73,12 +71,22 @@ pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
         return;
     }
 
-    let rules = super::combat::rows_for(ctx, creature_guid);
-    let known_rule_ids: HashSet<u64> = rules.iter().map(effective_rule_id).collect();
-    let engagement_rule_ids: HashSet<u64> = rules
+    let definition = super::combat::definition_for(ctx, creature_guid);
+    let known_rule_ids: HashSet<u64> = definition
+        .rules
         .iter()
-        .filter(|rule| !matches!(rule.event_type, EVENT_ON_DEATH | EVENT_ON_SPAWN))
-        .map(effective_rule_id)
+        .map(|rule| rule.source_rule_id)
+        .collect();
+    let engagement_rule_ids: HashSet<u64> = definition
+        .rules
+        .iter()
+        .filter(|rule| {
+            !matches!(
+                rule.event,
+                EventCondition::OnDeath | EventCondition::OnSpawn
+            )
+        })
+        .map(|rule| rule.source_rule_id)
         .collect();
     let states = ctx.db.game_creature_ai_state();
     let engagement_id = states.creature_guid().find(creature_guid).map(|mut state| {
@@ -167,9 +175,9 @@ mod eventai_gate_tripwire {
             ),
             (
                 include_str!("combat.rs"),
-                "pub(super) fn rows_for(",
+                "pub(super) fn definition_for(",
                 "super::runs_eventai(&creature)",
-                "the one row fetch answers `who runs EventAI` for the engine, the edges and the \
+                "the one definition fetch answers `who runs EventAI` for the engine, the edges and the \
                  cycle's authored-combat reads alike",
             ),
             (
@@ -180,9 +188,9 @@ mod eventai_gate_tripwire {
             ),
             (
                 include_str!("engine.rs"),
-                "fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent> {",
-                "super::combat::rows_for(",
-                "one entry-or-guid row fetch, not a second copy that drifts from the gated one",
+                "fn eventai_definition(&self, creature_guid: u64) -> EventAiDefinition {",
+                "super::combat::definition_for(",
+                "one entry-and-guid definition fetch, not a second copy that drifts from the gated one",
             ),
             (
                 include_str!("engine.rs"),

@@ -1,7 +1,9 @@
 use spacetimedb::table;
 
-/// One ordered action from a native EventAI source rule. The fields through `repeat_max_ms` are the
-/// migration shape. New rules use the compact fields appended after them.
+use super::EventAiRule;
+
+/// Retained flat EventAI migration row. Runtime and importer code use
+/// [`CreatureAiDefinition`]; this schema stays unchanged for additive migration safety.
 #[table(
     accessor = game_creature_ai_event,
     index(accessor = by_entry, btree(columns = [creature_entry])),
@@ -64,6 +66,22 @@ pub struct CreatureAiEvent {
     pub cast_options: u32,
 }
 
+/// One normalized native EventAI definition for an entry or one remapped creature guid.
+#[table(
+    accessor = game_creature_ai_definition,
+    index(accessor = by_entry, btree(columns = [creature_entry])),
+    index(accessor = by_guid, btree(columns = [creature_guid]))
+)]
+pub struct CreatureAiDefinition {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub creature_entry: u32,
+    pub creature_guid: u64,
+    pub definition_revision: u64,
+    pub rules: Vec<EventAiRule>,
+}
+
 /// Broadcast text referenced by EventAI actions. Module only.
 #[table(accessor = game_creature_ai_broadcast_text)]
 pub struct CreatureAiBroadcastText {
@@ -93,6 +111,8 @@ pub struct CreatureAiState {
     pub ranged_angle: f32,
     #[default(false)]
     pub ranged_posture_active: bool,
+    #[default(0u64)]
+    pub definition_revision: u64,
 }
 
 /// Timing and consumption state for one creature and one effective source rule. Module only.

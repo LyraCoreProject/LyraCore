@@ -10,6 +10,7 @@
 //!   --dump <classic-db .sql[.gz]>   cmangos creature/etc ETL
 //!                                   [--world-profile alliance-eastern|alliance-kalimdor|
 //!                                    alliance-single|instances]
+//!                                   [--eventai-profile cmangos-classic-z2815]
 //!                                   [advanced: --map 0 --center X,Y,Z --radius 180]
 //!                                   [--print-extents derives --box from the dump's real spawn
 //!                                    extents; always a dry run]
@@ -1008,8 +1009,9 @@ pub(crate) struct Args {
     pub(crate) family: Option<String>, // --family <name> (work-item 216): reload ONE --dump family's
     // clear+reload instead of the full ETL. `None` = full run (byte-identical to pre-216 behavior).
     pub(crate) source_sha: String, // --source-sha <sha> (work-item 216): the resolved cmangos
-                                   // classic-db commit this dump came from — threaded into every `stamp_import_meta` call this run
-                                   // makes. Empty string ("") when not given (no external provenance to record).
+    // classic-db commit this dump came from. It is threaded into every `stamp_import_meta` call this
+    // run makes. Empty string ("") when not given (no external provenance to record).
+    pub(crate) eventai_profile: String,
 }
 
 fn parse_args() -> Result<Args> {
@@ -1050,6 +1052,7 @@ where
         apply: false,
         family: None,
         source_sha: String::new(),
+        eventai_profile: eventai::SOURCE_PROFILE_NAME.to_string(),
     };
     let mut legacy_spatial_args: Vec<&'static str> = Vec::new();
     let mut it = args.into_iter().map(Into::into);
@@ -1239,6 +1242,11 @@ where
                 a.family = Some(v);
             }
             "--source-sha" => a.source_sha = it.next().context("--source-sha <sha>")?,
+            "--eventai-profile" => {
+                let profile = it.next().context("--eventai-profile <name>")?;
+                eventai::source_profile(&profile).map_err(anyhow::Error::msg)?;
+                a.eventai_profile = profile;
+            }
             "--center" => {
                 legacy_spatial_args.push("--center");
                 let v = it.next().context("--center X,Y,Z")?;
@@ -3532,6 +3540,10 @@ pub(crate) struct DumpPlan {
     pub(crate) spawn_row_count: usize,
     pub(crate) go_batches: Vec<String>,
     pub(crate) go_row_count: usize,
+    pub(crate) eventai_definition_batches: Vec<String>,
+    pub(crate) eventai_definition_count: u64,
+    pub(crate) eventai_instruction_count: u64,
+    pub(crate) eventai_manifest: Option<String>,
     pub(crate) stamps: Vec<(&'static str, u64)>,
 }
 
@@ -3743,9 +3755,11 @@ fn build_dump_plan(
                 template_is_importable(&row).then_some(entry)
             })
             .collect();
-    let eventai = if family_active(args, "creature-ai") {
+    let (eventai, eventai_manifest) = if family_active(args, "creature-ai") {
+        let profile = eventai::source_profile(&args.eventai_profile).map_err(anyhow::Error::msg)?;
+        let observed_sql_sha256 = sha256_hex(dump.as_bytes())?;
         let source = eventai::parse(dump);
-        loop {
+        let plan = loop {
             let plan = source.assemble(&entries, &imported_guid_entries, &importable_templates);
             let added = plan
                 .forced_template_entries
@@ -3756,13 +3770,16 @@ fn build_dump_plan(
             if added == 0 {
                 break plan;
             }
+        };
+        let manifest =
+            plan.compatibility_manifest(&profile, &observed_sql_sha256, eventai::LOADER_CONTRACT);
+        if args.apply {
+            manifest.require_apply_ready().map_err(anyhow::Error::msg)?;
         }
+        (plan, Some(manifest.render().to_string()))
     } else {
-        eventai::EventAiPlan::default()
+        (eventai::EventAiPlan::default(), None)
     };
-    if family_active(args, "creature-ai") {
-        eventai.report();
-    }
     for slice in &scope.bounded_slices {
         let count = spawns
             .iter()
@@ -4704,15 +4721,8 @@ fn build_dump_plan(
     }
 
     if family_active(args, "creature-ai") {
-        stmts.push("DELETE FROM game_creature_ai_event WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0".into());
-        push_insert(
-            &mut stmts,
-            "game_creature_ai_event",
-            "id,creature_entry,event_type,action_type,text,spell_id,initial_min_ms,initial_max_ms,repeat_min_ms,repeat_max_ms,source_rule_id,action_order,creature_guid,chance_pct,allowed_phase_mask,source_flags,repeat_policy,event_param_1,event_param_2,event_param_3,event_param_4,event_param_5,event_param_6,action_param_1,action_param_2,action_param_3,target_policy,cast_options",
-            &eventai.event_rows,
-        );
         push_insert(
             &mut stmts,
             "game_creature_ai_broadcast_text",
@@ -4857,12 +4867,20 @@ fn build_dump_plan(
         stamps.push(("spellmeta", spellmeta_row_count));
     }
 
+    let eventai_definition_count = eventai.definition_count();
+    let eventai_instruction_count = eventai.instruction_count();
+    let eventai_definition_batches = eventai.definition_batches;
+
     Ok(DumpPlan {
         stmts,
         spawn_row_count: spawn_rows.len(),
         go_row_count: go_packed_rows.len(),
         spawn_batches: batches,
         go_batches,
+        eventai_definition_batches,
+        eventai_definition_count,
+        eventai_instruction_count,
+        eventai_manifest,
         stamps,
     })
 }
@@ -4976,12 +4994,32 @@ fn main() -> Result<()> {
     let plan = build_dump_plan(&dump, &args, &display_scales, &profession_tier_values)?;
 
     if !args.apply {
+        if let Some(manifest) = &plan.eventai_manifest {
+            println!("-- EventAI Compatibility Manifest\n{manifest}\n");
+        }
         println!(
-            "-- DRY RUN: {} SQL statements, then {} creature-spawn batch(es) for {} spawns + {} gameobject batch(es) (of {SPAWN_BATCH}).\n",
-            plan.stmts.len(), plan.spawn_batches.len(), plan.spawn_row_count, plan.go_batches.len()
+            "-- DRY RUN: {} SQL statements, {} EventAI definition batch(es) for {} definitions and {} instructions, {} creature-spawn batch(es) for {} spawns, and {} gameobject batch(es) (of {SPAWN_BATCH}).\n",
+            plan.stmts.len(),
+            plan.eventai_definition_batches.len(),
+            plan.eventai_definition_count,
+            plan.eventai_instruction_count,
+            plan.spawn_batches.len(),
+            plan.spawn_row_count,
+            plan.go_batches.len()
         );
         for s in &plan.stmts {
             println!("{s};\n");
+        }
+        if family_active(&args, "creature-ai") {
+            println!(
+                "-- load native EventAI definitions via reducer: batch 0 replaces the family, and later batches append.\n  e.g. spacetime call -s {} {} import_creature_ai_definitions '<batch>'\n  (sample definition: {})",
+                args.server,
+                args.db,
+                plan.eventai_definition_batches
+                    .first()
+                    .and_then(|batch| batch.lines().next())
+                    .unwrap_or("")
+            );
         }
         println!(
             "-- load spawns via reducer: batch 0 = import_creature_spawns (clears+loads), the rest = import_creature_spawns_append (load only).\n  e.g. spacetime call -s {} {} import_creature_spawns '<batch>'\n  (sample row: {})",
@@ -4996,9 +5034,26 @@ fn main() -> Result<()> {
         bail!("no spawns matched the filter — check --box / --radius / --center");
     }
 
-    // Apply: SQL first (templates + waypoints ready), then the spawn batches (the first resets live
-    // state + loads; the next tick_creatures builds the entities from the just-loaded templates).
+    // Apply static catalogues first, then native EventAI definitions, then spawn batches. Definitions
+    // are ready before a new creature can raise its spawn edge.
     run_sql_statements(&args, &plan.stmts, "creatures")?;
+    if family_active(&args, "creature-ai") {
+        eprintln!(
+            "reducer: loading {} EventAI definitions with {} instructions in {} batch(es)…",
+            plan.eventai_definition_count,
+            plan.eventai_instruction_count,
+            plan.eventai_definition_batches.len()
+        );
+        for (index, batch) in plan.eventai_definition_batches.iter().enumerate() {
+            let reducer = if index == 0 {
+                "import_creature_ai_definitions"
+            } else {
+                "import_creature_ai_definitions_append"
+            };
+            call_reducer(&args, reducer, batch)
+                .with_context(|| format!("EventAI definition batch {index}"))?;
+        }
+    }
     if family_active(&args, "creatures") {
         eprintln!(
             "reducer: loading {} spawns in {} batch(es)…",
@@ -6376,6 +6431,32 @@ mod tests {
     }
 
     #[test]
+    fn command_selects_only_the_committed_eventai_source_profile() {
+        let default = parse_args_from(["--dump", "/path/need-not-exist.sql"])
+            .expect("default EventAI Source Profile");
+        assert_eq!(default.eventai_profile, eventai::SOURCE_PROFILE_NAME);
+
+        let selected = parse_args_from([
+            "--dump",
+            "/path/need-not-exist.sql",
+            "--eventai-profile",
+            eventai::SOURCE_PROFILE_NAME,
+        ])
+        .expect("named EventAI Source Profile");
+        assert_eq!(selected.eventai_profile, eventai::SOURCE_PROFILE_NAME);
+
+        let error = parse_args_from([
+            "--dump",
+            "/definitely/not/read.sql",
+            "--eventai-profile",
+            "cmangos-classic-z2815-moving-target",
+        ])
+        .err()
+        .expect("unknown EventAI Source Profile");
+        assert!(format!("{error:#}").contains("unknown EventAI source profile"));
+    }
+
+    #[test]
     fn command_selects_each_canonical_world_profile() {
         for name in WorldImportProfile::NAMES {
             let args = parse_args_from([
@@ -6938,6 +7019,7 @@ mod tests {
             apply: false,
             family: None,
             source_sha: String::new(),
+            eventai_profile: eventai::SOURCE_PROFILE_NAME.to_string(),
         }
     }
 
@@ -7153,6 +7235,7 @@ mod tests {
                 [[11, 42, target, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
             ));
         }
+        let second_insert = rules.split_off(8);
         format!(
             "x INSERT INTO `creature` VALUES \
              (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\
@@ -7161,6 +7244,7 @@ mod tests {
              INSERT INTO `broadcast_text` VALUES {},{},{},{}; \
              INSERT INTO `script_texts` VALUES (-1,'Old\\'s','','','','','','','','',0,1,0,2,0); \
              INSERT INTO `creature_ai_summons` VALUES (700,1,2,3,4,5); \
+             INSERT INTO `creature_ai_scripts` VALUES {}; \
              INSERT INTO `creature_ai_scripts` VALUES {}; y",
             creature_template_row(100, 0),
             creature_template_row(200, 0),
@@ -7169,6 +7253,7 @@ mod tests {
             eventai_broadcast_row(902, "Two", "Two"),
             eventai_broadcast_row(903, "Unused", "Unused"),
             rules.join(","),
+            second_insert.join(","),
         )
     }
 
@@ -7178,60 +7263,57 @@ mod tests {
         let mut args = test_args();
         args.family = Some("creature-ai".to_string());
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
-        assert_eq!(plan.stamps, vec![("creature-ai", 24)]);
-        assert_eq!(plan.stmts.len(), 6, "{:?}", plan.stmts);
+        assert_eq!(plan.stamps, vec![("creature-ai", 8)]);
+        assert_eq!(plan.eventai_definition_count, 3);
+        assert_eq!(plan.eventai_instruction_count, 19);
+        assert_eq!(plan.stmts.len(), 4, "{:?}", plan.stmts);
         assert_eq!(
-            &plan.stmts[..3],
+            &plan.stmts[..2],
             [
-                "DELETE FROM game_creature_ai_event WHERE id > 0",
                 "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0",
                 "DELETE FROM game_creature_ai_summon WHERE id > 0",
             ],
-            "a full EventAI reload replaces both imported rows and reserved fixtures"
+            "the family replaces its dependency catalogues"
         );
         assert!(plan.stmts.iter().all(|statement| {
-            statement.contains("game_creature_ai_event")
-                || statement.contains("game_creature_ai_broadcast_text")
+            statement.contains("game_creature_ai_broadcast_text")
                 || statement.contains("game_creature_ai_summon")
         }));
         assert!(!plan.stmts.iter().any(|statement| {
-            statement.contains("game_creature_ai_state")
+            statement.contains("game_creature_ai_event")
+                || statement.contains("game_creature_ai_definition")
+                || statement.contains("game_creature_ai_state")
                 || statement.contains("game_creature_ai_rule_state")
         }));
 
-        let events = plan
-            .stmts
-            .iter()
-            .find(|statement| statement.starts_with("INSERT INTO game_creature_ai_event"))
-            .expect("EventAI rows");
+        let definitions = plan.eventai_definition_batches.join("\n");
         assert!(
-            events.contains("(4611686018427387944,100,1,0,''"),
-            "{events}"
+            definitions.contains("entry:100@")
+                && definitions.contains(&format!("guid:{}@", world_guid(100, 2)))
+                && definitions.contains("entry:200@"),
+            "{definitions}"
         );
         assert!(
-            events.contains(",10,0,0,100,4294967293,3,1,1000,2000,3000,4000"),
-            "{events}"
+            definitions.contains(
+                "10,timer:1000:2000,100,4294967293,repeat:3000:4000,random,combat,speak:yell:self:900.901.902"
+            ),
+            "{definitions}"
         );
         assert!(
-            events.contains(",11,0,0,75,4294967295,0,0,20,80,100,200"),
-            "{events}"
+            definitions.contains(
+                "11,health:20:80,75,4294967295,once,all,ordinary,cast:42:opponent:1:0:1:1:1+emote:7:self+flee"
+            ),
+            "{definitions}"
         );
         assert!(
-            events.contains(",15,0,0,100,4294967295,0,0,0,0,0,0,0,0,900,0,0,0,0)"),
-            "{events}"
+            definitions.contains("14,range:5:20,100,4294967295,once,all,ordinary,posture:15:-45"),
+            "{definitions}"
         );
         assert!(
-            events.contains(&format!(",16,0,{},100,4294967295", world_guid(100, 2))),
-            "{events}"
+            definitions
+                .contains("15,aggro,100,4294967295,once,all,ordinary,speak:yell:opponent:900"),
+            "{definitions}"
         );
-        assert!(events.contains(",17,0,0,100,4294967295,0,0"), "{events}");
-        assert!(events.contains(",15,4294967251,0,0,0)"), "{events}");
-        for target in [0, 1, 3, 4, 5, 6, 8, 9, 10] {
-            assert!(
-                events.contains(&format!(",{target},")),
-                "missing native target {target}: {events}"
-            );
-        }
         let texts = plan
             .stmts
             .iter()
@@ -7241,36 +7323,66 @@ mod tests {
         assert!(texts.contains("Old''s"), "{texts}");
         assert!(!texts.contains("Unused"), "{texts}");
         assert!(texts.contains(",8,5,9,6,10,7)"), "{texts}");
+        let manifest = plan.eventai_manifest.as_deref().expect("manifest");
+        assert!(manifest.contains("\"source_rules\": 15"), "{manifest}");
+        assert!(
+            manifest.contains("\"emitted_instructions\": 19"),
+            "{manifest}"
+        );
+        assert!(manifest.contains("\"apply_ready\": false"), "{manifest}");
 
         let again = build_dump_plan(&dump, &args, &None, &None).expect("repeat EventAI plan");
         assert_eq!(plan.stmts, again.stmts);
+        assert_eq!(
+            plan.eventai_definition_batches,
+            again.eventai_definition_batches
+        );
+        assert_eq!(plan.eventai_manifest, again.eventai_manifest);
     }
 
     #[test]
-    fn eventai_row_carries_the_entry_or_the_spawn_guid_but_never_both() {
-        // The Module decodes a subject as (entry, 0) or (0, guid) and refuses a row that sets both,
-        // so a guid-scoped source rule has to clear the entry column it resolved the guid through.
+    fn eventai_definition_uses_entry_or_remapped_guid_subject() {
         let dump = eventai_fixture_dump();
         let mut args = test_args();
         args.family = Some("creature-ai".to_string());
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
-        let events = plan
-            .stmts
-            .iter()
-            .find(|statement| statement.starts_with("INSERT INTO game_creature_ai_event"))
-            .expect("EventAI rows");
+        let definitions = plan.eventai_definition_batches.join("\n");
 
-        // Source rule 16 names spawn guid 2 (`creature_id` -2); source rule 17 names entry 200.
+        // Source rule 16 names spawn guid 2. Source rule 17 names entry 200.
         assert!(
-            events.contains(&format!(
-                "(4611686018427387968,0,3,0,'',0,0,0,0,0,16,0,{},100,",
-                world_guid(100, 2)
-            )),
-            "{events}"
+            definitions
+                .lines()
+                .any(|definition| definition.starts_with(&format!("guid:{}@", world_guid(100, 2)))),
+            "{definitions}"
         );
         assert!(
-            events.contains("(4611686018427387972,200,5,0,'',0,0,0,0,0,17,0,0,100,"),
-            "{events}"
+            definitions
+                .lines()
+                .any(|definition| definition.starts_with("entry:200@")),
+            "{definitions}"
+        );
+    }
+
+    #[test]
+    fn eventai_apply_refuses_during_pure_plan_construction() {
+        let dump = eventai_fixture_dump();
+        let mut args = test_args();
+        args.family = Some("creature-ai".to_string());
+        args.apply = true;
+
+        let error = build_dump_plan(&dump, &args, &None, &None)
+            .err()
+            .expect("the compact dump cannot satisfy the full source profile")
+            .to_string();
+
+        assert!(
+            error.contains("compatibility manifest is not approved"),
+            "{error}"
+        );
+        assert!(error.contains("sql_sha256 expected="), "{error}");
+        assert!(
+            error.contains("source_rule_count expected=10843 observed=15"),
+            "{error}"
         );
     }
 
@@ -7307,12 +7419,11 @@ mod tests {
             plan.stmts
         );
         assert!(
-            !plan
-                .stmts
+            plan.eventai_definition_batches
                 .iter()
-                .any(|statement| statement.starts_with("INSERT INTO game_creature_ai_event")),
+                .all(|batch| !batch.contains("entry:100@")),
             "{:?}",
-            plan.stmts
+            plan.eventai_definition_batches
         );
     }
 
@@ -7521,7 +7632,7 @@ mod tests {
             ("missing_summon_creature", 999),
             ("missing_summon_location", 999),
             ("malformed_rule", 1),
-            ("invalid_numeric", 13),
+            ("empty_text", 1),
             ("unsupported_text_template", 77),
             ("unsupported_chat_type", 2),
             ("unsupported_target", 10),

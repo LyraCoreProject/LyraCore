@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, HashSet};
 
-use spacetimedb::{log, ReducerContext, Table};
+use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    effective_rule_id, ActionKind, ActionResult, BroadcastLine, CreatureAiEvent,
-    CreatureAiRuleState, CreatureAiState, CreatureState, Diagnostic, DiagnosticKind, EngagedFight,
-    EventAiRequest, EventAiUnit, EventContext, EventKind, RepeatPolicy, Rule, RuleAction,
-    RuleState, Subject, SummonLocation, TargetPolicy, SOURCE_FLAG_COMBAT_ACTION,
+    ActionResult, BroadcastLine, CreatureAiRuleState, CreatureAiState, CreatureInstruction,
+    CreatureState, DefinitionRevision, EngagedFight, EventAiDefinition, EventAiRequest,
+    EventAiRule, EventAiUnit, EventCondition, EventContext, ExecutionPolicy, InstructionSelection,
+    InstructionTarget, RecurrencePolicy, RuleState, SpeakInstruction, SpeechMode, SummonLocation,
 };
 use crate::chat::{is_supported_chat_type, CHAT_SAY, CHAT_YELL};
 use crate::creatures::ai::TickScope;
@@ -28,7 +28,7 @@ pub(crate) trait EventAiWorld {
     fn eventai_now_ms(&self) -> u64;
     /// The live melee fights whose attacker runs its entry's EventAI, within `scope`.
     fn eventai_fights(&self, scope: &TickScope) -> Vec<EngagedFight>;
-    fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent>;
+    fn eventai_definition(&self, creature_guid: u64) -> EventAiDefinition;
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState;
     fn eventai_rule_state(&self, creature_guid: u64, rule_id: u64) -> Option<RuleState>;
     fn eventai_unit(&self, guid: u64) -> Option<EventAiUnit>;
@@ -50,6 +50,12 @@ pub(crate) trait EventAiWorld {
 
     // Effects.
     fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8);
+    /// Adopt one normalized definition and clear only reversible state owned by the old revision.
+    fn adopt_eventai_revision(
+        &mut self,
+        creature_guid: u64,
+        revision: DefinitionRevision,
+    ) -> CreatureState;
     fn put_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64, state: RuleState);
     fn delete_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64);
     /// Remove state for missing rules on this evaluated creature. Lifecycle edges clean state for
@@ -86,7 +92,6 @@ pub(crate) trait EventAiWorld {
     );
     /// The fresh summon joins the fight against `target_guid`.
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64);
-    fn eventai_diagnostic(&mut self, diagnostic: Diagnostic);
 }
 
 pub(crate) fn evaluate<W: EventAiWorld>(world: &mut W, request: EventAiRequest<'_>) -> u64 {
@@ -103,47 +108,65 @@ pub(crate) fn evaluate<W: EventAiWorld>(world: &mut W, request: EventAiRequest<'
             .push(context);
     }
     for (creature_guid, contexts) in contexts_by_creature {
-        let rows = world.eventai_rows(creature_guid);
-        visited += rows.len() as u64;
-        let valid_rule_ids = rows.iter().map(effective_rule_id).collect();
-        world.reap_eventai_rule_state(creature_guid, &valid_rule_ids);
-        let mut groups: BTreeMap<u64, Vec<CreatureAiEvent>> = BTreeMap::new();
-        for row in rows {
-            groups.entry(effective_rule_id(&row)).or_default().push(row);
+        let definition = world.eventai_definition(creature_guid);
+        visited += definition
+            .rules
+            .iter()
+            .map(|rule| rule.instructions.len() as u64)
+            .sum::<u64>();
+        let creature_state = world.eventai_creature_state(creature_guid);
+        let legacy_state_without_definition = definition.rules.is_empty()
+            && definition.revision == DefinitionRevision::default()
+            && (creature_state.phase != 0
+                || creature_state.ranged_posture_active
+                || creature_state.ranged_distance != 0.0
+                || creature_state.ranged_angle != 0.0);
+        if creature_state.definition_revision != definition.revision
+            || legacy_state_without_definition
+        {
+            world.adopt_eventai_revision(creature_guid, definition.revision);
         }
-        for rows in groups.into_values() {
-            let rule = match Rule::decode(rows) {
-                Ok(rule) => rule,
-                Err(diagnostic) => {
-                    world.eventai_diagnostic(diagnostic);
-                    continue;
-                }
-            };
-            let Some(context) = contexts.iter().find(|context| context.kind == rule.event) else {
+        let valid_rule_ids = definition
+            .rules
+            .iter()
+            .map(|rule| rule.source_rule_id)
+            .collect();
+        world.reap_eventai_rule_state(creature_guid, &valid_rule_ids);
+        for rule in &definition.rules {
+            let Some(context) = contexts
+                .iter()
+                .find(|context| context.kind == rule.event.kind())
+            else {
                 continue;
             };
-            evaluate_rule(world, context, &rule);
+            let creature_state = world.eventai_creature_state(creature_guid);
+            evaluate_rule(world, context, rule, creature_state);
         }
     }
     visited
 }
 
-fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &Rule) {
-    if rule.event != context.kind || !subject_matches(rule.subject, context.creature_guid) {
+fn evaluate_rule<W: EventAiWorld>(
+    world: &mut W,
+    context: &EventContext,
+    rule: &EventAiRule,
+    creature_state: CreatureState,
+) {
+    if rule.event.kind() != context.kind {
         return;
     }
-    let creature_state = world.eventai_creature_state(context.creature_guid);
-    if creature_state.phase >= 32 || rule.allowed_phase_mask & (1u32 << creature_state.phase) == 0 {
+    if creature_state.phase >= 32 || rule.allowed_phases.bits & (1u32 << creature_state.phase) == 0
+    {
         return;
     }
     let state = world
-        .eventai_rule_state(context.creature_guid, rule.id)
+        .eventai_rule_state(context.creature_guid, rule.source_rule_id)
         .filter(|state| {
             state.lifecycle_id == creature_state.lifecycle_id
                 && state.engagement_id == creature_state.engagement_id
         });
     if state.is_none() {
-        world.delete_eventai_rule_state(context.creature_guid, rule.id);
+        world.delete_eventai_rule_state(context.creature_guid, rule.source_rule_id);
     }
     if state.is_some_and(|state| state.consumed) {
         return;
@@ -153,11 +176,11 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
         return;
     }
 
-    if rule.event == EventKind::TimedInCombat && state.is_none() {
-        let delay = roll_window(world, rule.event_params[0], rule.event_params[1]);
+    if let (EventCondition::TimedInCombat(window), None) = (rule.event, state) {
+        let delay = roll_window(world, window.min_ms, window.max_ms);
         world.put_eventai_rule_state(
             context.creature_guid,
-            rule.id,
+            rule.source_rule_id,
             RuleState {
                 next_eligible_ms: context.now_ms.saturating_add(delay),
                 consumed: false,
@@ -172,94 +195,81 @@ fn evaluate_rule<W: EventAiWorld>(world: &mut W, context: &EventContext, rule: &
         return;
     };
 
-    // A missed chance roll costs the opportunity, never the rule. CMaNGOS re-arms a recurring
+    // A missed chance roll costs the opportunity, never the rule. The source contract re-arms a recurring
     // event's repeat window before it rolls and returns without disabling the event, so a repeat
     // rule waits one window and a once-only rule stays armed to roll again next opportunity.
     if rule.chance_pct < 100 && world.eventai_roll() % 100 >= rule.chance_pct as u32 {
         if let Some(state) = repeat_state(world, &context, rule, creature_state) {
-            world.put_eventai_rule_state(context.creature_guid, rule.id, state);
+            world.put_eventai_rule_state(context.creature_guid, rule.source_rule_id, state);
         }
         return;
     }
 
-    let actions: Vec<&RuleAction> = if rule
-        .source_policy
-        .contains(super::SOURCE_FLAG_RANDOM_ACTION)
-    {
-        rule.actions
-            .get(world.eventai_roll() as usize % rule.actions.len())
+    let instructions: Vec<&CreatureInstruction> = match (rule.selection, rule.instructions.len()) {
+        (InstructionSelection::RandomOne, 0) => Vec::new(),
+        (InstructionSelection::RandomOne, len) => rule
+            .instructions
+            .get(world.eventai_roll() as usize % len)
             .into_iter()
-            .collect()
-    } else {
-        rule.actions.iter().collect()
+            .collect(),
+        (InstructionSelection::All, _) => rule.instructions.iter().collect(),
     };
-    for (index, action) in actions.into_iter().enumerate() {
-        if context.assisted && matches!(action.kind, ActionKind::Say | ActionKind::Yell) {
+    for (index, instruction) in instructions.into_iter().enumerate() {
+        if context.assisted && matches!(instruction, CreatureInstruction::Speak(_)) {
             continue;
         }
-        let result = execute_action(world, &context, action);
+        let result = execute_instruction(world, &context, instruction);
         match result {
             ActionResult::Applied => {}
             // A Refusal from a LATER action does not rewind the actions already applied, so it
             // spends the opportunity like any other outcome.
-            ActionResult::Refused if index == 0 && action.kind == ActionKind::Cast => {
+            ActionResult::Refused
+                if index == 0 && matches!(instruction, CreatureInstruction::Cast(_)) =>
+            {
                 hold_opportunity_open(world, &context, rule, creature_state);
                 return;
             }
             ActionResult::Refused => {}
-            ActionResult::Unsupported => {
-                world.eventai_diagnostic(Diagnostic {
-                    rule_id: rule.id,
-                    row_id: action.row_id,
-                    kind: DiagnosticKind::UnsupportedAction,
-                    value: action.kind as u64,
-                });
-                return;
-            }
+            ActionResult::Unsupported => return,
         }
     }
     finish_opportunity(world, &context, rule, creature_state);
 }
 
-fn execute_action<W: EventAiWorld>(
+fn execute_instruction<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    action: &RuleAction,
+    instruction: &CreatureInstruction,
 ) -> ActionResult {
-    match action.kind {
-        ActionKind::Say => {
-            speak(world, context, action, CHAT_SAY);
+    match instruction {
+        CreatureInstruction::Speak(speech) => {
+            speak(world, context, speech);
             ActionResult::Applied
         }
-        ActionKind::Yell => {
-            speak(world, context, action, CHAT_YELL);
-            ActionResult::Applied
-        }
-        ActionKind::Cast => {
-            let Some(target) = basic_target(world, context, action) else {
+        CreatureInstruction::Cast(cast) => {
+            let Some(target) = basic_target(world, context, cast.target, Some(cast)) else {
                 return ActionResult::Refused;
             };
-            if action.params[0] == 0 {
+            if cast.spell_id == 0 {
                 ActionResult::Refused
             } else {
-                super::combat::cast(world, context, action, target)
+                super::combat::cast(world, context, cast, target)
             }
         }
-        ActionKind::SetPhase => {
-            let Ok(phase) = u8::try_from(action.params[0]) else {
-                return ActionResult::Refused;
-            };
-            if phase >= 32 {
+        CreatureInstruction::SetPhase(set_phase) => {
+            if set_phase.phase >= 32 {
                 return ActionResult::Refused;
             }
-            world.set_eventai_phase(context.creature_guid, phase);
+            world.set_eventai_phase(context.creature_guid, set_phase.phase);
             ActionResult::Applied
         }
-        ActionKind::Emote | ActionKind::FleeForAssist | ActionKind::CallForHelp => {
-            super::combat::execute(world, context, action)
+        CreatureInstruction::Emote(_)
+        | CreatureInstruction::FleeForAssist
+        | CreatureInstruction::CallForHelp(_) => {
+            super::combat::execute(world, context, instruction)
         }
-        ActionKind::Summon | ActionKind::SetRangedPosture => {
-            super::mobility::execute(world, context, action)
+        CreatureInstruction::Summon(_) | CreatureInstruction::SetRangedPosture(_) => {
+            super::mobility::execute(world, context, instruction)
         }
     }
 }
@@ -268,20 +278,19 @@ fn execute_action<W: EventAiWorld>(
 /// chat type; the authored action decides when that is not one this tier relays (a monster emote
 /// line still reaches players as its say/yell). The broadcast text's emote belongs to the line,
 /// so a Refusal at delivery silences both.
-fn speak<W: EventAiWorld>(
-    world: &mut W,
-    context: &EventContext,
-    action: &RuleAction,
-    chat_type: u8,
-) {
-    let ids: Vec<u32> = action.params.into_iter().filter(|id| *id != 0).collect();
+fn speak<W: EventAiWorld>(world: &mut W, context: &EventContext, speech: &SpeakInstruction) {
+    let chat_type = match speech.mode {
+        SpeechMode::Say => CHAT_SAY,
+        SpeechMode::Yell => CHAT_YELL,
+    };
+    let ids = &speech.broadcast_ids;
     let picked = match ids.len() {
         0 => None,
         1 => Some(ids[0]),
         len => Some(ids[world.eventai_roll() as usize % len]),
     };
     let (message, chat_type, language, emote) = match picked {
-        None => (action.legacy_text.clone(), chat_type, 0, 0),
+        None => (speech.legacy_text.clone(), chat_type, 0, 0),
         Some(id) => {
             let Some(line) = world.eventai_broadcast(id) else {
                 return;
@@ -307,21 +316,22 @@ fn speak<W: EventAiWorld>(
 fn basic_target<W: EventAiWorld>(
     world: &W,
     context: &EventContext,
-    action: &RuleAction,
+    target: InstructionTarget,
+    cast: Option<&super::CastInstruction>,
 ) -> Option<u64> {
-    match action.target {
-        TargetPolicy::Current => context.current_target_guid,
-        TargetPolicy::SelfActor => Some(context.creature_guid),
-        TargetPolicy::Invoker => context.invoker_guid,
-        TargetPolicy::EventTarget => context.event_target_guid,
-        _ => super::combat::target(world, context, action),
+    match target {
+        InstructionTarget::CurrentOpponent => context.current_target_guid,
+        InstructionTarget::SelfActor => Some(context.creature_guid),
+        InstructionTarget::Invoker => context.invoker_guid,
+        InstructionTarget::EventSubject => context.event_target_guid,
+        _ => super::combat::target(world, context, target, cast),
     }
 }
 
 fn finish_opportunity<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    rule: &Rule,
+    rule: &EventAiRule,
     creature_state: CreatureState,
 ) {
     let state = repeat_state(world, context, rule, creature_state).unwrap_or(RuleState {
@@ -330,27 +340,27 @@ fn finish_opportunity<W: EventAiWorld>(
         lifecycle_id: creature_state.lifecycle_id,
         engagement_id: creature_state.engagement_id,
     });
-    world.put_eventai_rule_state(context.creature_guid, rule.id, state);
+    world.put_eventai_rule_state(context.creature_guid, rule.source_rule_id, state);
 }
 
 /// A Refusal from a rule's OPENING cast is transient (a cast already in flight, the target out of
 /// range or gone), so the rule keeps its opportunity instead of spending a whole repeat window on
 /// it. A rule the source marks as the creature's combat action comes back on the very next firing,
-/// the way CMaNGOS retries one; every other rule waits `CAST_RETRY_MS`, which is the retry the
+/// the way the source retries one; every other rule waits `CAST_RETRY_MS`, which is the retry the
 /// timer evaluator this engine replaced used for the same Refusal. An edge rule keeps its arming
 /// untouched either way: no window stamped on an edge would ever be reached again.
 fn hold_opportunity_open<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    rule: &Rule,
+    rule: &EventAiRule,
     creature_state: CreatureState,
 ) {
-    if rule.source_policy.contains(SOURCE_FLAG_COMBAT_ACTION) || !rule.event.recurs() {
+    if rule.execution == ExecutionPolicy::CombatAction || !rule.event.kind().recurs() {
         return;
     }
     world.put_eventai_rule_state(
         context.creature_guid,
-        rule.id,
+        rule.source_rule_id,
         RuleState {
             next_eligible_ms: context.now_ms.saturating_add(CAST_RETRY_MS),
             consumed: false,
@@ -365,36 +375,31 @@ fn hold_opportunity_open<W: EventAiWorld>(
 fn repeat_state<W: EventAiWorld>(
     world: &W,
     context: &EventContext,
-    rule: &Rule,
+    rule: &EventAiRule,
     creature_state: CreatureState,
 ) -> Option<RuleState> {
-    (rule.repeat == RepeatPolicy::Repeat && rule.event.recurs()).then(|| RuleState {
-        next_eligible_ms: context.now_ms.saturating_add(roll_window(
-            world,
-            rule.event_params[2],
-            rule.event_params[3],
-        )),
-        consumed: false,
-        lifecycle_id: creature_state.lifecycle_id,
-        engagement_id: creature_state.engagement_id,
-    })
+    match rule.recurrence {
+        RecurrencePolicy::Repeat(window) if rule.event.kind().recurs() => Some(RuleState {
+            next_eligible_ms: context.now_ms.saturating_add(roll_window(
+                world,
+                window.min_ms,
+                window.max_ms,
+            )),
+            consumed: false,
+            lifecycle_id: creature_state.lifecycle_id,
+            engagement_id: creature_state.engagement_id,
+        }),
+        RecurrencePolicy::Once | RecurrencePolicy::Repeat(_) => None,
+    }
 }
 
-/// Random ms in `[min, max]`. An empty or inverted window is a fixed cadence of `min` and costs no
-/// roll: `Rule::decode` refuses an inverted one, and this is what keeps a row that slipped past it
-/// from wrapping the span to weeks or dividing by zero.
+/// Random milliseconds in `[min, max]`. A fixed window costs no roll. The loader refuses an
+/// inverted window, and this guard keeps an invalid test definition from wrapping the span.
 fn roll_window<W: EventAiWorld>(world: &W, min: u32, max: u32) -> u64 {
     if max <= min {
         return min as u64;
     }
     min as u64 + (world.eventai_roll() as u64 % (u64::from(max) - u64::from(min) + 1))
-}
-
-fn subject_matches(subject: Subject, creature_guid: u64) -> bool {
-    match subject {
-        Subject::Entry(_) => true,
-        Subject::Guid(guid) => guid == creature_guid,
-    }
 }
 
 pub(crate) struct DatabaseWorld<'a> {
@@ -460,8 +465,8 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .collect()
     }
 
-    fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent> {
-        super::combat::rows_for(self.ctx, creature_guid)
+    fn eventai_definition(&self, creature_guid: u64) -> EventAiDefinition {
+        super::combat::definition_for(self.ctx, creature_guid)
     }
 
     fn eventai_creature_state(&self, creature_guid: u64) -> CreatureState {
@@ -607,9 +612,48 @@ impl EventAiWorld for DatabaseWorld<'_> {
                     ranged_distance: 0.0,
                     ranged_angle: 0.0,
                     ranged_posture_active: false,
+                    definition_revision: 0,
                 });
             }
         }
+    }
+
+    fn adopt_eventai_revision(
+        &mut self,
+        creature_guid: u64,
+        revision: DefinitionRevision,
+    ) -> CreatureState {
+        let rule_state = self.ctx.db.game_creature_ai_rule_state();
+        for row in rule_state
+            .by_creature()
+            .filter(&creature_guid)
+            .collect::<Vec<_>>()
+        {
+            rule_state.id().delete(row.id);
+        }
+
+        let table = self.ctx.db.game_creature_ai_state();
+        let row = match self.state_row(creature_guid) {
+            Some(mut row) => {
+                row.phase = 0;
+                row.ranged_distance = 0.0;
+                row.ranged_angle = 0.0;
+                row.ranged_posture_active = false;
+                row.definition_revision = revision.value;
+                table.creature_guid().update(row)
+            }
+            None => table.insert(CreatureAiState {
+                creature_guid,
+                phase: 0,
+                lifecycle_id: 1,
+                engagement_id: 1,
+                ranged_distance: 0.0,
+                ranged_angle: 0.0,
+                ranged_posture_active: false,
+                definition_revision: revision.value,
+            }),
+        };
+        CreatureState::from(row)
     }
 
     fn put_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64, state: RuleState) {
@@ -732,6 +776,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                     ranged_distance: distance_yd,
                     ranged_angle: angle_rad,
                     ranged_posture_active: true,
+                    definition_revision: 0,
                 });
             }
         }
@@ -771,9 +816,5 @@ impl EventAiWorld for DatabaseWorld<'_> {
 
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64) {
         super::mobility::engage_summon(self.ctx, summon_guid, target_guid)
-    }
-
-    fn eventai_diagnostic(&mut self, diagnostic: Diagnostic) {
-        log::error!("EventAI rule refused: {diagnostic:?}");
     }
 }

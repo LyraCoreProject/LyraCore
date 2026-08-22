@@ -464,6 +464,7 @@ fn combat_end_clears_only_engagement_state() {
             ranged_distance: 20.0,
             ranged_angle: 1.0,
             ranged_posture_active: true,
+            definition_revision: DefinitionRevision::default(),
         },
     );
     scenario.eventai_rule_state.borrow_mut().insert(
@@ -503,6 +504,7 @@ fn combat_end_clears_only_engagement_state() {
             ranged_distance: 0.0,
             ranged_angle: 0.0,
             ranged_posture_active: false,
+            definition_revision: DefinitionRevision::default(),
         }
     );
 }

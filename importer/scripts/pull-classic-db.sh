@@ -39,13 +39,12 @@
 #   importer/scripts/pull-classic-db.sh                        # clone/fetch, checkout the locked SHA, verify
 #   CLASSIC_DB_REF=master importer/scripts/pull-classic-db.sh --skip-verify   # float master, skip the pinned checksum
 #
-# Output: .import/classic-db-full.sql — importer/scripts/import-world.sh's default $DUMP path.
+# Output: .import/classic-db-full.sql, importer/scripts/import-world.sh's default $DUMP path.
 # classic-db ships its world database as ONE gzipped mysqldump under Full_DB/ (today:
 # Full_DB/ClassicDB_1_12_1_z<rev>.sql.gz), so "assemble" means: decompress every file the glob
-# matches, in glob order, into one plain-text file the importer can parse. Plain .sql files matched
-# by the glob are concatenated as-is, so a future upstream layout that splits the dump back into
-# per-table files keeps working. If upstream moves the dump somewhere else entirely, adjust
-# ASSEMBLE_GLOB below — the "no *.sql files found" abort tells you that has happened.
+# matches, in glob order, into one plain-text file the importer can parse. The script adds no bytes,
+# so the profile digest covers the exact decompressed source. If upstream splits or moves the dump,
+# the profile must change before import.
 #
 # Bump procedure for importer/scripts/classic-db.lock (one line): run
 #   CLASSIC_DB_REF=master importer/scripts/pull-classic-db.sh --skip-verify
@@ -98,7 +97,7 @@ clone_or_fetch() {
 }
 
 # --- assemble the single dump file the importer reads --------------------------------------------
-# NEVER executes any cmangos SQL — pure concatenation of files the importer will PARSE, not run.
+# NEVER executes any cmangos SQL. It only concatenates files the importer will parse.
 assemble() {
   : > "$OUT_FILE"
   shopt -s nullglob
@@ -116,7 +115,6 @@ assemble() {
       *.gz) gzip -dc "$f" >> "$OUT_FILE" ;;
       *) cat "$f" >> "$OUT_FILE" ;;
     esac
-    echo ";" >> "$OUT_FILE"
   done
   echo "[pull-classic-db] assembled $OUT_FILE from ${#sql_files[@]} file(s)"
 }

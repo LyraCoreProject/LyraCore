@@ -23,7 +23,8 @@ chk() { # label  expected-exit  actual-exit
 }
 
 tmpfile="$(mktemp)"
-trap 'rm -f "$tmpfile"' EXIT
+fixture_dir="$(mktemp -d)"
+trap 'rm -f "$tmpfile"; rm -rf "$fixture_dir"' EXIT
 printf 'known fixture bytes for the checksum test' > "$tmpfile"
 good_sha256="$(sha256sum "$tmpfile" | awk '{print $1}')"
 bad_sha256="0000000000000000000000000000000000000000000000000000000000000000"
@@ -39,5 +40,18 @@ chk "mismatched sha256 exits nonzero" 1 "$?"
 echo "[test] verify_sha256 against a missing file:"
 verify_sha256 "/nonexistent/path/that/cannot/exist" "$good_sha256" >/dev/null 2>&1
 chk "missing file exits nonzero" 1 "$?"
+
+echo "[test] assemble preserves the exact decompressed bytes:"
+mkdir -p "$fixture_dir/source/Full_DB"
+printf 'exact profile bytes;\n' | gzip >"$fixture_dir/source/Full_DB/profile.sql.gz"
+CLONE_DIR="$fixture_dir/source"
+OUT_FILE="$fixture_dir/output.sql"
+ASSEMBLE_GLOB="Full_DB/*.sql*"
+assemble >/dev/null 2>&1
+if cmp -s <(printf 'exact profile bytes;\n') "$OUT_FILE"; then
+  chk "assembly adds no delimiter" 0 0
+else
+  chk "assembly adds no delimiter" 0 1
+fi
 
 if [ "$fail" = 0 ]; then echo "[test] OK — pull-classic-db.sh checksum fixture passed"; else echo "[test] FAIL"; exit 1; fi

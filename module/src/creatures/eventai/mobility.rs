@@ -4,7 +4,7 @@ use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuratio
 
 use super::engine::EventAiWorld;
 use super::{
-    ActionKind, ActionResult, EventAiUnit, EventContext, RuleAction, SummonLocation, TargetPolicy,
+    ActionResult, CreatureInstruction, EventAiUnit, EventContext, InstructionTarget, SummonLocation,
 };
 use crate::{game_creature_ai_state, game_creature_template, game_world_entity};
 
@@ -32,18 +32,24 @@ pub struct CreatureAiSummonExpiry {
 pub(super) fn execute<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    action: &RuleAction,
+    instruction: &CreatureInstruction,
 ) -> ActionResult {
-    match action.kind {
-        ActionKind::Summon => summon(world, context, action),
-        ActionKind::SetRangedPosture => {
-            let distance_yd = action.params[0] as f32;
-            let angle_rad = if action.params[0] == 0 {
+    match instruction {
+        CreatureInstruction::Summon(summon_instruction) => summon(
+            world,
+            context,
+            summon_instruction.creature_entry,
+            summon_instruction.summon_location_id,
+            summon_instruction.target,
+        ),
+        CreatureInstruction::SetRangedPosture(posture) => {
+            let distance = posture.distance_yd as f32;
+            let angle_rad = if posture.distance_yd == 0 {
                 0.0
             } else {
-                (action.params[1] as i32 as f32).to_radians()
+                (posture.angle_degrees as f32).to_radians()
             };
-            world.set_eventai_ranged_posture(context.creature_guid, distance_yd, angle_rad);
+            world.set_eventai_ranged_posture(context.creature_guid, distance, angle_rad);
             ActionResult::Applied
         }
         _ => ActionResult::Unsupported,
@@ -77,15 +83,17 @@ pub(crate) fn drop_summon_expiry(ctx: &ReducerContext, creature_guid: u64) {
 fn summon<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    action: &RuleAction,
+    creature_entry: u32,
+    summon_location_id: u32,
+    target: InstructionTarget,
 ) -> ActionResult {
     let Some(summoner) = world.eventai_unit(context.creature_guid) else {
         return ActionResult::Refused;
     };
-    let Some(location) = world.eventai_summon_location(action.params[2]) else {
+    let Some(location) = world.eventai_summon_location(summon_location_id) else {
         return ActionResult::Refused;
     };
-    if !world.eventai_summon_template_exists(action.params[0]) {
+    if !world.eventai_summon_template_exists(creature_entry) {
         return ActionResult::Refused;
     }
     if ![location.x, location.y, location.z, location.orientation]
@@ -95,9 +103,9 @@ fn summon<W: EventAiWorld>(
         return ActionResult::Refused;
     }
 
-    let selected_target = super::combat::target(world, context, action);
+    let selected_target = super::combat::target(world, context, target, None);
     let sequence = world.eventai_claim_summon_sequence(location.lifetime_ms);
-    let Some(guid) = summon_guid(action.params[0], sequence) else {
+    let Some(guid) = summon_guid(creature_entry, sequence) else {
         world.eventai_release_summon_sequence(sequence);
         return ActionResult::Refused;
     };
@@ -105,9 +113,9 @@ fn summon<W: EventAiWorld>(
         world.eventai_release_summon_sequence(sequence);
         return ActionResult::Refused;
     }
-    world.eventai_place_summon(sequence, guid, action.params[0], &location, &summoner);
+    world.eventai_place_summon(sequence, guid, creature_entry, &location, &summoner);
 
-    if action.target != TargetPolicy::SelfActor {
+    if target != InstructionTarget::SelfActor {
         if let Some(target_guid) = selected_target {
             world.eventai_engage_summon(guid, target_guid);
         }
