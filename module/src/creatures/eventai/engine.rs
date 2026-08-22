@@ -12,6 +12,7 @@ use super::{
 };
 use crate::chat::{is_supported_chat_type, CHAT_SAY, CHAT_YELL};
 use crate::creatures::ai::TickScope;
+use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
 use crate::spell::{game_aura, game_spell};
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_rule_state, game_creature_ai_spell_metadata,
@@ -102,6 +103,12 @@ pub(crate) trait EventAiWorld {
     fn eventai_scale_selected_threat(&mut self, operation: crate::threat::ScaleSelectedThreat);
     /// Scale every existing threat row through threat authority.
     fn eventai_scale_all_threat(&mut self, operation: crate::threat::ScaleAllThreat);
+    /// Route a typed quest-credit instruction through quest authority.
+    fn eventai_credit_quest(
+        &mut self,
+        request: EventAiQuestCredit,
+        credit_context: EventAiQuestCreditContext,
+    ) -> QuestCreditOutcome;
     fn stamp_eventai_rout(&mut self, creature_guid: u64, ends_ms: u32);
     fn set_eventai_ranged_posture(&mut self, creature_guid: u64, distance_yd: f32, angle_rad: f32);
     /// The idle friend joins the fight against `victim_guid` as an assist.
@@ -417,6 +424,9 @@ fn execute_instruction<W: EventAiWorld>(
                 ActionResult::Refused
             }
         }
+        CreatureInstruction::QuestCredit(_) => {
+            super::quest_credit::execute(world, context, instruction)
+        }
     }
 }
 
@@ -630,7 +640,8 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 | CreatureInstruction::SetLethalDamageFloor(_)
                 | CreatureInstruction::ForceDeath
                 | CreatureInstruction::ScaleAllThreat(_)
-                | CreatureInstruction::Presentation(_) => false,
+                | CreatureInstruction::Presentation(_)
+                | CreatureInstruction::QuestCredit(_) => false,
             })
 }
 
@@ -829,6 +840,14 @@ impl EventAiWorld for DatabaseWorld<'_> {
 
     fn eventai_scale_all_threat(&mut self, operation: crate::threat::ScaleAllThreat) {
         crate::threat::scale_all_threat(self.ctx, operation);
+    }
+
+    fn eventai_credit_quest(
+        &mut self,
+        request: EventAiQuestCredit,
+        credit_context: EventAiQuestCreditContext,
+    ) -> QuestCreditOutcome {
+        crate::quest::apply_eventai_credit(self.ctx, request, &credit_context)
     }
 
     fn eventai_has_aura(&self, guid: u64, spell_id: u32) -> bool {

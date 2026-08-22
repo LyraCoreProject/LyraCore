@@ -18,6 +18,7 @@ use crate::creatures::eventai::{
     TargetRangeCondition, TimeWindow,
 };
 use crate::creatures::{chase_step, rout_window_open};
+use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -32,6 +33,8 @@ mod eventai_edges;
 mod eventai_legacy;
 #[path = "harness/eventai_mobility.rs"]
 mod eventai_mobility;
+#[path = "harness/eventai_quest_credit.rs"]
+mod eventai_quest_credit;
 #[path = "harness/eventai_tracer.rs"]
 mod eventai_tracer;
 
@@ -243,6 +246,8 @@ struct Scenario {
     /// Ordered text effects emitted by authored rules.
     eventai_speech: RefCell<Vec<(u64, u8, String)>>,
     eventai_emotes: RefCell<Vec<(u64, u32, u32, u64)>>,
+    eventai_quest_credit_outcomes: RefCell<VecDeque<QuestCreditOutcome>>,
+    eventai_quest_credit_results: RefCell<Vec<QuestCreditOutcome>>,
     eventai_diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
@@ -439,6 +444,17 @@ impl Scenario {
 
     fn eventai_forced_deaths(&self) -> Vec<u64> {
         self.eventai_forced_deaths.borrow().clone()
+    }
+
+    fn eventai_quest_credit_results(&self) -> Vec<QuestCreditOutcome> {
+        self.eventai_quest_credit_results.borrow().clone()
+    }
+
+    fn eventai_quest_credit_outcome(self, outcome: QuestCreditOutcome) -> Self {
+        self.eventai_quest_credit_outcomes
+            .borrow_mut()
+            .push_back(outcome);
+        self
     }
 
     fn eventai_diagnostics(&self) -> Vec<Diagnostic> {
@@ -1848,6 +1864,20 @@ impl EventAiWorld for Scenario {
             .borrow_mut()
             .push((caster.guid, spell_id, target_guid));
         true
+    }
+
+    fn eventai_credit_quest(
+        &mut self,
+        _request: EventAiQuestCredit,
+        _credit_context: EventAiQuestCreditContext,
+    ) -> QuestCreditOutcome {
+        let outcome = self
+            .eventai_quest_credit_outcomes
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or(QuestCreditOutcome::Applied);
+        self.eventai_quest_credit_results.borrow_mut().push(outcome);
+        outcome
     }
 
     fn stamp_eventai_rout(&mut self, creature_guid: u64, ends_ms: u32) {

@@ -463,6 +463,7 @@ mod qt {
     pub const REQ_ITEM_COUNT1: usize = 44; // ..=47
     pub const REQ_CREATURE_OR_GO_ID1: usize = 56; // ..=59; >0 = creature entry, <0 = gameobject (skip)
     pub const REQ_CREATURE_OR_GO_COUNT1: usize = 60; // ..=63
+    pub const REQ_SPELL_CAST1: usize = 64; // ..=67; 0 = ordinary kill/use objective
     pub const REW_CHOICE_ITEM_ID1: usize = 68; // ..=73 RewChoiceItemId1-6 (pick-1-of-N choice rewards)
     pub const REW_CHOICE_ITEM_COUNT1: usize = 74; // ..=79 RewChoiceItemCount1-6
     pub const REW_ITEM_ID1: usize = 80; // ..=83 (guaranteed reward items)
@@ -2344,11 +2345,12 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
 }
 
 /// The normalized quest rows the ETL produces (SQL value-tuples ready to INSERT) plus the reward-item
-/// entry set the item-template load must include. A struct (not a tuple) so the six outputs stay named.
+/// entry set the item-template load must include. A struct (not a tuple) so its outputs stay named.
 struct QuestEtl {
     templates: Vec<String>,
     texts: Vec<String>,
     objectives: Vec<String>,
+    cast_objectives: Vec<String>,
     reward_items: Vec<String>,
     reward_choices: Vec<String>,
     relations: Vec<String>,
@@ -2682,6 +2684,7 @@ fn build_quests(
     let mut quest_rows: Vec<String> = Vec::new();
     let mut quest_text_rows: Vec<String> = Vec::new();
     let mut objective_rows: Vec<String> = Vec::new();
+    let mut cast_objective_rows: Vec<String> = Vec::new();
     let mut reward_item_rows: Vec<String> = Vec::new();
     let mut reward_choice_rows: Vec<String> = Vec::new();
     let mut reward_item_entries: HashSet<u64> = HashSet::new();
@@ -2690,6 +2693,7 @@ fn build_quests(
     let mut chained_count: usize = 0;
     let mut timed_count: usize = 0;
     let mut obj_id: u64 = 1;
+    let mut cast_obj_id: u64 = 1;
     let mut rew_id: u64 = 1;
     let mut rew_choice_id: u64 = 1;
     // Per-quest count of emitted objectives → the next obj_index for area-trigger objectives (added after
@@ -2773,6 +2777,7 @@ fn build_quests(
             let count: u32 = field(&row, qt::REQ_CREATURE_OR_GO_COUNT1 + i)
                 .parse()
                 .unwrap_or(0);
+            let spell_id: u32 = field(&row, qt::REQ_SPELL_CAST1 + i).parse().unwrap_or(0);
             if count == 0 {
                 continue;
             }
@@ -2780,6 +2785,11 @@ fn build_quests(
                 objective_rows.push(format!(
                     "({obj_id},{entry},{obj_index},0,{id},{count})", // kind 0 = KILL_CREATURE
                 ));
+                if spell_id != 0 {
+                    cast_objective_rows
+                        .push(format!("({cast_obj_id},{entry},{obj_index},{spell_id})"));
+                    cast_obj_id += 1;
+                }
                 obj_id += 1;
                 obj_index += 1;
             } else if id < 0 {
@@ -2790,6 +2800,11 @@ fn build_quests(
                     objective_rows.push(format!(
                         "({obj_id},{entry},{obj_index},2,{go_entry},{count})", // kind 2 = USE_GAMEOBJECT
                     ));
+                    if spell_id != 0 {
+                        cast_objective_rows
+                            .push(format!("({cast_obj_id},{entry},{obj_index},{spell_id})"));
+                        cast_obj_id += 1;
+                    }
                     obj_id += 1;
                     obj_index += 1;
                 }
@@ -2942,6 +2957,7 @@ fn build_quests(
         templates: quest_rows,
         texts: quest_text_rows,
         objectives: objective_rows,
+        cast_objectives: cast_objective_rows,
         reward_items: reward_item_rows,
         reward_choices: reward_choice_rows,
         relations: creature_quest_rows,
@@ -4420,11 +4436,11 @@ fn build_dump_plan(
     obtainable_items.extend(vendor_stock_item_set(dump, &entries));
     let quests = build_quests(dump, &entries, &used_go, &goober_entries, &obtainable_items);
     eprintln!(
-        "mapped: {} quests, {} text, {} objectives, {} reward items, {} choice rewards, \
+        "mapped: {} quests, {} text, {} objectives, {} cast objectives, {} reward items, {} choice rewards, \
          {} creature giver relations, {} gameobject giver relations, {} chained (next_quest_id>0) [V], \
          {} timed (limit_time>0) [V]",
         quests.templates.len(), quests.texts.len(), quests.objectives.len(),
-        quests.reward_items.len(), quests.reward_choices.len(), quests.relations.len(),
+        quests.cast_objectives.len(), quests.reward_items.len(), quests.reward_choices.len(), quests.relations.len(),
         quests.go_relations.len(), quests.chained_count, quests.timed_count,
     );
 
@@ -4631,13 +4647,14 @@ fn build_dump_plan(
         push_insert(&mut stmts, "game_gossip_option", "row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2", &gossip.option_rows);
     }
 
-    // Quests: clear+reload the 6 static quest tables (header / body text / objectives / reward items /
-    // creature giver relations / gameobject giver relations — work-item 041). game_character_quest
+    // Quests: clear+reload the static quest tables (header / body text / objectives / cast objectives /
+    // reward items / creature giver relations / gameobject giver relations). game_character_quest
     // (per-player progress) is born in the accept reducer, never here.
     if family_active(args, "quests") {
         stmts.push("DELETE FROM game_quest_template WHERE entry > 0".into());
         stmts.push("DELETE FROM game_quest_text WHERE quest_entry > 0".into());
         stmts.push("DELETE FROM game_quest_objective WHERE id > 0".into());
+        stmts.push("DELETE FROM game_quest_cast_objective WHERE id > 0".into());
         stmts.push("DELETE FROM game_quest_reward_item WHERE id > 0".into());
         stmts.push("DELETE FROM game_quest_reward_choice WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_quest WHERE id > 0".into());
@@ -4654,6 +4671,12 @@ fn build_dump_plan(
             "game_quest_objective",
             "id,quest_entry,obj_index,kind,target_entry,required_count",
             &quests.objectives,
+        );
+        push_insert(
+            &mut stmts,
+            "game_quest_cast_objective",
+            "id,quest_entry,obj_index,spell_id",
+            &quests.cast_objectives,
         );
         push_insert(
             &mut stmts,
@@ -7067,6 +7090,45 @@ mod tests {
         cols[qt::ENTRY] = entry.to_string();
         cols[qt::TITLE] = format!("'{title}'");
         format!("({})", cols.join(","))
+    }
+
+    fn quest_template_row_with_cast_objective(
+        entry: u64,
+        creature_entry: u32,
+        spell_id: u32,
+    ) -> String {
+        let mut cols = vec!["0".to_string(); qt::REW_MONEY_MAX_LEVEL + 1];
+        cols[qt::ENTRY] = entry.to_string();
+        cols[qt::TITLE] = "'Cast objective'".to_string();
+        cols[qt::REQ_CREATURE_OR_GO_ID1] = creature_entry.to_string();
+        cols[qt::REQ_CREATURE_OR_GO_COUNT1] = "2".to_string();
+        cols[qt::REQ_SPELL_CAST1] = spell_id.to_string();
+        format!("({})", cols.join(","))
+    }
+
+    #[test]
+    fn quest_import_keeps_spell_gated_objective_metadata_private() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500);",
+            creature_template_row(100, 0),
+            quest_template_row_with_cast_objective(500, 12297, 456),
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).unwrap();
+        let objectives = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_quest_objective"))
+            .unwrap();
+        assert!(objectives.contains("(1,500,0,0,12297,2)"), "{objectives}");
+        let casts = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_quest_cast_objective"))
+            .unwrap();
+        assert!(casts.contains("(1,500,0,456)"), "{casts}");
     }
 
     /// Like `quest_template_row` but also stamps `qt::NEXT_QUEST_IN_CHAIN` / `qt::LIMIT_TIME`

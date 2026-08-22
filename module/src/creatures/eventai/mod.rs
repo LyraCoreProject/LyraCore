@@ -11,6 +11,7 @@ mod combat;
 mod death;
 mod edges;
 mod mobility;
+mod quest_credit;
 mod threat;
 
 pub(crate) use combat::{authored_combat, current_definition_revision};
@@ -74,6 +75,7 @@ mod architecture_tests {
             include_str!("combat.rs"),
             include_str!("mobility.rs"),
             include_str!("threat.rs"),
+            include_str!("quest_credit.rs"),
             include_str!("edges.rs"),
             include_str!("fixtures.rs"),
             include_str!("loader.rs"),
@@ -143,6 +145,24 @@ mod architecture_tests {
             assert!(
                 !subscriptions.contains(&format!("SELECT * FROM {table}")),
                 "Gateway subscribes Module-only table `{table}`"
+            );
+        }
+    }
+
+    #[test]
+    fn quest_credit_reaches_quest_authority_without_writing_quest_tables() {
+        let capability = include_str!("quest_credit.rs");
+        assert!(capability.contains("eventai_credit_quest"));
+        for table_write in [
+            "game_character_quest()",
+            "game_character_quest_event_credit()",
+            ".insert(",
+            ".update(",
+            ".delete(",
+        ] {
+            assert!(
+                !capability.contains(table_write),
+                "quest-credit capability directly writes `{table_write}`"
             );
         }
     }

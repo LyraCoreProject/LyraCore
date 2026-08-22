@@ -21,6 +21,8 @@
 //! [`crate::xp::grant_xp`] + [`crate::items::grant_item`]), and marks the row rewarded (kept, to block
 //! a repeat). Purely additive: brand-new tables + one hook call in `kill_creature`.
 
+use std::collections::BTreeSet;
+
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::game_gameobject; // GAMEOBJECT quest givers (e.g. Wanted Poster, Lost Guards corpses)
@@ -47,6 +49,65 @@ pub mod objective_kind {
     /// Credited by [`on_areatrigger_entered`] from the CMSG_AREATRIGGER path, mirroring USE_GAMEOBJECT.
     /// `required_count` is 1 (a single explore). [explore]
     pub const EXPLORE_AREATRIGGER: u8 = 3;
+}
+
+/// The intended Character set for one EventAI quest-credit instruction.
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuestCreditRecipientPolicy {
+    SelectedCharacter,
+    InvokerBeneficiary,
+    TapGroup,
+    EligibleGroup,
+    ThreatListCharacters,
+}
+
+/// A source quest completion event.
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuestEvent {
+    pub quest_entry: u32,
+    pub recipient_policy: QuestCreditRecipientPolicy,
+}
+
+/// A source cast-credit event.
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CastCredit {
+    pub creature_entry: u32,
+    pub spell_id: u32,
+    pub recipient_policy: QuestCreditRecipientPolicy,
+}
+
+/// A source kill-credit event.
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KillCredit {
+    pub creature_entry: u32,
+    pub recipient_policy: QuestCreditRecipientPolicy,
+}
+
+/// One typed EventAI request to quest authority.
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EventAiQuestCredit {
+    QuestEvent(QuestEvent),
+    CastCredit(CastCredit),
+    KillCredit(KillCredit),
+}
+
+/// The dynamic facts one EventAI instruction supplies to quest authority.
+#[derive(Clone, Debug)]
+pub(crate) struct EventAiQuestCreditContext {
+    pub source_x: f32,
+    pub source_y: f32,
+    pub source_map_id: u32,
+    pub source_instance_id: u64,
+    pub selected_character: Option<u64>,
+    pub invoker_beneficiary: Option<u64>,
+    pub threat_characters: Vec<u64>,
+}
+
+/// The outcome quest authority returns to the EventAI instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QuestCreditOutcome {
+    Applied,
+    Refused,
 }
 
 /// `CreatureQuest.role` — whether a creature is where you GET the quest or where you HAND IT IN. A
@@ -202,6 +263,20 @@ pub struct QuestObjective {
     pub required_count: u32, // how many
 }
 
+/// The spell requirement on a quest objective. Kept separately from the public objective row because
+/// it is Module-only quest-credit metadata. A missing row means ordinary (non-spell) credit.
+#[table(
+    accessor = game_quest_cast_objective,
+    index(accessor = by_quest, btree(columns = [quest_entry]))
+)]
+pub struct QuestCastObjective {
+    #[primary_key]
+    pub id: u64,
+    pub quest_entry: u32,
+    pub obj_index: u8,
+    pub spell_id: u32,
+}
+
 /// A guaranteed reward item granted on turn-in (cmangos RewItemId/RewItemCount), granted alongside
 /// any [`QuestRewardChoice`] pick. Public + read-only, SQL-loadable. [static]
 #[table(accessor = game_quest_reward_item, public, index(accessor = by_quest, btree(columns = [quest_entry])))]
@@ -301,6 +376,20 @@ pub struct CharacterQuest {
     pub failed: bool,
 }
 
+/// A quest completed through an EventAI quest event. The row is private because it only changes the
+/// Module's turn-in Gate; the client already receives quest-log rows through its existing read path.
+#[table(
+    accessor = game_character_quest_event_credit,
+    index(accessor = by_character, btree(columns = [character_guid]))
+)]
+pub struct CharacterQuestEventCredit {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub character_guid: u64,
+    pub quest_entry: u32,
+}
+
 // Character-owned sweeps: the quest log is deleted on character delete, re-owned (identity
 // re-stamp) on a relog under a changed gateway identity.
 crate::character_owned!(delete, fn sweep_delete_game_character_quest(ctx, character_guid) {
@@ -326,6 +415,18 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_quest(ctx, char
     }
 });
 
+crate::character_owned!(delete, fn sweep_delete_game_character_quest_event_credit(ctx, character_guid) {
+    let credits = ctx.db.game_character_quest_event_credit();
+    for row in credits.by_character().filter(&character_guid).collect::<Vec<_>>() {
+        credits.id().delete(row.id);
+    }
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_character_quest_event_credit(ctx, character_guid, io) {
+    table = game_character_quest_event_credit,
+    by = by_character,
+    remint = id,
+});
+
 // ===========================================================================================
 //  Pure helpers
 // ===========================================================================================
@@ -339,6 +440,15 @@ pub const MAX_OBJECTIVES: usize = 4;
 /// met). A quest with NO objectives is trivially complete (a pure talk-to-giver quest). Used by
 /// [`turn_in_quest`] and surfaced for tests.
 fn quest_is_complete(ctx: &ReducerContext, cq: &CharacterQuest) -> bool {
+    if ctx
+        .db
+        .game_character_quest_event_credit()
+        .by_character()
+        .filter(&cq.character_guid)
+        .any(|credit| credit.quest_entry == cq.quest_entry)
+    {
+        return true;
+    }
     ctx.db
         .game_quest_objective()
         .by_quest()
@@ -676,6 +786,15 @@ fn apply_accept_effects(
         .count()
         .min(MAX_OBJECTIVES);
     let counts = vec![0u32; num_objectives];
+    let event_credits = ctx.db.game_character_quest_event_credit();
+    for credit in event_credits
+        .by_character()
+        .filter(&character_guid)
+        .filter(|credit| credit.quest_entry == quest_entry)
+        .collect::<Vec<_>>()
+    {
+        event_credits.id().delete(credit.id);
+    }
     match existing {
         // Re-accepting a repeatable-rewarded OR failed quest: reset the SAME row (id kept) rather than
         // inserting a second one, and keeping one row per (character, quest) is what
@@ -1274,11 +1393,17 @@ pub fn debug_verify_choice_reward_refusal_fixture(
 /// Quest objective-credit engine — the ONE loop shared by [`on_creature_killed`],
 /// [`on_gameobject_used`], and [`on_areatrigger_entered`] (previously copy-pasted three times).
 /// Snapshots `character_guid`'s active (un-rewarded) quests, then for each one bumps every incomplete
-/// objective whose `(kind, target_entry)` matches the given `(kind, target_entry)`, capping each count
+/// objective whose `(kind, target_entry, spell_id)` matches the given credit, capping each count
 /// at its `required_count`. No matching quest (or a non-quest-holding actor) → no-op. Only writes back a
 /// quest row whose counts actually changed. Additive — touches only quest-log rows. A fourth objective
 /// kind (SPEAK_TO, CAST_ON, …) costs a new call site into this fn, not a fourth pasted loop.
-fn credit_objective(ctx: &ReducerContext, character_guid: u64, kind: u8, target_entry: u32) {
+fn credit_objective(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    kind: u8,
+    target_entry: u32,
+    spell_id: u32,
+) {
     let log = ctx.db.game_character_quest();
     // Snapshot the actor's active quests first (we mutate rows in the loop).
     let active: Vec<CharacterQuest> = log
@@ -1294,7 +1419,10 @@ fn credit_objective(ctx: &ReducerContext, character_guid: u64, kind: u8, target_
             .by_quest()
             .filter(&cq.quest_entry)
         {
-            if obj.kind != kind || obj.target_entry != target_entry {
+            if obj.kind != kind
+                || obj.target_entry != target_entry
+                || !objective_matches_spell(ctx, cq.quest_entry, obj.obj_index, spell_id)
+            {
                 continue;
             }
             let idx = obj.obj_index as usize;
@@ -1312,6 +1440,177 @@ fn credit_objective(ctx: &ReducerContext, character_guid: u64, kind: u8, target_
     }
 }
 
+fn objective_matches_spell(
+    ctx: &ReducerContext,
+    quest_entry: u32,
+    obj_index: u8,
+    spell_id: u32,
+) -> bool {
+    ctx.db
+        .game_quest_cast_objective()
+        .by_quest()
+        .filter(&quest_entry)
+        .find(|objective| objective.obj_index == obj_index)
+        .map_or(spell_id == 0, |objective| objective.spell_id == spell_id)
+}
+
+/// Apply one EventAI quest-credit request through quest authority. Missing runtime recipient facts
+/// are Refusals. A duplicate or irrelevant objective credit is applied idempotently.
+pub(crate) fn apply_eventai_credit(
+    ctx: &ReducerContext,
+    request: EventAiQuestCredit,
+    credit_context: &EventAiQuestCreditContext,
+) -> QuestCreditOutcome {
+    let policy = match request {
+        EventAiQuestCredit::QuestEvent(request) => request.recipient_policy,
+        EventAiQuestCredit::CastCredit(request) => request.recipient_policy,
+        EventAiQuestCredit::KillCredit(request) => request.recipient_policy,
+    };
+    let quest_event = matches!(request, EventAiQuestCredit::QuestEvent(_));
+    let Ok(recipients) = eventai_credit_recipients(ctx, policy, quest_event, credit_context) else {
+        return QuestCreditOutcome::Refused;
+    };
+
+    match request {
+        EventAiQuestCredit::QuestEvent(request) => {
+            if ctx
+                .db
+                .game_quest_template()
+                .entry()
+                .find(request.quest_entry)
+                .is_none()
+            {
+                return QuestCreditOutcome::Refused;
+            }
+            let credits = ctx.db.game_character_quest_event_credit();
+            for character_guid in recipients {
+                if !quest_is_taken(ctx, character_guid, request.quest_entry) {
+                    continue;
+                }
+                if credits
+                    .by_character()
+                    .filter(&character_guid)
+                    .any(|credit| credit.quest_entry == request.quest_entry)
+                {
+                    continue;
+                }
+                credits.insert(CharacterQuestEventCredit {
+                    id: 0,
+                    character_guid,
+                    quest_entry: request.quest_entry,
+                });
+            }
+        }
+        EventAiQuestCredit::CastCredit(request) => {
+            if request.creature_entry == 0 || request.spell_id == 0 {
+                return QuestCreditOutcome::Refused;
+            }
+            for character_guid in recipients {
+                credit_objective(
+                    ctx,
+                    character_guid,
+                    objective_kind::KILL_CREATURE,
+                    request.creature_entry,
+                    request.spell_id,
+                );
+            }
+        }
+        EventAiQuestCredit::KillCredit(request) => {
+            if request.creature_entry == 0 {
+                return QuestCreditOutcome::Refused;
+            }
+            for character_guid in recipients {
+                credit_objective(
+                    ctx,
+                    character_guid,
+                    objective_kind::KILL_CREATURE,
+                    request.creature_entry,
+                    0,
+                );
+            }
+        }
+    }
+    QuestCreditOutcome::Applied
+}
+
+fn eventai_credit_recipients(
+    ctx: &ReducerContext,
+    policy: QuestCreditRecipientPolicy,
+    expand_threat_groups: bool,
+    credit_context: &EventAiQuestCreditContext,
+) -> Result<Vec<u64>, ()> {
+    eventai_credit_recipient_set(
+        policy,
+        expand_threat_groups,
+        credit_context,
+        |guid| live_character(ctx, guid),
+        |root| {
+            crate::group::kill_reward_recipients(
+                ctx,
+                root,
+                credit_context.source_x,
+                credit_context.source_y,
+                credit_context.source_map_id,
+                credit_context.source_instance_id,
+            )
+        },
+    )
+}
+
+fn eventai_credit_recipient_set(
+    policy: QuestCreditRecipientPolicy,
+    expand_threat_groups: bool,
+    credit_context: &EventAiQuestCreditContext,
+    mut live_character: impl FnMut(u64) -> bool,
+    mut eligible_group: impl FnMut(u64) -> Vec<u64>,
+) -> Result<Vec<u64>, ()> {
+    let selected = credit_context
+        .selected_character
+        .filter(|guid| live_character(*guid));
+    let beneficiary = credit_context
+        .invoker_beneficiary
+        .filter(|guid| live_character(*guid));
+    let recipients = match policy {
+        QuestCreditRecipientPolicy::SelectedCharacter => vec![selected.ok_or(())?],
+        QuestCreditRecipientPolicy::InvokerBeneficiary => vec![beneficiary.ok_or(())?],
+        QuestCreditRecipientPolicy::TapGroup | QuestCreditRecipientPolicy::EligibleGroup => {
+            eligible_group(selected.ok_or(())?)
+        }
+        QuestCreditRecipientPolicy::ThreatListCharacters if expand_threat_groups => {
+            if !credit_context
+                .threat_characters
+                .iter()
+                .copied()
+                .all(&mut live_character)
+            {
+                return Err(());
+            }
+            credit_context
+                .threat_characters
+                .iter()
+                .copied()
+                .flat_map(eligible_group)
+                .collect()
+        }
+        QuestCreditRecipientPolicy::ThreatListCharacters => {
+            credit_context.threat_characters.clone()
+        }
+    };
+    let recipients: BTreeSet<u64> = recipients.into_iter().collect();
+    if recipients.is_empty() || !recipients.iter().copied().all(&mut live_character) {
+        return Err(());
+    }
+    Ok(recipients.into_iter().collect())
+}
+
+fn live_character(ctx: &ReducerContext, character_guid: u64) -> bool {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .is_some_and(|character| character.is_player() && !character.dead)
+}
+
 /// Quest progress hook — called from the combat killing-blow path ([`crate::combat::kill_creature`])
 /// when a PLAYER `killer_guid` kills a creature of `creature_entry`. [`credit_objective`] for
 /// [`objective_kind::KILL_CREATURE`].
@@ -1321,13 +1620,20 @@ pub(crate) fn on_creature_killed(ctx: &ReducerContext, killer_guid: u64, creatur
         killer_guid,
         objective_kind::KILL_CREATURE,
         creature_entry,
+        0,
     );
 }
 
 /// Quest credit for using a gameobject (the GOOBER path from CMSG_GAMEOBJ_USE). [`credit_objective`]
 /// for [`objective_kind::USE_GAMEOBJECT`].
 pub(crate) fn on_gameobject_used(ctx: &ReducerContext, player_guid: u64, go_entry: u32) {
-    credit_objective(ctx, player_guid, objective_kind::USE_GAMEOBJECT, go_entry);
+    credit_objective(
+        ctx,
+        player_guid,
+        objective_kind::USE_GAMEOBJECT,
+        go_entry,
+        0,
+    );
 }
 
 /// Quest credit for entering an area trigger (the CMSG_AREATRIGGER path). [`credit_objective`] for
@@ -1338,6 +1644,7 @@ pub(crate) fn on_areatrigger_entered(ctx: &ReducerContext, player_guid: u64, tri
         player_guid,
         objective_kind::EXPLORE_AREATRIGGER,
         trigger_id,
+        0,
     );
 }
 
@@ -1599,7 +1906,108 @@ pub(crate) fn apply_abandon_quest(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_expired, pick_choice_reward, QUEST_MAX_LEVEL_PAYOUT};
+    use super::{
+        eventai_credit_recipient_set, is_expired, pick_choice_reward, EventAiQuestCreditContext,
+        QuestCreditRecipientPolicy, QUEST_MAX_LEVEL_PAYOUT,
+    };
+
+    fn quest_credit_context() -> EventAiQuestCreditContext {
+        EventAiQuestCreditContext {
+            source_x: 0.0,
+            source_y: 0.0,
+            source_map_id: 0,
+            source_instance_id: 0,
+            selected_character: Some(10),
+            invoker_beneficiary: Some(20),
+            threat_characters: vec![30, 40],
+        }
+    }
+
+    #[test]
+    fn eventai_credit_recipient_policies_keep_only_authority_eligible_characters() {
+        let context = quest_credit_context();
+        let selected = eventai_credit_recipient_set(
+            QuestCreditRecipientPolicy::SelectedCharacter,
+            false,
+            &context,
+            |_| true,
+            |_| unreachable!("selected credit does not resolve a group"),
+        )
+        .unwrap();
+        assert_eq!(selected, vec![10]);
+
+        let beneficiary = eventai_credit_recipient_set(
+            QuestCreditRecipientPolicy::InvokerBeneficiary,
+            false,
+            &context,
+            |_| true,
+            |_| unreachable!("beneficiary credit does not resolve a group"),
+        )
+        .unwrap();
+        assert_eq!(beneficiary, vec![20]);
+
+        for policy in [
+            QuestCreditRecipientPolicy::TapGroup,
+            QuestCreditRecipientPolicy::EligibleGroup,
+        ] {
+            let recipients = eventai_credit_recipient_set(
+                policy,
+                false,
+                &context,
+                |_| true,
+                |root| {
+                    assert_eq!(root, 10);
+                    vec![10, 30, 30]
+                },
+            )
+            .unwrap();
+            assert_eq!(recipients, vec![10, 30]);
+        }
+
+        let threat = eventai_credit_recipient_set(
+            QuestCreditRecipientPolicy::ThreatListCharacters,
+            false,
+            &context,
+            |_| true,
+            |_| unreachable!("threat-list credit does not resolve a group"),
+        )
+        .unwrap();
+        assert_eq!(threat, vec![30, 40]);
+
+        let threat_groups = eventai_credit_recipient_set(
+            QuestCreditRecipientPolicy::ThreatListCharacters,
+            true,
+            &context,
+            |_| true,
+            |root| vec![root, 50],
+        )
+        .unwrap();
+        assert_eq!(threat_groups, vec![30, 40, 50]);
+    }
+
+    #[test]
+    fn eventai_credit_recipient_loss_refuses_without_a_substitute() {
+        let mut context = quest_credit_context();
+        context.selected_character = None;
+        assert!(eventai_credit_recipient_set(
+            QuestCreditRecipientPolicy::SelectedCharacter,
+            false,
+            &context,
+            |_| true,
+            |_| unreachable!("a missing selected Character cannot resolve a group"),
+        )
+        .is_err());
+
+        context.selected_character = Some(10);
+        assert!(eventai_credit_recipient_set(
+            QuestCreditRecipientPolicy::ThreatListCharacters,
+            false,
+            &context,
+            |guid| guid != 40,
+            |_| unreachable!("threat-list credit does not resolve a group"),
+        )
+        .is_err());
+    }
 
     /// The pure choice-pick grants choice[k], NOT choice[j]: a 3-row pick-list returns the item whose
     /// `choice_index` equals the requested `reward_index`, never a neighbor's.
