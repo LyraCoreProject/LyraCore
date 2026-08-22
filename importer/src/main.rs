@@ -7146,7 +7146,7 @@ mod tests {
                 10,
                 100,
                 0,
-                2,
+                64,
                 100,
                 0x421,
                 [1_000, 2_000, 3_000, 4_000, 0, 0],
@@ -7265,7 +7265,7 @@ mod tests {
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
         assert_eq!(plan.stamps, vec![("creature-ai", 8)]);
         assert_eq!(plan.eventai_definition_count, 3);
-        assert_eq!(plan.eventai_instruction_count, 19);
+        assert_eq!(plan.eventai_instruction_count, 17);
         assert_eq!(plan.stmts.len(), 4, "{:?}", plan.stmts);
         assert_eq!(
             &plan.stmts[..2],
@@ -7295,23 +7295,26 @@ mod tests {
         );
         assert!(
             definitions.contains(
-                "10,timer:1000:2000,100,4294967293,repeat:3000:4000,random,combat,speak:yell:self:900.901.902"
+                "10,timer-combat:1000:2000,100,4294967231,repeat:3000:4000,random,combat,any-posture,speak:yell:self:900.901.902"
             ),
             "{definitions}"
         );
         assert!(
             definitions.contains(
-                "11,health:20:80,75,4294967295,once,all,ordinary,cast:42:opponent:1:0:1:1:1+emote:7:self+flee"
+                "11,health:20:80:0,75,4294967295,once,all,ordinary,any-posture,cast:42:opponent:1:direct:actor:selected:1:1:1:0:0+emote:7:self+flee"
             ),
             "{definitions}"
         );
         assert!(
-            definitions.contains("14,range:5:20,100,4294967295,once,all,ordinary,posture:15:-45"),
+            definitions.contains(
+                "14,range:5:20,100,4294967295,once,all,ordinary,any-posture,posture:15:-45"
+            ),
             "{definitions}"
         );
         assert!(
-            definitions
-                .contains("15,aggro,100,4294967295,once,all,ordinary,speak:yell:opponent:900"),
+            definitions.contains(
+                "15,aggro,100,4294967295,once,all,ordinary,any-posture,speak:yell:opponent:900"
+            ),
             "{definitions}"
         );
         let texts = plan
@@ -7326,7 +7329,7 @@ mod tests {
         let manifest = plan.eventai_manifest.as_deref().expect("manifest");
         assert!(manifest.contains("\"source_rules\": 15"), "{manifest}");
         assert!(
-            manifest.contains("\"emitted_instructions\": 19"),
+            manifest.contains("\"emitted_instructions\": 17"),
             "{manifest}"
         );
         assert!(manifest.contains("\"apply_ready\": false"), "{manifest}");
@@ -7490,7 +7493,7 @@ mod tests {
                 0,
                 0,
                 100,
-                2,
+                64,
                 [0, 1, 0, 1, 0, 0],
                 [[1, 900, 0, 0]; 3],
             ),
@@ -7624,7 +7627,7 @@ mod tests {
             ("unsupported_event", 99),
             ("invalid_chance", 0),
             ("empty_phase_mask", u32::MAX as u64),
-            ("unsupported_flag", 2),
+            ("unsupported_flag", 64),
             ("unsupported_action", 99),
             ("missing_broadcast_text", 999),
             ("invalid_spell", 0),
@@ -7635,9 +7638,6 @@ mod tests {
             ("empty_text", 1),
             ("unsupported_text_template", 77),
             ("unsupported_chat_type", 2),
-            ("unsupported_target", 10),
-            ("unsupported_triggered_cast", 2),
-            ("unsupported_force_cast", 4),
         ] {
             assert_eq!(plan.dropped(reason, value), 1, "{reason}/{value}");
         }

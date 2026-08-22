@@ -20,7 +20,7 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
-    if let Err(e) = resolve_cast_at(
+    let result = resolve_cast_at(
         ctx,
         sched.caster_guid,
         sched.spell_id,
@@ -39,7 +39,9 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
         sched
             .has_dest
             .then_some((sched.dest_x, sched.dest_y, sched.dest_z)),
-    ) {
+    );
+    clear_dead_callback_cast_admission(ctx, sched.caster_guid, sched.spell_id);
+    if let Err(e) = result {
         log::info!(
             "pending cast {} (spell {}, caster {}) did not resolve: {}",
             sched.scheduled_id,
@@ -647,7 +649,8 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         if aura_moves_vitals(a.eff_kind, a.eff_p0) && !revitalize.contains(&a.target_guid) {
             revitalize.push(a.target_guid);
         }
-        if crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0) && !resheet.contains(&a.target_guid) {
+        if crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0) && !resheet.contains(&a.target_guid)
+        {
             resheet.push(a.target_guid);
         }
         if crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0)

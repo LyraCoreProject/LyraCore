@@ -29,10 +29,20 @@ pub struct CreatureAiSummonExpiry {
     pub last_checked_ms: u64,
 }
 
+/// The EventAI creature that created one temporary summon. Module only.
+#[table(accessor = game_creature_ai_summon_origin)]
+pub struct CreatureAiSummonOrigin {
+    #[primary_key]
+    #[unique]
+    pub creature_guid: u64,
+    pub summoner_guid: u64,
+}
+
 pub(super) fn execute<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
     instruction: &CreatureInstruction,
+    choice: u64,
 ) -> ActionResult {
     match instruction {
         CreatureInstruction::Summon(summon_instruction) => summon(
@@ -41,6 +51,7 @@ pub(super) fn execute<W: EventAiWorld>(
             summon_instruction.creature_entry,
             summon_instruction.summon_location_id,
             summon_instruction.target,
+            choice,
         ),
         CreatureInstruction::SetRangedPosture(posture) => {
             let distance = posture.distance_yd as f32;
@@ -78,6 +89,10 @@ pub(crate) fn drop_summon_expiry(ctx: &ReducerContext, creature_guid: u64) {
         .game_creature_ai_summon_expiry()
         .creature_guid()
         .delete(creature_guid);
+    ctx.db
+        .game_creature_ai_summon_origin()
+        .creature_guid()
+        .delete(creature_guid);
 }
 
 fn summon<W: EventAiWorld>(
@@ -86,6 +101,7 @@ fn summon<W: EventAiWorld>(
     creature_entry: u32,
     summon_location_id: u32,
     target: InstructionTarget,
+    choice: u64,
 ) -> ActionResult {
     let Some(summoner) = world.eventai_unit(context.creature_guid) else {
         return ActionResult::Refused;
@@ -103,7 +119,10 @@ fn summon<W: EventAiWorld>(
         return ActionResult::Refused;
     }
 
-    let selected_target = super::combat::target(world, context, target, None);
+    let selected_target = super::combat::unit_target(world, context, target, None, choice);
+    if target != InstructionTarget::SelfActor && selected_target.is_none() {
+        return ActionResult::Refused;
+    }
     let sequence = world.eventai_claim_summon_sequence(location.lifetime_ms);
     let Some(guid) = summon_guid(creature_entry, sequence) else {
         world.eventai_release_summon_sequence(sequence);
@@ -159,6 +178,12 @@ pub(super) fn place_summon(
         expiry.creature_guid = guid;
         expiry_table.scheduled_id().update(expiry);
     }
+    ctx.db
+        .game_creature_ai_summon_origin()
+        .insert(CreatureAiSummonOrigin {
+            creature_guid: guid,
+            summoner_guid: summoner.guid,
+        });
     let Some(template) = ctx.db.game_creature_template().entry().find(entry) else {
         return;
     };
@@ -186,22 +211,7 @@ pub(super) fn place_summon(
 }
 
 pub(super) fn engage_summon(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
-    if crate::combat::apply_start_attack(ctx, creature_guid, target_guid).is_err() {
-        return;
-    }
-    let entities = ctx.db.game_world_entity();
-    if let Some(mut creature) = entities.guid().find(creature_guid) {
-        creature.target_guid = target_guid;
-        entities.guid().update(creature);
-    }
-    crate::hooks::fire_on_aggro(
-        ctx,
-        &crate::hooks::AggroPayload {
-            creature_guid,
-            target_guid,
-            assist: true,
-        },
-    );
+    crate::combat::arm_creature_engagement(ctx, creature_guid, target_guid, true);
 }
 
 fn summon_guid(entry: u32, scheduled_id: u64) -> Option<u64> {

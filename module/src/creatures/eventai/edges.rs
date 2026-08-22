@@ -3,9 +3,14 @@
 use std::collections::HashSet;
 
 use spacetimedb::ReducerContext;
+use spacetimedb::{table, Table};
 
+use super::mobility::game_creature_ai_summon_origin;
 use super::{EventAiRequest, EventCondition, EventContext, EventKind};
-use crate::{game_creature_ai_rule_state, game_creature_ai_state, game_world_entity, WorldEntity};
+use crate::{
+    game_creature_ai_rule_state, game_creature_ai_state, game_melee_attack, game_world_entity,
+    WorldEntity,
+};
 
 /// Who runs its entry's EventAI at all. A Character carries no rules, and a pet answers its
 /// owner's commands rather than the wild entry it was built from, so a tamed beast must neither
@@ -14,13 +19,57 @@ pub(crate) fn runs_eventai(creature: &WorldEntity) -> bool {
     !creature.is_player() && creature.owner_guid == 0
 }
 
+/// One unit whose engagement reset waits until the current creature-death hooks finish.
+#[table(accessor = game_creature_ai_reset_deferral)]
+pub struct CreatureAiResetDeferral {
+    #[primary_key]
+    #[unique]
+    pub creature_guid: u64,
+}
+
+/// A creature whose evade return has not reached its spawn post.
+#[table(accessor = game_creature_ai_returning_home)]
+pub struct CreatureAiReturningHome {
+    #[primary_key]
+    #[unique]
+    pub creature_guid: u64,
+}
+
+pub(crate) fn begin_death_dispatch(
+    ctx: &ReducerContext,
+    victim_guid: u64,
+    killer_guid: Option<u64>,
+) {
+    let deferrals = ctx.db.game_creature_ai_reset_deferral();
+    for creature_guid in Some(victim_guid).into_iter().chain(killer_guid) {
+        if deferrals.creature_guid().find(creature_guid).is_none() {
+            deferrals.insert(CreatureAiResetDeferral { creature_guid });
+        }
+    }
+}
+
+pub(crate) fn finish_death_dispatch(
+    ctx: &ReducerContext,
+    victim_guid: u64,
+    killer_guid: Option<u64>,
+) {
+    let deferrals = ctx.db.game_creature_ai_reset_deferral();
+    deferrals.creature_guid().delete(victim_guid);
+    if let Some(killer_guid) = killer_guid {
+        deferrals.creature_guid().delete(killer_guid);
+        if !crate::combat::is_engaged(ctx, killer_guid) {
+            reset_engagement(ctx, killer_guid);
+        }
+    }
+}
+
 crate::game_hook!(on_aggro, fn creature_ai_on_aggro(ctx, payload) {
     evaluate_edge(
         ctx,
         EventKind::OnAggro,
         payload.creature_guid,
         Some(payload.target_guid),
-        Some(payload.target_guid),
+        None,
         Some(payload.target_guid),
         payload.assist,
     );
@@ -30,7 +79,7 @@ crate::game_hook!(on_creature_spawn, fn creature_ai_on_creature_spawn(ctx, paylo
     let Some(creature) = ctx.db.game_world_entity().guid().find(payload.guid) else {
         return;
     };
-    if !runs_eventai(&creature) {
+    if creature.dead || !runs_eventai(&creature) {
         return;
     }
     reset_creature_lifecycle(ctx, payload.guid);
@@ -51,12 +100,233 @@ crate::game_hook!(on_creature_death, fn creature_ai_on_creature_death(ctx, paylo
         EventKind::OnDeath,
         payload.creature_guid,
         (payload.killer_guid != 0).then_some(payload.killer_guid),
-        (payload.killer_guid != 0).then_some(payload.killer_guid),
         None,
+        (payload.current_target_guid != 0).then_some(payload.current_target_guid),
         false,
     );
     reset_creature_lifecycle(ctx, payload.creature_guid);
 });
+
+crate::game_hook!(on_death, fn creature_ai_on_unit_death(ctx, payload) {
+    if payload.killer_guid != 0 {
+        if let Some(killer) = ctx.db.game_world_entity().guid().find(payload.killer_guid) {
+            if runs_eventai(&killer) {
+                let mut context = edge_context(
+                    ctx,
+                    EventKind::OnKill,
+                    killer.guid,
+                    Some(payload.victim_guid),
+                    None,
+                    Some(payload.victim_guid),
+                    false,
+                );
+                context.invoker_is_player = Some(payload.victim_is_player);
+                context.engaged = true;
+                super::evaluate_context(ctx, EventAiRequest::Edge(context));
+            }
+        }
+    }
+
+    let Some(origin) = ctx
+        .db
+        .game_creature_ai_summon_origin()
+        .creature_guid()
+        .find(payload.victim_guid)
+    else {
+        return;
+    };
+    let entry = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(payload.victim_guid)
+        .map(|unit| unit.entry);
+    let mut context = edge_context(
+        ctx,
+        EventKind::OnSummonedDeath,
+        origin.summoner_guid,
+        Some(payload.victim_guid),
+        None,
+        None,
+        false,
+    );
+    context.creature_entry = entry;
+    super::evaluate_context(ctx, EventAiRequest::Edge(context));
+});
+
+pub(crate) fn eventai_on_spell_hit(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    spell_id: u32,
+    school_mask: u32,
+) {
+    if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
+        if runs_eventai(&target) {
+            let mut context = edge_context(
+                ctx,
+                EventKind::OnSpellHit,
+                target.guid,
+                Some(caster_guid),
+                None,
+                (target.target_guid != 0).then_some(target.target_guid),
+                false,
+            );
+            context.spell_id = Some(spell_id);
+            context.spell_school_mask = school_mask;
+            super::evaluate_context(ctx, EventAiRequest::Edge(context));
+        }
+    }
+    if let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) {
+        if runs_eventai(&caster) {
+            let mut context = edge_context(
+                ctx,
+                EventKind::OnSpellHitTarget,
+                caster.guid,
+                (target_guid != 0).then_some(target_guid),
+                None,
+                (caster.target_guid != 0).then_some(caster.target_guid),
+                false,
+            );
+            context.spell_id = Some(spell_id);
+            context.spell_school_mask = school_mask;
+            super::evaluate_context(ctx, EventAiRequest::Edge(context));
+        }
+    }
+}
+
+pub(crate) fn eventai_on_receive_emote(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    invoker_guid: u64,
+    emote_id: u32,
+) {
+    let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
+        return;
+    };
+    if creature.dead || !runs_eventai(&creature) {
+        return;
+    }
+    let mut context = edge_context(
+        ctx,
+        EventKind::OnReceiveEmote,
+        creature_guid,
+        Some(invoker_guid),
+        None,
+        (creature.target_guid != 0).then_some(creature.target_guid),
+        false,
+    );
+    context.emote_id = Some(emote_id);
+    super::evaluate_context(ctx, EventAiRequest::Edge(context));
+}
+
+pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
+    let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
+        return;
+    };
+    if creature.dead || !runs_eventai(&creature) {
+        return;
+    }
+    evaluate_edge(
+        ctx,
+        EventKind::OnEvade,
+        creature_guid,
+        None,
+        None,
+        (creature.target_guid != 0).then_some(creature.target_guid),
+        false,
+    );
+    let returning = ctx.db.game_creature_ai_returning_home();
+    if returning.creature_guid().find(creature_guid).is_none() {
+        returning.insert(CreatureAiReturningHome { creature_guid });
+    }
+}
+
+pub(crate) fn eventai_on_reached_home(ctx: &ReducerContext, creature_guid: u64) {
+    if !ctx
+        .db
+        .game_creature_ai_returning_home()
+        .creature_guid()
+        .delete(creature_guid)
+    {
+        return;
+    }
+    evaluate_edge(
+        ctx,
+        EventKind::OnReachedHome,
+        creature_guid,
+        None,
+        None,
+        None,
+        false,
+    );
+}
+
+#[allow(dead_code, reason = "typed producer seam for EventAI relay actions")]
+pub(crate) fn eventai_on_receive_ai_event(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    invoker_guid: Option<u64>,
+    sender_guid: u64,
+    kind: super::AiEventKind,
+) {
+    let current_target_guid = ctx
+        .db
+        .game_melee_attack()
+        .attacker_guid()
+        .find(creature_guid)
+        .map(|fight| fight.target_guid);
+    let mut context = edge_context(
+        ctx,
+        EventKind::OnReceiveAiEvent,
+        creature_guid,
+        invoker_guid,
+        None,
+        current_target_guid,
+        false,
+    );
+    context.ai_sender_guid = Some(sender_guid);
+    context.ai_event = Some(kind);
+    super::evaluate_context(ctx, EventAiRequest::Edge(context));
+}
+
+#[allow(dead_code, reason = "typed producer seam for pathfinding authority")]
+pub(crate) fn eventai_on_target_not_reachable(ctx: &ReducerContext, creature_guid: u64) {
+    let current_target_guid = ctx
+        .db
+        .game_melee_attack()
+        .attacker_guid()
+        .find(creature_guid)
+        .map(|fight| fight.target_guid);
+    evaluate_edge(
+        ctx,
+        EventKind::TargetNotReachable,
+        creature_guid,
+        None,
+        None,
+        current_target_guid,
+        false,
+    );
+}
+
+pub(crate) fn eventai_on_summoned(
+    ctx: &ReducerContext,
+    summoner_guid: u64,
+    summon_guid: u64,
+    summon_entry: u32,
+) {
+    let mut context = edge_context(
+        ctx,
+        EventKind::OnSummoned,
+        summoner_guid,
+        Some(summon_guid),
+        None,
+        None,
+        false,
+    );
+    context.creature_entry = Some(summon_entry);
+    super::evaluate_context(ctx, EventAiRequest::Edge(context));
+}
 
 /// Start the creature's next engagement: bump `engagement_id`, drop the phase and ranged posture,
 /// and clear the rule state every engagement rule earned in the fight that just ended. Once-only
@@ -64,6 +334,15 @@ crate::game_hook!(on_creature_death, fn creature_ai_on_creature_death(ctx, paylo
 /// death rules keep their state, moved onto the new engagement, because they belong to the
 /// lifecycle instead. Called however a fight ends, so no path can leave a creature half-armed.
 pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
+    if ctx
+        .db
+        .game_creature_ai_reset_deferral()
+        .creature_guid()
+        .find(creature_guid)
+        .is_some()
+    {
+        return;
+    }
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return;
     };
@@ -83,7 +362,9 @@ pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
         .filter(|rule| {
             !matches!(
                 rule.event,
-                EventCondition::OnDeath | EventCondition::OnSpawn
+                EventCondition::OnDeath(_)
+                    | EventCondition::OnSpawn(_)
+                    | EventCondition::TimedGeneric(_)
             )
         })
         .map(|rule| rule.source_rule_id)
@@ -124,22 +405,71 @@ fn evaluate_edge(
     current_target_guid: Option<u64>,
     assisted: bool,
 ) {
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
     super::evaluate_context(
         ctx,
-        EventAiRequest::Edge(EventContext {
+        EventAiRequest::Edge(edge_context(
+            ctx,
             kind,
             creature_guid,
             invoker_guid,
             event_target_guid,
             current_target_guid,
             assisted,
-            now_ms,
-        }),
+        )),
     );
 }
 
+fn edge_context(
+    ctx: &ReducerContext,
+    kind: EventKind,
+    creature_guid: u64,
+    invoker_guid: Option<u64>,
+    event_target_guid: Option<u64>,
+    current_target_guid: Option<u64>,
+    assisted: bool,
+) -> EventContext {
+    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+    EventContext {
+        invoker_guid,
+        invoker_is_player: invoker_guid.and_then(|guid| {
+            ctx.db
+                .game_world_entity()
+                .guid()
+                .find(guid)
+                .map(|invoker| invoker.is_player())
+        }),
+        beneficiary_guid: invoker_guid.and_then(|guid| beneficiary_guid(ctx, guid)),
+        spawner_guid: ctx
+            .db
+            .game_creature_ai_summon_origin()
+            .creature_guid()
+            .find(creature_guid)
+            .map(|origin| origin.summoner_guid),
+        event_target_guid,
+        current_target_guid,
+        assisted,
+        ..EventContext::empty(kind, creature_guid, now_ms)
+    }
+}
+
+fn beneficiary_guid(ctx: &ReducerContext, guid: u64) -> Option<u64> {
+    let invoker = ctx.db.game_world_entity().guid().find(guid)?;
+    (invoker.owner_guid != 0
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(invoker.owner_guid)
+            .is_some())
+    .then_some(invoker.owner_guid)
+    .or(Some(invoker.guid))
+}
+
 pub(crate) fn reset_creature_lifecycle(ctx: &ReducerContext, creature_guid: u64) {
+    ctx.db
+        .game_creature_ai_returning_home()
+        .creature_guid()
+        .delete(creature_guid);
     let rule_state = ctx.db.game_creature_ai_rule_state();
     for state in rule_state
         .by_creature()

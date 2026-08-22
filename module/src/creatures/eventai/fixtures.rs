@@ -5,8 +5,8 @@ use spacetimedb::{ReducerContext, Table};
 use super::{
     normalized_revision, CastInstruction, CreatureAiBroadcastText, CreatureAiDefinition,
     CreatureInstruction, EventAiRule, EventAiSubject, EventCondition, ExecutionPolicy,
-    InstructionSelection, InstructionTarget, PhaseSet, RecurrencePolicy, SpeakInstruction,
-    SpeechMode, TimeWindow,
+    InstructionSelection, InstructionTarget, PhaseSet, PostureAdmission, RecurrencePolicy,
+    SpeakInstruction, SpeechMode, SpellCasterRole, SpellStartMode, SpellTargetRole, TimeWindow,
 };
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_rule_state,
@@ -76,6 +76,7 @@ pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
             recurrence: RecurrencePolicy::Once,
             selection: InstructionSelection::All,
             execution: ExecutionPolicy::Ordinary,
+            posture: PostureAdmission::Any,
             instructions: vec![CreatureInstruction::Speak(SpeakInstruction {
                 mode,
                 broadcast_ids: vec![text_id],
@@ -102,14 +103,19 @@ pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
             }),
             selection: InstructionSelection::All,
             execution: ExecutionPolicy::Ordinary,
+            posture: PostureAdmission::Any,
             instructions: vec![CreatureInstruction::Cast(CastInstruction {
                 spell_id: spell,
                 target: InstructionTarget::CurrentOpponent,
                 interrupt_previous: false,
-                triggered: false,
+                start_mode: SpellStartMode::Direct,
+                caster_role: SpellCasterRole::Actor,
+                target_role: SpellTargetRole::Selected,
                 aura_absent: false,
                 character_only: false,
                 target_must_be_casting: false,
+                main_spell: false,
+                distance_after_start: false,
             })],
         });
     }

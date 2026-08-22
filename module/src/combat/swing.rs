@@ -115,6 +115,7 @@ fn leash_pass(ctx: &ReducerContext) {
         }
     }
     for creature in evaders {
+        crate::creatures::eventai_on_evade(ctx, creature);
         // Drop every engagement touching the creature (its attack + attacks on it).
         disengage(ctx, creature);
         // Evade-heal to full (the on_update relay refills the bar for observers).
@@ -175,17 +176,7 @@ fn aggro_pass(ctx: &ReducerContext) {
         }
     }
     for (creature, player) in new_aggro {
-        melee.insert(MeleeAttack {
-            attacker_guid: creature,
-            target_guid: player,
-            last_swing_ms: 0,   // swing back immediately
-            ranged_spell_id: 0, // creatures retaliate in melee
-            last_offhand_swing_ms: 0,
-            rout_ends_ms: 0,
-            pursuit_ends_ms: 0,
-            leash_x: 0.0,
-            leash_y: 0.0,
-        });
+        arm_creature_engagement(ctx, creature, player, false);
     }
 }
 
@@ -769,15 +760,30 @@ fn fire_melee_swing(
 
     // The SHARED application (#370): rage both ways, weapon/defense skill-ups, the lethal fork through
     // kill_player/kill_creature, the health write, break-on-damage, and threat.
-    if apply_hit(
+    let combat_ended = apply_hit(
         ctx,
         attacker_guid,
         target_guid,
         dmg,
         Hit::weapon(HitSource::MainHand, hit_info == HIT_CRIT),
     )
-    .combat_ended()
-    {
+    .combat_ended();
+    if swing_is_spell {
+        let school_mask = ctx
+            .db
+            .game_spell()
+            .spell_id()
+            .find(queued_spell)
+            .map_or(1, |spell| u32::from(spell.school_mask));
+        crate::creatures::eventai_on_spell_hit(
+            ctx,
+            attacker_guid,
+            target_guid,
+            queued_spell,
+            school_mask,
+        );
+    }
+    if combat_ended {
         return; // the kill's `disengage` freed the row — nothing left to stamp
     }
 

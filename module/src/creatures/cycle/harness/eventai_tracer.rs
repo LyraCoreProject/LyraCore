@@ -73,6 +73,7 @@ fn world(now_micros: u64) -> Scenario {
         .creature(CREATURE, point(0.0))
         .entry(CREATURE, ENTRY)
         .player(TARGET, point(2.0))
+        .at_war(BEASTS, ALLIANCE)
 }
 
 fn native_definition(subject: EventAiSubject, mut rules: Vec<EventAiRule>) -> EventAiDefinition {
@@ -93,6 +94,7 @@ fn aggro_rule(source_rule_id: u64, instructions: Vec<CreatureInstruction>) -> Ev
         recurrence: RecurrencePolicy::Once,
         selection: InstructionSelection::All,
         execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
         instructions,
     }
 }
@@ -104,6 +106,28 @@ fn say(broadcast_id: u32) -> CreatureInstruction {
         legacy_text: String::new(),
         target: InstructionTarget::SelfActor,
     })
+}
+
+fn native_rule(
+    source_rule_id: u64,
+    event: EventCondition,
+    recurrence: RecurrencePolicy,
+    allowed_phases: u32,
+    instructions: Vec<CreatureInstruction>,
+) -> EventAiRule {
+    EventAiRule {
+        source_rule_id,
+        event,
+        chance_pct: 100,
+        allowed_phases: PhaseSet {
+            bits: allowed_phases,
+        },
+        recurrence,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions,
+    }
 }
 
 #[test]
@@ -128,6 +152,160 @@ fn native_rule_runs_more_than_three_instructions_in_order() {
             (CREATURE, 0, "two".to_string()),
             (CREATURE, 0, "three".to_string()),
             (CREATURE, 0, "four".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn friendly_cycle_events_wait_their_authored_initial_window() {
+    let friend = CREATURE + 20;
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![native_rule(
+            11,
+            EventCondition::FriendlyHealthDeficit(FriendlyHealthDeficitCondition {
+                missing_health: 10,
+                radius_yd: 8,
+                percent: false,
+            }),
+            RecurrencePolicy::Repeat(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            u32::MAX,
+            vec![say(11)],
+        )],
+    );
+    let mut scenario = world(0)
+        .attacking(CREATURE, TARGET)
+        .creature(friend, point(3.0))
+        .entry(friend, ENTRY + 1)
+        .hurt(friend, 50)
+        .attacking(friend, TARGET)
+        .eventai_broadcast(11, "ready", 0)
+        .eventai_native_definition(definition);
+
+    fire(&mut scenario);
+    scenario.advance_clock(999_000);
+    fire(&mut scenario);
+    assert!(scenario.eventai_speech().is_empty());
+
+    scenario.advance_clock(1_000);
+    fire(&mut scenario);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "ready".to_string())]
+    );
+}
+
+#[test]
+fn phase_denial_pauses_an_authored_timer() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![native_rule(
+            12,
+            EventCondition::TimedGeneric(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            RecurrencePolicy::Repeat(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            1 << 1,
+            vec![say(12)],
+        )],
+    );
+    let mut scenario = world(0)
+        .awake([CREATURE])
+        .eventai_broadcast(12, "resumed", 0)
+        .eventai_native_definition(definition);
+
+    fire(&mut scenario);
+    scenario.advance_clock(2_000_000);
+    EventAiWorld::set_eventai_phase(&mut scenario, CREATURE, 1);
+    fire(&mut scenario);
+    scenario.advance_clock(999_000);
+    fire(&mut scenario);
+    assert!(scenario.eventai_speech().is_empty());
+
+    scenario.advance_clock(1_000);
+    fire(&mut scenario);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "resumed".to_string())]
+    );
+}
+
+#[test]
+fn generic_timer_state_survives_an_engagement_reset() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![native_rule(
+            13,
+            EventCondition::TimedGeneric(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            RecurrencePolicy::Repeat(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            u32::MAX,
+            vec![say(13)],
+        )],
+    );
+    let mut scenario = world(0)
+        .awake([CREATURE])
+        .eventai_broadcast(13, "generic", 0)
+        .eventai_native_definition(definition);
+
+    fire(&mut scenario);
+    let before = scenario.eventai_state(CREATURE, 13).unwrap();
+    EngageSink::leave_combat(&mut scenario, CREATURE);
+    let after = scenario.eventai_state(CREATURE, 13).unwrap();
+
+    assert_eq!(after.next_eligible_ms, before.next_eligible_ms);
+    assert_eq!(after.engagement_id, before.engagement_id + 1);
+    scenario.advance_clock(1_000_000);
+    fire(&mut scenario);
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "generic".to_string())]
+    );
+}
+
+#[test]
+fn repeat_on_event_rearms_target_not_reachable_without_a_timer() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![native_rule(
+            14,
+            EventCondition::TargetNotReachable,
+            RecurrencePolicy::RepeatOnEvent,
+            u32::MAX,
+            vec![say(14)],
+        )],
+    );
+    let mut scenario = world(0)
+        .eventai_broadcast(14, "blocked", 0)
+        .eventai_native_definition(definition);
+    let context = EventContext {
+        current_target_guid: Some(TARGET),
+        engaged: true,
+        ..EventContext::empty(EventKind::TargetNotReachable, CREATURE, 0)
+    };
+
+    evaluate(&mut scenario, EventAiRequest::Edge(context));
+    evaluate(&mut scenario, EventAiRequest::Edge(context));
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![
+            (CREATURE, 0, "blocked".to_string()),
+            (CREATURE, 0, "blocked".to_string()),
         ]
     );
 }
@@ -228,6 +406,11 @@ fn first_native_visit_cleans_reversible_legacy_state_without_a_definition() {
                 consumed: true,
                 lifecycle_id: 1,
                 engagement_id: 1,
+                invocation_seed: 0,
+                invocation_started: false,
+                executing: false,
+                invocation_branch: 0,
+                paused_at_ms: 0,
             },
         )]),
     );
@@ -601,7 +784,9 @@ fn a_combat_action_retries_only_when_its_first_cast_is_refused() {
     EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
     assert!(scenario.casts().is_empty());
     assert!(scenario.eventai_speech().is_empty());
-    assert!(scenario.eventai_state(CREATURE, 610).is_none());
+    assert!(scenario
+        .eventai_state(CREATURE, 610)
+        .is_some_and(|state| state.invocation_started && !state.consumed));
 
     scenario.not_ready.borrow_mut().remove(&62);
     EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
@@ -748,13 +933,11 @@ fn rule_state_cleanup_does_not_scan_other_creatures() {
     eventai::evaluate(
         &mut scenario,
         EventAiRequest::Edge(EventContext {
-            kind: EventKind::OnAggro,
-            creature_guid: CREATURE,
             invoker_guid: Some(TARGET),
-            event_target_guid: Some(TARGET),
+            beneficiary_guid: Some(TARGET),
             current_target_guid: Some(TARGET),
-            assisted: false,
-            now_ms: 0,
+            engaged: true,
+            ..EventContext::empty(EventKind::OnAggro, CREATURE, 0)
         }),
     );
 
@@ -823,7 +1006,7 @@ fn a_missing_summon_is_refused_without_an_unsupported_action_diagnostic() {
 }
 
 #[test]
-fn a_refused_cast_retries_sooner_than_its_repeat_window() {
+fn an_ordinary_refused_cast_spends_its_repeat_opportunity() {
     let rule_id = 920;
     let mut scenario = world(0)
         .attacking(CREATURE, TARGET)
@@ -850,7 +1033,7 @@ fn a_refused_cast_retries_sooner_than_its_repeat_window() {
             .eventai_state(CREATURE, rule_id)
             .unwrap()
             .next_eligible_ms,
-        1_500
+        30_000
     );
 }
 

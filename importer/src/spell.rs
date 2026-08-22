@@ -207,6 +207,7 @@ const SPELL_ATTR_RANGED_AUTO_REPEAT: u32 = 0x0200; // Auto Shot / wand Shoot: an
 
 // vanilla `AttributesEx1` CHANNELED bits — IS_CHANNELLED (0x04) | CHANNELED_2 (0x40). cmangos: channeled = AttributesEx1 & 0x44.
 const ATTR_EX1_CHANNELED_MASK: u32 = 0x0000_0044;
+const ATTR_EX1_EXCLUDE_CASTER: u32 = 0x0008_0000;
 // vanilla `AttributesEx2` SPELL_ATTR_EX2_AUTOREPEAT_FLAG (0x20) — marks auto-repeat ranged attacks (Auto Shot, wand Shoot).
 const ATTR_EX2_AUTOREPEAT: u32 = 0x0000_0020;
 
@@ -358,6 +359,10 @@ fn spell_flag_attributes(name: &str) -> u32 {
 /// reclassify (the periodic-trigger effect → `A_PERIODIC_TRIGGER`) so the two stay in lockstep.
 fn is_channeled(attributes_ex1: u32, name: &str) -> bool {
     attributes_ex1 & ATTR_EX1_CHANNELED_MASK != 0 || matches!(name, "Arcane Missiles" | "Evocation")
+}
+
+fn excludes_eventai_caster(attributes_ex1: u32) -> bool {
+    attributes_ex1 & ATTR_EX1_EXCLUDE_CASTER != 0
 }
 
 /// Is this an AUTO-REPEAT ranged attack (Auto Shot 75 / wand Shoot 5019) — the client fires it on the
@@ -1085,6 +1090,7 @@ fn build_spell_sql(
     let mut spell_rows: Vec<String> = Vec::new();
     let mut effect_rows: Vec<String> = Vec::new();
     let mut reagent_rows: Vec<String> = Vec::new();
+    let mut eventai_metadata_rows: Vec<String> = Vec::new();
     let mut samples: Vec<String> = Vec::new();
     // Mount creature-template display resolution (entry → display id): the `--dbc --spells` CLI path
     // is DBC-only (no cmangos creature_template dump is loaded alongside it), so this is empty today —
@@ -1217,6 +1223,9 @@ fn build_spell_sql(
         // col-21 schema bug), bit 0x44. Computed once; drives BOTH the cast_flags bit AND the per-effect
         // A_PERIODIC_TRIGGER reclassify below, so the channel header + its tick effect stay consistent.
         let channeled = is_channeled(s.attributes_ex1.as_int(), &name);
+        if excludes_eventai_caster(s.attributes_ex1.as_int()) {
+            eventai_metadata_rows.push(format!("({spell_id},true)"));
+        }
         // OUR OWN cast-gate flags (REQ_BEHIND / REQ_STEALTH / STEALTH_SAFE / CHANNELED …), set BY NAME or from
         // a dedicated DBC bit — emitted into the DEDICATED `cast_flags` column (NOT folded into `attributes`,
         // whose vanilla bits would collide).
@@ -1738,6 +1747,12 @@ fn build_spell_sql(
         "id,spell_id,item_entry,count",
         &reagent_rows,
     );
+    push_insert(
+        &mut stmts,
+        "game_creature_ai_spell_metadata",
+        "spell_id,exclude_caster",
+        &eventai_metadata_rows,
+    );
 
     // Fishing (060): synthesize the E_FISH marker effect rows for the three tier ids (skill 356 —
     // 7620/7731/7732, PROFESSION_LEARN's fishing entry). The gateway routes CMSG_CAST_SPELL to the
@@ -1819,12 +1834,13 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             format!("DELETE FROM game_spell_effect WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             // Reagents (282) share the fixture-floor guard so hand/test reagents survive a reload.
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
+            format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
         ];
     }
     let mut ids: Vec<u32> = only.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    let mut dels = Vec::with_capacity(ids.len() * 3);
+    let mut dels = Vec::with_capacity(ids.len() * 4);
     for id in ids {
         dels.push(format!("DELETE FROM game_spell WHERE spell_id = {id}"));
         dels.push(format!(
@@ -1832,6 +1848,9 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
         ));
         dels.push(format!(
             "DELETE FROM game_spell_reagent WHERE spell_id = {id}"
+        ));
+        dels.push(format!(
+            "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = {id}"
         ));
     }
     dels
@@ -2947,6 +2966,13 @@ mod tests {
     }
 
     #[test]
+    fn eventai_exclude_caster_uses_the_spell_attribute_bit() {
+        assert!(excludes_eventai_caster(0x0008_0000));
+        assert!(excludes_eventai_caster(0x0008_0044));
+        assert!(!excludes_eventai_caster(0x0000_0044));
+    }
+
+    #[test]
     fn trainer_cost_is_level_keyed_and_never_free() {
         // DBC-derived: 50 copper per required level, monotone, clamped so a level-0 rank still costs 50c.
         assert_eq!(trainer_cost(0), 50); // the DBC "floor" ranks clamp to level 1 → 50c (not free)
@@ -2967,7 +2993,7 @@ mod tests {
         // `(spell_id<<2)|effect_index` `id`) — asserting the exact column name here catches a
         // regression back to the packed-id form.
         let full = spell_delete_statements(&[]);
-        assert_eq!(full.len(), 3);
+        assert_eq!(full.len(), 4);
         assert_eq!(full[0], "DELETE FROM game_spell WHERE spell_id < 50000");
         assert_eq!(
             full[1],
@@ -2977,17 +3003,21 @@ mod tests {
             full[2],
             "DELETE FROM game_spell_reagent WHERE spell_id < 50000"
         );
+        assert_eq!(
+            full[3],
+            "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < 50000"
+        );
         // Per danger-zones.md §2, a single-column range filter via `spacetime sql` can silently return
         // 0 rows in some conditions — this guard's live behavior (fixtures 50000/50072/50110/50137
         // survive; all non-zero DBC rows below the floor ARE replaced) still NEEDS verification on a
         // real node per the work-item's runbook; this test only pins the SQL string.
 
-        // Additive allowlist: a SURGICAL pair per id, sorted + deduped, touching ONLY those ids.
+        // Additive allowlist: one surgical delete per table and id, sorted and deduped.
         let surgical = spell_delete_statements(&[7386, 78, 78]);
         assert_eq!(
             surgical.len(),
-            6,
-            "2 ids → 3 tables × 2 = 6 statements (dup dropped)"
+            8,
+            "two ids across four tables, with the duplicate removed"
         );
         assert_eq!(surgical[0], "DELETE FROM game_spell WHERE spell_id = 78");
         assert_eq!(
@@ -2998,14 +3028,22 @@ mod tests {
             surgical[2],
             "DELETE FROM game_spell_reagent WHERE spell_id = 78"
         );
-        assert_eq!(surgical[3], "DELETE FROM game_spell WHERE spell_id = 7386");
         assert_eq!(
-            surgical[4],
+            surgical[3],
+            "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = 78"
+        );
+        assert_eq!(surgical[4], "DELETE FROM game_spell WHERE spell_id = 7386");
+        assert_eq!(
+            surgical[5],
             "DELETE FROM game_spell_effect WHERE spell_id = 7386"
         );
         assert_eq!(
-            surgical[5],
+            surgical[6],
             "DELETE FROM game_spell_reagent WHERE spell_id = 7386"
+        );
+        assert_eq!(
+            surgical[7],
+            "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = 7386"
         );
         // The surgical path NEVER emits an unbounded clear (that would clobber the seed/fixtures).
         assert!(surgical.iter().all(|s| !s.contains(">= 0")));

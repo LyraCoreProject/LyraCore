@@ -400,6 +400,11 @@ fn character_quest_row(
         .find(|q| q.quest_entry == quest_entry)
 }
 
+pub(crate) fn quest_is_taken(ctx: &ReducerContext, character_guid: u64, quest_entry: u32) -> bool {
+    character_quest_row(ctx, character_guid, quest_entry)
+        .is_some_and(|quest| !quest.rewarded && !quest.failed)
+}
+
 /// Has the character turned in (been rewarded for) `quest_entry`? The prerequisite-chain test for
 /// [`apply_accept_quest`] — a `prev_quest_id` is satisfied only by a `rewarded` row, not merely an
 /// accepted one.

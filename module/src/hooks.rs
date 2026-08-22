@@ -17,7 +17,7 @@
 //! | `on_group_invite`   | `group::group_invite`, after the invite row + event are written | [`GroupInvitePayload`] |
 //! | `on_death`          | `combat::kill_creature` (creature corpse AND pet despawn), plus each player-death site (melee tick, spell damage, `debug_set_health(0)`) | [`DeathPayload`] |
 //! | `on_kill`           | `combat::kill_creature` when a player `killer` gets credit | [`KillPayload`] |
-//! | `on_aggro`          | the behavior cycle's aggro phase — direct proximity aggro AND the pack-assist arm | [`AggroPayload`] |
+//! | `on_aggro`          | `combat::arm_creature_engagement`, after a creature's first outgoing engagement is armed | [`AggroPayload`] |
 //! | `on_cast_resolved`  | `spell::resolve_cast_at` success exit — every cast path funnels through it | [`CastResolvedPayload`] |
 //! | `on_loot`           | `items::apply_take_loot` success — player + debug loot both route here | [`LootPayload`] |
 //! | `on_quest_accept`   | `quest::apply_accept_quest` AND `quest::grant_quest_unchecked` (the debug/harness grant) | [`QuestAcceptPayload`] |
@@ -97,10 +97,8 @@ pub struct KillPayload {
     pub victim_level: u32,
 }
 
-/// A creature ENGAGED a player on its own initiative — proximity aggro from the aggro pass, or a
-/// same-faction neighbor answering a pack-mate's call (`assist = true`). Fired once per new
-/// engagement, right after the melee row is armed. Retaliation (creature hit first) and
-/// `start_attack` do NOT fire this — it's specifically "the world noticed you".
+/// A creature entered its first outgoing engagement. Fired once after the melee row is armed;
+/// `assist` distinguishes a neighbor or summon joining an existing fight.
 pub struct AggroPayload {
     pub creature_guid: u64,
     pub target_guid: u64,
@@ -183,6 +181,8 @@ pub struct CreatureDeathPayload {
     pub entry: u32,
     pub instance_id: u64,
     pub killer_guid: u64,
+    /// The victim's selected opponent before death cleared its engagement.
+    pub current_target_guid: u64,
     /// The victim's threat table `(source_guid, threat)` as it stood at the death — snapshotted
     /// BEFORE `disengage` wipes it (hooks fire after the wipe, so handlers can't read the table
     /// themselves). Threat is the engine's only per-player damage/heal ledger (every damage path

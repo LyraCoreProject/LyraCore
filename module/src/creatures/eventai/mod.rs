@@ -12,11 +12,22 @@ mod mobility;
 
 pub(crate) use combat::authored_combat;
 #[cfg(test)]
-pub(crate) use combat::AuthoredCombat;
+pub(crate) use combat::{beneficiary_guid, condition, AuthoredCombat};
 pub(crate) use edges::reset_creature_lifecycle;
+pub use edges::CreatureAiResetDeferral;
+pub use edges::CreatureAiReturningHome;
 pub(crate) use edges::{
-    creature_ai_on_aggro, creature_ai_on_creature_death, creature_ai_on_creature_spawn,
+    begin_death_dispatch, creature_ai_on_aggro, creature_ai_on_creature_death,
+    creature_ai_on_creature_spawn, creature_ai_on_unit_death, finish_death_dispatch,
     reset_engagement, runs_eventai,
+};
+#[allow(
+    unused_imports,
+    reason = "later EventAI actions call these typed edge producers"
+)]
+pub(crate) use edges::{
+    eventai_on_evade, eventai_on_reached_home, eventai_on_receive_ai_event,
+    eventai_on_receive_emote, eventai_on_spell_hit, eventai_on_target_not_reachable,
 };
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};
@@ -24,7 +35,7 @@ pub(crate) use fixtures::seed_on_aggro_fixtures;
 #[cfg(test)]
 pub(crate) use mobility::summon_lifetime_after;
 pub(crate) use mobility::{drop_summon_expiry, ranged_posture};
-pub use mobility::{expire_eventai_summon, CreatureAiSummonExpiry};
+pub use mobility::{expire_eventai_summon, CreatureAiSummonExpiry, CreatureAiSummonOrigin};
 pub(crate) use model::*;
 pub use tables::*;
 
@@ -112,13 +123,54 @@ mod architecture_tests {
             "game_creature_ai_state",
             "game_creature_ai_rule_state",
             "game_creature_ai_broadcast_text",
+            "game_creature_ai_spell_metadata",
             "game_creature_ai_summon",
             "game_creature_ai_summon_expiry",
+            "game_creature_ai_returning_home",
         ] {
             assert!(
                 !subscriptions.contains(&format!("SELECT * FROM {table}")),
                 "Gateway subscribes Module-only table `{table}`"
             );
+        }
+    }
+
+    #[test]
+    fn event_producers_stop_at_named_core_chokepoints() {
+        let swing = include_str!("../../combat/swing.rs");
+        assert!(swing.contains("eventai_on_evade(ctx, creature)"));
+        assert!(swing.contains("eventai_on_spell_hit("));
+
+        let cycle = include_str!("../cycle/mod.rs");
+        let context = include_str!("../cycle/ctx.rs");
+        assert!(cycle.contains("w.reached_home(c.guid)"));
+        assert!(context.contains("eventai_on_reached_home(self.ctx, guid)"));
+
+        let chat = include_str!("../../chat.rs");
+        assert!(chat.contains("eventai_on_receive_emote("));
+
+        let spell = include_str!("../../spell/cast/resolve.rs");
+        assert!(spell.contains("eventai_on_spell_hit("));
+
+        let edges = include_str!("edges.rs");
+        for producer in [
+            "fn eventai_on_receive_ai_event(",
+            "fn eventai_on_target_not_reachable(",
+        ] {
+            assert!(edges.contains(producer));
+        }
+    }
+
+    #[test]
+    fn every_first_creature_engagement_uses_the_shared_aggro_edge() {
+        for source in [
+            include_str!("../../combat/swing.rs"),
+            include_str!("../../spell/effects.rs"),
+            include_str!("../cycle/ctx.rs"),
+            include_str!("engine.rs"),
+            include_str!("mobility.rs"),
+        ] {
+            assert!(source.contains("arm_creature_engagement("));
         }
     }
 }

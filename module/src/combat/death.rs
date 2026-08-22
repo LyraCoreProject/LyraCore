@@ -58,6 +58,7 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     // a stale, lootable corpse until the owner re-summons/logs out/dies. Delete it + free its engagements;
     // the owner can re-summon. (A pet kill credits no XP — an enemy killing your Imp gains nothing.)
     if target.owner_guid != 0 {
+        crate::creatures::begin_death_dispatch(ctx, target_guid, killer);
         crate::creatures::on_pet_death(ctx, target_guid);
         disengage(ctx, target_guid);
         entities.guid().delete(target_guid);
@@ -71,6 +72,7 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
                 victim_is_player: false,
             },
         );
+        crate::creatures::finish_death_dispatch(ctx, target_guid, killer);
         return true;
     }
     // Snapshot the victim's identity for the notify-hooks fired at the end of this fn — the corpse row
@@ -78,13 +80,14 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     let victim_entry = target.entry;
     let victim_level = target.level;
     let victim_instance = target.instance_id; // for on_creature_death (work-item 228)
-                                              // A player killer gains XP (and may ding) — awarded before the corpse's level is gone.
-                                              // Quests: the same killing blow advances the killer's kill objectives for this creature entry
-                                              // (no-op for a non-player killer or one with no matching quest). Done before the corpse is gone so
-                                              // the entry is still readable; on_creature_killed reads its own quest tables, not the target.
-                                              // `kill_recipients` is hoisted OUT of the `if let` block below (work-item 187) so the group-loot
-                                              // stamping call further down can reuse the SAME recipient set the XP/quest-credit split used —
-                                              // eligibility must never drift between the two.
+    let current_target_guid = target.target_guid;
+    // A player killer gains XP (and may ding) — awarded before the corpse's level is gone.
+    // Quests: the same killing blow advances the killer's kill objectives for this creature entry
+    // (no-op for a non-player killer or one with no matching quest). Done before the corpse is gone so
+    // the entry is still readable; on_creature_killed reads its own quest tables, not the target.
+    // `kill_recipients` is hoisted OUT of the `if let` block below (work-item 187) so the group-loot
+    // stamping call further down can reuse the SAME recipient set the XP/quest-credit split used —
+    // eligibility must never drift between the two.
     // XP + quest-credit + Drain-Soul-shard rewards for the killer (and its group) — extracted so the
     // death sequence below reads as a table of contents; see `award_killer_rewards` (issue #382).
     let kill_recipients = killer
@@ -121,7 +124,13 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
     // #519's literal "no row for the dead guid" Done-when only becomes true after that reap, not
     // immediately on kill — the stop-spline packet and position are what a headless check right after
     // kill can assert; row absence is a 60s-later assertion. See the issue-519 comment reconciling this.
-    if ctx.db.game_creature_spline().guid().find(target_guid).is_some() {
+    if ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(target_guid)
+        .is_some()
+    {
         let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
         crate::creatures::tick::emit_move_spline(
             ctx,
@@ -137,6 +146,7 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
         );
     }
     entities.guid().update(target);
+    crate::creatures::begin_death_dispatch(ctx, target_guid, killer);
     // Snapshot the victim's threat table for the death payload BEFORE disengage wipes it — threat
     // is the engine's per-player damage/heal ledger, and hooks fire only after the wipe (see
     // CreatureDeathPayload.threat_snapshot).
@@ -204,6 +214,7 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
             entry: victim_entry,
             instance_id: victim_instance,
             killer_guid: killer.unwrap_or(0),
+            current_target_guid,
             threat_snapshot,
         },
     );
@@ -218,6 +229,7 @@ pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Opti
             },
         );
     }
+    crate::creatures::finish_death_dispatch(ctx, target_guid, killer);
     true
 }
 
@@ -388,6 +400,8 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     victim.dead = true;
     victim.combat_until_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
     entities.guid().update(victim);
+    let killer = (killer_guid != 0).then_some(killer_guid);
+    crate::creatures::begin_death_dispatch(ctx, victim_guid, killer);
     disengage(ctx, victim_guid);
     crate::spell::break_channel(ctx, victim_guid);
     // Dying sheds the auras vanilla does not exempt, and converges every projection they fed. A rider
@@ -405,6 +419,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
             victim_is_player: true,
         },
     );
+    crate::creatures::finish_death_dispatch(ctx, victim_guid, killer);
     true
 }
 
@@ -792,8 +807,12 @@ mod lethality_tests {
     #[test]
     fn active_duel_lethal_hits_bypass_the_player_death_chokepoint() {
         let body = crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn apply_hit(");
-        let duel_floor = body.find("crate::duel::active_opponents").expect("duel finisher is checked in the shared damage seam");
-        let player_death = body.find("kill_player(ctx, target_guid, attacker_guid)").expect("ordinary player death remains behind the shared seam");
+        let duel_floor = body
+            .find("crate::duel::active_opponents")
+            .expect("duel finisher is checked in the shared damage seam");
+        let player_death = body
+            .find("kill_player(ctx, target_guid, attacker_guid)")
+            .expect("ordinary player death remains behind the shared seam");
         assert!(duel_floor < player_death);
         assert!(body.contains("target.health = 1;"));
         assert!(body.contains("duel_completion_kind::WON"));
@@ -810,6 +829,59 @@ mod lethality_tests {
         let body =
             crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn kill_player(");
         assert!(body.contains("crate::duel::interrupt_duel_for(ctx, victim_guid)"));
+    }
+
+    #[test]
+    fn death_hooks_run_before_engagement_reset_on_player_and_pet_death() {
+        let src = include_str!("death.rs");
+        let creature = crate::test_scan::code_of(src, "pub(crate) fn kill_creature(");
+        let pet_end = creature
+            .find("let victim_entry = target.entry")
+            .expect("pet death stays before ordinary creature death");
+        assert_in_order(
+            &creature[..pet_end],
+            [
+                "begin_death_dispatch",
+                "disengage(ctx, target_guid)",
+                "fire_on_death",
+                "finish_death_dispatch",
+            ],
+        );
+
+        let player = crate::test_scan::code_of(src, "pub(crate) fn kill_player(");
+        assert_in_order(
+            &player,
+            [
+                "begin_death_dispatch",
+                "disengage(ctx, victim_guid)",
+                "fire_on_death",
+                "finish_death_dispatch",
+            ],
+        );
+    }
+
+    #[test]
+    fn creature_death_carries_the_selected_opponent_across_disengage() {
+        let body =
+            crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn kill_creature(");
+        assert_in_order(
+            &body,
+            [
+                "let current_target_guid = target.target_guid",
+                "disengage(ctx, target_guid)",
+                "current_target_guid,",
+            ],
+        );
+    }
+
+    fn assert_in_order<const N: usize>(body: &str, needles: [&str; N]) {
+        let mut cursor = 0;
+        for needle in needles {
+            let offset = body[cursor..]
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing `{needle}` in death producer"));
+            cursor += offset + needle.len();
+        }
     }
 }
 

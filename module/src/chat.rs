@@ -7,9 +7,7 @@
 //! relays (single starting zone). Party chat (work-item 199) is NOT proximity-based — it rides the
 //! group system's per-recipient `game_group_event` relay (`crate::group`), not a broadcast. [event]
 
-use spacetimedb::{
-    reducer, table, Identity, ReducerContext, Table, Timestamp,
-};
+use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_character;
 use lyracore_shared::group::{err as group_err, event_kind as group_event_kind};
@@ -285,6 +283,9 @@ pub(crate) fn apply_send_emote(
         grid_x,
         grid_y,
     });
+    if sender.is_player() && target_guid != 0 {
+        crate::creatures::eventai_on_receive_emote(ctx, target_guid, sender.guid, text_emote);
+    }
     Ok(())
 }
 

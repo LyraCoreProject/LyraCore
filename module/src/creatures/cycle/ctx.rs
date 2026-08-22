@@ -23,7 +23,6 @@ use crate::creatures::cast_condition;
 use crate::creatures::eventai::{self, EventAiRequest};
 use crate::creatures::pet;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
-use crate::spell::game_pending_cast;
 use crate::{
     game_aura, game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
     game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
@@ -253,6 +252,9 @@ impl IdleSink for CtxWorld<'_> {
             entities.guid().update(e);
         }
     }
+    fn reached_home(&mut self, guid: u64) {
+        crate::creatures::eventai_on_reached_home(self.ctx, guid);
+    }
     fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32) {
         if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
             tick::emit_creature_leg(
@@ -342,35 +344,7 @@ impl EngageSink for CtxWorld<'_> {
             })
     }
     fn engage(&mut self, creature: u64, victim: u64, pull: Pull) {
-        let melee = self.ctx.db.game_melee_attack();
-        if melee.attacker_guid().find(creature).is_none() {
-            melee.insert(MeleeAttack {
-                attacker_guid: creature,
-                target_guid: victim,
-                last_swing_ms: 0,   // swing on the next melee tick
-                ranged_spell_id: 0, // proximity and pack aggro are melee
-                last_offhand_swing_ms: 0,
-                rout_ends_ms: 0,
-                pursuit_ends_ms: 0,
-                leash_x: 0.0,
-                leash_y: 0.0,
-            });
-        }
-        let entities = self.ctx.db.game_world_entity();
-        if let Some(mut c) = entities.guid().find(creature) {
-            if c.target_guid != victim {
-                c.target_guid = victim;
-                entities.guid().update(c);
-            }
-        }
-        crate::hooks::fire_on_aggro(
-            self.ctx,
-            &crate::hooks::AggroPayload {
-                creature_guid: creature,
-                target_guid: victim,
-                assist: pull == Pull::Assisted,
-            },
-        );
+        crate::combat::arm_creature_engagement(self.ctx, creature, victim, pull == Pull::Assisted);
     }
     fn engagements(&self) -> Vec<Engagement> {
         let entities = self.ctx.db.game_world_entity();
@@ -516,7 +490,6 @@ impl CtxWorld<'_> {
 impl CastSink for CtxWorld<'_> {
     fn casters(&self, scope: &TickScope) -> Vec<Caster> {
         let entities = self.ctx.db.game_world_entity();
-        let pending = self.ctx.db.game_pending_cast();
         // Same candidate discovery as chase: the engaged rows ARE the set, one per attacker.
         self.ctx
             .db
@@ -525,7 +498,7 @@ impl CastSink for CtxWorld<'_> {
             .filter_map(|row| {
                 let c = tick::movable_creature(self.ctx, row.attacker_guid, scope)?;
                 let guid = c.guid;
-                let casting = pending.by_caster().filter(&guid).next().is_some();
+                let casting = crate::spell::is_non_melee_spell_casting(self.ctx, guid);
                 Some(Caster {
                     guid,
                     victim: row.target_guid,

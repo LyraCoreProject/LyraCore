@@ -34,6 +34,10 @@ pub(crate) const TARGET_TOP_THREAT_PLAYER: u8 = 7;
 pub(crate) const TARGET_RANDOM_THREAT_PLAYER: u8 = 8;
 pub(crate) const TARGET_NEAREST_AREA: u8 = 9;
 pub(crate) const TARGET_FARTHEST_HOSTILE: u8 = 10;
+pub(crate) const TARGET_BENEFICIARY: u8 = 11;
+pub(crate) const TARGET_AI_SENDER: u8 = 12;
+pub(crate) const TARGET_SPAWNER: u8 = 13;
+pub(crate) const TARGET_NO_EXPLICIT: u8 = 14;
 
 pub(crate) const SOURCE_FLAG_COMBAT_ACTION: u32 = 1 << 0;
 pub(crate) const SOURCE_FLAG_RANDOM_ACTION: u32 = 1 << 1;
@@ -107,6 +111,10 @@ pub(crate) enum TargetPolicy {
     RandomThreatPlayer,
     NearestArea,
     FarthestHostile,
+    Beneficiary,
+    AiSender,
+    Spawner,
+    NoExplicit,
 }
 
 impl TargetPolicy {
@@ -123,6 +131,10 @@ impl TargetPolicy {
             TARGET_RANDOM_THREAT_PLAYER => Some(Self::RandomThreatPlayer),
             TARGET_NEAREST_AREA => Some(Self::NearestArea),
             TARGET_FARTHEST_HOSTILE => Some(Self::FarthestHostile),
+            TARGET_BENEFICIARY => Some(Self::Beneficiary),
+            TARGET_AI_SENDER => Some(Self::AiSender),
+            TARGET_SPAWNER => Some(Self::Spawner),
+            TARGET_NO_EXPLICIT => Some(Self::NoExplicit),
             _ => None,
         }
     }
@@ -290,7 +302,8 @@ impl Rule {
         // fixed cadence: left to the roller it wraps the delay to weeks, so it surfaces here.
         let inverted_initial =
             event == EventKind::TimedInCombat && decoded_event_params[0] > decoded_event_params[1];
-        let inverted_repeat = event.recurs() && decoded_event_params[2] > decoded_event_params[3];
+        let inverted_repeat =
+            event.supports_repeat_cooldown() && decoded_event_params[2] > decoded_event_params[3];
         if inverted_initial || inverted_repeat {
             return Err(Diagnostic {
                 rule_id: id,

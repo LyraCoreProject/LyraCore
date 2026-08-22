@@ -11,12 +11,37 @@ const DEFINITION_REVISION_DOMAIN: &[u8] = b"lyracore-eventai-definition-v1";
 const DEFINITION_BATCH_BYTES: usize = 64 * 1024;
 
 const EVENT_TIMER_IN_COMBAT: u32 = 0;
+const EVENT_TIMER_OUT_OF_COMBAT: u32 = 1;
 const EVENT_HP: u32 = 2;
+const EVENT_MANA: u32 = 3;
 const EVENT_AGGRO: u32 = 4;
+const EVENT_KILL: u32 = 5;
 const EVENT_DEATH: u32 = 6;
+const EVENT_EVADE: u32 = 7;
+const EVENT_SPELL_HIT: u32 = 8;
 const EVENT_RANGE: u32 = 9;
+const EVENT_OOC_LOS: u32 = 10;
 const EVENT_SPAWNED: u32 = 11;
+const EVENT_TARGET_HP: u32 = 12;
+const EVENT_TARGET_CASTING: u32 = 13;
 const EVENT_FRIENDLY_HP: u32 = 14;
+const EVENT_FRIENDLY_CC: u32 = 15;
+const EVENT_FRIENDLY_MISSING_AURA: u32 = 16;
+const EVENT_SUMMONED: u32 = 17;
+const EVENT_TARGET_MANA: u32 = 18;
+const EVENT_HOME: u32 = 21;
+const EVENT_RECEIVE_EMOTE: u32 = 22;
+const EVENT_AURA: u32 = 23;
+const EVENT_TARGET_AURA: u32 = 24;
+const EVENT_SUMMONED_DEATH: u32 = 25;
+const EVENT_MISSING_AURA: u32 = 27;
+const EVENT_TARGET_MISSING_AURA: u32 = 28;
+const EVENT_TIMER_GENERIC: u32 = 29;
+const EVENT_RECEIVE_AI_EVENT: u32 = 30;
+const EVENT_SELECT_ATTACKING: u32 = 32;
+const EVENT_FACING: u32 = 33;
+const EVENT_SPELL_HIT_TARGET: u32 = 34;
+const EVENT_TARGET_NOT_REACHABLE: u32 = 36;
 
 const ACTION_TEXT: u32 = 1;
 const ACTION_TEXT_NEW: u32 = 54;
@@ -30,9 +55,12 @@ const ACTION_SET_UNIT_FIELD: u32 = 17;
 const ACTION_SET_UNIT_FLAG: u32 = 18;
 const ACTION_REMOVE_UNIT_FLAG: u32 = 19;
 const ACTION_SET_PHASE: u32 = 22;
+const ACTION_INCREMENT_PHASE: u32 = 23;
 const ACTION_FLEE_FOR_ASSIST: u32 = 25;
 const ACTION_REMOVE_AURA: u32 = 28;
 const ACTION_RANGED_MOVEMENT: u32 = 29;
+const ACTION_RANDOM_PHASE: u32 = 30;
+const ACTION_RANDOM_PHASE_RANGE: u32 = 31;
 const ACTION_SUMMON_ID: u32 = 32;
 const ACTION_KILLED_MONSTER: u32 = 33;
 const ACTION_SET_INSTANCE_DATA_GUID: u32 = 35;
@@ -47,28 +75,50 @@ const TARGET_SELF: u32 = 0;
 const TARGET_HOSTILE: u32 = 1;
 const TARGET_HOSTILE_SECOND: u32 = 2;
 const TARGET_HOSTILE_RANDOM: u32 = 4;
+const TARGET_HOSTILE_RANDOM_EXCEPT_HIGHEST: u32 = 5;
 const TARGET_ACTION_INVOKER: u32 = 6;
+const TARGET_BENEFICIARY: u32 = 7;
 const TARGET_HOSTILE_RANDOM_PLAYER: u32 = 8;
+const TARGET_HOSTILE_RANDOM_PLAYER_EXCEPT_HIGHEST: u32 = 9;
+const TARGET_AI_SENDER: u32 = 10;
+const TARGET_SPAWNER: u32 = 11;
 const TARGET_EVENT_SPECIFIC: u32 = 12;
+const TARGET_NO_EXPLICIT: u32 = 15;
+const TARGET_HOSTILE_MANA: u32 = 16;
 const TARGET_NEAREST_AOE: u32 = 17;
 const TARGET_HOSTILE_FARTHEST: u32 = 18;
 
 const FLAG_REPEATABLE: u32 = 0x01;
 const FLAG_RANDOM_ACTION: u32 = 0x20;
+const FLAG_DEBUG_ONLY: u32 = 0x80;
+const FLAG_RANGED_ONLY: u32 = 0x100;
+const FLAG_MELEE_ONLY: u32 = 0x200;
 const FLAG_COMBAT_ACTION: u32 = 0x400;
-const SUPPORTED_FLAGS: u32 = FLAG_REPEATABLE | FLAG_RANDOM_ACTION | FLAG_COMBAT_ACTION;
+const FLAG_CLASSIC_RESERVED: u32 = 0x02 | 0x04 | 0x08 | 0x10;
+const SUPPORTED_FLAGS: u32 =
+    FLAG_REPEATABLE | FLAG_RANDOM_ACTION | FLAG_RANGED_ONLY | FLAG_MELEE_ONLY | FLAG_COMBAT_ACTION;
 
 const CAST_INTERRUPT_PREVIOUS: u32 = 0x01;
 const CAST_TRIGGERED: u32 = 0x02;
 const CAST_FORCE_CAST: u32 = 0x04;
+const CAST_FORCE_TARGET_SELF: u32 = 0x10;
 const CAST_AURA_NOT_PRESENT: u32 = 0x20;
+const CAST_IGNORE_UNSELECTABLE: u32 = 0x40;
+const CAST_SWITCH_CASTER_TARGET: u32 = 0x80;
+const CAST_MAIN_SPELL: u32 = 0x100;
 const CAST_PLAYER_ONLY: u32 = 0x200;
+const CAST_DISTANCE: u32 = 0x400;
 const CAST_TARGET_CASTING: u32 = 0x800;
 const SUPPORTED_CAST_FLAGS: u32 = CAST_INTERRUPT_PREVIOUS
     | CAST_TRIGGERED
     | CAST_FORCE_CAST
+    | CAST_FORCE_TARGET_SELF
     | CAST_AURA_NOT_PRESENT
+    | CAST_IGNORE_UNSELECTABLE
+    | CAST_SWITCH_CASTER_TARGET
+    | CAST_MAIN_SPELL
     | CAST_PLAYER_ONLY
+    | CAST_DISTANCE
     | CAST_TARGET_CASTING;
 
 const FIXTURE_ID_FIRST: u32 = 5_099_000;
@@ -176,6 +226,9 @@ pub(crate) struct SourceProfile {
     pub(crate) loader_contract: String,
     pub(crate) source_rule_count: u64,
     pub(crate) source_guid_rule_count: u64,
+    cast_action_subjects: u64,
+    template_schedule_overlaps: u64,
+    creature_spell_list_overlaps: u64,
     approvals: ApprovalRules,
     expected_source_census: BTreeMap<String, BTreeMap<u64, u64>>,
 }
@@ -322,6 +375,9 @@ pub(crate) fn source_profile(name: &str) -> Result<SourceProfile, String> {
         loader_contract: string("loader_contract")?,
         source_rule_count: count("source_rule_count")?,
         source_guid_rule_count: count("source_guid_rule_count")?,
+        cast_action_subjects: count("cast_action_subjects")?,
+        template_schedule_overlaps: count("template_schedule_overlaps")?,
+        creature_spell_list_overlaps: count("creature_spell_list_overlaps")?,
         approvals: ApprovalRules {
             classifications: strings("classifications")?,
             events: numbers("events")?,
@@ -411,6 +467,24 @@ impl CompatibilityManifest {
                 profile.source_guid_rule_count, coverage.source_guid_rules
             ));
         }
+        if coverage.cast_action_subjects != profile.cast_action_subjects {
+            findings.push(format!(
+                "cast_action_subjects expected={} observed={}",
+                profile.cast_action_subjects, coverage.cast_action_subjects
+            ));
+        }
+        if coverage.template_schedule_overlaps != profile.template_schedule_overlaps {
+            findings.push(format!(
+                "template_schedule_overlaps expected={} observed={}",
+                profile.template_schedule_overlaps, coverage.template_schedule_overlaps
+            ));
+        }
+        if coverage.creature_spell_list_overlaps != profile.creature_spell_list_overlaps {
+            findings.push(format!(
+                "creature_spell_list_overlaps expected={} observed={}",
+                profile.creature_spell_list_overlaps, coverage.creature_spell_list_overlaps
+            ));
+        }
         let classified_rules = coverage.classified_rules();
         if classified_rules != coverage.total_rules {
             findings.push(format!(
@@ -477,6 +551,9 @@ impl CompatibilityManifest {
             "counts": {
                 "source_rules": coverage.total_rules,
                 "source_guid_rules": coverage.source_guid_rules,
+                "cast_action_subjects": coverage.cast_action_subjects,
+                "template_schedule_overlaps": coverage.template_schedule_overlaps,
+                "creature_spell_list_overlaps": coverage.creature_spell_list_overlaps,
                 "classified_rules": classified_rules,
                 "unclassified_rules": coverage.total_rules.saturating_sub(classified_rules),
                 "emitted_rules": coverage.emitted_rules,
@@ -551,23 +628,32 @@ impl SourceProfile {
         if key.classification == "excluded" && key.reason == "outside_world_import_scope" {
             return true;
         }
-        if matches!(
-            key.reason.as_str(),
-            "chance_capped" | "invalid_action_to_none"
-        ) {
-            return key.classification == "normalized"
-                && self.approvals.classifications.contains(&key.classification)
-                && self.approvals.reasons.contains(&key.reason)
-                && self.approvals.normalizations.contains(&(
-                    key.dimension.clone(),
-                    key.raw_value.clone(),
-                    key.reason.clone(),
-                ));
-        }
         if !self.approvals.classifications.contains(&key.classification)
             || !self.approvals.reasons.contains(&key.reason)
         {
             return false;
+        }
+        let normalization_reason = self
+            .approvals
+            .normalizations
+            .iter()
+            .any(|(_, _, reason)| reason == &key.reason);
+        if (key.classification == "normalized" || normalization_reason)
+            && !self.approvals.normalizations.contains(&(
+                key.dimension.clone(),
+                key.raw_value.clone(),
+                key.reason.clone(),
+            ))
+        {
+            return false;
+        }
+        if key.classification == "normalized"
+            && matches!(
+                key.reason.as_str(),
+                "invalid_action_to_none" | "normalized_random_phase_range"
+            )
+        {
+            return true;
         }
         match key.dimension.as_str() {
             "event" => key
@@ -585,6 +671,7 @@ impl SourceProfile {
             "event_flag" => mask_has_no_residual(&key.raw_value, self.approvals.event_flag_bits),
             "cast_flag" => mask_has_no_residual(&key.raw_value, self.approvals.cast_flag_bits),
             "dependency" => self.approvals.dependencies.contains(&key.raw_value),
+            "phase_range" => true,
             "rule" => true,
             _ => false,
         }
@@ -617,6 +704,9 @@ fn render_rule_ids(values: &BTreeSet<u64>) -> String {
 struct Coverage {
     total_rules: u64,
     source_guid_rules: u64,
+    cast_action_subjects: u64,
+    template_schedule_overlaps: u64,
+    creature_spell_list_overlaps: u64,
     emitted_rules: u64,
     emitted_instructions: u64,
     normalized_rules: u64,
@@ -717,6 +807,11 @@ impl Coverage {
     }
 
     fn classify_rule(&mut self, rule_id: u64, classification: &str, reason: &str) {
+        self.mark_rule_classification(classification);
+        self.result("rule", rule_id, classification, reason, rule_id, None);
+    }
+
+    fn mark_rule_classification(&mut self, classification: &str) {
         match classification {
             "emitted" => self.emitted_rules += 1,
             "normalized" => self.normalized_rules += 1,
@@ -724,7 +819,6 @@ impl Coverage {
             "dropped" => self.dropped_rules += 1,
             _ => {}
         }
-        self.result("rule", rule_id, classification, reason, rule_id, None);
     }
 
     fn classified_rules(&self) -> u64 {
@@ -801,10 +895,28 @@ struct RawRule {
     normalizations: Vec<SourceNormalization>,
 }
 
+#[derive(Clone, Copy)]
 struct SourceNormalization {
     dimension: &'static str,
     raw_value: u64,
     reason: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum SourceEventPredicate {
+    Alliance,
+    Horde,
+    QuestTaken(u32),
+}
+
+impl SourceEventPredicate {
+    fn encode(self) -> String {
+        match self {
+            Self::Alliance => "alliance".to_string(),
+            Self::Horde => "horde".to_string(),
+            Self::QuestTaken(quest_entry) => format!("quest-taken.{quest_entry}"),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -848,6 +960,7 @@ struct NativeAction {
     summon_entry: Option<u64>,
     summon_location: Option<u32>,
     dependencies: Vec<Dependency>,
+    normalizations: Vec<SourceNormalization>,
 }
 
 struct Dependency {
@@ -896,6 +1009,8 @@ impl MappingFailure {
 pub(crate) struct EventAiSource {
     broadcasts: BTreeMap<u32, Broadcast>,
     summon_locations: BTreeMap<u32, SummonLocation>,
+    event_predicates: BTreeMap<u32, SourceEventPredicate>,
+    quest_entries: HashSet<u32>,
     rules: Vec<RawRule>,
     coverage: Coverage,
 }
@@ -905,14 +1020,58 @@ pub(crate) fn parse(dump: &str) -> EventAiSource {
     let mut broadcasts = parse_broadcasts(dump, &mut coverage);
     broadcasts.extend(parse_legacy_texts(dump, &broadcasts, &mut coverage));
     let summon_locations = parse_summons(dump, &mut coverage);
+    let event_predicates = parse_event_predicates(dump);
+    let quest_entries = parse_table(dump, "quest_template")
+        .into_iter()
+        .filter_map(|row| source_u32(field(&row, 0)))
+        .collect();
     let mut rules = parse_rules(dump, &mut coverage);
     rules.sort_by_key(|rule| rule.id);
+    let (cast_action_subjects, template_schedule_overlaps, creature_spell_list_overlaps) =
+        source_overlap_census(dump, &rules);
+    coverage.cast_action_subjects = cast_action_subjects;
+    coverage.template_schedule_overlaps = template_schedule_overlaps;
+    coverage.creature_spell_list_overlaps = creature_spell_list_overlaps;
     EventAiSource {
         broadcasts,
         summon_locations,
+        event_predicates,
+        quest_entries,
         rules,
         coverage,
     }
+}
+
+fn source_overlap_census(dump: &str, rules: &[RawRule]) -> (u64, u64, u64) {
+    let template_rows = crate::parse_table(dump, "creature_template");
+    let schedule_rows = crate::parse_table(dump, "creature_template_spells");
+    let template_schedule_entries: HashSet<u64> = schedule_rows
+        .into_iter()
+        .filter_map(|row| row.first()?.parse().ok())
+        .collect();
+    let creature_spell_list_entries: HashSet<u64> = template_rows
+        .into_iter()
+        .filter(|row| {
+            row.get(80)
+                .and_then(|value| value.parse::<i64>().ok())
+                .is_some_and(|spell_list| spell_list > 0)
+        })
+        .filter_map(|row| row.first()?.parse().ok())
+        .collect();
+    let cast_action_entries: HashSet<u64> = rules
+        .iter()
+        .filter(|rule| rule.actions.iter().any(|action| action[0] == ACTION_CAST))
+        .filter_map(|rule| (rule.subject > 0).then_some(rule.subject as u64))
+        .collect();
+    (
+        cast_action_entries.len() as u64,
+        cast_action_entries
+            .intersection(&template_schedule_entries)
+            .count() as u64,
+        cast_action_entries
+            .intersection(&creature_spell_list_entries)
+            .count() as u64,
+    )
 }
 
 impl EventAiSource {
@@ -970,13 +1129,28 @@ impl EventAiSource {
                 }
             };
             let mut failures = Vec::new();
-            let event = match map_event(rule) {
+            let event = match map_event(rule, &self.event_predicates) {
                 Ok(event) => Some(event),
                 Err(failure) => {
                     failures.push(failure);
                     None
                 }
             };
+            if let Some((condition_id, quest_entry)) =
+                event_quest_dependency(rule, &self.event_predicates)
+            {
+                if !self.quest_entries.contains(&quest_entry) {
+                    failures.push(MappingFailure::dependency(
+                        "quest_template",
+                        u64::from(quest_entry),
+                        "missing",
+                        format!(
+                            "rule:{} -> conditions:{condition_id} -> quest_template:{quest_entry}",
+                            rule.id
+                        ),
+                    ));
+                }
+            }
             if rule.chance == 0 {
                 failures.push(MappingFailure::source(
                     "rule",
@@ -984,7 +1158,8 @@ impl EventAiSource {
                     "invalid_chance",
                 ));
             }
-            let flag_residual = rule.flags & !SUPPORTED_FLAGS;
+            let flags = effective_event_flags(rule);
+            let flag_residual = flags & !SUPPORTED_FLAGS;
             if flag_residual != 0 {
                 failures.push(MappingFailure::source(
                     "event_flag",
@@ -998,6 +1173,13 @@ impl EventAiSource {
                     "rule",
                     rule.inverse_phase_mask as u64,
                     "empty_phase_mask",
+                ));
+            }
+            if flags & FLAG_RANGED_ONLY != 0 && flags & FLAG_MELEE_ONLY != 0 {
+                failures.push(MappingFailure::source(
+                    "event_flag",
+                    rule.flags as u64,
+                    "conflicting_posture_flags",
                 ));
             }
             let mut actions = Vec::new();
@@ -1018,6 +1200,17 @@ impl EventAiSource {
                     Err(mut action_failures) => failures.append(&mut action_failures),
                 }
             }
+            for action in &actions {
+                if let Some(target) = action.raw_target {
+                    if !event_provides_target_context(rule.event, target) {
+                        failures.push(MappingFailure::source(
+                            "target",
+                            u64::from(target),
+                            format!("target_context_unavailable_for_event_{}", rule.event),
+                        ));
+                    }
+                }
+            }
             if actions.is_empty() {
                 failures.push(MappingFailure::source("rule", rule.id, "empty_rule"));
             }
@@ -1029,20 +1222,48 @@ impl EventAiSource {
                 continue;
             }
             let event = event.expect("a rule without mapping failures has an event");
-            let recurrence = if rule.flags & FLAG_REPEATABLE != 0 {
-                format!("repeat:{}:{}", rule.params[2], rule.params[3])
+            let recurrence = if flags & FLAG_REPEATABLE != 0 {
+                match repeat_window(rule) {
+                    Some((min, max)) if min <= max => format!("repeat:{min}:{max}"),
+                    None if repeats_on_each_event(rule.event) => "repeat-event".to_string(),
+                    _ => {
+                        failures.push(MappingFailure::source(
+                            "event",
+                            rule.event as u64,
+                            "invalid_repeat_window",
+                        ));
+                        "once".to_string()
+                    }
+                }
             } else {
                 "once".to_string()
             };
-            let selection = if rule.flags & FLAG_RANDOM_ACTION != 0 {
+            if !failures.is_empty() {
+                record_dropped_rule(&mut plan.coverage, rule, failures);
+                continue;
+            }
+            if rule.flags & FLAG_DEBUG_ONLY != 0 {
+                plan.coverage
+                    .classify_rule(rule.id, "excluded", "debug_only_rule");
+                record_rule_dimensions(&mut plan.coverage, rule, "excluded", "debug_only_rule");
+                continue;
+            }
+            let selection = if flags & FLAG_RANDOM_ACTION != 0 {
                 "random"
             } else {
                 "all"
             };
-            let execution = if rule.flags & FLAG_COMBAT_ACTION != 0 {
+            let execution = if flags & FLAG_COMBAT_ACTION != 0 {
                 "combat"
             } else {
                 "ordinary"
+            };
+            let posture = if flags & FLAG_RANGED_ONLY != 0 {
+                "ranged-only"
+            } else if flags & FLAG_MELEE_ONLY != 0 {
+                "melee-only"
+            } else {
+                "any-posture"
             };
             let instructions = actions
                 .iter()
@@ -1050,7 +1271,7 @@ impl EventAiSource {
                 .collect::<Vec<_>>()
                 .join("+");
             let encoded_rule = format!(
-                "{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{}",
                 rule.id,
                 event,
                 rule.chance,
@@ -1058,16 +1279,22 @@ impl EventAiSource {
                 recurrence,
                 selection,
                 execution,
+                posture,
                 instructions,
             );
             definitions.entry(subject.0).or_default().push(encoded_rule);
 
-            let (classification, reason) = if rule.normalizations.is_empty() {
-                ("emitted", "emitted")
+            let has_action_normalization = actions
+                .iter()
+                .any(|action| !action.normalizations.is_empty());
+            let normalized = !rule.normalizations.is_empty() || has_action_normalization;
+            if normalized {
+                plan.coverage.mark_rule_classification("normalized");
             } else {
-                ("normalized", "source_loader_normalization")
-            };
-            plan.coverage.classify_rule(rule.id, classification, reason);
+                plan.coverage.classify_rule(rule.id, "emitted", "emitted");
+            }
+            let classification = "emitted";
+            let reason = "emitted";
             plan.coverage
                 .result("event", rule.event, classification, reason, rule.id, None);
             plan.coverage.result(
@@ -1079,6 +1306,19 @@ impl EventAiSource {
                 None,
             );
             for normalization in &rule.normalizations {
+                plan.coverage.result(
+                    normalization.dimension,
+                    normalization.raw_value,
+                    "normalized",
+                    normalization.reason,
+                    rule.id,
+                    None,
+                );
+            }
+            for normalization in actions
+                .iter()
+                .flat_map(|action| action.normalizations.iter())
+            {
                 plan.coverage.result(
                     normalization.dimension,
                     normalization.raw_value,
@@ -1103,6 +1343,30 @@ impl EventAiSource {
                     rule.id,
                     Some(dependency.path),
                 );
+            }
+            if let Some(condition_id) = event_condition_id(rule) {
+                plan.coverage.result(
+                    "dependency",
+                    "event_condition",
+                    classification,
+                    "resolved",
+                    rule.id,
+                    Some(format!("rule:{} -> conditions:{condition_id}", rule.id)),
+                );
+                if let Some((_, quest_entry)) = event_quest_dependency(rule, &self.event_predicates)
+                {
+                    plan.coverage.result(
+                        "dependency",
+                        "quest_template",
+                        classification,
+                        "resolved",
+                        rule.id,
+                        Some(format!(
+                            "rule:{} -> conditions:{condition_id} -> quest_template:{quest_entry}",
+                            rule.id
+                        )),
+                    );
+                }
             }
             for action in actions {
                 Coverage::source_value(&mut plan.coverage.accepted_action, action.raw_kind as u64);
@@ -1184,6 +1448,54 @@ impl EventAiSource {
         }
         plan
     }
+}
+
+fn event_provides_target_context(event: u32, target: u32) -> bool {
+    match target {
+        TARGET_ACTION_INVOKER | TARGET_BENEFICIARY => matches!(
+            event,
+            EVENT_AGGRO
+                | EVENT_KILL
+                | EVENT_DEATH
+                | EVENT_SPELL_HIT
+                | EVENT_OOC_LOS
+                | EVENT_RECEIVE_EMOTE
+                | EVENT_RECEIVE_AI_EVENT
+                | EVENT_SUMMONED
+                | EVENT_SUMMONED_DEATH
+                | EVENT_SPELL_HIT_TARGET
+        ),
+        TARGET_AI_SENDER => event == EVENT_RECEIVE_AI_EVENT,
+        TARGET_EVENT_SPECIFIC => matches!(
+            event,
+            EVENT_FRIENDLY_HP
+                | EVENT_FRIENDLY_CC
+                | EVENT_FRIENDLY_MISSING_AURA
+                | EVENT_SELECT_ATTACKING
+        ),
+        _ => true,
+    }
+}
+
+fn event_condition_id(rule: &RawRule) -> Option<u32> {
+    let id = match rule.event {
+        EVENT_DEATH => rule.params[0],
+        EVENT_OOC_LOS => rule.params[5],
+        EVENT_RECEIVE_EMOTE => rule.params[1],
+        _ => 0,
+    };
+    (id != 0).then_some(id)
+}
+
+fn event_quest_dependency(
+    rule: &RawRule,
+    predicates: &BTreeMap<u32, SourceEventPredicate>,
+) -> Option<(u32, u32)> {
+    let condition_id = event_condition_id(rule)?;
+    let SourceEventPredicate::QuestTaken(quest_entry) = predicates.get(&condition_id)? else {
+        return None;
+    };
+    Some((condition_id, *quest_entry))
 }
 
 fn encode_definition(subject: Subject, rules: &[String]) -> String {
@@ -1345,6 +1657,20 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                     reason: "chance_capped",
                 });
             }
+            if flags & FLAG_CLASSIC_RESERVED != 0 {
+                normalizations.push(SourceNormalization {
+                    dimension: "event_flag",
+                    raw_value: u64::from(flags),
+                    reason: "normalized_reserved_event_flag",
+                });
+            }
+            if event == EVENT_RECEIVE_EMOTE && flags & FLAG_REPEATABLE == 0 {
+                normalizations.push(SourceNormalization {
+                    dimension: "event_flag",
+                    raw_value: u64::from(flags),
+                    reason: "receive_emote_repeatable",
+                });
+            }
             for (index, param) in params.iter_mut().enumerate() {
                 let Some(value) = source_loader_u32(field(&row, 6 + index)) else {
                     coverage.drop("invalid_numeric", (6 + index) as u64);
@@ -1401,6 +1727,14 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
             })
         })
         .collect()
+}
+
+fn effective_event_flags(rule: &RawRule) -> u32 {
+    let mut flags = rule.flags & !FLAG_CLASSIC_RESERVED & !FLAG_DEBUG_ONLY;
+    if rule.event == EVENT_RECEIVE_EMOTE {
+        flags |= FLAG_REPEATABLE;
+    }
+    flags
 }
 
 fn source_target_parameter(action: u32) -> Option<usize> {
@@ -1504,6 +1838,25 @@ fn parse_legacy_texts(
                 ],
             });
             (id < 0).then_some((id as u32, text))
+        })
+        .collect()
+}
+
+fn parse_event_predicates(dump: &str) -> BTreeMap<u32, SourceEventPredicate> {
+    parse_table(dump, "conditions")
+        .into_iter()
+        .filter_map(|row| {
+            let id = source_u32(field(&row, 0))?;
+            let kind = field(&row, 1).parse::<i32>().ok()?;
+            let value = source_u32(field(&row, 2))?;
+            let second = source_u32(field(&row, 3))?;
+            let predicate = match (kind, value, second) {
+                (6, 469, 0) => SourceEventPredicate::Alliance,
+                (6, 67, 0) => SourceEventPredicate::Horde,
+                (9, quest_entry, 0) => SourceEventPredicate::QuestTaken(quest_entry),
+                _ => return None,
+            };
+            Some((id, predicate))
         })
         .collect()
 }
@@ -1635,47 +1988,192 @@ fn resolve_subject(
     }
 }
 
-fn map_event(rule: &RawRule) -> Result<String, MappingFailure> {
+fn map_event(
+    rule: &RawRule,
+    predicates: &BTreeMap<u32, SourceEventPredicate>,
+) -> Result<String, MappingFailure> {
     let params = rule.params;
-    let valid_timer = |params: [u32; 6]| params[0] <= params[1] && params[2] <= params[3];
+    let percentage = |event: &str| {
+        (params[0] <= 100 && params[1] <= params[0])
+            .then(|| format!("{event}:{}:{}", params[1], params[0]))
+    };
     match rule.event {
-        EVENT_TIMER_IN_COMBAT if valid_timer(params) => {
-            Ok(format!("timer:{}:{}", params[0], params[1]))
+        EVENT_TIMER_IN_COMBAT if params[0] <= params[1] => {
+            Some(format!("timer-combat:{}:{}", params[0], params[1]))
         }
-        EVENT_HP if params[0] <= 100 && params[1] <= params[0] && params[2] <= params[3] => {
-            Ok(format!("health:{}:{}", params[1], params[0]))
+        EVENT_TIMER_IN_COMBAT => None,
+        EVENT_TIMER_OUT_OF_COMBAT if params[0] <= params[1] => {
+            Some(format!("timer-ooc:{}:{}", params[0], params[1]))
         }
-        EVENT_AGGRO if params == [0; 6] => Ok("aggro".to_string()),
-        EVENT_DEATH if params == [0; 6] => Ok("death".to_string()),
-        EVENT_RANGE if valid_timer(params) => Ok(format!("range:{}:{}", params[0], params[1])),
-        EVENT_SPAWNED if params[0] == 0 && params[1..] == [0; 5] => Ok("spawn".to_string()),
-        EVENT_FRIENDLY_HP if params[1] > 0 && params[2] <= params[3] => {
-            Ok(format!("friendly-health:{}:{}", params[0], params[1]))
+        EVENT_TIMER_OUT_OF_COMBAT => None,
+        EVENT_HP if params[4] <= 1 => {
+            percentage("health").map(|event| format!("{event}:{}", params[4]))
         }
-        value
-            if matches!(
-                value,
-                EVENT_TIMER_IN_COMBAT
-                    | EVENT_HP
-                    | EVENT_AGGRO
-                    | EVENT_DEATH
-                    | EVENT_RANGE
-                    | EVENT_SPAWNED
-                    | EVENT_FRIENDLY_HP
-            ) =>
-        {
-            Err(MappingFailure::source(
-                "event",
-                value as u64,
-                "invalid_event_parameters",
+        EVENT_HP => None,
+        EVENT_MANA => percentage("power"),
+        EVENT_AGGRO => Some("aggro".to_string()),
+        EVENT_KILL if params[2] <= 1 => Some(format!("kill:{}", params[2])),
+        EVENT_KILL => None,
+        EVENT_DEATH => Some(format!(
+            "death:{}",
+            event_predicate(rule, params[0], predicates)?
+        )),
+        EVENT_EVADE => Some("evade".to_string()),
+        EVENT_SPELL_HIT => Some(format!("spell-hit:{}:{}", params[0], params[1])),
+        EVENT_RANGE if params[0] <= params[1] => Some(format!("range:{}:{}", params[0], params[1])),
+        EVENT_RANGE => None,
+        EVENT_OOC_LOS if params[0] <= 1 && params[4] <= 1 => Some(format!(
+            "ooc-los:{}:{}:{}:{}",
+            params[0],
+            params[1],
+            params[4],
+            event_predicate(rule, params[5], predicates)?
+        )),
+        EVENT_OOC_LOS => None,
+        EVENT_SPAWNED => match params[0] {
+            0 => Some("spawn:always".to_string()),
+            1 => Some(format!("spawn:map:{}", params[1])),
+            2 => Some(format!("spawn:zone-or-area:{}", params[1])),
+            _ => None,
+        },
+        EVENT_TARGET_HP => percentage("target-health"),
+        EVENT_TARGET_CASTING => Some("target-casting".to_string()),
+        EVENT_FRIENDLY_HP if params[1] > 0 && params[4] <= 1 => Some(format!(
+            "friendly-health:{}:{}:{}",
+            params[0], params[1], params[4]
+        )),
+        EVENT_FRIENDLY_HP => None,
+        EVENT_FRIENDLY_CC if params[1] > 0 => Some(format!("friendly-cc:{}", params[1])),
+        EVENT_FRIENDLY_CC => None,
+        EVENT_FRIENDLY_MISSING_AURA if params[1] > 0 && params[4] <= 2 => {
+            let selection = match params[4] {
+                0 => "nearby-engaged",
+                1 => "match-actor-combat",
+                2 => "any-while-disengaged",
+                _ => unreachable!("the event guard admits only source modes 0..=2"),
+            };
+            Some(format!(
+                "friendly-missing-aura:{}:{}:{selection}",
+                params[0], params[1]
             ))
         }
-        value => Err(MappingFailure::source(
-            "event",
-            value as u64,
-            "unsupported_event",
+        EVENT_FRIENDLY_MISSING_AURA => None,
+        EVENT_SUMMONED => Some(format!("summoned:{}", params[0])),
+        EVENT_TARGET_MANA => percentage("target-power"),
+        EVENT_HOME => Some("home".to_string()),
+        EVENT_RECEIVE_EMOTE => Some(format!(
+            "receive-emote:{}:{}",
+            params[0],
+            event_predicate(rule, params[1], predicates)?
         )),
+        EVENT_AURA => Some(format!("aura:{}:{}", params[0], params[1])),
+        EVENT_TARGET_AURA => Some(format!("target-aura:{}:{}", params[0], params[1])),
+        EVENT_SUMMONED_DEATH => Some(format!("summoned-death:{}", params[0])),
+        EVENT_MISSING_AURA => Some(format!("missing-aura:{}:{}", params[0], params[1])),
+        EVENT_TARGET_MISSING_AURA => {
+            Some(format!("target-missing-aura:{}:{}", params[0], params[1]))
+        }
+        EVENT_TIMER_GENERIC if params[0] <= params[1] => {
+            Some(format!("timer-generic:{}:{}", params[0], params[1]))
+        }
+        EVENT_TIMER_GENERIC => None,
+        EVENT_RECEIVE_AI_EVENT => {
+            ai_event_name(params[0]).map(|event| format!("ai-event:{event}:{}", params[1]))
+        }
+        EVENT_SELECT_ATTACKING if params[0] <= params[1] => {
+            Some(format!("select-attacking:{}:{}", params[0], params[1]))
+        }
+        EVENT_SELECT_ATTACKING => None,
+        EVENT_FACING if params[0] <= 1 => Some(format!("facing:{}", u8::from(params[0] == 0))),
+        EVENT_FACING => None,
+        EVENT_SPELL_HIT_TARGET => Some(format!("spell-hit-target:{}:{}", params[0], params[1])),
+        EVENT_TARGET_NOT_REACHABLE => Some("target-not-reachable".to_string()),
+        _ => {
+            return Err(MappingFailure::source(
+                "event",
+                rule.event as u64,
+                "unsupported_event",
+            ));
+        }
     }
+    .ok_or_else(|| MappingFailure::source("event", rule.event as u64, "invalid_event_parameters"))
+}
+
+fn event_predicate(
+    rule: &RawRule,
+    condition_id: u32,
+    predicates: &BTreeMap<u32, SourceEventPredicate>,
+) -> Result<String, MappingFailure> {
+    if condition_id == 0 {
+        return Ok("always".to_string());
+    }
+    predicates
+        .get(&condition_id)
+        .copied()
+        .map(SourceEventPredicate::encode)
+        .ok_or_else(|| {
+            MappingFailure::dependency(
+                "event_condition",
+                u64::from(condition_id),
+                "unsupported_or_missing",
+                format!("rule:{} -> conditions:{condition_id}", rule.id),
+            )
+        })
+}
+
+fn ai_event_name(value: u32) -> Option<&'static str> {
+    [
+        "just-died",
+        "critical-health",
+        "lost-health",
+        "lost-some-health",
+        "got-full-health",
+        "custom-a",
+        "custom-b",
+        "crowd-controlled",
+        "custom-c",
+        "custom-d",
+        "custom-e",
+        "custom-f",
+    ]
+    .get(value as usize)
+    .copied()
+}
+
+fn repeat_window(rule: &RawRule) -> Option<(u32, u32)> {
+    let p = rule.params;
+    match rule.event {
+        EVENT_TIMER_IN_COMBAT
+        | EVENT_TIMER_OUT_OF_COMBAT
+        | EVENT_HP
+        | EVENT_MANA
+        | EVENT_SPELL_HIT
+        | EVENT_RANGE
+        | EVENT_OOC_LOS
+        | EVENT_TARGET_HP
+        | EVENT_FRIENDLY_HP
+        | EVENT_FRIENDLY_CC
+        | EVENT_FRIENDLY_MISSING_AURA
+        | EVENT_TARGET_MANA
+        | EVENT_AURA
+        | EVENT_TARGET_AURA
+        | EVENT_MISSING_AURA
+        | EVENT_TARGET_MISSING_AURA
+        | EVENT_TIMER_GENERIC
+        | EVENT_SELECT_ATTACKING
+        | EVENT_FACING
+        | EVENT_SPELL_HIT_TARGET => Some((p[2], p[3])),
+        EVENT_KILL | EVENT_TARGET_CASTING => Some((p[0], p[1])),
+        EVENT_SUMMONED | EVENT_SUMMONED_DEATH => Some((p[1], p[2])),
+        _ => None,
+    }
+}
+
+fn repeats_on_each_event(event: u32) -> bool {
+    matches!(
+        event,
+        EVENT_SPAWNED | EVENT_RECEIVE_EMOTE | EVENT_RECEIVE_AI_EVENT | EVENT_TARGET_NOT_REACHABLE
+    )
 }
 
 fn map_action(
@@ -1732,6 +2230,7 @@ fn map_action(
                 texts,
                 summon_entry: None,
                 summon_location: None,
+                normalizations: Vec::new(),
             })
         }
         ACTION_TEXT_NEW => {
@@ -1768,6 +2267,7 @@ fn map_action(
                 texts: vec![action[1]],
                 summon_entry: None,
                 summon_location: None,
+                normalizations: Vec::new(),
             })
         }
         ACTION_EMOTE => Ok(NativeAction {
@@ -1779,6 +2279,7 @@ fn map_action(
             texts: Vec::new(),
             summon_entry: None,
             summon_location: None,
+            normalizations: Vec::new(),
         }),
         ACTION_CAST => {
             if action[1] == 0 {
@@ -1788,7 +2289,8 @@ fn map_action(
                     "invalid_spell",
                 )]);
             }
-            let (target, options) = map_cast_target_and_flags(action[2], action[3])?;
+            let (target, options, normalizations) =
+                map_cast_target_and_flags(action[2], action[3])?;
             Ok(NativeAction {
                 encoded: format!("cast:{}:{target}:{options}", action[1]),
                 raw_kind: kind,
@@ -1798,6 +2300,7 @@ fn map_action(
                 texts: Vec::new(),
                 summon_entry: None,
                 summon_location: None,
+                normalizations,
             })
         }
         ACTION_SET_PHASE if action[1] < 32 => Ok(NativeAction {
@@ -1809,7 +2312,56 @@ fn map_action(
             texts: Vec::new(),
             summon_entry: None,
             summon_location: None,
+            normalizations: Vec::new(),
         }),
+        ACTION_INCREMENT_PHASE if action[1] != 0 => Ok(NativeAction {
+            encoded: format!("phase-inc:{}", action[1] as i32),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_RANDOM_PHASE if action[1..].iter().all(|phase| *phase < 32) => Ok(NativeAction {
+            encoded: format!("phase-random:{}.{}.{}", action[1], action[2], action[3]),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_RANDOM_PHASE_RANGE if action[1] != action[2] && action[1] < 32 && action[2] < 32 => {
+            let (min, max, normalizations) = if action[1] < action[2] {
+                (action[1], action[2], Vec::new())
+            } else {
+                (
+                    action[2],
+                    action[1],
+                    vec![SourceNormalization {
+                        dimension: "phase_range",
+                        raw_value: (u64::from(action[1]) << 32) | u64::from(action[2]),
+                        reason: "normalized_random_phase_range",
+                    }],
+                )
+            };
+            Ok(NativeAction {
+                encoded: format!("phase-range:{min}:{max}"),
+                raw_kind: kind,
+                raw_target: None,
+                raw_cast_flags: None,
+                dependencies: Vec::new(),
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations,
+            })
+        }
         ACTION_FLEE_FOR_ASSIST => Ok(NativeAction {
             encoded: "flee".to_string(),
             raw_kind: kind,
@@ -1819,6 +2371,7 @@ fn map_action(
             texts: Vec::new(),
             summon_entry: None,
             summon_location: None,
+            normalizations: Vec::new(),
         }),
         ACTION_CALL_FOR_HELP => Ok(NativeAction {
             encoded: format!("help:{}", action[1]),
@@ -1829,6 +2382,7 @@ fn map_action(
             texts: Vec::new(),
             summon_entry: None,
             summon_location: None,
+            normalizations: Vec::new(),
         }),
         ACTION_RANGED_MOVEMENT => Ok(NativeAction {
             encoded: format!("posture:{}:{}", action[1], action[2] as i32),
@@ -1839,6 +2393,7 @@ fn map_action(
             texts: Vec::new(),
             summon_entry: None,
             summon_location: None,
+            normalizations: Vec::new(),
         }),
         ACTION_SUMMON_ID => {
             let entry = action[1] as u64;
@@ -1900,9 +2455,13 @@ fn map_action(
                         ),
                     },
                 ],
+                normalizations: Vec::new(),
             })
         }
-        ACTION_SET_PHASE => Err(vec![MappingFailure::source(
+        ACTION_SET_PHASE
+        | ACTION_INCREMENT_PHASE
+        | ACTION_RANDOM_PHASE
+        | ACTION_RANDOM_PHASE_RANGE => Err(vec![MappingFailure::source(
             "action",
             u64::from(action[1]),
             format!("invalid_phase_{}", action[1]),
@@ -1918,8 +2477,9 @@ fn map_action(
 fn map_cast_target_and_flags(
     raw_target: u32,
     raw_flags: u32,
-) -> Result<(&'static str, String), Vec<MappingFailure>> {
+) -> Result<(&'static str, String, Vec<SourceNormalization>), Vec<MappingFailure>> {
     let mut failures = Vec::new();
+    let mut normalizations = Vec::new();
     let residual = raw_flags & !SUPPORTED_CAST_FLAGS;
     if residual != 0 {
         failures.push(MappingFailure::source(
@@ -1928,19 +2488,42 @@ fn map_cast_target_and_flags(
             format!("unsupported_cast_flag_residual_{residual:#x}"),
         ));
     }
-    if raw_flags & CAST_TRIGGERED != 0 {
-        failures.push(MappingFailure::source(
-            "cast_flag",
-            raw_flags as u64,
-            "unsupported_triggered_cast",
-        ));
-    }
     if raw_flags & CAST_FORCE_CAST != 0 {
+        if raw_flags & CAST_TRIGGERED == 0 {
+            failures.push(MappingFailure::source(
+                "cast_flag",
+                raw_flags as u64,
+                "force_cast_requires_triggered",
+            ));
+        } else {
+            normalizations.push(SourceNormalization {
+                dimension: "cast_flag",
+                raw_value: u64::from(raw_flags),
+                reason: "normalized_force_cast",
+            });
+        }
+    }
+    if raw_flags & CAST_IGNORE_UNSELECTABLE != 0
+        && (raw_target != TARGET_NO_EXPLICIT || raw_flags != 0x42)
+    {
         failures.push(MappingFailure::source(
             "cast_flag",
             raw_flags as u64,
-            "unsupported_force_cast",
+            "ignore_unselectable_not_profile_normalizable",
         ));
+    } else if raw_flags & CAST_IGNORE_UNSELECTABLE != 0 {
+        normalizations.push(SourceNormalization {
+            dimension: "cast_flag",
+            raw_value: u64::from(raw_flags),
+            reason: "normalized_no_effect",
+        });
+    }
+    if raw_flags & CAST_FORCE_TARGET_SELF != 0 && raw_flags & CAST_TRIGGERED == 0 {
+        normalizations.push(SourceNormalization {
+            dimension: "cast_flag",
+            raw_value: u64::from(raw_flags),
+            reason: "force_target_self_implies_triggered",
+        });
     }
     let target = match map_target(raw_target) {
         Ok(target) => Some(target),
@@ -1952,16 +2535,35 @@ fn map_cast_target_and_flags(
     if !failures.is_empty() {
         return Err(failures);
     }
+    let start = if raw_flags & (CAST_TRIGGERED | CAST_FORCE_TARGET_SELF) != 0 {
+        "triggered"
+    } else {
+        "direct"
+    };
+    let (caster, target_role) = if raw_flags & CAST_FORCE_TARGET_SELF != 0 {
+        ("selected", "caster")
+    } else if raw_flags & CAST_SWITCH_CASTER_TARGET != 0 {
+        ("selected", "actor")
+    } else if raw_target == TARGET_NO_EXPLICIT {
+        ("actor", "none")
+    } else if raw_target == TARGET_NEAREST_AOE {
+        ("actor", "caster-area")
+    } else {
+        ("actor", "selected")
+    };
     let options = format!(
-        "{}:0:{}:{}:{}",
+        "{}:{start}:{caster}:{target_role}:{}:{}:{}:{}:{}",
         u8::from(raw_flags & CAST_INTERRUPT_PREVIOUS != 0),
         u8::from(raw_flags & CAST_AURA_NOT_PRESENT != 0),
         u8::from(raw_flags & CAST_PLAYER_ONLY != 0),
         u8::from(raw_flags & CAST_TARGET_CASTING != 0),
+        u8::from(raw_flags & CAST_MAIN_SPELL != 0),
+        u8::from(raw_flags & CAST_DISTANCE != 0),
     );
     Ok((
         target.expect("a cast without mapping failures has a target"),
         options,
+        normalizations,
     ))
 }
 
@@ -1971,9 +2573,16 @@ fn map_target(value: u32) -> Result<&'static str, MappingFailure> {
         TARGET_HOSTILE => Ok("opponent"),
         TARGET_HOSTILE_SECOND => Ok("second-threat"),
         TARGET_HOSTILE_RANDOM => Ok("random-threat"),
+        TARGET_HOSTILE_RANDOM_EXCEPT_HIGHEST => Ok("random-threat-except-highest"),
         TARGET_ACTION_INVOKER => Ok("invoker"),
+        TARGET_BENEFICIARY => Ok("beneficiary"),
         TARGET_HOSTILE_RANDOM_PLAYER => Ok("random-threat-character"),
+        TARGET_HOSTILE_RANDOM_PLAYER_EXCEPT_HIGHEST => Ok("random-threat-character-except-highest"),
+        TARGET_AI_SENDER => Ok("ai-sender"),
+        TARGET_SPAWNER => Ok("spawner"),
         TARGET_EVENT_SPECIFIC => Ok("event-subject"),
+        TARGET_NO_EXPLICIT => Ok("no-explicit-spell-target"),
+        TARGET_HOSTILE_MANA => Ok("random-hostile-mana-user"),
         TARGET_NEAREST_AOE => Ok("eligible-caster-area"),
         TARGET_HOSTILE_FARTHEST => Ok("farthest-hostile"),
         other => Err(MappingFailure::source(
@@ -2098,6 +2707,9 @@ mod tests {
         profile.sql_sha256 = "fixture".to_string();
         profile.source_rule_count = plan.coverage.total_rules;
         profile.source_guid_rule_count = plan.coverage.source_guid_rules;
+        profile.cast_action_subjects = plan.coverage.cast_action_subjects;
+        profile.template_schedule_overlaps = plan.coverage.template_schedule_overlaps;
+        profile.creature_spell_list_overlaps = plan.coverage.creature_spell_list_overlaps;
         profile.expected_source_census.clear();
         profile
     }
@@ -2195,14 +2807,17 @@ mod tests {
             .iter()
             .find(|row| row.starts_with("entry:100@"))
             .unwrap();
-        assert!(entry
-            .ends_with("@10,aggro,100,4294967295,once,random,combat,emote:7:self+help:12+phase:3"));
+        assert!(entry.ends_with(
+            "@10,aggro,100,4294967295,once,random,combat,any-posture,emote:7:self+help:12+phase:3"
+        ));
         let guid = world_guid(100, 2);
         assert!(plan
             .definition_rows
             .iter()
             .any(|row| row.starts_with(&format!("guid:{guid}@"))
-                && row.ends_with("@11,death,75,4294967295,once,all,ordinary,flee")));
+                && row.ends_with(
+                    "@11,death:always,75,4294967295,once,all,ordinary,any-posture,flee"
+                )));
         assert_eq!(plan.instruction_count(), 4);
         assert_eq!(
             plan.definition_batches.join("\n"),
@@ -2211,6 +2826,46 @@ mod tests {
 
         let again = source.assemble(&entries, &guids, &templates);
         assert_eq!(plan.definition_rows, again.definition_rows);
+    }
+
+    #[test]
+    fn definitions_emit_the_loader_posture_vocabulary() {
+        let source = parse(&dump(&[
+            rule(
+                10,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_EMOTE as i64, 1, 0, 0], [0; 4], [0; 4]],
+            ),
+            rule(
+                11,
+                100,
+                EVENT_AGGRO,
+                100,
+                FLAG_RANGED_ONLY,
+                [0; 6],
+                [[ACTION_EMOTE as i64, 2, 0, 0], [0; 4], [0; 4]],
+            ),
+            rule(
+                12,
+                100,
+                EVENT_AGGRO,
+                100,
+                FLAG_MELEE_ONLY,
+                [0; 6],
+                [[ACTION_EMOTE as i64, 3, 0, 0], [0; 4], [0; 4]],
+            ),
+        ]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let definition = &plan.definition_rows[0];
+
+        for posture in ["any-posture", "ranged-only", "melee-only"] {
+            assert!(definition.contains(posture), "{definition}");
+        }
     }
 
     #[test]
@@ -2360,6 +3015,52 @@ mod tests {
     }
 
     #[test]
+    fn quest_predicates_require_the_condition_and_quest_dependency_chain() {
+        let death = rule(
+            54_4102,
+            100,
+            EVENT_DEATH,
+            100,
+            0,
+            [100, 0, 0, 0, 0, 0],
+            [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
+        );
+        let missing_quest_dump = format!(
+            "{} INSERT INTO `conditions` VALUES (100,9,7734,0);",
+            dump(std::slice::from_ref(&death))
+        );
+        let source = parse(&missing_quest_dump);
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        let rendered = assert_refusal(&manifest, "missing:quest_template");
+        assert_result(
+            &rendered,
+            "dependency",
+            "quest_template",
+            "dropped",
+            "missing:quest_template",
+        );
+        assert!(manifest
+            .render()
+            .contains("rule:544102 -> conditions:100 -> quest_template:7734"));
+
+        let complete_dump =
+            format!("{missing_quest_dump} INSERT INTO `quest_template` VALUES (7734);");
+        let source = parse(&complete_dump);
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+
+        assert!(manifest.is_apply_ready(), "{}", manifest.render());
+        assert!(plan.definition_rows[0].contains("death:quest-taken.7734"));
+        assert!(manifest
+            .render()
+            .contains("rule:544102 -> conditions:100 -> quest_template:7734"));
+    }
+
+    #[test]
     fn manifest_refuses_an_unapproved_classification_and_retains_its_group() {
         let source = parse(&dump(&[rule(
             10,
@@ -2398,7 +3099,7 @@ mod tests {
             100,
             EVENT_AGGRO,
             100,
-            0x02,
+            0x40,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
         )]));
@@ -2409,7 +3110,77 @@ mod tests {
         assert!(!manifest.is_apply_ready());
         assert!(manifest
             .render()
-            .contains("unsupported_event_flag_residual_0x2"));
+            .contains("unsupported_event_flag_residual_0x40"));
+    }
+
+    #[test]
+    fn debug_exclusion_records_raw_dimensions_without_normalization_results() {
+        let source = parse(&dump(&[rule(
+            10,
+            100,
+            EVENT_AGGRO,
+            100,
+            FLAG_DEBUG_ONLY | 0x02,
+            [0; 6],
+            [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        let rendered: serde_json::Value = serde_json::from_str(manifest.render()).unwrap();
+
+        assert!(manifest.is_apply_ready(), "{}", manifest.render());
+        assert_result(
+            &rendered,
+            "event_flag",
+            "130",
+            "excluded",
+            "debug_only_rule",
+        );
+        assert!(!rendered["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|result| { result["reason"] == "normalized_reserved_event_flag" }));
+    }
+
+    #[test]
+    fn debug_exclusion_cannot_hide_an_unknown_event_flag() {
+        let source = parse(&dump(&[rule(
+            10,
+            100,
+            EVENT_AGGRO,
+            100,
+            FLAG_DEBUG_ONLY | 0x40,
+            [0; 6],
+            [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+
+        assert_refusal(&manifest, "unsupported_event_flag_residual_0x40");
+    }
+
+    #[test]
+    fn outside_scope_exclusion_cannot_bypass_an_unapproved_normalization_tuple() {
+        let source = parse(&dump(&[rule(
+            10,
+            101,
+            EVENT_AGGRO,
+            100,
+            0x04,
+            [0; 6],
+            [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+
+        assert_refusal(&manifest, "normalized_reserved_event_flag");
     }
 
     #[test]
@@ -2452,7 +3223,7 @@ mod tests {
         let plan = source.assemble(&entries, &guids, &templates);
         assert_eq!(plan.definition_rows.len(), 1);
         assert!(plan.definition_rows[0].contains(&format!(
-            "@{},aggro,100,4294967295,once,all,ordinary,emote:7:self",
+            "@{},aggro,100,4294967295,once,all,ordinary,any-posture,emote:7:self",
             u32::MAX
         )));
         assert_eq!(plan.coverage.normalized_rules, 1);
@@ -2501,7 +3272,7 @@ mod tests {
         assert_eq!(plan.coverage.normalized_rules, 1);
         assert_eq!(plan.coverage.dropped_rules, 1);
         assert!(plan.definition_rows[0].contains(
-            "20,timer:4294967295:4294967295,100,4294967295,once,all,ordinary,emote:4294967295:self"
+            "20,timer-combat:4294967295:4294967295,100,4294967295,once,all,ordinary,any-posture,emote:4294967295:self"
         ));
     }
 
@@ -2526,6 +3297,30 @@ mod tests {
             "d2083bcd2670451279cbf93af138eadae04c6d183a4cd0ff0357047e4a565de6"
         );
         let source = parse(std::str::from_utf8(&bytes).unwrap());
+        let exclude_caster_spells = [3_477, 4_961, 7_154, 7_638, 11_014, 13_903];
+        let exclude_caster_actions: Vec<(u64, u32)> = source
+            .rules
+            .iter()
+            .filter(|rule| rule.event == EVENT_FRIENDLY_HP)
+            .flat_map(|rule| {
+                rule.actions
+                    .iter()
+                    .filter(|action| {
+                        action[0] == ACTION_CAST
+                            && action[2] == TARGET_EVENT_SPECIFIC
+                            && exclude_caster_spells.contains(&action[1])
+                    })
+                    .map(|action| (rule.id, action[1]))
+            })
+            .collect();
+        assert_eq!(exclude_caster_actions.len(), 14);
+        assert_eq!(
+            exclude_caster_actions
+                .iter()
+                .map(|(_, spell_id)| *spell_id)
+                .collect::<BTreeSet<_>>(),
+            exclude_caster_spells.into_iter().collect()
+        );
         assert_eq!(source.coverage.total_rules, 10_843);
         assert_eq!(source.coverage.source_guid_rules, 39);
         assert_eq!(
@@ -2534,10 +3329,33 @@ mod tests {
             "loader-valid rows lost during parsing: {:?}",
             source.coverage.dropped_values
         );
-        assert!(source
+        let normalization_census = source
             .rules
             .iter()
-            .all(|rule| rule.normalizations.is_empty()));
+            .flat_map(|rule| &rule.normalizations)
+            .fold(BTreeMap::new(), |mut counts, normalization| {
+                *counts
+                    .entry((
+                        normalization.dimension,
+                        normalization.raw_value,
+                        normalization.reason,
+                    ))
+                    .or_insert(0) += 1;
+                counts
+            });
+        assert_eq!(
+            normalization_census,
+            BTreeMap::from([
+                (("event_flag", 2, "normalized_reserved_event_flag"), 2),
+                (("event_flag", 1027, "normalized_reserved_event_flag"), 3),
+                (("event_flag", 1029, "normalized_reserved_event_flag"), 2),
+                (("event_flag", 1031, "normalized_reserved_event_flag"), 3),
+                (("event_flag", 1205, "normalized_reserved_event_flag"), 1),
+            ])
+        );
+        assert_eq!(source.coverage.template_schedule_overlaps, 2_108);
+        assert_eq!(source.coverage.creature_spell_list_overlaps, 38);
+        assert_eq!(source.coverage.cast_action_subjects, 3_556);
         let profile = source_profile(SOURCE_PROFILE_NAME).unwrap();
         for (dimension, expected) in profile.expected_source_census {
             assert_eq!(

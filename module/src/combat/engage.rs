@@ -53,6 +53,46 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     entities.guid().update(e);
 }
 
+/// Arm a creature's first outgoing melee engagement and dispatch its aggro edge once.
+pub(crate) fn arm_creature_engagement(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    target_guid: u64,
+    assist: bool,
+) -> bool {
+    let melee = ctx.db.game_melee_attack();
+    if melee.attacker_guid().find(creature_guid).is_some() {
+        return false;
+    }
+    melee.insert(MeleeAttack {
+        attacker_guid: creature_guid,
+        target_guid,
+        last_swing_ms: 0,
+        ranged_spell_id: 0,
+        last_offhand_swing_ms: 0,
+        rout_ends_ms: 0,
+        pursuit_ends_ms: 0,
+        leash_x: 0.0,
+        leash_y: 0.0,
+    });
+    let entities = ctx.db.game_world_entity();
+    if let Some(mut creature) = entities.guid().find(creature_guid) {
+        if creature.target_guid != target_guid {
+            creature.target_guid = target_guid;
+            entities.guid().update(creature);
+        }
+    }
+    crate::hooks::fire_on_aggro(
+        ctx,
+        &crate::hooks::AggroPayload {
+            creature_guid,
+            target_guid,
+            assist,
+        },
+    );
+    true
+}
+
 /// Refresh the pursuit leash on the CREATURE side of a damage exchange: deadline to
 /// `now + PURSUIT_WINDOW_MS`, remembered position to wherever that creature stands. Fed both guids, so
 /// the creature's own damage refreshes it like the player's.

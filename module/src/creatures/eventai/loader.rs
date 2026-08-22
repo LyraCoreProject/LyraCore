@@ -5,11 +5,18 @@ use std::collections::HashSet;
 use spacetimedb::{reducer, ReducerContext, Table};
 
 use super::{
-    CallForHelpInstruction, CastInstruction, CreatureAiDefinition, CreatureHealthCondition,
-    CreatureInstruction, EmoteInstruction, EventAiRule, EventCondition, ExecutionPolicy,
-    FriendlyHealthDeficitCondition, InstructionSelection, InstructionTarget, PhaseSet,
-    RangedPostureInstruction, RecurrencePolicy, SetPhaseInstruction, SpeakInstruction, SpeechMode,
-    SummonInstruction, TargetRangeCondition, TimeWindow,
+    AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
+    CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction, DeathCondition,
+    EmoteInstruction, EventAiRule, EventCondition, EventPredicate, ExecutionPolicy,
+    FacingCondition, FriendlyAuraSelection, FriendlyCrowdControlCondition,
+    FriendlyHealthDeficitCondition, FriendlyMissingAuraCondition, IncrementPhaseInstruction,
+    InstructionSelection, InstructionTarget, KillCondition, OutOfCombatSightCondition,
+    PercentageCondition, PhaseSet, PostureAdmission, QuestTakenPredicate, RandomPhaseInstruction,
+    RandomPhaseRangeInstruction, RangedPostureInstruction, ReceiveAiEventCondition,
+    ReceiveEmoteCondition, RecurrencePolicy, SetPhaseInstruction, SpawnCondition,
+    SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode, SpellCasterRole,
+    SpellEventCondition, SpellStartMode, SpellTargetRole, SummonInstruction, TargetRangeCondition,
+    TimeWindow,
 };
 use crate::game_creature_ai_definition;
 #[cfg(feature = "debug_reducers")]
@@ -141,10 +148,10 @@ fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
 }
 
 fn parse_rule(encoded: &str) -> Result<EventAiRule, String> {
-    let fields: Vec<&str> = encoded.splitn(8, ',').collect();
-    if fields.len() != 8 {
+    let fields: Vec<&str> = encoded.splitn(9, ',').collect();
+    if !(8..=9).contains(&fields.len()) {
         return Err(format!(
-            "definition rule needs 8 fields, got {}: {encoded}",
+            "definition rule needs 8 or 9 fields, got {}: {encoded}",
             fields.len()
         ));
     }
@@ -162,7 +169,20 @@ fn parse_rule(encoded: &str) -> Result<EventAiRule, String> {
     if allowed_phases.bits == 0 {
         return Err("allowed phase set must be nonempty".to_string());
     }
-    let instructions = fields[7]
+    let (posture, encoded_instructions) = if fields.len() == 9 {
+        (
+            match fields[7] {
+                "any-posture" => PostureAdmission::Any,
+                "ranged-only" => PostureAdmission::RangedOnly,
+                "melee-only" => PostureAdmission::MeleeOnly,
+                value => return Err(format!("unknown posture admission: {value}")),
+            },
+            fields[8],
+        )
+    } else {
+        (PostureAdmission::Any, fields[7])
+    };
+    let instructions = encoded_instructions
         .split('+')
         .map(parse_instruction)
         .collect::<Result<Vec<_>, _>>()?;
@@ -185,6 +205,7 @@ fn parse_rule(encoded: &str) -> Result<EventAiRule, String> {
             "combat" => ExecutionPolicy::CombatAction,
             value => return Err(format!("unknown execution policy: {value}")),
         },
+        posture,
         instructions,
     })
 }
@@ -193,7 +214,10 @@ fn parse_event(encoded: &str) -> Result<EventCondition, String> {
     let fields: Vec<&str> = encoded.split(':').collect();
     match fields.as_slice() {
         ["aggro"] => Ok(EventCondition::OnAggro),
-        ["timer", min, max] => Ok(EventCondition::TimedInCombat(window(min, max)?)),
+        ["timer", min, max] | ["timer-combat", min, max] => {
+            Ok(EventCondition::TimedInCombat(window(min, max)?))
+        }
+        ["timer-ooc", min, max] => Ok(EventCondition::TimedOutOfCombat(window(min, max)?)),
         ["health", min, max] => {
             let min_pct = parse_u8(min)?;
             let max_pct = parse_u8(max)?;
@@ -203,9 +227,33 @@ fn parse_event(encoded: &str) -> Result<EventCondition, String> {
             Ok(EventCondition::CreatureHealth(CreatureHealthCondition {
                 min_pct,
                 max_pct,
+                allow_out_of_combat: false,
             }))
         }
-        ["death"] => Ok(EventCondition::OnDeath),
+        ["health", min, max, allow_ooc] => {
+            let min_pct = parse_u8(min)?;
+            let max_pct = parse_u8(max)?;
+            if min_pct > max_pct || max_pct > 100 {
+                return Err(format!("invalid health percentage window: {encoded}"));
+            }
+            Ok(EventCondition::CreatureHealth(CreatureHealthCondition {
+                min_pct,
+                max_pct,
+                allow_out_of_combat: parse_bool(allow_ooc)?,
+            }))
+        }
+        ["power", min, max] => Ok(EventCondition::CreaturePower(percent(min, max)?)),
+        ["kill", character_only] => Ok(EventCondition::OnKill(KillCondition {
+            character_only: parse_bool(character_only)?,
+        })),
+        ["death", predicate] => Ok(EventCondition::OnDeath(DeathCondition {
+            predicate: parse_event_predicate(predicate)?,
+        })),
+        ["evade"] => Ok(EventCondition::OnEvade),
+        ["spell-hit", spell, school] => Ok(EventCondition::OnSpellHit(SpellEventCondition {
+            spell_id: parse_u32(spell)?,
+            school_mask: parse_u32(school)?,
+        })),
         ["range", min, max] => {
             let min_yd = parse_u32(min)?;
             let max_yd = parse_u32(max)?;
@@ -217,14 +265,130 @@ fn parse_event(encoded: &str) -> Result<EventCondition, String> {
                 max_yd,
             }))
         }
-        ["spawn"] => Ok(EventCondition::OnSpawn),
+        ["ooc-los", non_hostile, range, character, condition] => Ok(
+            EventCondition::OutOfCombatSight(OutOfCombatSightCondition {
+                require_non_hostile: parse_bool(non_hostile)?,
+                max_range_yd: parse_u32(range)?,
+                character_only: parse_bool(character)?,
+                predicate: parse_event_predicate(condition)?,
+            }),
+        ),
+        ["spawn"] | ["spawn", "always"] => Ok(EventCondition::OnSpawn(SpawnCondition::Always)),
+        ["spawn", "map", value] => Ok(EventCondition::OnSpawn(SpawnCondition::Map(
+            SpawnMapCondition {
+                map_id: parse_u32(value)?,
+            },
+        ))),
+        ["spawn", "zone-or-area", value] => Ok(EventCondition::OnSpawn(
+            SpawnCondition::ZoneOrArea(SpawnZoneOrAreaCondition {
+                zone_or_area_id: parse_u32(value)?,
+            }),
+        )),
+        ["target-health", min, max] => Ok(EventCondition::TargetHealth(percent(min, max)?)),
+        ["target-casting"] => Ok(EventCondition::TargetCasting),
         ["friendly-health", missing, radius] => Ok(EventCondition::FriendlyHealthDeficit(
             FriendlyHealthDeficitCondition {
                 missing_health: parse_u32(missing)?,
                 radius_yd: parse_u32(radius)?,
+                percent: false,
             },
         )),
+        ["friendly-health", missing, radius, percent] => Ok(EventCondition::FriendlyHealthDeficit(
+            FriendlyHealthDeficitCondition {
+                missing_health: parse_u32(missing)?,
+                radius_yd: parse_u32(radius)?,
+                percent: parse_bool(percent)?,
+            },
+        )),
+        ["friendly-cc", radius] => Ok(EventCondition::FriendlyCrowdControlled(
+            FriendlyCrowdControlCondition {
+                radius_yd: parse_u32(radius)?,
+            },
+        )),
+        ["friendly-missing-aura", spell, radius, selection] => Ok(
+            EventCondition::FriendlyMissingAura(FriendlyMissingAuraCondition {
+                spell_id: parse_u32(spell)?,
+                radius_yd: parse_u32(radius)?,
+                selection: match *selection {
+                    "nearby-engaged" => FriendlyAuraSelection::NearbyWhileEngaged,
+                    "match-actor-combat" => FriendlyAuraSelection::MatchActorCombatState,
+                    "any-while-disengaged" => FriendlyAuraSelection::AnyWhileDisengaged,
+                    value => return Err(format!("unknown friendly aura selection: {value}")),
+                },
+            }),
+        ),
+        ["summoned", entry] => Ok(EventCondition::OnSummoned(CreatureEntryCondition {
+            creature_entry: parse_u32(entry)?,
+        })),
+        ["target-power", min, max] => Ok(EventCondition::TargetPower(percent(min, max)?)),
+        ["home"] => Ok(EventCondition::OnReachedHome),
+        ["receive-emote", emote, condition] => {
+            Ok(EventCondition::OnReceiveEmote(ReceiveEmoteCondition {
+                emote_id: parse_u32(emote)?,
+                predicate: parse_event_predicate(condition)?,
+            }))
+        }
+        ["aura", spell, stacks] => Ok(EventCondition::CreatureAura(AuraStackCondition {
+            spell_id: parse_u32(spell)?,
+            stacks: parse_u32(stacks)?,
+        })),
+        ["target-aura", spell, stacks] => Ok(EventCondition::TargetAura(AuraStackCondition {
+            spell_id: parse_u32(spell)?,
+            stacks: parse_u32(stacks)?,
+        })),
+        ["summoned-death", entry] => Ok(EventCondition::OnSummonedDeath(CreatureEntryCondition {
+            creature_entry: parse_u32(entry)?,
+        })),
+        ["missing-aura", spell, stacks] => {
+            Ok(EventCondition::CreatureMissingAura(AuraStackCondition {
+                spell_id: parse_u32(spell)?,
+                stacks: parse_u32(stacks)?,
+            }))
+        }
+        ["target-missing-aura", spell, stacks] => {
+            Ok(EventCondition::TargetMissingAura(AuraStackCondition {
+                spell_id: parse_u32(spell)?,
+                stacks: parse_u32(stacks)?,
+            }))
+        }
+        ["timer-generic", min, max] => Ok(EventCondition::TimedGeneric(window(min, max)?)),
+        ["ai-event", event_name, sender] => {
+            Ok(EventCondition::OnReceiveAiEvent(ReceiveAiEventCondition {
+                kind: parse_ai_event(event_name)?,
+                sender_entry: parse_u32(sender)?,
+            }))
+        }
+        ["select-attacking", min, max] => Ok(EventCondition::SelectAttackingTarget(
+            TargetRangeCondition {
+                min_yd: parse_u32(min)?,
+                max_yd: parse_u32(max)?,
+            },
+        )),
+        ["facing", behind] => Ok(EventCondition::FacingTarget(FacingCondition {
+            behind: parse_bool(behind)?,
+        })),
+        ["spell-hit-target", spell, school] => {
+            Ok(EventCondition::OnSpellHitTarget(SpellEventCondition {
+                spell_id: parse_u32(spell)?,
+                school_mask: parse_u32(school)?,
+            }))
+        }
+        ["target-not-reachable"] => Ok(EventCondition::TargetNotReachable),
         _ => Err(format!("unknown event condition: {encoded}")),
+    }
+}
+
+fn parse_event_predicate(encoded: &str) -> Result<EventPredicate, String> {
+    match encoded {
+        "always" => Ok(EventPredicate::Always),
+        "alliance" => Ok(EventPredicate::Alliance),
+        "horde" => Ok(EventPredicate::Horde),
+        value => value
+            .strip_prefix("quest-taken.")
+            .map(parse_u32)
+            .transpose()?
+            .map(|quest_entry| EventPredicate::QuestTaken(QuestTakenPredicate { quest_entry }))
+            .ok_or_else(|| format!("unknown EventAI predicate: {encoded}")),
     }
 }
 
@@ -233,6 +397,7 @@ fn parse_recurrence(encoded: &str) -> Result<RecurrencePolicy, String> {
     match fields.as_slice() {
         ["once"] => Ok(RecurrencePolicy::Once),
         ["repeat", min, max] => Ok(RecurrencePolicy::Repeat(window(min, max)?)),
+        ["repeat-event"] => Ok(RecurrencePolicy::RepeatOnEvent),
         _ => Err(format!("unknown recurrence policy: {encoded}")),
     }
 }
@@ -268,10 +433,53 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 spell_id,
                 target: parse_target(target)?,
                 interrupt_previous: parse_bool(interrupt)?,
-                triggered: parse_bool(triggered)?,
+                start_mode: if parse_bool(triggered)? {
+                    SpellStartMode::Triggered
+                } else {
+                    SpellStartMode::Direct
+                },
+                caster_role: SpellCasterRole::Actor,
+                target_role: SpellTargetRole::Selected,
                 aura_absent: parse_bool(aura_absent)?,
                 character_only: parse_bool(character)?,
                 target_must_be_casting: parse_bool(casting)?,
+                main_spell: false,
+                distance_after_start: false,
+            }))
+        }
+        ["cast", spell, target, interrupt, start, caster, target_role, aura_absent, character, casting, main, distance] =>
+        {
+            let spell_id = parse_u32(spell)?;
+            if spell_id == 0 {
+                return Err("cast spell must be nonzero".to_string());
+            }
+            Ok(CreatureInstruction::Cast(CastInstruction {
+                spell_id,
+                target: parse_target(target)?,
+                interrupt_previous: parse_bool(interrupt)?,
+                start_mode: match *start {
+                    "direct" => SpellStartMode::Direct,
+                    "triggered" => SpellStartMode::Triggered,
+                    value => return Err(format!("unknown spell start mode: {value}")),
+                },
+                caster_role: match *caster {
+                    "actor" => SpellCasterRole::Actor,
+                    "selected" => SpellCasterRole::Selected,
+                    value => return Err(format!("unknown spell caster role: {value}")),
+                },
+                target_role: match *target_role {
+                    "selected" => SpellTargetRole::Selected,
+                    "actor" => SpellTargetRole::Actor,
+                    "caster" => SpellTargetRole::Caster,
+                    "none" => SpellTargetRole::None,
+                    "caster-area" => SpellTargetRole::CasterArea,
+                    value => return Err(format!("unknown spell target role: {value}")),
+                },
+                aura_absent: parse_bool(aura_absent)?,
+                character_only: parse_bool(character)?,
+                target_must_be_casting: parse_bool(casting)?,
+                main_spell: parse_bool(main)?,
+                distance_after_start: parse_bool(distance)?,
             }))
         }
         ["emote", emote, target] => Ok(CreatureInstruction::Emote(EmoteInstruction {
@@ -288,6 +496,38 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 return Err(format!("phase must be below 32: {phase}"));
             }
             Ok(CreatureInstruction::SetPhase(SetPhaseInstruction { phase }))
+        }
+        ["phase-inc", amount] => Ok(CreatureInstruction::IncrementPhase(
+            IncrementPhaseInstruction {
+                amount: parse_i32(amount)?,
+            },
+        )),
+        ["phase-random", phases] => {
+            let phases = phases
+                .split('.')
+                .map(parse_u8)
+                .collect::<Result<Vec<_>, _>>()?;
+            if phases.is_empty() || phases.iter().any(|phase| *phase >= 32) {
+                return Err("random phases must be nonempty and below 32".to_string());
+            }
+            Ok(CreatureInstruction::RandomPhase(RandomPhaseInstruction {
+                phases,
+            }))
+        }
+        ["phase-range", min, max] => {
+            let min_phase = parse_u8(min)?;
+            let max_phase = parse_u8(max)?;
+            if min_phase >= max_phase || max_phase >= 32 {
+                return Err(format!(
+                    "invalid random phase range: {min_phase}..={max_phase}"
+                ));
+            }
+            Ok(CreatureInstruction::RandomPhaseRange(
+                RandomPhaseRangeInstruction {
+                    min_phase,
+                    max_phase,
+                },
+            ))
         }
         ["summon", entry, location, target] => {
             let creature_entry = parse_u32(entry)?;
@@ -318,10 +558,19 @@ fn parse_target(value: &str) -> Result<InstructionTarget, String> {
         "highest-threat" => Ok(InstructionTarget::HighestThreat),
         "second-threat" => Ok(InstructionTarget::SecondThreat),
         "random-threat" => Ok(InstructionTarget::RandomThreat),
+        "random-threat-except-highest" => Ok(InstructionTarget::RandomThreatExceptHighest),
         "invoker" => Ok(InstructionTarget::Invoker),
+        "beneficiary" => Ok(InstructionTarget::Beneficiary),
+        "ai-sender" => Ok(InstructionTarget::AiSender),
+        "spawner" => Ok(InstructionTarget::Spawner),
         "event-subject" => Ok(InstructionTarget::EventSubject),
         "highest-threat-character" => Ok(InstructionTarget::HighestThreatCharacter),
         "random-threat-character" => Ok(InstructionTarget::RandomThreatCharacter),
+        "random-threat-character-except-highest" => {
+            Ok(InstructionTarget::RandomThreatCharacterExceptHighest)
+        }
+        "no-explicit-spell-target" => Ok(InstructionTarget::NoExplicitSpellTarget),
+        "random-hostile-mana-user" => Ok(InstructionTarget::RandomHostileManaUser),
         "eligible-caster-area" => Ok(InstructionTarget::EligibleCasterArea),
         "farthest-hostile" => Ok(InstructionTarget::FarthestHostile),
         _ => Err(format!("unknown instruction target: {value}")),
@@ -335,6 +584,33 @@ fn window(min: &str, max: &str) -> Result<TimeWindow, String> {
         return Err(format!("invalid time window: {min_ms}..{max_ms}"));
     }
     Ok(TimeWindow { min_ms, max_ms })
+}
+
+fn percent(min: &str, max: &str) -> Result<PercentageCondition, String> {
+    let min_pct = parse_u8(min)?;
+    let max_pct = parse_u8(max)?;
+    if min_pct > max_pct || max_pct > 100 {
+        return Err(format!("invalid percentage window: {min_pct}..={max_pct}"));
+    }
+    Ok(PercentageCondition { min_pct, max_pct })
+}
+
+fn parse_ai_event(value: &str) -> Result<AiEventKind, String> {
+    match value {
+        "just-died" => Ok(AiEventKind::JustDied),
+        "critical-health" => Ok(AiEventKind::CriticalHealth),
+        "lost-health" => Ok(AiEventKind::LostHealth),
+        "lost-some-health" => Ok(AiEventKind::LostSomeHealth),
+        "got-full-health" => Ok(AiEventKind::GotFullHealth),
+        "custom-a" => Ok(AiEventKind::CustomA),
+        "custom-b" => Ok(AiEventKind::CustomB),
+        "crowd-controlled" => Ok(AiEventKind::CrowdControlled),
+        "custom-c" => Ok(AiEventKind::CustomC),
+        "custom-d" => Ok(AiEventKind::CustomD),
+        "custom-e" => Ok(AiEventKind::CustomE),
+        "custom-f" => Ok(AiEventKind::CustomF),
+        _ => Err(format!("unknown AI event: {value}")),
+    }
 }
 
 fn definition_revision(material: &str) -> u64 {
@@ -520,5 +796,18 @@ mod tests {
         let first = "entry:6@17,aggro,100,1,once,all,ordinary,flee";
         let second = "entry:6@17,aggro,100,1,once,all,ordinary,help:8";
         assert_ne!(definition_revision(first), definition_revision(second));
+    }
+
+    #[test]
+    fn importer_posture_vocabulary_decodes_at_the_module_boundary() {
+        for (encoded, expected) in [
+            ("any-posture", PostureAdmission::Any),
+            ("ranged-only", PostureAdmission::RangedOnly),
+            ("melee-only", PostureAdmission::MeleeOnly),
+        ] {
+            let rule =
+                parse_rule(&format!("17,aggro,100,1,once,all,ordinary,{encoded},flee")).unwrap();
+            assert_eq!(rule.posture, expected);
+        }
     }
 }

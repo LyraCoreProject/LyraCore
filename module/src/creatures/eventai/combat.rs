@@ -3,76 +3,338 @@
 //! `definition_for` and `authored_combat` read durable definitions directly.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 use spacetimedb::ReducerContext;
 
 use super::engine::EventAiWorld;
 use super::{
-    ActionResult, CastInstruction, CreatureInstruction, DefinitionRevision, EventAiDefinition,
-    EventAiRule, EventAiSubject, EventAiUnit, EventCondition, EventContext, EventKind,
-    InstructionTarget,
+    ActionResult, CastInstruction, CreatureInstruction, CycleActor, DefinitionRevision,
+    EventAiDefinition, EventAiRule, EventAiSubject, EventAiUnit, EventCondition, EventContext,
+    EventKind, FriendlyAuraSelection, InstructionTarget, PostureAdmission, SpawnCondition,
+    SpellCastTarget, SpellCasterAdmission, SpellCasterRole, SpellStartMode, SpellTargetRole,
 };
 use crate::creatures::ai::{rout_close_ms, rout_window_open, TickScope};
 use crate::{game_creature_ai_definition, game_world_entity};
 
-pub(super) fn engaged_contexts<W: EventAiWorld>(world: &W, scope: &TickScope) -> Vec<EventContext> {
+pub(super) fn cycle_contexts<W: EventAiWorld>(
+    world: &W,
+    scope: &TickScope,
+    active: &HashSet<u64>,
+) -> Vec<EventContext> {
+    contexts_for_actors(world, world.eventai_cycle_actors(scope, active))
+}
+
+fn contexts_for_actors<W: EventAiWorld>(world: &W, actors: Vec<CycleActor>) -> Vec<EventContext> {
+    const KINDS: [EventKind; 19] = [
+        EventKind::TimedInCombat,
+        EventKind::TimedOutOfCombat,
+        EventKind::CreatureHp,
+        EventKind::CreaturePower,
+        EventKind::TargetRange,
+        EventKind::OutOfCombatSight,
+        EventKind::TargetHp,
+        EventKind::TargetCasting,
+        EventKind::FriendlyHpDeficit,
+        EventKind::FriendlyCrowdControlled,
+        EventKind::FriendlyMissingAura,
+        EventKind::TargetPower,
+        EventKind::CreatureAura,
+        EventKind::TargetAura,
+        EventKind::CreatureMissingAura,
+        EventKind::TargetMissingAura,
+        EventKind::TimedGeneric,
+        EventKind::SelectAttackingTarget,
+        EventKind::FacingTarget,
+    ];
     let now_ms = world.eventai_now_ms();
-    world
-        .eventai_fights(scope)
+    actors
         .into_iter()
-        .flat_map(|fight| {
-            [
-                EventKind::TimedInCombat,
-                EventKind::CreatureHp,
-                EventKind::TargetRange,
-                EventKind::FriendlyHpDeficit,
-            ]
-            .into_iter()
-            .map(move |kind| EventContext {
-                kind,
-                creature_guid: fight.creature_guid,
-                invoker_guid: Some(fight.victim_guid),
-                event_target_guid: Some(fight.victim_guid),
-                current_target_guid: Some(fight.victim_guid),
-                assisted: false,
-                now_ms,
+        .flat_map(|actor| {
+            let spawner_guid = world.eventai_spawner_guid(actor.creature_guid);
+            KINDS.into_iter().map(move |kind| EventContext {
+                current_target_guid: actor.current_target_guid,
+                spawner_guid,
+                engaged: actor.engaged,
+                ..EventContext::empty(kind, actor.creature_guid, now_ms)
             })
         })
         .collect()
 }
 
 /// Checks the rule's event condition and may name the actor selected by that condition.
-pub(super) fn condition<W: EventAiWorld>(
+pub(crate) fn condition<W: EventAiWorld>(
     world: &W,
     context: &EventContext,
     rule: &EventAiRule,
+    choice: u64,
 ) -> Option<EventContext> {
     let creature = world.eventai_unit(context.creature_guid)?;
     match rule.event {
-        EventCondition::TimedInCombat(_) => Some(*context),
-        EventCondition::CreatureHealth(health) => in_inclusive_pct(
-            creature.health,
-            creature.max_health,
-            u32::from(health.min_pct),
-            u32::from(health.max_pct),
-        )
+        EventCondition::TimedInCombat(_) => context.engaged.then_some(*context),
+        EventCondition::TimedOutOfCombat(_) => (!context.engaged).then_some(*context),
+        EventCondition::TimedGeneric(_) => Some(*context),
+        EventCondition::CreatureHealth(health) => ((context.engaged || health.allow_out_of_combat)
+            && in_inclusive_pct(
+                creature.health,
+                creature.max_health,
+                u32::from(health.min_pct),
+                u32::from(health.max_pct),
+            ))
+        .then_some(*context),
+        EventCondition::CreaturePower(power) => (context.engaged
+            && creature.power_type == lyracore_shared::packing::power_type::MANA
+            && in_inclusive_pct(
+                creature.power,
+                creature.max_power,
+                u32::from(power.min_pct),
+                u32::from(power.max_pct),
+            ))
         .then_some(*context),
         EventCondition::TargetRange(range) => {
+            if !context.engaged {
+                return None;
+            }
             let target = world.eventai_unit(context.current_target_guid?)?;
             let distance = distance_yd(&creature, &target);
             (distance >= range.min_yd as f32 && distance <= range.max_yd as f32).then_some(*context)
         }
-        EventCondition::FriendlyHealthDeficit(deficit) => {
-            wounded_friendly(world, &creature, deficit.radius_yd, deficit.missing_health).map(
-                |guid| EventContext {
-                    event_target_guid: Some(guid),
-                    ..*context
-                },
+        EventCondition::FriendlyHealthDeficit(deficit) if context.engaged => {
+            let exclude_actor = rule.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    CreatureInstruction::Cast(CastInstruction {
+                        spell_id,
+                        target: InstructionTarget::EventSubject,
+                        ..
+                    }) if world.eventai_spell_excludes_caster(*spell_id)
+                )
+            });
+            wounded_friendly(world, &creature, deficit, exclude_actor)
+                .map(|guid| event_target_context(context, guid))
+        }
+        EventCondition::FriendlyHealthDeficit(_) => None,
+        EventCondition::TargetHealth(health) => {
+            if !context.engaged {
+                return None;
+            }
+            let target = world.eventai_unit(context.current_target_guid?)?;
+            in_inclusive_pct(
+                target.health,
+                target.max_health,
+                u32::from(health.min_pct),
+                u32::from(health.max_pct),
             )
+            .then_some(*context)
         }
-        EventCondition::OnAggro | EventCondition::OnDeath | EventCondition::OnSpawn => {
-            Some(*context)
+        EventCondition::TargetPower(power) => {
+            let target = world.eventai_unit(context.current_target_guid?)?;
+            (context.engaged
+                && target.power_type == lyracore_shared::packing::power_type::MANA
+                && in_inclusive_pct(
+                    target.power,
+                    target.max_power,
+                    u32::from(power.min_pct),
+                    u32::from(power.max_pct),
+                ))
+            .then_some(*context)
         }
+        EventCondition::TargetCasting if context.engaged => context
+            .current_target_guid
+            .filter(|guid| world.eventai_is_casting(*guid))
+            .map(|_| *context),
+        EventCondition::TargetCasting => None,
+        EventCondition::OutOfCombatSight(sight) => {
+            if context.engaged {
+                return None;
+            }
+            let candidate = world
+                .eventai_units_near(&creature, sight.max_range_yd as f32)
+                .into_iter()
+                .filter(|candidate| {
+                    candidate.guid != creature.guid
+                        && !candidate.dead
+                        && candidate.map_id == creature.map_id
+                        && candidate.instance_id == creature.instance_id
+                        && (!sight.character_only || candidate.is_player)
+                        && (sight.require_non_hostile
+                            != world.eventai_factions_hostile(
+                                creature.faction_template,
+                                candidate.faction_template,
+                            ))
+                        && distance_yd(&creature, candidate) <= sight.max_range_yd as f32
+                        && world.eventai_line_of_sight(&creature, candidate)
+                        && beneficiary_guid(world, candidate.guid)
+                            .and_then(|guid| world.eventai_unit(guid))
+                            .filter(|beneficiary| beneficiary.is_player)
+                            .is_none_or(|beneficiary| {
+                                world.eventai_matches_predicate(beneficiary.guid, sight.predicate)
+                            })
+                })
+                .min_by(|first, second| compare_distance(&creature, first, second))?;
+            let beneficiary_guid = beneficiary_guid(world, candidate.guid);
+            Some(EventContext {
+                invoker_guid: Some(candidate.guid),
+                beneficiary_guid,
+                ..*context
+            })
+        }
+        EventCondition::OnSpawn(spawn) => match spawn {
+            SpawnCondition::Always => Some(*context),
+            SpawnCondition::Map(map) => (creature.map_id == map.map_id).then_some(*context),
+            SpawnCondition::ZoneOrArea(zone) => world
+                .eventai_in_zone_or_area(&creature, zone.zone_or_area_id)
+                .then_some(*context),
+        },
+        EventCondition::FriendlyCrowdControlled(condition) if context.engaged => {
+            friendly_candidate(world, &creature, condition.radius_yd, |candidate| {
+                world.eventai_is_engaged(candidate.guid)
+                    && !candidate.is_player
+                    && candidate.owner_guid == 0
+                    && world.eventai_is_crowd_controlled(candidate.guid, 0)
+            })
+            .map(|guid| event_target_context(context, guid))
+        }
+        EventCondition::FriendlyCrowdControlled(_) => None,
+        EventCondition::FriendlyMissingAura(condition) => {
+            let actor_admitted = match condition.selection {
+                FriendlyAuraSelection::NearbyWhileEngaged => context.engaged,
+                FriendlyAuraSelection::MatchActorCombatState => true,
+                FriendlyAuraSelection::AnyWhileDisengaged => !context.engaged,
+            };
+            if !actor_admitted {
+                return None;
+            }
+            friendly_candidate(world, &creature, condition.radius_yd, |candidate| {
+                let combat_state_matches = match condition.selection {
+                    FriendlyAuraSelection::NearbyWhileEngaged => {
+                        world.eventai_is_engaged(candidate.guid)
+                    }
+                    FriendlyAuraSelection::MatchActorCombatState => {
+                        !context.engaged || world.eventai_is_engaged(candidate.guid)
+                    }
+                    FriendlyAuraSelection::AnyWhileDisengaged => true,
+                };
+                combat_state_matches
+                    && !candidate.is_player
+                    && candidate.owner_guid == 0
+                    && !world.eventai_has_aura(candidate.guid, condition.spell_id)
+            })
+            .map(|guid| event_target_context(context, guid))
+        }
+        EventCondition::CreatureAura(aura) => {
+            (world.eventai_aura_stacks(creature.guid, aura.spell_id) >= aura.stacks)
+                .then_some(*context)
+        }
+        EventCondition::TargetAura(aura) => {
+            if !context.engaged {
+                return None;
+            }
+            let target = context.current_target_guid?;
+            (world.eventai_aura_stacks(target, aura.spell_id) >= aura.stacks).then_some(*context)
+        }
+        EventCondition::CreatureMissingAura(aura) => {
+            (world.eventai_aura_stacks(creature.guid, aura.spell_id) < aura.stacks)
+                .then_some(*context)
+        }
+        EventCondition::TargetMissingAura(aura) => {
+            if !context.engaged {
+                return None;
+            }
+            let target = context.current_target_guid?;
+            (world.eventai_aura_stacks(target, aura.spell_id) < aura.stacks).then_some(*context)
+        }
+        EventCondition::SelectAttackingTarget(range) => {
+            let candidates: Vec<u64> = ranked_threat(
+                world,
+                &creature,
+                InstructionTarget::RandomThreat,
+                None,
+                SpellCasterAdmission::Living,
+            )
+            .into_iter()
+            .filter(|guid| {
+                world.eventai_unit(*guid).is_some_and(|candidate| {
+                    let distance = distance_yd(&creature, &candidate);
+                    distance >= range.min_yd as f32 && distance <= range.max_yd as f32
+                })
+            })
+            .collect();
+            pick(choice, &candidates).map(|guid| event_target_context(context, guid))
+        }
+        EventCondition::FacingTarget(facing) => {
+            let target = world.eventai_unit(context.current_target_guid?)?;
+            (distance_sq(&creature, &target) <= crate::combat::MELEE_RANGE_SQ
+                && actor_is_behind_target(&creature, &target) == facing.behind)
+                .then_some(*context)
+        }
+        EventCondition::OnKill(kill) => context
+            .invoker_is_player
+            .or_else(|| {
+                context
+                    .invoker_guid
+                    .and_then(|guid| world.eventai_unit(guid))
+                    .map(|victim| victim.is_player)
+            })
+            .filter(|is_player| !kill.character_only || *is_player)
+            .map(|_| *context),
+        EventCondition::OnSpellHit(spell) | EventCondition::OnSpellHitTarget(spell) => {
+            ((spell.spell_id == 0 || context.spell_id == Some(spell.spell_id))
+                && (spell.school_mask == 0 || context.spell_school_mask & spell.school_mask != 0))
+                .then_some(*context)
+        }
+        EventCondition::OnSummoned(entry) | EventCondition::OnSummonedDeath(entry) => {
+            (entry.creature_entry == 0 || context.creature_entry == Some(entry.creature_entry))
+                .then_some(*context)
+        }
+        EventCondition::OnReceiveEmote(receive) => (context.emote_id == Some(receive.emote_id)
+            && context
+                .beneficiary_guid
+                .and_then(|guid| world.eventai_unit(guid))
+                .filter(|beneficiary| beneficiary.is_player)
+                .is_none_or(|beneficiary| {
+                    world.eventai_matches_predicate(beneficiary.guid, receive.predicate)
+                }))
+        .then_some(*context),
+        EventCondition::OnReceiveAiEvent(receive) => {
+            let sender_matches = receive.sender_entry == 0
+                || context
+                    .ai_sender_guid
+                    .and_then(|guid| world.eventai_unit(guid))
+                    .is_some_and(|sender| sender.entry == receive.sender_entry);
+            (context.ai_event == Some(receive.kind) && sender_matches).then_some(*context)
+        }
+        EventCondition::OnDeath(death) => matches!(death.predicate, super::EventPredicate::Always)
+            .then_some(())
+            .or_else(|| {
+                let beneficiary = context
+                    .beneficiary_guid
+                    .and_then(|guid| world.eventai_unit(guid))
+                    .filter(|beneficiary| beneficiary.is_player)?;
+                world
+                    .eventai_matches_predicate(beneficiary.guid, death.predicate)
+                    .then_some(())
+            })
+            .map(|_| *context),
+        EventCondition::OnAggro
+        | EventCondition::OnEvade
+        | EventCondition::OnReachedHome
+        | EventCondition::TargetNotReachable => Some(*context),
+    }
+}
+
+pub(super) fn posture_matches<W: EventAiWorld>(
+    world: &W,
+    context: &EventContext,
+    posture: PostureAdmission,
+) -> bool {
+    let ranged = world
+        .eventai_creature_state(context.creature_guid)
+        .ranged_posture_active;
+    match posture {
+        PostureAdmission::Any => true,
+        PostureAdmission::RangedOnly => ranged,
+        PostureAdmission::MeleeOnly => !ranged,
     }
 }
 
@@ -80,10 +342,13 @@ pub(super) fn execute<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
     instruction: &CreatureInstruction,
+    choice: u64,
 ) -> ActionResult {
     match instruction {
         CreatureInstruction::Emote(emote) => {
-            let target_guid = target(world, context, emote.target, None).unwrap_or(0);
+            let Some(target_guid) = unit_target(world, context, emote.target, None, choice) else {
+                return ActionResult::Refused;
+            };
             if world.eventai_deliver_emote(context.creature_guid, emote.emote_id, target_guid) {
                 ActionResult::Applied
             } else {
@@ -116,101 +381,181 @@ pub(super) fn target<W: EventAiWorld>(
     context: &EventContext,
     target_policy: InstructionTarget,
     cast: Option<&CastInstruction>,
-) -> Option<u64> {
+    choice: u64,
+) -> Option<SpellCastTarget> {
     let creature = world.eventai_unit(context.creature_guid)?;
-    let target = match target_policy {
+    let admission = spell_caster_admission(context, &creature);
+    if target_policy == InstructionTarget::NoExplicitSpellTarget {
+        return cast
+            .is_none_or(|cast| {
+                spell_target_eligible(world, &creature, &creature, cast, admission, false)
+            })
+            .then_some(SpellCastTarget::None);
+    }
+    if target_policy == InstructionTarget::EligibleCasterArea {
+        nearest_area(world, &creature, target_policy, cast, admission)?;
+        return Some(SpellCastTarget::CasterArea);
+    }
+    let target_guid = match target_policy {
         InstructionTarget::CurrentOpponent => context.current_target_guid,
         InstructionTarget::SelfActor => Some(context.creature_guid),
         InstructionTarget::Invoker => context.invoker_guid,
+        InstructionTarget::Beneficiary => context.beneficiary_guid,
+        InstructionTarget::AiSender => context.ai_sender_guid,
+        InstructionTarget::Spawner => context.spawner_guid,
         InstructionTarget::EventSubject => context.event_target_guid,
         InstructionTarget::HighestThreat | InstructionTarget::HighestThreatCharacter => {
-            ranked_threat(world, &creature, target_policy, cast)
+            ranked_threat(world, &creature, target_policy, cast, admission)
                 .first()
                 .copied()
         }
-        InstructionTarget::SecondThreat => ranked_threat(world, &creature, target_policy, cast)
-            .get(1)
-            .copied(),
-        InstructionTarget::RandomThreat | InstructionTarget::RandomThreatCharacter => {
-            pick(world, &ranked_threat(world, &creature, target_policy, cast))
+        InstructionTarget::SecondThreat => {
+            ranked_threat(world, &creature, target_policy, cast, admission)
+                .get(1)
+                .copied()
         }
-        InstructionTarget::EligibleCasterArea => {
-            nearest_area(world, &creature, target_policy, cast)
+        InstructionTarget::RandomThreat
+        | InstructionTarget::RandomThreatCharacter
+        | InstructionTarget::RandomHostileManaUser => pick(
+            choice,
+            &ranked_threat(world, &creature, target_policy, cast, admission),
+        ),
+        InstructionTarget::RandomThreatExceptHighest
+        | InstructionTarget::RandomThreatCharacterExceptHighest => {
+            let candidates = ranked_threat(world, &creature, target_policy, cast, admission);
+            pick(choice, candidates.get(1..).unwrap_or_default())
+        }
+        InstructionTarget::EligibleCasterArea | InstructionTarget::NoExplicitSpellTarget => {
+            unreachable!("target shape handled before unit selection")
         }
         InstructionTarget::FarthestHostile => {
-            farthest_hostile(world, &creature, target_policy, cast)
+            farthest_hostile(world, &creature, target_policy, cast, admission)
         }
     }?;
-    if cast.is_some_and(|cast| cast.character_only) && !world.eventai_unit(target)?.is_player {
-        return None;
+    let candidate = world.eventai_unit(target_guid)?;
+    candidate_eligible(
+        world,
+        &creature,
+        &candidate,
+        target_policy,
+        cast,
+        admission,
+        killed_invoker_target(context, target_policy, target_guid),
+    )
+    .then_some(SpellCastTarget::Unit(target_guid))
+}
+
+pub(super) fn unit_target<W: EventAiWorld>(
+    world: &W,
+    context: &EventContext,
+    target_policy: InstructionTarget,
+    cast: Option<&CastInstruction>,
+    choice: u64,
+) -> Option<u64> {
+    match target(world, context, target_policy, cast, choice)? {
+        SpellCastTarget::Unit(guid) => Some(guid),
+        SpellCastTarget::None | SpellCastTarget::CasterArea => None,
     }
-    Some(target)
 }
 
 pub(super) fn cast<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
     cast: &CastInstruction,
-    target_guid: u64,
+    selected: SpellCastTarget,
 ) -> ActionResult {
-    if cast.triggered {
-        return ActionResult::Refused;
-    }
-    if cast.character_only
-        && !world
-            .eventai_unit(target_guid)
-            .is_some_and(|target| target.is_player)
-    {
-        return ActionResult::Refused;
-    }
-    if cast.aura_absent && world.eventai_has_aura(target_guid, cast.spell_id) {
-        return ActionResult::Refused;
-    }
-    if cast.target_must_be_casting && !world.eventai_is_casting(target_guid) {
-        return ActionResult::Refused;
-    }
-    let Some(creature) = world.eventai_unit(context.creature_guid) else {
+    let Some(actor) = world.eventai_unit(context.creature_guid) else {
         return ActionResult::Refused;
     };
-    if world.eventai_is_casting(creature.guid) {
-        if !cast.interrupt_previous {
+    let admission = spell_caster_admission(context, &actor);
+    let selected_guid = match selected {
+        SpellCastTarget::Unit(guid) => Some(guid),
+        SpellCastTarget::None | SpellCastTarget::CasterArea => None,
+    };
+    let caster = match cast.caster_role {
+        SpellCasterRole::Actor => actor,
+        SpellCasterRole::Selected => {
+            let Some(caster) = selected_guid.and_then(|guid| world.eventai_unit(guid)) else {
+                return ActionResult::Refused;
+            };
+            caster
+        }
+    };
+    let spell_target = match cast.target_role {
+        SpellTargetRole::Selected => selected,
+        SpellTargetRole::Actor => SpellCastTarget::Unit(actor.guid),
+        SpellTargetRole::Caster => SpellCastTarget::Unit(caster.guid),
+        SpellTargetRole::None => SpellCastTarget::None,
+        SpellTargetRole::CasterArea => SpellCastTarget::CasterArea,
+    };
+    if let SpellCastTarget::Unit(target_guid) = spell_target {
+        let Some(target) = world.eventai_unit(target_guid) else {
+            return ActionResult::Refused;
+        };
+        if !spell_target_eligible(
+            world,
+            &caster,
+            &target,
+            cast,
+            admission,
+            context.kind == EventKind::OnKill && context.invoker_guid == Some(target_guid),
+        ) {
             return ActionResult::Refused;
         }
-        world.eventai_interrupt_cast(creature.guid);
     }
-    if world.eventai_begin_cast(&creature, cast.spell_id, target_guid) {
+    if world.eventai_is_casting(caster.guid) {
+        if !cast.interrupt_previous && cast.start_mode == SpellStartMode::Direct {
+            return ActionResult::Refused;
+        }
+    }
+    if world.eventai_start_spell(
+        &caster,
+        cast.spell_id,
+        cast.start_mode,
+        spell_target,
+        cast.interrupt_previous,
+        admission,
+    ) {
+        if cast.distance_after_start {
+            let distance = world.eventai_spell_range(cast.spell_id).unwrap_or(0) as f32;
+            world.set_eventai_ranged_posture(actor.guid, distance, 0.0);
+        }
         ActionResult::Applied
     } else {
         ActionResult::Refused
     }
 }
 
-/// Which halves of a creature's fight an imported script has taken over. Both are properties of the
-/// SCRIPT, not of this instant: eligibility, phase and the rule's own condition are all deliberately
-/// ignored, because a health-gated cast rule has to silence the flat rotation from the first firing
-/// of the fight rather than at the moment its band opens. The creature would otherwise hold at a
-/// range it casts nothing from.
+/// Which compatibility behaviors EventAI owns for this creature.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct AuthoredCombat {
-    /// The script owns offensive casting: the flat rotation, the lone spell and the caster hold
-    /// range are all off, so the creature closes to melee between authored casts unless an authored
-    /// ranged posture holds it back.
+    /// An engaged cycle rule owns casting for this creature.
     pub casting: bool,
+    /// The definition marks at least one spell for authored ranged-mode posture. T8 consumes this
+    /// metadata with the Set Ranged Mode action.
+    pub main_spell_posture: bool,
     /// The script owns breaking off: the fixed low-health rout is off, and the authored window runs
     /// the creature whatever its health and whatever its creature type.
     pub flee: bool,
 }
 
-/// Read `AuthoredCombat` from one creature's composed definition. Most creatures have no definition
-/// and keep the default combat behavior.
+/// Read compatibility ownership from the creature's composed definition.
 pub(crate) fn authored_combat(ctx: &ReducerContext, creature_guid: u64) -> AuthoredCombat {
     let mut authored = AuthoredCombat::default();
-    for rule in definition_for(ctx, creature_guid).rules {
-        if !rule.event.kind().recurs() {
+    let definition = definition_for(ctx, creature_guid);
+    for rule in definition.rules {
+        if !rule.event.runs_while_engaged() {
             continue;
         }
         for instruction in rule.instructions {
             authored.casting |= matches!(instruction, CreatureInstruction::Cast(_));
+            authored.main_spell_posture |= matches!(
+                instruction,
+                CreatureInstruction::Cast(CastInstruction {
+                    main_spell: true,
+                    ..
+                })
+            );
             authored.flee |= matches!(instruction, CreatureInstruction::FleeForAssist);
         }
     }
@@ -256,36 +601,108 @@ pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventA
 }
 
 fn in_inclusive_pct(value: u32, max: u32, min_pct: u32, max_pct: u32) -> bool {
-    max != 0
-        && u64::from(value) * 100 >= u64::from(min_pct) * u64::from(max)
-        && u64::from(value) * 100 <= u64::from(max_pct) * u64::from(max)
+    if max == 0 {
+        return false;
+    }
+    let percent = u64::from(value) * 100 / u64::from(max);
+    percent >= u64::from(min_pct) && percent <= u64::from(max_pct)
 }
 
 fn wounded_friendly<W: EventAiWorld>(
     world: &W,
     creature: &EventAiUnit,
-    radius: u32,
-    deficit: u32,
+    condition: super::FriendlyHealthDeficitCondition,
+    exclude_actor: bool,
 ) -> Option<u64> {
+    let radius = condition.radius_yd;
     world
         .eventai_units_near(creature, radius as f32)
         .into_iter()
         .filter(|other| {
             !other.dead
+                && !other.is_player
+                && other.owner_guid == 0
+                && (!exclude_actor || other.guid != creature.guid)
+                && world.eventai_is_engaged(other.guid)
+                && other.map_id == creature.map_id
+                && other.instance_id == creature.instance_id
                 && (other.guid == creature.guid
                     || world.eventai_factions_friendly(
                         creature.faction_template,
                         other.faction_template,
                     ))
                 && distance_yd(creature, other) <= radius as f32
-                && other.max_health.saturating_sub(other.health) >= deficit
+                && if condition.percent {
+                    other.max_health != 0
+                        && u64::from(other.max_health.saturating_sub(other.health)) * 100
+                            > u64::from(condition.missing_health) * u64::from(other.max_health)
+                } else {
+                    other.max_health.saturating_sub(other.health) > condition.missing_health
+                }
         })
         .min_by(|a, b| {
             let a_missing = a.max_health - a.health;
             let b_missing = b.max_health - b.health;
-            b_missing.cmp(&a_missing).then(a.guid.cmp(&b.guid))
+            if condition.percent {
+                let a_scaled = u64::from(a_missing) * u64::from(b.max_health);
+                let b_scaled = u64::from(b_missing) * u64::from(a.max_health);
+                b_scaled.cmp(&a_scaled).then(a.guid.cmp(&b.guid))
+            } else {
+                b_missing.cmp(&a_missing).then(a.guid.cmp(&b.guid))
+            }
         })
         .map(|other| other.guid)
+}
+
+fn friendly_candidate<W: EventAiWorld>(
+    world: &W,
+    creature: &EventAiUnit,
+    radius: u32,
+    predicate: impl Fn(&EventAiUnit) -> bool,
+) -> Option<u64> {
+    world
+        .eventai_units_near(creature, radius as f32)
+        .into_iter()
+        .filter(|candidate| {
+            !candidate.dead
+                && candidate.map_id == creature.map_id
+                && candidate.instance_id == creature.instance_id
+                && (candidate.guid == creature.guid
+                    || world.eventai_factions_friendly(
+                        creature.faction_template,
+                        candidate.faction_template,
+                    ))
+                && distance_yd(creature, candidate) <= radius as f32
+                && predicate(candidate)
+        })
+        .min_by_key(|candidate| candidate.guid)
+        .map(|candidate| candidate.guid)
+}
+
+fn event_target_context(context: &EventContext, guid: u64) -> EventContext {
+    EventContext {
+        event_target_guid: Some(guid),
+        ..*context
+    }
+}
+
+pub(crate) fn beneficiary_guid<W: EventAiWorld>(world: &W, guid: u64) -> Option<u64> {
+    let invoker = world.eventai_unit(guid)?;
+    (invoker.owner_guid != 0 && world.eventai_unit(invoker.owner_guid).is_some())
+        .then_some(invoker.owner_guid)
+        .or(Some(invoker.guid))
+}
+
+fn compare_distance(origin: &EventAiUnit, first: &EventAiUnit, second: &EventAiUnit) -> Ordering {
+    distance_sq(origin, first)
+        .partial_cmp(&distance_sq(origin, second))
+        .unwrap_or(Ordering::Equal)
+        .then(first.guid.cmp(&second.guid))
+}
+
+fn actor_is_behind_target(actor: &EventAiUnit, target: &EventAiUnit) -> bool {
+    let direction = (actor.y - target.y).atan2(actor.x - target.x);
+    (direction - target.orientation).cos() < 0.0
 }
 
 /// The creature's threat list, hostiles first by threat then by guid, with every target the
@@ -295,26 +712,15 @@ fn ranked_threat<W: EventAiWorld>(
     creature: &EventAiUnit,
     target: InstructionTarget,
     cast: Option<&CastInstruction>,
+    admission: SpellCasterAdmission,
 ) -> Vec<u64> {
     let mut ranked: Vec<(u64, i64)> = world
         .eventai_threat(creature.guid)
         .into_iter()
         .filter_map(|(guid, threat)| {
             let source = world.eventai_unit(guid)?;
-            (!source.dead
-                && source.map_id == creature.map_id
-                && source.instance_id == creature.instance_id
-                && (!matches!(
-                    target,
-                    InstructionTarget::HighestThreatCharacter
-                        | InstructionTarget::RandomThreatCharacter
-                ) || source.is_player)
-                && (!cast.is_some_and(|cast| cast.character_only) || source.is_player)
-                && (!cast.is_some_and(|cast| cast.aura_absent)
-                    || !world.eventai_has_aura(guid, cast.map_or(0, |cast| cast.spell_id)))
-                && (!cast.is_some_and(|cast| cast.target_must_be_casting)
-                    || world.eventai_is_casting(guid)))
-            .then_some((guid, threat))
+            candidate_eligible(world, creature, &source, target, cast, admission, false)
+                .then_some((guid, threat))
         })
         .collect();
     ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -326,8 +732,9 @@ fn nearest_area<W: EventAiWorld>(
     creature: &EventAiUnit,
     target: InstructionTarget,
     cast: Option<&CastInstruction>,
+    admission: SpellCasterAdmission,
 ) -> Option<u64> {
-    ranked_threat(world, creature, target, cast)
+    ranked_threat(world, creature, target, cast, admission)
         .into_iter()
         .filter_map(|guid| {
             let target = world.eventai_unit(guid)?;
@@ -346,8 +753,9 @@ fn farthest_hostile<W: EventAiWorld>(
     creature: &EventAiUnit,
     target: InstructionTarget,
     cast: Option<&CastInstruction>,
+    admission: SpellCasterAdmission,
 ) -> Option<u64> {
-    ranked_threat(world, creature, target, cast)
+    ranked_threat(world, creature, target, cast, admission)
         .into_iter()
         .filter_map(|guid| {
             let target = world.eventai_unit(guid)?;
@@ -360,6 +768,158 @@ fn farthest_hostile<W: EventAiWorld>(
                 .then(b.0.cmp(&a.0))
         })
         .map(|(guid, _)| guid)
+}
+
+fn candidate_eligible<W: EventAiWorld>(
+    world: &W,
+    actor: &EventAiUnit,
+    candidate: &EventAiUnit,
+    target: InstructionTarget,
+    cast: Option<&CastInstruction>,
+    admission: SpellCasterAdmission,
+    allow_dead_selected: bool,
+) -> bool {
+    if (candidate.dead
+        && !allow_dead_selected
+        && !(admission == SpellCasterAdmission::DeadCreatureCallback
+            && candidate.guid == actor.guid
+            && !candidate.is_player))
+        || candidate.map_id != actor.map_id
+        || candidate.instance_id != actor.instance_id
+    {
+        return false;
+    }
+    let hostile = matches!(
+        target,
+        InstructionTarget::CurrentOpponent
+            | InstructionTarget::HighestThreat
+            | InstructionTarget::SecondThreat
+            | InstructionTarget::RandomThreat
+            | InstructionTarget::RandomThreatExceptHighest
+            | InstructionTarget::HighestThreatCharacter
+            | InstructionTarget::RandomThreatCharacter
+            | InstructionTarget::RandomThreatCharacterExceptHighest
+            | InstructionTarget::RandomHostileManaUser
+            | InstructionTarget::EligibleCasterArea
+            | InstructionTarget::FarthestHostile
+    );
+    if hostile
+        && !world.eventai_factions_hostile(actor.faction_template, candidate.faction_template)
+    {
+        return false;
+    }
+    let character = matches!(
+        target,
+        InstructionTarget::HighestThreatCharacter
+            | InstructionTarget::RandomThreatCharacter
+            | InstructionTarget::RandomThreatCharacterExceptHighest
+    );
+    if character && !candidate.is_player {
+        return false;
+    }
+    if target == InstructionTarget::RandomHostileManaUser
+        && candidate.power_type != lyracore_shared::packing::power_type::MANA
+    {
+        return false;
+    }
+    cast.is_none_or(|cast| {
+        selection_spell_eligible(
+            world,
+            actor,
+            candidate,
+            cast,
+            admission,
+            allow_dead_selected,
+        )
+    })
+}
+
+fn selection_spell_eligible<W: EventAiWorld>(
+    world: &W,
+    actor: &EventAiUnit,
+    selected: &EventAiUnit,
+    cast: &CastInstruction,
+    admission: SpellCasterAdmission,
+    allow_dead_selected: bool,
+) -> bool {
+    if cast.start_mode == SpellStartMode::Triggered {
+        return true;
+    }
+    if cast.caster_role == SpellCasterRole::Selected
+        && cast.target_role == SpellTargetRole::Actor
+        && !spell_target_eligible(world, actor, selected, cast, admission, allow_dead_selected)
+    {
+        return false;
+    }
+    let caster = match cast.caster_role {
+        SpellCasterRole::Actor => actor,
+        SpellCasterRole::Selected => selected,
+    };
+    let target = match cast.target_role {
+        SpellTargetRole::Selected => selected,
+        SpellTargetRole::Actor => actor,
+        SpellTargetRole::Caster => caster,
+        SpellTargetRole::CasterArea => selected,
+        SpellTargetRole::None => caster,
+    };
+    spell_target_eligible(
+        world,
+        caster,
+        target,
+        cast,
+        admission,
+        allow_dead_selected && target.guid == selected.guid,
+    )
+}
+
+fn spell_target_eligible<W: EventAiWorld>(
+    world: &W,
+    caster: &EventAiUnit,
+    target: &EventAiUnit,
+    cast: &CastInstruction,
+    admission: SpellCasterAdmission,
+    allow_dead_target: bool,
+) -> bool {
+    if (target.dead
+        && !allow_dead_target
+        && !(admission == SpellCasterAdmission::DeadCreatureCallback
+            && target.guid == caster.guid
+            && !target.is_player))
+        || target.map_id != caster.map_id
+        || target.instance_id != caster.instance_id
+        || !world.eventai_line_of_sight(caster, target)
+        || (cast.character_only && !target.is_player)
+        || (cast.aura_absent && world.eventai_has_aura(target.guid, cast.spell_id))
+        || (cast.target_must_be_casting && !world.eventai_is_casting(target.guid))
+    {
+        return false;
+    }
+    let Some(range) = world.eventai_spell_range(cast.spell_id) else {
+        return false;
+    };
+    range == 0 || target.guid == caster.guid || distance_yd(caster, target) <= range as f32
+}
+
+fn killed_invoker_target(
+    context: &EventContext,
+    target_policy: InstructionTarget,
+    selected_guid: u64,
+) -> bool {
+    context.kind == EventKind::OnKill
+        && target_policy == InstructionTarget::Invoker
+        && context.invoker_guid == Some(selected_guid)
+}
+
+fn spell_caster_admission(context: &EventContext, actor: &EventAiUnit) -> SpellCasterAdmission {
+    if matches!(
+        context.kind,
+        EventKind::OnDeath | EventKind::OnSpellHit | EventKind::OnSpellHitTarget
+    ) && !actor.is_player
+    {
+        SpellCasterAdmission::DeadCreatureCallback
+    } else {
+        SpellCasterAdmission::Living
+    }
 }
 
 fn call_for_help<W: EventAiWorld>(
@@ -389,16 +949,18 @@ fn call_for_help<W: EventAiWorld>(
 }
 
 /// One candidate at random, or `None` when there are none to choose between.
-fn pick<W: EventAiWorld, T: Copy>(world: &W, candidates: &[T]) -> Option<T> {
+fn pick<T: Copy>(choice: u64, candidates: &[T]) -> Option<T> {
     if candidates.is_empty() {
         return None;
     }
-    candidates
-        .get(world.eventai_roll() as usize % candidates.len())
-        .copied()
+    candidates.get(choice as usize % candidates.len()).copied()
 }
 
 fn distance_yd(first: &EventAiUnit, second: &EventAiUnit) -> f32 {
+    distance_sq(first, second).sqrt()
+}
+
+fn distance_sq(first: &EventAiUnit, second: &EventAiUnit) -> f32 {
     let (dx, dy, dz) = (second.x - first.x, second.y - first.y, second.z - first.z);
-    (dx * dx + dy * dy + dz * dz).sqrt()
+    dx * dx + dy * dy + dz * dz
 }

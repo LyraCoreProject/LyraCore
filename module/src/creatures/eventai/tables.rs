@@ -99,6 +99,14 @@ pub struct CreatureAiBroadcastText {
     pub emote_id_3: u32,
 }
 
+/// Spell metadata used only while EventAI selects an event subject.
+#[table(accessor = game_creature_ai_spell_metadata)]
+pub struct CreatureAiSpellMetadata {
+    #[primary_key]
+    pub spell_id: u32,
+    pub exclude_caster: bool,
+}
+
 /// Creature-wide EventAI state. Edge resets advance its lifecycle identities. Module only.
 #[table(accessor = game_creature_ai_state)]
 pub struct CreatureAiState {
@@ -130,6 +138,19 @@ pub struct CreatureAiRuleState {
     pub consumed: bool,
     pub lifecycle_id: u64,
     pub engagement_id: u64,
+    /// Saved for every linked choice while an authored opportunity remains open.
+    #[default(0u64)]
+    pub invocation_seed: u64,
+    #[default(false)]
+    pub invocation_started: bool,
+    /// Prevents a synchronous spell or action hook from re-entering this rule.
+    #[default(false)]
+    pub executing: bool,
+    #[default(0u32)]
+    pub invocation_branch: u32,
+    /// When an authored phase gate stopped this rule's timer. Zero means the timer is running.
+    #[default(0u64)]
+    pub paused_at_ms: u64,
 }
 
 /// Imported EventAI summon placement. Module only.

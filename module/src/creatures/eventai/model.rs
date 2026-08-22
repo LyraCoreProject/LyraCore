@@ -27,6 +27,7 @@ pub struct TimeWindow {
 pub struct CreatureHealthCondition {
     pub min_pct: u8,
     pub max_pct: u8,
+    pub allow_out_of_combat: bool,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,29 +40,213 @@ pub struct TargetRangeCondition {
 pub struct FriendlyHealthDeficitCondition {
     pub missing_health: u32,
     pub radius_yd: u32,
+    pub percent: bool,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PercentageCondition {
+    pub min_pct: u8,
+    pub max_pct: u8,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KillCondition {
+    pub character_only: bool,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeathCondition {
+    pub predicate: EventPredicate,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpellEventCondition {
+    pub spell_id: u32,
+    pub school_mask: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OutOfCombatSightCondition {
+    pub require_non_hostile: bool,
+    pub max_range_yd: u32,
+    pub character_only: bool,
+    pub predicate: EventPredicate,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpawnMapCondition {
+    pub map_id: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpawnZoneOrAreaCondition {
+    pub zone_or_area_id: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpawnCondition {
+    Always,
+    Map(SpawnMapCondition),
+    ZoneOrArea(SpawnZoneOrAreaCondition),
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FriendlyCrowdControlCondition {
+    pub radius_yd: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FriendlyMissingAuraCondition {
+    pub spell_id: u32,
+    pub radius_yd: u32,
+    pub selection: FriendlyAuraSelection,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FriendlyAuraSelection {
+    NearbyWhileEngaged,
+    MatchActorCombatState,
+    AnyWhileDisengaged,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CreatureEntryCondition {
+    pub creature_entry: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReceiveEmoteCondition {
+    pub emote_id: u32,
+    pub predicate: EventPredicate,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuestTakenPredicate {
+    pub quest_entry: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EventPredicate {
+    Always,
+    Alliance,
+    Horde,
+    QuestTaken(QuestTakenPredicate),
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuraStackCondition {
+    pub spell_id: u32,
+    pub stacks: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AiEventKind {
+    JustDied,
+    CriticalHealth,
+    LostHealth,
+    LostSomeHealth,
+    GotFullHealth,
+    CustomA,
+    CustomB,
+    CrowdControlled,
+    CustomC,
+    CustomD,
+    CustomE,
+    CustomF,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReceiveAiEventCondition {
+    pub kind: AiEventKind,
+    pub sender_entry: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FacingCondition {
+    pub behind: bool,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventCondition {
-    OnAggro,
     TimedInCombat(TimeWindow),
+    TimedOutOfCombat(TimeWindow),
     CreatureHealth(CreatureHealthCondition),
-    OnDeath,
+    CreaturePower(PercentageCondition),
+    OnAggro,
+    OnKill(KillCondition),
+    OnDeath(DeathCondition),
+    OnEvade,
+    OnSpellHit(SpellEventCondition),
     TargetRange(TargetRangeCondition),
-    OnSpawn,
+    OutOfCombatSight(OutOfCombatSightCondition),
+    OnSpawn(SpawnCondition),
+    TargetHealth(PercentageCondition),
+    TargetCasting,
     FriendlyHealthDeficit(FriendlyHealthDeficitCondition),
+    FriendlyCrowdControlled(FriendlyCrowdControlCondition),
+    FriendlyMissingAura(FriendlyMissingAuraCondition),
+    OnSummoned(CreatureEntryCondition),
+    TargetPower(PercentageCondition),
+    OnReachedHome,
+    OnReceiveEmote(ReceiveEmoteCondition),
+    CreatureAura(AuraStackCondition),
+    TargetAura(AuraStackCondition),
+    OnSummonedDeath(CreatureEntryCondition),
+    CreatureMissingAura(AuraStackCondition),
+    TargetMissingAura(AuraStackCondition),
+    TimedGeneric(TimeWindow),
+    OnReceiveAiEvent(ReceiveAiEventCondition),
+    SelectAttackingTarget(TargetRangeCondition),
+    FacingTarget(FacingCondition),
+    OnSpellHitTarget(SpellEventCondition),
+    TargetNotReachable,
 }
 
 impl EventCondition {
     pub(crate) fn kind(self) -> EventKind {
         match self {
-            Self::OnAggro => EventKind::OnAggro,
             Self::TimedInCombat(_) => EventKind::TimedInCombat,
+            Self::TimedOutOfCombat(_) => EventKind::TimedOutOfCombat,
             Self::CreatureHealth(_) => EventKind::CreatureHp,
-            Self::OnDeath => EventKind::OnDeath,
+            Self::CreaturePower(_) => EventKind::CreaturePower,
+            Self::OnAggro => EventKind::OnAggro,
+            Self::OnKill(_) => EventKind::OnKill,
+            Self::OnDeath(_) => EventKind::OnDeath,
+            Self::OnEvade => EventKind::OnEvade,
+            Self::OnSpellHit(_) => EventKind::OnSpellHit,
             Self::TargetRange(_) => EventKind::TargetRange,
-            Self::OnSpawn => EventKind::OnSpawn,
+            Self::OutOfCombatSight(_) => EventKind::OutOfCombatSight,
+            Self::OnSpawn(_) => EventKind::OnSpawn,
+            Self::TargetHealth(_) => EventKind::TargetHp,
+            Self::TargetCasting => EventKind::TargetCasting,
             Self::FriendlyHealthDeficit(_) => EventKind::FriendlyHpDeficit,
+            Self::FriendlyCrowdControlled(_) => EventKind::FriendlyCrowdControlled,
+            Self::FriendlyMissingAura(_) => EventKind::FriendlyMissingAura,
+            Self::OnSummoned(_) => EventKind::OnSummoned,
+            Self::TargetPower(_) => EventKind::TargetPower,
+            Self::OnReachedHome => EventKind::OnReachedHome,
+            Self::OnReceiveEmote(_) => EventKind::OnReceiveEmote,
+            Self::CreatureAura(_) => EventKind::CreatureAura,
+            Self::TargetAura(_) => EventKind::TargetAura,
+            Self::OnSummonedDeath(_) => EventKind::OnSummonedDeath,
+            Self::CreatureMissingAura(_) => EventKind::CreatureMissingAura,
+            Self::TargetMissingAura(_) => EventKind::TargetMissingAura,
+            Self::TimedGeneric(_) => EventKind::TimedGeneric,
+            Self::OnReceiveAiEvent(_) => EventKind::OnReceiveAiEvent,
+            Self::SelectAttackingTarget(_) => EventKind::SelectAttackingTarget,
+            Self::FacingTarget(_) => EventKind::FacingTarget,
+            Self::OnSpellHitTarget(_) => EventKind::OnSpellHitTarget,
+            Self::TargetNotReachable => EventKind::TargetNotReachable,
+        }
+    }
+
+    pub(crate) fn runs_while_engaged(self) -> bool {
+        match self {
+            Self::TimedOutOfCombat(_) | Self::OutOfCombatSight(_) => false,
+            Self::FriendlyMissingAura(condition) => {
+                condition.selection != FriendlyAuraSelection::AnyWhileDisengaged
+            }
+            _ => self.kind().runs_in_cycle(),
         }
     }
 }
@@ -70,6 +255,8 @@ impl EventCondition {
 pub enum RecurrencePolicy {
     Once,
     Repeat(TimeWindow),
+    /// Every distinct edge may fire. There is no authored cooldown window.
+    RepeatOnEvent,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,18 +272,66 @@ pub enum ExecutionPolicy {
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PostureAdmission {
+    Any,
+    RangedOnly,
+    MeleeOnly,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstructionTarget {
     CurrentOpponent,
     SelfActor,
     HighestThreat,
     SecondThreat,
     RandomThreat,
+    RandomThreatExceptHighest,
     Invoker,
+    Beneficiary,
+    AiSender,
+    Spawner,
     EventSubject,
     HighestThreatCharacter,
     RandomThreatCharacter,
+    RandomThreatCharacterExceptHighest,
+    NoExplicitSpellTarget,
+    RandomHostileManaUser,
     EligibleCasterArea,
     FarthestHostile,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpellStartMode {
+    Direct,
+    Triggered,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SpellCasterAdmission {
+    Living,
+    DeadCreatureCallback,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpellCasterRole {
+    Actor,
+    Selected,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpellTargetRole {
+    Selected,
+    Actor,
+    Caster,
+    None,
+    CasterArea,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SpellCastTarget {
+    Unit(u64),
+    None,
+    CasterArea,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,10 +353,14 @@ pub struct CastInstruction {
     pub spell_id: u32,
     pub target: InstructionTarget,
     pub interrupt_previous: bool,
-    pub triggered: bool,
+    pub start_mode: SpellStartMode,
+    pub caster_role: SpellCasterRole,
+    pub target_role: SpellTargetRole,
     pub aura_absent: bool,
     pub character_only: bool,
     pub target_must_be_casting: bool,
+    pub main_spell: bool,
+    pub distance_after_start: bool,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +377,22 @@ pub struct CallForHelpInstruction {
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SetPhaseInstruction {
     pub phase: u8,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IncrementPhaseInstruction {
+    pub amount: i32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
+pub struct RandomPhaseInstruction {
+    pub phases: Vec<u8>,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RandomPhaseRangeInstruction {
+    pub min_phase: u8,
+    pub max_phase: u8,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,6 +416,9 @@ pub enum CreatureInstruction {
     FleeForAssist,
     CallForHelp(CallForHelpInstruction),
     SetPhase(SetPhaseInstruction),
+    IncrementPhase(IncrementPhaseInstruction),
+    RandomPhase(RandomPhaseInstruction),
+    RandomPhaseRange(RandomPhaseRangeInstruction),
     Summon(SummonInstruction),
     SetRangedPosture(RangedPostureInstruction),
 }
@@ -174,6 +432,7 @@ pub struct EventAiRule {
     pub recurrence: RecurrencePolicy,
     pub selection: InstructionSelection,
     pub execution: ExecutionPolicy,
+    pub posture: PostureAdmission,
     pub instructions: Vec<CreatureInstruction>,
 }
 
@@ -250,25 +509,86 @@ pub(crate) fn normalized_revision(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EventKind {
-    OnAggro,
     TimedInCombat,
+    TimedOutOfCombat,
     CreatureHp,
+    CreaturePower,
+    OnAggro,
+    OnKill,
     OnDeath,
+    OnEvade,
+    OnSpellHit,
     TargetRange,
+    OutOfCombatSight,
     OnSpawn,
+    TargetHp,
+    TargetCasting,
     FriendlyHpDeficit,
+    FriendlyCrowdControlled,
+    FriendlyMissingAura,
+    OnSummoned,
+    TargetPower,
+    OnReachedHome,
+    OnReceiveEmote,
+    CreatureAura,
+    TargetAura,
+    OnSummonedDeath,
+    CreatureMissingAura,
+    TargetMissingAura,
+    TimedGeneric,
+    OnReceiveAiEvent,
+    SelectAttackingTarget,
+    FacingTarget,
+    OnSpellHitTarget,
+    TargetNotReachable,
 }
 
 impl EventKind {
-    /// An engaged creature re-evaluates these kinds on every cycle firing, so a rule keyed on one
-    /// can carry a repeat window. The edges (aggro, spawn, death) fire once per engagement or
-    /// lifecycle: a window stamped on one of them would never be reached again.
-    pub(crate) fn recurs(self) -> bool {
-        !matches!(self, Self::OnAggro | Self::OnSpawn | Self::OnDeath)
+    /// Whether a new firing of this event may wait behind the previous firing's repeat window.
+    /// Aggro, death, evade, spawn, reached-home, and unreachable have no authored cooldown.
+    /// `RepeatOnEvent` can still re-arm any of those rules for its next edge.
+    pub(crate) fn supports_repeat_cooldown(self) -> bool {
+        !matches!(
+            self,
+            Self::OnAggro
+                | Self::OnDeath
+                | Self::OnEvade
+                | Self::OnSpawn
+                | Self::OnReachedHome
+                | Self::TargetNotReachable
+        )
+    }
+
+    pub(crate) fn runs_in_cycle(self) -> bool {
+        matches!(
+            self,
+            Self::TimedInCombat
+                | Self::TimedOutOfCombat
+                | Self::CreatureHp
+                | Self::CreaturePower
+                | Self::TargetRange
+                | Self::OutOfCombatSight
+                | Self::TargetHp
+                | Self::TargetCasting
+                | Self::FriendlyHpDeficit
+                | Self::FriendlyCrowdControlled
+                | Self::FriendlyMissingAura
+                | Self::TargetPower
+                | Self::CreatureAura
+                | Self::TargetAura
+                | Self::CreatureMissingAura
+                | Self::TargetMissingAura
+                | Self::TimedGeneric
+                | Self::SelectAttackingTarget
+                | Self::FacingTarget
+        )
     }
 }
 pub(crate) enum EventAiRequest<'a> {
-    Engaged(&'a TickScope),
+    Cycle {
+        scope: &'a TickScope,
+        active: &'a std::collections::HashSet<u64>,
+    },
     Edge(EventContext),
 }
 
@@ -280,21 +600,35 @@ pub(crate) struct EngagedFight {
     pub victim_guid: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CycleActor {
+    pub creature_guid: u64,
+    pub current_target_guid: Option<u64>,
+    pub engaged: bool,
+}
+
 /// One unit as EventAI conditions and target selection read it, free of any table shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct EventAiUnit {
     pub guid: u64,
+    pub entry: u32,
     pub x: f32,
     pub y: f32,
     pub z: f32,
     pub map_id: u32,
     pub instance_id: u64,
+    pub zone_id: u32,
     pub health: u32,
     pub max_health: u32,
+    pub power: u32,
+    pub max_power: u32,
+    pub power_type: u8,
     pub level: u32,
     pub faction_template: u32,
     pub dead: bool,
     pub is_player: bool,
+    pub orientation: f32,
+    pub owner_guid: u64,
 }
 
 /// One imported broadcast text as speech reads it: the line, the chat type it carries, and the
@@ -322,10 +656,44 @@ pub(crate) struct EventContext {
     pub kind: EventKind,
     pub creature_guid: u64,
     pub invoker_guid: Option<u64>,
+    pub invoker_is_player: Option<bool>,
+    pub beneficiary_guid: Option<u64>,
+    pub ai_sender_guid: Option<u64>,
+    pub spawner_guid: Option<u64>,
     pub event_target_guid: Option<u64>,
     pub current_target_guid: Option<u64>,
+    pub spell_id: Option<u32>,
+    pub spell_school_mask: u32,
+    pub emote_id: Option<u32>,
+    pub creature_entry: Option<u32>,
+    pub ai_event: Option<AiEventKind>,
+    pub engaged: bool,
     pub assisted: bool,
     pub now_ms: u64,
+}
+
+impl EventContext {
+    pub(crate) fn empty(kind: EventKind, creature_guid: u64, now_ms: u64) -> Self {
+        Self {
+            kind,
+            creature_guid,
+            invoker_guid: None,
+            invoker_is_player: None,
+            beneficiary_guid: None,
+            ai_sender_guid: None,
+            spawner_guid: None,
+            event_target_guid: None,
+            current_target_guid: None,
+            spell_id: None,
+            spell_school_mask: 0,
+            emote_id: None,
+            creature_entry: None,
+            ai_event: None,
+            engaged: false,
+            assisted: false,
+            now_ms,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -334,6 +702,11 @@ pub(crate) struct RuleState {
     pub consumed: bool,
     pub lifecycle_id: u64,
     pub engagement_id: u64,
+    pub invocation_seed: u64,
+    pub invocation_started: bool,
+    pub executing: bool,
+    pub invocation_branch: u32,
+    pub paused_at_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

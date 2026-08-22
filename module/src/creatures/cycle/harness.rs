@@ -7,12 +7,14 @@ use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
 use crate::creatures::eventai::{
     self, BroadcastLine, CallForHelpInstruction, CastInstruction, CreatureAiEvent,
-    CreatureHealthCondition, CreatureInstruction, CreatureState, DefinitionRevision,
-    EmoteInstruction, EngagedFight, EventAiDefinition, EventAiRequest, EventAiRule, EventAiSubject,
-    EventAiUnit, EventAiWorld, EventCondition, EventContext, EventKind, ExecutionPolicy,
-    FriendlyHealthDeficitCondition, InstructionSelection, InstructionTarget, PhaseSet,
-    RangedPostureInstruction, RecurrencePolicy, RuleState, SetPhaseInstruction, SpeakInstruction,
-    SpeechMode, SummonInstruction, SummonLocation, TargetRangeCondition, TimeWindow,
+    CreatureHealthCondition, CreatureInstruction, CreatureState, CycleActor, DeathCondition,
+    DefinitionRevision, EmoteInstruction, EngagedFight, EventAiDefinition, EventAiRequest,
+    EventAiRule, EventAiSubject, EventAiUnit, EventAiWorld, EventCondition, EventContext,
+    EventKind, EventPredicate, ExecutionPolicy, FriendlyHealthDeficitCondition,
+    InstructionSelection, InstructionTarget, PhaseSet, PostureAdmission, RangedPostureInstruction,
+    RecurrencePolicy, RuleState, SetPhaseInstruction, SpawnCondition, SpeakInstruction, SpeechMode,
+    SpellCastTarget, SpellCasterAdmission, SpellCasterRole, SpellStartMode, SpellTargetRole,
+    SummonInstruction, SummonLocation, TargetRangeCondition, TimeWindow,
 };
 use crate::creatures::{chase_step, rout_window_open};
 use lyracore_shared::spatial;
@@ -105,6 +107,7 @@ struct ScenarioSummonExpiry {
     lifetime_ms: u32,
     remaining_ms: u32,
     last_checked_ms: u64,
+    summoner_guid: u64,
 }
 
 #[derive(Default)]
@@ -137,6 +140,7 @@ struct Scenario {
     last_carrier: RefCell<HashMap<u64, (u64, MoveEffect)>>,
     /// The players in the world, in the order the world reads them.
     players: RefCell<Vec<AggroTarget>>,
+    eventai_player_health: RefCell<HashMap<u64, (u32, u32)>>,
     /// Live melee engagements — what aggro arms, and what combat entry and chase read.
     fights: RefCell<Vec<Engagement>>,
     /// Each engagement's rout clock, `creature -> the ms its window closes at`. Absent is the
@@ -166,16 +170,26 @@ struct Scenario {
     combat_regen: RefCell<HashSet<u64>>,
     /// Authored spell rotations, per creature (the world keys them by template).
     rotations: RefCell<HashMap<u64, Vec<SpellOption>>>,
+    /// Independent Creature Spell Lists, separate from template compatibility schedules.
+    creature_spell_lists: RefCell<HashMap<u64, Vec<SpellOption>>>,
     /// The single spell a creature with no rotation falls back to.
     lone_spells: RefCell<HashMap<u64, u32>>,
     /// `(unit, spell)` auras already on a unit — what a missing-aura condition reads.
     auras: RefCell<HashSet<(u64, u32)>>,
     /// Creatures with a cast bar already running.
     casting: RefCell<HashSet<u64>>,
+    /// Units holding the non-melee spell slot through an active channel.
+    channeling: RefCell<HashSet<u64>>,
+    slowed: RefCell<HashSet<u64>>,
     /// Fault injection: spells the spell module refuses — on cooldown, unaffordable or out of range.
     not_ready: RefCell<HashSet<u32>>,
+    /// Static spell ranges used by EventAI selection. Unlisted spells have no practical limit.
+    eventai_spell_ranges: RefCell<HashMap<u32, u32>>,
     /// Ordered casts the cycle began, oldest first.
     casts: RefCell<Vec<CastEffect>>,
+    /// Typed EventAI spell starts, retained separately from the compatibility cast log.
+    eventai_spell_starts:
+        RefCell<Vec<(SpellStartMode, SpellCastTarget, bool, SpellCasterAdmission)>>,
     /// The threat table, `(creature, source) -> threat`.
     threat: RefCell<HashMap<(u64, u64), i64>>,
     /// Live taunt locks: the creature is pinned on this unit whatever the threat table says.
@@ -206,6 +220,10 @@ struct Scenario {
     eventai_rule_state: RefCell<HashMap<u64, HashMap<u64, RuleState>>>,
     eventai_summons: RefCell<HashMap<u32, ScenarioSummon>>,
     eventai_templates: RefCell<HashSet<u32>>,
+    eventai_exclude_caster_spells: RefCell<HashSet<u32>>,
+    eventai_quests_taken: RefCell<HashSet<(u64, u32)>>,
+    eventai_areas: RefCell<HashMap<u64, u32>>,
+    eventai_returning_home: RefCell<HashSet<u64>>,
     eventai_summon_expiry: RefCell<HashMap<u64, ScenarioSummonExpiry>>,
     eventai_next_summon: Cell<u64>,
     /// Ordered text effects emitted by authored rules.
@@ -312,6 +330,20 @@ impl Scenario {
 
     fn eventai_template(self, entry: u32) -> Self {
         self.eventai_templates.borrow_mut().insert(entry);
+        self
+    }
+
+    fn eventai_exclude_caster_spell(self, spell_id: u32) -> Self {
+        self.eventai_exclude_caster_spells
+            .borrow_mut()
+            .insert(spell_id);
+        self
+    }
+
+    fn eventai_quest_taken(self, guid: u64, quest_entry: u32) -> Self {
+        self.eventai_quests_taken
+            .borrow_mut()
+            .insert((guid, quest_entry));
         self
     }
 
@@ -457,20 +489,26 @@ impl Scenario {
             .collect()
     }
 
-    /// The world's `eventai::authored_combat`: which halves of the fight the script has taken over,
-    /// read straight off the rows with no decode and no rule state, so an authored cast silences the
-    /// flat rotation from the first firing rather than when its condition first passes.
+    /// Compatibility ownership for this creature's current EventAI lifecycle.
     fn authored_combat(&self, creature_guid: u64) -> eventai::AuthoredCombat {
         if self.pet_owners.borrow().contains_key(&creature_guid) {
             return eventai::AuthoredCombat::default();
         }
         let mut authored = eventai::AuthoredCombat::default();
-        for rule in self.eventai_definition(creature_guid).rules {
-            if !rule.event.kind().recurs() {
+        let definition = self.eventai_definition(creature_guid);
+        for rule in definition.rules {
+            if !rule.event.runs_while_engaged() {
                 continue;
             }
             for instruction in rule.instructions {
                 authored.casting |= matches!(instruction, CreatureInstruction::Cast(_));
+                authored.main_spell_posture |= matches!(
+                    instruction,
+                    CreatureInstruction::Cast(CastInstruction {
+                        main_spell: true,
+                        ..
+                    })
+                );
                 authored.flee |= matches!(instruction, CreatureInstruction::FleeForAssist);
             }
         }
@@ -535,6 +573,13 @@ impl Scenario {
 
     fn player_level(self, guid: u64, level: u32) -> Self {
         self.tweak_player(guid, |p| p.level = level)
+    }
+
+    fn player_health(self, guid: u64, health: u32, max_health: u32) -> Self {
+        self.eventai_player_health
+            .borrow_mut()
+            .insert(guid, (health, max_health));
+        self
     }
 
     /// A GM who cannot be killed.
@@ -611,6 +656,25 @@ impl Scenario {
         self
     }
 
+    fn creature_spell_list_line(
+        self,
+        guid: u64,
+        spell_id: u32,
+        when: CastWhen,
+        priority: u8,
+    ) -> Self {
+        let mut lists = self.creature_spell_lists.borrow_mut();
+        let lines = lists.entry(guid).or_default();
+        lines.push(SpellOption {
+            spell_id,
+            when,
+            priority,
+            authored: lines.len() as u64,
+        });
+        drop(lists);
+        self
+    }
+
     /// The creature has no rotation, only the one authored spell.
     fn lone_spell(self, guid: u64, spell_id: u32) -> Self {
         self.lone_spells.borrow_mut().insert(guid, spell_id);
@@ -629,9 +693,21 @@ impl Scenario {
         self
     }
 
+    fn channeling(self, guid: u64) -> Self {
+        self.channeling.borrow_mut().insert(guid);
+        self
+    }
+
     /// Fault injection: the spell module refuses this spell — on cooldown, unaffordable, out of range.
     fn not_ready(self, spell_id: u32) -> Self {
         self.not_ready.borrow_mut().insert(spell_id);
+        self
+    }
+
+    fn spell_range(self, spell_id: u32, range_yd: u32) -> Self {
+        self.eventai_spell_ranges
+            .borrow_mut()
+            .insert(spell_id, range_yd);
         self
     }
 
@@ -887,6 +963,11 @@ impl Scenario {
         self
     }
 
+    fn slowed(self, guid: u64) -> Self {
+        self.slowed.borrow_mut().insert(guid);
+        self
+    }
+
     /// This engagement's rout clock, as the phase left it.
     fn rout_ends_ms(&self, guid: u64) -> u32 {
         self.rout_clock.borrow().get(&guid).copied().unwrap_or(0)
@@ -1130,19 +1211,24 @@ fn native_test_rule(rule: Rule) -> EventAiRule {
         EventKind::CreatureHp => EventCondition::CreatureHealth(CreatureHealthCondition {
             min_pct: rule.event_params[0] as u8,
             max_pct: rule.event_params[1] as u8,
+            allow_out_of_combat: false,
         }),
-        EventKind::OnDeath => EventCondition::OnDeath,
+        EventKind::OnDeath => EventCondition::OnDeath(DeathCondition {
+            predicate: EventPredicate::Always,
+        }),
         EventKind::TargetRange => EventCondition::TargetRange(TargetRangeCondition {
             min_yd: rule.event_params[0],
             max_yd: rule.event_params[1],
         }),
-        EventKind::OnSpawn => EventCondition::OnSpawn,
+        EventKind::OnSpawn => EventCondition::OnSpawn(SpawnCondition::Always),
         EventKind::FriendlyHpDeficit => {
             EventCondition::FriendlyHealthDeficit(FriendlyHealthDeficitCondition {
                 missing_health: rule.event_params[0],
                 radius_yd: rule.event_params[1],
+                percent: false,
             })
         }
+        _ => unreachable!("the retired flat fixture cannot produce this event kind"),
     };
     EventAiRule {
         source_rule_id: rule.id,
@@ -1168,6 +1254,7 @@ fn native_test_rule(rule: Rule) -> EventAiRule {
         } else {
             ExecutionPolicy::Ordinary
         },
+        posture: PostureAdmission::Any,
         instructions: rule.actions.iter().map(native_test_instruction).collect(),
     }
 }
@@ -1185,6 +1272,10 @@ fn native_test_instruction(action: &RuleAction) -> CreatureInstruction {
         TargetPolicy::RandomThreatPlayer => InstructionTarget::RandomThreatCharacter,
         TargetPolicy::NearestArea => InstructionTarget::EligibleCasterArea,
         TargetPolicy::FarthestHostile => InstructionTarget::FarthestHostile,
+        TargetPolicy::Beneficiary => InstructionTarget::Beneficiary,
+        TargetPolicy::AiSender => InstructionTarget::AiSender,
+        TargetPolicy::Spawner => InstructionTarget::Spawner,
+        TargetPolicy::NoExplicit => InstructionTarget::NoExplicitSpellTarget,
     };
     match action.kind {
         ActionKind::Say | ActionKind::Yell => CreatureInstruction::Speak(SpeakInstruction {
@@ -1201,10 +1292,18 @@ fn native_test_instruction(action: &RuleAction) -> CreatureInstruction {
             spell_id: action.params[0],
             target,
             interrupt_previous: action.cast_options.contains(CAST_INTERRUPT_PREVIOUS),
-            triggered: action.cast_options.contains(CAST_TRIGGERED),
+            start_mode: if action.cast_options.contains(CAST_TRIGGERED) {
+                SpellStartMode::Triggered
+            } else {
+                SpellStartMode::Direct
+            },
+            caster_role: SpellCasterRole::Actor,
+            target_role: SpellTargetRole::Selected,
             aura_absent: action.cast_options.contains(CAST_AURA_ABSENT),
             character_only: action.cast_options.contains(CAST_PLAYER_ONLY),
             target_must_be_casting: action.cast_options.contains(CAST_TARGET_CASTING),
+            main_spell: false,
+            distance_after_start: false,
         }),
         ActionKind::Emote => CreatureInstruction::Emote(EmoteInstruction {
             emote_id: action.params[0],
@@ -1280,21 +1379,62 @@ impl EventAiWorld for Scenario {
             .collect()
     }
 
+    fn eventai_cycle_actors(&self, scope: &TickScope, active: &HashSet<u64>) -> Vec<CycleActor> {
+        let mut actors = BTreeMap::new();
+        for guid in active {
+            let Some(creature) = self.creatures.borrow().get(guid).copied() else {
+                continue;
+            };
+            if !scope.covers(creature.instance_id) || self.corpses.borrow().contains(guid) {
+                continue;
+            }
+            let target = self
+                .fights
+                .borrow()
+                .iter()
+                .find(|fight| fight.attacker == *guid)
+                .map(|fight| fight.victim);
+            actors.insert(
+                *guid,
+                CycleActor {
+                    creature_guid: *guid,
+                    current_target_guid: target,
+                    engaged: target.is_some(),
+                },
+            );
+        }
+        for fight in self.eventai_fights(scope) {
+            actors.entry(fight.creature_guid).or_insert(CycleActor {
+                creature_guid: fight.creature_guid,
+                current_target_guid: Some(fight.victim_guid),
+                engaged: true,
+            });
+        }
+        actors.into_values().collect()
+    }
+
     fn eventai_unit(&self, guid: u64) -> Option<EventAiUnit> {
         if let Some(c) = self.creatures.borrow().get(&guid) {
             return Some(EventAiUnit {
                 guid,
+                entry: c.entry,
                 x: c.at.x,
                 y: c.at.y,
                 z: c.at.z,
                 map_id: c.map_id,
                 instance_id: c.instance_id,
+                zone_id: 0,
                 health: c.health,
                 max_health: c.max_health,
+                power: c.power,
+                max_power: c.max_power,
+                power_type: lyracore_shared::packing::power_type::MANA,
                 level: c.level,
                 faction_template: c.faction_template,
                 dead: self.corpses.borrow().contains(&guid),
                 is_player: false,
+                orientation: c.orientation,
+                owner_guid: self.pet_owners.borrow().get(&guid).copied().unwrap_or(0),
             });
         }
         self.players
@@ -1303,19 +1443,40 @@ impl EventAiWorld for Scenario {
             .find(|p| p.guid == guid)
             .map(|p| EventAiUnit {
                 guid,
+                entry: 0,
                 x: p.at.x,
                 y: p.at.y,
                 z: p.at.z,
                 map_id: p.map_id,
                 instance_id: p.instance_id,
-                // A scenario player carries no health model, so a deficit scan never picks it.
-                health: 1,
-                max_health: 1,
+                zone_id: 0,
+                health: self
+                    .eventai_player_health
+                    .borrow()
+                    .get(&guid)
+                    .map_or(1, |vitals| vitals.0),
+                max_health: self
+                    .eventai_player_health
+                    .borrow()
+                    .get(&guid)
+                    .map_or(1, |vitals| vitals.1),
+                power: 100,
+                max_power: 100,
+                power_type: lyracore_shared::packing::power_type::MANA,
                 level: p.level,
                 faction_template: p.faction_template,
                 dead: p.dead,
                 is_player: true,
+                orientation: 0.0,
+                owner_guid: 0,
             })
+    }
+
+    fn eventai_spawner_guid(&self, creature_guid: u64) -> Option<u64> {
+        self.eventai_summon_expiry
+            .borrow()
+            .get(&creature_guid)
+            .map(|expiry| expiry.summoner_guid)
     }
 
     /// The world prunes by grid cell before its exact distance check; this Fake hands back the
@@ -1347,8 +1508,22 @@ impl EventAiWorld for Scenario {
         self.auras.borrow().contains(&(guid, spell_id))
     }
 
+    fn eventai_aura_stacks(&self, guid: u64, spell_id: u32) -> u32 {
+        u32::from(self.eventai_has_aura(guid, spell_id))
+    }
+
+    fn eventai_is_crowd_controlled(&self, guid: u64, _dispel_type: u32) -> bool {
+        self.frozen.borrow().contains(&guid)
+            || self.slowed.borrow().contains(&guid)
+            || self
+                .creatures
+                .borrow()
+                .get(&guid)
+                .is_some_and(|creature| creature.cannot_act)
+    }
+
     fn eventai_is_casting(&self, guid: u64) -> bool {
-        self.casting.borrow().contains(&guid)
+        self.casting.borrow().contains(&guid) || self.channeling.borrow().contains(&guid)
     }
 
     /// The scenario world has no faction table, so kinship is template equality, exactly the
@@ -1357,11 +1532,65 @@ impl EventAiWorld for Scenario {
         first == second
     }
 
+    fn eventai_factions_hostile(&self, first: u32, second: u32) -> bool {
+        self.at_war.borrow().contains(&(first, second))
+    }
+
+    fn eventai_line_of_sight(&self, first: &EventAiUnit, second: &EventAiUnit) -> bool {
+        !self.blind.borrow().contains(&(first.guid, second.guid))
+    }
+
+    fn eventai_spell_range(&self, spell_id: u32) -> Option<u32> {
+        Some(
+            self.eventai_spell_ranges
+                .borrow()
+                .get(&spell_id)
+                .copied()
+                .unwrap_or(u32::MAX),
+        )
+    }
+
+    fn eventai_spell_excludes_caster(&self, spell_id: u32) -> bool {
+        self.eventai_exclude_caster_spells
+            .borrow()
+            .contains(&spell_id)
+    }
+
     fn eventai_is_engaged(&self, guid: u64) -> bool {
         self.fights
             .borrow()
             .iter()
             .any(|fight| fight.attacker == guid || fight.victim == guid)
+    }
+
+    fn eventai_matches_predicate(&self, guid: u64, predicate: EventPredicate) -> bool {
+        match predicate {
+            EventPredicate::Always => true,
+            EventPredicate::Alliance => self
+                .players
+                .borrow()
+                .iter()
+                .any(|player| player.guid == guid),
+            EventPredicate::Horde => false,
+            EventPredicate::QuestTaken(quest) => self
+                .eventai_quests_taken
+                .borrow()
+                .contains(&(guid, quest.quest_entry)),
+        }
+    }
+
+    fn eventai_in_zone_or_area(&self, unit: &EventAiUnit, zone_or_area_id: u32) -> bool {
+        unit.zone_id == zone_or_area_id
+            || self.eventai_areas.borrow().get(&unit.guid) == Some(&zone_or_area_id)
+    }
+
+    fn eventai_combat_action_ready(&self, guid: u64) -> bool {
+        self.creatures
+            .borrow()
+            .get(&guid)
+            .is_some_and(|creature| !creature.cannot_act)
+            && !self.eventai_is_casting(guid)
+            && !self.is_routing(guid)
     }
 
     fn eventai_rout_ends_ms(&self, creature_guid: u64) -> Option<u32> {
@@ -1522,23 +1751,33 @@ impl EventAiWorld for Scenario {
         true
     }
 
-    fn eventai_begin_cast(
+    fn eventai_start_spell(
         &mut self,
         caster: &EventAiUnit,
         spell_id: u32,
-        target_guid: u64,
+        mode: SpellStartMode,
+        target: SpellCastTarget,
+        interrupt_previous: bool,
+        admission: SpellCasterAdmission,
     ) -> bool {
         if self.not_ready.borrow().contains(&spell_id) {
             return false;
         }
+        if interrupt_previous {
+            self.casting.borrow_mut().remove(&caster.guid);
+            self.channeling.borrow_mut().remove(&caster.guid);
+        }
+        self.eventai_spell_starts
+            .borrow_mut()
+            .push((mode, target, interrupt_previous, admission));
+        let target_guid = match target {
+            SpellCastTarget::Unit(guid) => guid,
+            SpellCastTarget::None | SpellCastTarget::CasterArea => 0,
+        };
         self.casts
             .borrow_mut()
             .push((caster.guid, spell_id, target_guid));
         true
-    }
-
-    fn eventai_interrupt_cast(&mut self, caster_guid: u64) {
-        self.casting.borrow_mut().remove(&caster_guid);
     }
 
     fn stamp_eventai_rout(&mut self, creature_guid: u64, ends_ms: u32) {
@@ -1610,18 +1849,26 @@ impl EventAiWorld for Scenario {
                 lifetime_ms: location.lifetime_ms,
                 remaining_ms: location.lifetime_ms,
                 last_checked_ms: self.now_micros.get() / 1_000,
+                summoner_guid: summoner.guid,
             },
         );
         eventai::evaluate(
             self,
             EventAiRequest::Edge(EventContext {
-                kind: EventKind::OnSpawn,
-                creature_guid: guid,
-                invoker_guid: None,
-                event_target_guid: None,
-                current_target_guid: None,
-                assisted: false,
-                now_ms: self.now_micros.get() / 1_000,
+                spawner_guid: Some(summoner.guid),
+                ..EventContext::empty(EventKind::OnSpawn, guid, self.now_micros.get() / 1_000)
+            }),
+        );
+        eventai::evaluate(
+            self,
+            EventAiRequest::Edge(EventContext {
+                invoker_guid: Some(guid),
+                creature_entry: Some(entry),
+                ..EventContext::empty(
+                    EventKind::OnSummoned,
+                    summoner.guid,
+                    self.now_micros.get() / 1_000,
+                )
             }),
         );
     }
@@ -1686,6 +1933,19 @@ impl IdleSink for Scenario {
         if let Some(c) = self.creatures.borrow_mut().get_mut(&guid) {
             c.wp_target = waypoint_id;
         }
+    }
+    fn reached_home(&mut self, guid: u64) {
+        if !self.eventai_returning_home.borrow_mut().remove(&guid) {
+            return;
+        }
+        eventai::evaluate(
+            self,
+            EventAiRequest::Edge(EventContext::empty(
+                EventKind::OnReachedHome,
+                guid,
+                self.now_micros.get() / 1_000,
+            )),
+        );
     }
     /// The one leg writer: ground-snap, relay, and start the spline the NEXT cycle advances along —
     /// the production writer's three jobs in one place, exactly as `emit_creature_leg` does them.
@@ -1796,13 +2056,12 @@ impl EngageSink for Scenario {
             player_never_swung: false,
         });
         let request = EventAiRequest::Edge(EventContext {
-            kind: EventKind::OnAggro,
-            creature_guid: creature,
             invoker_guid: Some(victim),
-            event_target_guid: Some(victim),
+            beneficiary_guid: Some(victim),
             current_target_guid: Some(victim),
             assisted: pull == Pull::Assisted,
-            now_ms: self.now_micros.get() / 1000,
+            engaged: true,
+            ..EventContext::empty(EventKind::OnAggro, creature, self.now_micros.get() / 1000)
         });
         eventai::evaluate(self, request);
     }
@@ -1848,7 +2107,9 @@ impl EngageSink for Scenario {
             .filter(|rule| {
                 !matches!(
                     rule.event,
-                    EventCondition::OnDeath | EventCondition::OnSpawn
+                    EventCondition::OnDeath(_)
+                        | EventCondition::OnSpawn(_)
+                        | EventCondition::TimedGeneric(_)
                 )
             })
             .map(|rule| rule.source_rule_id)
@@ -1859,7 +2120,9 @@ impl EngageSink for Scenario {
             .filter(|rule| {
                 matches!(
                     rule.event,
-                    EventCondition::OnDeath | EventCondition::OnSpawn
+                    EventCondition::OnDeath(_)
+                        | EventCondition::OnSpawn(_)
+                        | EventCondition::TimedGeneric(_)
                 )
             })
             .map(|rule| rule.source_rule_id)
@@ -1967,7 +2230,7 @@ impl CastSink for Scenario {
                     health: c.health,
                     max_health: c.max_health,
                     cannot_act: c.cannot_act || self.cc(f.attacker).0,
-                    casting: self.casting.borrow().contains(&f.attacker),
+                    casting: self.eventai_is_casting(f.attacker),
                 })
             })
             .collect()
@@ -1977,6 +2240,13 @@ impl CastSink for Scenario {
             return Vec::new();
         }
         self.rotations
+            .borrow()
+            .get(&guid)
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn creature_spell_list_of(&self, guid: u64) -> Vec<SpellOption> {
+        self.creature_spell_lists
             .borrow()
             .get(&guid)
             .cloned()
@@ -4906,6 +5176,7 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
                 ("aggro", 1),
                 ("assist", 0),
                 ("pet", 0),
+                ("eventai", 0),
                 ("cast", 1),
                 ("threat_retarget", 1),
                 ("chase", 1),
@@ -4915,7 +5186,6 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
                 ("combat_drop*", 0),
                 ("rout", 1),
                 ("fear", 0),
-                ("eventai", 0),
             ]
         ),
         "the engaged phases must cost one row per FIGHT and the idle phases one per AWAKE \
@@ -5039,7 +5309,9 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64) { let entities = ",
                 "self.ctx.db.game_world_entity(); if let Some(mut e) = ",
                 "entities.guid().find(guid) { e.wp_target = waypoint_id; ",
-                "entities.guid().update(e); } } fn commit_leg(&mut self, guid: u64, leg: Leg, ",
+                "entities.guid().update(e); } } fn reached_home(&mut self, guid: u64) { ",
+                "crate::creatures::eventai_on_reached_home(self.ctx, guid); } fn ",
+                "commit_leg(&mut self, guid: u64, leg: Leg, ",
                 "now_ms: u32) { if let Some(e) = ",
                 "self.ctx.db.game_world_entity().guid().find(guid) { tick::emit_creature_leg( ",
                 "self.ctx, e, leg.to, leg.z_fallback, leg.dur_ms, leg.gait == Gait::Run, ",
@@ -5071,17 +5343,9 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "line_of_sight(&self, looker: u64, at: Point) -> bool { self.ctx .db ",
                 ".game_world_entity() .guid() .find(looker) .is_none_or(|c| { ",
                 "crate::nav::has_los(self.ctx, c.map_id, (c.x, c.y, c.z), (at.x, at.y, at.z)) ",
-                "}) } fn engage(&mut self, creature: u64, victim: u64, pull: Pull) { let melee ",
-                "= self.ctx.db.game_melee_attack(); if ",
-                "melee.attacker_guid().find(creature).is_none() { melee.insert(MeleeAttack { ",
-                "attacker_guid: creature, target_guid: victim, last_swing_ms: 0, ",
-                "ranged_spell_id: 0, last_offhand_swing_ms: 0, rout_ends_ms: 0, ",
-                "pursuit_ends_ms: 0, leash_x: 0.0, leash_y: 0.0, }); } let entities = ",
-                "self.ctx.db.game_world_entity(); if let Some(mut c) = ",
-                "entities.guid().find(creature) { if c.target_guid != victim { c.target_guid = ",
-                "victim; entities.guid().update(c); } } crate::hooks::fire_on_aggro( self.ctx, ",
-                "&crate::hooks::AggroPayload { creature_guid: creature, target_guid: victim, ",
-                "assist: pull == Pull::Assisted, }, ); } fn engagements(&self) -> ",
+                "}) } fn engage(&mut self, creature: u64, victim: u64, pull: Pull) { ",
+                "crate::combat::arm_creature_engagement(self.ctx, creature, victim, pull == ",
+                "Pull::Assisted); } fn engagements(&self) -> ",
                 "Vec<Engagement> { let entities = self.ctx.db.game_world_entity(); self.ctx .db ",
                 ".game_melee_attack() .iter() .filter_map(|a| { let attacker = ",
                 "entities.guid().find(a.attacker_guid); let instance_id = attacker .as_ref() ",
@@ -5138,11 +5402,10 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
             "impl CastSink for CtxWorld<'_> {",
             concat!(
                 "{ fn casters(&self, scope: &TickScope) -> Vec<Caster> { let entities = ",
-                "self.ctx.db.game_world_entity(); let pending = ",
-                "self.ctx.db.game_pending_cast(); self.ctx .db .game_melee_attack() .iter() ",
+                "self.ctx.db.game_world_entity(); self.ctx .db .game_melee_attack() .iter() ",
                 ".filter_map(|row| { let c = tick::movable_creature(self.ctx, ",
                 "row.attacker_guid, scope)?; let guid = c.guid; let casting = ",
-                "pending.by_caster().filter(&guid).next().is_some(); Some(Caster { guid, ",
+                "crate::spell::is_non_melee_spell_casting(self.ctx, guid); Some(Caster { guid, ",
                 "victim: row.target_guid, victim_at: ",
                 "entities.guid().find(row.target_guid).map(|t| Point { x: t.x, y: t.y, z: t.z, ",
                 "}), level: c.level as u8, health: c.health, max_health: c.max_health, ",

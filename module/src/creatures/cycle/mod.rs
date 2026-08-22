@@ -175,6 +175,8 @@ pub(crate) trait IdleSink {
     fn roll(&self) -> u32;
     /// Move the route cursor to `waypoint_id` without moving the creature.
     fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64);
+    /// Complete a pending evade return after the creature enters its home radius.
+    fn reached_home(&mut self, guid: u64);
     /// Send the creature on `leg`: ground-snap the landing point, relay the leg to the clients that
     /// can see it, and stamp the move clock (plus the ETA gate for a held leg).
     fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32);
@@ -379,6 +381,11 @@ pub(crate) trait CastSink {
     fn casters(&self, scope: &TickScope) -> Vec<Caster>;
     /// This creature's authored rotation, in no particular order; empty for one with no rotation.
     fn rotation_of(&self, guid: u64) -> Vec<SpellOption>;
+    /// An independent Creature Spell List. The current world has no supplier, but EventAI casting
+    /// acceptance must not suppress one when a source adds it.
+    fn creature_spell_list_of(&self, _guid: u64) -> Vec<SpellOption> {
+        Vec::new()
+    }
     /// The single spell a creature with no rotation casts at its victim.
     fn lone_spell(&self, guid: u64) -> Option<u32>;
     /// Does this unit already carry `spell_id`'s aura? The missing-aura conditions read it.
@@ -641,8 +648,8 @@ pub(crate) trait CreatureWorld:
 /// ONE firing's complete behavior transition. The order below is load-bearing:
 ///   1. advance splines FIRST — every range read must see where a creature renders, not its leg end.
 ///   2. aggro and pet engagement before chase — a creature aggroed this sense tick closes the same
-///      tick; cast and threat retarget also precede chase (cast instead of close; move at the newly
-///      selected victim).
+///      tick; EventAI gets first casting authority, then compatibility casts and threat retarget
+///      precede chase (cast instead of close; move at the newly selected victim).
 ///   3. aggro before assist before combat entry — a pack answers a call raised this firing, and
 ///      every creature that pulled carries its combat flag before the firing ends.
 ///   4. chase before regen — regen's in-combat gate must see the still-engaged chaser.
@@ -679,7 +686,13 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.push(("aggro", seen as u64));
         rows.push(("assist", assist(w, &active, pulls) as u64));
         rows.push(("pet", pet_behavior(w, &tick, &pets) as u64));
-        // EventAI combat precedence extends at this call without changing the rotation itself.
+        rows.push((
+            "eventai",
+            w.evaluate_eventai(EventAiRequest::Cycle {
+                scope: &tick.scope,
+                active: &active,
+            }),
+        ));
         rows.push(("cast", cast(w, &tick.scope) as u64));
         rows.push(("threat_retarget", threat_retarget(w, &tick.scope) as u64));
     }
@@ -693,10 +706,15 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
     // EventAI combat precedence extends at this call without adding a second rout pass.
     rows.push(("rout", rout(w, &tick) as u64));
     rows.push(("fear", fear(w, &tick) as u64));
-    rows.push((
-        "eventai",
-        w.evaluate_eventai(EventAiRequest::Engaged(&tick.scope)),
-    ));
+    if !tick.sense {
+        rows.push((
+            "eventai",
+            w.evaluate_eventai(EventAiRequest::Cycle {
+                scope: &tick.scope,
+                active: &active,
+            }),
+        ));
+    }
     if global {
         w.run_package_passes();
     }
@@ -1172,6 +1190,7 @@ fn cast<W: CastSink + EngageSink>(w: &mut W, scope: &TickScope) -> usize {
             continue;
         }
         let mut rotation = w.rotation_of(c.guid);
+        rotation.extend(w.creature_spell_list_of(c.guid));
         let mut candidates: Vec<(u32, u64)> = if rotation.is_empty() {
             match w.lone_spell(c.guid) {
                 Some(spell_id) => vec![(spell_id, c.victim)],
@@ -1534,6 +1553,7 @@ fn idle_movement<W: IdleSink + MotionSink>(
         if hdx * hdx + hdy * hdy > RETURN_LEASH_SQ {
             walk_home(w, tick, &c, home);
         } else if tick.sense {
+            w.reached_home(c.guid);
             loiter(w, tick, &c, home);
         }
     }
