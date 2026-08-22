@@ -566,6 +566,30 @@ q_list() { # <query> — like n() but returns the MATCHING NUMERIC LINES themsel
   if [ "$status" -ne 0 ]; then sql_note_failure "$out"; return 0; fi
   printf '%s\n' "$out" | grep -oE '^ *[0-9]+ *$' | tr -d ' '
 }
+# SQL TABLE PULL BEGIN — extracted by import-manifest-smoke.sh.
+q_table() { # <query> — like q_list but for a MULTI-column SELECT: one space-separated line per
+            # ALL-NUMERIC result row (the header, the rule line, and any row holding a non-numeric
+            # cell are dropped), same failure handling. It exists so a check can pull a whole column
+            # set in ONE `spacetime sql` and do its grouping in awk, instead of spawning a
+            # subprocess per row. See verify_eventai_catalogue.
+  local out status
+  out="$(q "$1" 2>&1)"; status=$?
+  if [ "$status" -ne 0 ]; then sql_note_failure "$out"; return 0; fi
+  printf '%s\n' "$out" | awk -F'|' '
+    { sub(/^[[:space:]|]+/, ""); sub(/[[:space:]|]+$/, "") }
+    NF == 0 { next }
+    {
+      numeric = 1
+      row = ""
+      for (i = 1; i <= NF; i++) {
+        gsub(/[[:space:]]/, "", $i)
+        if ($i !~ /^[0-9]+$/) { numeric = 0; break }
+        row = row (i > 1 ? " " : "") $i
+      }
+      if (numeric) print row
+    }'
+}
+# SQL TABLE PULL END
 quest_giver_levels_in_band() { # creature-entry low high
   local entry="$1" low="$2" high="$3" quest level matched=0
   for quest in $(q_list "SELECT quest_entry FROM game_creature_quest WHERE creature_entry = $entry"); do
@@ -592,67 +616,102 @@ verify_caster_spell_catalogue() {
     fail=1
   fi
 }
-verify_eventai_catalogue() {
-  local rule action order values entry guid spell text summon kind option duplicate=0 mismatch=0 missing=0 unsupported=0
-  rule="$(n "SELECT source_rule_id FROM game_creature_ai_event WHERE source_rule_id > 0")"
+# EVENTAI VERIFY BEGIN — extracted by import-manifest-smoke.sh.
+# The native values the Module accepts in game_creature_ai_event. Declared once and read by the
+# checks below, so the verifier has no second copy to drift from.
+# `cargo test -p lyracore-importer eventai_verifier` pins every set here against the importer's own
+# NATIVE_* constants: a value the importer emits that the verifier then calls unsupported is a
+# silent, import-time-only failure otherwise.
+# SUPPORTED NATIVE VALUES BEGIN
+EVENTAI_EVENT_TYPES='0|1|2|3|4|5|6'
+EVENTAI_ACTION_TYPES='0|1|2|3|4|5|6|7|8'
+EVENTAI_TARGET_POLICIES='0|1|2|3|4|5|6|7|8|9|10'
+EVENTAI_REPEAT_POLICIES='0|1'
+EVENTAI_SOURCE_FLAGS_MASK=3
+EVENTAI_CAST_OPTIONS_MASK=31
+# SUPPORTED NATIVE VALUES END
+unresolved_references() { # <referenced-ids> <catalogue-ids> — how many referenced ids have no row
+  comm -23 \
+    <(printf '%s\n' "$1" | grep -E '^[0-9]+$' | sort -u) \
+    <(printf '%s\n' "$2" | grep -E '^[0-9]+$' | sort -u) | grep -c '^'
+}
+verify_eventai_catalogue() { # O(1) `spacetime sql` calls: six, whatever the rule count is. One pull
+      # per column set, then the per-rule grouping and the reference checks run locally. Column order
+      # below IS the awk field order, so keep the SELECT list and the field numbers in step.
+  local events kind count rule grouped duplicate=0 mismatch=0 missing=0 unsupported=0
+  local templates spawns spells texts summons referenced
+  events="$(q_table "SELECT source_rule_id, action_order, event_type, action_type, target_policy, repeat_policy, source_flags, cast_options, chance_pct, allowed_phase_mask, creature_entry, creature_guid, spell_id, action_param_1, action_param_2, action_param_3, event_param_1, event_param_2, event_param_3, event_param_4, event_param_5, event_param_6 FROM game_creature_ai_event")"
+  rule="$(printf '%s\n' "$events" | awk 'NF && $1 > 0 { rows++ } END { print rows + 0 }')"
   if [ "$rule" -eq 0 ]; then
     echo "  ..    EventAI: no supported source rules in this World Import Scope"
     return 0
   fi
   chk "EventAI source rule actions" 1 "$rule"
-  for kind in $(q_list "SELECT event_type FROM game_creature_ai_event" | sort -u); do
-    case "$kind" in
-      0|1|2|3|4|5|6) chk "EventAI enabled event type $kind" 1 "$(n "SELECT id FROM game_creature_ai_event WHERE event_type = $kind")" ;;
+  while read -r kind count; do
+    [ -n "$kind" ] || continue
+    case "|$EVENTAI_EVENT_TYPES|" in
+      *"|$kind|"*) chk "EventAI enabled event type $kind" 1 "$count" ;;
       *) unsupported=$((unsupported + 1)) ;;
     esac
-  done
-  for kind in $(q_list "SELECT action_type FROM game_creature_ai_event" | sort -u); do
-    case "$kind" in
-      0|1|2|3|4|5|6|7|8) chk "EventAI enabled action type $kind" 1 "$(n "SELECT id FROM game_creature_ai_event WHERE action_type = $kind")" ;;
+  done <<EOF
+$(printf '%s\n' "$events" | awk 'NF { rows[$3]++ } END { for (kind in rows) print kind, rows[kind] }' | sort -n)
+EOF
+  while read -r kind count; do
+    [ -n "$kind" ] || continue
+    case "|$EVENTAI_ACTION_TYPES|" in
+      *"|$kind|"*) chk "EventAI enabled action type $kind" 1 "$count" ;;
       *) unsupported=$((unsupported + 1)) ;;
     esac
+  done <<EOF
+$(printf '%s\n' "$events" | awk 'NF { rows[$4]++ } END { for (kind in rows) print kind, rows[kind] }' | sort -n)
+EOF
+  for kind in $(printf '%s\n' "$events" | awk 'NF { print $5 }' | sort -nu); do
+    case "|$EVENTAI_TARGET_POLICIES|" in *"|$kind|"*) ;; *) unsupported=$((unsupported + 1)) ;; esac
   done
-  for kind in $(q_list "SELECT target_policy FROM game_creature_ai_event" | sort -u); do
-    case "$kind" in 0|1|2|3|4|5|6|7|8|9|10) ;; *) unsupported=$((unsupported + 1)) ;; esac
+  for kind in $(printf '%s\n' "$events" | awk 'NF { print $6 }' | sort -nu); do
+    case "|$EVENTAI_REPEAT_POLICIES|" in *"|$kind|"*) ;; *) unsupported=$((unsupported + 1)) ;; esac
   done
-  for kind in $(q_list "SELECT repeat_policy FROM game_creature_ai_event" | sort -u); do
-    case "$kind" in 0|1) ;; *) unsupported=$((unsupported + 1)) ;; esac
+  for kind in $(printf '%s\n' "$events" | awk 'NF { print $7 }' | sort -nu); do
+    [ $((kind & ~EVENTAI_SOURCE_FLAGS_MASK)) -eq 0 ] || unsupported=$((unsupported + 1))
   done
-  for option in $(q_list "SELECT source_flags FROM game_creature_ai_event" | sort -u); do
-    [ $((option & ~3)) -eq 0 ] || unsupported=$((unsupported + 1))
+  for kind in $(printf '%s\n' "$events" | awk 'NF { print $8 }' | sort -nu); do
+    [ $((kind & ~EVENTAI_CAST_OPTIONS_MASK)) -eq 0 ] || unsupported=$((unsupported + 1))
   done
-  for option in $(q_list "SELECT cast_options FROM game_creature_ai_event" | sort -u); do
-    [ $((option & ~29)) -eq 0 ] || unsupported=$((unsupported + 1))
-  done
-  for entry in $(q_list "SELECT creature_entry FROM game_creature_ai_event WHERE creature_entry > 0" | sort -u); do
-    [ "$(n "SELECT entry FROM game_creature_template WHERE entry = $entry")" -gt 0 ] || missing=1
-  done
-  for guid in $(q_list "SELECT creature_guid FROM game_creature_ai_event WHERE creature_guid > 0" | sort -u); do
-    [ "$(n "SELECT guid FROM game_creature_spawn WHERE guid = $guid")" -gt 0 ] || missing=1
-  done
-  for spell in $(q_list "SELECT spell_id FROM game_creature_ai_event WHERE spell_id > 0" | sort -u); do
-    [ "$(n "SELECT spell_id FROM game_spell WHERE spell_id = $spell")" -gt 0 ] || missing=1
-  done
-  for text in $( {
-    q_list "SELECT action_param_1 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_1 > 0"
-    q_list "SELECT action_param_2 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_2 > 0"
-    q_list "SELECT action_param_3 FROM game_creature_ai_event WHERE action_type = 0 AND action_param_3 > 0"
-  } | sort -u); do
-    [ "$(n "SELECT id FROM game_creature_ai_broadcast_text WHERE id = $text")" -gt 0 ] || missing=1
-  done
-  for entry in $(q_list "SELECT action_param_1 FROM game_creature_ai_event WHERE action_type = 7 AND action_param_1 > 0" | sort -u); do
-    [ "$(n "SELECT entry FROM game_creature_template WHERE entry = $entry")" -gt 0 ] || missing=1
-  done
-  for summon in $(q_list "SELECT action_param_3 FROM game_creature_ai_event WHERE action_type = 7 AND action_param_3 > 0" | sort -u); do
-    [ "$(n "SELECT id FROM game_creature_ai_summon WHERE id = $summon")" -gt 0 ] || missing=1
-  done
-  for rule in $(q_list "SELECT source_rule_id FROM game_creature_ai_event WHERE source_rule_id > 0" | sort -u); do
-    order="$(q_list "SELECT action_order FROM game_creature_ai_event WHERE source_rule_id = $rule")"
-    duplicate=$((duplicate + $(printf '%s\n' "$order" | sort | uniq -d | wc -l)))
-    for values in chance_pct allowed_phase_mask source_flags repeat_policy event_param_1 event_param_2 event_param_3 event_param_4 event_param_5 event_param_6 creature_entry creature_guid event_type; do
-      [ "$(q_list "SELECT $values FROM game_creature_ai_event WHERE source_rule_id = $rule" | sort -u | wc -l)" -le 1 ] || mismatch=$((mismatch + 1))
-    done
-  done
+  templates="$(q_table "SELECT entry FROM game_creature_template")"
+  spawns="$(q_table "SELECT guid FROM game_creature_spawn")"
+  spells="$(q_table "SELECT spell_id FROM game_spell")"
+  texts="$(q_table "SELECT id FROM game_creature_ai_broadcast_text")"
+  summons="$(q_table "SELECT id FROM game_creature_ai_summon")"
+  referenced="$(printf '%s\n' "$events" | awk 'NF && $11 > 0 { print $11 }')"
+  [ "$(unresolved_references "$referenced" "$templates")" -eq 0 ] || missing=1
+  referenced="$(printf '%s\n' "$events" | awk 'NF && $12 > 0 { print $12 }')"
+  [ "$(unresolved_references "$referenced" "$spawns")" -eq 0 ] || missing=1
+  referenced="$(printf '%s\n' "$events" | awk 'NF && $13 > 0 { print $13 }')"
+  [ "$(unresolved_references "$referenced" "$spells")" -eq 0 ] || missing=1
+  referenced="$(printf '%s\n' "$events" | awk 'NF && $4 == 0 { for (i = 14; i <= 16; i++) if ($i > 0) print $i }')"
+  [ "$(unresolved_references "$referenced" "$texts")" -eq 0 ] || missing=1
+  referenced="$(printf '%s\n' "$events" | awk 'NF && $4 == 7 && $14 > 0 { print $14 }')"
+  [ "$(unresolved_references "$referenced" "$templates")" -eq 0 ] || missing=1
+  referenced="$(printf '%s\n' "$events" | awk 'NF && $4 == 7 && $16 > 0 { print $16 }')"
+  [ "$(unresolved_references "$referenced" "$summons")" -eq 0 ] || missing=1
+  # Every row of one source rule repeats that rule's event and grouping columns; two rows disagreeing
+  # means the reload interleaved rules, and two rows sharing an action_order means one was lost.
+  grouped="$(printf '%s\n' "$events" | awk '
+    # event_type, repeat_policy, source_flags, chance_pct, allowed_phase_mask, creature_entry,
+    # creature_guid, event_param_1..6: every column that describes the RULE, not the action.
+    BEGIN { split("3 6 7 9 10 11 12 17 18 19 20 21 22", grouped_columns, " ") }
+    NF && $1 > 0 {
+      if (++orders[$1 SUBSEP $2] == 2) duplicate++
+      for (slot in grouped_columns) {
+        column = grouped_columns[slot]
+        key = $1 SUBSEP column
+        if (!(key in first)) first[key] = $column
+        else if (first[key] != $column && !(key in flagged)) { flagged[key] = 1; mismatch++ }
+      }
+    }
+    END { print duplicate + 0, mismatch + 0 }')"
+  duplicate="${grouped%% *}"
+  mismatch="${grouped##* }"
   sql_check_abort
   if [ "$duplicate" -ne 0 ] || [ "$mismatch" -ne 0 ] || [ "$missing" -ne 0 ] || [ "$unsupported" -ne 0 ]; then
     echo "  FAIL  EventAI linkage: duplicate-action-orders=$duplicate metadata-mismatches=$mismatch missing-references=$missing unsupported-native-values=$unsupported"
@@ -661,6 +720,7 @@ verify_eventai_catalogue() {
     echo "  ok    EventAI enabled types, grouping, subjects, spells, texts, and summon locations resolve"
   fi
 }
+# EVENTAI VERIFY END
 verify_alliance_creation_data() {
   chk "Human start positions (all 6 classes, map 0)" "$FLOOR_HUMAN_START_POSITIONS" "$(n "SELECT race_class FROM game_start_position WHERE race=1 AND map_id=0")"
   chk "Dwarf start positions (all 5 classes, map 0)" "$FLOOR_DWARF_START_POSITIONS" "$(n "SELECT race_class FROM game_start_position WHERE race=3 AND map_id=0")"

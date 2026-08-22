@@ -215,6 +215,35 @@ fn a_summon_inherits_partition_fires_spawn_once_and_engages() {
 }
 
 #[test]
+fn a_summon_guid_carries_the_entry_and_the_first_sequence_of_the_eventai_band() {
+    let summon = row(
+        509_0310,
+        509_0310,
+        0,
+        ENTRY,
+        EVENT_ON_AGGRO,
+        ACTION_SUMMON,
+        [SUMMON_ENTRY, 1, 10],
+    );
+    let mut scenario = world()
+        .eventai_template(SUMMON_ENTRY)
+        .eventai_summon(10, point(5.0, 0.0), 0.0, 1_000)
+        .eventai_row(summon);
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+
+    let summoned_guids = scenario.eventai_summoned_guids();
+    let [summoned] = summoned_guids.as_slice() else {
+        panic!("expected one summon");
+    };
+    // The wave-guid layout: the template entry in the high 24 bits of the low 48, the low 24 bits
+    // for the band and sequence. The EventAI band is 0x40_0000 and this world's first summon takes
+    // sequence 1.
+    assert_eq!((summoned >> 24) & 0xFF_FFFF, u64::from(SUMMON_ENTRY));
+    assert_eq!(summoned & 0xFF_FFFF, 0x40_0000 | 1);
+}
+
+#[test]
 fn summon_lifetime_waits_out_combat_then_uses_full_cleanup() {
     let mut summon = row(
         509_0306,
@@ -293,4 +322,44 @@ fn missing_summon_catalogue_or_template_fails_without_a_partial_creature() {
         .eventai_row(summon);
     EngageSink::engage(&mut missing_template, CREATURE, TARGET, Pull::Noticed);
     assert!(missing_template.eventai_summoned_guids().is_empty());
+}
+
+#[test]
+fn a_creature_standing_on_its_authored_hold_point_turns_to_its_victim() {
+    // Placed exactly where the 10 yd / 90° posture holds it, looking the other way: the shape a
+    // victim who ran a quarter circle around it leaves behind.
+    let mut scenario = Scenario::new(1_000_000)
+        .creature(CREATURE, point(20.0, 10.0))
+        .entry(CREATURE, ENTRY)
+        .player(TARGET, point(20.0, 0.0))
+        .facing(CREATURE, std::f32::consts::FRAC_PI_2)
+        .eventai_row(row(
+            509_0309,
+            509_0309,
+            0,
+            ENTRY,
+            EVENT_ON_AGGRO,
+            ACTION_SET_RANGED_POSTURE,
+            [10, 90, 0],
+        ));
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+    fire(&mut scenario, false);
+
+    let effects = scenario.effects();
+    assert_eq!(
+        effects
+            .iter()
+            .map(|effect| (effect.dur_ms, effect.facing))
+            .collect::<Vec<_>>(),
+        [(0, true)],
+        "arriving at an authored hold point is an arrival like reaching melee: a creature that only \
+         ever stops there renders with its back to what it is shooting at"
+    );
+    assert!((effects[0].facing_angle + std::f32::consts::FRAC_PI_2).abs() < 0.01);
+    assert_eq!(
+        scenario.at(CREATURE).at,
+        point(20.0, 10.0),
+        "the turn must not move it off the hold point"
+    );
 }

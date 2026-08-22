@@ -213,7 +213,7 @@ duplicated on every shard by design.
 `--family creature-ai` imports the supported CMaNGOS `creature_ai_scripts` rules into the Module-only
 EventAI tables. It clears and reloads `game_creature_ai_event`,
 `game_creature_ai_broadcast_text`, and `game_creature_ai_summon`. It does not clear creature EventAI
-state, rule state, or timer rows.
+state or rule state rows.
 
 One accepted source rule becomes one to three ordered static rows. The row id is
 `0x4000_0000_0000_0000 | (source_rule_id << 2) | action_order`; this keeps imported ids outside the
@@ -230,6 +230,8 @@ bit 0. Event parameters map as follows:
 The importer accepts timed combat, HP, aggro, death, range, spawn, and friendly-HP events. It accepts
 text, text-new, emote, cast, phase, flee, call-for-help, summon, and ranged-movement actions. Positive
 subjects must be in the World Import Scope. Negative subjects resolve through the imported spawn guid.
+Each row names its creature by template entry or by spawn guid, never both: a guid-scoped rule emits
+`creature_entry` 0, because the Module refuses a row that sets both columns.
 Accepted summon templates enlarge the scope to a fixpoint, so a summoned creature can bring its own
 EventAI dependencies. The importer carries current broadcast text and supported legacy negative
 `script_texts` ids. It reads both the compact 12-column and current 17-column broadcast-text
@@ -265,13 +267,18 @@ lookup, rather than being represented as a direct broadcast.
 
 Operator verification needs the exact dump identity supplied for the import, including its resolved
 classic-db commit. On current z2815 data, verify Hogger speech and timed casts, Goldtooth's HP-based
-flee, and one nearby creature with no authored EventAI rules. The last creature must keep the same
+flee, and one nearby creature with no authored EventAI rules. Goldtooth must break off and run at the
+health band its rule states, not at the fixed 15% flee threshold, and the fixed flee must not fire as
+well. An authored flee replaces the fixed one. The last creature must keep the same
 cycle outcome, durable state, and emitted effects as it had before this family was imported. This is a
 dev-node and real-client check. Do not treat importer unit tests as a substitute for it.
 
 The shell preflight accepts any subset of supported event and action types because each World Import
 Scope contains different creatures. It prints and checks every type present in the destination. It
-does not require absent families to be fabricated to meet a global count floor.
+does not require absent families to be fabricated to meet a global count floor. It pulls each column
+set it needs in one query and groups the rows locally, so it costs six queries for any rule count.
+The native values it accepts are declared once in the script and pinned to the importer's constants
+by an importer test.
 
 The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
 the other client tables. It validates every endpoint/path reference and every `(path, node_index)`

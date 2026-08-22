@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    CreatureAiBroadcastText, CreatureAiEvent, ACTION_CAST, ACTION_SAY, ACTION_YELL, EVENT_ON_AGGRO,
-    EVENT_TIMED_IN_COMBAT, REPEAT, REPEAT_ONCE, TARGET_CURRENT,
+    effective_rule_id, CreatureAiBroadcastText, CreatureAiEvent, ACTION_CAST, ACTION_SAY,
+    ACTION_YELL, EVENT_ON_AGGRO, EVENT_TIMED_IN_COMBAT, REPEAT, REPEAT_ONCE, TARGET_CURRENT,
 };
-use crate::{game_creature_ai_broadcast_text, game_creature_ai_event};
+use crate::{game_creature_ai_broadcast_text, game_creature_ai_event, game_creature_ai_rule_state};
 
 const FIRST_RULE_ID: u64 = 5_099_000;
 const FIRST_TEXT_ID: u32 = 5_099_100;
@@ -22,15 +24,28 @@ const BOSS_CASTS: [(u32, u32, u32, u32, u32, u32); 6] = [
     (646, 6432, 6_000, 10_000, 12_000, 17_000),
 ];
 
+/// Write the fixture barks and boss casts, replacing every rule a seeded entry already has.
+/// Reseeding on top of an imported world is the point: entry 644 must end with ONE Slam rule, not
+/// the fixture's plus the importer's on independent timers. Live rule state for the cleared rules
+/// goes with them, so no creature keeps a window belonging to a rule that no longer exists.
 pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
     let rules = ctx.db.game_creature_ai_event();
-    for id in FIRST_RULE_ID..=FIRST_RULE_ID + 8 {
-        rules.id().delete(id);
-    }
-    // Remove the auto-increment fixture rows written by the previous schema without touching
-    // imported native rules.
-    for row in rules.iter().filter(is_previous_fixture).collect::<Vec<_>>() {
+    let mut cleared: HashSet<u64> = HashSet::new();
+    for row in rules
+        .iter()
+        .filter(|row| is_seeded_entry(row.creature_entry))
+        .collect::<Vec<_>>()
+    {
+        cleared.insert(effective_rule_id(&row));
         rules.id().delete(row.id);
+    }
+    let rule_state = ctx.db.game_creature_ai_rule_state();
+    for state in rule_state
+        .iter()
+        .filter(|state| cleared.contains(&state.source_rule_id))
+        .collect::<Vec<_>>()
+    {
+        rule_state.id().delete(state.id);
     }
 
     let texts = ctx.db.game_creature_ai_broadcast_text();
@@ -78,28 +93,11 @@ pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
     }
 }
 
-fn is_previous_fixture(row: &CreatureAiEvent) -> bool {
-    if row.source_rule_id != 0 || row.creature_guid != 0 {
-        return false;
-    }
-    BARKS.iter().any(|&(entry, action, message)| {
-        row.creature_entry == entry
-            && row.event_type == EVENT_ON_AGGRO
-            && row.action_type == action
-            && row.text == message
-            && row.spell_id == 0
-    }) || BOSS_CASTS.iter().any(
-        |&(entry, spell, initial_min, initial_max, repeat_min, repeat_max)| {
-            row.creature_entry == entry
-                && row.event_type == EVENT_TIMED_IN_COMBAT
-                && row.action_type == ACTION_CAST
-                && row.spell_id == spell
-                && row.initial_min_ms == initial_min
-                && row.initial_max_ms == initial_max
-                && row.repeat_min_ms == repeat_min
-                && row.repeat_max_ms == repeat_max
-        },
-    )
+/// Does this fixture set own every rule for `entry`? True for the barks and the boss casts alike,
+/// whatever wrote them: a hand-seeded row, a row from the previous schema, or an imported one.
+fn is_seeded_entry(entry: u32) -> bool {
+    BARKS.iter().any(|&(seeded, ..)| seeded == entry)
+        || BOSS_CASTS.iter().any(|&(seeded, ..)| seeded == entry)
 }
 
 fn native_row(
@@ -152,6 +150,31 @@ pub fn debug_seed_creature_ai_fixtures(ctx: &ReducerContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_scan::code_of;
+
+    /// Reseeding on top of an imported world must leave ONE Slam rule for Rhahk'Zor, not the
+    /// fixture's plus the importer's on independent timers. The clear keys on the ENTRY, so it
+    /// reaches an imported row whatever id or source rule it carries.
+    #[test]
+    fn every_seeded_entry_is_cleared_whoever_wrote_its_rules() {
+        assert!(is_seeded_entry(644)); // Rhahk'Zor, whose Slam the importer also writes
+        for (entry, ..) in BARKS {
+            assert!(is_seeded_entry(entry));
+        }
+        for (entry, ..) in BOSS_CASTS {
+            assert!(is_seeded_entry(entry));
+        }
+        assert!(!is_seeded_entry(1));
+
+        let body = code_of(
+            include_str!("fixtures.rs"),
+            "pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {",
+        );
+        assert!(
+            body.contains("is_seeded_entry(row.creature_entry)"),
+            "the seed no longer clears every rule a seeded entry already has"
+        );
+    }
 
     #[test]
     fn static_fixture_ids_are_explicit_and_reserved() {

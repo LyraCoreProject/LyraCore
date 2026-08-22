@@ -143,7 +143,7 @@ fn direct_aggro_speaks_once_and_assisted_aggro_keeps_casts() {
 }
 
 #[test]
-fn an_edge_chance_miss_is_consumed_even_when_the_source_repeats() {
+fn a_chance_miss_costs_the_opportunity_and_not_the_rule() {
     let mut scenario = scenario()
         .eventai_broadcast(4, "late", 0)
         .eventai_row(row(
@@ -157,13 +157,102 @@ fn an_edge_chance_miss_is_consumed_even_when_the_source_repeats() {
             REPEAT,
             [4, 0, 0],
         ))
-        .rolls([50]);
+        .rolls([50, 49]);
 
-    edge(&mut scenario, EventKind::OnSpawn, false);
     edge(&mut scenario, EventKind::OnSpawn, false);
 
     assert!(scenario.eventai_speech().is_empty());
-    assert!(scenario.eventai_state(CREATURE, 4).unwrap().consumed);
+    assert!(scenario.eventai_state(CREATURE, 4).is_none());
+
+    edge(&mut scenario, EventKind::OnSpawn, false);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "late".to_string())]
+    );
+}
+
+#[test]
+fn an_inverted_repeat_window_is_refused_instead_of_rolled() {
+    let mut inverted = row(
+        20,
+        20,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_SAY,
+        100,
+        1,
+        REPEAT,
+        [20, 0, 0],
+    );
+    inverted.event_param_2 = 100;
+    inverted.event_param_3 = 5_000;
+    inverted.event_param_4 = 4_000;
+    let mut scenario = scenario()
+        .eventai_broadcast(20, "hurt", 0)
+        .eventai_row(inverted);
+
+    edge(&mut scenario, EventKind::CreatureHp, false);
+
+    assert!(scenario.eventai_speech().is_empty());
+    assert_eq!(
+        scenario
+            .eventai_diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.kind)
+            .collect::<Vec<_>>(),
+        vec![DiagnosticKind::InvalidWindow]
+    );
+}
+
+#[test]
+fn a_dead_creature_says_nothing() {
+    let mut scenario = scenario()
+        .slain(CREATURE)
+        .eventai_broadcast(21, "silent", 0)
+        .eventai_row(row(
+            21,
+            21,
+            0,
+            EVENT_ON_AGGRO,
+            ACTION_SAY,
+            100,
+            1,
+            REPEAT_ONCE,
+            [21, 0, 0],
+        ));
+
+    edge(&mut scenario, EventKind::OnAggro, false);
+
+    assert!(scenario.eventai_speech().is_empty());
+}
+
+#[test]
+fn an_overlong_line_is_capped_like_any_other_chat() {
+    let mut scenario = scenario()
+        .eventai_broadcast(22, &"a".repeat(400), 0)
+        .eventai_row(row(
+            22,
+            22,
+            0,
+            EVENT_ON_AGGRO,
+            ACTION_SAY,
+            100,
+            1,
+            REPEAT_ONCE,
+            [22, 0, 0],
+        ));
+
+    edge(&mut scenario, EventKind::OnAggro, false);
+
+    // Vanilla caps client chat input around 255 characters; the stored row is bounded to match.
+    assert_eq!(
+        scenario
+            .eventai_speech()
+            .first()
+            .map(|(_, _, line)| line.chars().count()),
+        Some(255)
+    );
 }
 
 #[test]

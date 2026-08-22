@@ -376,6 +376,130 @@ fn target_policies_choose_the_expected_actor() {
 }
 
 #[test]
+fn ranked_threat_orders_by_threat_and_breaks_a_tie_on_the_lower_guid() {
+    let third_target = SECOND_TARGET + 1;
+    let mut top = row(
+        509_0230,
+        509_0230,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [230, 0, 0],
+    );
+    top.target_policy = TARGET_TOP_THREAT;
+    let mut second = row(
+        509_0231,
+        509_0230,
+        1,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [231, 0, 0],
+    );
+    second.target_policy = TARGET_SECOND_THREAT;
+    let mut scenario = world()
+        .player(SECOND_TARGET, point(6.0))
+        .player(third_target, point(9.0))
+        .threat(CREATURE, TARGET, 50)
+        .threat(CREATURE, SECOND_TARGET, 90)
+        .threat(CREATURE, third_target, 90)
+        .eventai_row(top)
+        .eventai_row(second);
+
+    fire(&mut scenario);
+
+    assert_eq!(
+        scenario.casts(),
+        vec![
+            (CREATURE, 230, SECOND_TARGET),
+            (CREATURE, 231, third_target)
+        ],
+        "the list runs highest threat first, and a tied pair keeps the lower guid ahead"
+    );
+}
+
+#[test]
+fn nearest_area_picks_the_closest_threat_holder_not_the_top_threat() {
+    let mut action = row(
+        509_0232,
+        509_0232,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [232, 0, 0],
+    );
+    action.target_policy = TARGET_NEAREST_AREA;
+    let mut scenario = world()
+        .player(SECOND_TARGET, point(6.0))
+        .threat(CREATURE, TARGET, 10)
+        .threat(CREATURE, SECOND_TARGET, 200)
+        .eventai_row(action);
+
+    fire(&mut scenario);
+
+    assert_eq!(scenario.casts(), vec![(CREATURE, 232, TARGET)]);
+}
+
+#[test]
+fn farthest_hostile_skips_a_target_inside_melee_reach() {
+    let mut action = row(
+        509_0233,
+        509_0233,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_CAST,
+        REPEAT_ONCE,
+        [0, 100, 0, 0, 0, 0],
+        [233, 0, 0],
+    );
+    action.target_policy = TARGET_FARTHEST_HOSTILE;
+    let mut scenario = world().threat(CREATURE, TARGET, 100).eventai_row(action);
+
+    fire(&mut scenario);
+
+    assert!(
+        scenario.casts().is_empty(),
+        "a knockback-shaped cast aimed at the farthest hostile must never land on the victim \
+         already standing in melee reach"
+    );
+}
+
+#[test]
+fn call_for_help_recruits_only_inside_its_authored_radius() {
+    let near_friend = CREATURE + 30;
+    let far_friend = CREATURE + 31;
+    let mut scenario = world()
+        .creature(near_friend, point(6.0))
+        .entry(near_friend, ENTRY + 30)
+        .creature(far_friend, point(20.0))
+        .entry(far_friend, ENTRY + 31)
+        .eventai_row(row(
+            509_0234,
+            509_0234,
+            0,
+            EVENT_CREATURE_HP,
+            ACTION_CALL_FOR_HELP,
+            REPEAT_ONCE,
+            [0, 100, 0, 0, 0, 0],
+            [8, 0, 0],
+        ));
+
+    fire(&mut scenario);
+
+    let pulls = scenario.pulls.borrow().clone();
+    assert!(pulls.contains(&(near_friend, TARGET, Pull::Assisted)));
+    assert!(
+        !pulls.iter().any(|(helper, _, _)| *helper == far_friend),
+        "a friend beyond the authored radius hears nothing"
+    );
+}
+
+#[test]
 fn ranked_random_casts_filter_ineligible_targets_before_selection() {
     let mut action = row(
         509_0220,
@@ -490,22 +614,77 @@ fn interrupt_previous_replaces_a_pending_cast() {
 }
 
 #[test]
-fn flee_for_assist_opens_the_existing_rout_window_without_writing_a_leg() {
-    let mut scenario = world().eventai_row(row(
+fn an_authored_flee_runs_a_creature_the_fixed_rout_would_leave_standing() {
+    // A beast at 30% health: below no flee threshold and of a kind that fights to the death, so
+    // nothing but the authored rule can break it off.
+    let mut scenario = world().hurt(CREATURE, 30).eventai_row(row(
         509_0211,
         509_0211,
         0,
         EVENT_CREATURE_HP,
         ACTION_FLEE_FOR_ASSIST,
         REPEAT_ONCE,
-        [0, 100, 0, 0, 0, 0],
+        [0, 30, 0, 0, 0, 0],
         [0; 3],
     ));
 
     fire(&mut scenario);
+    assert!(
+        scenario.rout_ends_ms(CREATURE) > 0,
+        "the authored action is the only thing that can open this creature's rout window"
+    );
 
-    assert!(scenario.rout_ends_ms(CREATURE) > 0);
-    assert!(!scenario.has_leg(CREATURE));
+    // The rout pass runs BEFORE the eventai pass in the firing order, so the window opened above is
+    // read on the next firing.
+    fire(&mut scenario);
+
+    let legs = scenario.effects();
+    assert_eq!(
+        legs.len(),
+        1,
+        "an authored flee that stamps a window nothing then reads leaves the creature standing in \
+         melee, which is the fixed rout's own gate deciding a fight the script owns"
+    );
+    assert!(
+        legs[0].dest.x < 0.0,
+        "the leg must run AWAY from the victim it is breaking off from"
+    );
+}
+
+#[test]
+fn a_repeat_authored_flee_runs_the_creature_again_later_in_the_fight() {
+    // The rule repeats every 15 s and each rout window runs 10 s, so the second firing lands on a
+    // window that is stamped but SPENT. It must re-stamp rather than treat the spent window as the
+    // fixed rout's once per Engagement.
+    let mut scenario = world().hurt(CREATURE, 30).eventai_row(row(
+        509_0214,
+        509_0214,
+        0,
+        EVENT_CREATURE_HP,
+        ACTION_FLEE_FOR_ASSIST,
+        REPEAT,
+        [0, 30, 15_000, 15_000, 0, 0],
+        [0; 3],
+    ));
+
+    fire(&mut scenario); // the rule stamps the first window
+    fire(&mut scenario); // the rout pass reads it: the first flee leg
+
+    scenario.advance_clock(15_000_000); // the first window and the repeat wait are both over
+    fire(&mut scenario); // the rule fires onto the spent window and re-stamps it
+    scenario.advance_clock(5_000_000); // the chase leg thrown while the window was spent lands
+    fire(&mut scenario); // the re-stamped window runs the creature again
+
+    let flee_legs: Vec<_> = scenario
+        .effects()
+        .into_iter()
+        .filter(|leg| leg.dur_ms > 0 && leg.dest.x < leg.start.x)
+        .collect();
+    assert_eq!(
+        flee_legs.len(),
+        2,
+        "a later flee in the same fight must write a second leg away from the victim"
+    );
 }
 
 #[test]
@@ -559,7 +738,7 @@ fn eventai_cast_rules_suppress_flat_casts_without_changing_unscripted_creatures(
 }
 
 #[test]
-fn edge_and_malformed_cast_rows_do_not_suppress_the_default_rotation() {
+fn edge_cast_rows_do_not_suppress_the_default_rotation() {
     let edge = row(
         509_0310,
         310,
@@ -570,25 +749,54 @@ fn edge_and_malformed_cast_rows_do_not_suppress_the_default_rotation() {
         [0; 6],
         [310, 0, 0],
     );
-    let mut malformed = row(
-        509_0311,
-        311,
-        0,
-        EVENT_CREATURE_HP,
-        ACTION_CAST,
-        REPEAT_ONCE,
-        [0, 100, 0, 0, 0, 0],
-        [311, 0, 0],
-    );
-    malformed.chance_pct = 0;
-    let mut scenario = world()
-        .lone_spell(CREATURE, 120)
-        .eventai_row(edge)
-        .eventai_row(malformed);
+    let mut scenario = world().lone_spell(CREATURE, 120).eventai_row(edge);
 
     fire(&mut scenario);
 
-    assert_eq!(scenario.casts(), vec![(CREATURE, 120, TARGET)]);
+    assert_eq!(
+        scenario.casts(),
+        vec![(CREATURE, 120, TARGET)],
+        "an on-death or on-spawn cast fires at a moment the rotation never covers, so it takes \
+         nothing over: silencing the rotation for it would leave the creature swinging in silence"
+    );
+}
+
+#[test]
+fn an_authored_cast_rule_sends_its_caster_to_melee_and_replaces_the_flat_rotation() {
+    let mut scenario = Scenario::new(0)
+        .creature(CREATURE, point(0.0))
+        .entry(CREATURE, ENTRY)
+        .player(TARGET, point(20.0))
+        .attacking(CREATURE, TARGET)
+        .caster(CREATURE, 30.0)
+        .rotation_line(CREATURE, 120, CastWhen::Always, 1)
+        .eventai_row(row(
+            509_0113,
+            509_0113,
+            0,
+            EVENT_CREATURE_HP,
+            ACTION_CAST,
+            REPEAT_ONCE,
+            [0, 30, 0, 0, 0, 0],
+            [113, 0, 0],
+        ));
+
+    fire(&mut scenario);
+
+    assert!(
+        scenario.casts().is_empty(),
+        "the flat rotation is off, so nothing may be cast before the authored band opens"
+    );
+    assert!(
+        scenario.has_leg(CREATURE),
+        "a creature whose casting the script owns holds at no rotation range: it closes to melee \
+         and swings between authored casts, instead of standing at 30 yards casting nothing"
+    );
+
+    scenario = scenario.hurt(CREATURE, 30);
+    fire(&mut scenario);
+
+    assert_eq!(scenario.casts(), vec![(CREATURE, 113, TARGET)]);
 }
 
 #[test]

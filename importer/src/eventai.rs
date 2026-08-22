@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::{field, parse_table, sql_text, world_guid};
+use crate::{bt, field, parse_table, sql_text, world_guid};
 
 const EVENT_TIMER_IN_COMBAT: u32 = 0;
 const EVENT_HP: u32 = 2;
@@ -138,7 +138,7 @@ impl EventAiPlan {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Coverage {
     total_rules: u64,
     accepted_rules: u64,
@@ -284,6 +284,22 @@ struct SummonLocation {
     lifetime_ms: u32,
 }
 
+/// A row names its creature by template entry or by spawn guid, never both. The Module reads the
+/// pair and refuses a row that sets neither or sets both.
+enum Subject {
+    Entry(u32),
+    Guid(u64),
+}
+
+impl Subject {
+    fn columns(&self) -> (u32, u64) {
+        match *self {
+            Self::Entry(entry) => (entry, 0),
+            Self::Guid(guid) => (0, guid),
+        }
+    }
+}
+
 struct NativeAction {
     kind: u8,
     params: [u32; 3],
@@ -295,167 +311,195 @@ struct NativeAction {
     summon_location: Option<u32>,
 }
 
-pub(crate) fn build(
-    dump: &str,
-    imported_entries: &HashSet<u64>,
-    imported_guid_entries: &HashMap<u64, u64>,
-    importable_templates: &HashSet<u64>,
-) -> EventAiPlan {
-    let mut plan = EventAiPlan::default();
-    let mut broadcasts = parse_broadcasts(dump, &mut plan.coverage);
-    broadcasts.extend(parse_legacy_texts(dump, &broadcasts, &mut plan.coverage));
-    let summon_locations = parse_summons(dump, &mut plan.coverage);
-    let mut used_texts = BTreeSet::new();
-    let mut used_summons = BTreeSet::new();
-    let mut rules = parse_rules(dump, &mut plan.coverage);
-    rules.sort_by_key(|rule| rule.id);
+/// The dump's EventAI tables, parsed once. Only rule assembly depends on the World Import Scope, and
+/// the scope grows to a fixpoint while summoned templates pull in more entries, so the caller
+/// re-runs [`EventAiSource::assemble`] against the grown scope rather than re-reading the dump.
+pub(crate) struct EventAiSource {
+    broadcasts: BTreeMap<u32, Broadcast>,
+    summon_locations: BTreeMap<u32, SummonLocation>,
+    rules: Vec<RawRule>,
+    coverage: Coverage,
+}
 
-    for rule in rules {
-        let Some((creature_entry, creature_guid)) = resolve_subject(
-            &rule,
-            imported_entries,
-            imported_guid_entries,
-            importable_templates,
-            &mut plan.coverage,
-        ) else {
-            continue;
+pub(crate) fn parse(dump: &str) -> EventAiSource {
+    let mut coverage = Coverage::default();
+    let mut broadcasts = parse_broadcasts(dump, &mut coverage);
+    broadcasts.extend(parse_legacy_texts(dump, &broadcasts, &mut coverage));
+    let summon_locations = parse_summons(dump, &mut coverage);
+    let mut rules = parse_rules(dump, &mut coverage);
+    rules.sort_by_key(|rule| rule.id);
+    EventAiSource {
+        broadcasts,
+        summon_locations,
+        rules,
+        coverage,
+    }
+}
+
+impl EventAiSource {
+    pub(crate) fn assemble(
+        &self,
+        imported_entries: &HashSet<u64>,
+        imported_guid_entries: &HashMap<u64, u64>,
+        importable_templates: &HashSet<u64>,
+    ) -> EventAiPlan {
+        let broadcasts = &self.broadcasts;
+        let summon_locations = &self.summon_locations;
+        let mut plan = EventAiPlan {
+            coverage: self.coverage.clone(),
+            ..EventAiPlan::default()
         };
-        let Some((event, params)) = map_event(&rule, &mut plan.coverage) else {
-            continue;
-        };
-        if rule.chance == 0 || rule.chance > 100 {
-            plan.coverage.drop("invalid_chance", rule.chance as u64);
-            continue;
-        }
-        if rule.flags & !SUPPORTED_FLAGS != 0 {
-            plan.coverage.drop("unsupported_flag", rule.flags as u64);
-            continue;
-        }
-        let allowed_phase_mask = !rule.inverse_phase_mask;
-        if allowed_phase_mask == 0 {
-            plan.coverage
-                .drop("empty_phase_mask", rule.inverse_phase_mask as u64);
-            continue;
-        }
-        let mut actions = Vec::new();
-        let mut failed = false;
-        for (slot, action) in rule.actions.iter().enumerate() {
-            let raw_action = action[0];
-            if raw_action == 0 {
-                continue;
-            }
-            match map_action(
-                *action,
-                &broadcasts,
-                &summon_locations,
+        let mut used_texts = BTreeSet::new();
+        let mut used_summons = BTreeSet::new();
+
+        for rule in &self.rules {
+            let Some(subject) = resolve_subject(
+                rule,
+                imported_entries,
+                imported_guid_entries,
                 importable_templates,
                 &mut plan.coverage,
-            ) {
-                Some(action) => actions.push((slot as u8, raw_action, action)),
-                None => {
-                    failed = true;
-                    break;
+            ) else {
+                continue;
+            };
+            let (creature_entry, creature_guid) = subject.columns();
+            let Some((event, params)) = map_event(rule, &mut plan.coverage) else {
+                continue;
+            };
+            if rule.chance == 0 || rule.chance > 100 {
+                plan.coverage.drop("invalid_chance", rule.chance as u64);
+                continue;
+            }
+            if rule.flags & !SUPPORTED_FLAGS != 0 {
+                plan.coverage.drop("unsupported_flag", rule.flags as u64);
+                continue;
+            }
+            let allowed_phase_mask = !rule.inverse_phase_mask;
+            if allowed_phase_mask == 0 {
+                plan.coverage
+                    .drop("empty_phase_mask", rule.inverse_phase_mask as u64);
+                continue;
+            }
+            let mut actions = Vec::new();
+            let mut failed = false;
+            for (slot, action) in rule.actions.iter().enumerate() {
+                let raw_action = action[0];
+                if raw_action == 0 {
+                    continue;
+                }
+                match map_action(
+                    *action,
+                    broadcasts,
+                    summon_locations,
+                    importable_templates,
+                    &mut plan.coverage,
+                ) {
+                    Some(action) => actions.push((slot as u8, raw_action, action)),
+                    None => {
+                        failed = true;
+                        break;
+                    }
                 }
             }
-        }
-        if failed {
-            continue;
-        }
-        if actions.is_empty() {
-            plan.coverage.drop("empty_rule", rule.id);
-            continue;
-        }
-        let action_count = actions.len() as u64;
-        if rule.id == 0 || rule.id > ((ROW_ID_NAMESPACE - 1) >> 2) {
-            plan.coverage.drop("invalid_rule_id", rule.id);
-            continue;
-        }
-        let rule_prefix = ROW_ID_NAMESPACE | (rule.id << 2);
-        let source_flags = if rule.flags & FLAG_COMBAT_ACTION != 0 {
-            NATIVE_SOURCE_COMBAT_ACTION
-        } else {
-            0
-        } | if rule.flags & FLAG_RANDOM_ACTION != 0 {
-            NATIVE_SOURCE_RANDOM_ACTION
-        } else {
-            0
-        };
-        let repeat = if rule.flags & FLAG_REPEATABLE != 0 {
-            NATIVE_REPEAT
-        } else {
-            NATIVE_REPEAT_ONCE
-        };
-        Coverage::source_value(&mut plan.coverage.accepted_event, rule.event as u64);
-        *plan
-            .coverage
-            .emitted_event
-            .entry(rule.event as u64)
-            .or_default() += action_count;
-        for (_, raw_action, _) in &actions {
-            Coverage::source_value(&mut plan.coverage.accepted_action, *raw_action as u64);
-            Coverage::source_value(&mut plan.coverage.emitted_action, *raw_action as u64);
-        }
-        for (order, _, action) in actions {
-            let row_id = rule_prefix | u64::from(order);
-            used_texts.extend(action.texts.iter().copied());
-            if let Some(entry) = action.summon_entry {
-                plan.forced_template_entries.insert(entry);
+            if failed {
+                continue;
             }
-            if let Some(location) = action.summon_location {
-                used_summons.insert(location);
+            if actions.is_empty() {
+                plan.coverage.drop("empty_rule", rule.id);
+                continue;
             }
-            plan.event_rows.push(format!(
-                "({row_id},{creature_entry},{event},{kind},{legacy_text},{spell},0,0,0,0,{rule_id},{order},{creature_guid},{chance},{allowed_phase_mask},{source_flags},{repeat},{p1},{p2},{p3},{p4},{p5},{p6},{a1},{a2},{a3},{target},{cast_options})",
-                kind = action.kind,
-                legacy_text = sql_text(action.legacy_text),
-                spell = if action.kind == NATIVE_ACTION_CAST { action.params[0] } else { 0 },
-                rule_id = rule.id,
-                chance = rule.chance,
-                p1 = params[0],
-                p2 = params[1],
-                p3 = params[2],
-                p4 = params[3],
-                p5 = params[4],
-                p6 = params[5],
-                a1 = action.params[0],
-                a2 = action.params[1],
-                a3 = action.params[2],
-                target = action.target,
-                cast_options = action.cast_options,
+            let action_count = actions.len() as u64;
+            if rule.id == 0 || rule.id > ((ROW_ID_NAMESPACE - 1) >> 2) {
+                plan.coverage.drop("invalid_rule_id", rule.id);
+                continue;
+            }
+            let rule_prefix = ROW_ID_NAMESPACE | (rule.id << 2);
+            let source_flags = if rule.flags & FLAG_COMBAT_ACTION != 0 {
+                NATIVE_SOURCE_COMBAT_ACTION
+            } else {
+                0
+            } | if rule.flags & FLAG_RANDOM_ACTION != 0 {
+                NATIVE_SOURCE_RANDOM_ACTION
+            } else {
+                0
+            };
+            let repeat = if rule.flags & FLAG_REPEATABLE != 0 {
+                NATIVE_REPEAT
+            } else {
+                NATIVE_REPEAT_ONCE
+            };
+            Coverage::source_value(&mut plan.coverage.accepted_event, rule.event as u64);
+            *plan
+                .coverage
+                .emitted_event
+                .entry(rule.event as u64)
+                .or_default() += action_count;
+            for (_, raw_action, _) in &actions {
+                Coverage::source_value(&mut plan.coverage.accepted_action, *raw_action as u64);
+                Coverage::source_value(&mut plan.coverage.emitted_action, *raw_action as u64);
+            }
+            for (order, _, action) in actions {
+                let row_id = rule_prefix | u64::from(order);
+                used_texts.extend(action.texts.iter().copied());
+                if let Some(entry) = action.summon_entry {
+                    plan.forced_template_entries.insert(entry);
+                }
+                if let Some(location) = action.summon_location {
+                    used_summons.insert(location);
+                }
+                plan.event_rows.push(format!(
+                    "({row_id},{creature_entry},{event},{kind},{legacy_text},{spell},0,0,0,0,{rule_id},{order},{creature_guid},{chance},{allowed_phase_mask},{source_flags},{repeat},{p1},{p2},{p3},{p4},{p5},{p6},{a1},{a2},{a3},{target},{cast_options})",
+                    kind = action.kind,
+                    legacy_text = sql_text(action.legacy_text),
+                    spell = if action.kind == NATIVE_ACTION_CAST { action.params[0] } else { 0 },
+                    rule_id = rule.id,
+                    chance = rule.chance,
+                    p1 = params[0],
+                    p2 = params[1],
+                    p3 = params[2],
+                    p4 = params[3],
+                    p5 = params[4],
+                    p6 = params[5],
+                    a1 = action.params[0],
+                    a2 = action.params[1],
+                    a3 = action.params[2],
+                    target = action.target,
+                    cast_options = action.cast_options,
+                ));
+            }
+            plan.coverage.accepted_rules += 1;
+            plan.coverage.action_rows += action_count;
+        }
+
+        for id in used_texts {
+            let Some(text) = broadcasts.get(&id) else {
+                continue;
+            };
+            plan.broadcast_rows.push(format!(
+                "({id},{male},{female},{chat_type},{language},{delay1},{emote1},{delay2},{emote2},{delay3},{emote3})",
+                male = sql_text(&text.male),
+                female = sql_text(&text.female),
+                chat_type = text.chat_type,
+                language = text.language,
+                delay1 = text.emotes[0].0,
+                emote1 = text.emotes[0].1,
+                delay2 = text.emotes[1].0,
+                emote2 = text.emotes[1].1,
+                delay3 = text.emotes[2].0,
+                emote3 = text.emotes[2].1,
             ));
         }
-        plan.coverage.accepted_rules += 1;
-        plan.coverage.action_rows += action_count;
+        for id in used_summons {
+            let Some(location) = summon_locations.get(&id) else {
+                continue;
+            };
+            plan.summon_rows.push(format!(
+                "({id},{},{},{},{},{})",
+                location.x, location.y, location.z, location.orientation, location.lifetime_ms
+            ));
+        }
+        plan
     }
-
-    for id in used_texts {
-        let Some(text) = broadcasts.get(&id) else {
-            continue;
-        };
-        plan.broadcast_rows.push(format!(
-            "({id},{male},{female},{chat_type},{language},{delay1},{emote1},{delay2},{emote2},{delay3},{emote3})",
-            male = sql_text(&text.male),
-            female = sql_text(&text.female),
-            chat_type = text.chat_type,
-            language = text.language,
-            delay1 = text.emotes[0].0,
-            emote1 = text.emotes[0].1,
-            delay2 = text.emotes[1].0,
-            emote2 = text.emotes[1].1,
-            delay3 = text.emotes[2].0,
-            emote3 = text.emotes[2].1,
-        ));
-    }
-    for id in used_summons {
-        let Some(location) = summon_locations.get(&id) else {
-            continue;
-        };
-        plan.summon_rows.push(format!(
-            "({id},{},{},{},{},{})",
-            location.x, location.y, location.z, location.orientation, location.lifetime_ms
-        ));
-    }
-    plan
 }
 
 fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
@@ -545,7 +589,7 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
     parse_table(dump, "broadcast_text")
         .into_iter()
         .filter_map(|row| {
-            let Some(id) = source_u32(field(&row, 0)) else {
+            let Some(id) = source_u32(field(&row, bt::ID)) else {
                 coverage.drop("malformed_broadcast_text", 0);
                 return None;
             };
@@ -554,13 +598,13 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
                 return None;
             }
             let Some(chat_type) =
-                source_u32(field(&row, 3)).and_then(|value| u8::try_from(value).ok())
+                source_u32(field(&row, bt::CHAT_TYPE)).and_then(|value| u8::try_from(value).ok())
             else {
                 coverage.drop("malformed_broadcast_text", id as u64);
                 return None;
             };
             let Some(language) =
-                source_u32(field(&row, 4)).and_then(|value| u8::try_from(value).ok())
+                source_u32(field(&row, bt::LANGUAGE)).and_then(|value| u8::try_from(value).ok())
             else {
                 coverage.drop("malformed_broadcast_text", id as u64);
                 return None;
@@ -579,8 +623,8 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
             Some((
                 id,
                 Broadcast {
-                    male: field(&row, 1).to_string(),
-                    female: field(&row, 2).to_string(),
+                    male: field(&row, bt::TEXT).to_string(),
+                    female: field(&row, bt::TEXT1).to_string(),
                     chat_type,
                     language,
                     emotes,
@@ -676,11 +720,11 @@ fn resolve_subject(
     imported_guid_entries: &HashMap<u64, u64>,
     importable_templates: &HashSet<u64>,
     coverage: &mut Coverage,
-) -> Option<(u32, u64)> {
+) -> Option<Subject> {
     if rule.subject > 0 {
         let entry = rule.subject as u64;
         if imported_entries.contains(&entry) && importable_templates.contains(&entry) {
-            return u32::try_from(entry).ok().map(|entry| (entry, 0));
+            return u32::try_from(entry).ok().map(Subject::Entry);
         }
         coverage.drop("missing_entry_subject", entry);
         return None;
@@ -699,9 +743,7 @@ fn resolve_subject(
         return None;
     }
     coverage.guid_rules += 1;
-    u32::try_from(entry)
-        .ok()
-        .map(|entry| (entry, world_guid(entry as u64, source_guid)))
+    Some(Subject::Guid(world_guid(entry, source_guid)))
 }
 
 fn map_event(rule: &RawRule, coverage: &mut Coverage) -> Option<(u8, [u32; 6])> {
@@ -1003,4 +1045,121 @@ fn supported_texts(
         }
     }
     valid && ids.iter().all(|id| broadcasts.contains_key(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `EVENTAI_*` out of the world-import verifier's supported-native-values manifest, as the set of
+    /// numbers a `0|1|2`-style shell alternation lists.
+    fn verifier_values(key: &str) -> Vec<u32> {
+        verifier_manifest(key)
+            .split('|')
+            .map(|value| value.parse().expect("a numeric native value"))
+            .collect()
+    }
+
+    fn verifier_mask(key: &str) -> u32 {
+        verifier_manifest(key).parse().expect("a numeric mask")
+    }
+
+    fn verifier_manifest(key: &str) -> String {
+        let script = include_str!("../scripts/import-world.sh");
+        let manifest = script
+            .split_once("# SUPPORTED NATIVE VALUES BEGIN")
+            .and_then(|(_, rest)| rest.split_once("# SUPPORTED NATIVE VALUES END"))
+            .expect("the verifier's supported-native-values manifest")
+            .0;
+        manifest
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("{key} is missing from the verifier manifest"))
+            .trim_matches('\'')
+            .to_string()
+    }
+
+    /// The world import verifies the loaded catalogue with its own allowlist of native values, in
+    /// shell. A value this importer emits that the verifier then reports as unsupported fails only
+    /// at import time, against real data, long after the mapping was written.
+    #[test]
+    fn eventai_verifier_accepts_every_native_value_the_importer_emits() {
+        for (key, emitted) in [
+            (
+                "EVENTAI_EVENT_TYPES",
+                vec![
+                    NATIVE_EVENT_ON_AGGRO,
+                    NATIVE_EVENT_TIMED_IN_COMBAT,
+                    NATIVE_EVENT_CREATURE_HP,
+                    NATIVE_EVENT_ON_DEATH,
+                    NATIVE_EVENT_TARGET_RANGE,
+                    NATIVE_EVENT_ON_SPAWN,
+                    NATIVE_EVENT_FRIENDLY_HP_DEFICIT,
+                ],
+            ),
+            (
+                "EVENTAI_ACTION_TYPES",
+                vec![
+                    NATIVE_ACTION_SAY,
+                    NATIVE_ACTION_CAST,
+                    NATIVE_ACTION_EMOTE,
+                    NATIVE_ACTION_FLEE_FOR_ASSIST,
+                    NATIVE_ACTION_CALL_FOR_HELP,
+                    NATIVE_ACTION_SET_PHASE,
+                    NATIVE_ACTION_SUMMON,
+                    NATIVE_ACTION_SET_RANGED_POSTURE,
+                ],
+            ),
+            (
+                "EVENTAI_TARGET_POLICIES",
+                vec![
+                    NATIVE_TARGET_CURRENT,
+                    NATIVE_TARGET_SELF,
+                    NATIVE_TARGET_SECOND_THREAT,
+                    NATIVE_TARGET_RANDOM_THREAT,
+                    NATIVE_TARGET_INVOKER,
+                    NATIVE_TARGET_EVENT,
+                    NATIVE_TARGET_RANDOM_THREAT_PLAYER,
+                    NATIVE_TARGET_NEAREST_AREA,
+                    NATIVE_TARGET_FARTHEST_HOSTILE,
+                ],
+            ),
+            (
+                "EVENTAI_REPEAT_POLICIES",
+                vec![NATIVE_REPEAT_ONCE, NATIVE_REPEAT],
+            ),
+        ] {
+            let accepted = verifier_values(key);
+            for value in emitted {
+                assert!(
+                    accepted.contains(&u32::from(value)),
+                    "{key} rejects native value {value} the importer emits: {accepted:?}"
+                );
+            }
+        }
+
+        let source_flags = NATIVE_SOURCE_COMBAT_ACTION | NATIVE_SOURCE_RANDOM_ACTION;
+        assert_eq!(
+            source_flags & !verifier_mask("EVENTAI_SOURCE_FLAGS_MASK"),
+            0,
+            "the verifier rejects a source policy the importer emits"
+        );
+        let cast_options = NATIVE_CAST_INTERRUPT_PREVIOUS
+            | NATIVE_CAST_AURA_ABSENT
+            | NATIVE_CAST_PLAYER_ONLY
+            | NATIVE_CAST_TARGET_CASTING;
+        assert_eq!(
+            cast_options & !verifier_mask("EVENTAI_CAST_OPTIONS_MASK"),
+            0,
+            "the verifier rejects a cast option the importer emits"
+        );
+        // The Module's supported cast options also carry triggered casts. This importer drops them,
+        // but a reserved fixture may load one, and the verifier reads the durable table.
+        const MODULE_CAST_TRIGGERED: u32 = 1 << 1;
+        assert_eq!(
+            verifier_mask("EVENTAI_CAST_OPTIONS_MASK") & MODULE_CAST_TRIGGERED,
+            MODULE_CAST_TRIGGERED,
+            "the verifier rejects a triggered cast the Module supports"
+        );
+    }
 }

@@ -127,6 +127,10 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
         if is_engaged(ctx, g) {
             continue;
         }
+        // The fight is over for this unit however it ended — evade, the player dying, a logout, a
+        // map change. This is the ONLY place that sees all four, so the EventAI engagement resets
+        // here rather than in the cycle's combat-drop pass, which sees only a decayed flag.
+        crate::creatures::reset_engagement(ctx, g);
         if let Some(mut e) = entities.guid().find(g) {
             if e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
                 e.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
@@ -671,5 +675,27 @@ mod duel_relation_tests {
         assert!(!may_help_decision(false, true, false));
         assert!(!may_help_decision(false, false, true));
         assert!(may_help_decision(true, false, true));
+    }
+}
+
+#[cfg(test)]
+mod engagement_reset_tripwire {
+    use crate::test_scan::code_of;
+
+    /// `disengage` is the ONLY place that sees every way a fight ends: an evade, the player dying,
+    /// a logout, a map change. Each of those clears `IN_COMBAT` here, so the cycle's combat-drop
+    /// pass never reaches them and its `leave_combat` cannot be the EventAI engagement reset on its
+    /// own. Dropping this call fails silently and in the player's favour nowhere: the next pull
+    /// finds once-only aggro rules still spent and timed rules due on their first tick.
+    #[test]
+    fn freeing_a_unit_starts_its_next_eventai_engagement() {
+        let body = code_of(
+            include_str!("engage.rs"),
+            "pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {",
+        );
+        assert!(
+            body.contains("crate::creatures::reset_engagement(ctx, g)"),
+            "`disengage` no longer resets the EventAI engagement of the units it freed"
+        );
     }
 }

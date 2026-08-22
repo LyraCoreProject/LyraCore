@@ -112,21 +112,6 @@ pub struct CreatureAiRuleState {
     pub engagement_id: u64,
 }
 
-/// Migration table retained for timers written by the previous timer pass. The native evaluator
-/// ignores these rows and writes `game_creature_ai_rule_state` instead.
-#[table(
-    accessor = game_creature_ai_timer,
-    index(accessor = by_creature, btree(columns = [creature_guid]))
-)]
-pub struct CreatureAiTimer {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub creature_guid: u64,
-    pub rule_id: u64,
-    pub next_at_ms: u64,
-}
-
 /// Imported EventAI summon placement. Module only.
 #[table(accessor = game_creature_ai_summon)]
 pub struct CreatureAiSummon {

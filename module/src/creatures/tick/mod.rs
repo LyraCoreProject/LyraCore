@@ -706,13 +706,21 @@ pub(crate) fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
             .is_some_and(|t| flee_eligible(t.creature_type))
 }
 
-/// Is this creature ACTIVELY routing — eligible, inside an open rout window on its own engagement row,
-/// and able to move? The ONE place that question is answered, so the three engaged sites agree: the
-/// chase→rout divert, the rout leg itself, and the swing pass. If only some of them knew about the
-/// window, a creature would be diverted out of chasing yet never routed — standing FROZEN instead of
-/// fighting. A spent window means not routing, so a creature that has used its rout chases and swings
-/// like any other attacker. CC counts as not routing for the same reason: the rout leg is suppressed for
-/// a rooted/stunned/feared creature, so it must keep swinging rather than stand silent. [server]
+/// Is this creature ACTIVELY routing — inside an open rout window on its own engagement row, entitled
+/// to that window, and able to move? The ONE place that question is answered, so the three engaged
+/// sites agree: the chase→rout divert, the rout leg itself, and the swing pass. If only some of them
+/// knew about the window, a creature would be diverted out of chasing yet never routed — standing
+/// FROZEN instead of fighting. A spent window means not routing, so a creature that has used its rout
+/// chases and swings like any other attacker. CC counts as not routing for the same reason: the rout
+/// leg is suppressed for a rooted/stunned/feared creature, so it must keep swinging rather than stand
+/// silent. [server]
+///
+/// Two things entitle a creature to the window. The fixed rout's own gate (`rout_eligible`: below the
+/// flee threshold AND of a kind that runs) opens it for the ordinary near-death humanoid. An authored
+/// flee opens it for anyone the script says flees, a beast at 30% health included, because the
+/// script's window is the only thing that stamped it, and the fixed gate is switched OFF for such a
+/// creature. Reading only the fixed gate left an authored flee with an open window and nothing that
+/// would move it.
 ///
 /// `pub(crate)` because the swing pass in `combat::swing` is one of the three sites.
 pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool {
@@ -722,7 +730,7 @@ pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool
         .attacker_guid()
         .find(c.guid)
         .is_some_and(|row| rout_window_open(now_ms, row.rout_ends_ms))
-        && rout_eligible(ctx, c)
+        && (rout_eligible(ctx, c) || crate::creatures::eventai::authored_combat(ctx, c.guid).flee)
         && !crate::spell::is_self_movement_suppressed(ctx, c.guid)
 }
 

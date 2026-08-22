@@ -26,7 +26,8 @@ canonical profiles are `alliance-eastern`, `alliance-kalimdor`, `alliance-single
 
 **World Import Scope**:
 The authoritative union of Bounded Map Slices, whole maps, and forced creature dependencies owned
-by one World Import Profile. It decides spatial import membership for dump, terrain, navigation,
+by one World Import Profile. Accepted EventAI summons force their summoned templates into the
+scope, to a fixpoint. It decides spatial import membership for dump, terrain, navigation,
 and vmap modes.
 
 **Bounded Map Slice**:
@@ -185,6 +186,46 @@ _Avoid_: other unit, opponent
 **Triggered Cast**:
 The cast a fired Proc starts. It runs the cast core's effect loop and nothing else: no Gate, no cost, no cooldown, no stealth break. Its own hits fire no further Procs.
 _Avoid_: proc cast, internal cast, free cast
+
+### Creature AI
+
+**Creature-AI Family**:
+The import family that loads the EventAI catalogue: event rows, broadcast texts, and summon
+locations.
+
+**Engagement**:
+One creature's fight, from the aggro that starts it until the creature is freed, however that
+happens. Numbered per creature; a new Engagement re-arms once-only rules and drops the phase and
+the Ranged Posture.
+
+**Rule State**:
+The durable arming of one EventAI rule on one creature: its next eligible time and whether it is
+consumed, keyed to the creature's lifecycle and Engagement.
+
+**Flat Cast**:
+The spell use a creature derives from its `game_creature_spell` rows alone: the rotation and the
+lone spell, cast on cooldown with no authored condition. Off for an Authored Casting creature.
+
+**Fixed Rout**:
+The built-in break-off: a creature below the flee threshold and of a kind that runs opens one rout
+window per Engagement. Off for an Authored Flee creature.
+
+**Authored Combat**:
+The halves of a creature's fight an imported EventAI script has taken over: Authored Casting and
+Authored Flee. A property of the script's rows, not of the moment; eligibility and conditions do
+not move it mid-fight.
+
+**Authored Casting**:
+An engaged EventAI cast rule exists for the creature, so its Flat Cast and caster hold range are
+off and it closes to melee between authored casts unless a Ranged Posture holds it back.
+
+**Authored Flee**:
+An engaged EventAI flee rule exists for the creature, so the Fixed Rout is off and the rule's own
+window runs the creature whatever its health or kind, as often as the rule fires.
+
+**Ranged Posture**:
+An authored stance holding a creature at a scripted distance and angle from its victim instead of
+the melee approach. Set by the script, dropped with the Engagement.
 
 ### Auctions
 

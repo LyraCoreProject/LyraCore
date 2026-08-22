@@ -7,9 +7,14 @@ use spacetimedb::ReducerContext;
 use super::{
     effective_rule_id, EventAiRequest, EventContext, EventKind, EVENT_ON_DEATH, EVENT_ON_SPAWN,
 };
-use crate::{
-    game_creature_ai_event, game_creature_ai_rule_state, game_creature_ai_state, game_world_entity,
-};
+use crate::{game_creature_ai_rule_state, game_creature_ai_state, game_world_entity, WorldEntity};
+
+/// Who runs its entry's EventAI at all. A Character carries no rules, and a pet answers its
+/// owner's commands rather than the wild entry it was built from, so a tamed beast must neither
+/// evaluate its entry's rules nor keep rule state of its own.
+pub(crate) fn runs_eventai(creature: &WorldEntity) -> bool {
+    !creature.is_player() && creature.owner_guid == 0
+}
 
 crate::game_hook!(on_aggro, fn creature_ai_on_aggro(ctx, payload) {
     evaluate_edge(
@@ -27,7 +32,7 @@ crate::game_hook!(on_creature_spawn, fn creature_ai_on_creature_spawn(ctx, paylo
     let Some(creature) = ctx.db.game_world_entity().guid().find(payload.guid) else {
         return;
     };
-    if creature.owner_guid != 0 {
+    if !runs_eventai(&creature) {
         return;
     }
     reset_creature_lifecycle(ctx, payload.guid);
@@ -55,15 +60,20 @@ crate::game_hook!(on_creature_death, fn creature_ai_on_creature_death(ctx, paylo
     reset_creature_lifecycle(ctx, payload.creature_guid);
 });
 
+/// Start the creature's next engagement: bump `engagement_id`, drop the phase and ranged posture,
+/// and clear the rule state every engagement rule earned in the fight that just ended. Once-only
+/// aggro rules re-arm and timed rules wait their initial window again on the next pull. Spawn and
+/// death rules keep their state, moved onto the new engagement, because they belong to the
+/// lifecycle instead. Called however a fight ends, so no path can leave a creature half-armed.
 pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return;
     };
-    if creature.is_player() || creature.owner_guid != 0 {
+    if !runs_eventai(&creature) {
         return;
     }
 
-    let rules = rules_for(ctx, creature_guid, creature.entry);
+    let rules = super::combat::rows_for(ctx, creature_guid);
     let known_rule_ids: HashSet<u64> = rules.iter().map(effective_rule_id).collect();
     let engagement_rule_ids: HashSet<u64> = rules
         .iter()
@@ -137,15 +147,62 @@ pub(crate) fn reset_creature_lifecycle(ctx: &ReducerContext, creature_guid: u64)
         .delete(creature_guid);
 }
 
-fn rules_for(
-    ctx: &ReducerContext,
-    creature_guid: u64,
-    creature_entry: u32,
-) -> Vec<super::CreatureAiEvent> {
-    let rules = ctx.db.game_creature_ai_event();
-    rules
-        .by_entry()
-        .filter(&creature_entry)
-        .chain(rules.by_guid().filter(&creature_guid))
-        .collect()
+#[cfg(test)]
+mod eventai_gate_tripwire {
+    use crate::test_scan::code_of;
+
+    /// The three Gates below decide WHICH creature EventAI touches and WHERE its speech leaves the
+    /// Module. Each reads durable state through a `ReducerContext`, which this crate has no test
+    /// harness for, and each fails silently when it is dropped: a tamed beast quietly runs its wild
+    /// entry's rules and never clears its rule state, and a creature line quietly skips the
+    /// dead-speaker Gate and the length cap that every other spoken line goes through.
+    #[test]
+    fn every_eventai_entry_point_keeps_its_gate() {
+        for (source, signature, needle, why) in [
+            (
+                include_str!("engine.rs"),
+                "fn eventai_fights(&self, scope: &TickScope) -> Vec<EngagedFight> {",
+                "super::runs_eventai(&creature)",
+                "a pet must produce no evaluation context of its own",
+            ),
+            (
+                include_str!("combat.rs"),
+                "pub(super) fn rows_for(",
+                "super::runs_eventai(&creature)",
+                "the one row fetch answers `who runs EventAI` for the engine, the edges and the \
+                 cycle's authored-combat reads alike",
+            ),
+            (
+                include_str!("edges.rs"),
+                "pub(crate) fn reset_engagement(",
+                "runs_eventai(&creature)",
+                "a Character and a pet carry no engagement to reset",
+            ),
+            (
+                include_str!("engine.rs"),
+                "fn eventai_rows(&self, creature_guid: u64) -> Vec<CreatureAiEvent> {",
+                "super::combat::rows_for(",
+                "one entry-or-guid row fetch, not a second copy that drifts from the gated one",
+            ),
+            (
+                include_str!("engine.rs"),
+                concat!(
+                    "fn eventai_deliver_line(\n",
+                    "        &mut self,\n",
+                    "        speaker_guid: u64,\n",
+                    "        chat_type: u8,\n",
+                    "        language: u8,\n",
+                    "        message: String,\n",
+                    "    ) -> bool {",
+                ),
+                "crate::chat::apply_send_chat(",
+                "the say/yell chokepoint owns the dead-speaker Gate and the length cap",
+            ),
+        ] {
+            assert!(
+                code_of(source, signature).contains(needle),
+                "`{signature}` no longer contains `{needle}` — {why}"
+            );
+        }
+    }
 }

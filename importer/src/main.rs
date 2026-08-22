@@ -132,11 +132,13 @@ mod npct {
         9 + slot
     }
 }
-mod bt {
-    // broadcast_text: Id, Text (male), Text1 (female), ...
+pub(crate) mod bt {
+    // broadcast_text: Id, Text (male), Text1 (female), ChatTypeID, LanguageID, ...
     pub const ID: usize = 0;
     pub const TEXT: usize = 1; // male greeting text
     pub const TEXT1: usize = 2; // female greeting text
+    pub const CHAT_TYPE: usize = 3;
+    pub const LANGUAGE: usize = 4;
 }
 mod gmo {
     // gossip_menu_option — DUMP-VERIFIED 2026-07-10 (the [V] guess had OPTION_TYPE at 4, which is
@@ -3533,6 +3535,18 @@ pub(crate) struct DumpPlan {
     pub(crate) stamps: Vec<(&'static str, u64)>,
 }
 
+/// UNIT_FLAG_NOT_SELECTABLE. A template carrying it is an invisible server-side trigger or event
+/// creature (Scourge Invasion necropolises, Lunar Festival markers, World Trigger). Its spawns sit
+/// inside the box but must never appear in regular gameplay.
+const UNIT_FLAG_NOT_SELECTABLE: u32 = 0x0200_0000;
+
+/// Whether a `creature_template` row may import at all. The template block, the packed spawn
+/// payload, and the EventAI scope all read this one predicate, so an excluded entry can never
+/// import through one path while another skips it.
+fn template_is_importable(row: &[String]) -> bool {
+    field(row, ct::UNIT_FLAGS).parse::<u32>().unwrap_or(0) & UNIT_FLAG_NOT_SELECTABLE == 0
+}
+
 // ETL row shape: one `game_creature_spawn` row per tuple, in the packed-payload column order.
 #[allow(clippy::type_complexity)]
 /// Build the full `--dump` ETL plan (work-item 216's `--family` split lives entirely in here, via
@@ -3726,18 +3740,13 @@ fn build_dump_plan(
             .into_iter()
             .filter_map(|row| {
                 let entry = field(&row, ct::ENTRY).parse().ok()?;
-                (field(&row, ct::UNIT_FLAGS).parse::<u32>().unwrap_or(0) & 0x0200_0000 == 0)
-                    .then_some(entry)
+                template_is_importable(&row).then_some(entry)
             })
             .collect();
     let eventai = if family_active(args, "creature-ai") {
+        let source = eventai::parse(dump);
         loop {
-            let plan = eventai::build(
-                dump,
-                &entries,
-                &imported_guid_entries,
-                &importable_templates,
-            );
+            let plan = source.assemble(&entries, &imported_guid_entries, &importable_templates);
             let added = plan
                 .forced_template_entries
                 .iter()
@@ -3785,10 +3794,8 @@ fn build_dump_plan(
         std::collections::HashMap::new();
     let mut creature_skin_ids: std::collections::HashMap<u64, u64> =
         std::collections::HashMap::new();
-    // Entries whose template carries UNIT_FLAG_NOT_SELECTABLE (0x02000000): invisible server-side
-    // trigger / event creatures (Scourge Invasion Necropolis*, Lunar Festival markers, World Trigger,
-    // etc.). Their spawns are in the box but should never appear in regular gameplay — skip template
-    // AND suppress their spawns from the packed payload below.
+    // Entries `template_is_importable` rejects: their template is skipped here and their spawns are
+    // suppressed from the packed payload below.
     let mut excluded_entries: std::collections::HashSet<u64> = std::collections::HashSet::new();
     // How many imported templates carry a nonzero `trainer_class`. Reported below so an operator can
     // confirm the columns populated: a wrong index reads a real neighbouring cell, which is the one
@@ -3799,8 +3806,7 @@ fn build_dump_plan(
         if !entries.contains(&entry) {
             continue;
         }
-        let unit_flags_raw: u32 = field(&row, ct::UNIT_FLAGS).parse().unwrap_or(0);
-        if unit_flags_raw & 0x0200_0000 != 0 {
+        if !template_is_importable(&row) {
             excluded_entries.insert(entry);
             continue;
         }
@@ -7040,6 +7046,14 @@ mod tests {
         format!("({})", columns.join(","))
     }
 
+    /// `creature_template_row` with `UnitFlags` (col 17) set; everything else `0`.
+    fn creature_template_row_with_unit_flags(entry: u64, unit_flags: u32) -> String {
+        let mut cols = vec!["0".to_string(); ct::GOSSIP_MENU_ID + 1];
+        cols[ct::ENTRY] = entry.to_string();
+        cols[ct::UNIT_FLAGS] = unit_flags.to_string();
+        format!("({})", cols.join(","))
+    }
+
     fn eventai_broadcast_row(id: u32, male: &str, female: &str) -> String {
         format!("({id},'{male}','{female}',1,0,0,0,0,0,0,5,6,7,8,9,10,0)")
     }
@@ -7183,7 +7197,6 @@ mod tests {
         assert!(!plan.stmts.iter().any(|statement| {
             statement.contains("game_creature_ai_state")
                 || statement.contains("game_creature_ai_rule_state")
-                || statement.contains("game_creature_ai_timer")
         }));
 
         let events = plan
@@ -7231,6 +7244,76 @@ mod tests {
 
         let again = build_dump_plan(&dump, &args, &None, &None).expect("repeat EventAI plan");
         assert_eq!(plan.stmts, again.stmts);
+    }
+
+    #[test]
+    fn eventai_row_carries_the_entry_or_the_spawn_guid_but_never_both() {
+        // The Module decodes a subject as (entry, 0) or (0, guid) and refuses a row that sets both,
+        // so a guid-scoped source rule has to clear the entry column it resolved the guid through.
+        let dump = eventai_fixture_dump();
+        let mut args = test_args();
+        args.family = Some("creature-ai".to_string());
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
+        let events = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_creature_ai_event"))
+            .expect("EventAI rows");
+
+        // Source rule 16 names spawn guid 2 (`creature_id` -2); source rule 17 names entry 200.
+        assert!(
+            events.contains(&format!(
+                "(4611686018427387968,0,3,0,'',0,0,0,0,0,16,0,{},100,",
+                world_guid(100, 2)
+            )),
+            "{events}"
+        );
+        assert!(
+            events.contains("(4611686018427387972,200,5,0,'',0,0,0,0,0,17,0,0,100,"),
+            "{events}"
+        );
+    }
+
+    #[test]
+    fn a_not_selectable_template_imports_neither_its_template_row_nor_its_eventai_rules() {
+        // Template eligibility is one predicate. If the EventAI scope and the template block each
+        // kept their own copy, an excluded trigger creature would still get EventAI rules naming a
+        // template that never imported.
+        let dump = format!(
+            "x INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `broadcast_text` VALUES {}; \
+             INSERT INTO `creature_ai_scripts` VALUES {}; y",
+            creature_template_row_with_unit_flags(100, UNIT_FLAG_NOT_SELECTABLE),
+            eventai_broadcast_row(900, "Trigger", "Trigger"),
+            eventai_rule_row(
+                10,
+                100,
+                4,
+                0,
+                100,
+                0,
+                [0; 6],
+                [[1, 900, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            ),
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).expect("full plan");
+        assert!(
+            !plan
+                .stmts
+                .iter()
+                .any(|statement| statement.starts_with("INSERT INTO game_creature_template")),
+            "{:?}",
+            plan.stmts
+        );
+        assert!(
+            !plan
+                .stmts
+                .iter()
+                .any(|statement| statement.starts_with("INSERT INTO game_creature_ai_event")),
+            "{:?}",
+            plan.stmts
+        );
     }
 
     #[test]
@@ -7425,7 +7508,7 @@ mod tests {
         let entries = [100].into_iter().collect();
         let guids = [(1, 100), (2, 100)].into_iter().collect();
         let templates = [100, 200].into_iter().collect();
-        let plan = eventai::build(&dump, &entries, &guids, &templates);
+        let plan = eventai::parse(&dump).assemble(&entries, &guids, &templates);
         for (reason, value) in [
             ("unsupported_event", 99),
             ("invalid_chance", 0),
