@@ -2830,6 +2830,11 @@ pub(crate) fn item_instance_update_outbound(
     old: &ItemInstance,
     row: &ItemInstance,
 ) -> Vec<Outbound> {
+    let old_slot_is_empty = old.slot != row.slot
+        && !db
+            .game_item_instance()
+            .iter()
+            .any(|item| item.owner_guid == self_guid && item.slot == old.slot);
     let mut out = if row.slot == old.slot && row.stack_count > old.stack_count {
         item_gain_feedback(
             db,
@@ -2859,7 +2864,9 @@ pub(crate) fn item_instance_update_outbound(
             )),
         )));
     }
-    if old.slot != row.slot && (old.slot <= 18 || row.slot <= 18)
+    let moved_into_equipment = old.slot != row.slot && row.slot <= 18;
+    let emptied_equipment = old.slot != row.slot && old.slot <= 18 && old_slot_is_empty;
+    if moved_into_equipment || emptied_equipment
         || row.slot <= 18 && (old.durability == 0) != (row.durability == 0)
     {
         append_item_armor_and_sheet(db, self_guid, &mut out);
@@ -2874,18 +2881,21 @@ fn append_final_item_slots(
     out: &mut Vec<Outbound>,
     item_in_slot: impl Fn(u8) -> Option<(u64, u32)>,
 ) {
-    let slots = [
-        (old_slot, item_in_slot(old_slot).unwrap_or_default()),
-        (new_slot, item_in_slot(new_slot).unwrap_or_default()),
-    ];
-    for (slot, (guid, _)) in slots {
+    let old_item = item_in_slot(old_slot);
+    let new_item = item_in_slot(new_slot).unwrap_or_default();
+    let slots = old_item
+        .is_none()
+        .then_some((old_slot, (0, 0)))
+        .into_iter()
+        .chain([(new_slot, new_item)]);
+    for (slot, (guid, _)) in slots.clone() {
         if let Some(values) = codec::build_inv_slot_values(self_guid, slot, guid) {
             out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(values),
             )));
         }
     }
-    for (slot, (_, entry)) in slots {
+    for (slot, (_, entry)) in slots.clone() {
         if let Some(values) = codec::build_visible_item_values(self_guid, slot, entry) {
             out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(values),
@@ -4251,11 +4261,71 @@ mod tests {
             );
         }
 
-        assert_eq!(equipment, [Guid::new(INCOMING_GUID), Guid::new(INCOMING_GUID)]);
-        assert_eq!(backpack, [Guid::new(DISPLACED_GUID), Guid::new(DISPLACED_GUID)]);
-        assert_eq!(visible_head, [INCOMING_ENTRY, INCOMING_ENTRY]);
+        assert_eq!(equipment, [Guid::new(INCOMING_GUID)]);
+        assert_eq!(backpack, [Guid::new(DISPLACED_GUID)]);
+        assert_eq!(visible_head, [INCOMING_ENTRY]);
         assert!(!equipment.contains(&Guid::new(0)));
         assert!(!backpack.contains(&Guid::new(0)));
+    }
+
+    #[test]
+    fn empty_equipment_destination_clears_backpack_and_sets_equipment() {
+        use wow_world_messages::vanilla::{Guid, ItemSlot, Object, UpdateMask};
+
+        let mut outbound = Vec::new();
+        append_final_item_slots(7, 23, 0, &mut outbound, |slot| {
+            (slot == 0).then_some((202, 1337))
+        });
+
+        let mut equipment = Vec::new();
+        let mut backpack = Vec::new();
+        for message in &outbound {
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)) = message else {
+                continue;
+            };
+            let Object::Values {
+                mask1: UpdateMask::Player(player),
+                ..
+            } = &update.objects[0]
+            else {
+                continue;
+            };
+            equipment.extend(player.player_field_inv(ItemSlot::Head));
+            backpack.extend(player.player_field_inv(ItemSlot::Inventory0));
+        }
+
+        assert_eq!(equipment, [Guid::new(202)]);
+        assert_eq!(backpack, [Guid::new(0)]);
+    }
+
+    #[test]
+    fn ordinary_backpack_move_clears_source_and_sets_destination() {
+        use wow_world_messages::vanilla::{Guid, ItemSlot, Object, UpdateMask};
+
+        let mut outbound = Vec::new();
+        append_final_item_slots(7, 23, 24, &mut outbound, |slot| {
+            (slot == 24).then_some((202, 1337))
+        });
+
+        let mut source = Vec::new();
+        let mut destination = Vec::new();
+        for message in &outbound {
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)) = message else {
+                continue;
+            };
+            let Object::Values {
+                mask1: UpdateMask::Player(player),
+                ..
+            } = &update.objects[0]
+            else {
+                continue;
+            };
+            source.extend(player.player_field_inv(ItemSlot::Inventory0));
+            destination.extend(player.player_field_inv(ItemSlot::Inventory1));
+        }
+
+        assert_eq!(source, [Guid::new(0)]);
+        assert_eq!(destination, [Guid::new(202)]);
     }
 
     #[test]
