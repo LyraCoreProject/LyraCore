@@ -90,6 +90,10 @@ pub(crate) trait EventAiWorld {
         interrupt_previous: bool,
         admission: super::SpellCasterAdmission,
     ) -> bool;
+    /// Scale one selected source's existing threat through threat authority.
+    fn eventai_scale_selected_threat(&mut self, operation: crate::threat::ScaleSelectedThreat);
+    /// Scale every existing threat row through threat authority.
+    fn eventai_scale_all_threat(&mut self, operation: crate::threat::ScaleAllThreat);
     fn stamp_eventai_rout(&mut self, creature_guid: u64, ends_ms: u32);
     fn set_eventai_ranged_posture(&mut self, creature_guid: u64, distance_yd: f32, angle_rad: f32);
     /// The idle friend joins the fight against `victim_guid` as an assist.
@@ -389,6 +393,9 @@ fn execute_instruction<W: EventAiWorld>(
         CreatureInstruction::SetLethalDamageFloor(_) | CreatureInstruction::ForceDeath => {
             super::death::execute(world, context, instruction)
         }
+        CreatureInstruction::ScaleSelectedThreat(_) | CreatureInstruction::ScaleAllThreat(_) => {
+            super::threat::execute(world, context, instruction, linked_choice)
+        }
     }
 }
 
@@ -590,6 +597,7 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 CreatureInstruction::Cast(cast) => random_target(cast.target),
                 CreatureInstruction::Emote(emote) => random_target(emote.target),
                 CreatureInstruction::Summon(summon) => random_target(summon.target),
+                CreatureInstruction::ScaleSelectedThreat(scale) => random_target(scale.target),
                 CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => {
                     true
                 }
@@ -599,7 +607,8 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 | CreatureInstruction::IncrementPhase(_)
                 | CreatureInstruction::SetRangedPosture(_)
                 | CreatureInstruction::SetLethalDamageFloor(_)
-                | CreatureInstruction::ForceDeath => false,
+                | CreatureInstruction::ForceDeath
+                | CreatureInstruction::ScaleAllThreat(_) => false,
             })
 }
 
@@ -790,6 +799,14 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .filter(&creature_guid)
             .map(|entry| (entry.source_guid, entry.threat))
             .collect()
+    }
+
+    fn eventai_scale_selected_threat(&mut self, operation: crate::threat::ScaleSelectedThreat) {
+        crate::threat::scale_selected_threat(self.ctx, operation);
+    }
+
+    fn eventai_scale_all_threat(&mut self, operation: crate::threat::ScaleAllThreat) {
+        crate::threat::scale_all_threat(self.ctx, operation);
     }
 
     fn eventai_has_aura(&self, guid: u64, spell_id: u32) -> bool {

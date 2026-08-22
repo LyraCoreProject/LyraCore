@@ -413,6 +413,17 @@ pub struct SetLethalDamageFloorInstruction {
     pub enabled: bool,
 }
 
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScaleSelectedThreatInstruction {
+    pub percent: i32,
+    pub target: InstructionTarget,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScaleAllThreatInstruction {
+    pub percent: i32,
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
 pub enum CreatureInstruction {
     Speak(SpeakInstruction),
@@ -428,6 +439,8 @@ pub enum CreatureInstruction {
     SetRangedPosture(RangedPostureInstruction),
     SetLethalDamageFloor(SetLethalDamageFloorInstruction),
     ForceDeath,
+    ScaleSelectedThreat(ScaleSelectedThreatInstruction),
+    ScaleAllThreat(ScaleAllThreatInstruction),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

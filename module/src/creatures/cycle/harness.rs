@@ -733,6 +733,10 @@ impl Scenario {
         self
     }
 
+    fn threat_value(&self, creature: u64, source: u64) -> Option<i64> {
+        self.threat.borrow().get(&(creature, source)).copied()
+    }
+
     /// A live taunt: the creature is pinned on `taunter` for the window's duration.
     fn taunted(self, creature: u64, taunter: u64) -> Self {
         self.taunts.borrow_mut().insert(creature, taunter);
@@ -1514,6 +1518,22 @@ impl EventAiWorld for Scenario {
             .collect();
         entries.sort_unstable();
         entries
+    }
+
+    fn eventai_scale_selected_threat(&mut self, operation: crate::threat::ScaleSelectedThreat) {
+        let mut threats = self.threat.borrow_mut();
+        if let Some(threat) = threats.get_mut(&(operation.creature_guid, operation.source_guid)) {
+            *threat = crate::threat::threat_after_percent_scale(*threat, operation.percent);
+        }
+    }
+
+    fn eventai_scale_all_threat(&mut self, operation: crate::threat::ScaleAllThreat) {
+        let mut threats = self.threat.borrow_mut();
+        for ((creature_guid, _), threat) in threats.iter_mut() {
+            if *creature_guid == operation.creature_guid {
+                *threat = crate::threat::threat_after_percent_scale(*threat, operation.percent);
+            }
+        }
     }
 
     fn eventai_has_aura(&self, guid: u64, spell_id: u32) -> bool {

@@ -10,6 +10,7 @@ mod combat;
 mod death;
 mod edges;
 mod mobility;
+mod threat;
 
 pub(crate) use combat::{authored_combat, current_definition_revision};
 #[cfg(test)]
@@ -67,6 +68,7 @@ mod architecture_tests {
             include_str!("engine.rs"),
             include_str!("combat.rs"),
             include_str!("mobility.rs"),
+            include_str!("threat.rs"),
             include_str!("edges.rs"),
             include_str!("fixtures.rs"),
             include_str!("loader.rs"),
@@ -174,6 +176,17 @@ mod architecture_tests {
             include_str!("mobility.rs"),
         ] {
             assert!(source.contains("arm_creature_engagement("));
+        }
+    }
+
+    #[test]
+    fn threat_actions_call_the_authority_without_table_writes() {
+        let capability = include_str!("threat.rs");
+        for direct_table_operation in ["game_threat", ".insert(", ".update(", ".delete("] {
+            assert!(
+                !capability.contains(direct_table_operation),
+                "EventAI threat capability writes through `{direct_table_operation}`"
+            );
         }
     }
 }

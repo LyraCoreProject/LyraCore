@@ -51,6 +51,7 @@ const ACTION_EMOTE: u32 = 5;
 const ACTION_CAST: u32 = 11;
 const ACTION_SPAWN: u32 = 12;
 const ACTION_THREAT_SINGLE: u32 = 13;
+const ACTION_THREAT_ALL_PCT: u32 = 14;
 const ACTION_QUEST_EVENT: u32 = 15;
 const ACTION_CAST_EVENT: u32 = 16;
 const ACTION_SET_UNIT_FIELD: u32 = 17;
@@ -233,8 +234,10 @@ pub(crate) struct SourceProfile {
     cast_action_subjects: u64,
     template_schedule_overlaps: u64,
     creature_spell_list_overlaps: u64,
+    direct_threat_actions: u64,
     approvals: ApprovalRules,
     expected_source_census: BTreeMap<String, BTreeMap<u64, u64>>,
+    expected_threat_percent_census: BTreeMap<i32, u64>,
 }
 
 #[derive(Clone, Default)]
@@ -372,6 +375,21 @@ pub(crate) fn source_profile(name: &str) -> Result<SourceProfile, String> {
         })
         .transpose()?
         .unwrap_or_default();
+    let expected_threat_percent_census = root
+        .get("expected_threat_percent_census")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("EventAI source profile has no threat percent census")?
+        .iter()
+        .map(|(value, count)| {
+            let value = value
+                .parse::<i32>()
+                .map_err(|_| format!("threat percent census value is not an integer: {value}"))?;
+            let count = count
+                .as_u64()
+                .ok_or_else(|| format!("threat percent census count is not an integer: {value}"))?;
+            Ok((value, count))
+        })
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
     let source_profile = SourceProfile {
         name: string("name")?,
         cmangos_commit: string("cmangos_commit")?,
@@ -383,6 +401,7 @@ pub(crate) fn source_profile(name: &str) -> Result<SourceProfile, String> {
         cast_action_subjects: count("cast_action_subjects")?,
         template_schedule_overlaps: count("template_schedule_overlaps")?,
         creature_spell_list_overlaps: count("creature_spell_list_overlaps")?,
+        direct_threat_actions: count("direct_threat_actions")?,
         approvals: ApprovalRules {
             classifications: strings("classifications")?,
             events: numbers("events")?,
@@ -396,6 +415,7 @@ pub(crate) fn source_profile(name: &str) -> Result<SourceProfile, String> {
             normalizations,
         },
         expected_source_census,
+        expected_threat_percent_census,
     };
     if source_profile.name != name {
         return Err(format!(
@@ -491,6 +511,19 @@ impl CompatibilityManifest {
                 profile.creature_spell_list_overlaps, coverage.creature_spell_list_overlaps
             ));
         }
+        if coverage.direct_threat_actions != profile.direct_threat_actions {
+            findings.push(format!(
+                "source_direct_threat_actions expected={} observed={}",
+                profile.direct_threat_actions, coverage.direct_threat_actions
+            ));
+        }
+        if coverage.threat_percent != profile.expected_threat_percent_census {
+            findings.push(format!(
+                "source_threat_percent_census expected={} observed={}",
+                render_signed_census(&profile.expected_threat_percent_census),
+                render_signed_census(&coverage.threat_percent)
+            ));
+        }
         let classified_rules = coverage.classified_rules();
         if classified_rules != coverage.total_rules {
             findings.push(format!(
@@ -560,6 +593,7 @@ impl CompatibilityManifest {
                 "cast_action_subjects": coverage.cast_action_subjects,
                 "template_schedule_overlaps": coverage.template_schedule_overlaps,
                 "creature_spell_list_overlaps": coverage.creature_spell_list_overlaps,
+                "direct_threat_actions": coverage.direct_threat_actions,
                 "classified_rules": classified_rules,
                 "unclassified_rules": coverage.total_rules.saturating_sub(classified_rules),
                 "emitted_rules": coverage.emitted_rules,
@@ -639,6 +673,21 @@ impl SourceProfile {
                 ));
             }
         }
+        let percent_threat_actions = actions
+            .get(&u64::from(ACTION_THREAT_SINGLE))
+            .copied()
+            .unwrap_or(0)
+            .saturating_sub(self.direct_threat_actions)
+            + actions
+                .get(&u64::from(ACTION_THREAT_ALL_PCT))
+                .copied()
+                .unwrap_or(0);
+        let observed_percent_actions = self.expected_threat_percent_census.values().sum::<u64>();
+        if percent_threat_actions != observed_percent_actions {
+            return Err(format!(
+                "EventAI threat percent census count mismatch: actions={percent_threat_actions} census={observed_percent_actions}"
+            ));
+        }
         Ok(())
     }
 
@@ -694,6 +743,10 @@ impl SourceProfile {
             "cast_flag" => mask_has_no_residual(&key.raw_value, self.approvals.cast_flag_bits),
             "dependency" => self.approvals.dependencies.contains(&key.raw_value),
             "phase_range" => true,
+            "threat_percent" => key
+                .raw_value
+                .parse()
+                .is_ok_and(|value| self.expected_threat_percent_census.contains_key(&value)),
             "rule" => true,
             _ => false,
         }
@@ -707,6 +760,14 @@ fn mask_has_no_residual(raw_value: &str, approved_bits: u32) -> bool {
 }
 
 fn render_census(values: &BTreeMap<u64, u64>) -> String {
+    values
+        .iter()
+        .map(|(value, count)| format!("{value}={count}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn render_signed_census(values: &BTreeMap<i32, u64>) -> String {
     values
         .iter()
         .map(|(value, count)| format!("{value}={count}"))
@@ -736,6 +797,7 @@ struct Coverage {
     dropped_rules: u64,
     accepted_rules: u64,
     action_rows: u64,
+    direct_threat_actions: u64,
     event: BTreeMap<u64, u64>,
     action: BTreeMap<u64, u64>,
     accepted_event: BTreeMap<u64, u64>,
@@ -747,6 +809,7 @@ struct Coverage {
     flags: BTreeMap<u64, u64>,
     cast_flags: BTreeMap<u64, u64>,
     death_prevention_states: BTreeMap<u64, u64>,
+    threat_percent: BTreeMap<i32, u64>,
     dropped: BTreeMap<String, u64>,
     dropped_values: BTreeMap<(String, u64), u64>,
     dropped_rule_values: BTreeMap<(String, u64), BTreeSet<u64>>,
@@ -770,6 +833,10 @@ struct GroupValue {
 
 impl Coverage {
     fn source_value(values: &mut BTreeMap<u64, u64>, value: u64) {
+        *values.entry(value).or_default() += 1;
+    }
+
+    fn source_signed_value(values: &mut BTreeMap<i32, u64>, value: i32) {
         *values.entry(value).or_default() += 1;
     }
 
@@ -868,6 +935,8 @@ impl Coverage {
             "event_flags": self.flags,
             "cast_flags": self.cast_flags,
             "death_prevention_states": self.death_prevention_states,
+            "threat_percents": self.threat_percent,
+            "direct_threat_actions": self.direct_threat_actions,
         })
     }
 
@@ -981,6 +1050,7 @@ struct NativeAction {
     raw_kind: u32,
     raw_target: Option<u32>,
     raw_cast_flags: Option<u32>,
+    threat_percent: Option<i32>,
     texts: Vec<u32>,
     summon_entry: Option<u64>,
     summon_location: Option<u32>,
@@ -1428,6 +1498,16 @@ impl EventAiSource {
                     plan.coverage
                         .result("cast_flag", flags, classification, reason, rule.id, None);
                 }
+                if let Some(percent) = action.threat_percent {
+                    plan.coverage.result(
+                        "threat_percent",
+                        percent,
+                        classification,
+                        reason,
+                        rule.id,
+                        None,
+                    );
+                }
                 for dependency in action.dependencies {
                     plan.coverage.result(
                         "dependency",
@@ -1765,6 +1845,19 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                 }
                 if kind == ACTION_SET_DEATH_PREVENTION {
                     Coverage::source_value(&mut coverage.death_prevention_states, action[1] as u64);
+                }
+                if kind == ACTION_THREAT_SINGLE {
+                    if action[3] == 0 {
+                        Coverage::source_signed_value(
+                            &mut coverage.threat_percent,
+                            action[1] as i32,
+                        );
+                    } else {
+                        coverage.direct_threat_actions += 1;
+                    }
+                }
+                if kind == ACTION_THREAT_ALL_PCT {
+                    Coverage::source_signed_value(&mut coverage.threat_percent, action[1] as i32);
                 }
             }
             Some(RawRule {
@@ -2279,6 +2372,7 @@ fn map_action(
                 raw_kind: kind,
                 raw_target: None,
                 raw_cast_flags: None,
+                threat_percent: None,
                 dependencies: text_dependencies(rule_id, slot, &texts),
                 texts,
                 summon_entry: None,
@@ -2316,6 +2410,7 @@ fn map_action(
                 raw_kind: kind,
                 raw_target: Some(action[2]),
                 raw_cast_flags: None,
+                threat_percent: None,
                 dependencies: text_dependencies(rule_id, slot, &[action[1]]),
                 texts: vec![action[1]],
                 summon_entry: None,
@@ -2328,6 +2423,7 @@ fn map_action(
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
+            threat_percent: None,
             dependencies: Vec::new(),
             texts: Vec::new(),
             summon_entry: None,
@@ -2349,6 +2445,7 @@ fn map_action(
                 raw_kind: kind,
                 raw_target: Some(action[2]),
                 raw_cast_flags: Some(action[3]),
+                threat_percent: None,
                 dependencies: Vec::new(),
                 texts: Vec::new(),
                 summon_entry: None,
@@ -2356,11 +2453,48 @@ fn map_action(
                 normalizations,
             })
         }
+        ACTION_THREAT_SINGLE if action[3] == 0 => {
+            let percent = map_threat_percent(action[1])?;
+            let target = map_target(action[2]).map_err(|failure| vec![failure])?;
+            Ok(NativeAction {
+                encoded: format!("threat-selected:{percent}:{target}"),
+                raw_kind: kind,
+                raw_target: Some(action[2]),
+                raw_cast_flags: None,
+                threat_percent: Some(percent),
+                dependencies: Vec::new(),
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
+        ACTION_THREAT_SINGLE => Err(vec![MappingFailure::source(
+            "threat_mode",
+            u64::from(action[3]),
+            "unsupported_direct_threat",
+        )]),
+        ACTION_THREAT_ALL_PCT => {
+            let percent = map_threat_percent(action[1])?;
+            Ok(NativeAction {
+                encoded: format!("threat-all:{percent}"),
+                raw_kind: kind,
+                raw_target: None,
+                raw_cast_flags: None,
+                threat_percent: Some(percent),
+                dependencies: Vec::new(),
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
         ACTION_SET_PHASE if action[1] < 32 => Ok(NativeAction {
             encoded: format!("phase:{}", action[1]),
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
+            threat_percent: None,
             dependencies: Vec::new(),
             texts: Vec::new(),
             summon_entry: None,
@@ -2372,6 +2506,7 @@ fn map_action(
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
+            threat_percent: None,
             dependencies: Vec::new(),
             texts: Vec::new(),
             summon_entry: None,
@@ -2383,6 +2518,7 @@ fn map_action(
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
+            threat_percent: None,
             dependencies: Vec::new(),
             texts: Vec::new(),
             summon_entry: None,
@@ -2408,6 +2544,7 @@ fn map_action(
                 raw_kind: kind,
                 raw_target: None,
                 raw_cast_flags: None,
+                threat_percent: None,
                 dependencies: Vec::new(),
                 texts: Vec::new(),
                 summon_entry: None,
@@ -2420,6 +2557,7 @@ fn map_action(
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
+            threat_percent: None,
             dependencies: Vec::new(),
             texts: Vec::new(),
             summon_entry: None,
@@ -2431,6 +2569,7 @@ fn map_action(
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
+            threat_percent: None,
             dependencies: Vec::new(),
             texts: Vec::new(),
             summon_entry: None,
@@ -2442,6 +2581,7 @@ fn map_action(
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
+            threat_percent: None,
             dependencies: Vec::new(),
             texts: Vec::new(),
             summon_entry: None,
@@ -2490,6 +2630,7 @@ fn map_action(
                 raw_kind: kind,
                 raw_target: Some(action[2]),
                 raw_cast_flags: None,
+                threat_percent: None,
                 texts: Vec::new(),
                 summon_entry: Some(entry),
                 summon_location: Some(action[3]),
@@ -2516,6 +2657,7 @@ fn map_action(
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
+            threat_percent: None,
             dependencies: Vec::new(),
             texts: Vec::new(),
             summon_entry: None,
@@ -2528,6 +2670,7 @@ fn map_action(
                 raw_kind: kind,
                 raw_target: None,
                 raw_cast_flags: None,
+                threat_percent: None,
                 dependencies: Vec::new(),
                 texts: Vec::new(),
                 summon_entry: None,
@@ -2559,6 +2702,18 @@ fn map_action(
             "unsupported_action",
         )]),
     }
+}
+
+fn map_threat_percent(raw: u32) -> Result<i32, Vec<MappingFailure>> {
+    let percent = raw as i32;
+    if !(-100..=100).contains(&percent) {
+        return Err(vec![MappingFailure::source(
+            "threat_percent",
+            u64::from(raw),
+            "invalid_threat_percent",
+        )]);
+    }
+    Ok(percent)
 }
 
 fn map_cast_target_and_flags(
@@ -2797,7 +2952,9 @@ mod tests {
         profile.cast_action_subjects = plan.coverage.cast_action_subjects;
         profile.template_schedule_overlaps = plan.coverage.template_schedule_overlaps;
         profile.creature_spell_list_overlaps = plan.coverage.creature_spell_list_overlaps;
+        profile.direct_threat_actions = plan.coverage.direct_threat_actions;
         profile.expected_source_census.clear();
+        profile.expected_threat_percent_census = plan.coverage.threat_percent.clone();
         profile
     }
 
@@ -2857,7 +3014,86 @@ mod tests {
         assert_eq!(profile.loader_contract, LOADER_CONTRACT);
         assert_eq!(profile.source_rule_count, 10_843);
         assert_eq!(profile.source_guid_rule_count, 39);
+        assert_eq!(profile.direct_threat_actions, 0);
+        assert_eq!(
+            profile.expected_threat_percent_census,
+            BTreeMap::from([(-100, 2), (-99, 1), (-75, 1), (-50, 2), (50, 1)])
+        );
         assert!(source_profile("z2815").is_err());
+    }
+
+    #[test]
+    fn percent_threat_actions_keep_signed_provenance_and_source_order() {
+        let source = parse(&dump(&[rule(
+            10,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [
+                [ACTION_THREAT_SINGLE as i64, -50, TARGET_HOSTILE as i64, 0],
+                [ACTION_THREAT_ALL_PCT as i64, -100, 0, 0],
+                [
+                    ACTION_THREAT_SINGLE as i64,
+                    50,
+                    TARGET_HOSTILE_RANDOM_EXCEPT_HIGHEST as i64,
+                    0,
+                ],
+            ],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+
+        assert!(manifest.is_apply_ready(), "{}", manifest.render());
+        assert!(plan.definition_rows[0].contains(
+            "threat-selected:-50:opponent+threat-all:-100+threat-selected:50:random-threat-except-highest"
+        ));
+        assert_eq!(
+            plan.action_counts(ACTION_THREAT_SINGLE as u64),
+            (2, 2, 0, 2)
+        );
+        assert_eq!(
+            plan.action_counts(ACTION_THREAT_ALL_PCT as u64),
+            (1, 1, 0, 1)
+        );
+        let rendered: serde_json::Value = serde_json::from_str(manifest.render()).unwrap();
+        assert_eq!(rendered["source_census"]["threat_percents"]["-100"], 1);
+        assert_result(&rendered, "threat_percent", "-50", "emitted", "emitted");
+        assert_result(&rendered, "threat_percent", "50", "emitted", "emitted");
+    }
+
+    #[test]
+    fn direct_threat_is_recognized_but_refuses_without_source_coverage() {
+        let source = parse(&dump(&[rule(
+            10,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [
+                [ACTION_THREAT_SINGLE as i64, 25, TARGET_HOSTILE as i64, 1],
+                [0; 4],
+                [0; 4],
+            ],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+
+        assert_eq!(plan.dropped("unsupported_direct_threat", 1), 1);
+        let rendered = assert_refusal(&manifest, "unsupported_direct_threat");
+        assert_result(
+            &rendered,
+            "threat_mode",
+            "1",
+            "dropped",
+            "unsupported_direct_threat",
+        );
     }
 
     #[test]
@@ -3532,6 +3768,11 @@ mod tests {
             0
         );
         let profile = source_profile(SOURCE_PROFILE_NAME).unwrap();
+        assert_eq!(source.coverage.direct_threat_actions, 0);
+        assert_eq!(
+            source.coverage.threat_percent,
+            profile.expected_threat_percent_census
+        );
         for (dimension, expected) in profile.expected_source_census {
             assert_eq!(
                 source.coverage.source_census(&dimension),

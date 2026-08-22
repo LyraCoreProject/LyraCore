@@ -92,6 +92,128 @@ fn condition_rule(source_rule_id: u64, event: EventCondition) -> EventAiRule {
     }
 }
 
+fn aggro_threat_definition(instructions: Vec<CreatureInstruction>) -> EventAiDefinition {
+    let rule = EventAiRule {
+        source_rule_id: 509_0000,
+        event: EventCondition::OnAggro,
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::Once,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions,
+    };
+    let subject = EventAiSubject::Entry(ENTRY);
+    EventAiDefinition {
+        subject,
+        revision: normalized_revision(subject, std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    }
+}
+
+fn dispatch_aggro(scenario: &mut Scenario, current_target_guid: Option<u64>) {
+    evaluate(
+        scenario,
+        EventAiRequest::Edge(EventContext {
+            current_target_guid,
+            engaged: true,
+            ..EventContext::empty(EventKind::OnAggro, CREATURE, 0)
+        }),
+    );
+}
+
+#[test]
+fn percent_threat_instructions_apply_in_source_order_and_keep_zero_rows() {
+    let definition = aggro_threat_definition(vec![
+        CreatureInstruction::ScaleSelectedThreat(ScaleSelectedThreatInstruction {
+            percent: -50,
+            target: InstructionTarget::CurrentOpponent,
+        }),
+        CreatureInstruction::ScaleSelectedThreat(ScaleSelectedThreatInstruction {
+            percent: 50,
+            target: InstructionTarget::CurrentOpponent,
+        }),
+    ]);
+    let mut scenario = world()
+        .threat(CREATURE, TARGET, 100)
+        .eventai_native_definition(definition);
+
+    dispatch_aggro(&mut scenario, Some(TARGET));
+
+    assert_eq!(scenario.threat_value(CREATURE, TARGET), Some(75));
+
+    let definition = aggro_threat_definition(vec![CreatureInstruction::ScaleAllThreat(
+        ScaleAllThreatInstruction { percent: -100 },
+    )]);
+    let mut scenario = world()
+        .threat(CREATURE, TARGET, 5)
+        .eventai_native_definition(definition);
+
+    dispatch_aggro(&mut scenario, Some(TARGET));
+
+    assert_eq!(scenario.threat_value(CREATURE, TARGET), Some(0));
+}
+
+#[test]
+fn absent_selected_threat_target_refuses_without_fallback() {
+    let definition = aggro_threat_definition(vec![CreatureInstruction::ScaleSelectedThreat(
+        ScaleSelectedThreatInstruction {
+            percent: -50,
+            target: InstructionTarget::Invoker,
+        },
+    )]);
+    let mut scenario = world()
+        .threat(CREATURE, TARGET, 100)
+        .eventai_native_definition(definition);
+
+    dispatch_aggro(&mut scenario, Some(TARGET));
+
+    assert_eq!(scenario.threat_value(CREATURE, TARGET), Some(100));
+}
+
+#[test]
+fn threat_scale_retargets_by_lowest_guid_but_preserves_a_taunt_lock() {
+    let definition = aggro_threat_definition(vec![CreatureInstruction::ScaleSelectedThreat(
+        ScaleSelectedThreatInstruction {
+            percent: -50,
+            target: InstructionTarget::CurrentOpponent,
+        },
+    )]);
+    let higher_guid = SECOND_TARGET + 1;
+    let mut scenario = world()
+        .player(SECOND_TARGET, point(6.0))
+        .player(higher_guid, point(9.0))
+        .threat(CREATURE, TARGET, 100)
+        .threat(CREATURE, SECOND_TARGET, 100)
+        .threat(CREATURE, higher_guid, 100)
+        .eventai_native_definition(definition);
+
+    dispatch_aggro(&mut scenario, Some(TARGET));
+    fire(&mut scenario);
+
+    assert_eq!(scenario.threat_value(CREATURE, TARGET), Some(50));
+    assert_eq!(scenario.victims(), vec![(CREATURE, SECOND_TARGET)]);
+
+    let definition = aggro_threat_definition(vec![CreatureInstruction::ScaleSelectedThreat(
+        ScaleSelectedThreatInstruction {
+            percent: -50,
+            target: InstructionTarget::CurrentOpponent,
+        },
+    )]);
+    let mut scenario = world()
+        .player(SECOND_TARGET, point(6.0))
+        .threat(CREATURE, TARGET, 100)
+        .threat(CREATURE, SECOND_TARGET, 100)
+        .taunted(CREATURE, TARGET)
+        .eventai_native_definition(definition);
+
+    dispatch_aggro(&mut scenario, Some(TARGET));
+    fire(&mut scenario);
+
+    assert_eq!(scenario.victims(), vec![(CREATURE, TARGET)]);
+}
+
 #[test]
 fn main_spell_metadata_reaches_the_authored_posture_seam() {
     let mut rule = condition_rule(

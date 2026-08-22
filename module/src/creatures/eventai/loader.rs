@@ -13,7 +13,8 @@ use super::{
     InstructionSelection, InstructionTarget, KillCondition, OutOfCombatSightCondition,
     PercentageCondition, PhaseSet, PostureAdmission, QuestTakenPredicate, RandomPhaseInstruction,
     RandomPhaseRangeInstruction, RangedPostureInstruction, ReceiveAiEventCondition,
-    ReceiveEmoteCondition, RecurrencePolicy, SetLethalDamageFloorInstruction, SetPhaseInstruction,
+    ReceiveEmoteCondition, RecurrencePolicy, ScaleAllThreatInstruction,
+    ScaleSelectedThreatInstruction, SetLethalDamageFloorInstruction, SetPhaseInstruction,
     SpawnCondition, SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode,
     SpellCasterRole, SpellEventCondition, SpellStartMode, SpellTargetRole, SummonInstruction,
     TargetRangeCondition, TimeWindow,
@@ -565,6 +566,17 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
             },
         )),
         ["force-death"] => Ok(CreatureInstruction::ForceDeath),
+        ["threat-selected", percent, target] => Ok(CreatureInstruction::ScaleSelectedThreat(
+            ScaleSelectedThreatInstruction {
+                percent: parse_threat_percent(percent)?,
+                target: parse_target(target)?,
+            },
+        )),
+        ["threat-all", percent] => Ok(CreatureInstruction::ScaleAllThreat(
+            ScaleAllThreatInstruction {
+                percent: parse_threat_percent(percent)?,
+            },
+        )),
         _ => Err(format!("unknown creature instruction: {encoded}")),
     }
 }
@@ -664,6 +676,14 @@ fn parse_u8(value: &str) -> Result<u8, String> {
 
 fn parse_i32(value: &str) -> Result<i32, String> {
     value.parse().map_err(|_| format!("invalid i32: {value}"))
+}
+
+fn parse_threat_percent(value: &str) -> Result<i32, String> {
+    let percent = parse_i32(value)?;
+    if !(-100..=100).contains(&percent) {
+        return Err(format!("threat percent must be -100..=100: {percent}"));
+    }
+    Ok(percent)
 }
 
 /// Load one definition and keep its creature in combat for the durable integration test.
@@ -848,5 +868,24 @@ mod tests {
                 parse_rule(&format!("17,aggro,100,1,once,all,ordinary,{encoded},flee")).unwrap();
             assert_eq!(rule.posture, expected);
         }
+    }
+
+    #[test]
+    fn percent_threat_vocabulary_decodes_with_signed_bounds() {
+        let selected = parse_instruction("threat-selected:-50:opponent").unwrap();
+        assert!(matches!(
+            selected,
+            CreatureInstruction::ScaleSelectedThreat(ScaleSelectedThreatInstruction {
+                percent: -50,
+                target: InstructionTarget::CurrentOpponent,
+            })
+        ));
+
+        let all = parse_instruction("threat-all:-100").unwrap();
+        assert!(matches!(
+            all,
+            CreatureInstruction::ScaleAllThreat(ScaleAllThreatInstruction { percent: -100 })
+        ));
+        assert!(parse_instruction("threat-all:-101").is_err());
     }
 }
