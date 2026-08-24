@@ -1,5 +1,5 @@
 #[cfg(feature = "debug_reducers")]
-use spacetimedb::{reducer, ReducerContext, Table};
+use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 #[cfg(feature = "debug_reducers")]
 use crate::encounter::{
@@ -9,21 +9,38 @@ use crate::encounter::{
 #[cfg(feature = "debug_reducers")]
 use crate::pkg_blackrock_depths::blackrock_tomb_round;
 #[cfg(feature = "debug_reducers")]
-use crate::pkg_shadowfang_keep::shadowfang_fenrus_choreography;
+use crate::pkg_shadowfang_keep::{
+    shadowfang_dark_offering_schedule, shadowfang_fenrus_choreography, shadowfang_voidwalker_group,
+    VOIDWALKER_ROUTE,
+};
 #[cfg(feature = "debug_reducers")]
 use crate::pkg_sunken_temple::sunken_temple_suppression;
 #[cfg(feature = "debug_reducers")]
-use crate::pkg_wailing_caverns::{wailing_escort_progress, wailing_escort_schedule};
+use crate::pkg_wailing_caverns::{
+    wailing_escort_progress, wailing_escort_schedule, WailingEscortSchedule,
+};
 #[cfg(feature = "debug_reducers")]
 use crate::{
     game_chat_event, game_creature_spline, game_creature_template, game_gameobject, game_instance,
-    game_spell, game_world_entity, GameInstance,
+    game_spell, game_spell_effect, game_world_entity, GameInstance, SpellEffect,
 };
 
 #[cfg(feature = "debug_reducers")]
 const FIXTURE_LOW_BAND: u64 = 0x10_0000;
 #[cfg(feature = "debug_reducers")]
 const TOMB_SCHEDULER_INSTANCE: u64 = 920;
+#[cfg(feature = "debug_reducers")]
+const WAILING_WAIT_MUTANUS_PHASE: u8 = 19;
+#[cfg(feature = "debug_reducers")]
+const WAILING_DISCIPLE_AWAKE_PHASE: u8 = 21;
+#[cfg(feature = "debug_reducers")]
+const WAILING_ROUTE_ARRIVE_PHASE: u8 = 2;
+#[cfg(feature = "debug_reducers")]
+const WAILING_FIRST_CORNER_POINT: u8 = 12;
+#[cfg(feature = "debug_reducers")]
+const WAILING_EXIT_PHASE: u8 = 25;
+#[cfg(feature = "debug_reducers")]
+const WAILING_DESPAWN_PHASE: u8 = 26;
 
 /// Starts the Tomb of Seven through EventAI's production notification boundary. The standalone
 /// verifier calls this reducer, waits for the package-owned schedule, then checks the next round.
@@ -116,19 +133,75 @@ pub fn debug_verify_shadowfang_choreography(ctx: &ReducerContext) -> Result<(), 
         voidwalkers.len() == 4,
         "Fenrus choreography did not summon four Arugal Voidwalkers",
     )?;
-    for (x, y, z) in [
-        (-155.352, 2172.780, 128.448),
-        (-147.059, 2163.193, 128.696),
-        (-148.869, 2180.859, 128.448),
-        (-140.203, 2175.263, 128.448),
-    ] {
+    let group = ctx
+        .db
+        .shadowfang_voidwalker_group()
+        .instance_id()
+        .find(907)
+        .ok_or_else(|| "Fenrus choreography installed no durable voidwalker group".to_string())?;
+    require(
+        group.walker_guids.len() == 4 && group.walker_guids.contains(&group.leader_guid),
+        "Arugal Voidwalkers did not elect one durable leader",
+    )?;
+    require(
+        group.route_point > 0,
+        "Arugal Voidwalker group did not advance its pinned patrol route",
+    )?;
+    let route_point =
+        (usize::from(group.route_point) + VOIDWALKER_ROUTE.len() - 1) % VOIDWALKER_ROUTE.len();
+    let destination = VOIDWALKER_ROUTE[route_point];
+    let previous = if route_point == 0 {
+        VOIDWALKER_ROUTE[VOIDWALKER_ROUTE.len() - 2]
+    } else {
+        VOIDWALKER_ROUTE[route_point - 1]
+    };
+    let heading = (destination.1 - previous.1).atan2(destination.0 - previous.0);
+    let leader_target = ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(group.leader_guid)
+        .map(|spline| (spline.dx, spline.dy, spline.dz))
+        .or_else(|| {
+            ctx.db
+                .game_world_entity()
+                .guid()
+                .find(group.leader_guid)
+                .map(|leader| (leader.x, leader.y, leader.z))
+        })
+        .ok_or_else(|| "Arugal Voidwalker leader disappeared".to_string())?;
+    require(
+        (leader_target.0 - destination.0).abs() < 0.01
+            && (leader_target.1 - destination.1).abs() < 0.01
+            && (leader_target.2 - destination.2).abs() < 0.01,
+        "Arugal Voidwalker leader did not target its pinned patrol point",
+    )?;
+    for (position, follower_guid) in group.walker_guids.iter().copied().enumerate().skip(1) {
+        let angle = heading + std::f32::consts::FRAC_PI_2 * position as f32;
+        let expected = (
+            destination.0 + angle.cos(),
+            destination.1 + angle.sin(),
+            destination.2,
+        );
+        let actual = ctx
+            .db
+            .game_creature_spline()
+            .guid()
+            .find(follower_guid)
+            .map(|spline| (spline.dx, spline.dy, spline.dz))
+            .or_else(|| {
+                ctx.db
+                    .game_world_entity()
+                    .guid()
+                    .find(follower_guid)
+                    .map(|follower| (follower.x, follower.y, follower.z))
+            })
+            .ok_or_else(|| "an Arugal Voidwalker follower disappeared".to_string())?;
         require(
-            voidwalkers.iter().any(|entity| {
-                (entity.x - x).abs() < 0.01
-                    && (entity.y - y).abs() < 0.01
-                    && (entity.z - z).abs() < 0.01
-            }),
-            "an Arugal Voidwalker was not at its source position",
+            (actual.0 - expected.0).abs() < 0.01
+                && (actual.1 - expected.1).abs() < 0.01
+                && (actual.2 - expected.2).abs() < 0.01,
+            "an Arugal Voidwalker did not target its 1 yard formation offset",
         )?;
     }
     require(
@@ -143,6 +216,98 @@ pub fn debug_verify_shadowfang_choreography(ctx: &ReducerContext) -> Result<(), 
             .next()
             .is_none(),
         "Fenrus choreography left a scheduled step behind",
+    )?;
+
+    let wounded_guid = group
+        .walker_guids
+        .iter()
+        .copied()
+        .find(|guid| *guid != group.leader_guid)
+        .ok_or_else(|| "voidwalker group had no Dark Offering target".to_string())?;
+    let mut wounded = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(wounded_guid)
+        .ok_or_else(|| "Dark Offering target disappeared".to_string())?;
+    wounded.max_health = 1_000;
+    wounded.health = 500;
+    ctx.db.game_world_entity().guid().update(wounded);
+    require(
+        crate::combat::arm_creature_engagement(ctx, group.leader_guid, fixture_guid(0, 46), false),
+        "Arugal Voidwalker did not cross the creature aggro boundary",
+    )?;
+    require(
+        ctx.db
+            .shadowfang_dark_offering_schedule()
+            .by_caster()
+            .filter(&group.leader_guid)
+            .count()
+            == 1,
+        "Arugal Voidwalker aggro did not arm one Dark Offering callback",
+    )
+}
+
+/// Verifies Dark Offering's durable heal, kills the source-spawned group through the production
+/// death path, then closes the door to model a reloaded gameobject before restart recovery.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_shadowfang_dark_offering_and_prepare_restart(
+    ctx: &ReducerContext,
+) -> Result<(), String> {
+    let group = ctx
+        .db
+        .shadowfang_voidwalker_group()
+        .instance_id()
+        .find(907)
+        .ok_or_else(|| "Arugal Voidwalker group disappeared before Dark Offering".to_string())?;
+    let wounded_guid = group
+        .walker_guids
+        .iter()
+        .copied()
+        .find(|guid| *guid != group.leader_guid)
+        .ok_or_else(|| "voidwalker group had no Dark Offering target".to_string())?;
+    let wounded = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(wounded_guid)
+        .ok_or_else(|| "Dark Offering target disappeared".to_string())?;
+    require(
+        wounded.health > 500,
+        "Dark Offering did not durably heal the lowest-health friendly",
+    )?;
+
+    let player_guid = fixture_guid(0, 46);
+    for walker_guid in group.walker_guids {
+        require(
+            crate::combat::kill_creature(ctx, walker_guid, Some(player_guid)),
+            "production creature death refused an Arugal Voidwalker",
+        )?;
+    }
+    let sorcerer_door = fixture_gameobject_guid(27);
+    require(
+        gameobject_state(ctx, sorcerer_door)? == DOOR_OPEN_STATE,
+        "the last Arugal Voidwalker did not open the Sorcerer Door",
+    )?;
+    let gameobjects = ctx.db.game_gameobject();
+    let mut door = gameobjects
+        .guid()
+        .find(sorcerer_door)
+        .ok_or_else(|| "Sorcerer Door disappeared".to_string())?;
+    door.state = 0;
+    gameobjects.guid().update(door);
+    Ok(())
+}
+
+/// Verifies that the package tick restores the Sorcerer Door from durable encounter and group
+/// state after the object was reloaded closed.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_shadowfang_restart_recovery(ctx: &ReducerContext) -> Result<(), String> {
+    require(
+        gameobject_state(ctx, fixture_gameobject_guid(27))? == DOOR_OPEN_STATE,
+        "Shadowfang restart recovery left the Sorcerer Door closed",
     )
 }
 
@@ -164,13 +329,10 @@ pub fn debug_verify_wailing_escort_and_begin_awakening(ctx: &ReducerContext) -> 
         .guid()
         .find(disciple_guid)
         .ok_or_else(|| "Wailing escort emitted no durable movement spline".to_string())?;
-    let targets_first_corner = (spline.dx - -104.28827).abs() < 0.01
-        && (spline.dy - 234.40804).abs() < 0.01
-        && (spline.dz - -91.64163).abs() < 0.01;
-    let targets_circle = (spline.dx - -54.713943).abs() < 0.01
-        && (spline.dy - 273.85025).abs() < 0.01
-        && (spline.dz - -92.84426).abs() < 0.01;
-    if !targets_first_corner && !targets_circle {
+    let targets_second_route_point = (spline.dx - -124.4064).abs() < 0.01
+        && (spline.dy - 131.07953).abs() < 0.01
+        && (spline.dz - -78.71027).abs() < 0.01;
+    if !targets_second_route_point {
         let phase = ctx
             .db
             .wailing_escort_progress()
@@ -193,6 +355,27 @@ pub fn debug_verify_wailing_escort_and_begin_awakening(ctx: &ReducerContext) -> 
         "Wailing escort left InProgress before the ritual completed",
     )?;
 
+    clear_wailing_schedule(ctx, 908);
+    ctx.db.game_creature_spline().guid().delete(disciple_guid);
+    set_fixture_position(ctx, disciple_guid, -104.28827, 234.40804, -91.64163)?;
+    set_fixture_position(ctx, fixture_guid(0, 29), -104.28827, 234.40804, -91.64163)?;
+    let progress_table = ctx.db.wailing_escort_progress();
+    let mut first_corner = progress_table
+        .instance_id()
+        .find(908)
+        .ok_or_else(|| "Wailing escort progress disappeared".to_string())?;
+    first_corner.phase = WAILING_ROUTE_ARRIVE_PHASE;
+    first_corner.route_point = WAILING_FIRST_CORNER_POINT;
+    progress_table.instance_id().update(first_corner);
+    schedule_wailing_fixture(
+        ctx,
+        908,
+        WAILING_ROUTE_ARRIVE_PHASE,
+        WAILING_FIRST_CORNER_POINT,
+        100_000,
+    );
+
+    install_creature_template(ctx, 3636)?;
     install_creature_template(ctx, 5762)?;
     install_creature_template(ctx, 5763)?;
     install_creature_template(ctx, 3654)?;
@@ -208,6 +391,14 @@ pub fn debug_verify_wailing_escort_and_begin_awakening(ctx: &ReducerContext) -> 
         encounter::get_encounter_state(ctx, 921, 4) == ENCOUNTER_IN_PROGRESS,
         "second Wailing escort did not start through gossip",
     )?;
+    clear_wailing_schedule(ctx, 921);
+    let mut awaiting_mutanus = progress_table
+        .instance_id()
+        .find(921)
+        .ok_or_else(|| "second Wailing escort progress disappeared".to_string())?;
+    awaiting_mutanus.phase = WAILING_WAIT_MUTANUS_PHASE;
+    awaiting_mutanus.route_point = 70;
+    progress_table.instance_id().update(awaiting_mutanus);
     let mutanus = spawn_source(ctx, 3654, 43, 921, true, 44)?;
     notify(
         ctx,
@@ -227,6 +418,19 @@ pub fn debug_verify_wailing_escort_and_begin_awakening(ctx: &ReducerContext) -> 
             .count()
             == 1,
         "Mutanus completion did not arm one awakening callback",
+    )
+}
+
+/// Verifies the point-12 source line while its one-second relay row is still live.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_wailing_first_corner_dialogue(ctx: &ReducerContext) -> Result<(), String> {
+    require(
+        ctx.db.game_chat_event().iter().any(|event| {
+            event.message
+                == "These caverns were once a temple of promise for regrowth in the Barrens. Now, they are the halls of nightmares."
+        }),
+        "Wailing first corner did not emit its source dialogue",
     )
 }
 
@@ -255,8 +459,158 @@ pub fn debug_verify_wailing_awakening(ctx: &ReducerContext) -> Result<(), String
         .find(921)
         .ok_or_else(|| "Wailing awakening progress disappeared".to_string())?;
     require(
-        progress.phase == 12,
-        "Wailing awakening did not advance to the Disciple response",
+        progress.phase == WAILING_DISCIPLE_AWAKE_PHASE,
+        "Wailing awakening did not preserve the source-timed Disciple response",
+    )?;
+
+    let raptors: Vec<_> = ctx
+        .db
+        .game_world_entity()
+        .by_map()
+        .filter(&43u32)
+        .filter(|entity| entity.instance_id == 908 && entity.entry == 3636 && !entity.dead)
+        .collect();
+    require(
+        raptors.len() == 2,
+        "Wailing first corner did not summon both Deviate Raptors",
+    )?;
+    require(
+        raptors
+            .iter()
+            .all(|raptor| raptor.target_guid == fixture_guid(3678, 25)),
+        "Wailing first-corner raptors did not engage the exact Disciple instance",
+    )?;
+    let player_guid = fixture_guid(0, 29);
+    for raptor in raptors {
+        require(
+            crate::combat::kill_creature(ctx, raptor.guid, Some(player_guid)),
+            "production creature death refused a Wailing first-corner raptor",
+        )?;
+    }
+    Ok(())
+}
+
+/// Fast-forwards the completed awakening to the source exit phase. The scheduled package reducer
+/// still owns the movement and cleanup outcomes verified by the next two reducers.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_prepare_wailing_exit(ctx: &ReducerContext) -> Result<(), String> {
+    clear_wailing_schedule(ctx, 921);
+    let progress_table = ctx.db.wailing_escort_progress();
+    let mut progress = progress_table
+        .instance_id()
+        .find(921)
+        .ok_or_else(|| "Wailing awakening progress disappeared before exit".to_string())?;
+    progress.phase = WAILING_EXIT_PHASE;
+    progress.route_point = 70;
+    progress_table.instance_id().update(progress);
+    schedule_wailing_fixture(ctx, 921, WAILING_EXIT_PHASE, 70, 100_000);
+    Ok(())
+}
+
+/// Verifies the first scheduled exit leg for both druids, then shortens only the fixture's
+/// package-owned cleanup callback.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_wailing_exit_and_prepare_cleanup(ctx: &ReducerContext) -> Result<(), String> {
+    let disciple_target = ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(fixture_guid(3678, 41))
+        .map(|spline| (spline.dx, spline.dy, spline.dz))
+        .ok_or_else(|| "Wailing exit emitted no durable Disciple movement spline".to_string())?;
+    let naralex_target = ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(fixture_guid(3679, 42))
+        .map(|spline| (spline.dx, spline.dy, spline.dz))
+        .ok_or_else(|| "Wailing exit emitted no durable Naralex movement spline".to_string())?;
+    let dx = disciple_target.0 - naralex_target.0;
+    let dy = disciple_target.1 - naralex_target.1;
+    require(
+        ((dx * dx + dy * dy).sqrt() - 5.0).abs() < 0.01,
+        "Naralex did not target the source five-yard exit follow distance",
+    )?;
+
+    clear_wailing_schedule(ctx, 921);
+    let progress_table = ctx.db.wailing_escort_progress();
+    let mut progress = progress_table
+        .instance_id()
+        .find(921)
+        .ok_or_else(|| "Wailing exit progress disappeared".to_string())?;
+    progress.phase = WAILING_DESPAWN_PHASE;
+    let route_point = progress.route_point;
+    progress_table.instance_id().update(progress);
+    schedule_wailing_fixture(ctx, 921, WAILING_DESPAWN_PHASE, route_point, 100_000);
+    Ok(())
+}
+
+/// Verifies the source cleanup boundary: players stay, every non-player creature and every escort
+/// row in the instance is gone, and the completed encounter remains durable.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_wailing_cleanup(ctx: &ReducerContext) -> Result<(), String> {
+    require(
+        ctx.db
+            .game_world_entity()
+            .by_map()
+            .filter(&43u32)
+            .filter(|entity| entity.instance_id == 921 && !entity.is_player())
+            .next()
+            .is_none(),
+        "Wailing cleanup left a non-player creature in the instance",
+    )?;
+    require(
+        ctx.db
+            .game_world_entity()
+            .guid()
+            .find(fixture_guid(0, 43))
+            .is_some_and(|entity| entity.is_player()),
+        "Wailing cleanup despawned the participating player",
+    )?;
+    require(
+        ctx.db
+            .wailing_escort_progress()
+            .instance_id()
+            .find(921)
+            .is_none()
+            && ctx
+                .db
+                .wailing_escort_schedule()
+                .by_instance()
+                .filter(&921u64)
+                .next()
+                .is_none(),
+        "Wailing cleanup left durable escort state behind",
+    )?;
+    require(
+        encounter::get_encounter_state(ctx, 921, 4) == ENCOUNTER_DONE,
+        "Wailing cleanup lost the completed Disciple encounter",
+    )
+}
+
+/// Verifies that the last first-corner death resumed the package-owned route in source order.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_verify_wailing_first_corner_continue(ctx: &ReducerContext) -> Result<(), String> {
+    require(
+        ctx.db.game_chat_event().iter().any(|event| {
+            event.message
+                == "Come. We must continue. There is much to be done before we can pull Naralex from his nightmare."
+        }),
+        "Wailing first-corner wave did not resume its source dialogue",
+    )?;
+    let progress = ctx
+        .db
+        .wailing_escort_progress()
+        .instance_id()
+        .find(908)
+        .ok_or_else(|| "Wailing progress disappeared after the first-corner wave".to_string())?;
+    require(
+        progress.route_point >= 13,
+        "Wailing first-corner wave did not resume the pinned route",
     )
 }
 
@@ -508,7 +862,11 @@ fn verify_alzzin(ctx: &ReducerContext) -> Result<(), String> {
 fn verify_shadowfang(ctx: &ReducerContext) -> Result<(), String> {
     install_creature_template(ctx, 4275)?;
     install_creature_template(ctx, 4627)?;
+    set_creature_template_faction(ctx, 4627, 14)?;
     install_spell(ctx, 6422, "Archmage Arugal fire")?;
+    install_heal_spell(ctx, 7154, "Dark Offering", 300, 10)?;
+    let player = spawn_fixture_player(ctx, 33, 907, 46)?;
+    set_fixture_position(ctx, player, -159.547, 2178.11, 128.944)?;
     let _ada = spawn_source(ctx, 3849, 33, 907, false, 22)?;
     let _ash = spawn_source(ctx, 3850, 33, 907, false, 23)?;
     let rethilgore = spawn_source(ctx, 3914, 33, 907, true, 24)?;
@@ -532,6 +890,7 @@ fn verify_shadowfang(ctx: &ReducerContext) -> Result<(), String> {
     )?;
     let fenrus = spawn_source(ctx, 4274, 33, 907, true, 14)?;
     let _focus = spawn_gameobject(ctx, 18973, 33, 907, 26)?;
+    let _sorcerer_door = spawn_gameobject(ctx, 18972, 33, 907, 27)?;
     notify(
         ctx,
         fenrus,
@@ -574,9 +933,10 @@ fn verify_shadowfang(ctx: &ReducerContext) -> Result<(), String> {
 
 #[cfg(feature = "debug_reducers")]
 fn verify_wailing_caverns_gate(ctx: &ReducerContext) -> Result<(), String> {
+    install_creature_template(ctx, 3678)?;
     let source = spawn_source(ctx, 3671, 43, 908, true, 17)?;
     let disciple = spawn_source(ctx, 3678, 43, 908, false, 25)?;
-    set_fixture_position(ctx, disciple, -105.0, 233.0, -91.6)?;
+    set_fixture_position(ctx, disciple, -134.96526, 125.40187, -78.09446)?;
     let _naralex = spawn_source(ctx, 3679, 43, 908, false, 28)?;
     let player = spawn_fixture_player(ctx, 43, 908, 29)?;
     complete_wailing_leaders(ctx, source)?;
@@ -624,6 +984,43 @@ fn complete_wailing_leaders(ctx: &ReducerContext, source: u64) -> Result<(), Str
         notify(ctx, source, binding, EncounterSignal::Complete)?;
     }
     Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+fn clear_wailing_schedule(ctx: &ReducerContext, instance_id: u64) {
+    let schedules = ctx.db.wailing_escort_schedule();
+    let ids: Vec<u64> = schedules
+        .by_instance()
+        .filter(&instance_id)
+        .map(|scheduled| scheduled.scheduled_id)
+        .collect();
+    for id in ids {
+        schedules.scheduled_id().delete(id);
+    }
+}
+
+#[cfg(feature = "debug_reducers")]
+fn schedule_wailing_fixture(
+    ctx: &ReducerContext,
+    instance_id: u64,
+    phase: u8,
+    route_point: u8,
+    delay_micros: i64,
+) {
+    let scheduled_at = ScheduleAt::Time(
+        ctx.timestamp
+            .checked_add(TimeDuration::from_micros(delay_micros))
+            .unwrap_or(ctx.timestamp),
+    );
+    ctx.db
+        .wailing_escort_schedule()
+        .insert(WailingEscortSchedule {
+            scheduled_id: 0,
+            scheduled_at,
+            instance_id,
+            phase,
+            route_point,
+        });
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -817,6 +1214,22 @@ fn install_creature_template(ctx: &ReducerContext, entry: u32) -> Result<(), Str
 }
 
 #[cfg(feature = "debug_reducers")]
+fn set_creature_template_faction(
+    ctx: &ReducerContext,
+    entry: u32,
+    faction_template: u32,
+) -> Result<(), String> {
+    let templates = ctx.db.game_creature_template();
+    let mut template = templates
+        .entry()
+        .find(entry)
+        .ok_or_else(|| format!("fixture creature template {entry} disappeared"))?;
+    template.faction_template = faction_template;
+    templates.entry().update(template);
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
 fn install_spell(ctx: &ReducerContext, spell_id: u32, name: &str) -> Result<(), String> {
     let spells = ctx.db.game_spell();
     if spells.spell_id().find(spell_id).is_some() {
@@ -837,6 +1250,51 @@ fn install_spell(ctx: &ReducerContext, spell_id: u32, name: &str) -> Result<(), 
     spell.cast_flags = 0;
     spell.stances = 0;
     spells.insert(spell);
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+fn install_heal_spell(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    name: &str,
+    healing: i32,
+    range_yd: u32,
+) -> Result<(), String> {
+    install_spell(ctx, spell_id, name)?;
+    let spells = ctx.db.game_spell();
+    let mut spell = spells
+        .spell_id()
+        .find(spell_id)
+        .ok_or_else(|| format!("fixture spell {spell_id} disappeared"))?;
+    spell.range_yd = range_yd;
+    spell.school_mask = 32;
+    spell.is_negative = false;
+    spells.spell_id().update(spell);
+
+    let effects = ctx.db.game_spell_effect();
+    let id = (u64::from(spell_id) << 2) | 0;
+    effects.id().delete(id);
+    effects.insert(SpellEffect {
+        id,
+        spell_id,
+        effect_index: 0,
+        kind: 0x02,
+        base_points: healing,
+        die_sides: 0,
+        per_level: 0.0,
+        period_ms: 0,
+        target: 2,
+        radius_yd: 0.0,
+        chain_targets: 0,
+        trigger_spell: 0,
+        effect_mechanic: 0,
+        p0: 0,
+        p0_kind: 0,
+        p1: 0,
+        script_id: 0,
+        enters_combat: false,
+    });
     Ok(())
 }
 
