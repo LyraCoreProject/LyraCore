@@ -269,6 +269,14 @@ _Avoid_: checksum, fingerprint, version
 The deterministic, read-only inventory `packages add` prints before it asks: what the candidate Package registers, counted the way the build counts it. It is an inventory, never a security verdict. A Package's unclassified Rust is trusted code.
 _Avoid_: audit, scan, security check
 
+**Datascript**:
+Author-time TypeScript that describes game data, written against typings generated from the Module schema. It runs on the author's machine under Bun, never on the realm, and it is trusted code the author wrote — not sandboxed code. Distinct from a Runtime Script, which would execute inside the realm.
+_Avoid_: data script, script (unqualified), seed script, sandbox
+
+**Reference Datascript**:
+The maintained, minimal Datascript at `datascripts/src/reference.ts`. It names real Module columns on purpose: it is both the worked example and the standing schema check that fails `tsc --noEmit` when the schema moves under it.
+_Avoid_: sample script, test script
+
 ### Working method
 
 **Seam**:

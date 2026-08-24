@@ -1,0 +1,14 @@
+{
+  "name": "lyracore-datascripts",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": "1.3.7"
+  },
+  "dependencies": {
+    "spacetimedb": "2.7.1"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

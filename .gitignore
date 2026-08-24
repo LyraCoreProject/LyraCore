@@ -39,3 +39,13 @@ __pycache__/
 
 # Local fan-out briefs are agent execution state, not repository content.
 /.claude/tickets/
+
+# The Datascript toolchain's Bun project. `package.json`, `bun.lock`, `tsconfig.json` and the
+# Datascripts under `src/` ARE committed — the pin and the code are repository content.
+#
+# `generated/` is not: it is a ~400-file, 2 MB projection of the Module wasm that
+# `lyracore packages build` reproduces from `spacetime generate --lang typescript` on every run.
+# Committing it would put a large mechanical diff in every schema change and, worse, create a
+# second source of truth that can disagree with the Module. The Module is the schema's authority.
+/datascripts/generated/
+/datascripts/node_modules/

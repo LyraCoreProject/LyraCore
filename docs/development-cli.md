@@ -57,6 +57,7 @@ lyracore config
 lyracore config set client-data PATH
 lyracore client sync
 lyracore packages add FOLDER [--yes]
+lyracore packages build
 lyracore packages list
 lyracore packages new NAME
 lyracore character gm NAME true|false
@@ -80,6 +81,7 @@ lyracore update
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
 | `packages add` | install a Package from a folder on this machine, after a trust review and a confirmation |
+| `packages build` | regenerate the Module schema typings, then typecheck every Datascript against them |
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
 | `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
@@ -202,8 +204,9 @@ than the folder name — `my-package` and `my_package` fold onto the same module
 Then it prints a **Trust Review** and asks. The review is a deterministic, read-only scan of the
 candidate folder using a port of the build's own marker scan, so a commented-out or quoted marker
 registers nothing here either. It reports tables, reducers, hooks, tick passes, character-owned
-sweeps, addons and client overrides. Datascripts and Runtime Scripts have no tooling in this
-checkout yet, so they get an explicit "none detected" row rather than silence. The review states
+sweeps, addons and client overrides. A Package cannot yet ship a Datascript of its own — the
+authoring toolchain lives in `datascripts/` and is described under `packages build` below — so
+Datascripts and Runtime Scripts get an explicit "none detected" row rather than silence. The review states
 plainly that everything else in the Package's Rust is trusted code and that it is an inventory, not
 a security guarantee.
 
@@ -242,12 +245,71 @@ Rust-only and inert. Its `src/mod.rs` carries one commented hook pattern, and th
 `client/` directory. The printed next steps say to add `client/addons/<Name>/` for addons or `client/mpq/`
 for client-file overrides, and that `client sync` will pack them in once you do. Growing the Rust
 half means wiring more hooks from the catalogue in `module/src/hooks.rs`, following the pattern
-`packages/NAME/src/mod.rs` already shows. Datascripts and Runtime Scripts have no tooling in this
-checkout yet.
+`packages/NAME/src/mod.rs` already shows. A scaffold ships no Datascript: the authoring toolchain
+in `datascripts/` is checkout-wide today, not per-Package.
 
 Enabled Packages live in `packages/`, which is the only place the build looks. Disabling, removing
 and updating a Package are separate work (#299, #300, #302), as are git URL sources and Official
 Package lookup.
+
+## `packages build` — Datascript typings and the typecheck gate
+
+```bash
+./lyracore packages build
+```
+
+A **Datascript** is author-time TypeScript that describes game data. It is written against the
+Module's own schema, so the names and types in it cannot drift from the Module. `packages build`
+is what enforces that, in three steps:
+
+1. `spacetime generate --lang typescript` extracts the schema **through the module wasm** and writes
+   it to `datascripts/generated/`. Offline: it builds the module and reads it, and touches no
+   database.
+2. `bun install --frozen-lockfile` installs exactly what `datascripts/bun.lock` records. Frozen, so
+   a build never silently resolves a newer dependency than the next author will get.
+3. `tsc --noEmit` is the gate. Nothing is emitted; the answer is the exit code.
+
+Generating **first** is what gives the gate teeth. Rename a column in the Module, run
+`packages build`, and a Datascript still using the old name fails with the file and line to fix —
+at author time, rather than at apply time.
+
+The typings cover **core and installed Package tables alike**, and by construction rather than by a
+second mechanism: `module/build.rs` compiles every enabled Package into the same module wasm, so a
+table a Package registers is in the schema `spacetime generate` reads. Install a Package that
+declares a table, re-run `packages build`, and its row type is in `datascripts/generated/types.ts`.
+
+### The Datascript project
+
+```text
+datascripts/
+  package.json     the pins: Bun 1.3.7, spacetimedb 2.7.1, typescript 7.0.2
+  bun.lock         committed — a fresh checkout resolves exactly these dependencies
+  tsconfig.json    strict, noEmit
+  src/             the Datascripts. `src/reference.ts` is the maintained reference Datascript
+  generated/       written by step 1. NOT committed
+```
+
+`generated/` is git-ignored on purpose. It is a ~400-file, 2 MB projection of the module wasm that
+`packages build` reproduces on every run. Committing it would put a large mechanical diff in every
+schema change and create a second source of truth that can disagree with the Module. The Module is
+the schema's authority.
+
+`src/reference.ts` is the standing schema check. It names real columns, so it is the file that fails
+when the schema moves under it. Keep it referencing real columns.
+
+### Bun is author-side only
+
+`packages build` is the only command that needs Bun, and authoring Datascripts is the only reason
+to run it. **An Operator applying a prebuilt Package needs no Bun and no Node.** Nothing in
+`dev up`, `preflight`, `publish` or `client sync` invokes a JavaScript toolchain. That is why
+`doctor` reports a missing or different Bun version as a warning and never as a launch blocker.
+
+Install the pinned version with
+`curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.7"`.
+
+Datascripts are **trusted author-time code**, run from this checkout by the person who wrote them.
+They are not sandboxed and are not described as sandboxed. Building a Package Delta from a
+Datascript, and applying one, are separate work (#315, #320).
 
 ## `client sync` — push client content to your own client
 
