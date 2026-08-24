@@ -2072,6 +2072,34 @@ pub(crate) fn cancel_relay_runs_for_instance(ctx: &ReducerContext, instance_id: 
     reap_unused_definitions(ctx);
 }
 
+/// End every Relay Run and arrival held by one source creature, whatever its lifetime.
+///
+/// A creature respawns under the guid it already had, so a run started by an earlier life would
+/// otherwise resolve its source to the new creature and play the rest of the previous life's script
+/// against it. Death is the wrong boundary for this: a death-triggered relay is authored to act on
+/// the corpse, and the corpse window is the whole point. Respawn is the boundary no run may cross.
+pub(crate) fn cancel_relay_runs_for_new_life(ctx: &ReducerContext, source_guid: u64) {
+    let arrivals = ctx.db.game_creature_ai_relay_arrival();
+    for row in arrivals
+        .by_source()
+        .filter(&source_guid)
+        .collect::<Vec<_>>()
+    {
+        arrivals.scheduled_id().delete(row.scheduled_id);
+    }
+    let run_ids = ctx
+        .db
+        .game_creature_ai_relay_run()
+        .by_source()
+        .filter(&source_guid)
+        .map(|run| run.id)
+        .collect::<Vec<_>>();
+    for run_id in run_ids {
+        cancel_run_tree(ctx, run_id);
+    }
+    reap_unused_definitions(ctx);
+}
+
 pub(crate) fn cancel_relay_runs_for_source(ctx: &ReducerContext, source_guid: u64) {
     let arrivals = ctx.db.game_creature_ai_relay_arrival();
     for row in arrivals

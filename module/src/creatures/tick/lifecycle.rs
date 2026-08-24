@@ -202,6 +202,8 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
     for spawn in due {
         let guid = spawn.guid;
         crate::combat::clear_lethal_damage_floor(ctx, guid);
+        // The new life reuses this guid, so nothing an earlier life scheduled may reach it.
+        crate::creatures::cancel_relay_runs_for_new_life(ctx, guid);
         if let Some(tmpl) = templates.entry().find(spawn.entry) {
             super::spawn::insert_creature_entity(
                 ctx,
@@ -314,6 +316,15 @@ mod due_timer_tripwire {
         assert!(
             respawn.contains("by_respawn_at()") && respawn.contains("filter(..=now_ts)"),
             "`pass_respawn` no longer range-scans `by_respawn_at`. Body was:\n{respawn}"
+        );
+        // A creature respawns under the guid it already had. Death is the wrong place to end a
+        // Relay Run, because a death-triggered relay is authored to act on the corpse, so respawn
+        // is the boundary that must clear anything an earlier life left scheduled.
+        assert!(
+            respawn.contains("crate::creatures::cancel_relay_runs_for_new_life(ctx, guid)"),
+            "`pass_respawn` no longer ends the previous life's Relay Runs, so a run started before \
+             the creature died can resume against the new life under the same guid. Body \
+             was:\n{respawn}"
         );
         assert!(
             respawn.contains("respawn_at = crate::creatures::timer_never(ctx)"),
