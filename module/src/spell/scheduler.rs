@@ -477,13 +477,21 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                         pending.insert(a.target_guid, damaged_value(cur, amount));
                     }
                 } else if !target.is_player() && amount > 0 && (amount as u32) >= cur {
-                    let killer = entities
-                        .guid()
-                        .find(a.caster_guid)
-                        .filter(|c| c.is_player())
-                        .map(|_| a.caster_guid);
-                    dying.insert(a.target_guid, killer);
-                    pending.remove(&a.target_guid);
+                    // A Lethal Damage Floor holds the creature at one health here exactly as it does
+                    // on the swing and direct-spell paths: a DoT tick must not be the one resolver
+                    // that can end a script the floor exists to keep open.
+                    if crate::combat::lethal_floor_protects(ctx, a.target_guid) {
+                        pending.insert(a.target_guid, 1);
+                        crate::combat::commit_death_prevention(ctx, a.target_guid, a.caster_guid);
+                    } else {
+                        let killer = entities
+                            .guid()
+                            .find(a.caster_guid)
+                            .filter(|c| c.is_player())
+                            .map(|_| a.caster_guid);
+                        dying.insert(a.target_guid, killer);
+                        pending.remove(&a.target_guid);
+                    }
                 } else {
                     pending.insert(a.target_guid, damaged_value(cur, amount));
                 }
@@ -914,6 +922,26 @@ mod duel_periodic_wiring_tests {
         assert!(body.contains("crate::duel::active_duel_between"));
         assert!(body.contains("pending.insert(a.target_guid, 1)"));
         assert!(body.contains("crate::duel::complete_duel"));
+    }
+
+    /// The periodic fold is the one damage resolver that cannot route through `final_damage`: it
+    /// folds several auras against an in-transaction health the durable row does not carry yet. It
+    /// must still consult the floor before marking a creature dying, or a DoT tick becomes the only
+    /// way to kill a creature a script is holding at one health.
+    #[test]
+    fn a_periodic_kill_consults_the_lethal_damage_floor_before_marking_a_creature_dying() {
+        let body = crate::test_scan::code_of(include_str!("scheduler.rs"), "pub fn tick_auras(");
+        let protects = body
+            .find("crate::combat::lethal_floor_protects(ctx, a.target_guid)")
+            .expect("the periodic creature-kill branch no longer consults the lethal floor");
+        let dying = body
+            .find("dying.insert(a.target_guid, killer)")
+            .expect("the periodic creature-kill branch no longer marks a creature dying");
+        assert!(
+            protects < dying,
+            "the floor must be consulted BEFORE the creature is marked dying"
+        );
+        assert!(body.contains("crate::combat::commit_death_prevention"));
     }
 }
 

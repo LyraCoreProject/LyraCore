@@ -150,8 +150,22 @@ pub(crate) fn final_damage(
             lethal_prevented: false,
         };
     };
+    lethal_floor_amount(
+        target.health,
+        post_mitigation,
+        lethal_floor_protects(ctx, target_guid),
+    )
+}
+
+/// True when a live Lethal Damage Floor protects this creature, reaping the row when its defining
+/// revision has moved on. Exposed on its own for the periodic-damage fold, which folds several
+/// ticks against an in-transaction health that [`final_damage`] cannot see.
+pub(crate) fn lethal_floor_protects(ctx: &ReducerContext, target_guid: u64) -> bool {
+    let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) else {
+        return false;
+    };
     let floors = ctx.db.game_creature_lethal_damage_floor();
-    let protected = !target.is_player()
+    !target.is_player()
         && !target.dead
         && floors.creature_guid().find(target_guid).is_some_and(|row| {
             let current = crate::creatures::current_definition_revision(ctx, target_guid);
@@ -161,8 +175,7 @@ pub(crate) fn final_damage(
                 floors.creature_guid().delete(target_guid);
                 false
             }
-        });
-    lethal_floor_amount(target.health, post_mitigation, protected)
+        })
 }
 
 fn lethal_floor_amount(health: u32, post_mitigation: u32, protected: bool) -> FinalDamage {
@@ -177,7 +190,11 @@ fn lethal_floor_amount(health: u32, post_mitigation: u32, protected: bool) -> Fi
     }
 }
 
-fn commit_death_prevention(ctx: &ReducerContext, creature_guid: u64, attacker_guid: u64) {
+pub(crate) fn commit_death_prevention(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    attacker_guid: u64,
+) {
     let floors = ctx.db.game_creature_lethal_damage_floor();
     let Some(mut row) = floors.creature_guid().find(creature_guid) else {
         return;
@@ -1088,6 +1105,10 @@ pub(crate) fn fold_incoming_damage(
 /// break-on-damage, no threat — matching what the melee swing and `apply_target_damage` have always
 /// done, and what the ranged impact now does too (before #370 it ran the survivor path with a 0
 /// damage value on a godmode target — the same drift class #361 fixed twice).
+///
+/// The one 0-damage hit that is NOT inert is a hit a Lethal Damage Floor reduced to nothing: it
+/// still refreshes the pursuit leash and fires the death-prevented hook once, because the creature
+/// is pinned at one health in a live fight rather than untouched.
 pub(crate) fn apply_hit(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -1122,6 +1143,10 @@ pub(crate) fn apply_hit(
     let attacker_owner = attacker.as_ref().map(|a| a.owner_guid).unwrap_or(0);
     let target_is_player = target.is_player();
     if damage.lethal_prevented && dmg == 0 {
+        // Pinned at one health and still under attack. No damage lands, so nothing damage-derived
+        // (threat, break-on-damage, procs) applies — but the fight is real, so the pursuit deadline
+        // must keep moving or the leash pass evades the creature out of the script holding it here.
+        refresh_leash(ctx, attacker_guid, target_guid);
         commit_death_prevention(ctx, target_guid, attacker_guid);
         return miss;
     }
