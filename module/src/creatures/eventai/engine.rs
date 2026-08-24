@@ -774,9 +774,12 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => {
                     true
                 }
-                CreatureInstruction::StartRelay(start) => {
-                    start.relay_ids.len() > 1 || random_target(start.target)
-                }
+                // The linked lane seeds the Relay Run's saved random state, and the relay's own
+                // steps (multi-line talk, random emote, dynamic move) consume it. This predicate
+                // cannot see inside a Relay Definition, so starting one always draws a real roll:
+                // the deterministic fallback is stable across a long window and would otherwise
+                // freeze a whole authored sequence to one outcome for the session.
+                CreatureInstruction::StartRelay(_) => true,
                 CreatureInstruction::FleeForAssist
                 | CreatureInstruction::CallForHelp(_)
                 | CreatureInstruction::SetPhase(_)
@@ -1594,14 +1597,25 @@ impl EventAiWorld for DatabaseWorld<'_> {
         random_state: u64,
         catalogue_version: u64,
     ) -> bool {
-        super::relay::start_imported_relay(
+        match super::relay::start_imported_relay(
             self.ctx,
             relay_id,
             source_guid,
             selected_guid,
             random_state,
             catalogue_version,
-        )
-        .is_ok()
+        ) {
+            Ok(_) => true,
+            Err(error) => {
+                // A relay that cannot start is a catalogue or world-state failure, not a gameplay
+                // Refusal. The caller can only report it as a refusal, so name it here — otherwise a
+                // combat rule re-attempts a missing definition every tick with nothing in the log.
+                spacetimedb::log::error!(
+                    "eventai: relay {relay_id} failed to start for creature {source_guid} \
+                     (catalogue {catalogue_version}): {error}"
+                );
+                false
+            }
+        }
     }
 }

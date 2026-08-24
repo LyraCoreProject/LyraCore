@@ -1287,7 +1287,10 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
                     let present = subject_present(ctx, &fresh, terminate.subject);
                     let terminate_now = termination_matches(terminate.when, present);
                     if terminate_now {
-                        remove_run(ctx, run_id);
+                        // An authored terminate ends the whole invocation, not just this run: its
+                        // nested relays and pending arrivals belong to the same invocation and
+                        // would otherwise keep playing after the script said stop.
+                        cancel_run_tree(ctx, run_id);
                         return Ok(());
                     }
                     Ok(())
@@ -1649,6 +1652,13 @@ fn schedule_arrival(
         .guid()
         .find(source_guid)
         .filter(|spline| Some(spline.spline_id) != previous_spline_id);
+    let arrival_lifetime = ctx
+        .db
+        .game_creature_ai_relay_definition()
+        .by_relay()
+        .filter(&relay_id)
+        .find(|row| row.catalogue_version == run.catalogue_version)
+        .map_or(run.lifetime, |definition| definition.lifetime);
     let (child_state, parent_state) = next_random(run.saved_random_state);
     run.saved_random_state = parent_state;
     let (scheduled_at, spline_id) = spline.map_or((ctx.timestamp, 0), |spline| {
@@ -1675,7 +1685,10 @@ fn schedule_arrival(
             parent_run_id: run.id,
             relay_id,
             catalogue_version: run.catalogue_version,
-            lifetime: run.lifetime,
+            // The cleanup policy recorded here must be the one the arrival will actually run under.
+            // `start_relay` takes it from the arrival relay's own definition, so reading the parent
+            // run's lifetime would let cleanup apply a policy the resulting run never has.
+            lifetime: arrival_lifetime,
             saved_random_state: child_state,
             spline_id,
             x: destination.0,
