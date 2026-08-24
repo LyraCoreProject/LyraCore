@@ -29,7 +29,7 @@ blake3 = "1"
 # minor bump here can silently drift the module ahead of what `spacetime` on PATH can publish.
 spacetimedb = { version = "=2.7.1", features = ["unstable"] }
 lyracore-shared.workspace = true
-# The Runtime Script Host's embedded Lua engine (src/runtime_script.rs). Pinned exactly, same house
+# The Runtime Script Host's embedded Lua interpreter (src/runtime_script.rs). Pinned exactly, same house
 # rule as the spacetimedb pin above: the fuel constants are sized against THIS version's metering,
 # and the stdlib subset a Runtime Script sees is this version's — a minor bump can move both under
 # scripts that already shipped.

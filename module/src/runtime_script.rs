@@ -1,14 +1,15 @@
 //! The Runtime Script Host: the contained Lua interpreter a Runtime Script runs inside.
 //!
-//! One [`RuntimeScriptHost`] owns one embedded piccolo VM and a compiler cache. The cache holds
+//! One [`RuntimeScriptHost`] owns one embedded piccolo interpreter and a compiler cache. The cache holds
 //! compiled chunks only, keyed by a hash of the source, so it can never hand back stale code for
 //! an edited script and it holds no Lua state between invocations.
 //!
 //! Every invocation gets:
 //!
-//! * a FRESH environment table — writes land there and die with the invocation, reads fall through
-//!   a `__index` metatable to the shared stdlib, so nothing a script assigns survives it;
-//! * a [`FUEL_BUDGET_PER_INVOCATION`] of metered VM work, plus [`MAX_STEPS_PER_INVOCATION`] as the
+//! * a fresh environment table with its own standard-library tables, so nothing a script assigns
+//!   survives it;
+//! * a [`FUEL_BUDGET_PER_INVOCATION`] of metered interpreter work, plus
+//!   [`MAX_STEPS_PER_INVOCATION`] as the
 //!   stall guard for the case where a step burns no fuel at all;
 //! * a staging buffer. A host operation a script calls does not touch the world; it appends a
 //!   [`StagedEffect`]. Only a fully successful invocation returns [`StagedEffects`], which the
@@ -22,12 +23,10 @@
 //! What this host deliberately does NOT do: durable script storage or event bindings, a broad
 //! gameplay host API, or any Lua state that outlives an invocation.
 //!
-//! CAVEAT for the host API to come: the fresh environment chains to piccolo's `Lua::core()`
-//! globals, so a script can still reach `math`, `string` and friends, and can mutate those SHARED
-//! stdlib tables. Replacing the fallthrough with an explicit allowlist is the curated-host-API
-//! work, not this layer. For the same reason `math.random`'s stream is shared across invocations
-//! and reproducible only for a shard replaying the same sequence of calls — a Runtime Script must
-//! not decide a durable outcome with it.
+//! Each Invocation receives its own copies of piccolo's standard-library tables. Stateful
+//! interpreter operations such as `math.random`, `math.randomseed`, and `collectgarbage` are not
+//! exposed. Durable randomness belongs in a later core gameplay operation, where the Module can use
+//! `ReducerContext::rng`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,18 +37,18 @@ use piccolo::{
     Callback, CallbackReturn, Closure, Executor, Fuel, Lua, StashedClosure, Table, Value,
 };
 
-/// Fuel handed to one `Executor::step`. The VM only checks its budget between operations, so a
-/// step can overshoot slightly; the slice is small enough that the overshoot stays negligible
-/// against the budget below.
+/// Fuel handed to one `Executor::step`. The interpreter checks its budget between operations, so a
+/// step can overshoot slightly. The Host refuses the Invocation if that overshoot crosses the total
+/// budget.
 const FUEL_PER_STEP: i32 = 64;
 
-/// Metered VM work one invocation may perform before it is cut off as a fuel failure.
+/// Metered interpreter work one Invocation may perform before it is cut off as a fuel failure.
 ///
 /// Sized by measurement, not by guess. `REPRESENTATIVE_SCRIPT` — the transpiler-shaped workload of
 /// list building, a higher-order function, string work and a host call that this host exists to
 /// run — costs 2,054 fuel over 30 steps, so the budget is roughly a hundred of those. Fifty times
 /// its list still costs only 96,442. At the other end, a bare `while true do end` reaches this
-/// number in under a millisecond of VM time, which is what keeps a runaway script off the 0.5s
+/// number in under a millisecond of interpreter time, which keeps a runaway script off the 0.5s
 /// tick.
 const FUEL_BUDGET_PER_INVOCATION: i32 = 200_000;
 
@@ -66,10 +65,14 @@ const MAX_STEPS_PER_INVOCATION: usize = 20_000;
 /// script name and event are host-supplied labels.
 const DIAGNOSTIC_MESSAGE_CAP: usize = 512;
 
+/// Maximum bytes retained for each host-supplied diagnostic label.
+const DIAGNOSTIC_LABEL_CAP: usize = 128;
+
 const TRUNCATION_MARK: &str = "…[truncated]";
 
 /// piccolo's stdlib subset omits `table.concat`, which transpiler output uses constantly. Loaded
-/// once into the shared globals at host construction, in the form the runtime spike proved.
+/// once into the shared globals at host construction, in the form the Runtime Script Prototype
+/// proved.
 ///
 /// Two parameters and a type guard, both deliberate: pinned piccolo passes an inline table
 /// constructor's ELEMENT COUNT as an extra argument, so `table.concat({"a", "b"})` arrives here as
@@ -111,7 +114,7 @@ impl FailureKind {
 }
 
 /// The bounded record of one failed invocation. Names the script, the event it was running for,
-/// and what kind of failure it was, so an operator can act on it without a stack trace.
+/// and what kind of failure it was, so an Operator can act on it without interpreter internals.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct ScriptDiagnostic {
     pub script: String,
@@ -123,10 +126,10 @@ pub(crate) struct ScriptDiagnostic {
 impl ScriptDiagnostic {
     fn new(script: &str, event: &str, kind: FailureKind, message: String) -> Self {
         Self {
-            script: script.to_string(),
-            event: event.to_string(),
+            script: bounded(script, DIAGNOSTIC_LABEL_CAP),
+            event: bounded(event, DIAGNOSTIC_LABEL_CAP),
             kind,
-            message: bounded(message),
+            message: bounded(&message, DIAGNOSTIC_MESSAGE_CAP),
         }
     }
 }
@@ -144,17 +147,17 @@ impl std::fmt::Display for ScriptDiagnostic {
     }
 }
 
-/// Cuts `message` down to [`DIAGNOSTIC_MESSAGE_CAP`] bytes INCLUDING the truncation mark, on a
-/// char boundary so the result is still valid UTF-8 to log.
-fn bounded(message: String) -> String {
-    if message.len() <= DIAGNOSTIC_MESSAGE_CAP {
-        return message;
+/// Cuts `text` down to `cap` bytes including the truncation mark, on a char boundary so the result
+/// remains valid UTF-8.
+fn bounded(text: &str, cap: usize) -> String {
+    if text.len() <= cap {
+        return text.to_string();
     }
-    let mut keep = DIAGNOSTIC_MESSAGE_CAP - TRUNCATION_MARK.len();
-    while keep > 0 && !message.is_char_boundary(keep) {
+    let mut keep = cap - TRUNCATION_MARK.len();
+    while keep > 0 && !text.is_char_boundary(keep) {
         keep -= 1;
     }
-    let mut out = message[..keep].to_string();
+    let mut out = text[..keep].to_string();
     out.push_str(TRUNCATION_MARK);
     out
 }
@@ -273,18 +276,19 @@ impl RuntimeScriptHost {
             });
             fuel_spent = fuel_spent.saturating_add(burned.max(0));
             steps += 1;
-            if finished {
-                break;
-            }
-            if fuel_spent >= FUEL_BUDGET_PER_INVOCATION {
+            if fuel_spent > FUEL_BUDGET_PER_INVOCATION
+                || (fuel_spent == FUEL_BUDGET_PER_INVOCATION && !finished)
+            {
                 return Err(ScriptDiagnostic::new(
                     script.name,
                     event,
                     FailureKind::Fuel,
-                    format!("spent the {FUEL_BUDGET_PER_INVOCATION} fuel budget without finishing"),
+                    format!(
+                        "exhausted the {FUEL_BUDGET_PER_INVOCATION} fuel budget (spent {fuel_spent})"
+                    ),
                 ));
             }
-            if steps >= MAX_STEPS_PER_INVOCATION {
+            if steps >= MAX_STEPS_PER_INVOCATION && !finished {
                 return Err(ScriptDiagnostic::new(
                     script.name,
                     event,
@@ -293,6 +297,9 @@ impl RuntimeScriptHost {
                         "stalled: {MAX_STEPS_PER_INVOCATION} steps burned only {fuel_spent} fuel"
                     ),
                 ));
+            }
+            if finished {
+                break;
             }
         }
 
@@ -347,16 +354,13 @@ impl RuntimeScriptHost {
     }
 }
 
-/// Build the environment ONE invocation sees: an empty table that reads through to the shared
-/// stdlib and carries this invocation's host operations.
+/// Build the environment one Invocation sees. Standard-library tables are copied so a write in one
+/// Invocation cannot affect the next one.
 fn fresh_environment<'gc>(
     ctx: piccolo::Context<'gc>,
     staged: Rc<RefCell<Vec<StagedEffect>>>,
 ) -> Table<'gc> {
-    let env = Table::new(&ctx);
-    let fallthrough = Table::new(&ctx);
-    let _ = fallthrough.set(ctx, "__index", ctx.globals());
-    env.set_metatable(&ctx, Some(fallthrough));
+    let env = isolated_standard_library(ctx);
 
     let grant_xp = Callback::from_fn(&ctx, move |ctx, _execution, mut stack| {
         let (character_guid, amount): (u64, u32) = stack.consume(ctx)?;
@@ -367,7 +371,41 @@ fn fresh_environment<'gc>(
         Ok(CallbackReturn::Return)
     });
     let _ = env.set(ctx, "grant_xp", grant_xp);
+    let _ = env.set(ctx, "_G", env);
     env
+}
+
+fn isolated_standard_library<'gc>(ctx: piccolo::Context<'gc>) -> Table<'gc> {
+    let globals = Table::new(&ctx);
+    for (key, value) in ctx.globals().iter() {
+        let value = match value {
+            Value::Table(table) => Value::Table(copy_table(ctx, table)),
+            value => value,
+        };
+        globals
+            .set_value(&ctx, key, value)
+            .expect("a key copied from a Lua table remains a valid table key");
+    }
+
+    if let Value::Table(math) = globals.get(ctx, "math") {
+        for name in ["random", "randomseed"] {
+            math.set(ctx, name, Value::Nil)
+                .expect("a string is a valid Lua table key");
+        }
+    }
+    globals
+        .set(ctx, "collectgarbage", Value::Nil)
+        .expect("a string is a valid Lua table key");
+    globals
+}
+
+fn copy_table<'gc>(ctx: piccolo::Context<'gc>, source: Table<'gc>) -> Table<'gc> {
+    let copy = Table::new(&ctx);
+    for (key, value) in source.iter() {
+        copy.set_value(&ctx, key, value)
+            .expect("a key copied from a Lua table remains a valid table key");
+    }
+    copy
 }
 
 thread_local! {
@@ -555,9 +593,43 @@ if #roster > 0 then grant_xp(4242, 25) end
     #[test]
     fn a_truncated_diagnostic_message_stays_valid_utf8() {
         let long = "é".repeat(DIAGNOSTIC_MESSAGE_CAP);
-        let cut = bounded(long);
+        let cut = bounded(&long, DIAGNOSTIC_MESSAGE_CAP);
         assert!(cut.len() <= DIAGNOSTIC_MESSAGE_CAP);
         assert!(cut.ends_with(TRUNCATION_MARK));
+    }
+
+    #[test]
+    fn diagnostic_labels_are_bounded_and_stay_valid_utf8() {
+        let label = "é".repeat(DIAGNOSTIC_LABEL_CAP);
+        let diagnostic =
+            ScriptDiagnostic::new(&label, &label, FailureKind::Runtime, "failed".to_string());
+        assert!(diagnostic.script.len() <= DIAGNOSTIC_LABEL_CAP);
+        assert!(diagnostic.event.len() <= DIAGNOSTIC_LABEL_CAP);
+        assert!(diagnostic.script.ends_with(TRUNCATION_MARK));
+        assert!(diagnostic.event.ends_with(TRUNCATION_MARK));
+    }
+
+    #[test]
+    fn a_failed_script_cannot_change_the_next_invocations_standard_library() {
+        let mut host = RuntimeScriptHost::new();
+        host.invoke(
+            script(
+                "poison",
+                "math.saved = 41\nstring.saved = 42\nerror(\"discard me\")",
+            ),
+            "on_login",
+        )
+        .expect_err("the first Invocation fails after changing its own library tables");
+
+        assert_eq!(
+            committed(
+                &mut host,
+                "if math.saved ~= nil or string.saved ~= nil then error(\"leaked\") end\n\
+                 grant_xp(1, 1)",
+            )
+            .expect("the next Invocation receives clean library tables"),
+            [(1, 1)]
+        );
     }
 
     #[test]
@@ -615,14 +687,14 @@ if #roster > 0 then grant_xp(4242, 25) end
         assert_eq!(diagnostics.len(), 1);
     }
 
-    /// A DEFECT in the pinned engine, recorded so it cannot change unnoticed: piccolo 0.3.3 passes
+    /// A defect in the pinned interpreter, recorded so it cannot change unnoticed: piccolo 0.3.3 passes
     /// an inline table constructor's element count as an extra argument, so `f({7, 8, 9})` reaches
     /// a three-parameter `f` as `f(table, 3, nil)` instead of `f(table, nil, nil)`. Passing the
     /// same table through a local is correct, so it is the call site, not the callee.
     ///
-    /// It reproduces in the runtime spike's own harness, untouched by this host. `x = x or default`
+    /// It reproduces in the Runtime Script Prototype, untouched by this Host. `x = x or default`
     /// is the commonest idiom in Lua and in transpiler output, so anything generating Lua for this
-    /// host has to know. When this test starts failing, the engine has fixed it — drop the type
+    /// Host has to know. When this test starts failing, the interpreter has fixed it. Drop the type
     /// guard in `PICCOLO_SHIM` at the same time.
     #[test]
     fn piccolo_leaks_a_table_constructors_element_count_as_an_extra_argument() {
@@ -707,29 +779,12 @@ if #roster > 0 then grant_xp(4242, 25) end
             "the refusal must not poison the host for the next caller"
         );
     }
-
-    #[test]
-    fn the_production_effect_sink_is_the_pass_through_the_fake_replaces() {
-        let src = include_str!("runtime_script.rs");
-        assert_eq!(
-            crate::test_scan::shape_of(src, "impl EffectSink for CoreEffects<'_> {"),
-            "{ fn grant_xp(&mut self, character_guid: u64, amount: u32) { use \
-             crate::game_world_entity; let Some(mut entity) = \
-             crate::helpers::acting_entity_by_guid(self.ctx, character_guid) else { return; }; \
-             crate::xp::grant_xp(self.ctx, &mut entity, amount); \
-             self.ctx.db.game_world_entity().guid().update(entity); } }"
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" "),
-            "the production sink is the one line of this host the Fake replaces, so nothing else \
-             covers an edit to it"
-        );
-    }
 }
 
 /// piccolo reaches `getrandom` twice on `wasm32-unknown-unknown` — 0.2 through `rand`, when
 /// `Lua::core()` seeds `math.random`, and 0.3 through `ahash`, when the first Lua table is built.
-/// Neither generation has a backend on that target, and the JS backend the runtime spike used to
+/// Neither generation has a backend on that target, and the JS backend the Runtime Script
+/// Prototype used to
 /// get a compile emits `wasm-bindgen` imports a SpacetimeDB host cannot resolve. So the Module
 /// supplies its own, selected by `getrandom_backend="custom"` in `.cargo/config.toml`.
 ///

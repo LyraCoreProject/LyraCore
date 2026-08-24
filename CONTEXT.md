@@ -245,7 +245,7 @@ One run of one Runtime Script for one event. Starts with an empty environment an
 committing its Staged Effects or by producing a Script Diagnostic. Nothing carries to the next one.
 
 **Fuel Budget**:
-The metered VM work one Invocation may spend before the Host cuts it off. The cut-off is a failure,
+The metered interpreter work one Invocation may spend before the Host cuts it off. The cut-off is a failure,
 so a script that overruns changes nothing.
 _Avoid_: quota, gas, instruction limit
 
