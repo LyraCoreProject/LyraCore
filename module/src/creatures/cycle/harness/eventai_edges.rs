@@ -111,6 +111,7 @@ fn direct_aggro_speaks_once_and_assisted_aggro_keeps_casts() {
         direct.eventai_speech(),
         vec![(CREATURE, 0, "direct".to_string())]
     );
+    assert_eq!(direct.eventai_speech_targets(), vec![(CREATURE, TARGET)]);
 
     let mut assisted = scenario()
         .eventai_broadcast(2, "quiet", 0)

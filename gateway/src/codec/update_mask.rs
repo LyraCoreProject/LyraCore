@@ -62,6 +62,9 @@ pub mod idx {
     pub const UNIT_FACTIONTEMPLATE: u16 = 35;
     /// `UNIT_FIELD_BYTES_0` — packed race|class|gender|power (4×u8).
     pub const UNIT_BYTES_0: u16 = 36;
+    /// `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY[0..3]` — creature weapon display ids. The generated vanilla
+    /// builder exposes only slot 0, so the three-slot live projection uses the raw VALUES path.
+    pub const UNIT_VIRTUAL_ITEM_SLOT_DISPLAY: u16 = 37;
     pub const UNIT_FLAGS: u16 = 46;
 
     /// `UNIT_FIELD_AURA` — 48 slots, one spell-id u32 each (slot k at `UNIT_AURA + k`).

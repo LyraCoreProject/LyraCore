@@ -21,7 +21,8 @@ use crate::pkg_wailing_caverns::{
 };
 #[cfg(feature = "debug_reducers")]
 use crate::{
-    game_chat_event, game_creature_spline, game_creature_template, game_gameobject, game_instance,
+    game_chat_event, game_creature_gossip_menu_override, game_creature_spline,
+    game_creature_template, game_gameobject, game_gossip_menu_profile_option, game_instance,
     game_spell, game_spell_effect, game_world_entity, GameInstance, SpellEffect,
 };
 
@@ -950,7 +951,31 @@ fn verify_wailing_caverns_gate(ctx: &ReducerContext) -> Result<(), String> {
         }),
         "Wailing Caverns gate did not emit the Disciple intro",
     )?;
+    let menu = ctx
+        .db
+        .game_creature_gossip_menu_override()
+        .creature_guid()
+        .find(disciple)
+        .ok_or_else(|| "Wailing Caverns gate did not render its start menu".to_string())?;
+    require(
+        menu.menu_id == 3_678
+            && ctx
+                .db
+                .game_gossip_menu_profile_option()
+                .row_id()
+                .find(50_296)
+                .is_some_and(|option| option.menu_id == menu.menu_id),
+        "Wailing Caverns start menu is missing its package option",
+    )?;
     crate::world::apply_gossip_select(ctx, player, disciple, 0, 50_296)?;
+    require(
+        ctx.db
+            .game_creature_gossip_menu_override()
+            .creature_guid()
+            .find(disciple)
+            .is_none(),
+        "Wailing Caverns start menu remained active after selection",
+    )?;
     let disciple = ctx
         .db
         .game_world_entity()

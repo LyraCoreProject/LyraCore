@@ -47,6 +47,8 @@ pub use mobility::{
     expire_eventai_summon, fire_eventai_forced_despawn, CreatureAiForcedDespawn,
     CreatureAiSummonExpiry, CreatureAiSummonOrigin,
 };
+#[cfg(feature = "debug_reducers")]
+pub(crate) use mobility::{mark_summon_origin_for_debug, remove_guardians};
 pub(crate) use model::*;
 pub use movement::{CreatureAiMovementIntent, CreatureAiMovementPathWaypoint};
 use presentation::import_verified_rajaxx_spawn_protection;
@@ -54,6 +56,8 @@ pub(crate) use presentation::{
     CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride,
 };
 pub use relay::*;
+#[cfg(feature = "debug_reducers")]
+pub(crate) use relay::{replace_relay_catalogue_for_debug, replace_single_relay_for_debug};
 pub use tables::*;
 
 use spacetimedb::ReducerContext;
@@ -80,7 +84,9 @@ mod architecture_tests {
             include_str!("model.rs"),
             include_str!("engine.rs"),
             include_str!("combat.rs"),
+            include_str!("death.rs"),
             include_str!("mobility.rs"),
+            include_str!("movement.rs"),
             include_str!("threat.rs"),
             include_str!("quest_credit.rs"),
             include_str!("edges.rs"),
@@ -154,6 +160,7 @@ mod architecture_tests {
             "game_creature_ai_relay_definition",
             "game_creature_ai_relay_run",
             "game_creature_ai_relay_continuation",
+            "game_creature_ai_relay_arrival",
         ] {
             assert!(
                 !subscriptions.contains(&format!("SELECT * FROM {table}")),

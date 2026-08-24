@@ -84,6 +84,7 @@ pub(crate) trait EventAiWorld {
     fn eventai_deliver_line(
         &mut self,
         speaker_guid: u64,
+        target_guid: u64,
         chat_type: u8,
         language: u8,
         message: String,
@@ -375,12 +376,12 @@ fn execute_instruction<W: EventAiWorld>(
 ) -> ActionResult {
     match instruction {
         CreatureInstruction::Speak(speech) => {
-            if super::combat::unit_target(world, context, speech.target, None, linked_choice)
-                .is_none()
-            {
+            let Some(target) =
+                super::combat::unit_target(world, context, speech.target, None, linked_choice)
+            else {
                 return ActionResult::Refused;
-            }
-            if speak(world, context, speech, linked_choice) {
+            };
+            if speak(world, context, speech, target, linked_choice) {
                 ActionResult::Applied
             } else {
                 ActionResult::Refused
@@ -567,6 +568,7 @@ fn speak<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
     speech: &SpeakInstruction,
+    target_guid: u64,
     linked_choice: u64,
 ) -> bool {
     let chat_type = match speech.mode {
@@ -597,7 +599,13 @@ fn speak<W: EventAiWorld>(
             )
         }
     };
-    let spoken = world.eventai_deliver_line(context.creature_guid, chat_type, language, message);
+    let spoken = world.eventai_deliver_line(
+        context.creature_guid,
+        target_guid,
+        chat_type,
+        language,
+        message,
+    );
     if spoken && emote != 0 {
         world.eventai_deliver_emote(context.creature_guid, emote, 0);
     }
@@ -1321,6 +1329,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
     fn eventai_deliver_line(
         &mut self,
         speaker_guid: u64,
+        target_guid: u64,
         chat_type: u8,
         language: u8,
         message: String,
@@ -1330,7 +1339,15 @@ impl EventAiWorld for DatabaseWorld<'_> {
         };
         // The say/yell chokepoint owns the dead-speaker Gate and the length cap; a creature line
         // goes through it like a player's rather than writing the event row itself.
-        crate::chat::apply_send_chat(self.ctx, creature, chat_type, language, message).is_ok()
+        crate::chat::apply_send_chat_to(
+            self.ctx,
+            creature,
+            target_guid,
+            chat_type,
+            language,
+            message,
+        )
+        .is_ok()
     }
 
     fn eventai_deliver_emote(&mut self, source_guid: u64, emote_id: u32, target_guid: u64) -> bool {

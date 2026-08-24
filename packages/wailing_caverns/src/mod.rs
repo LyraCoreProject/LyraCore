@@ -4,7 +4,10 @@ use crate::encounter::{
     self, EncounterSignal, ENCOUNTER_DONE, ENCOUNTER_FAILED, ENCOUNTER_IN_PROGRESS,
     ENCOUNTER_NOT_STARTED,
 };
-use crate::{game_encounter_spawn, game_instance, game_melee_attack, game_world_entity};
+use crate::{
+    game_encounter_spawn, game_gossip_menu_profile, game_gossip_menu_profile_option, game_instance,
+    game_melee_attack, game_world_entity, GossipMenuProfile, GossipMenuProfileOption,
+};
 
 const MAP_ID: u32 = 43;
 const DISCIPLE_ENCOUNTER_ID: u32 = 4;
@@ -18,6 +21,8 @@ const DEVIATE_ADDER: u32 = 5048;
 const DEVIATE_MOCCASIN: u32 = 5762;
 const NIGHTMARE_ECTOPLASM: u32 = 5763;
 const WAILING_START_OPTION_ROW: u32 = 50_296;
+const WAILING_START_MENU: u32 = 3_678;
+const WAILING_START_TEXT: u32 = 699;
 const ESCORT_FACTION: u32 = 250;
 const SLEEP: u32 = 1090;
 const POTION: u32 = 8141;
@@ -450,8 +455,57 @@ fn refresh_disciple_gate(
             DISCIPLE_ENCOUNTER_ID,
             DISCIPLE_ESCORT_READY,
         )?;
+        if let Some(disciple) = live_instance_creature(ctx, instance_id, DISCIPLE_OF_NARALEX) {
+            install_start_menu(ctx, disciple.guid)?;
+        }
     }
     Ok(())
+}
+
+fn install_start_menu(ctx: &ReducerContext, disciple_guid: u64) -> Result<(), String> {
+    let profiles = ctx.db.game_gossip_menu_profile();
+    match profiles.menu_id().find(WAILING_START_MENU) {
+        Some(profile) if profile.text_id != WAILING_START_TEXT => {
+            return Err(format!(
+                "Wailing start menu {} collides with text {}",
+                WAILING_START_MENU, profile.text_id
+            ));
+        }
+        Some(_) => {}
+        None => {
+            profiles.insert(GossipMenuProfile {
+                menu_id: WAILING_START_MENU,
+                text_id: WAILING_START_TEXT,
+            });
+        }
+    }
+    let options = ctx.db.game_gossip_menu_profile_option();
+    match options.row_id().find(WAILING_START_OPTION_ROW) {
+        Some(option)
+            if option.menu_id != WAILING_START_MENU || option.text != "Let the event begin!" =>
+        {
+            return Err(format!(
+                "Wailing start option row {} collides with menu {}",
+                WAILING_START_OPTION_ROW, option.menu_id
+            ));
+        }
+        Some(_) => {}
+        None => {
+            options.insert(GossipMenuProfileOption {
+                row_id: WAILING_START_OPTION_ROW,
+                menu_id: WAILING_START_MENU,
+                option_index: 0,
+                icon: 0,
+                text: "Let the event begin!".to_string(),
+                action: lyracore_shared::constants::gossip_option::GOSSIP,
+                action_menu_id: 0,
+                cond_type: 0,
+                cond_value1: 0,
+                cond_value2: 0,
+            });
+        }
+    }
+    crate::creatures::set_creature_gossip_menu(ctx, disciple_guid, Some(WAILING_START_MENU))
 }
 
 fn speak_disciple_intro(ctx: &spacetimedb::ReducerContext, instance_id: u64) {
@@ -476,6 +530,9 @@ fn start_escort(ctx: &ReducerContext, instance_id: u64, disciple_guid: u64) {
     )
     .is_err()
     {
+        return;
+    }
+    if crate::creatures::set_creature_gossip_menu(ctx, disciple_guid, None).is_err() {
         return;
     }
     if encounter::set_encounter_state(

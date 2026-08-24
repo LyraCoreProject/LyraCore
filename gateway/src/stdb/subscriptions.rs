@@ -685,6 +685,9 @@ pub(crate) fn offer_peer_create_for(
         return Vec::new();
     };
     let mut out = vec![Outbound::One(m)];
+    if let Some(equipment) = db.game_encounter_equip().creature_guid().find(&row.guid) {
+        append_encounter_equip_after_create(&mut out, viewer, &equipment);
+    }
     // Pet action bar: this viewer's OWN summoned pet just appeared — bind it client-side
     // (UNIT_FIELD_SUMMON + the pet action bar).
     if row.owner_guid == viewer.self_guid {
@@ -727,6 +730,34 @@ pub(crate) fn offer_peer_create_for(
         );
     }
     out
+}
+
+/// Relay one durable creature virtual-item projection to a viewer that already holds the creature.
+/// A delete clears all three display slots. The raw builder is the crash-safe sparse VALUES path.
+pub(crate) fn encounter_equip_outbound(
+    viewer: &Viewer,
+    row: &EncounterEquip,
+    cleared: bool,
+) -> Vec<Outbound> {
+    if !viewer.created.lock().unwrap().contains(&row.creature_guid) {
+        return Vec::new();
+    }
+    let (main_hand, off_hand, ranged) = if cleared {
+        (0, 0, 0)
+    } else {
+        (row.main_hand, row.off_hand, row.ranged)
+    };
+    let (opcode, body) =
+        codec::build_virtual_item_values(row.creature_guid, main_hand, off_hand, ranged);
+    vec![Outbound::Raw { opcode, body }]
+}
+
+fn append_encounter_equip_after_create(
+    out: &mut Vec<Outbound>,
+    viewer: &Viewer,
+    row: &EncounterEquip,
+) {
+    out.extend(encounter_equip_outbound(viewer, row, false));
 }
 
 /// One entity row changed, for one viewer: re-entry-as-UPDATE first (a peer that
@@ -1096,10 +1127,10 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         // teardown (unlike the START/GO broadcast visuals), so relay it ONLY to the caster — else
         // bystanders get stray "Interrupted" feedback and a bystander mid-casting the same spell
         // risks a spurious teardown.
-        // A CREATURE caster (0xF130 high-guid) has no self — broadcast so every observer's
+        // A creature or pet caster (0xF130/0xF140 high-guid) has no self — broadcast so every observer's
         // mob cast bar tears down on a Kick/Counterspell (the packet carries the mob's guid, so
         // a bystander's own bar is untouched; mirrors the START broadcast that drew the bar).
-        let is_creature = row.caster_guid >> 48 == 0xF130;
+        let is_creature = matches!(row.caster_guid >> 48, 0xF130 | 0xF140);
         if is_creature || row.caster_guid == self_guid {
             let m = codec::build_spell_failure(row.caster_guid, row.spell_id);
             out.push(Outbound::One(
@@ -2075,7 +2106,7 @@ pub(crate) fn chat_event_outbound(
             return Vec::new();
         }
     }
-    let sender_name = if row.sender_guid >> 48 == 0xF130 {
+    let sender_name = if matches!(row.sender_guid >> 48, 0xF130 | 0xF140) {
         let guard = coord.0.coord();
         let Some(speaker) = guard
             .conn
@@ -2099,16 +2130,19 @@ pub(crate) fn chat_event_outbound(
     } else {
         None
     };
-    let m = codec::build_chat_message(
+    vec![chat_event_message(row, sender_name)]
+}
+
+fn chat_event_message(row: &ChatEvent, sender_name: Option<String>) -> Outbound {
+    let message = codec::build_chat_message_to(
         row.sender_guid,
         sender_name,
+        row.target_guid,
         row.chat_type,
         row.language,
         row.message.clone(),
     );
-    vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
-        Box::new(m),
-    ))]
+    Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
 }
 
 /// Chat channels: membership IS the audience (no proximity — General
@@ -3220,6 +3254,132 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn viewer_with_created(creature_guid: u64) -> Viewer {
+        let (tx, _rx) = SessionTx::with_depth(0);
+        Viewer {
+            session: 1,
+            self_guid: 7,
+            bound_identity: spacetimedb_sdk::Identity::from_byte_array([0; 32]),
+            map_id: 0,
+            instance_id: 0,
+            zone_id: 0.into(),
+            tx,
+            created: Arc::new(Mutex::new(HashSet::from([creature_guid]))),
+            gates: Arc::new(ViewerGates::default()),
+            skill_slots: Arc::new(Mutex::new((std::collections::HashMap::new(), 0))),
+            explored: Mutex::new(world_view::ExplorationReplay::default()),
+            motion_pending: Arc::new(world_view::MotionPending::default()),
+        }
+    }
+
+    #[test]
+    fn encounter_equipment_reaches_live_and_late_viewers_in_wire_order() {
+        let creature_guid = 0xF130_0000_0000_002A;
+        let viewer = viewer_with_created(creature_guid);
+        let equipment = EncounterEquip {
+            creature_guid,
+            instance_id: 0,
+            main_hand: 2_196,
+            off_hand: 2_716,
+            ranged: 0,
+        };
+
+        for (row, cleared, expected) in [
+            (equipment.clone(), false, (2_196, 2_716, 0)),
+            (
+                EncounterEquip {
+                    main_hand: 2_716,
+                    off_hand: 0,
+                    ranged: 2_196,
+                    ..equipment.clone()
+                },
+                false,
+                (2_716, 0, 2_196),
+            ),
+            (equipment.clone(), true, (0, 0, 0)),
+        ] {
+            let out = encounter_equip_outbound(&viewer, &row, cleared);
+            let (expected_opcode, expected_body) = codec::build_virtual_item_values(
+                creature_guid,
+                expected.0,
+                expected.1,
+                expected.2,
+            );
+            assert!(matches!(
+                out.as_slice(),
+                [Outbound::Raw { opcode, body }]
+                    if *opcode == expected_opcode && *body == expected_body
+            ));
+        }
+
+        let creature = codec::EntityView {
+            guid: creature_guid,
+            type_mask: lyracore_shared::constants::type_mask::CREATURE,
+            entry: 42,
+            scale_x: 1.0,
+            health: 1,
+            max_health: 1,
+            level: 1,
+            run_speed_mult_bp: 10_000,
+            unit_bytes_0: 0x0101,
+            display_id: 1,
+            native_display_id: 1,
+            ..Default::default()
+        };
+        let create = codec::build_create_object(&creature, CreateKind::Peer, &[], &[]).unwrap();
+        let mut late = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(create),
+        ))];
+        append_encounter_equip_after_create(&mut late, &viewer, &equipment);
+        assert!(matches!(
+            late.as_slice(),
+            [
+                Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_)),
+                Outbound::Raw { .. }
+            ]
+        ));
+    }
+
+    #[test]
+    fn chat_event_target_reaches_every_addressable_creature_packet() {
+        let base = ChatEvent {
+            id: 1,
+            sender_guid: 0xF130_0000_0000_002A,
+            chat_type: 0,
+            language: 0,
+            message: "You there!".into(),
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            target_guid: 77,
+        };
+        for chat_type in [0, CHAT_YELL, codec::social::CHAT_TEXT_EMOTE] {
+            let out = chat_event_message(
+                &ChatEvent {
+                    chat_type,
+                    ..base.clone()
+                },
+                Some("Defias Thug".into()),
+            );
+            let Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(message)) = out else {
+                panic!("expected creature chat packet");
+            };
+            match &message.chat_type {
+                wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::MonsterSay {
+                    target,
+                    ..
+                }
+                | wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::MonsterYell {
+                    target,
+                    ..
+                } => assert_eq!(target.guid(), 77),
+                wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+                    monster,
+                    ..
+                } => assert_eq!(monster.guid(), 77),
+                other => panic!("expected addressable creature chat, got {other:?}"),
+            }
+        }
+    }
 
     fn duel_event(kind: u8, completion_kind: u8) -> DuelEvent {
         DuelEvent {

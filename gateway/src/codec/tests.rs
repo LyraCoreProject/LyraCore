@@ -137,6 +137,24 @@ fn raw_values_body_matches_gtker_envelope() {
 }
 
 #[test]
+fn creature_virtual_items_use_all_three_display_fields_without_object_type() {
+    let guid = 0xF130_0000_0000_002Au64;
+    let (opcode, body) = build_virtual_item_values(guid, 2196, 2716, 0);
+    assert_eq!(opcode, 0x00A9);
+
+    let mut expected = update_mask::UpdateMaskValues::new();
+    expected.set_u32(update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY, 2196);
+    expected.set_u32(update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + 1, 2716);
+    expected.set_u32(update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + 2, 0);
+    assert!(body.ends_with(&expected.to_bytes()));
+    assert_eq!(
+        expected.get(update_mask::idx::OBJECT_TYPE),
+        None,
+        "partial equipment VALUES must not resend OBJECT_FIELD_TYPE"
+    );
+}
+
+#[test]
 fn movement_info_bytes_roundtrip() {
     use wow_world_messages::vanilla::{MovementInfo_MovementFlags, Vector3d};
     let info = MovementInfo {

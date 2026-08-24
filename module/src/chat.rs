@@ -42,6 +42,10 @@ pub struct ChatEvent {
     pub language: u8,  // vanilla Language discriminant, echoed back to clients
     pub message: String,
     pub created_at: Timestamp,
+    /// The addressed unit for creature-authored Say/Yell. Zero for unaddressed and player chat.
+    /// END-appended with a typed default so existing rows migrate safely.
+    #[default(0u64)]
+    pub target_guid: u64,
 }
 
 /// True for the creature broadcast chat types this slice relays. [pure]
@@ -69,6 +73,18 @@ pub(crate) fn apply_send_chat(
     language: u8,
     message: String,
 ) -> Result<(), String> {
+    apply_send_chat_to(ctx, sender, 0, chat_type, language, message)
+}
+
+/// Creature-authored speech with its resolved addressed unit retained for the monster chat packet.
+pub(crate) fn apply_send_chat_to(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    target_guid: u64,
+    chat_type: u8,
+    language: u8,
+    message: String,
+) -> Result<(), String> {
     // Vanilla: a dead/ghost player can't be heard via Say/Yell (proximity chat). Whisper + party/guild
     // are NOT gated by death (and aren't routed here anyway — this reducer only handles SAY/YELL).
     if sender.dead {
@@ -85,6 +101,7 @@ pub(crate) fn apply_send_chat(
         language,
         message: text,
         created_at: ctx.timestamp,
+        target_guid,
     });
     Ok(())
 }

@@ -20,8 +20,8 @@
 //!    compile-time-const `GAME_HOOKS_ON_HP_THRESHOLD.is_empty()`, so a tree with no registered
 //!    consumer pays one predictable branch per damage event and nothing else.
 //! 3. **Primitives** — thin package-callable choreography verbs: [`open_door`], [`spawn_wave`]
-//!    (with despawn-on-reset bookkeeping via `game_encounter_spawn`), [`equip_swap`] (module-side
-//!    virtual-item rows; client rendering is `[V]`, see the fn doc), [`move_to_point`] (the
+//!    (with despawn-on-reset bookkeeping via `game_encounter_spawn`), [`equip_swap`] (durable
+//!    virtual-item display projection), [`move_to_point`] (the
 //!    existing creature move-event emission pattern, used directly — work-item 181's shared leg
 //!    chokepoint is NOT built yet; fold this in when it lands), and [`encounter_reset`].
 //!
@@ -33,6 +33,8 @@
 use spacetimedb::{table, ReducerContext, Table};
 
 use lyracore_shared::{constants, spatial};
+
+use crate::game_item_template;
 
 use crate::{
     game_creature_spawn, game_creature_spline, game_creature_template, game_gameobject,
@@ -276,13 +278,11 @@ pub struct EncounterSpawn {
     pub guid: u64,
 }
 
-/// Module-side virtual-item slots for a creature (Mr. Smite's weapon swaps): the durable source of
-/// truth [`equip_swap`] writes. `[V]` CLIENT RENDERING IS NOT WIRED YET — the 5875 client shows
-/// these via `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY` partial-VALUES, which must route through the
-/// gateway's `dirty_reset` path (danger-zones §1.3 — a partial VALUES that re-sends
-/// OBJECT_FIELD_TYPE crashes the client; design doc gap #11). When that relay lands it reads this
-/// row. Swept per instance ([`sweep_encounter_state`]) and per tracked despawn. [server]
-#[table(accessor = game_encounter_equip, index(accessor = by_instance, btree(columns = [instance_id])))]
+/// Client-visible virtual-item display slots for a creature. [`equip_swap`] resolves authored item
+/// entries through `game_item_template` before writing this projection. The gateway relays the three
+/// display fields through its crash-safe partial VALUES path and replays them after a peer CREATE.
+/// Swept per instance ([`sweep_encounter_state`]) and per tracked despawn. [entity]
+#[table(accessor = game_encounter_equip, public, index(accessor = by_instance, btree(columns = [instance_id])))]
 pub struct EncounterEquip {
     #[primary_key]
     pub creature_guid: u64,
@@ -699,12 +699,10 @@ pub fn spawn_wave(
     guids
 }
 
-/// Write a creature's virtual-item slots (Mr. Smite: sword+board → two-hander → dual maces) —
-/// module-side ONLY today: the durable `game_encounter_equip` row is the source of truth; `[V]`
-/// the client-visible `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY` partial-VALUES relay is NOT wired (it must
-/// go through the gateway `dirty_reset` path, danger-zones §1.3 — flagged in the work item; the
-/// entity-row columns it will read from require a `world.rs` edit owned elsewhere this wave).
-/// Upserts; errs for a missing/player guid.
+/// Write a creature's virtual-item slots (Mr. Smite: sword+board → two-hander → dual maces).
+/// Authored values are item entries; the durable row carries the corresponding display ids expected
+/// by `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY`. Zero unequips a slot. Upserts; errs for a missing creature
+/// or item template so a relay never reports success without an observable projection.
 pub fn equip_swap(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -717,6 +715,18 @@ pub fn equip_swap(
     if e.is_player() {
         return Err("equip_swap targets creatures only".to_string());
     }
+    let display = |entry: u32| -> Result<u32, String> {
+        if entry == 0 {
+            return Ok(0);
+        }
+        ctx.db
+            .game_item_template()
+            .entry()
+            .find(entry)
+            .map(|item| item.display_id)
+            .ok_or_else(|| format!("virtual equipment item {entry} is missing"))
+    };
+    let (main_hand, off_hand, ranged) = (display(main_hand)?, display(off_hand)?, display(ranged)?);
     let t = ctx.db.game_encounter_equip();
     match t.creature_guid().find(creature_guid) {
         Some(mut row) => {

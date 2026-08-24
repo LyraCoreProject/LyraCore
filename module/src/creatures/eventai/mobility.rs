@@ -300,25 +300,26 @@ pub(crate) fn remove_guardians(
         .find(summoner_guid)
         .filter(|entity| !entity.is_player())
         .ok_or_else(|| format!("guardian owner {summoner_guid} is unavailable"))?;
-    let entities = ctx.db.game_world_entity();
-    let mut guardians = ctx
-        .db
-        .game_creature_ai_summon_origin()
-        .iter()
-        .filter(|origin| origin.summoner_guid == summoner_guid)
-        .filter_map(|origin| {
-            let entity = entities.guid().find(origin.creature_guid)?;
-            (creature_entry == 0 || entity.entry == creature_entry).then_some(entity.guid)
-        })
-        .collect::<Vec<_>>();
-    guardians.sort_unstable();
-    if creature_entry != 0 {
-        guardians.truncate(1);
-    }
-    for guardian in guardians {
-        crate::creatures::despawn_creature_entity(ctx, guardian);
+    if let Some(pet) = crate::creatures::pet_of(ctx, summoner_guid) {
+        if creature_entry == 0 || pet.entry == creature_entry {
+            crate::creatures::despawn_pets(ctx, summoner_guid);
+        }
     }
     Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn mark_summon_origin_for_debug(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    summoner_guid: u64,
+) {
+    ctx.db
+        .game_creature_ai_summon_origin()
+        .insert(CreatureAiSummonOrigin {
+            creature_guid,
+            summoner_guid,
+        });
 }
 
 fn applied(applied: bool) -> ActionResult {
@@ -634,6 +635,7 @@ fn despawn_temporary_summon(ctx: &ReducerContext, creature_guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_scan::code_of;
 
     #[test]
     fn summon_guids_reuse_the_eventai_band_without_corrupting_entry_bits() {
@@ -645,5 +647,16 @@ mod tests {
             SUMMON_LOW_BAND | 1
         );
         assert!(summon_guid(123, 0).is_none());
+    }
+
+    #[test]
+    fn guardian_removal_includes_spell_created_pets() {
+        let body = code_of(
+            include_str!("mobility.rs"),
+            "pub(crate) fn remove_guardians(",
+        );
+        assert!(body.contains("crate::creatures::pet_of(ctx, summoner_guid)"));
+        assert!(body.contains("crate::creatures::despawn_pets(ctx, summoner_guid)"));
+        assert!(!body.contains("game_creature_ai_summon_origin"));
     }
 }

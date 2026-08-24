@@ -673,6 +673,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_channel_event",
         "SELECT * FROM game_channel_member",
         "SELECT * FROM game_emote_event",
+        // Creature virtual-item display projection. Durable rows are replayed after peer CREATE;
+        // insert/update/delete also relay the three sparse UNIT fields live.
+        "SELECT * FROM game_encounter_equip",
         // Cast visuals + projectile impact: `world_view::
         // cast_event_appeared` runs the full cast-lock contract per viewer; `impact_appeared`
         // the deferred damage number. Both TTL-reaped event tables.

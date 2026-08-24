@@ -5,7 +5,8 @@ use crate::creatures::tick::game_creature_spline;
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_template,
     game_faction_template, game_gameobject, game_gameobject_template, game_gameobject_trap,
-    game_gossip_menu_profile, game_spell, game_world_entity, game_world_state_name,
+    game_gossip_menu_profile, game_item_template, game_spell, game_world_entity,
+    game_world_state_name,
 };
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -340,9 +341,6 @@ fn load_definition_catalogue(ctx: &ReducerContext, packed: &str) -> Result<(), S
         .filter(|line| !line.is_empty())
         .map(parse_definition)
         .collect::<Result<Vec<_>, _>>()?;
-    if definitions.is_empty() {
-        return Err("relay catalogue needs at least one definition".to_string());
-    }
     let table = ctx.db.game_creature_ai_relay_definition();
     let mut graph = std::collections::BTreeMap::new();
     for definition in &definitions {
@@ -381,6 +379,30 @@ fn load_definition_catalogue(ctx: &ReducerContext, packed: &str) -> Result<(), S
     }
     reap_unused_definitions(ctx);
     Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn replace_relay_catalogue_for_debug(
+    ctx: &ReducerContext,
+    packed: &str,
+) -> Result<(), String> {
+    load_definition_catalogue(ctx, packed)
+}
+
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn replace_single_relay_for_debug(
+    ctx: &ReducerContext,
+    relay_id: u32,
+    instruction: &str,
+) -> Result<u64, String> {
+    let relay = relay_id.to_string();
+    let steps = format!("0,0,0,source>source,{instruction}");
+    let version = encoded_definition_version(&relay, "parallel", "map-or-instance", &steps);
+    load_definition_catalogue(
+        ctx,
+        &format!("{relay}@{version}@parallel@map-or-instance@{steps}"),
+    )?;
+    current_catalogue_version(ctx).ok_or_else(|| "relay catalogue has no current version".into())
 }
 
 fn validate_definition_dependencies(
@@ -444,6 +466,24 @@ fn validate_definition_dependencies(
                         "faction_template",
                         faction.faction_template,
                     ));
+                }
+                RelayInstruction::SetEquipment(equipment) => {
+                    for entry in [equipment.main_hand, equipment.off_hand, equipment.ranged] {
+                        let entry = u32::try_from(entry).map_err(|_| {
+                            format!(
+                                "relay dependency path {} -> row:{} -> item_template:{entry} has a negative id",
+                                definition.relay_id, step.source_order
+                            )
+                        })?;
+                        if entry != 0 && ctx.db.game_item_template().entry().find(entry).is_none() {
+                            return Err(missing_dependency(
+                                definition,
+                                step,
+                                "item_template",
+                                entry,
+                            ));
+                        }
+                    }
                 }
                 RelayInstruction::UpdateCreatureTemplate(update)
                     if ctx
@@ -1347,9 +1387,10 @@ fn apply_leaf_for_pair(
                 .guid()
                 .find(guid)
                 .ok_or_else(|| format!("relay talk subject {guid} is missing"))?;
-            crate::chat::apply_send_chat(
+            crate::chat::apply_send_chat_to(
                 ctx,
                 source,
+                target_guid,
                 line.chat_type,
                 line.language_id,
                 line.male_text,
@@ -1542,13 +1583,19 @@ fn apply_leaf_for_pair(
         RelayInstruction::DespawnGameObject(_) => {
             crate::gameobject::despawn_from_relay(ctx, target_guid)
         }
-        RelayInstruction::SetEquipment(equipment) => crate::encounter::equip_swap(
-            ctx,
-            guid,
-            equipment.main_hand as u32,
-            equipment.off_hand as u32,
-            equipment.ranged as u32,
-        ),
+        RelayInstruction::SetEquipment(equipment) => {
+            let slot = |entry: i32| {
+                u32::try_from(entry)
+                    .map_err(|_| format!("relay equipment item {entry} has a negative id"))
+            };
+            crate::encounter::equip_swap(
+                ctx,
+                guid,
+                slot(equipment.main_hand)?,
+                slot(equipment.off_hand)?,
+                slot(equipment.ranged)?,
+            )
+        }
         RelayInstruction::ModifyUnitFlags(change) => {
             crate::creatures::presentation::apply_relay_unit_flags(
                 ctx,
@@ -2244,6 +2291,19 @@ mod tests {
         assert!(validate_definition_graph(&cycle)
             .unwrap_err()
             .contains("relay cycle: 1 -> 2 -> 1"));
+    }
+
+    #[test]
+    fn empty_catalogue_is_a_valid_replacement_graph() {
+        let graph = std::collections::BTreeMap::new();
+        assert!(validate_definition_graph(&graph).is_ok());
+        let loader = crate::test_scan::code_of(
+            include_str!("relay.rs"),
+            "fn load_definition_catalogue(ctx: &ReducerContext, packed: &str)",
+        );
+        assert!(!loader.contains("definitions.is_empty()"));
+        assert!(loader.contains("definition.current = false"));
+        assert!(loader.contains("reap_unused_definitions(ctx)"));
     }
 
     #[test]

@@ -282,6 +282,7 @@ struct Scenario {
     eventai_next_summon: Cell<u64>,
     /// Ordered text effects emitted by authored rules.
     eventai_speech: RefCell<Vec<(u64, u8, String)>>,
+    eventai_speech_targets: RefCell<Vec<(u64, u64)>>,
     eventai_emotes: RefCell<Vec<(u64, u32, u32, u64)>>,
     eventai_quest_credit_outcomes: RefCell<VecDeque<QuestCreditOutcome>>,
     eventai_quest_credit_results: RefCell<Vec<QuestCreditOutcome>>,
@@ -470,6 +471,10 @@ impl Scenario {
 
     fn eventai_speech(&self) -> Vec<(u64, u8, String)> {
         self.eventai_speech.borrow().clone()
+    }
+
+    fn eventai_speech_targets(&self) -> Vec<(u64, u64)> {
+        self.eventai_speech_targets.borrow().clone()
     }
 
     fn eventai_emotes(&self) -> Vec<(u64, u32, u32, u64)> {
@@ -1872,6 +1877,7 @@ impl EventAiWorld for Scenario {
     fn eventai_deliver_line(
         &mut self,
         speaker_guid: u64,
+        target_guid: u64,
         chat_type: u8,
         _language: u8,
         message: String,
@@ -1885,6 +1891,9 @@ impl EventAiWorld for Scenario {
         self.eventai_speech
             .borrow_mut()
             .push((speaker_guid, chat_type, message));
+        self.eventai_speech_targets
+            .borrow_mut()
+            .push((speaker_guid, target_guid));
         true
     }
 
@@ -2199,10 +2208,10 @@ impl EventAiWorld for Scenario {
             return false;
         }
         let mut guardians = self
-            .eventai_summon_expiry
+            .pet_owners
             .borrow()
             .iter()
-            .filter(|(_, expiry)| expiry.summoner_guid == summoner_guid)
+            .filter(|(_, owner)| **owner == summoner_guid)
             .filter_map(|(guid, _)| {
                 self.creatures
                     .borrow()
@@ -2216,7 +2225,7 @@ impl EventAiWorld for Scenario {
             guardians.truncate(1);
         }
         for guardian in guardians {
-            self.clear_eventai_summon(guardian);
+            self.pet_owners.borrow_mut().remove(&guardian);
             self.creatures.borrow_mut().remove(&guardian);
         }
         true

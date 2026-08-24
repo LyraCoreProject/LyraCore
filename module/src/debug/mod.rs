@@ -39,6 +39,7 @@
 
 mod audit;
 mod encounter;
+mod eventai;
 mod fingerprint;
 mod instance;
 mod readout;
@@ -47,6 +48,7 @@ mod runtime_script;
 
 pub use audit::*;
 pub use encounter::*;
+pub use eventai::*;
 pub use fingerprint::*;
 pub use instance::*;
 pub use readout::*;

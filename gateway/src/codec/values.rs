@@ -253,6 +253,23 @@ pub fn build_target_values(guid: u64, target: u64) -> SMSG_UPDATE_OBJECT {
     })
 }
 
+/// Build the three creature `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY` fields in one partial VALUES update.
+/// The vanilla typed builder exposes only slot 0, so this uses the same raw-mask escape as
+/// multi-slot auras and bag contents. It never carries `OBJECT_FIELD_TYPE`.
+pub fn build_virtual_item_values(
+    guid: u64,
+    main_hand_display: u32,
+    off_hand_display: u32,
+    ranged_display: u32,
+) -> (u16, Vec<u8>) {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    let first = update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY;
+    mask.set_u32(first, main_hand_display);
+    mask.set_u32(first + 1, off_hand_display);
+    mask.set_u32(first + 2, ranged_display);
+    build_values_update_raw(guid, &mask)
+}
+
 /// VALUES partial-update carrying `UNIT_FIELD_MAXHEALTH` + the unit's max power, so a non-level-up
 /// max-vitals change (e.g. +Stamina/+Intellect gear or a Fortitude/Mark aura) moves the bar
 /// DENOMINATOR live for observers. `power_b` selects the max-power descriptor exactly like

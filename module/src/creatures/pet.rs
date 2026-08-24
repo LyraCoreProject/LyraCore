@@ -285,13 +285,20 @@ fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Op
 /// (Unit vs other) from its guid's HIGHGUID type, so a pet MUST carry it or the client can't treat it as a
 /// unit (broken nameplate/targeting/pet-bar), exactly like the importer `world_guid` / `seed` / `debug`.
 const HIGHGUID_UNIT: u64 = 0xF130;
+/// Vanilla's separate namespace for a pet owned by another server-authored unit.
+const HIGHGUID_PET: u64 = 0xF140;
 
-/// The deterministic pet guid for an owner: `HIGHGUID_UNIT` in the high bits (so the client treats it as a
-/// Unit) + the owner guid in the low 48. The owner is a small player guid (< 2^24); a real creature's low is
-/// `(entry << 24) | db_guid` (always >= 1<<24 since entry >= 1), so the pet's low never collides with a
-/// creature. Stable so the keyed `pet_of` read, despawn delete, and `on_delete` relay agree. Pure.
+/// The deterministic pet guid for an owner. Player pets retain the established `HIGHGUID_UNIT`
+/// namespace. A creature-owned spell guardian uses vanilla's `HIGHGUID_PET`, otherwise copying the
+/// creature owner's low 48 bits would reproduce the owner's guid and collide on insert. Stable so
+/// the keyed `pet_of` read, despawn delete, and `on_delete` relay agree. Pure.
 pub(crate) fn pet_guid_for(owner_guid: u64) -> u64 {
-    (HIGHGUID_UNIT << 48) | (owner_guid & 0x0000_FFFF_FFFF_FFFF)
+    let high = if owner_guid >> 48 == HIGHGUID_UNIT {
+        HIGHGUID_PET
+    } else {
+        HIGHGUID_UNIT
+    };
+    (high << 48) | (owner_guid & 0x0000_FFFF_FFFF_FFFF)
 }
 
 /// E_SUMMON_PET handler: summon a persistent pet `entry` owned by `caster_guid` (Summon Imp → an Imp).
@@ -411,12 +418,10 @@ mod tests {
     }
 
     #[test]
-    fn pet_guid_uses_only_the_owner_low_48_bits() {
-        let owner = 0xABCD_1234_5678_9ABC_u64;
-        assert_eq!(
-            pet_guid_for(owner),
-            (HIGHGUID_UNIT << 48) | 0x0000_1234_5678_9ABC
-        );
+    fn creature_owned_guardian_uses_the_pet_namespace_without_colliding() {
+        let owner = 0xF130_1234_5678_9ABC_u64;
+        let pet = pet_guid_for(owner);
+        assert_eq!(pet, (HIGHGUID_PET << 48) | 0x0000_1234_5678_9ABC);
+        assert_ne!(pet, owner);
     }
-
 }

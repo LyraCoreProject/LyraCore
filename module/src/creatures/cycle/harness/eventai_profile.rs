@@ -134,7 +134,8 @@ fn profile_actions_reach_their_named_world_owners() {
 }
 
 #[test]
-fn guardian_entry_removal_reaps_one_match_and_zero_reaps_the_rest() {
+fn guardian_removal_reaps_a_spell_pet_and_leaves_an_eventai_summon() {
+    const GUARDIAN_GUID: u64 = 8_404;
     let spawn = |entry| {
         CreatureInstruction::SpawnAtActor(SpawnAtActorInstruction {
             creature_entry: entry,
@@ -145,16 +146,16 @@ fn guardian_entry_removal_reaps_one_match_and_zero_reaps_the_rest() {
     let mut scenario = world()
         .eventai_template(GUARDIAN_ENTRY)
         .eventai_template(OTHER_GUARDIAN_ENTRY)
+        .pet(GUARDIAN_GUID, CREATURE, point(0.0))
+        .entry(GUARDIAN_GUID, GUARDIAN_ENTRY)
         .eventai_native_definition(definition(
             EventAiSubject::Entry(ENTRY),
             2,
             InstructionSelection::All,
             vec![
-                spawn(GUARDIAN_ENTRY),
-                spawn(GUARDIAN_ENTRY),
                 spawn(OTHER_GUARDIAN_ENTRY),
                 CreatureInstruction::RemoveGuardians(RemoveGuardiansInstruction {
-                    creature_entry: GUARDIAN_ENTRY,
+                    creature_entry: 0,
                 }),
             ],
         ));
@@ -162,20 +163,12 @@ fn guardian_entry_removal_reaps_one_match_and_zero_reaps_the_rest() {
     dispatch(&mut scenario, CREATURE);
 
     let remaining = scenario.eventai_summoned_guids();
-    assert_eq!(remaining.len(), 2);
+    assert_eq!(remaining.len(), 1);
     assert_eq!(
-        remaining
-            .iter()
-            .map(|guid| scenario.creatures.borrow()[guid].entry)
-            .collect::<Vec<_>>(),
-        vec![GUARDIAN_ENTRY, OTHER_GUARDIAN_ENTRY]
+        scenario.creatures.borrow()[&remaining[0]].entry,
+        OTHER_GUARDIAN_ENTRY
     );
-    assert!(EventAiWorld::eventai_remove_guardians(
-        &mut scenario,
-        CREATURE,
-        0
-    ));
-    assert!(scenario.eventai_summoned_guids().is_empty());
+    assert!(!scenario.creatures.borrow().contains_key(&GUARDIAN_GUID));
 }
 
 #[test]
