@@ -12,6 +12,8 @@ pub struct RangedImpactSchedule {
     pub attacker_guid: u64,
     pub target_guid: u64,
     pub damage: u32,
+    pub ranged_spell_id: u32,
+    pub is_crit: bool,
 }
 
 impl __sdk::InModule for RangedImpactSchedule {
@@ -27,6 +29,8 @@ pub struct RangedImpactScheduleCols {
     pub attacker_guid: __sdk::__query_builder::Col<RangedImpactSchedule, u64>,
     pub target_guid: __sdk::__query_builder::Col<RangedImpactSchedule, u64>,
     pub damage: __sdk::__query_builder::Col<RangedImpactSchedule, u32>,
+    pub ranged_spell_id: __sdk::__query_builder::Col<RangedImpactSchedule, u32>,
+    pub is_crit: __sdk::__query_builder::Col<RangedImpactSchedule, bool>,
 }
 
 impl __sdk::__query_builder::HasCols for RangedImpactSchedule {
@@ -38,6 +42,8 @@ impl __sdk::__query_builder::HasCols for RangedImpactSchedule {
             attacker_guid: __sdk::__query_builder::Col::new(table_name, "attacker_guid"),
             target_guid: __sdk::__query_builder::Col::new(table_name, "target_guid"),
             damage: __sdk::__query_builder::Col::new(table_name, "damage"),
+            ranged_spell_id: __sdk::__query_builder::Col::new(table_name, "ranged_spell_id"),
+            is_crit: __sdk::__query_builder::Col::new(table_name, "is_crit"),
         }
     }
 }

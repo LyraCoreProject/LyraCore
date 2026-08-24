@@ -10,7 +10,11 @@ pub mod account_type;
 pub mod activate_vmap_generation_reducer;
 pub mod active_taxi_flight_type;
 pub mod addon_message_type;
+pub mod advance_fenrus_choreography_reducer;
 pub mod advance_taxi_flight_reducer;
+pub mod advance_tomb_round_reducer;
+pub mod advance_wailing_escort_reducer;
+pub mod ai_event_kind_type;
 pub mod alpha_test_tools_enrollment_type;
 pub mod append_vmap_generation_chunks_reducer;
 pub mod areatrigger_teleport_type;
@@ -23,18 +27,27 @@ pub mod auction_house_definition_type;
 pub mod auction_operation_receipt_type;
 pub mod auction_type;
 pub mod aura_schedule_type;
+pub mod aura_stack_condition_type;
 pub mod aura_type;
+pub mod authored_idle_movement_type;
+pub mod authored_walking_mode_type;
 pub mod begin_transfer_reducer;
+pub mod blackrock_tomb_round_table;
+pub mod blackrock_tomb_round_type;
 pub mod bot_invite_intent_type;
 pub mod breath_relay_event_type;
 pub mod breath_schedule_type;
 pub mod breath_state_type;
 pub mod buyback_entry_type;
+pub mod call_for_help_instruction_type;
+pub mod cast_credit_type;
+pub mod cast_instruction_type;
 pub mod catalogue_fingerprint_type;
 pub mod channel_event_type;
 pub mod channel_member_type;
 pub mod char_base_info_type;
 pub mod character_explored_type;
+pub mod character_quest_event_credit_type;
 pub mod character_quest_type;
 pub mod character_shard_type;
 pub mod character_talent_type;
@@ -56,25 +69,48 @@ pub mod create_character_reducer;
 pub mod createinfo_action_type;
 pub mod createinfo_spell_type;
 pub mod creature_ai_broadcast_text_type;
+pub mod creature_ai_definition_type;
 pub mod creature_ai_event_type;
+pub mod creature_ai_forced_despawn_type;
+pub mod creature_ai_movement_intent_type;
+pub mod creature_ai_movement_path_waypoint_type;
+pub mod creature_ai_reset_deferral_type;
+pub mod creature_ai_returning_home_type;
 pub mod creature_ai_rule_state_type;
+pub mod creature_ai_spell_metadata_type;
 pub mod creature_ai_state_type;
 pub mod creature_ai_summon_expiry_type;
+pub mod creature_ai_summon_origin_type;
 pub mod creature_ai_summon_type;
 pub mod creature_cast_type;
+pub mod creature_dead_callback_cast_admission_type;
+pub mod creature_entry_condition_type;
 pub mod creature_family_type;
+pub mod creature_gossip_menu_override_type;
+pub mod creature_health_condition_type;
+pub mod creature_instruction_type;
+pub mod creature_lethal_damage_floor_type;
 pub mod creature_loot_type;
 pub mod creature_move_event_type;
 pub mod creature_move_schedule_type;
+pub mod creature_presentation_instruction_type;
+pub mod creature_presentation_mount_type;
+pub mod creature_presentation_type;
+pub mod creature_quest_tap_member_type;
+pub mod creature_quest_tap_type;
 pub mod creature_quest_type;
+pub mod creature_react_state_type;
+pub mod creature_relay_temporary_faction_type;
 pub mod creature_spawn_type;
 pub mod creature_spell_type;
 pub mod creature_spline_type;
 pub mod creature_template_type;
 pub mod creature_waypoint_type;
+pub mod death_condition_type;
 pub mod debug_accept_quest_reducer;
 pub mod debug_add_threat_reducer;
 pub mod debug_apply_damage_reducer;
+pub mod debug_apply_lethal_damage_floor_fixture_reducer;
 pub mod debug_arm_instance_tick_reducer;
 pub mod debug_assert_blink_clamp_reducer;
 pub mod debug_assert_chase_stops_at_column_reducer;
@@ -86,6 +122,7 @@ pub mod debug_auto_bank_item_reducer;
 pub mod debug_backfill_cell_ids_reducer;
 pub mod debug_backfill_go_grid_reducer;
 pub mod debug_begin_cast_reducer;
+pub mod debug_begin_tomb_round_scheduler_reducer;
 pub mod debug_bench_collision_gate_reducer;
 pub mod debug_bench_los_reducer;
 pub mod debug_bind_home_reducer;
@@ -128,6 +165,7 @@ pub mod debug_floor_probe_reducer;
 pub mod debug_force_cast_at_reducer;
 pub mod debug_force_cast_reducer;
 pub mod debug_force_gameobject_respawn_reducer;
+pub mod debug_force_lethal_damage_floor_fixture_reducer;
 pub mod debug_force_pool_reroll_reducer;
 pub mod debug_gossip_select_reducer;
 pub mod debug_grant_default_actions_reducer;
@@ -157,11 +195,13 @@ pub mod debug_reap_instance_reducer;
 pub mod debug_regrid_reducer;
 pub mod debug_repair_after_publish_reducer;
 pub mod debug_repair_item_reducer;
+pub mod debug_replace_definition_then_apply_damage_floor_fixture_reducer;
 pub mod debug_replay_auction_expiry_fixture_reducer;
 pub mod debug_repop_reducer;
 pub mod debug_reseed_skills_reducer;
 pub mod debug_reset_instance_reducer;
 pub mod debug_reset_talents_reducer;
+pub mod debug_respawn_lethal_damage_floor_fixture_reducer;
 pub mod debug_resurrect_response_reducer;
 pub mod debug_retire_region_creatures_reducer;
 pub mod debug_score_movement_reducer;
@@ -170,6 +210,8 @@ pub mod debug_seed_mail_reducer;
 pub mod debug_seed_scenario_fixtures_reducer;
 pub mod debug_sell_item_reducer;
 pub mod debug_set_health_reducer;
+pub mod debug_set_lethal_damage_floor_fixture_reducer;
+pub mod debug_set_lethal_damage_floor_health_fixture_reducer;
 pub mod debug_set_level_reducer;
 pub mod debug_set_money_reducer;
 pub mod debug_set_nav_coverage_enabled_reducer;
@@ -189,6 +231,9 @@ pub mod debug_split_item_reducer;
 pub mod debug_stage_auction_buyout_fixture_reducer;
 pub mod debug_stage_auction_expiry_fixture_reducer;
 pub mod debug_stage_choice_reward_fixture_reducer;
+pub mod debug_stage_eventai_revision_fixture_reducer;
+pub mod debug_stage_lethal_damage_floor_fixture_reducer;
+pub mod debug_stage_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_stress_relay_reducer;
 pub mod debug_sweep_encounter_state_reducer;
 pub mod debug_sweep_slice_lens_reducer;
@@ -206,6 +251,15 @@ pub mod debug_verify_auction_expiry_fixture_reducer;
 pub mod debug_verify_choice_reward_fixture_reducer;
 pub mod debug_verify_choice_reward_refusal_fixture_reducer;
 pub mod debug_verify_combat_regen_reducer;
+pub mod debug_verify_eventai_instance_packages_reducer;
+pub mod debug_verify_eventai_quest_credit_fixture_reducer;
+pub mod debug_verify_eventai_revision_fixture_reducer;
+pub mod debug_verify_lethal_damage_floor_fixture_reducer;
+pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
+pub mod debug_verify_shadowfang_choreography_reducer;
+pub mod debug_verify_tomb_round_scheduler_reducer;
+pub mod debug_verify_wailing_awakening_reducer;
+pub mod debug_verify_wailing_escort_and_begin_awakening_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_reducer;
 pub mod delete_character_reducer;
@@ -216,23 +270,42 @@ pub mod duel_schedule_type;
 pub mod duel_type;
 pub mod dynamic_object_type;
 pub mod emote_event_type;
+pub mod emote_instruction_type;
+pub mod encounter_binding_type;
 pub mod encounter_equip_type;
 pub mod encounter_hp_watch_type;
+pub mod encounter_signal_type;
 pub mod encounter_spawn_type;
 pub mod encounter_state_type;
 pub mod ensure_instance_reducer;
 pub mod entity_motion_type;
 pub mod establish_session_reducer;
+pub mod evade_instruction_type;
+pub mod event_ai_quest_credit_type;
+pub mod event_ai_rule_type;
+pub mod event_condition_type;
+pub mod event_predicate_type;
 pub mod event_reaper_schedule_type;
 pub mod evict_instance_population_reducer;
+pub mod execution_policy_type;
 pub mod expire_auction_reducer;
+pub mod expire_avatar_suppression_reducer;
 pub mod expire_eventai_summon_reducer;
+pub mod facing_condition_type;
+pub mod facing_instruction_type;
 pub mod faction_template_type;
 pub mod faction_type;
 pub mod finalize_vmap_nav_coverage_reducer;
 pub mod finish_transfer_reducer;
+pub mod fire_eventai_forced_despawn_reducer;
 pub mod fire_pending_cast_reducer;
 pub mod fire_spell_impact_reducer;
+pub mod flag_override_type;
+pub mod force_despawn_instruction_type;
+pub mod friendly_aura_selection_type;
+pub mod friendly_crowd_control_condition_type;
+pub mod friendly_health_deficit_condition_type;
+pub mod friendly_missing_aura_condition_type;
 pub mod game_account_table;
 pub mod game_active_taxi_flight_table;
 pub mod game_addon_message_table;
@@ -262,6 +335,7 @@ pub mod game_char_base_info_table;
 pub mod game_character_buyback_table;
 pub mod game_character_contact_table;
 pub mod game_character_explored_table;
+pub mod game_character_quest_event_credit_table;
 pub mod game_character_quest_table;
 pub mod game_character_shard_table;
 pub mod game_character_table;
@@ -278,17 +352,36 @@ pub mod game_corpse_table;
 pub mod game_createinfo_action_table;
 pub mod game_createinfo_spell_table;
 pub mod game_creature_ai_broadcast_text_table;
+pub mod game_creature_ai_definition_table;
 pub mod game_creature_ai_event_table;
+pub mod game_creature_ai_forced_despawn_table;
+pub mod game_creature_ai_movement_intent_table;
+pub mod game_creature_ai_movement_path_waypoint_table;
+pub mod game_creature_ai_relay_arrival_table;
+pub mod game_creature_ai_relay_continuation_table;
+pub mod game_creature_ai_relay_definition_table;
+pub mod game_creature_ai_relay_run_table;
+pub mod game_creature_ai_reset_deferral_table;
+pub mod game_creature_ai_returning_home_table;
 pub mod game_creature_ai_rule_state_table;
+pub mod game_creature_ai_spell_metadata_table;
 pub mod game_creature_ai_state_table;
 pub mod game_creature_ai_summon_expiry_table;
+pub mod game_creature_ai_summon_origin_table;
 pub mod game_creature_ai_summon_table;
 pub mod game_creature_cast_table;
+pub mod game_creature_dead_callback_cast_admission_table;
 pub mod game_creature_family_table;
+pub mod game_creature_gossip_menu_override_table;
+pub mod game_creature_lethal_damage_floor_table;
 pub mod game_creature_loot_table;
 pub mod game_creature_move_event_table;
 pub mod game_creature_move_schedule_table;
+pub mod game_creature_presentation_table;
 pub mod game_creature_quest_table;
+pub mod game_creature_quest_tap_member_table;
+pub mod game_creature_quest_tap_table;
+pub mod game_creature_relay_temporary_faction_table;
 pub mod game_creature_spawn_table;
 pub mod game_creature_spell_table;
 pub mod game_creature_spline_table;
@@ -318,11 +411,15 @@ pub mod game_gameobject_pool_table;
 pub mod game_gameobject_quest_table;
 pub mod game_gameobject_table;
 pub mod game_gameobject_template_table;
+pub mod game_gameobject_trap_cooldown_table;
+pub mod game_gameobject_trap_table;
 pub mod game_gameobject_unlocked_table;
 pub mod game_gateway_lease_reaper_schedule_table;
 pub mod game_gateway_lease_table;
 pub mod game_gateway_session_table;
 pub mod game_go_model_table;
+pub mod game_gossip_menu_profile_option_table;
+pub mod game_gossip_menu_profile_table;
 pub mod game_gossip_menu_table;
 pub mod game_gossip_option_table;
 pub mod game_graveyard_table;
@@ -371,6 +468,8 @@ pub mod game_object_pool_member_type;
 pub mod game_object_pool_type;
 pub mod game_object_quest_type;
 pub mod game_object_template_type;
+pub mod game_object_trap_cooldown_type;
+pub mod game_object_trap_type;
 pub mod game_object_type;
 pub mod game_object_unlocked_type;
 pub mod game_operator_table;
@@ -384,6 +483,8 @@ pub mod game_player_action_table;
 pub mod game_player_reputation_table;
 pub mod game_player_skill_table;
 pub mod game_player_spell_table;
+pub mod game_quest_cast_objective_table;
+pub mod game_quest_event_requirement_table;
 pub mod game_quest_objective_table;
 pub mod game_quest_reward_choice_table;
 pub mod game_quest_reward_item_table;
@@ -454,6 +555,8 @@ pub mod game_weather_table;
 pub mod game_whisper_event_table;
 pub mod game_world_config_table;
 pub mod game_world_entity_table;
+pub mod game_world_state_name_table;
+pub mod game_world_state_table;
 pub mod game_xp_event_table;
 pub mod game_zone_weather_table;
 pub mod gateway_lease_reaper_schedule_type;
@@ -461,6 +564,8 @@ pub mod gateway_lease_type;
 pub mod gateway_session_type;
 pub mod gm_world_config_type;
 pub mod go_model_type;
+pub mod gossip_menu_profile_option_type;
+pub mod gossip_menu_profile_type;
 pub mod gossip_menu_type;
 pub mod gossip_option_type;
 pub mod grant_alpha_test_tools_reducer;
@@ -576,8 +681,13 @@ pub mod gw_use_gameobject_reducer;
 pub mod gw_use_item_reducer;
 pub mod hunter_pet_protocol_type;
 pub mod hunter_pet_type;
+pub mod idle_movement_intent_type;
+pub mod immobilization_instruction_type;
 pub mod import_character_blob_reducer;
 pub mod import_character_reducer;
+pub mod import_creature_ai_definitions_append_reducer;
+pub mod import_creature_ai_definitions_reducer;
+pub mod import_creature_ai_relay_definitions_reducer;
 pub mod import_creature_spawns_append_reducer;
 pub mod import_creature_spawns_reducer;
 pub mod import_gameobjects_append_reducer;
@@ -590,12 +700,18 @@ pub mod import_nav_chunks_append_reducer;
 pub mod import_nav_chunks_reducer;
 pub mod import_terrain_chunks_append_reducer;
 pub mod import_terrain_chunks_reducer;
+pub mod import_verified_rajaxx_projection_type;
 pub mod import_vmap_chunks_append_reducer;
 pub mod import_vmap_chunks_reducer;
+pub mod increment_phase_instruction_type;
 pub mod install_guid_range_reducer;
 pub mod instance_reaper_schedule_type;
+pub mod instruction_selection_type;
+pub mod instruction_target_type;
 pub mod item_instance_type;
 pub mod item_template_type;
+pub mod kill_condition_type;
+pub mod kill_credit_type;
 pub mod level_stats_type;
 pub mod levelup_event_type;
 pub mod live_pet_kind_type;
@@ -608,34 +724,57 @@ pub mod mail_type;
 pub mod map_region_type;
 pub mod melee_attack_type;
 pub mod melee_schedule_type;
+pub mod missing_text_template_no_effect_type;
 pub mod motion_publish_schedule_type;
+pub mod movement_operation_type;
+pub mod movement_switch_type;
 pub mod movement_violation_type;
 pub mod nav_chunk_type;
+pub mod notify_encounter_instruction_type;
+pub mod npc_flags_projection_type;
 pub mod npc_text_slot_type;
 pub mod npc_text_type;
 pub mod npc_vendor_type;
 pub mod on_disconnect_reducer;
 pub mod operator_type;
+pub mod out_of_combat_sight_condition_type;
+pub mod patrol_intent_type;
+pub mod patrol_pause_type;
 pub mod pending_cast_type;
 pub mod pending_motion_type;
 pub mod pending_spell_impact_type;
+pub mod percentage_condition_type;
 pub mod pet_care_schedule_type;
 pub mod pet_command_type;
+pub mod phase_set_type;
 pub mod player_action_type;
 pub mod player_reputation_type;
 pub mod player_skill_type;
 pub mod player_spell_type;
+pub mod posture_admission_type;
 pub mod prepare_vmap_nav_coverage_reducer;
 pub mod provision_account_reducer;
 pub mod publish_motion_reducer;
+pub mod quest_cast_objective_type;
+pub mod quest_credit_recipient_policy_type;
+pub mod quest_event_requirement_type;
+pub mod quest_event_type;
 pub mod quest_objective_type;
 pub mod quest_reward_choice_type;
 pub mod quest_reward_item_type;
+pub mod quest_taken_predicate_type;
 pub mod quest_template_type;
 pub mod quest_text_type;
 pub mod race_info_type;
+pub mod random_emote_instruction_type;
+pub mod random_movement_intent_type;
+pub mod random_phase_instruction_type;
+pub mod random_phase_range_instruction_type;
 pub mod ranged_impact_reducer;
 pub mod ranged_impact_schedule_type;
+pub mod ranged_mode_instruction_type;
+pub mod ranged_mode_type;
+pub mod ranged_posture_instruction_type;
 pub mod realm_auction_commit_listing_reducer;
 pub mod realm_auction_confirm_listing_reducer;
 pub mod realm_auction_decide_bid_reducer;
@@ -665,50 +804,121 @@ pub mod reap_instances_reducer;
 pub mod reap_mail_escrows_reducer;
 pub mod reap_movement_events_reducer;
 pub mod reap_transfers_reducer;
+pub mod receive_ai_event_condition_type;
+pub mod receive_emote_condition_type;
 pub mod record_region_load_reducer;
 pub mod record_shard_load_reducer;
+pub mod recurrence_policy_type;
 pub mod region_assignment_type;
 pub mod region_load_type;
+pub mod relay_activate_object_type;
+pub mod relay_ai_event_type;
+pub mod relay_arrival_type;
+pub mod relay_cast_spell_type;
+pub mod relay_concurrency_type;
+pub mod relay_continuation_type;
+pub mod relay_definition_type;
+pub mod relay_delay_type;
+pub mod relay_dynamic_move_type;
+pub mod relay_emote_type;
+pub mod relay_enabled_type;
+pub mod relay_equipment_type;
+pub mod relay_face_orientation_type;
+pub mod relay_facing_type;
+pub mod relay_faction_restoration_type;
+pub mod relay_faction_type;
+pub mod relay_flag_change_type;
+pub mod relay_flag_operation_type;
+pub mod relay_forced_movement_type;
+pub mod relay_gossip_menu_type;
+pub mod relay_instruction_type;
+pub mod relay_lifetime_type;
+pub mod relay_move_point_type;
+pub mod relay_move_to_type;
+pub mod relay_movement_type;
+pub mod relay_nearby_type;
+pub mod relay_participants_type;
+pub mod relay_patrol_movement_type;
+pub mod relay_random_movement_type;
+pub mod relay_run_type;
+pub mod relay_set_movement_type;
+pub mod relay_spawn_creature_type;
+pub mod relay_stand_state_type;
+pub mod relay_start_type;
+pub mod relay_step_type;
+pub mod relay_subject_type;
+pub mod relay_talk_type;
+pub mod relay_template_update_type;
+pub mod relay_terminate_type;
+pub mod relay_terminate_when_type;
+pub mod relay_world_state_type;
 pub mod release_transfer_reducer;
+pub mod remove_aura_instruction_type;
+pub mod remove_guardians_instruction_type;
 pub mod rest_state_event_type;
 pub mod restore_taxi_fixture_reducer;
+pub mod resume_relay_arrival_reducer;
+pub mod resume_relay_run_reducer;
 pub mod resurrect_request_type;
 pub mod revoke_alpha_test_tools_reducer;
 pub mod roll_event_type;
+pub mod scale_all_threat_instruction_type;
+pub mod scale_selected_threat_instruction_type;
 pub mod school_lockout_type;
 pub mod server_config_type;
 pub mod session_type;
 pub mod set_alpha_test_tools_enrollment_reducer;
 pub mod set_character_shard_reducer;
 pub mod set_gm_level_reducer;
+pub mod set_lethal_damage_floor_instruction_type;
 pub mod set_motion_tick_ms_reducer;
+pub mod set_phase_instruction_type;
+pub mod set_react_state_instruction_type;
 pub mod set_realm_address_reducer;
 pub mod set_region_assignment_reducer;
+pub mod set_stand_state_instruction_type;
 pub mod settle_loot_roll_reducer;
+pub mod shadowfang_fenrus_choreography_table;
+pub mod shadowfang_fenrus_choreography_type;
 pub mod shard_load_total_type;
 pub mod shard_load_type;
 pub mod skill_ability_type;
 pub mod skill_availability_type;
 pub mod skill_line_type;
+pub mod spawn_at_actor_instruction_type;
+pub mod spawn_condition_type;
+pub mod spawn_map_condition_type;
+pub mod spawn_zone_or_area_condition_type;
+pub mod speak_instruction_type;
+pub mod speech_mode_type;
 pub mod spell_cast_event_type;
+pub mod spell_caster_role_type;
 pub mod spell_cd_type;
 pub mod spell_chain_type;
 pub mod spell_cooldown_type;
 pub mod spell_effect_type;
+pub mod spell_event_condition_type;
 pub mod spell_group_rule_type;
 pub mod spell_group_type;
 pub mod spell_impact_event_type;
 pub mod spell_learn_type;
 pub mod spell_proc_event_type;
 pub mod spell_reagent_type;
+pub mod spell_start_mode_type;
+pub mod spell_target_role_type;
 pub mod spell_type;
 pub mod stage_vmap_generation_reducer;
 pub mod stamp_import_meta_reducer;
 pub mod start_item_type;
 pub mod start_position_type;
+pub mod start_relay_instruction_type;
+pub mod summon_instruction_type;
+pub mod sunken_temple_suppression_table;
+pub mod sunken_temple_suppression_type;
 pub mod sync_group_mirror_reducer;
 pub mod talent_tab_type;
 pub mod talent_type;
+pub mod target_range_condition_type;
 pub mod taunt_lock_type;
 pub mod taxi_flight_schedule_type;
 pub mod taxi_passenger_spline_type;
@@ -716,6 +926,7 @@ pub mod taxi_service_reply_type;
 pub mod teleport_event_type;
 pub mod terrain_chunk_type;
 pub mod threat_entry_type;
+pub mod throw_ai_event_instruction_type;
 pub mod tick_auras_reducer;
 pub mod tick_breath_reducer;
 pub mod tick_creatures_reducer;
@@ -724,6 +935,7 @@ pub mod tick_ground_areas_reducer;
 pub mod tick_melee_reducer;
 pub mod tick_pet_care_reducer;
 pub mod tick_weather_reducer;
+pub mod time_window_type;
 pub mod trade_event_type;
 pub mod trade_session_type;
 pub mod trade_slot_type;
@@ -740,9 +952,16 @@ pub mod vmap_indoor_cell_type;
 pub mod vmap_nav_coverage_cell_type;
 pub mod vmap_nav_coverage_manifest_type;
 pub mod vmap_nav_coverage_type;
+pub mod wailing_escort_progress_table;
+pub mod wailing_escort_progress_type;
+pub mod wailing_escort_schedule_table;
+pub mod wailing_escort_schedule_type;
+pub mod walking_mode_type;
 pub mod weather_schedule_type;
 pub mod whisper_event_type;
 pub mod world_entity_type;
+pub mod world_state_name_type;
+pub mod world_state_type;
 pub mod xp_event_type;
 pub mod zone_weather_chance_type;
 pub mod zone_weather_type;
@@ -751,7 +970,11 @@ pub use account_type::Account;
 pub use activate_vmap_generation_reducer::activate_vmap_generation;
 pub use active_taxi_flight_type::ActiveTaxiFlight;
 pub use addon_message_type::AddonMessage;
+pub use advance_fenrus_choreography_reducer::advance_fenrus_choreography;
 pub use advance_taxi_flight_reducer::advance_taxi_flight;
+pub use advance_tomb_round_reducer::advance_tomb_round;
+pub use advance_wailing_escort_reducer::advance_wailing_escort;
+pub use ai_event_kind_type::AiEventKind;
 pub use alpha_test_tools_enrollment_type::AlphaTestToolsEnrollment;
 pub use append_vmap_generation_chunks_reducer::append_vmap_generation_chunks;
 pub use areatrigger_teleport_type::AreatriggerTeleport;
@@ -764,18 +987,27 @@ pub use auction_house_definition_type::AuctionHouseDefinition;
 pub use auction_operation_receipt_type::AuctionOperationReceipt;
 pub use auction_type::Auction;
 pub use aura_schedule_type::AuraSchedule;
+pub use aura_stack_condition_type::AuraStackCondition;
 pub use aura_type::Aura;
+pub use authored_idle_movement_type::AuthoredIdleMovement;
+pub use authored_walking_mode_type::AuthoredWalkingMode;
 pub use begin_transfer_reducer::begin_transfer;
+pub use blackrock_tomb_round_table::*;
+pub use blackrock_tomb_round_type::BlackrockTombRound;
 pub use bot_invite_intent_type::BotInviteIntent;
 pub use breath_relay_event_type::BreathRelayEvent;
 pub use breath_schedule_type::BreathSchedule;
 pub use breath_state_type::BreathState;
 pub use buyback_entry_type::BuybackEntry;
+pub use call_for_help_instruction_type::CallForHelpInstruction;
+pub use cast_credit_type::CastCredit;
+pub use cast_instruction_type::CastInstruction;
 pub use catalogue_fingerprint_type::CatalogueFingerprint;
 pub use channel_event_type::ChannelEvent;
 pub use channel_member_type::ChannelMember;
 pub use char_base_info_type::CharBaseInfo;
 pub use character_explored_type::CharacterExplored;
+pub use character_quest_event_credit_type::CharacterQuestEventCredit;
 pub use character_quest_type::CharacterQuest;
 pub use character_shard_type::CharacterShard;
 pub use character_talent_type::CharacterTalent;
@@ -797,25 +1029,48 @@ pub use create_character_reducer::create_character;
 pub use createinfo_action_type::CreateinfoAction;
 pub use createinfo_spell_type::CreateinfoSpell;
 pub use creature_ai_broadcast_text_type::CreatureAiBroadcastText;
+pub use creature_ai_definition_type::CreatureAiDefinition;
 pub use creature_ai_event_type::CreatureAiEvent;
+pub use creature_ai_forced_despawn_type::CreatureAiForcedDespawn;
+pub use creature_ai_movement_intent_type::CreatureAiMovementIntent;
+pub use creature_ai_movement_path_waypoint_type::CreatureAiMovementPathWaypoint;
+pub use creature_ai_reset_deferral_type::CreatureAiResetDeferral;
+pub use creature_ai_returning_home_type::CreatureAiReturningHome;
 pub use creature_ai_rule_state_type::CreatureAiRuleState;
+pub use creature_ai_spell_metadata_type::CreatureAiSpellMetadata;
 pub use creature_ai_state_type::CreatureAiState;
 pub use creature_ai_summon_expiry_type::CreatureAiSummonExpiry;
+pub use creature_ai_summon_origin_type::CreatureAiSummonOrigin;
 pub use creature_ai_summon_type::CreatureAiSummon;
 pub use creature_cast_type::CreatureCast;
+pub use creature_dead_callback_cast_admission_type::CreatureDeadCallbackCastAdmission;
+pub use creature_entry_condition_type::CreatureEntryCondition;
 pub use creature_family_type::CreatureFamily;
+pub use creature_gossip_menu_override_type::CreatureGossipMenuOverride;
+pub use creature_health_condition_type::CreatureHealthCondition;
+pub use creature_instruction_type::CreatureInstruction;
+pub use creature_lethal_damage_floor_type::CreatureLethalDamageFloor;
 pub use creature_loot_type::CreatureLoot;
 pub use creature_move_event_type::CreatureMoveEvent;
 pub use creature_move_schedule_type::CreatureMoveSchedule;
+pub use creature_presentation_instruction_type::CreaturePresentationInstruction;
+pub use creature_presentation_mount_type::CreaturePresentationMount;
+pub use creature_presentation_type::CreaturePresentation;
+pub use creature_quest_tap_member_type::CreatureQuestTapMember;
+pub use creature_quest_tap_type::CreatureQuestTap;
 pub use creature_quest_type::CreatureQuest;
+pub use creature_react_state_type::CreatureReactState;
+pub use creature_relay_temporary_faction_type::CreatureRelayTemporaryFaction;
 pub use creature_spawn_type::CreatureSpawn;
 pub use creature_spell_type::CreatureSpell;
 pub use creature_spline_type::CreatureSpline;
 pub use creature_template_type::CreatureTemplate;
 pub use creature_waypoint_type::CreatureWaypoint;
+pub use death_condition_type::DeathCondition;
 pub use debug_accept_quest_reducer::debug_accept_quest;
 pub use debug_add_threat_reducer::debug_add_threat;
 pub use debug_apply_damage_reducer::debug_apply_damage;
+pub use debug_apply_lethal_damage_floor_fixture_reducer::debug_apply_lethal_damage_floor_fixture;
 pub use debug_arm_instance_tick_reducer::debug_arm_instance_tick;
 pub use debug_assert_blink_clamp_reducer::debug_assert_blink_clamp;
 pub use debug_assert_chase_stops_at_column_reducer::debug_assert_chase_stops_at_column;
@@ -827,6 +1082,7 @@ pub use debug_auto_bank_item_reducer::debug_auto_bank_item;
 pub use debug_backfill_cell_ids_reducer::debug_backfill_cell_ids;
 pub use debug_backfill_go_grid_reducer::debug_backfill_go_grid;
 pub use debug_begin_cast_reducer::debug_begin_cast;
+pub use debug_begin_tomb_round_scheduler_reducer::debug_begin_tomb_round_scheduler;
 pub use debug_bench_collision_gate_reducer::debug_bench_collision_gate;
 pub use debug_bench_los_reducer::debug_bench_los;
 pub use debug_bind_home_reducer::debug_bind_home;
@@ -869,6 +1125,7 @@ pub use debug_floor_probe_reducer::debug_floor_probe;
 pub use debug_force_cast_at_reducer::debug_force_cast_at;
 pub use debug_force_cast_reducer::debug_force_cast;
 pub use debug_force_gameobject_respawn_reducer::debug_force_gameobject_respawn;
+pub use debug_force_lethal_damage_floor_fixture_reducer::debug_force_lethal_damage_floor_fixture;
 pub use debug_force_pool_reroll_reducer::debug_force_pool_reroll;
 pub use debug_gossip_select_reducer::debug_gossip_select;
 pub use debug_grant_default_actions_reducer::debug_grant_default_actions;
@@ -898,11 +1155,13 @@ pub use debug_reap_instance_reducer::debug_reap_instance;
 pub use debug_regrid_reducer::debug_regrid;
 pub use debug_repair_after_publish_reducer::debug_repair_after_publish;
 pub use debug_repair_item_reducer::debug_repair_item;
+pub use debug_replace_definition_then_apply_damage_floor_fixture_reducer::debug_replace_definition_then_apply_damage_floor_fixture;
 pub use debug_replay_auction_expiry_fixture_reducer::debug_replay_auction_expiry_fixture;
 pub use debug_repop_reducer::debug_repop;
 pub use debug_reseed_skills_reducer::debug_reseed_skills;
 pub use debug_reset_instance_reducer::debug_reset_instance;
 pub use debug_reset_talents_reducer::debug_reset_talents;
+pub use debug_respawn_lethal_damage_floor_fixture_reducer::debug_respawn_lethal_damage_floor_fixture;
 pub use debug_resurrect_response_reducer::debug_resurrect_response;
 pub use debug_retire_region_creatures_reducer::debug_retire_region_creatures;
 pub use debug_score_movement_reducer::debug_score_movement;
@@ -911,6 +1170,8 @@ pub use debug_seed_mail_reducer::debug_seed_mail;
 pub use debug_seed_scenario_fixtures_reducer::debug_seed_scenario_fixtures;
 pub use debug_sell_item_reducer::debug_sell_item;
 pub use debug_set_health_reducer::debug_set_health;
+pub use debug_set_lethal_damage_floor_fixture_reducer::debug_set_lethal_damage_floor_fixture;
+pub use debug_set_lethal_damage_floor_health_fixture_reducer::debug_set_lethal_damage_floor_health_fixture;
 pub use debug_set_level_reducer::debug_set_level;
 pub use debug_set_money_reducer::debug_set_money;
 pub use debug_set_nav_coverage_enabled_reducer::debug_set_nav_coverage_enabled;
@@ -930,6 +1191,9 @@ pub use debug_split_item_reducer::debug_split_item;
 pub use debug_stage_auction_buyout_fixture_reducer::debug_stage_auction_buyout_fixture;
 pub use debug_stage_auction_expiry_fixture_reducer::debug_stage_auction_expiry_fixture;
 pub use debug_stage_choice_reward_fixture_reducer::debug_stage_choice_reward_fixture;
+pub use debug_stage_eventai_revision_fixture_reducer::debug_stage_eventai_revision_fixture;
+pub use debug_stage_lethal_damage_floor_fixture_reducer::debug_stage_lethal_damage_floor_fixture;
+pub use debug_stage_ranged_lethal_damage_floor_fixture_reducer::debug_stage_ranged_lethal_damage_floor_fixture;
 pub use debug_stress_relay_reducer::debug_stress_relay;
 pub use debug_sweep_encounter_state_reducer::debug_sweep_encounter_state;
 pub use debug_sweep_slice_lens_reducer::debug_sweep_slice_lens;
@@ -947,6 +1211,15 @@ pub use debug_verify_auction_expiry_fixture_reducer::debug_verify_auction_expiry
 pub use debug_verify_choice_reward_fixture_reducer::debug_verify_choice_reward_fixture;
 pub use debug_verify_choice_reward_refusal_fixture_reducer::debug_verify_choice_reward_refusal_fixture;
 pub use debug_verify_combat_regen_reducer::debug_verify_combat_regen;
+pub use debug_verify_eventai_instance_packages_reducer::debug_verify_eventai_instance_packages;
+pub use debug_verify_eventai_quest_credit_fixture_reducer::debug_verify_eventai_quest_credit_fixture;
+pub use debug_verify_eventai_revision_fixture_reducer::debug_verify_eventai_revision_fixture;
+pub use debug_verify_lethal_damage_floor_fixture_reducer::debug_verify_lethal_damage_floor_fixture;
+pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
+pub use debug_verify_shadowfang_choreography_reducer::debug_verify_shadowfang_choreography;
+pub use debug_verify_tomb_round_scheduler_reducer::debug_verify_tomb_round_scheduler;
+pub use debug_verify_wailing_awakening_reducer::debug_verify_wailing_awakening;
+pub use debug_verify_wailing_escort_and_begin_awakening_reducer::debug_verify_wailing_escort_and_begin_awakening;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_reducer::debug_vmap_ray;
 pub use delete_character_reducer::delete_character;
@@ -957,23 +1230,42 @@ pub use duel_schedule_type::DuelSchedule;
 pub use duel_type::Duel;
 pub use dynamic_object_type::DynamicObject;
 pub use emote_event_type::EmoteEvent;
+pub use emote_instruction_type::EmoteInstruction;
+pub use encounter_binding_type::EncounterBinding;
 pub use encounter_equip_type::EncounterEquip;
 pub use encounter_hp_watch_type::EncounterHpWatch;
+pub use encounter_signal_type::EncounterSignal;
 pub use encounter_spawn_type::EncounterSpawn;
 pub use encounter_state_type::EncounterState;
 pub use ensure_instance_reducer::ensure_instance;
 pub use entity_motion_type::EntityMotion;
 pub use establish_session_reducer::establish_session;
+pub use evade_instruction_type::EvadeInstruction;
+pub use event_ai_quest_credit_type::EventAiQuestCredit;
+pub use event_ai_rule_type::EventAiRule;
+pub use event_condition_type::EventCondition;
+pub use event_predicate_type::EventPredicate;
 pub use event_reaper_schedule_type::EventReaperSchedule;
 pub use evict_instance_population_reducer::evict_instance_population;
+pub use execution_policy_type::ExecutionPolicy;
 pub use expire_auction_reducer::expire_auction;
+pub use expire_avatar_suppression_reducer::expire_avatar_suppression;
 pub use expire_eventai_summon_reducer::expire_eventai_summon;
+pub use facing_condition_type::FacingCondition;
+pub use facing_instruction_type::FacingInstruction;
 pub use faction_template_type::FactionTemplate;
 pub use faction_type::Faction;
 pub use finalize_vmap_nav_coverage_reducer::finalize_vmap_nav_coverage;
 pub use finish_transfer_reducer::finish_transfer;
+pub use fire_eventai_forced_despawn_reducer::fire_eventai_forced_despawn;
 pub use fire_pending_cast_reducer::fire_pending_cast;
 pub use fire_spell_impact_reducer::fire_spell_impact;
+pub use flag_override_type::FlagOverride;
+pub use force_despawn_instruction_type::ForceDespawnInstruction;
+pub use friendly_aura_selection_type::FriendlyAuraSelection;
+pub use friendly_crowd_control_condition_type::FriendlyCrowdControlCondition;
+pub use friendly_health_deficit_condition_type::FriendlyHealthDeficitCondition;
+pub use friendly_missing_aura_condition_type::FriendlyMissingAuraCondition;
 pub use game_account_table::*;
 pub use game_active_taxi_flight_table::*;
 pub use game_addon_message_table::*;
@@ -1003,6 +1295,7 @@ pub use game_char_base_info_table::*;
 pub use game_character_buyback_table::*;
 pub use game_character_contact_table::*;
 pub use game_character_explored_table::*;
+pub use game_character_quest_event_credit_table::*;
 pub use game_character_quest_table::*;
 pub use game_character_shard_table::*;
 pub use game_character_table::*;
@@ -1019,17 +1312,36 @@ pub use game_corpse_table::*;
 pub use game_createinfo_action_table::*;
 pub use game_createinfo_spell_table::*;
 pub use game_creature_ai_broadcast_text_table::*;
+pub use game_creature_ai_definition_table::*;
 pub use game_creature_ai_event_table::*;
+pub use game_creature_ai_forced_despawn_table::*;
+pub use game_creature_ai_movement_intent_table::*;
+pub use game_creature_ai_movement_path_waypoint_table::*;
+pub use game_creature_ai_relay_arrival_table::*;
+pub use game_creature_ai_relay_continuation_table::*;
+pub use game_creature_ai_relay_definition_table::*;
+pub use game_creature_ai_relay_run_table::*;
+pub use game_creature_ai_reset_deferral_table::*;
+pub use game_creature_ai_returning_home_table::*;
 pub use game_creature_ai_rule_state_table::*;
+pub use game_creature_ai_spell_metadata_table::*;
 pub use game_creature_ai_state_table::*;
 pub use game_creature_ai_summon_expiry_table::*;
+pub use game_creature_ai_summon_origin_table::*;
 pub use game_creature_ai_summon_table::*;
 pub use game_creature_cast_table::*;
+pub use game_creature_dead_callback_cast_admission_table::*;
 pub use game_creature_family_table::*;
+pub use game_creature_gossip_menu_override_table::*;
+pub use game_creature_lethal_damage_floor_table::*;
 pub use game_creature_loot_table::*;
 pub use game_creature_move_event_table::*;
 pub use game_creature_move_schedule_table::*;
+pub use game_creature_presentation_table::*;
 pub use game_creature_quest_table::*;
+pub use game_creature_quest_tap_member_table::*;
+pub use game_creature_quest_tap_table::*;
+pub use game_creature_relay_temporary_faction_table::*;
 pub use game_creature_spawn_table::*;
 pub use game_creature_spell_table::*;
 pub use game_creature_spline_table::*;
@@ -1059,11 +1371,15 @@ pub use game_gameobject_pool_table::*;
 pub use game_gameobject_quest_table::*;
 pub use game_gameobject_table::*;
 pub use game_gameobject_template_table::*;
+pub use game_gameobject_trap_cooldown_table::*;
+pub use game_gameobject_trap_table::*;
 pub use game_gameobject_unlocked_table::*;
 pub use game_gateway_lease_reaper_schedule_table::*;
 pub use game_gateway_lease_table::*;
 pub use game_gateway_session_table::*;
 pub use game_go_model_table::*;
+pub use game_gossip_menu_profile_option_table::*;
+pub use game_gossip_menu_profile_table::*;
 pub use game_gossip_menu_table::*;
 pub use game_gossip_option_table::*;
 pub use game_graveyard_table::*;
@@ -1112,6 +1428,8 @@ pub use game_object_pool_member_type::GameObjectPoolMember;
 pub use game_object_pool_type::GameObjectPool;
 pub use game_object_quest_type::GameObjectQuest;
 pub use game_object_template_type::GameObjectTemplate;
+pub use game_object_trap_cooldown_type::GameObjectTrapCooldown;
+pub use game_object_trap_type::GameObjectTrap;
 pub use game_object_type::GameObject;
 pub use game_object_unlocked_type::GameObjectUnlocked;
 pub use game_operator_table::*;
@@ -1125,6 +1443,8 @@ pub use game_player_action_table::*;
 pub use game_player_reputation_table::*;
 pub use game_player_skill_table::*;
 pub use game_player_spell_table::*;
+pub use game_quest_cast_objective_table::*;
+pub use game_quest_event_requirement_table::*;
 pub use game_quest_objective_table::*;
 pub use game_quest_reward_choice_table::*;
 pub use game_quest_reward_item_table::*;
@@ -1195,6 +1515,8 @@ pub use game_weather_table::*;
 pub use game_whisper_event_table::*;
 pub use game_world_config_table::*;
 pub use game_world_entity_table::*;
+pub use game_world_state_name_table::*;
+pub use game_world_state_table::*;
 pub use game_xp_event_table::*;
 pub use game_zone_weather_table::*;
 pub use gateway_lease_reaper_schedule_type::GatewayLeaseReaperSchedule;
@@ -1202,6 +1524,8 @@ pub use gateway_lease_type::GatewayLease;
 pub use gateway_session_type::GatewaySession;
 pub use gm_world_config_type::GmWorldConfig;
 pub use go_model_type::GoModel;
+pub use gossip_menu_profile_option_type::GossipMenuProfileOption;
+pub use gossip_menu_profile_type::GossipMenuProfile;
 pub use gossip_menu_type::GossipMenu;
 pub use gossip_option_type::GossipOption;
 pub use grant_alpha_test_tools_reducer::grant_alpha_test_tools;
@@ -1317,8 +1641,13 @@ pub use gw_use_gameobject_reducer::gw_use_gameobject;
 pub use gw_use_item_reducer::gw_use_item;
 pub use hunter_pet_protocol_type::HunterPetProtocol;
 pub use hunter_pet_type::HunterPet;
+pub use idle_movement_intent_type::IdleMovementIntent;
+pub use immobilization_instruction_type::ImmobilizationInstruction;
 pub use import_character_blob_reducer::import_character_blob;
 pub use import_character_reducer::import_character;
+pub use import_creature_ai_definitions_append_reducer::import_creature_ai_definitions_append;
+pub use import_creature_ai_definitions_reducer::import_creature_ai_definitions;
+pub use import_creature_ai_relay_definitions_reducer::import_creature_ai_relay_definitions;
 pub use import_creature_spawns_append_reducer::import_creature_spawns_append;
 pub use import_creature_spawns_reducer::import_creature_spawns;
 pub use import_gameobjects_append_reducer::import_gameobjects_append;
@@ -1331,12 +1660,18 @@ pub use import_nav_chunks_append_reducer::import_nav_chunks_append;
 pub use import_nav_chunks_reducer::import_nav_chunks;
 pub use import_terrain_chunks_append_reducer::import_terrain_chunks_append;
 pub use import_terrain_chunks_reducer::import_terrain_chunks;
+pub use import_verified_rajaxx_projection_type::ImportVerifiedRajaxxProjection;
 pub use import_vmap_chunks_append_reducer::import_vmap_chunks_append;
 pub use import_vmap_chunks_reducer::import_vmap_chunks;
+pub use increment_phase_instruction_type::IncrementPhaseInstruction;
 pub use install_guid_range_reducer::install_guid_range;
 pub use instance_reaper_schedule_type::InstanceReaperSchedule;
+pub use instruction_selection_type::InstructionSelection;
+pub use instruction_target_type::InstructionTarget;
 pub use item_instance_type::ItemInstance;
 pub use item_template_type::ItemTemplate;
+pub use kill_condition_type::KillCondition;
+pub use kill_credit_type::KillCredit;
 pub use level_stats_type::LevelStats;
 pub use levelup_event_type::LevelupEvent;
 pub use live_pet_kind_type::LivePetKind;
@@ -1349,34 +1684,57 @@ pub use mail_type::Mail;
 pub use map_region_type::MapRegion;
 pub use melee_attack_type::MeleeAttack;
 pub use melee_schedule_type::MeleeSchedule;
+pub use missing_text_template_no_effect_type::MissingTextTemplateNoEffect;
 pub use motion_publish_schedule_type::MotionPublishSchedule;
+pub use movement_operation_type::MovementOperation;
+pub use movement_switch_type::MovementSwitch;
 pub use movement_violation_type::MovementViolation;
 pub use nav_chunk_type::NavChunk;
+pub use notify_encounter_instruction_type::NotifyEncounterInstruction;
+pub use npc_flags_projection_type::NpcFlagsProjection;
 pub use npc_text_slot_type::NpcTextSlot;
 pub use npc_text_type::NpcText;
 pub use npc_vendor_type::NpcVendor;
 pub use on_disconnect_reducer::on_disconnect;
 pub use operator_type::Operator;
+pub use out_of_combat_sight_condition_type::OutOfCombatSightCondition;
+pub use patrol_intent_type::PatrolIntent;
+pub use patrol_pause_type::PatrolPause;
 pub use pending_cast_type::PendingCast;
 pub use pending_motion_type::PendingMotion;
 pub use pending_spell_impact_type::PendingSpellImpact;
+pub use percentage_condition_type::PercentageCondition;
 pub use pet_care_schedule_type::PetCareSchedule;
 pub use pet_command_type::PetCommand;
+pub use phase_set_type::PhaseSet;
 pub use player_action_type::PlayerAction;
 pub use player_reputation_type::PlayerReputation;
 pub use player_skill_type::PlayerSkill;
 pub use player_spell_type::PlayerSpell;
+pub use posture_admission_type::PostureAdmission;
 pub use prepare_vmap_nav_coverage_reducer::prepare_vmap_nav_coverage;
 pub use provision_account_reducer::provision_account;
 pub use publish_motion_reducer::publish_motion;
+pub use quest_cast_objective_type::QuestCastObjective;
+pub use quest_credit_recipient_policy_type::QuestCreditRecipientPolicy;
+pub use quest_event_requirement_type::QuestEventRequirement;
+pub use quest_event_type::QuestEvent;
 pub use quest_objective_type::QuestObjective;
 pub use quest_reward_choice_type::QuestRewardChoice;
 pub use quest_reward_item_type::QuestRewardItem;
+pub use quest_taken_predicate_type::QuestTakenPredicate;
 pub use quest_template_type::QuestTemplate;
 pub use quest_text_type::QuestText;
 pub use race_info_type::RaceInfo;
+pub use random_emote_instruction_type::RandomEmoteInstruction;
+pub use random_movement_intent_type::RandomMovementIntent;
+pub use random_phase_instruction_type::RandomPhaseInstruction;
+pub use random_phase_range_instruction_type::RandomPhaseRangeInstruction;
 pub use ranged_impact_reducer::ranged_impact;
 pub use ranged_impact_schedule_type::RangedImpactSchedule;
+pub use ranged_mode_instruction_type::RangedModeInstruction;
+pub use ranged_mode_type::RangedMode;
+pub use ranged_posture_instruction_type::RangedPostureInstruction;
 pub use realm_auction_commit_listing_reducer::realm_auction_commit_listing;
 pub use realm_auction_confirm_listing_reducer::realm_auction_confirm_listing;
 pub use realm_auction_decide_bid_reducer::realm_auction_decide_bid;
@@ -1406,50 +1764,121 @@ pub use reap_instances_reducer::reap_instances;
 pub use reap_mail_escrows_reducer::reap_mail_escrows;
 pub use reap_movement_events_reducer::reap_movement_events;
 pub use reap_transfers_reducer::reap_transfers;
+pub use receive_ai_event_condition_type::ReceiveAiEventCondition;
+pub use receive_emote_condition_type::ReceiveEmoteCondition;
 pub use record_region_load_reducer::record_region_load;
 pub use record_shard_load_reducer::record_shard_load;
+pub use recurrence_policy_type::RecurrencePolicy;
 pub use region_assignment_type::RegionAssignment;
 pub use region_load_type::RegionLoad;
+pub use relay_activate_object_type::RelayActivateObject;
+pub use relay_ai_event_type::RelayAiEvent;
+pub use relay_arrival_type::RelayArrival;
+pub use relay_cast_spell_type::RelayCastSpell;
+pub use relay_concurrency_type::RelayConcurrency;
+pub use relay_continuation_type::RelayContinuation;
+pub use relay_definition_type::RelayDefinition;
+pub use relay_delay_type::RelayDelay;
+pub use relay_dynamic_move_type::RelayDynamicMove;
+pub use relay_emote_type::RelayEmote;
+pub use relay_enabled_type::RelayEnabled;
+pub use relay_equipment_type::RelayEquipment;
+pub use relay_face_orientation_type::RelayFaceOrientation;
+pub use relay_facing_type::RelayFacing;
+pub use relay_faction_restoration_type::RelayFactionRestoration;
+pub use relay_faction_type::RelayFaction;
+pub use relay_flag_change_type::RelayFlagChange;
+pub use relay_flag_operation_type::RelayFlagOperation;
+pub use relay_forced_movement_type::RelayForcedMovement;
+pub use relay_gossip_menu_type::RelayGossipMenu;
+pub use relay_instruction_type::RelayInstruction;
+pub use relay_lifetime_type::RelayLifetime;
+pub use relay_move_point_type::RelayMovePoint;
+pub use relay_move_to_type::RelayMoveTo;
+pub use relay_movement_type::RelayMovement;
+pub use relay_nearby_type::RelayNearby;
+pub use relay_participants_type::RelayParticipants;
+pub use relay_patrol_movement_type::RelayPatrolMovement;
+pub use relay_random_movement_type::RelayRandomMovement;
+pub use relay_run_type::RelayRun;
+pub use relay_set_movement_type::RelaySetMovement;
+pub use relay_spawn_creature_type::RelaySpawnCreature;
+pub use relay_stand_state_type::RelayStandState;
+pub use relay_start_type::RelayStart;
+pub use relay_step_type::RelayStep;
+pub use relay_subject_type::RelaySubject;
+pub use relay_talk_type::RelayTalk;
+pub use relay_template_update_type::RelayTemplateUpdate;
+pub use relay_terminate_type::RelayTerminate;
+pub use relay_terminate_when_type::RelayTerminateWhen;
+pub use relay_world_state_type::RelayWorldState;
 pub use release_transfer_reducer::release_transfer;
+pub use remove_aura_instruction_type::RemoveAuraInstruction;
+pub use remove_guardians_instruction_type::RemoveGuardiansInstruction;
 pub use rest_state_event_type::RestStateEvent;
 pub use restore_taxi_fixture_reducer::restore_taxi_fixture;
+pub use resume_relay_arrival_reducer::resume_relay_arrival;
+pub use resume_relay_run_reducer::resume_relay_run;
 pub use resurrect_request_type::ResurrectRequest;
 pub use revoke_alpha_test_tools_reducer::revoke_alpha_test_tools;
 pub use roll_event_type::RollEvent;
+pub use scale_all_threat_instruction_type::ScaleAllThreatInstruction;
+pub use scale_selected_threat_instruction_type::ScaleSelectedThreatInstruction;
 pub use school_lockout_type::SchoolLockout;
 pub use server_config_type::ServerConfig;
 pub use session_type::Session;
 pub use set_alpha_test_tools_enrollment_reducer::set_alpha_test_tools_enrollment;
 pub use set_character_shard_reducer::set_character_shard;
 pub use set_gm_level_reducer::set_gm_level;
+pub use set_lethal_damage_floor_instruction_type::SetLethalDamageFloorInstruction;
 pub use set_motion_tick_ms_reducer::set_motion_tick_ms;
+pub use set_phase_instruction_type::SetPhaseInstruction;
+pub use set_react_state_instruction_type::SetReactStateInstruction;
 pub use set_realm_address_reducer::set_realm_address;
 pub use set_region_assignment_reducer::set_region_assignment;
+pub use set_stand_state_instruction_type::SetStandStateInstruction;
 pub use settle_loot_roll_reducer::settle_loot_roll;
+pub use shadowfang_fenrus_choreography_table::*;
+pub use shadowfang_fenrus_choreography_type::ShadowfangFenrusChoreography;
 pub use shard_load_total_type::ShardLoadTotal;
 pub use shard_load_type::ShardLoad;
 pub use skill_ability_type::SkillAbility;
 pub use skill_availability_type::SkillAvailability;
 pub use skill_line_type::SkillLine;
+pub use spawn_at_actor_instruction_type::SpawnAtActorInstruction;
+pub use spawn_condition_type::SpawnCondition;
+pub use spawn_map_condition_type::SpawnMapCondition;
+pub use spawn_zone_or_area_condition_type::SpawnZoneOrAreaCondition;
+pub use speak_instruction_type::SpeakInstruction;
+pub use speech_mode_type::SpeechMode;
 pub use spell_cast_event_type::SpellCastEvent;
+pub use spell_caster_role_type::SpellCasterRole;
 pub use spell_cd_type::SpellCd;
 pub use spell_chain_type::SpellChain;
 pub use spell_cooldown_type::SpellCooldown;
 pub use spell_effect_type::SpellEffect;
+pub use spell_event_condition_type::SpellEventCondition;
 pub use spell_group_rule_type::SpellGroupRule;
 pub use spell_group_type::SpellGroup;
 pub use spell_impact_event_type::SpellImpactEvent;
 pub use spell_learn_type::SpellLearn;
 pub use spell_proc_event_type::SpellProcEvent;
 pub use spell_reagent_type::SpellReagent;
+pub use spell_start_mode_type::SpellStartMode;
+pub use spell_target_role_type::SpellTargetRole;
 pub use spell_type::Spell;
 pub use stage_vmap_generation_reducer::stage_vmap_generation;
 pub use stamp_import_meta_reducer::stamp_import_meta;
 pub use start_item_type::StartItem;
 pub use start_position_type::StartPosition;
+pub use start_relay_instruction_type::StartRelayInstruction;
+pub use summon_instruction_type::SummonInstruction;
+pub use sunken_temple_suppression_table::*;
+pub use sunken_temple_suppression_type::SunkenTempleSuppression;
 pub use sync_group_mirror_reducer::sync_group_mirror;
 pub use talent_tab_type::TalentTab;
 pub use talent_type::Talent;
+pub use target_range_condition_type::TargetRangeCondition;
 pub use taunt_lock_type::TauntLock;
 pub use taxi_flight_schedule_type::TaxiFlightSchedule;
 pub use taxi_passenger_spline_type::TaxiPassengerSpline;
@@ -1457,6 +1886,7 @@ pub use taxi_service_reply_type::TaxiServiceReply;
 pub use teleport_event_type::TeleportEvent;
 pub use terrain_chunk_type::TerrainChunk;
 pub use threat_entry_type::ThreatEntry;
+pub use throw_ai_event_instruction_type::ThrowAiEventInstruction;
 pub use tick_auras_reducer::tick_auras;
 pub use tick_breath_reducer::tick_breath;
 pub use tick_creatures_reducer::tick_creatures;
@@ -1465,6 +1895,7 @@ pub use tick_ground_areas_reducer::tick_ground_areas;
 pub use tick_melee_reducer::tick_melee;
 pub use tick_pet_care_reducer::tick_pet_care;
 pub use tick_weather_reducer::tick_weather;
+pub use time_window_type::TimeWindow;
 pub use trade_event_type::TradeEvent;
 pub use trade_session_type::TradeSession;
 pub use trade_slot_type::TradeSlot;
@@ -1481,9 +1912,16 @@ pub use vmap_indoor_cell_type::VmapIndoorCell;
 pub use vmap_nav_coverage_cell_type::VmapNavCoverageCell;
 pub use vmap_nav_coverage_manifest_type::VmapNavCoverageManifest;
 pub use vmap_nav_coverage_type::VmapNavCoverage;
+pub use wailing_escort_progress_table::*;
+pub use wailing_escort_progress_type::WailingEscortProgress;
+pub use wailing_escort_schedule_table::*;
+pub use wailing_escort_schedule_type::WailingEscortSchedule;
+pub use walking_mode_type::WalkingMode;
 pub use weather_schedule_type::WeatherSchedule;
 pub use whisper_event_type::WhisperEvent;
 pub use world_entity_type::WorldEntity;
+pub use world_state_name_type::WorldStateName;
+pub use world_state_type::WorldState;
 pub use xp_event_type::XpEvent;
 pub use zone_weather_chance_type::ZoneWeatherChance;
 pub use zone_weather_type::ZoneWeather;
@@ -1499,8 +1937,17 @@ pub enum Reducer {
     ActivateVmapGeneration {
         generation_id: u64,
     },
+    AdvanceFenrusChoreography {
+        choreography: ShadowfangFenrusChoreography,
+    },
     AdvanceTaxiFlight {
         schedule: TaxiFlightSchedule,
+    },
+    AdvanceTombRound {
+        timer: BlackrockTombRound,
+    },
+    AdvanceWailingEscort {
+        scheduled: WailingEscortSchedule,
     },
     AppendVmapGenerationChunks {
         generation_id: u64,
@@ -1556,6 +2003,11 @@ pub enum Reducer {
         amount: u32,
         attacker_guid: u64,
     },
+    DebugApplyLethalDamageFloorFixture {
+        attacker_guid: u64,
+        target_guid: u64,
+        rolled: u32,
+    },
     DebugArmInstanceTick {
         instance_id: u64,
         tick_ms: u64,
@@ -1586,6 +2038,7 @@ pub enum Reducer {
         spell_id: u32,
         target_guid: u64,
     },
+    DebugBeginTombRoundScheduler,
     DebugBenchCollisionGate {
         map: u32,
         min_x: f32,
@@ -1788,6 +2241,9 @@ pub enum Reducer {
     DebugForceGameobjectRespawn {
         go_entry: u32,
     },
+    DebugForceLethalDamageFloorFixture {
+        creature_guid: u64,
+    },
     DebugForcePoolReroll {
         pool_id: u32,
         gathered_guid: u64,
@@ -1902,6 +2358,12 @@ pub enum Reducer {
         character_guid: u64,
         slot: u8,
     },
+    DebugReplaceDefinitionThenApplyDamageFloorFixture {
+        attacker_guid: u64,
+        target_guid: u64,
+        packed_definition: String,
+        rolled: u32,
+    },
     DebugReplayAuctionExpiryFixture,
     DebugRepop {
         character_guid: u64,
@@ -1915,6 +2377,9 @@ pub enum Reducer {
     DebugResetTalents {
         character_guid: u64,
         trainer_guid: u64,
+    },
+    DebugRespawnLethalDamageFloorFixture {
+        creature_guid: u64,
     },
     DebugResurrectResponse {
         character_guid: u64,
@@ -1953,6 +2418,14 @@ pub enum Reducer {
     },
     DebugSetHealth {
         guid: u64,
+        health: u32,
+    },
+    DebugSetLethalDamageFloorFixture {
+        creature_guid: u64,
+        enabled: bool,
+    },
+    DebugSetLethalDamageFloorHealthFixture {
+        creature_guid: u64,
         health: u32,
     },
     DebugSetLevel {
@@ -2033,6 +2506,20 @@ pub enum Reducer {
     DebugStageChoiceRewardFixture {
         fill_inventory: bool,
     },
+    DebugStageEventaiRevisionFixture {
+        creature_guid: u64,
+        target_guid: u64,
+        packed: String,
+    },
+    DebugStageLethalDamageFloorFixture {
+        creature_guid: u64,
+    },
+    DebugStageRangedLethalDamageFloorFixture {
+        attacker_guid: u64,
+        target_guid: u64,
+        damage: u32,
+        delay_ms: u32,
+    },
     DebugStressRelay {
         character_guid: u64,
         victim_entry: u32,
@@ -2095,6 +2582,31 @@ pub enum Reducer {
     DebugVerifyCombatRegen {
         character_guid: u64,
     },
+    DebugVerifyEventaiInstancePackages,
+    DebugVerifyEventaiQuestCreditFixture,
+    DebugVerifyEventaiRevisionFixture {
+        creature_guid: u64,
+        source_rule_id: u64,
+        expect_rule_state: bool,
+    },
+    DebugVerifyLethalDamageFloorFixture {
+        creature_guid: u64,
+        expected_health: u32,
+        expected_dead: bool,
+        expected_floor: bool,
+        expected_notification: bool,
+        expected_absorb: i32,
+    },
+    DebugVerifyRangedLethalDamageFloorFixture {
+        attacker_guid: u64,
+        creature_guid: u64,
+        expected_health: u32,
+        expected_damage_log: u32,
+    },
+    DebugVerifyShadowfangChoreography,
+    DebugVerifyTombRoundScheduler,
+    DebugVerifyWailingAwakening,
+    DebugVerifyWailingEscortAndBeginAwakening,
     DebugVmapAreaInfo {
         map: u32,
         x: f32,
@@ -2133,6 +2645,9 @@ pub enum Reducer {
     ExpireAuction {
         schedule: AuctionExpiry,
     },
+    ExpireAvatarSuppression {
+        timer: SunkenTempleSuppression,
+    },
     ExpireEventaiSummon {
         expiry: CreatureAiSummonExpiry,
     },
@@ -2141,6 +2656,9 @@ pub enum Reducer {
     },
     FinishTransfer {
         transfer_id: u64,
+    },
+    FireEventaiForcedDespawn {
+        row: CreatureAiForcedDespawn,
     },
     FirePendingCast {
         sched: PendingCast,
@@ -2616,6 +3134,15 @@ pub enum Reducer {
         transfer_id: u64,
         blob: Vec<u8>,
     },
+    ImportCreatureAiDefinitions {
+        packed: String,
+    },
+    ImportCreatureAiDefinitionsAppend {
+        packed: String,
+    },
+    ImportCreatureAiRelayDefinitions {
+        packed: String,
+    },
     ImportCreatureSpawns {
         packed: String,
     },
@@ -2861,6 +3388,12 @@ pub enum Reducer {
         transfer_id: u64,
     },
     RestoreTaxiFixture,
+    ResumeRelayArrival {
+        arrival: RelayArrival,
+    },
+    ResumeRelayRun {
+        continuation: RelayContinuation,
+    },
     RevokeAlphaTestTools {
         account_name: String,
     },
@@ -2953,7 +3486,10 @@ impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
             Reducer::ActivateVmapGeneration { .. } => "activate_vmap_generation",
+            Reducer::AdvanceFenrusChoreography { .. } => "advance_fenrus_choreography",
             Reducer::AdvanceTaxiFlight { .. } => "advance_taxi_flight",
+            Reducer::AdvanceTombRound { .. } => "advance_tomb_round",
+            Reducer::AdvanceWailingEscort { .. } => "advance_wailing_escort",
             Reducer::AppendVmapGenerationChunks { .. } => "append_vmap_generation_chunks",
             Reducer::ArmAllPools => "arm_all_pools",
             Reducer::BeginTransfer { .. } => "begin_transfer",
@@ -2965,6 +3501,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
             Reducer::DebugAddThreat { .. } => "debug_add_threat",
             Reducer::DebugApplyDamage { .. } => "debug_apply_damage",
+            Reducer::DebugApplyLethalDamageFloorFixture { .. } => {
+                "debug_apply_lethal_damage_floor_fixture"
+            }
             Reducer::DebugArmInstanceTick { .. } => "debug_arm_instance_tick",
             Reducer::DebugAssertBlinkClamp { .. } => "debug_assert_blink_clamp",
             Reducer::DebugAssertChaseStopsAtColumn { .. } => "debug_assert_chase_stops_at_column",
@@ -2978,6 +3517,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugBackfillCellIds => "debug_backfill_cell_ids",
             Reducer::DebugBackfillGoGrid => "debug_backfill_go_grid",
             Reducer::DebugBeginCast { .. } => "debug_begin_cast",
+            Reducer::DebugBeginTombRoundScheduler => "debug_begin_tomb_round_scheduler",
             Reducer::DebugBenchCollisionGate { .. } => "debug_bench_collision_gate",
             Reducer::DebugBenchLos { .. } => "debug_bench_los",
             Reducer::DebugBindHome { .. } => "debug_bind_home",
@@ -3020,6 +3560,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugForceCast { .. } => "debug_force_cast",
             Reducer::DebugForceCastAt { .. } => "debug_force_cast_at",
             Reducer::DebugForceGameobjectRespawn { .. } => "debug_force_gameobject_respawn",
+            Reducer::DebugForceLethalDamageFloorFixture { .. } => {
+                "debug_force_lethal_damage_floor_fixture"
+            }
             Reducer::DebugForcePoolReroll { .. } => "debug_force_pool_reroll",
             Reducer::DebugGossipSelect { .. } => "debug_gossip_select",
             Reducer::DebugGrantDefaultActions { .. } => "debug_grant_default_actions",
@@ -3050,11 +3593,17 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugRegrid => "debug_regrid",
             Reducer::DebugRepairAfterPublish => "debug_repair_after_publish",
             Reducer::DebugRepairItem { .. } => "debug_repair_item",
+            Reducer::DebugReplaceDefinitionThenApplyDamageFloorFixture { .. } => {
+                "debug_replace_definition_then_apply_damage_floor_fixture"
+            }
             Reducer::DebugReplayAuctionExpiryFixture => "debug_replay_auction_expiry_fixture",
             Reducer::DebugRepop { .. } => "debug_repop",
             Reducer::DebugReseedSkills { .. } => "debug_reseed_skills",
             Reducer::DebugResetInstance { .. } => "debug_reset_instance",
             Reducer::DebugResetTalents { .. } => "debug_reset_talents",
+            Reducer::DebugRespawnLethalDamageFloorFixture { .. } => {
+                "debug_respawn_lethal_damage_floor_fixture"
+            }
             Reducer::DebugResurrectResponse { .. } => "debug_resurrect_response",
             Reducer::DebugRetireRegionCreatures { .. } => "debug_retire_region_creatures",
             Reducer::DebugScoreMovement { .. } => "debug_score_movement",
@@ -3063,6 +3612,12 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSeedScenarioFixtures => "debug_seed_scenario_fixtures",
             Reducer::DebugSellItem { .. } => "debug_sell_item",
             Reducer::DebugSetHealth { .. } => "debug_set_health",
+            Reducer::DebugSetLethalDamageFloorFixture { .. } => {
+                "debug_set_lethal_damage_floor_fixture"
+            }
+            Reducer::DebugSetLethalDamageFloorHealthFixture { .. } => {
+                "debug_set_lethal_damage_floor_health_fixture"
+            }
             Reducer::DebugSetLevel { .. } => "debug_set_level",
             Reducer::DebugSetMoney { .. } => "debug_set_money",
             Reducer::DebugSetNavCoverageEnabled { .. } => "debug_set_nav_coverage_enabled",
@@ -3082,6 +3637,15 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugStageAuctionBuyoutFixture => "debug_stage_auction_buyout_fixture",
             Reducer::DebugStageAuctionExpiryFixture => "debug_stage_auction_expiry_fixture",
             Reducer::DebugStageChoiceRewardFixture { .. } => "debug_stage_choice_reward_fixture",
+            Reducer::DebugStageEventaiRevisionFixture { .. } => {
+                "debug_stage_eventai_revision_fixture"
+            }
+            Reducer::DebugStageLethalDamageFloorFixture { .. } => {
+                "debug_stage_lethal_damage_floor_fixture"
+            }
+            Reducer::DebugStageRangedLethalDamageFloorFixture { .. } => {
+                "debug_stage_ranged_lethal_damage_floor_fixture"
+            }
             Reducer::DebugStressRelay { .. } => "debug_stress_relay",
             Reducer::DebugSweepEncounterState { .. } => "debug_sweep_encounter_state",
             Reducer::DebugSweepSliceLens => "debug_sweep_slice_lens",
@@ -3101,6 +3665,25 @@ impl __sdk::Reducer for Reducer {
                 "debug_verify_choice_reward_refusal_fixture"
             }
             Reducer::DebugVerifyCombatRegen { .. } => "debug_verify_combat_regen",
+            Reducer::DebugVerifyEventaiInstancePackages => "debug_verify_eventai_instance_packages",
+            Reducer::DebugVerifyEventaiQuestCreditFixture => {
+                "debug_verify_eventai_quest_credit_fixture"
+            }
+            Reducer::DebugVerifyEventaiRevisionFixture { .. } => {
+                "debug_verify_eventai_revision_fixture"
+            }
+            Reducer::DebugVerifyLethalDamageFloorFixture { .. } => {
+                "debug_verify_lethal_damage_floor_fixture"
+            }
+            Reducer::DebugVerifyRangedLethalDamageFloorFixture { .. } => {
+                "debug_verify_ranged_lethal_damage_floor_fixture"
+            }
+            Reducer::DebugVerifyShadowfangChoreography => "debug_verify_shadowfang_choreography",
+            Reducer::DebugVerifyTombRoundScheduler => "debug_verify_tomb_round_scheduler",
+            Reducer::DebugVerifyWailingAwakening => "debug_verify_wailing_awakening",
+            Reducer::DebugVerifyWailingEscortAndBeginAwakening => {
+                "debug_verify_wailing_escort_and_begin_awakening"
+            }
             Reducer::DebugVmapAreaInfo { .. } => "debug_vmap_area_info",
             Reducer::DebugVmapRay { .. } => "debug_vmap_ray",
             Reducer::DeleteCharacter { .. } => "delete_character",
@@ -3109,9 +3692,11 @@ impl __sdk::Reducer for Reducer {
             Reducer::EstablishSession { .. } => "establish_session",
             Reducer::EvictInstancePopulation { .. } => "evict_instance_population",
             Reducer::ExpireAuction { .. } => "expire_auction",
+            Reducer::ExpireAvatarSuppression { .. } => "expire_avatar_suppression",
             Reducer::ExpireEventaiSummon { .. } => "expire_eventai_summon",
             Reducer::FinalizeVmapNavCoverage { .. } => "finalize_vmap_nav_coverage",
             Reducer::FinishTransfer { .. } => "finish_transfer",
+            Reducer::FireEventaiForcedDespawn { .. } => "fire_eventai_forced_despawn",
             Reducer::FirePendingCast { .. } => "fire_pending_cast",
             Reducer::FireSpellImpact { .. } => "fire_spell_impact",
             Reducer::GrantAlphaTestTools { .. } => "grant_alpha_test_tools",
@@ -3215,6 +3800,13 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwUseItem { .. } => "gw_use_item",
             Reducer::ImportCharacter { .. } => "import_character",
             Reducer::ImportCharacterBlob { .. } => "import_character_blob",
+            Reducer::ImportCreatureAiDefinitions { .. } => "import_creature_ai_definitions",
+            Reducer::ImportCreatureAiDefinitionsAppend { .. } => {
+                "import_creature_ai_definitions_append"
+            }
+            Reducer::ImportCreatureAiRelayDefinitions { .. } => {
+                "import_creature_ai_relay_definitions"
+            }
             Reducer::ImportCreatureSpawns { .. } => "import_creature_spawns",
             Reducer::ImportCreatureSpawnsAppend { .. } => "import_creature_spawns_append",
             Reducer::ImportGameobjects { .. } => "import_gameobjects",
@@ -3266,6 +3858,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::RecordShardLoad { .. } => "record_shard_load",
             Reducer::ReleaseTransfer { .. } => "release_transfer",
             Reducer::RestoreTaxiFixture => "restore_taxi_fixture",
+            Reducer::ResumeRelayArrival { .. } => "resume_relay_arrival",
+            Reducer::ResumeRelayRun { .. } => "resume_relay_run",
             Reducer::RevokeAlphaTestTools { .. } => "revoke_alpha_test_tools",
             Reducer::SetAlphaTestToolsEnrollment { .. } => "set_alpha_test_tools_enrollment",
             Reducer::SetCharacterShard { .. } => "set_character_shard",
@@ -3297,10 +3891,25 @@ impl __sdk::Reducer for Reducer {
 }             => __sats::bsatn::to_vec(&activate_vmap_generation_reducer::ActivateVmapGenerationArgs {
                 generation_id: generation_id.clone(),
 }),
+            Reducer::AdvanceFenrusChoreography{
+                choreography,
+}             => __sats::bsatn::to_vec(&advance_fenrus_choreography_reducer::AdvanceFenrusChoreographyArgs {
+                choreography: choreography.clone(),
+}),
             Reducer::AdvanceTaxiFlight{
                 schedule,
 }             => __sats::bsatn::to_vec(&advance_taxi_flight_reducer::AdvanceTaxiFlightArgs {
                 schedule: schedule.clone(),
+}),
+            Reducer::AdvanceTombRound{
+                timer,
+}             => __sats::bsatn::to_vec(&advance_tomb_round_reducer::AdvanceTombRoundArgs {
+                timer: timer.clone(),
+}),
+            Reducer::AdvanceWailingEscort{
+                scheduled,
+}             => __sats::bsatn::to_vec(&advance_wailing_escort_reducer::AdvanceWailingEscortArgs {
+                scheduled: scheduled.clone(),
 }),
             Reducer::AppendVmapGenerationChunks{
                 generation_id,
@@ -3401,6 +4010,15 @@ Reducer::ClearPromotedLootRoll{
                 amount: amount.clone(),
                 attacker_guid: attacker_guid.clone(),
 }),
+            Reducer::DebugApplyLethalDamageFloorFixture{
+                attacker_guid,
+                target_guid,
+                rolled,
+}             => __sats::bsatn::to_vec(&debug_apply_lethal_damage_floor_fixture_reducer::DebugApplyLethalDamageFloorFixtureArgs {
+                attacker_guid: attacker_guid.clone(),
+                target_guid: target_guid.clone(),
+                rolled: rolled.clone(),
+}),
             Reducer::DebugArmInstanceTick{
                 instance_id,
                 tick_ms,
@@ -3454,7 +4072,9 @@ Reducer::DebugBeginCast{
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
 }),
-            Reducer::DebugBenchCollisionGate{
+            Reducer::DebugBeginTombRoundScheduler => __sats::bsatn::to_vec(&debug_begin_tomb_round_scheduler_reducer::DebugBeginTombRoundSchedulerArgs {
+                }),
+Reducer::DebugBenchCollisionGate{
                 map,
                 min_x,
                 min_y,
@@ -3817,6 +4437,11 @@ Reducer::DebugCheckRestAt{
 }             => __sats::bsatn::to_vec(&debug_force_gameobject_respawn_reducer::DebugForceGameobjectRespawnArgs {
                 go_entry: go_entry.clone(),
 }),
+            Reducer::DebugForceLethalDamageFloorFixture{
+                creature_guid,
+}             => __sats::bsatn::to_vec(&debug_force_lethal_damage_floor_fixture_reducer::DebugForceLethalDamageFloorFixtureArgs {
+                creature_guid: creature_guid.clone(),
+}),
             Reducer::DebugForcePoolReroll{
                 pool_id,
                 gathered_guid,
@@ -4019,6 +4644,17 @@ Reducer::DebugRepairItem{
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
 }),
+            Reducer::DebugReplaceDefinitionThenApplyDamageFloorFixture{
+                attacker_guid,
+                target_guid,
+                packed_definition,
+                rolled,
+}             => __sats::bsatn::to_vec(&debug_replace_definition_then_apply_damage_floor_fixture_reducer::DebugReplaceDefinitionThenApplyDamageFloorFixtureArgs {
+                attacker_guid: attacker_guid.clone(),
+                target_guid: target_guid.clone(),
+                packed_definition: packed_definition.clone(),
+                rolled: rolled.clone(),
+}),
             Reducer::DebugReplayAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_replay_auction_expiry_fixture_reducer::DebugReplayAuctionExpiryFixtureArgs {
                 }),
 Reducer::DebugRepop{
@@ -4042,6 +4678,11 @@ Reducer::DebugRepop{
 }             => __sats::bsatn::to_vec(&debug_reset_talents_reducer::DebugResetTalentsArgs {
                 character_guid: character_guid.clone(),
                 trainer_guid: trainer_guid.clone(),
+}),
+            Reducer::DebugRespawnLethalDamageFloorFixture{
+                creature_guid,
+}             => __sats::bsatn::to_vec(&debug_respawn_lethal_damage_floor_fixture_reducer::DebugRespawnLethalDamageFloorFixtureArgs {
+                creature_guid: creature_guid.clone(),
 }),
             Reducer::DebugResurrectResponse{
                 character_guid,
@@ -4113,6 +4754,20 @@ Reducer::DebugSellItem{
                 health,
 }             => __sats::bsatn::to_vec(&debug_set_health_reducer::DebugSetHealthArgs {
                 guid: guid.clone(),
+                health: health.clone(),
+}),
+            Reducer::DebugSetLethalDamageFloorFixture{
+                creature_guid,
+                enabled,
+}             => __sats::bsatn::to_vec(&debug_set_lethal_damage_floor_fixture_reducer::DebugSetLethalDamageFloorFixtureArgs {
+                creature_guid: creature_guid.clone(),
+                enabled: enabled.clone(),
+}),
+            Reducer::DebugSetLethalDamageFloorHealthFixture{
+                creature_guid,
+                health,
+}             => __sats::bsatn::to_vec(&debug_set_lethal_damage_floor_health_fixture_reducer::DebugSetLethalDamageFloorHealthFixtureArgs {
+                creature_guid: creature_guid.clone(),
                 health: health.clone(),
 }),
             Reducer::DebugSetLevel{
@@ -4254,6 +4909,31 @@ Reducer::DebugStageChoiceRewardFixture{
 }             => __sats::bsatn::to_vec(&debug_stage_choice_reward_fixture_reducer::DebugStageChoiceRewardFixtureArgs {
                 fill_inventory: fill_inventory.clone(),
 }),
+            Reducer::DebugStageEventaiRevisionFixture{
+                creature_guid,
+                target_guid,
+                packed,
+}             => __sats::bsatn::to_vec(&debug_stage_eventai_revision_fixture_reducer::DebugStageEventaiRevisionFixtureArgs {
+                creature_guid: creature_guid.clone(),
+                target_guid: target_guid.clone(),
+                packed: packed.clone(),
+}),
+            Reducer::DebugStageLethalDamageFloorFixture{
+                creature_guid,
+}             => __sats::bsatn::to_vec(&debug_stage_lethal_damage_floor_fixture_reducer::DebugStageLethalDamageFloorFixtureArgs {
+                creature_guid: creature_guid.clone(),
+}),
+            Reducer::DebugStageRangedLethalDamageFloorFixture{
+                attacker_guid,
+                target_guid,
+                damage,
+                delay_ms,
+}             => __sats::bsatn::to_vec(&debug_stage_ranged_lethal_damage_floor_fixture_reducer::DebugStageRangedLethalDamageFloorFixtureArgs {
+                attacker_guid: attacker_guid.clone(),
+                target_guid: target_guid.clone(),
+                damage: damage.clone(),
+                delay_ms: delay_ms.clone(),
+}),
             Reducer::DebugStressRelay{
                 character_guid,
                 victim_entry,
@@ -4364,7 +5044,54 @@ Reducer::DebugVerifyChoiceRewardFixture{
 }             => __sats::bsatn::to_vec(&debug_verify_combat_regen_reducer::DebugVerifyCombatRegenArgs {
                 character_guid: character_guid.clone(),
 }),
-            Reducer::DebugVmapAreaInfo{
+            Reducer::DebugVerifyEventaiInstancePackages => __sats::bsatn::to_vec(&debug_verify_eventai_instance_packages_reducer::DebugVerifyEventaiInstancePackagesArgs {
+                }),
+Reducer::DebugVerifyEventaiQuestCreditFixture => __sats::bsatn::to_vec(&debug_verify_eventai_quest_credit_fixture_reducer::DebugVerifyEventaiQuestCreditFixtureArgs {
+                }),
+Reducer::DebugVerifyEventaiRevisionFixture{
+                creature_guid,
+                source_rule_id,
+                expect_rule_state,
+}             => __sats::bsatn::to_vec(&debug_verify_eventai_revision_fixture_reducer::DebugVerifyEventaiRevisionFixtureArgs {
+                creature_guid: creature_guid.clone(),
+                source_rule_id: source_rule_id.clone(),
+                expect_rule_state: expect_rule_state.clone(),
+}),
+            Reducer::DebugVerifyLethalDamageFloorFixture{
+                creature_guid,
+                expected_health,
+                expected_dead,
+                expected_floor,
+                expected_notification,
+                expected_absorb,
+}             => __sats::bsatn::to_vec(&debug_verify_lethal_damage_floor_fixture_reducer::DebugVerifyLethalDamageFloorFixtureArgs {
+                creature_guid: creature_guid.clone(),
+                expected_health: expected_health.clone(),
+                expected_dead: expected_dead.clone(),
+                expected_floor: expected_floor.clone(),
+                expected_notification: expected_notification.clone(),
+                expected_absorb: expected_absorb.clone(),
+}),
+            Reducer::DebugVerifyRangedLethalDamageFloorFixture{
+                attacker_guid,
+                creature_guid,
+                expected_health,
+                expected_damage_log,
+}             => __sats::bsatn::to_vec(&debug_verify_ranged_lethal_damage_floor_fixture_reducer::DebugVerifyRangedLethalDamageFloorFixtureArgs {
+                attacker_guid: attacker_guid.clone(),
+                creature_guid: creature_guid.clone(),
+                expected_health: expected_health.clone(),
+                expected_damage_log: expected_damage_log.clone(),
+}),
+            Reducer::DebugVerifyShadowfangChoreography => __sats::bsatn::to_vec(&debug_verify_shadowfang_choreography_reducer::DebugVerifyShadowfangChoreographyArgs {
+                }),
+Reducer::DebugVerifyTombRoundScheduler => __sats::bsatn::to_vec(&debug_verify_tomb_round_scheduler_reducer::DebugVerifyTombRoundSchedulerArgs {
+                }),
+Reducer::DebugVerifyWailingAwakening => __sats::bsatn::to_vec(&debug_verify_wailing_awakening_reducer::DebugVerifyWailingAwakeningArgs {
+                }),
+Reducer::DebugVerifyWailingEscortAndBeginAwakening => __sats::bsatn::to_vec(&debug_verify_wailing_escort_and_begin_awakening_reducer::DebugVerifyWailingEscortAndBeginAwakeningArgs {
+                }),
+Reducer::DebugVmapAreaInfo{
                 map,
                 x,
                 y,
@@ -4432,6 +5159,11 @@ Reducer::DebugVerifyChoiceRewardFixture{
 }             => __sats::bsatn::to_vec(&expire_auction_reducer::ExpireAuctionArgs {
                 schedule: schedule.clone(),
 }),
+            Reducer::ExpireAvatarSuppression{
+                timer,
+}             => __sats::bsatn::to_vec(&expire_avatar_suppression_reducer::ExpireAvatarSuppressionArgs {
+                timer: timer.clone(),
+}),
             Reducer::ExpireEventaiSummon{
                 expiry,
 }             => __sats::bsatn::to_vec(&expire_eventai_summon_reducer::ExpireEventaiSummonArgs {
@@ -4446,6 +5178,11 @@ Reducer::DebugVerifyChoiceRewardFixture{
                 transfer_id,
 }             => __sats::bsatn::to_vec(&finish_transfer_reducer::FinishTransferArgs {
                 transfer_id: transfer_id.clone(),
+}),
+            Reducer::FireEventaiForcedDespawn{
+                row,
+}             => __sats::bsatn::to_vec(&fire_eventai_forced_despawn_reducer::FireEventaiForcedDespawnArgs {
+                row: row.clone(),
 }),
             Reducer::FirePendingCast{
                 sched,
@@ -5293,6 +6030,21 @@ Reducer::GwIgnoreTrade{
                 transfer_id: transfer_id.clone(),
                 blob: blob.clone(),
 }),
+            Reducer::ImportCreatureAiDefinitions{
+                packed,
+}             => __sats::bsatn::to_vec(&import_creature_ai_definitions_reducer::ImportCreatureAiDefinitionsArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportCreatureAiDefinitionsAppend{
+                packed,
+}             => __sats::bsatn::to_vec(&import_creature_ai_definitions_append_reducer::ImportCreatureAiDefinitionsAppendArgs {
+                packed: packed.clone(),
+}),
+            Reducer::ImportCreatureAiRelayDefinitions{
+                packed,
+}             => __sats::bsatn::to_vec(&import_creature_ai_relay_definitions_reducer::ImportCreatureAiRelayDefinitionsArgs {
+                packed: packed.clone(),
+}),
             Reducer::ImportCreatureSpawns{
                 packed,
 }             => __sats::bsatn::to_vec(&import_creature_spawns_reducer::ImportCreatureSpawnsArgs {
@@ -5734,7 +6486,17 @@ Reducer::PrepareVmapNavCoverage{
 }),
             Reducer::RestoreTaxiFixture => __sats::bsatn::to_vec(&restore_taxi_fixture_reducer::RestoreTaxiFixtureArgs {
                 }),
-Reducer::RevokeAlphaTestTools{
+Reducer::ResumeRelayArrival{
+                arrival,
+}             => __sats::bsatn::to_vec(&resume_relay_arrival_reducer::ResumeRelayArrivalArgs {
+                arrival: arrival.clone(),
+}),
+            Reducer::ResumeRelayRun{
+                continuation,
+}             => __sats::bsatn::to_vec(&resume_relay_run_reducer::ResumeRelayRunArgs {
+                continuation: continuation.clone(),
+}),
+            Reducer::RevokeAlphaTestTools{
                 account_name,
 }             => __sats::bsatn::to_vec(&revoke_alpha_test_tools_reducer::RevokeAlphaTestToolsArgs {
                 account_name: account_name.clone(),
@@ -5887,6 +6649,7 @@ Reducer::RevokeAlphaTestTools{
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct DbUpdate {
+    blackrock_tomb_round: __sdk::TableUpdate<BlackrockTombRound>,
     game_account: __sdk::TableUpdate<Account>,
     game_active_taxi_flight: __sdk::TableUpdate<ActiveTaxiFlight>,
     game_addon_message: __sdk::TableUpdate<AddonMessage>,
@@ -5916,6 +6679,7 @@ pub struct DbUpdate {
     game_character_contact: __sdk::TableUpdate<ContactEntry>,
     game_character_explored: __sdk::TableUpdate<CharacterExplored>,
     game_character_quest: __sdk::TableUpdate<CharacterQuest>,
+    game_character_quest_event_credit: __sdk::TableUpdate<CharacterQuestEventCredit>,
     game_character_shard: __sdk::TableUpdate<CharacterShard>,
     game_character_talent: __sdk::TableUpdate<CharacterTalent>,
     game_character_taxi_node: __sdk::TableUpdate<CharacterTaxiNode>,
@@ -5930,17 +6694,37 @@ pub struct DbUpdate {
     game_createinfo_action: __sdk::TableUpdate<CreateinfoAction>,
     game_createinfo_spell: __sdk::TableUpdate<CreateinfoSpell>,
     game_creature_ai_broadcast_text: __sdk::TableUpdate<CreatureAiBroadcastText>,
+    game_creature_ai_definition: __sdk::TableUpdate<CreatureAiDefinition>,
     game_creature_ai_event: __sdk::TableUpdate<CreatureAiEvent>,
+    game_creature_ai_forced_despawn: __sdk::TableUpdate<CreatureAiForcedDespawn>,
+    game_creature_ai_movement_intent: __sdk::TableUpdate<CreatureAiMovementIntent>,
+    game_creature_ai_movement_path_waypoint: __sdk::TableUpdate<CreatureAiMovementPathWaypoint>,
+    game_creature_ai_relay_arrival: __sdk::TableUpdate<RelayArrival>,
+    game_creature_ai_relay_continuation: __sdk::TableUpdate<RelayContinuation>,
+    game_creature_ai_relay_definition: __sdk::TableUpdate<RelayDefinition>,
+    game_creature_ai_relay_run: __sdk::TableUpdate<RelayRun>,
+    game_creature_ai_reset_deferral: __sdk::TableUpdate<CreatureAiResetDeferral>,
+    game_creature_ai_returning_home: __sdk::TableUpdate<CreatureAiReturningHome>,
     game_creature_ai_rule_state: __sdk::TableUpdate<CreatureAiRuleState>,
+    game_creature_ai_spell_metadata: __sdk::TableUpdate<CreatureAiSpellMetadata>,
     game_creature_ai_state: __sdk::TableUpdate<CreatureAiState>,
     game_creature_ai_summon: __sdk::TableUpdate<CreatureAiSummon>,
     game_creature_ai_summon_expiry: __sdk::TableUpdate<CreatureAiSummonExpiry>,
+    game_creature_ai_summon_origin: __sdk::TableUpdate<CreatureAiSummonOrigin>,
     game_creature_cast: __sdk::TableUpdate<CreatureCast>,
+    game_creature_dead_callback_cast_admission:
+        __sdk::TableUpdate<CreatureDeadCallbackCastAdmission>,
     game_creature_family: __sdk::TableUpdate<CreatureFamily>,
+    game_creature_gossip_menu_override: __sdk::TableUpdate<CreatureGossipMenuOverride>,
+    game_creature_lethal_damage_floor: __sdk::TableUpdate<CreatureLethalDamageFloor>,
     game_creature_loot: __sdk::TableUpdate<CreatureLoot>,
     game_creature_move_event: __sdk::TableUpdate<CreatureMoveEvent>,
     game_creature_move_schedule: __sdk::TableUpdate<CreatureMoveSchedule>,
+    game_creature_presentation: __sdk::TableUpdate<CreaturePresentation>,
     game_creature_quest: __sdk::TableUpdate<CreatureQuest>,
+    game_creature_quest_tap: __sdk::TableUpdate<CreatureQuestTap>,
+    game_creature_quest_tap_member: __sdk::TableUpdate<CreatureQuestTapMember>,
+    game_creature_relay_temporary_faction: __sdk::TableUpdate<CreatureRelayTemporaryFaction>,
     game_creature_spawn: __sdk::TableUpdate<CreatureSpawn>,
     game_creature_spell: __sdk::TableUpdate<CreatureSpell>,
     game_creature_spline: __sdk::TableUpdate<CreatureSpline>,
@@ -5969,12 +6753,16 @@ pub struct DbUpdate {
     game_gameobject_pool_member: __sdk::TableUpdate<GameObjectPoolMember>,
     game_gameobject_quest: __sdk::TableUpdate<GameObjectQuest>,
     game_gameobject_template: __sdk::TableUpdate<GameObjectTemplate>,
+    game_gameobject_trap: __sdk::TableUpdate<GameObjectTrap>,
+    game_gameobject_trap_cooldown: __sdk::TableUpdate<GameObjectTrapCooldown>,
     game_gameobject_unlocked: __sdk::TableUpdate<GameObjectUnlocked>,
     game_gateway_lease: __sdk::TableUpdate<GatewayLease>,
     game_gateway_lease_reaper_schedule: __sdk::TableUpdate<GatewayLeaseReaperSchedule>,
     game_gateway_session: __sdk::TableUpdate<GatewaySession>,
     game_go_model: __sdk::TableUpdate<GoModel>,
     game_gossip_menu: __sdk::TableUpdate<GossipMenu>,
+    game_gossip_menu_profile: __sdk::TableUpdate<GossipMenuProfile>,
+    game_gossip_menu_profile_option: __sdk::TableUpdate<GossipMenuProfileOption>,
     game_gossip_option: __sdk::TableUpdate<GossipOption>,
     game_graveyard: __sdk::TableUpdate<GraveyardLoc>,
     game_graveyard_zone: __sdk::TableUpdate<GraveyardZone>,
@@ -6024,6 +6812,8 @@ pub struct DbUpdate {
     game_player_reputation: __sdk::TableUpdate<PlayerReputation>,
     game_player_skill: __sdk::TableUpdate<PlayerSkill>,
     game_player_spell: __sdk::TableUpdate<PlayerSpell>,
+    game_quest_cast_objective: __sdk::TableUpdate<QuestCastObjective>,
+    game_quest_event_requirement: __sdk::TableUpdate<QuestEventRequirement>,
     game_quest_objective: __sdk::TableUpdate<QuestObjective>,
     game_quest_reward_choice: __sdk::TableUpdate<QuestRewardChoice>,
     game_quest_reward_item: __sdk::TableUpdate<QuestRewardItem>,
@@ -6090,8 +6880,14 @@ pub struct DbUpdate {
     game_whisper_event: __sdk::TableUpdate<WhisperEvent>,
     game_world_config: __sdk::TableUpdate<GmWorldConfig>,
     game_world_entity: __sdk::TableUpdate<WorldEntity>,
+    game_world_state: __sdk::TableUpdate<WorldState>,
+    game_world_state_name: __sdk::TableUpdate<WorldStateName>,
     game_xp_event: __sdk::TableUpdate<XpEvent>,
     game_zone_weather: __sdk::TableUpdate<ZoneWeather>,
+    shadowfang_fenrus_choreography: __sdk::TableUpdate<ShadowfangFenrusChoreography>,
+    sunken_temple_suppression: __sdk::TableUpdate<SunkenTempleSuppression>,
+    wailing_escort_progress: __sdk::TableUpdate<WailingEscortProgress>,
+    wailing_escort_schedule: __sdk::TableUpdate<WailingEscortSchedule>,
 }
 
 impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
@@ -6100,6 +6896,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_update in __sdk::transaction_update_iter_table_updates(raw) {
             match &table_update.table_name[..] {
+                "blackrock_tomb_round" => db_update.blackrock_tomb_round.append(
+                    blackrock_tomb_round_table::parse_table_update(table_update)?,
+                ),
                 "game_account" => db_update
                     .game_account
                     .append(game_account_table::parse_table_update(table_update)?),
@@ -6191,6 +6990,11 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_character_quest" => db_update.game_character_quest.append(
                     game_character_quest_table::parse_table_update(table_update)?,
                 ),
+                "game_character_quest_event_credit" => {
+                    db_update.game_character_quest_event_credit.append(
+                        game_character_quest_event_credit_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_character_shard" => db_update.game_character_shard.append(
                     game_character_shard_table::parse_table_update(table_update)?,
                 ),
@@ -6235,12 +7039,67 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                         game_creature_ai_broadcast_text_table::parse_table_update(table_update)?,
                     )
                 }
+                "game_creature_ai_definition" => db_update.game_creature_ai_definition.append(
+                    game_creature_ai_definition_table::parse_table_update(table_update)?,
+                ),
                 "game_creature_ai_event" => db_update.game_creature_ai_event.append(
                     game_creature_ai_event_table::parse_table_update(table_update)?,
                 ),
+                "game_creature_ai_forced_despawn" => {
+                    db_update.game_creature_ai_forced_despawn.append(
+                        game_creature_ai_forced_despawn_table::parse_table_update(table_update)?,
+                    )
+                }
+                "game_creature_ai_movement_intent" => {
+                    db_update.game_creature_ai_movement_intent.append(
+                        game_creature_ai_movement_intent_table::parse_table_update(table_update)?,
+                    )
+                }
+                "game_creature_ai_movement_path_waypoint" => {
+                    db_update.game_creature_ai_movement_path_waypoint.append(
+                        game_creature_ai_movement_path_waypoint_table::parse_table_update(
+                            table_update,
+                        )?,
+                    )
+                }
+                "game_creature_ai_relay_arrival" => {
+                    db_update.game_creature_ai_relay_arrival.append(
+                        game_creature_ai_relay_arrival_table::parse_table_update(table_update)?,
+                    )
+                }
+                "game_creature_ai_relay_continuation" => {
+                    db_update.game_creature_ai_relay_continuation.append(
+                        game_creature_ai_relay_continuation_table::parse_table_update(
+                            table_update,
+                        )?,
+                    )
+                }
+                "game_creature_ai_relay_definition" => {
+                    db_update.game_creature_ai_relay_definition.append(
+                        game_creature_ai_relay_definition_table::parse_table_update(table_update)?,
+                    )
+                }
+                "game_creature_ai_relay_run" => db_update.game_creature_ai_relay_run.append(
+                    game_creature_ai_relay_run_table::parse_table_update(table_update)?,
+                ),
+                "game_creature_ai_reset_deferral" => {
+                    db_update.game_creature_ai_reset_deferral.append(
+                        game_creature_ai_reset_deferral_table::parse_table_update(table_update)?,
+                    )
+                }
+                "game_creature_ai_returning_home" => {
+                    db_update.game_creature_ai_returning_home.append(
+                        game_creature_ai_returning_home_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_creature_ai_rule_state" => db_update.game_creature_ai_rule_state.append(
                     game_creature_ai_rule_state_table::parse_table_update(table_update)?,
                 ),
+                "game_creature_ai_spell_metadata" => {
+                    db_update.game_creature_ai_spell_metadata.append(
+                        game_creature_ai_spell_metadata_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_creature_ai_state" => db_update.game_creature_ai_state.append(
                     game_creature_ai_state_table::parse_table_update(table_update)?,
                 ),
@@ -6252,12 +7111,34 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                         game_creature_ai_summon_expiry_table::parse_table_update(table_update)?,
                     )
                 }
+                "game_creature_ai_summon_origin" => {
+                    db_update.game_creature_ai_summon_origin.append(
+                        game_creature_ai_summon_origin_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_creature_cast" => db_update
                     .game_creature_cast
                     .append(game_creature_cast_table::parse_table_update(table_update)?),
+                "game_creature_dead_callback_cast_admission" => {
+                    db_update.game_creature_dead_callback_cast_admission.append(
+                        game_creature_dead_callback_cast_admission_table::parse_table_update(
+                            table_update,
+                        )?,
+                    )
+                }
                 "game_creature_family" => db_update.game_creature_family.append(
                     game_creature_family_table::parse_table_update(table_update)?,
                 ),
+                "game_creature_gossip_menu_override" => {
+                    db_update.game_creature_gossip_menu_override.append(
+                        game_creature_gossip_menu_override_table::parse_table_update(table_update)?,
+                    )
+                }
+                "game_creature_lethal_damage_floor" => {
+                    db_update.game_creature_lethal_damage_floor.append(
+                        game_creature_lethal_damage_floor_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_creature_loot" => db_update
                     .game_creature_loot
                     .append(game_creature_loot_table::parse_table_update(table_update)?),
@@ -6267,9 +7148,27 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_creature_move_schedule" => db_update.game_creature_move_schedule.append(
                     game_creature_move_schedule_table::parse_table_update(table_update)?,
                 ),
+                "game_creature_presentation" => db_update.game_creature_presentation.append(
+                    game_creature_presentation_table::parse_table_update(table_update)?,
+                ),
                 "game_creature_quest" => db_update
                     .game_creature_quest
                     .append(game_creature_quest_table::parse_table_update(table_update)?),
+                "game_creature_quest_tap" => db_update.game_creature_quest_tap.append(
+                    game_creature_quest_tap_table::parse_table_update(table_update)?,
+                ),
+                "game_creature_quest_tap_member" => {
+                    db_update.game_creature_quest_tap_member.append(
+                        game_creature_quest_tap_member_table::parse_table_update(table_update)?,
+                    )
+                }
+                "game_creature_relay_temporary_faction" => {
+                    db_update.game_creature_relay_temporary_faction.append(
+                        game_creature_relay_temporary_faction_table::parse_table_update(
+                            table_update,
+                        )?,
+                    )
+                }
                 "game_creature_spawn" => db_update
                     .game_creature_spawn
                     .append(game_creature_spawn_table::parse_table_update(table_update)?),
@@ -6354,6 +7253,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_gameobject_template" => db_update.game_gameobject_template.append(
                     game_gameobject_template_table::parse_table_update(table_update)?,
                 ),
+                "game_gameobject_trap" => db_update.game_gameobject_trap.append(
+                    game_gameobject_trap_table::parse_table_update(table_update)?,
+                ),
+                "game_gameobject_trap_cooldown" => db_update.game_gameobject_trap_cooldown.append(
+                    game_gameobject_trap_cooldown_table::parse_table_update(table_update)?,
+                ),
                 "game_gameobject_unlocked" => db_update.game_gameobject_unlocked.append(
                     game_gameobject_unlocked_table::parse_table_update(table_update)?,
                 ),
@@ -6374,6 +7279,14 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_gossip_menu" => db_update
                     .game_gossip_menu
                     .append(game_gossip_menu_table::parse_table_update(table_update)?),
+                "game_gossip_menu_profile" => db_update.game_gossip_menu_profile.append(
+                    game_gossip_menu_profile_table::parse_table_update(table_update)?,
+                ),
+                "game_gossip_menu_profile_option" => {
+                    db_update.game_gossip_menu_profile_option.append(
+                        game_gossip_menu_profile_option_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_gossip_option" => db_update
                     .game_gossip_option
                     .append(game_gossip_option_table::parse_table_update(table_update)?),
@@ -6523,6 +7436,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_player_spell" => db_update
                     .game_player_spell
                     .append(game_player_spell_table::parse_table_update(table_update)?),
+                "game_quest_cast_objective" => db_update.game_quest_cast_objective.append(
+                    game_quest_cast_objective_table::parse_table_update(table_update)?,
+                ),
+                "game_quest_event_requirement" => db_update.game_quest_event_requirement.append(
+                    game_quest_event_requirement_table::parse_table_update(table_update)?,
+                ),
                 "game_quest_objective" => db_update.game_quest_objective.append(
                     game_quest_objective_table::parse_table_update(table_update)?,
                 ),
@@ -6723,12 +7642,32 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_world_entity" => db_update
                     .game_world_entity
                     .append(game_world_entity_table::parse_table_update(table_update)?),
+                "game_world_state" => db_update
+                    .game_world_state
+                    .append(game_world_state_table::parse_table_update(table_update)?),
+                "game_world_state_name" => db_update.game_world_state_name.append(
+                    game_world_state_name_table::parse_table_update(table_update)?,
+                ),
                 "game_xp_event" => db_update
                     .game_xp_event
                     .append(game_xp_event_table::parse_table_update(table_update)?),
                 "game_zone_weather" => db_update
                     .game_zone_weather
                     .append(game_zone_weather_table::parse_table_update(table_update)?),
+                "shadowfang_fenrus_choreography" => {
+                    db_update.shadowfang_fenrus_choreography.append(
+                        shadowfang_fenrus_choreography_table::parse_table_update(table_update)?,
+                    )
+                }
+                "sunken_temple_suppression" => db_update.sunken_temple_suppression.append(
+                    sunken_temple_suppression_table::parse_table_update(table_update)?,
+                ),
+                "wailing_escort_progress" => db_update.wailing_escort_progress.append(
+                    wailing_escort_progress_table::parse_table_update(table_update)?,
+                ),
+                "wailing_escort_schedule" => db_update.wailing_escort_schedule.append(
+                    wailing_escort_schedule_table::parse_table_update(table_update)?,
+                ),
 
                 unknown => {
                     return Err(__sdk::InternalError::unknown_name(
@@ -6755,6 +7694,12 @@ impl __sdk::DbUpdate for DbUpdate {
     ) -> AppliedDiff<'_> {
         let mut diff = AppliedDiff::default();
 
+        diff.blackrock_tomb_round = cache
+            .apply_diff_to_table::<BlackrockTombRound>(
+                "blackrock_tomb_round",
+                &self.blackrock_tomb_round,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_account = cache
             .apply_diff_to_table::<Account>("game_account", &self.game_account)
             .with_updates_by_pk(|row| &row.id);
@@ -6887,6 +7832,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_character_quest,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_character_quest_event_credit = cache
+            .apply_diff_to_table::<CharacterQuestEventCredit>(
+                "game_character_quest_event_credit",
+                &self.game_character_quest_event_credit,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_character_shard = cache
             .apply_diff_to_table::<CharacterShard>(
                 "game_character_shard",
@@ -6953,18 +7904,84 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_creature_ai_broadcast_text,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_definition = cache
+            .apply_diff_to_table::<CreatureAiDefinition>(
+                "game_creature_ai_definition",
+                &self.game_creature_ai_definition,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_creature_ai_event = cache
             .apply_diff_to_table::<CreatureAiEvent>(
                 "game_creature_ai_event",
                 &self.game_creature_ai_event,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_forced_despawn = cache
+            .apply_diff_to_table::<CreatureAiForcedDespawn>(
+                "game_creature_ai_forced_despawn",
+                &self.game_creature_ai_forced_despawn,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_creature_ai_movement_intent = cache
+            .apply_diff_to_table::<CreatureAiMovementIntent>(
+                "game_creature_ai_movement_intent",
+                &self.game_creature_ai_movement_intent,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
+        diff.game_creature_ai_movement_path_waypoint = cache
+            .apply_diff_to_table::<CreatureAiMovementPathWaypoint>(
+                "game_creature_ai_movement_path_waypoint",
+                &self.game_creature_ai_movement_path_waypoint,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_relay_arrival = cache
+            .apply_diff_to_table::<RelayArrival>(
+                "game_creature_ai_relay_arrival",
+                &self.game_creature_ai_relay_arrival,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_creature_ai_relay_continuation = cache
+            .apply_diff_to_table::<RelayContinuation>(
+                "game_creature_ai_relay_continuation",
+                &self.game_creature_ai_relay_continuation,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_creature_ai_relay_definition = cache
+            .apply_diff_to_table::<RelayDefinition>(
+                "game_creature_ai_relay_definition",
+                &self.game_creature_ai_relay_definition,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_relay_run = cache
+            .apply_diff_to_table::<RelayRun>(
+                "game_creature_ai_relay_run",
+                &self.game_creature_ai_relay_run,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_reset_deferral = cache
+            .apply_diff_to_table::<CreatureAiResetDeferral>(
+                "game_creature_ai_reset_deferral",
+                &self.game_creature_ai_reset_deferral,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
+        diff.game_creature_ai_returning_home = cache
+            .apply_diff_to_table::<CreatureAiReturningHome>(
+                "game_creature_ai_returning_home",
+                &self.game_creature_ai_returning_home,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
         diff.game_creature_ai_rule_state = cache
             .apply_diff_to_table::<CreatureAiRuleState>(
                 "game_creature_ai_rule_state",
                 &self.game_creature_ai_rule_state,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_ai_spell_metadata = cache
+            .apply_diff_to_table::<CreatureAiSpellMetadata>(
+                "game_creature_ai_spell_metadata",
+                &self.game_creature_ai_spell_metadata,
+            )
+            .with_updates_by_pk(|row| &row.spell_id);
         diff.game_creature_ai_state = cache
             .apply_diff_to_table::<CreatureAiState>(
                 "game_creature_ai_state",
@@ -6983,15 +8000,39 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_creature_ai_summon_expiry,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_creature_ai_summon_origin = cache
+            .apply_diff_to_table::<CreatureAiSummonOrigin>(
+                "game_creature_ai_summon_origin",
+                &self.game_creature_ai_summon_origin,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
         diff.game_creature_cast = cache
             .apply_diff_to_table::<CreatureCast>("game_creature_cast", &self.game_creature_cast)
             .with_updates_by_pk(|row| &row.creature_entry);
+        diff.game_creature_dead_callback_cast_admission = cache
+            .apply_diff_to_table::<CreatureDeadCallbackCastAdmission>(
+                "game_creature_dead_callback_cast_admission",
+                &self.game_creature_dead_callback_cast_admission,
+            )
+            .with_updates_by_pk(|row| &row.caster_guid);
         diff.game_creature_family = cache
             .apply_diff_to_table::<CreatureFamily>(
                 "game_creature_family",
                 &self.game_creature_family,
             )
             .with_updates_by_pk(|row| &row.family_id);
+        diff.game_creature_gossip_menu_override = cache
+            .apply_diff_to_table::<CreatureGossipMenuOverride>(
+                "game_creature_gossip_menu_override",
+                &self.game_creature_gossip_menu_override,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
+        diff.game_creature_lethal_damage_floor = cache
+            .apply_diff_to_table::<CreatureLethalDamageFloor>(
+                "game_creature_lethal_damage_floor",
+                &self.game_creature_lethal_damage_floor,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
         diff.game_creature_loot = cache
             .apply_diff_to_table::<CreatureLoot>("game_creature_loot", &self.game_creature_loot)
             .with_updates_by_pk(|row| &row.id);
@@ -7007,9 +8048,33 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_creature_move_schedule,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_creature_presentation = cache
+            .apply_diff_to_table::<CreaturePresentation>(
+                "game_creature_presentation",
+                &self.game_creature_presentation,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
         diff.game_creature_quest = cache
             .apply_diff_to_table::<CreatureQuest>("game_creature_quest", &self.game_creature_quest)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_quest_tap = cache
+            .apply_diff_to_table::<CreatureQuestTap>(
+                "game_creature_quest_tap",
+                &self.game_creature_quest_tap,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
+        diff.game_creature_quest_tap_member = cache
+            .apply_diff_to_table::<CreatureQuestTapMember>(
+                "game_creature_quest_tap_member",
+                &self.game_creature_quest_tap_member,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_relay_temporary_faction = cache
+            .apply_diff_to_table::<CreatureRelayTemporaryFaction>(
+                "game_creature_relay_temporary_faction",
+                &self.game_creature_relay_temporary_faction,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
         diff.game_creature_spawn = cache
             .apply_diff_to_table::<CreatureSpawn>("game_creature_spawn", &self.game_creature_spawn)
             .with_updates_by_pk(|row| &row.guid);
@@ -7139,6 +8204,18 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_gameobject_template,
             )
             .with_updates_by_pk(|row| &row.entry);
+        diff.game_gameobject_trap = cache
+            .apply_diff_to_table::<GameObjectTrap>(
+                "game_gameobject_trap",
+                &self.game_gameobject_trap,
+            )
+            .with_updates_by_pk(|row| &row.entry);
+        diff.game_gameobject_trap_cooldown = cache
+            .apply_diff_to_table::<GameObjectTrapCooldown>(
+                "game_gameobject_trap_cooldown",
+                &self.game_gameobject_trap_cooldown,
+            )
+            .with_updates_by_pk(|row| &row.go_guid);
         diff.game_gameobject_unlocked = cache
             .apply_diff_to_table::<GameObjectUnlocked>(
                 "game_gameobject_unlocked",
@@ -7166,6 +8243,18 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_gossip_menu = cache
             .apply_diff_to_table::<GossipMenu>("game_gossip_menu", &self.game_gossip_menu)
             .with_updates_by_pk(|row| &row.entry);
+        diff.game_gossip_menu_profile = cache
+            .apply_diff_to_table::<GossipMenuProfile>(
+                "game_gossip_menu_profile",
+                &self.game_gossip_menu_profile,
+            )
+            .with_updates_by_pk(|row| &row.menu_id);
+        diff.game_gossip_menu_profile_option = cache
+            .apply_diff_to_table::<GossipMenuProfileOption>(
+                "game_gossip_menu_profile_option",
+                &self.game_gossip_menu_profile_option,
+            )
+            .with_updates_by_pk(|row| &row.row_id);
         diff.game_gossip_option = cache
             .apply_diff_to_table::<GossipOption>("game_gossip_option", &self.game_gossip_option)
             .with_updates_by_pk(|row| &row.row_id);
@@ -7348,6 +8437,18 @@ impl __sdk::DbUpdate for DbUpdate {
             .with_updates_by_pk(|row| &row.id);
         diff.game_player_spell = cache
             .apply_diff_to_table::<PlayerSpell>("game_player_spell", &self.game_player_spell)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_quest_cast_objective = cache
+            .apply_diff_to_table::<QuestCastObjective>(
+                "game_quest_cast_objective",
+                &self.game_quest_cast_objective,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_quest_event_requirement = cache
+            .apply_diff_to_table::<QuestEventRequirement>(
+                "game_quest_event_requirement",
+                &self.game_quest_event_requirement,
+            )
             .with_updates_by_pk(|row| &row.id);
         diff.game_quest_objective = cache
             .apply_diff_to_table::<QuestObjective>(
@@ -7622,12 +8723,45 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_world_entity = cache
             .apply_diff_to_table::<WorldEntity>("game_world_entity", &self.game_world_entity)
             .with_updates_by_pk(|row| &row.guid);
+        diff.game_world_state = cache
+            .apply_diff_to_table::<WorldState>("game_world_state", &self.game_world_state)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_world_state_name = cache
+            .apply_diff_to_table::<WorldStateName>(
+                "game_world_state_name",
+                &self.game_world_state_name,
+            )
+            .with_updates_by_pk(|row| &row.variable_id);
         diff.game_xp_event = cache
             .apply_diff_to_table::<XpEvent>("game_xp_event", &self.game_xp_event)
             .with_updates_by_pk(|row| &row.id);
         diff.game_zone_weather = cache
             .apply_diff_to_table::<ZoneWeather>("game_zone_weather", &self.game_zone_weather)
             .with_updates_by_pk(|row| &row.zone_id);
+        diff.shadowfang_fenrus_choreography = cache
+            .apply_diff_to_table::<ShadowfangFenrusChoreography>(
+                "shadowfang_fenrus_choreography",
+                &self.shadowfang_fenrus_choreography,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.sunken_temple_suppression = cache
+            .apply_diff_to_table::<SunkenTempleSuppression>(
+                "sunken_temple_suppression",
+                &self.sunken_temple_suppression,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.wailing_escort_progress = cache
+            .apply_diff_to_table::<WailingEscortProgress>(
+                "wailing_escort_progress",
+                &self.wailing_escort_progress,
+            )
+            .with_updates_by_pk(|row| &row.instance_id);
+        diff.wailing_escort_schedule = cache
+            .apply_diff_to_table::<WailingEscortSchedule>(
+                "wailing_escort_schedule",
+                &self.wailing_escort_schedule,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
 
         diff
     }
@@ -7635,6 +8769,9 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
+                "blackrock_tomb_round" => db_update
+                    .blackrock_tomb_round
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_account" => db_update
                     .game_account
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7722,6 +8859,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_character_quest" => db_update
                     .game_character_quest
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_character_quest_event_credit" => db_update
+                    .game_character_quest_event_credit
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_character_shard" => db_update
                     .game_character_shard
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7764,11 +8904,44 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_ai_broadcast_text" => db_update
                     .game_creature_ai_broadcast_text
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_definition" => db_update
+                    .game_creature_ai_definition
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_ai_event" => db_update
                     .game_creature_ai_event
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_forced_despawn" => db_update
+                    .game_creature_ai_forced_despawn
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_movement_intent" => db_update
+                    .game_creature_ai_movement_intent
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_movement_path_waypoint" => db_update
+                    .game_creature_ai_movement_path_waypoint
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_relay_arrival" => db_update
+                    .game_creature_ai_relay_arrival
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_relay_continuation" => db_update
+                    .game_creature_ai_relay_continuation
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_relay_definition" => db_update
+                    .game_creature_ai_relay_definition
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_relay_run" => db_update
+                    .game_creature_ai_relay_run
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_reset_deferral" => db_update
+                    .game_creature_ai_reset_deferral
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_returning_home" => db_update
+                    .game_creature_ai_returning_home
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_ai_rule_state" => db_update
                     .game_creature_ai_rule_state
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_spell_metadata" => db_update
+                    .game_creature_ai_spell_metadata
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_ai_state" => db_update
                     .game_creature_ai_state
@@ -7779,11 +8952,23 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_ai_summon_expiry" => db_update
                     .game_creature_ai_summon_expiry
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_ai_summon_origin" => db_update
+                    .game_creature_ai_summon_origin
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_cast" => db_update
                     .game_creature_cast
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_dead_callback_cast_admission" => db_update
+                    .game_creature_dead_callback_cast_admission
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_family" => db_update
                     .game_creature_family
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_gossip_menu_override" => db_update
+                    .game_creature_gossip_menu_override
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_lethal_damage_floor" => db_update
+                    .game_creature_lethal_damage_floor
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_loot" => db_update
                     .game_creature_loot
@@ -7794,8 +8979,20 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_move_schedule" => db_update
                     .game_creature_move_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_presentation" => db_update
+                    .game_creature_presentation
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_quest" => db_update
                     .game_creature_quest
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_quest_tap" => db_update
+                    .game_creature_quest_tap
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_quest_tap_member" => db_update
+                    .game_creature_quest_tap_member
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_relay_temporary_faction" => db_update
+                    .game_creature_relay_temporary_faction
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_spawn" => db_update
                     .game_creature_spawn
@@ -7881,6 +9078,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_gameobject_template" => db_update
                     .game_gameobject_template
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_gameobject_trap" => db_update
+                    .game_gameobject_trap
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_gameobject_trap_cooldown" => db_update
+                    .game_gameobject_trap_cooldown
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_gameobject_unlocked" => db_update
                     .game_gameobject_unlocked
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -7898,6 +9101,12 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_gossip_menu" => db_update
                     .game_gossip_menu
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_gossip_menu_profile" => db_update
+                    .game_gossip_menu_profile
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_gossip_menu_profile_option" => db_update
+                    .game_gossip_menu_profile_option
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_gossip_option" => db_update
                     .game_gossip_option
@@ -8045,6 +9254,12 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_player_spell" => db_update
                     .game_player_spell
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_quest_cast_objective" => db_update
+                    .game_quest_cast_objective
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_quest_event_requirement" => db_update
+                    .game_quest_event_requirement
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_quest_objective" => db_update
                     .game_quest_objective
@@ -8244,11 +9459,29 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_world_entity" => db_update
                     .game_world_entity
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_world_state" => db_update
+                    .game_world_state
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_world_state_name" => db_update
+                    .game_world_state_name
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_xp_event" => db_update
                     .game_xp_event
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_zone_weather" => db_update
                     .game_zone_weather
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "shadowfang_fenrus_choreography" => db_update
+                    .shadowfang_fenrus_choreography
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "sunken_temple_suppression" => db_update
+                    .sunken_temple_suppression
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "wailing_escort_progress" => db_update
+                    .wailing_escort_progress
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "wailing_escort_schedule" => db_update
+                    .wailing_escort_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -8263,6 +9496,9 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
+                "blackrock_tomb_round" => db_update
+                    .blackrock_tomb_round
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_account" => db_update
                     .game_account
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8350,6 +9586,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_character_quest" => db_update
                     .game_character_quest
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_character_quest_event_credit" => db_update
+                    .game_character_quest_event_credit
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_character_shard" => db_update
                     .game_character_shard
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8392,11 +9631,44 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_ai_broadcast_text" => db_update
                     .game_creature_ai_broadcast_text
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_definition" => db_update
+                    .game_creature_ai_definition
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_ai_event" => db_update
                     .game_creature_ai_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_forced_despawn" => db_update
+                    .game_creature_ai_forced_despawn
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_movement_intent" => db_update
+                    .game_creature_ai_movement_intent
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_movement_path_waypoint" => db_update
+                    .game_creature_ai_movement_path_waypoint
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_relay_arrival" => db_update
+                    .game_creature_ai_relay_arrival
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_relay_continuation" => db_update
+                    .game_creature_ai_relay_continuation
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_relay_definition" => db_update
+                    .game_creature_ai_relay_definition
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_relay_run" => db_update
+                    .game_creature_ai_relay_run
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_reset_deferral" => db_update
+                    .game_creature_ai_reset_deferral
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_returning_home" => db_update
+                    .game_creature_ai_returning_home
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_ai_rule_state" => db_update
                     .game_creature_ai_rule_state
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_spell_metadata" => db_update
+                    .game_creature_ai_spell_metadata
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_ai_state" => db_update
                     .game_creature_ai_state
@@ -8407,11 +9679,23 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_ai_summon_expiry" => db_update
                     .game_creature_ai_summon_expiry
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_ai_summon_origin" => db_update
+                    .game_creature_ai_summon_origin
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_cast" => db_update
                     .game_creature_cast
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_dead_callback_cast_admission" => db_update
+                    .game_creature_dead_callback_cast_admission
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_family" => db_update
                     .game_creature_family
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_gossip_menu_override" => db_update
+                    .game_creature_gossip_menu_override
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_lethal_damage_floor" => db_update
+                    .game_creature_lethal_damage_floor
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_loot" => db_update
                     .game_creature_loot
@@ -8422,8 +9706,20 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_move_schedule" => db_update
                     .game_creature_move_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_presentation" => db_update
+                    .game_creature_presentation
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_quest" => db_update
                     .game_creature_quest
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_quest_tap" => db_update
+                    .game_creature_quest_tap
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_quest_tap_member" => db_update
+                    .game_creature_quest_tap_member
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_relay_temporary_faction" => db_update
+                    .game_creature_relay_temporary_faction
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_spawn" => db_update
                     .game_creature_spawn
@@ -8509,6 +9805,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_gameobject_template" => db_update
                     .game_gameobject_template
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_gameobject_trap" => db_update
+                    .game_gameobject_trap
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_gameobject_trap_cooldown" => db_update
+                    .game_gameobject_trap_cooldown
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_gameobject_unlocked" => db_update
                     .game_gameobject_unlocked
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -8526,6 +9828,12 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_gossip_menu" => db_update
                     .game_gossip_menu
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_gossip_menu_profile" => db_update
+                    .game_gossip_menu_profile
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_gossip_menu_profile_option" => db_update
+                    .game_gossip_menu_profile_option
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_gossip_option" => db_update
                     .game_gossip_option
@@ -8673,6 +9981,12 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_player_spell" => db_update
                     .game_player_spell
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_quest_cast_objective" => db_update
+                    .game_quest_cast_objective
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_quest_event_requirement" => db_update
+                    .game_quest_event_requirement
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_quest_objective" => db_update
                     .game_quest_objective
@@ -8872,11 +10186,29 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_world_entity" => db_update
                     .game_world_entity
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_world_state" => db_update
+                    .game_world_state
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_world_state_name" => db_update
+                    .game_world_state_name
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_xp_event" => db_update
                     .game_xp_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_zone_weather" => db_update
                     .game_zone_weather
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "shadowfang_fenrus_choreography" => db_update
+                    .shadowfang_fenrus_choreography
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "sunken_temple_suppression" => db_update
+                    .sunken_temple_suppression
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "wailing_escort_progress" => db_update
+                    .wailing_escort_progress
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "wailing_escort_schedule" => db_update
+                    .wailing_escort_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -8893,6 +10225,7 @@ impl __sdk::DbUpdate for DbUpdate {
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
+    blackrock_tomb_round: __sdk::TableAppliedDiff<'r, BlackrockTombRound>,
     game_account: __sdk::TableAppliedDiff<'r, Account>,
     game_active_taxi_flight: __sdk::TableAppliedDiff<'r, ActiveTaxiFlight>,
     game_addon_message: __sdk::TableAppliedDiff<'r, AddonMessage>,
@@ -8922,6 +10255,7 @@ pub struct AppliedDiff<'r> {
     game_character_contact: __sdk::TableAppliedDiff<'r, ContactEntry>,
     game_character_explored: __sdk::TableAppliedDiff<'r, CharacterExplored>,
     game_character_quest: __sdk::TableAppliedDiff<'r, CharacterQuest>,
+    game_character_quest_event_credit: __sdk::TableAppliedDiff<'r, CharacterQuestEventCredit>,
     game_character_shard: __sdk::TableAppliedDiff<'r, CharacterShard>,
     game_character_talent: __sdk::TableAppliedDiff<'r, CharacterTalent>,
     game_character_taxi_node: __sdk::TableAppliedDiff<'r, CharacterTaxiNode>,
@@ -8936,17 +10270,39 @@ pub struct AppliedDiff<'r> {
     game_createinfo_action: __sdk::TableAppliedDiff<'r, CreateinfoAction>,
     game_createinfo_spell: __sdk::TableAppliedDiff<'r, CreateinfoSpell>,
     game_creature_ai_broadcast_text: __sdk::TableAppliedDiff<'r, CreatureAiBroadcastText>,
+    game_creature_ai_definition: __sdk::TableAppliedDiff<'r, CreatureAiDefinition>,
     game_creature_ai_event: __sdk::TableAppliedDiff<'r, CreatureAiEvent>,
+    game_creature_ai_forced_despawn: __sdk::TableAppliedDiff<'r, CreatureAiForcedDespawn>,
+    game_creature_ai_movement_intent: __sdk::TableAppliedDiff<'r, CreatureAiMovementIntent>,
+    game_creature_ai_movement_path_waypoint:
+        __sdk::TableAppliedDiff<'r, CreatureAiMovementPathWaypoint>,
+    game_creature_ai_relay_arrival: __sdk::TableAppliedDiff<'r, RelayArrival>,
+    game_creature_ai_relay_continuation: __sdk::TableAppliedDiff<'r, RelayContinuation>,
+    game_creature_ai_relay_definition: __sdk::TableAppliedDiff<'r, RelayDefinition>,
+    game_creature_ai_relay_run: __sdk::TableAppliedDiff<'r, RelayRun>,
+    game_creature_ai_reset_deferral: __sdk::TableAppliedDiff<'r, CreatureAiResetDeferral>,
+    game_creature_ai_returning_home: __sdk::TableAppliedDiff<'r, CreatureAiReturningHome>,
     game_creature_ai_rule_state: __sdk::TableAppliedDiff<'r, CreatureAiRuleState>,
+    game_creature_ai_spell_metadata: __sdk::TableAppliedDiff<'r, CreatureAiSpellMetadata>,
     game_creature_ai_state: __sdk::TableAppliedDiff<'r, CreatureAiState>,
     game_creature_ai_summon: __sdk::TableAppliedDiff<'r, CreatureAiSummon>,
     game_creature_ai_summon_expiry: __sdk::TableAppliedDiff<'r, CreatureAiSummonExpiry>,
+    game_creature_ai_summon_origin: __sdk::TableAppliedDiff<'r, CreatureAiSummonOrigin>,
     game_creature_cast: __sdk::TableAppliedDiff<'r, CreatureCast>,
+    game_creature_dead_callback_cast_admission:
+        __sdk::TableAppliedDiff<'r, CreatureDeadCallbackCastAdmission>,
     game_creature_family: __sdk::TableAppliedDiff<'r, CreatureFamily>,
+    game_creature_gossip_menu_override: __sdk::TableAppliedDiff<'r, CreatureGossipMenuOverride>,
+    game_creature_lethal_damage_floor: __sdk::TableAppliedDiff<'r, CreatureLethalDamageFloor>,
     game_creature_loot: __sdk::TableAppliedDiff<'r, CreatureLoot>,
     game_creature_move_event: __sdk::TableAppliedDiff<'r, CreatureMoveEvent>,
     game_creature_move_schedule: __sdk::TableAppliedDiff<'r, CreatureMoveSchedule>,
+    game_creature_presentation: __sdk::TableAppliedDiff<'r, CreaturePresentation>,
     game_creature_quest: __sdk::TableAppliedDiff<'r, CreatureQuest>,
+    game_creature_quest_tap: __sdk::TableAppliedDiff<'r, CreatureQuestTap>,
+    game_creature_quest_tap_member: __sdk::TableAppliedDiff<'r, CreatureQuestTapMember>,
+    game_creature_relay_temporary_faction:
+        __sdk::TableAppliedDiff<'r, CreatureRelayTemporaryFaction>,
     game_creature_spawn: __sdk::TableAppliedDiff<'r, CreatureSpawn>,
     game_creature_spell: __sdk::TableAppliedDiff<'r, CreatureSpell>,
     game_creature_spline: __sdk::TableAppliedDiff<'r, CreatureSpline>,
@@ -8975,12 +10331,16 @@ pub struct AppliedDiff<'r> {
     game_gameobject_pool_member: __sdk::TableAppliedDiff<'r, GameObjectPoolMember>,
     game_gameobject_quest: __sdk::TableAppliedDiff<'r, GameObjectQuest>,
     game_gameobject_template: __sdk::TableAppliedDiff<'r, GameObjectTemplate>,
+    game_gameobject_trap: __sdk::TableAppliedDiff<'r, GameObjectTrap>,
+    game_gameobject_trap_cooldown: __sdk::TableAppliedDiff<'r, GameObjectTrapCooldown>,
     game_gameobject_unlocked: __sdk::TableAppliedDiff<'r, GameObjectUnlocked>,
     game_gateway_lease: __sdk::TableAppliedDiff<'r, GatewayLease>,
     game_gateway_lease_reaper_schedule: __sdk::TableAppliedDiff<'r, GatewayLeaseReaperSchedule>,
     game_gateway_session: __sdk::TableAppliedDiff<'r, GatewaySession>,
     game_go_model: __sdk::TableAppliedDiff<'r, GoModel>,
     game_gossip_menu: __sdk::TableAppliedDiff<'r, GossipMenu>,
+    game_gossip_menu_profile: __sdk::TableAppliedDiff<'r, GossipMenuProfile>,
+    game_gossip_menu_profile_option: __sdk::TableAppliedDiff<'r, GossipMenuProfileOption>,
     game_gossip_option: __sdk::TableAppliedDiff<'r, GossipOption>,
     game_graveyard: __sdk::TableAppliedDiff<'r, GraveyardLoc>,
     game_graveyard_zone: __sdk::TableAppliedDiff<'r, GraveyardZone>,
@@ -9030,6 +10390,8 @@ pub struct AppliedDiff<'r> {
     game_player_reputation: __sdk::TableAppliedDiff<'r, PlayerReputation>,
     game_player_skill: __sdk::TableAppliedDiff<'r, PlayerSkill>,
     game_player_spell: __sdk::TableAppliedDiff<'r, PlayerSpell>,
+    game_quest_cast_objective: __sdk::TableAppliedDiff<'r, QuestCastObjective>,
+    game_quest_event_requirement: __sdk::TableAppliedDiff<'r, QuestEventRequirement>,
     game_quest_objective: __sdk::TableAppliedDiff<'r, QuestObjective>,
     game_quest_reward_choice: __sdk::TableAppliedDiff<'r, QuestRewardChoice>,
     game_quest_reward_item: __sdk::TableAppliedDiff<'r, QuestRewardItem>,
@@ -9096,8 +10458,14 @@ pub struct AppliedDiff<'r> {
     game_whisper_event: __sdk::TableAppliedDiff<'r, WhisperEvent>,
     game_world_config: __sdk::TableAppliedDiff<'r, GmWorldConfig>,
     game_world_entity: __sdk::TableAppliedDiff<'r, WorldEntity>,
+    game_world_state: __sdk::TableAppliedDiff<'r, WorldState>,
+    game_world_state_name: __sdk::TableAppliedDiff<'r, WorldStateName>,
     game_xp_event: __sdk::TableAppliedDiff<'r, XpEvent>,
     game_zone_weather: __sdk::TableAppliedDiff<'r, ZoneWeather>,
+    shadowfang_fenrus_choreography: __sdk::TableAppliedDiff<'r, ShadowfangFenrusChoreography>,
+    sunken_temple_suppression: __sdk::TableAppliedDiff<'r, SunkenTempleSuppression>,
+    wailing_escort_progress: __sdk::TableAppliedDiff<'r, WailingEscortProgress>,
+    wailing_escort_schedule: __sdk::TableAppliedDiff<'r, WailingEscortSchedule>,
     __unused: std::marker::PhantomData<&'r ()>,
 }
 
@@ -9111,6 +10479,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         event: &EventContext,
         callbacks: &mut __sdk::DbCallbacks<RemoteModule>,
     ) {
+        callbacks.invoke_table_row_callbacks::<BlackrockTombRound>(
+            "blackrock_tomb_round",
+            &self.blackrock_tomb_round,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<Account>("game_account", &self.game_account, event);
         callbacks.invoke_table_row_callbacks::<ActiveTaxiFlight>(
             "game_active_taxi_flight",
@@ -9240,6 +10613,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_character_quest,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<CharacterQuestEventCredit>(
+            "game_character_quest_event_credit",
+            &self.game_character_quest_event_credit,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<CharacterShard>(
             "game_character_shard",
             &self.game_character_shard,
@@ -9306,14 +10684,69 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_creature_ai_broadcast_text,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<CreatureAiDefinition>(
+            "game_creature_ai_definition",
+            &self.game_creature_ai_definition,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<CreatureAiEvent>(
             "game_creature_ai_event",
             &self.game_creature_ai_event,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<CreatureAiForcedDespawn>(
+            "game_creature_ai_forced_despawn",
+            &self.game_creature_ai_forced_despawn,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiMovementIntent>(
+            "game_creature_ai_movement_intent",
+            &self.game_creature_ai_movement_intent,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiMovementPathWaypoint>(
+            "game_creature_ai_movement_path_waypoint",
+            &self.game_creature_ai_movement_path_waypoint,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<RelayArrival>(
+            "game_creature_ai_relay_arrival",
+            &self.game_creature_ai_relay_arrival,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<RelayContinuation>(
+            "game_creature_ai_relay_continuation",
+            &self.game_creature_ai_relay_continuation,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<RelayDefinition>(
+            "game_creature_ai_relay_definition",
+            &self.game_creature_ai_relay_definition,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<RelayRun>(
+            "game_creature_ai_relay_run",
+            &self.game_creature_ai_relay_run,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiResetDeferral>(
+            "game_creature_ai_reset_deferral",
+            &self.game_creature_ai_reset_deferral,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiReturningHome>(
+            "game_creature_ai_returning_home",
+            &self.game_creature_ai_returning_home,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<CreatureAiRuleState>(
             "game_creature_ai_rule_state",
             &self.game_creature_ai_rule_state,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureAiSpellMetadata>(
+            "game_creature_ai_spell_metadata",
+            &self.game_creature_ai_spell_metadata,
             event,
         );
         callbacks.invoke_table_row_callbacks::<CreatureAiState>(
@@ -9331,14 +10764,34 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_creature_ai_summon_expiry,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<CreatureAiSummonOrigin>(
+            "game_creature_ai_summon_origin",
+            &self.game_creature_ai_summon_origin,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<CreatureCast>(
             "game_creature_cast",
             &self.game_creature_cast,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<CreatureDeadCallbackCastAdmission>(
+            "game_creature_dead_callback_cast_admission",
+            &self.game_creature_dead_callback_cast_admission,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<CreatureFamily>(
             "game_creature_family",
             &self.game_creature_family,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureGossipMenuOverride>(
+            "game_creature_gossip_menu_override",
+            &self.game_creature_gossip_menu_override,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureLethalDamageFloor>(
+            "game_creature_lethal_damage_floor",
+            &self.game_creature_lethal_damage_floor,
             event,
         );
         callbacks.invoke_table_row_callbacks::<CreatureLoot>(
@@ -9356,9 +10809,29 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_creature_move_schedule,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<CreaturePresentation>(
+            "game_creature_presentation",
+            &self.game_creature_presentation,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<CreatureQuest>(
             "game_creature_quest",
             &self.game_creature_quest,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureQuestTap>(
+            "game_creature_quest_tap",
+            &self.game_creature_quest_tap,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureQuestTapMember>(
+            "game_creature_quest_tap_member",
+            &self.game_creature_quest_tap_member,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<CreatureRelayTemporaryFaction>(
+            "game_creature_relay_temporary_faction",
+            &self.game_creature_relay_temporary_faction,
             event,
         );
         callbacks.invoke_table_row_callbacks::<CreatureSpawn>(
@@ -9493,6 +10966,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_gameobject_template,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<GameObjectTrap>(
+            "game_gameobject_trap",
+            &self.game_gameobject_trap,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GameObjectTrapCooldown>(
+            "game_gameobject_trap_cooldown",
+            &self.game_gameobject_trap_cooldown,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<GameObjectUnlocked>(
             "game_gameobject_unlocked",
             &self.game_gameobject_unlocked,
@@ -9521,6 +11004,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<GossipMenu>(
             "game_gossip_menu",
             &self.game_gossip_menu,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GossipMenuProfile>(
+            "game_gossip_menu_profile",
+            &self.game_gossip_menu_profile,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GossipMenuProfileOption>(
+            "game_gossip_menu_profile_option",
+            &self.game_gossip_menu_profile_option,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GossipOption>(
@@ -9754,6 +11247,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<PlayerSpell>(
             "game_player_spell",
             &self.game_player_spell,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<QuestCastObjective>(
+            "game_quest_cast_objective",
+            &self.game_quest_cast_objective,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<QuestEventRequirement>(
+            "game_quest_event_requirement",
+            &self.game_quest_event_requirement,
             event,
         );
         callbacks.invoke_table_row_callbacks::<QuestObjective>(
@@ -10070,6 +11573,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_world_entity,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<WorldState>(
+            "game_world_state",
+            &self.game_world_state,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<WorldStateName>(
+            "game_world_state_name",
+            &self.game_world_state_name,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<XpEvent>(
             "game_xp_event",
             &self.game_xp_event,
@@ -10078,6 +11591,26 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ZoneWeather>(
             "game_zone_weather",
             &self.game_zone_weather,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ShadowfangFenrusChoreography>(
+            "shadowfang_fenrus_choreography",
+            &self.shadowfang_fenrus_choreography,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<SunkenTempleSuppression>(
+            "sunken_temple_suppression",
+            &self.sunken_temple_suppression,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<WailingEscortProgress>(
+            "wailing_escort_progress",
+            &self.wailing_escort_progress,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<WailingEscortSchedule>(
+            "wailing_escort_schedule",
+            &self.wailing_escort_schedule,
             event,
         );
     }
@@ -10740,6 +12273,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     type QueryBuilder = __sdk::QueryBuilder;
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
+        blackrock_tomb_round_table::register_table(client_cache);
         game_account_table::register_table(client_cache);
         game_active_taxi_flight_table::register_table(client_cache);
         game_addon_message_table::register_table(client_cache);
@@ -10769,6 +12303,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_character_contact_table::register_table(client_cache);
         game_character_explored_table::register_table(client_cache);
         game_character_quest_table::register_table(client_cache);
+        game_character_quest_event_credit_table::register_table(client_cache);
         game_character_shard_table::register_table(client_cache);
         game_character_talent_table::register_table(client_cache);
         game_character_taxi_node_table::register_table(client_cache);
@@ -10783,17 +12318,36 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_createinfo_action_table::register_table(client_cache);
         game_createinfo_spell_table::register_table(client_cache);
         game_creature_ai_broadcast_text_table::register_table(client_cache);
+        game_creature_ai_definition_table::register_table(client_cache);
         game_creature_ai_event_table::register_table(client_cache);
+        game_creature_ai_forced_despawn_table::register_table(client_cache);
+        game_creature_ai_movement_intent_table::register_table(client_cache);
+        game_creature_ai_movement_path_waypoint_table::register_table(client_cache);
+        game_creature_ai_relay_arrival_table::register_table(client_cache);
+        game_creature_ai_relay_continuation_table::register_table(client_cache);
+        game_creature_ai_relay_definition_table::register_table(client_cache);
+        game_creature_ai_relay_run_table::register_table(client_cache);
+        game_creature_ai_reset_deferral_table::register_table(client_cache);
+        game_creature_ai_returning_home_table::register_table(client_cache);
         game_creature_ai_rule_state_table::register_table(client_cache);
+        game_creature_ai_spell_metadata_table::register_table(client_cache);
         game_creature_ai_state_table::register_table(client_cache);
         game_creature_ai_summon_table::register_table(client_cache);
         game_creature_ai_summon_expiry_table::register_table(client_cache);
+        game_creature_ai_summon_origin_table::register_table(client_cache);
         game_creature_cast_table::register_table(client_cache);
+        game_creature_dead_callback_cast_admission_table::register_table(client_cache);
         game_creature_family_table::register_table(client_cache);
+        game_creature_gossip_menu_override_table::register_table(client_cache);
+        game_creature_lethal_damage_floor_table::register_table(client_cache);
         game_creature_loot_table::register_table(client_cache);
         game_creature_move_event_table::register_table(client_cache);
         game_creature_move_schedule_table::register_table(client_cache);
+        game_creature_presentation_table::register_table(client_cache);
         game_creature_quest_table::register_table(client_cache);
+        game_creature_quest_tap_table::register_table(client_cache);
+        game_creature_quest_tap_member_table::register_table(client_cache);
+        game_creature_relay_temporary_faction_table::register_table(client_cache);
         game_creature_spawn_table::register_table(client_cache);
         game_creature_spell_table::register_table(client_cache);
         game_creature_spline_table::register_table(client_cache);
@@ -10822,12 +12376,16 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_gameobject_pool_member_table::register_table(client_cache);
         game_gameobject_quest_table::register_table(client_cache);
         game_gameobject_template_table::register_table(client_cache);
+        game_gameobject_trap_table::register_table(client_cache);
+        game_gameobject_trap_cooldown_table::register_table(client_cache);
         game_gameobject_unlocked_table::register_table(client_cache);
         game_gateway_lease_table::register_table(client_cache);
         game_gateway_lease_reaper_schedule_table::register_table(client_cache);
         game_gateway_session_table::register_table(client_cache);
         game_go_model_table::register_table(client_cache);
         game_gossip_menu_table::register_table(client_cache);
+        game_gossip_menu_profile_table::register_table(client_cache);
+        game_gossip_menu_profile_option_table::register_table(client_cache);
         game_gossip_option_table::register_table(client_cache);
         game_graveyard_table::register_table(client_cache);
         game_graveyard_zone_table::register_table(client_cache);
@@ -10877,6 +12435,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_player_reputation_table::register_table(client_cache);
         game_player_skill_table::register_table(client_cache);
         game_player_spell_table::register_table(client_cache);
+        game_quest_cast_objective_table::register_table(client_cache);
+        game_quest_event_requirement_table::register_table(client_cache);
         game_quest_objective_table::register_table(client_cache);
         game_quest_reward_choice_table::register_table(client_cache);
         game_quest_reward_item_table::register_table(client_cache);
@@ -10943,10 +12503,17 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_whisper_event_table::register_table(client_cache);
         game_world_config_table::register_table(client_cache);
         game_world_entity_table::register_table(client_cache);
+        game_world_state_table::register_table(client_cache);
+        game_world_state_name_table::register_table(client_cache);
         game_xp_event_table::register_table(client_cache);
         game_zone_weather_table::register_table(client_cache);
+        shadowfang_fenrus_choreography_table::register_table(client_cache);
+        sunken_temple_suppression_table::register_table(client_cache);
+        wailing_escort_progress_table::register_table(client_cache);
+        wailing_escort_schedule_table::register_table(client_cache);
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
+        "blackrock_tomb_round",
         "game_account",
         "game_active_taxi_flight",
         "game_addon_message",
@@ -10976,6 +12543,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_character_contact",
         "game_character_explored",
         "game_character_quest",
+        "game_character_quest_event_credit",
         "game_character_shard",
         "game_character_talent",
         "game_character_taxi_node",
@@ -10990,17 +12558,36 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_createinfo_action",
         "game_createinfo_spell",
         "game_creature_ai_broadcast_text",
+        "game_creature_ai_definition",
         "game_creature_ai_event",
+        "game_creature_ai_forced_despawn",
+        "game_creature_ai_movement_intent",
+        "game_creature_ai_movement_path_waypoint",
+        "game_creature_ai_relay_arrival",
+        "game_creature_ai_relay_continuation",
+        "game_creature_ai_relay_definition",
+        "game_creature_ai_relay_run",
+        "game_creature_ai_reset_deferral",
+        "game_creature_ai_returning_home",
         "game_creature_ai_rule_state",
+        "game_creature_ai_spell_metadata",
         "game_creature_ai_state",
         "game_creature_ai_summon",
         "game_creature_ai_summon_expiry",
+        "game_creature_ai_summon_origin",
         "game_creature_cast",
+        "game_creature_dead_callback_cast_admission",
         "game_creature_family",
+        "game_creature_gossip_menu_override",
+        "game_creature_lethal_damage_floor",
         "game_creature_loot",
         "game_creature_move_event",
         "game_creature_move_schedule",
+        "game_creature_presentation",
         "game_creature_quest",
+        "game_creature_quest_tap",
+        "game_creature_quest_tap_member",
+        "game_creature_relay_temporary_faction",
         "game_creature_spawn",
         "game_creature_spell",
         "game_creature_spline",
@@ -11029,12 +12616,16 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_gameobject_pool_member",
         "game_gameobject_quest",
         "game_gameobject_template",
+        "game_gameobject_trap",
+        "game_gameobject_trap_cooldown",
         "game_gameobject_unlocked",
         "game_gateway_lease",
         "game_gateway_lease_reaper_schedule",
         "game_gateway_session",
         "game_go_model",
         "game_gossip_menu",
+        "game_gossip_menu_profile",
+        "game_gossip_menu_profile_option",
         "game_gossip_option",
         "game_graveyard",
         "game_graveyard_zone",
@@ -11084,6 +12675,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_player_reputation",
         "game_player_skill",
         "game_player_spell",
+        "game_quest_cast_objective",
+        "game_quest_event_requirement",
         "game_quest_objective",
         "game_quest_reward_choice",
         "game_quest_reward_item",
@@ -11150,7 +12743,13 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_whisper_event",
         "game_world_config",
         "game_world_entity",
+        "game_world_state",
+        "game_world_state_name",
         "game_xp_event",
         "game_zone_weather",
+        "shadowfang_fenrus_choreography",
+        "sunken_temple_suppression",
+        "wailing_escort_progress",
+        "wailing_escort_schedule",
     ];
 }

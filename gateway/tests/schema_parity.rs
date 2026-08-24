@@ -578,6 +578,16 @@ parity_test!(parity_game_gossip_option, "game_gossip_option", lyracore_module::G
     row_id, entry, option_index, icon, text, action, action_menu_id, cond_type, cond_value1,
     cond_value2,
 });
+parity_test!(parity_game_gossip_menu_profile, "game_gossip_menu_profile", lyracore_module::GossipMenuProfile, bindings::gossip_menu_profile_type::GossipMenuProfile, {
+    menu_id, text_id,
+});
+parity_test!(parity_game_gossip_menu_profile_option, "game_gossip_menu_profile_option", lyracore_module::GossipMenuProfileOption, bindings::gossip_menu_profile_option_type::GossipMenuProfileOption, {
+    row_id, menu_id, option_index, icon, text, action, action_menu_id, cond_type, cond_value1,
+    cond_value2,
+});
+parity_test!(parity_game_creature_gossip_menu_override, "game_creature_gossip_menu_override", lyracore_module::CreatureGossipMenuOverride, bindings::creature_gossip_menu_override_type::CreatureGossipMenuOverride, {
+    creature_guid, menu_id, map_id, instance_id,
+});
 parity_test!(parity_game_npc_text, "game_npc_text", lyracore_module::NpcText, bindings::npc_text_type::NpcText, {
     text_id, text,
 });
@@ -839,6 +849,9 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_npc_vendor",
     "game_gossip_menu",
     "game_gossip_option",
+    "game_gossip_menu_profile",
+    "game_gossip_menu_profile_option",
+    "game_creature_gossip_menu_override",
     "game_npc_text",
     "game_npc_text_slot",
     "game_quest_template",

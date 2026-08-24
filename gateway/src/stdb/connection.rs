@@ -743,13 +743,12 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_corpse_loot",
         // Vendors (Tier 2): a creature's vendor stock, read for SMSG_LIST_INVENTORY.
         "SELECT * FROM game_npc_vendor",
-        // Gossip menus + NPC text (+ weighted slots) + menu options: per-NPC text
-        // for SMSG_GOSSIP_MESSAGE title_text_id and SMSG_NPC_TEXT_UPDATE body, and the imported
-        // clickable options that take precedence over the vendor/innkeeper synthesis. Imported by
-        // the world ETL; fallback to generic greeting / flag-derived options when a creature's
-        // entry has no rows.
+        // Gossip menus, runtime per-creature selections, NPC text, and clickable options.
         "SELECT * FROM game_gossip_menu",
         "SELECT * FROM game_gossip_option",
+        "SELECT * FROM game_gossip_menu_profile",
+        "SELECT * FROM game_gossip_menu_profile_option",
+        "SELECT * FROM game_creature_gossip_menu_override",
         "SELECT * FROM game_npc_text",
         "SELECT * FROM game_npc_text_slot",
         // Quests (gateway slice): the static quest tables + every player's quest log. The
