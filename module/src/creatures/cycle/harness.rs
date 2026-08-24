@@ -7,16 +7,16 @@ use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
 use crate::creatures::eventai::{
     self, BroadcastLine, CallForHelpInstruction, CastInstruction, CreatureAiEvent,
-    CreatureHealthCondition, CreatureInstruction, CreaturePresentationInstruction, CreatureState,
-    CycleActor, DeathCondition, DefinitionRevision, EmoteInstruction, EngagedFight,
-    EventAiDefinition, EventAiRequest, EventAiRule, EventAiSubject, EventAiUnit, EventAiWorld,
-    EventCondition, EventContext, EventKind, EventPredicate, ExecutionPolicy,
-    FriendlyHealthDeficitCondition, IdleMovementIntent, InstructionSelection, InstructionTarget,
-    MovementOperation, NotifyEncounterInstruction, PhaseSet, PostureAdmission, RangedMode,
-    RangedPostureInstruction, RecurrencePolicy, RuleState, SetPhaseInstruction, SpawnCondition,
-    SpeakInstruction, SpeechMode, SpellCastTarget, SpellCasterAdmission, SpellCasterRole,
-    SpellStartMode, SpellTargetRole, SummonInstruction, SummonLocation, TargetRangeCondition,
-    TimeWindow, WalkingMode,
+    CreatureHealthCondition, CreatureInstruction, CreaturePresentationInstruction,
+    CreatureReactState, CreatureState, CycleActor, DeathCondition, DefinitionRevision,
+    EmoteInstruction, EngagedFight, EventAiDefinition, EventAiRequest, EventAiRule, EventAiSubject,
+    EventAiUnit, EventAiWorld, EventCondition, EventContext, EventKind, EventPredicate,
+    ExecutionPolicy, FriendlyHealthDeficitCondition, IdleMovementIntent, InstructionSelection,
+    InstructionTarget, MovementOperation, NotifyEncounterInstruction, PhaseSet, PostureAdmission,
+    RangedMode, RangedPostureInstruction, RecurrencePolicy, RuleState, SetPhaseInstruction,
+    SpawnCondition, SpeakInstruction, SpeechMode, SpellCastTarget, SpellCasterAdmission,
+    SpellCasterRole, SpellStartMode, SpellTargetRole, SummonInstruction, SummonLocation,
+    TargetRangeCondition, TimeWindow, WalkingMode,
 };
 use crate::creatures::{chase_step, rout_window_open};
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
@@ -38,6 +38,8 @@ mod eventai_legacy;
 mod eventai_mobility;
 #[path = "harness/eventai_movement.rs"]
 mod eventai_movement;
+#[path = "harness/eventai_profile.rs"]
+mod eventai_profile;
 #[path = "harness/eventai_quest_credit.rs"]
 mod eventai_quest_credit;
 #[path = "harness/eventai_tracer.rs"]
@@ -271,6 +273,10 @@ struct Scenario {
     eventai_summon_expiry: RefCell<HashMap<u64, ScenarioSummonExpiry>>,
     eventai_lethal_floors: RefCell<HashMap<u64, DefinitionRevision>>,
     eventai_forced_deaths: RefCell<Vec<u64>>,
+    eventai_forced_despawns: RefCell<Vec<(u64, u32)>>,
+    eventai_ai_events: RefCell<Vec<(u64, u64, eventai::AiEventKind, u32)>>,
+    eventai_stand_states: RefCell<HashMap<u64, u8>>,
+    eventai_react_states: RefCell<HashMap<u64, CreatureReactState>>,
     eventai_encounter_notifications: RefCell<Vec<(u64, NotifyEncounterInstruction)>>,
     eventai_relay_starts: RefCell<Vec<(u32, u64, u64, u64)>>,
     eventai_next_summon: Cell<u64>,
@@ -1824,6 +1830,9 @@ impl EventAiWorld for Scenario {
     }
 
     fn put_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64, state: RuleState) {
+        if !self.creatures.borrow().contains_key(&creature_guid) {
+            return;
+        }
         self.eventai_rule_state
             .borrow_mut()
             .entry(creature_guid)
@@ -2127,6 +2136,92 @@ impl EventAiWorld for Scenario {
         EngageSink::engage(self, summon_guid, target_guid, Pull::Assisted);
     }
 
+    fn eventai_remove_aura(&mut self, target_guid: u64, spell_id: u32) -> bool {
+        if self.eventai_unit(target_guid).is_none() {
+            return false;
+        }
+        self.auras.borrow_mut().remove(&(target_guid, spell_id));
+        true
+    }
+
+    fn eventai_force_despawn(&mut self, creature_guid: u64, delay_ms: u32) -> bool {
+        if !self.creatures.borrow().contains_key(&creature_guid) {
+            return false;
+        }
+        self.eventai_forced_despawns
+            .borrow_mut()
+            .push((creature_guid, delay_ms));
+        if delay_ms == 0 {
+            self.clear_eventai_summon(creature_guid);
+            self.creatures.borrow_mut().remove(&creature_guid);
+        }
+        true
+    }
+
+    fn eventai_throw_ai_event(
+        &mut self,
+        source_guid: u64,
+        invoker_guid: u64,
+        kind: eventai::AiEventKind,
+        radius_yd: u32,
+    ) -> bool {
+        if self.eventai_unit(source_guid).is_none() || self.eventai_unit(invoker_guid).is_none() {
+            return false;
+        }
+        self.eventai_ai_events
+            .borrow_mut()
+            .push((source_guid, invoker_guid, kind, radius_yd));
+        true
+    }
+
+    fn eventai_set_stand_state(&mut self, creature_guid: u64, stand_state: u8) -> bool {
+        if self.eventai_unit(creature_guid).is_none() {
+            return false;
+        }
+        self.eventai_stand_states
+            .borrow_mut()
+            .insert(creature_guid, stand_state);
+        true
+    }
+
+    fn eventai_set_react_state(&mut self, creature_guid: u64, state: CreatureReactState) -> bool {
+        if self.eventai_unit(creature_guid).is_none() {
+            return false;
+        }
+        self.eventai_react_states
+            .borrow_mut()
+            .insert(creature_guid, state);
+        true
+    }
+
+    fn eventai_remove_guardians(&mut self, summoner_guid: u64, creature_entry: u32) -> bool {
+        if self.eventai_unit(summoner_guid).is_none() {
+            return false;
+        }
+        let mut guardians = self
+            .eventai_summon_expiry
+            .borrow()
+            .iter()
+            .filter(|(_, expiry)| expiry.summoner_guid == summoner_guid)
+            .filter_map(|(guid, _)| {
+                self.creatures
+                    .borrow()
+                    .get(guid)
+                    .filter(|creature| creature_entry == 0 || creature.entry == creature_entry)
+                    .map(|_| *guid)
+            })
+            .collect::<Vec<_>>();
+        guardians.sort_unstable();
+        if creature_entry != 0 {
+            guardians.truncate(1);
+        }
+        for guardian in guardians {
+            self.clear_eventai_summon(guardian);
+            self.creatures.borrow_mut().remove(&guardian);
+        }
+        true
+    }
+
     fn eventai_set_lethal_damage_floor(
         &mut self,
         creature_guid: u64,
@@ -2217,6 +2312,7 @@ impl IdleSink for Scenario {
                     Some(IdleMovementIntent::Patrol(_)) => true,
                     Some(
                         IdleMovementIntent::Stationary
+                        | IdleMovementIntent::RandomAroundHomePosition(_)
                         | IdleMovementIntent::RandomAroundCurrentPosition(_),
                     ) => false,
                     None => routes.contains_key(guid),
@@ -2247,6 +2343,15 @@ impl IdleSink for Scenario {
                 Some(IdleMovementIntent::RandomAroundCurrentPosition(_))
             ) {
                 return intent.anchor.map(|at| Home { at, wanders: true });
+            }
+            if matches!(
+                intent.idle,
+                Some(IdleMovementIntent::RandomAroundHomePosition(_))
+            ) {
+                return self.homes.borrow().get(&guid).copied().map(|home| Home {
+                    wanders: true,
+                    ..home
+                });
             }
         }
         self.homes.borrow().get(&guid).copied()
@@ -2316,7 +2421,8 @@ impl IdleSink for Scenario {
         self.movement_intent(guid)
             .and_then(|intent| intent.idle)
             .and_then(|idle| match idle {
-                IdleMovementIntent::RandomAroundCurrentPosition(random) => {
+                IdleMovementIntent::RandomAroundHomePosition(random)
+                | IdleMovementIntent::RandomAroundCurrentPosition(random) => {
                     Some(random.radius_yd as f32)
                 }
                 _ => None,
@@ -2442,6 +2548,12 @@ impl EngageSink for Scenario {
                 detect_range_mod: c.detect_range_mod,
                 would_rout: c.would_rout,
                 cannot_act: c.cannot_act || self.cc(guid).0,
+                react_state: self
+                    .eventai_react_states
+                    .borrow()
+                    .get(&guid)
+                    .copied()
+                    .unwrap_or(CreatureReactState::Aggressive),
             })
             .collect()
     }
@@ -5797,7 +5909,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "c.instance_id, aggro_range: templates.entry().find(c.entry).map(|t| ",
                 "t.aggro_range), detect_range_mod: crate::spell::detect_range_mod(self.ctx, ",
                 "c.guid), would_rout: tick::rout_eligible(self.ctx, &c), cannot_act: ",
-                "crate::spell::is_action_blocked(self.ctx, c.guid), }) .collect() } fn ",
+                "crate::spell::is_action_blocked(self.ctx, c.guid), react_state: ",
+                "crate::creatures::react_state(self.ctx, c.guid), }) .collect() } fn ",
                 "hostile(&self, faction_template: u32, other: u32) -> bool { ",
                 "crate::faction::is_hostile(self.ctx, faction_template, other) } fn ",
                 "line_of_sight(&self, looker: u64, at: Point) -> bool { self.ctx .db ",

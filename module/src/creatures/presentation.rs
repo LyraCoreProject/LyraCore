@@ -260,6 +260,74 @@ pub(crate) fn apply_relay_stand_state(
     Ok(())
 }
 
+pub(crate) fn update_template_from_relay(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    entry: u32,
+) -> Result<(), String> {
+    let template = ctx
+        .db
+        .game_creature_template()
+        .entry()
+        .find(entry)
+        .ok_or_else(|| format!("relay creature template {entry} is missing"))?;
+    let entities = ctx.db.game_world_entity();
+    let old = entities
+        .guid()
+        .find(creature_guid)
+        .filter(|entity| !entity.is_player() && !entity.dead)
+        .ok_or_else(|| format!("relay template subject {creature_guid} is unavailable"))?;
+    if old.entry == entry {
+        return Ok(());
+    }
+
+    clear_eventai_presentation(ctx, creature_guid);
+    clear_relay_temporary_faction(ctx, creature_guid);
+    let mut entity = entities
+        .guid()
+        .find(creature_guid)
+        .ok_or_else(|| format!("relay template subject {creature_guid} disappeared"))?;
+    let old_health = entity.health;
+    let old_max_health = entity.max_health;
+    let (level, base_health) = crate::creatures::rolled_creature_stats(
+        template.level,
+        template.max_level,
+        template.health,
+        template.max_level_health,
+        ctx.random(),
+    );
+    let max_health = crate::creatures::scale_health_for_rank(base_health, template.rank).max(1);
+    let health = health_after_template_update(old_health, old_max_health, max_health);
+    let in_combat = entity.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT;
+    entity.entry = entry;
+    entity.scale_x = if template.scale > 0.0 {
+        template.scale
+    } else {
+        1.0
+    };
+    entity.display_id = template.display_id;
+    entity.native_display_id = template.display_id;
+    entity.level = level;
+    entity.health = health;
+    entity.max_health = max_health;
+    entity.faction_template = template.faction_template;
+    entity.npc_flags = template.npc_flags;
+    entity.unit_flags = template.unit_flags | in_combat;
+    entity.base_attack_time_ms = template.base_attack_time_ms;
+    entity.armor = template.armor;
+    entities.guid().update(entity);
+    let _ = crate::creatures::set_creature_gossip_menu(ctx, creature_guid, None);
+    Ok(())
+}
+
+fn health_after_template_update(old_health: u32, old_max_health: u32, new_max_health: u32) -> u32 {
+    if old_max_health == 0 {
+        return new_max_health;
+    }
+    (u64::from(old_health) * u64::from(new_max_health) / u64::from(old_max_health))
+        .clamp(1, u64::from(new_max_health)) as u32
+}
+
 pub(crate) fn apply_relay_npc_flags(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -437,6 +505,13 @@ fn apply_flag_override(flags: u32, bit: u32, override_state: FlagOverride) -> u3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_update_preserves_health_percent_with_live_bounds() {
+        assert_eq!(health_after_template_update(50, 100, 240), 120);
+        assert_eq!(health_after_template_update(1, 100, 1), 1);
+        assert_eq!(health_after_template_update(100, 0, 240), 240);
+    }
 
     #[test]
     fn named_overrides_keep_unrelated_dynamic_flags() {

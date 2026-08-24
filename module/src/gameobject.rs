@@ -12,11 +12,12 @@
 
 use std::collections::HashSet;
 
-use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
+use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::game_corpse_loot;
 use crate::game_gameobject_loot; // CHEST data-driven loot table (work-item 210)
 use crate::game_player_skill; // GATHER skill-gate reads the gather skill row (accessor trait)
+use crate::game_world_entity;
 use crate::loot::CorpseLoot;
 use crate::nav::game_nav_chunk; // arm_pool's map-fence (issue #79) — neither is wildcard-exported at the crate root
 use crate::terrain::game_terrain_chunk;
@@ -43,6 +44,8 @@ pub mod go_type {
     pub const QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER;
     /// Loot container — `use` rolls its drop into the loot window. cmangos type 3.
     pub const CHEST: u8 = lyracore_shared::constants::go_type::CHEST;
+    /// Spell trap. Relay activation uses its imported spell and cooldown metadata.
+    pub const TRAP: u8 = 6;
     /// Quest-use object (lever/totem/etc.) — `use` grants USE_GAMEOBJECT quest credit. cmangos type 10.
     pub const GOOBER: u8 = 10;
     /// Gather node (mining vein / herb bush). `use` skill-gates then DIRECT-grants the ore/herb
@@ -112,6 +115,29 @@ pub struct GameObjectTemplate {
     // gateway, so it is hand-synced into `game_object_template_type.rs` (unlike `lock_id` above).
     #[default(0f32)]
     pub size: f32,
+}
+
+/// Source trap fields needed by the relay-use authority. Module only. [static]
+#[table(accessor = game_gameobject_trap)]
+pub struct GameObjectTrap {
+    #[primary_key]
+    pub entry: u32,
+    pub spell_id: u32,
+    /// Zero selects the source default of four seconds.
+    pub cooldown_secs: u32,
+}
+
+/// Per-spawn trap cooldown after a successful relay activation. Module only. [entity]
+#[table(
+    accessor = game_gameobject_trap_cooldown,
+    index(accessor = by_instance, btree(columns = [instance_id]))
+)]
+pub struct GameObjectTrapCooldown {
+    #[primary_key]
+    pub go_guid: u64,
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub ready_at: Timestamp,
 }
 
 /// Lock.dbc → `game_lock` (work-item 211: the DATA half of open-lock; work-item 119 is the system half
@@ -947,8 +973,107 @@ pub(crate) fn despawn_from_relay(ctx: &ReducerContext, go_guid: u64) -> Result<(
     }
     crate::loot::reap_corpse_loot_family(ctx, go_guid);
     ctx.db.game_gameobject_unlocked().go_guid().delete(go_guid);
+    ctx.db
+        .game_gameobject_trap_cooldown()
+        .go_guid()
+        .delete(go_guid);
     ctx.db.game_gameobject().guid().delete(go_guid);
     Ok(())
+}
+
+pub(crate) fn activate_trap_from_relay(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    go_guid: u64,
+) -> Result<(), String> {
+    let source = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(source_guid)
+        .filter(|entity| !entity.dead)
+        .ok_or_else(|| format!("relay trap user {source_guid} is unavailable"))?;
+    let object = ctx
+        .db
+        .game_gameobject()
+        .guid()
+        .find(go_guid)
+        .filter(|object| object.map_id == source.map_id && object.instance_id == source.instance_id)
+        .ok_or_else(|| format!("relay trap {go_guid} is unavailable"))?;
+    let template = ctx
+        .db
+        .game_gameobject_template()
+        .entry()
+        .find(object.template_entry)
+        .filter(|template| template.type_id == go_type::TRAP)
+        .ok_or_else(|| format!("relay object {go_guid} is not a trap"))?;
+    let trap = ctx
+        .db
+        .game_gameobject_trap()
+        .entry()
+        .find(template.entry)
+        .filter(|trap| trap.spell_id != 0)
+        .ok_or_else(|| format!("trap metadata {} is missing", template.entry))?;
+    if ctx
+        .db
+        .game_gameobject_trap_cooldown()
+        .go_guid()
+        .find(go_guid)
+        .is_some_and(|cooldown| cooldown.ready_at > ctx.timestamp)
+    {
+        return Ok(());
+    }
+    crate::spell::start_creature_spell(
+        ctx,
+        crate::spell::CreatureSpellStart {
+            caster_guid: source_guid,
+            caster_level: source.level as u8,
+            spell_id: trap.spell_id,
+            mode: crate::spell::CreatureSpellStartMode::Triggered,
+            target: crate::spell::CreatureSpellTarget::Unit(source_guid),
+            interrupt_previous: false,
+            admission: crate::spell::CreatureSpellCasterAdmission::Living,
+        },
+    )?;
+    let cooldown_secs = trap_cooldown_secs(trap.cooldown_secs);
+    let ready_at = ctx
+        .timestamp
+        .checked_add(TimeDuration::from_micros(
+            i64::from(cooldown_secs) * 1_000_000,
+        ))
+        .unwrap_or(ctx.timestamp);
+    let cooldowns = ctx.db.game_gameobject_trap_cooldown();
+    let row = GameObjectTrapCooldown {
+        go_guid,
+        map_id: object.map_id,
+        instance_id: object.instance_id,
+        ready_at,
+    };
+    if cooldowns.go_guid().find(go_guid).is_some() {
+        cooldowns.go_guid().update(row);
+    } else {
+        cooldowns.insert(row);
+    }
+    Ok(())
+}
+
+fn trap_cooldown_secs(source_cooldown_secs: u32) -> u32 {
+    if source_cooldown_secs == 0 {
+        4
+    } else {
+        source_cooldown_secs
+    }
+}
+
+pub(crate) fn clear_relay_trap_cooldowns_for_instance(ctx: &ReducerContext, instance_id: u64) {
+    let cooldowns = ctx.db.game_gameobject_trap_cooldown();
+    for row in cooldowns
+        .by_instance()
+        .filter(&instance_id)
+        .collect::<Vec<_>>()
+    {
+        cooldowns.go_guid().delete(row.go_guid);
+    }
 }
 
 /// Pure DOOR/BUTTON open/closed TOGGLE (ctx-free, unit-tested): the same binary `state` field a CHEST
@@ -1085,6 +1210,13 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_trap_uses_the_source_default_only_for_zero_cooldown() {
+        assert_eq!(trap_cooldown_secs(0), 4);
+        assert_eq!(trap_cooldown_secs(1), 1);
+        assert_eq!(trap_cooldown_secs(30), 30);
+    }
     use crate::skill::{next_skill, skill_line, APPRENTICE_CAP};
 
     /// The GATHER type id is wire-facing (it rides into the client's UpdateGameObject `type_id`), so guard

@@ -251,6 +251,8 @@ pub(crate) struct Sensor {
     pub would_rout: bool,
     /// Stunned, polymorphed or feared. It cannot act, so it neither pulls nor answers a call.
     pub cannot_act: bool,
+    /// The authored EventAI reaction policy for sight pulls and pack assistance.
+    pub react_state: crate::creatures::CreatureReactState,
 }
 
 /// Why a creature entered a fight, as the world hook reports it.
@@ -942,7 +944,10 @@ fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> (Vec<Called>, usize
     let sensors = sensing_order(w, active);
     let mut called = Vec::new();
     for s in &sensors {
-        if s.would_rout || s.cannot_act {
+        if s.would_rout
+            || s.cannot_act
+            || s.react_state != crate::creatures::CreatureReactState::Aggressive
+        {
             continue;
         }
         let Some(victim) = nearest_noticed(w, s, &targets) else {
@@ -1017,7 +1022,10 @@ fn assist<W: EngageSink>(w: &mut W, active: &HashSet<u64>, mut calls: Vec<Called
     let neighbors = sensing_order(w, active);
     let mut answered = Vec::new();
     for n in &neighbors {
-        if n.would_rout || n.cannot_act {
+        if n.would_rout
+            || n.cannot_act
+            || n.react_state == crate::creatures::CreatureReactState::Passive
+        {
             continue;
         }
         let call = calls.iter().find(|c| {

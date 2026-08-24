@@ -1,9 +1,11 @@
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
+use crate::creatures::tick::game_creature_spline;
+
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_template,
-    game_faction_template, game_gameobject, game_gameobject_template, game_spell,
-    game_world_entity,
+    game_faction_template, game_gameobject, game_gameobject_template, game_gameobject_trap,
+    game_gossip_menu_profile, game_spell, game_world_entity, game_world_state_name,
 };
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,10 +81,7 @@ pub struct RelaySpawnCreature {
     pub run_by_default: bool,
 }
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
-pub struct RelayActivateObject {
-    pub animation_id: u32,
-    pub custom_animation_id: u32,
-}
+pub struct RelayActivateObject;
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RelayForcedMovement {
     Inherit,
@@ -109,6 +108,7 @@ pub struct RelayPatrolMovement {
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
 pub enum RelayMovement {
     Stationary,
+    RandomAroundHome(RelayRandomMovement),
     RandomAroundCurrent(RelayRandomMovement),
     Patrol(RelayPatrolMovement),
 }
@@ -162,7 +162,7 @@ pub struct RelayDynamicMove {
     pub maximum_distance_yd: u32,
     pub fixed_distance_yd: u32,
     pub movement: RelayForcedMovement,
-    pub movement_flags: u32,
+    pub arrival_relay_id: u32,
 }
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
 pub struct RelayEquipment {
@@ -174,7 +174,6 @@ pub struct RelayEquipment {
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
 pub struct RelayTemplateUpdate {
     pub entry: u32,
-    pub team: u32,
 }
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
 pub struct RelayGossipMenu {
@@ -182,8 +181,8 @@ pub struct RelayGossipMenu {
 }
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
 pub struct RelayWorldState {
-    pub world_state_id: u32,
-    pub value: u32,
+    pub world_state_id: i32,
+    pub value: i32,
 }
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
 pub struct RelayStart {
@@ -296,6 +295,34 @@ pub struct RelayContinuation {
     pub scheduled_id: u64,
     pub scheduled_at: ScheduleAt,
     pub run_id: u64,
+}
+
+/// A dynamic movement completion that starts another relay from the same catalogue. Module only.
+#[table(
+    accessor = game_creature_ai_relay_arrival,
+    index(accessor = by_instance, btree(columns = [instance_id])),
+    index(accessor = by_parent_run, btree(columns = [parent_run_id])),
+    index(accessor = by_source, btree(columns = [source_guid])),
+    scheduled(resume_relay_arrival)
+)]
+pub struct RelayArrival {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub source_guid: u64,
+    pub selected_guid: u64,
+    pub parent_run_id: u64,
+    pub relay_id: u32,
+    pub catalogue_version: u64,
+    pub lifetime: RelayLifetime,
+    pub saved_random_state: u64,
+    pub spline_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 
 #[reducer]
@@ -418,6 +445,52 @@ fn validate_definition_dependencies(
                         faction.faction_template,
                     ));
                 }
+                RelayInstruction::UpdateCreatureTemplate(update)
+                    if ctx
+                        .db
+                        .game_creature_template()
+                        .entry()
+                        .find(update.entry)
+                        .is_none() =>
+                {
+                    return Err(missing_dependency(
+                        definition,
+                        step,
+                        "creature_template",
+                        update.entry,
+                    ));
+                }
+                RelayInstruction::SetGossipMenu(menu)
+                    if ctx
+                        .db
+                        .game_gossip_menu_profile()
+                        .menu_id()
+                        .find(menu.menu_id)
+                        .is_none() =>
+                {
+                    return Err(missing_dependency(
+                        definition,
+                        step,
+                        "gossip_menu_profile",
+                        menu.menu_id,
+                    ));
+                }
+                RelayInstruction::SetWorldState(state)
+                    if ctx
+                        .db
+                        .game_world_state_name()
+                        .variable_id()
+                        .find(state.world_state_id)
+                        .is_none() =>
+                {
+                    return Err(format!(
+                        "relay dependency path {} -> row:{} -> world_state:{} is missing",
+                        definition.relay_id, step.source_order, state.world_state_id
+                    ));
+                }
+                RelayInstruction::ActivateObject(_) => {
+                    validate_trap_dependency(ctx, definition, step)?;
+                }
                 _ => {}
             }
             validate_subject_dependency(ctx, definition, step, step.participants.source)?;
@@ -426,6 +499,52 @@ fn validate_definition_dependencies(
                 validate_subject_dependency(ctx, definition, step, terminate.subject)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_trap_dependency(
+    ctx: &ReducerContext,
+    definition: &RelayDefinition,
+    step: &RelayStep,
+) -> Result<(), String> {
+    let entry = match step.participants.target {
+        RelaySubject::NearbyGameObject(nearby) => nearby.entry,
+        RelaySubject::GameObjectGuid(guid) => ctx
+            .db
+            .game_gameobject()
+            .guid()
+            .find(guid)
+            .map(|object| object.template_entry)
+            .ok_or_else(|| {
+                format!(
+                    "relay dependency path {} -> row:{} -> gameobject-guid:{guid} is missing",
+                    definition.relay_id, step.source_order
+                )
+            })?,
+        subject => {
+            return Err(format!(
+                "relay {} step {} activate-object needs a typed gameobject target, got {subject:?}",
+                definition.relay_id, step.source_order
+            ));
+        }
+    };
+    let template = ctx
+        .db
+        .game_gameobject_template()
+        .entry()
+        .find(entry)
+        .filter(|template| template.type_id == crate::gameobject::go_type::TRAP)
+        .ok_or_else(|| missing_dependency(definition, step, "trap_template", entry))?;
+    let trap = ctx
+        .db
+        .game_gameobject_trap()
+        .entry()
+        .find(template.entry)
+        .filter(|trap| trap.spell_id != 0)
+        .ok_or_else(|| missing_dependency(definition, step, "trap_metadata", entry))?;
+    if ctx.db.game_spell().spell_id().find(trap.spell_id).is_none() {
+        return Err(missing_dependency(definition, step, "spell", trap.spell_id));
     }
     Ok(())
 }
@@ -505,14 +624,28 @@ fn validate_definition_graph(
             validate_step_capability(relay_id, step)?;
             *step_count += 1;
             *scheduled_count += usize::from(step.offset_ms != 0);
+            *scheduled_count += usize::from(matches!(
+                &step.instruction,
+                RelayInstruction::MoveDynamic(RelayDynamicMove {
+                    arrival_relay_id: 1..,
+                    ..
+                })
+            ));
             if *step_count > 4_096 {
                 return Err("relay graph exceeds the 4096-step budget".to_string());
             }
             if *scheduled_count > 2_048 {
                 return Err("relay graph exceeds the 2048 scheduled-work budget".to_string());
             }
-            if let RelayInstruction::StartRelay(start) = &step.instruction {
-                visit(graph, start.relay_id, path, step_count, scheduled_count)?;
+            let dependency = match &step.instruction {
+                RelayInstruction::StartRelay(start) => Some(start.relay_id),
+                RelayInstruction::MoveDynamic(movement) => {
+                    (movement.arrival_relay_id != 0).then_some(movement.arrival_relay_id)
+                }
+                _ => None,
+            };
+            if let Some(dependency) = dependency {
+                visit(graph, dependency, path, step_count, scheduled_count)?;
             }
         }
         path.pop();
@@ -561,6 +694,17 @@ fn validate_step_capability(relay_id: u32, step: &RelayStep) -> Result<(), Strin
                 step.source_order
             ))
         }
+        RelayInstruction::ActivateObject(_)
+            if !matches!(
+                step.participants.target,
+                RelaySubject::GameObjectGuid(_) | RelaySubject::NearbyGameObject(_)
+            ) =>
+        {
+            Err(format!(
+                "relay {relay_id} step {} activate-object needs a typed gameobject target",
+                step.source_order
+            ))
+        }
         RelayInstruction::CastSpell(cast)
             if cast.spell_ids.is_empty() || cast.spell_ids.contains(&0) =>
         {
@@ -604,18 +748,6 @@ fn validate_step_capability(relay_id: u32, step: &RelayStep) -> Result<(), Strin
                 step.source_order
             ))
         }
-        RelayInstruction::MoveDynamic(movement) if movement.movement_flags != 0 => Err(format!(
-            "relay {relay_id} step {} needs unavailable dynamic movement flags {:#x}",
-            step.source_order, movement.movement_flags
-        )),
-        instruction @ (RelayInstruction::ActivateObject(_)
-        | RelayInstruction::SetActive(_)
-        | RelayInstruction::UpdateCreatureTemplate(_)
-        | RelayInstruction::SetGossipMenu(_)
-        | RelayInstruction::SetWorldState(_)) => Err(format!(
-            "relay {relay_id} step {} has no gameplay authority binding for {instruction:?}",
-            step.source_order
-        )),
         _ => Ok(()),
     }
 }
@@ -765,12 +897,7 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
                 orientation: parse_f32(o)?,
             }))
         }
-        ["activate-object", animation, custom] => {
-            Ok(RelayInstruction::ActivateObject(RelayActivateObject {
-                animation_id: parse_u32(animation)?,
-                custom_animation_id: parse_u32(custom)?,
-            }))
-        }
+        ["activate-object", "use"] => Ok(RelayInstruction::ActivateObject(RelayActivateObject)),
         ["cast-spell", spells, start] => Ok(RelayInstruction::CastSpell(RelayCastSpell {
             spell_ids: spells.split('.').map(parse_u32).collect::<Result<_, _>>()?,
             triggered: match *start {
@@ -791,6 +918,14 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
         ["set-movement", "random-current", radius, forced] => {
             Ok(RelayInstruction::SetMovement(RelaySetMovement {
                 idle: RelayMovement::RandomAroundCurrent(RelayRandomMovement {
+                    radius_yd: parse_u32(radius)?,
+                }),
+                forced: parse_forced_movement(forced)?,
+            }))
+        }
+        ["set-movement", "random-home", radius, forced] => {
+            Ok(RelayInstruction::SetMovement(RelaySetMovement {
+                idle: RelayMovement::RandomAroundHome(RelayRandomMovement {
                     radius_yd: parse_u32(radius)?,
                 }),
                 forced: parse_forced_movement(forced)?,
@@ -837,13 +972,13 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
         })),
         ["set-facing", "target"] => Ok(RelayInstruction::SetFacing(RelayFacing::Target)),
         ["set-facing", "reset"] => Ok(RelayInstruction::SetFacing(RelayFacing::Reset)),
-        ["move-dynamic", minimum, maximum, fixed, movement, flags] => {
+        ["move-dynamic", minimum, maximum, fixed, movement, arrival_relay] => {
             Ok(RelayInstruction::MoveDynamic(RelayDynamicMove {
                 minimum_distance_yd: parse_u32(minimum)?,
                 maximum_distance_yd: parse_u32(maximum)?,
                 fixed_distance_yd: parse_u32(fixed)?,
                 movement: parse_forced_movement(movement)?,
-                movement_flags: parse_u32(flags)?,
+                arrival_relay_id: parse_u32(arrival_relay)?,
             }))
         }
         ["despawn-gameobject", delay] => Ok(RelayInstruction::DespawnGameObject(RelayDelay {
@@ -857,10 +992,13 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
                 ranged: parse_i32(ranged)?,
             }))
         }
-        ["update-creature-template", entry, team] => Ok(RelayInstruction::UpdateCreatureTemplate(
+        ["update-creature-template", entry] => Ok(RelayInstruction::UpdateCreatureTemplate(
             RelayTemplateUpdate {
-                entry: parse_u32(entry)?,
-                team: parse_u32(team)?,
+                entry: entry
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|entry| *entry != 0)
+                    .ok_or_else(|| format!("invalid relay creature template: {entry}"))?,
             },
         )),
         ["modify-unit-flags", flags, operation] => {
@@ -873,8 +1011,8 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
             menu_id: parse_u32(menu)?,
         })),
         ["set-world-state", id, value] => Ok(RelayInstruction::SetWorldState(RelayWorldState {
-            world_state_id: parse_u32(id)?,
-            value: parse_u32(value)?,
+            world_state_id: parse_i32(id)?,
+            value: parse_i32(value)?,
         })),
         ["start-relay", relay] => Ok(RelayInstruction::StartRelay(RelayStart {
             relay_id: parse_u32(relay)?,
@@ -1209,7 +1347,13 @@ fn apply_leaf_for_pair(
                 .guid()
                 .find(guid)
                 .ok_or_else(|| format!("relay talk subject {guid} is missing"))?;
-            crate::chat::apply_send_chat(ctx, source, line.chat_type, line.language_id, line.male_text)
+            crate::chat::apply_send_chat(
+                ctx,
+                source,
+                line.chat_type,
+                line.language_id,
+                line.male_text,
+            )
         }
         RelayInstruction::Emote(emote) => {
             let emote_id = choose(&emote.emote_ids, &mut run.saved_random_state);
@@ -1306,12 +1450,14 @@ fn apply_leaf_for_pair(
         RelayInstruction::SetMovement(movement) => {
             super::movement::apply_relay_idle(ctx, guid, movement.idle, movement.forced)
         }
-        RelayInstruction::SetFaction(faction) => crate::creatures::presentation::apply_relay_faction(
-            ctx,
-            guid,
-            faction.faction_template,
-            faction.restoration == RelayFactionRestoration::OnCombatStopOrRespawn,
-        ),
+        RelayInstruction::SetFaction(faction) => {
+            crate::creatures::presentation::apply_relay_faction(
+                ctx,
+                guid,
+                faction.faction_template,
+                faction.restoration == RelayFactionRestoration::OnCombatStopOrRespawn,
+            )
+        }
         RelayInstruction::SetRun(enabled) => super::movement::apply_relay_walking(
             ctx,
             guid,
@@ -1333,18 +1479,12 @@ fn apply_leaf_for_pair(
                 change.operation,
             )
         }
-        RelayInstruction::PauseWaypoints(paused) => super::movement::apply_relay_patrol_pause(
-            ctx,
-            guid,
-            paused.enabled,
-        ),
-        RelayInstruction::SendAiEvent(event) => super::edges::send_relay_ai_event(
-            ctx,
-            guid,
-            target_guid,
-            event.kind,
-            event.radius_yd,
-        ),
+        RelayInstruction::PauseWaypoints(paused) => {
+            super::movement::apply_relay_patrol_pause(ctx, guid, paused.enabled)
+        }
+        RelayInstruction::SendAiEvent(event) => {
+            super::edges::send_relay_ai_event(ctx, guid, target_guid, event.kind, event.radius_yd)
+        }
         RelayInstruction::SetFacing(facing) => super::movement::apply_relay_facing(
             ctx,
             guid,
@@ -1354,6 +1494,9 @@ fn apply_leaf_for_pair(
             },
         ),
         RelayInstruction::MoveDynamic(dynamic) => {
+            if !dynamic_move_should_start(crate::combat::is_engaged(ctx, guid)) {
+                return Ok(());
+            }
             let (target_x, target_y, target_z) = participant_position(ctx, target_guid)?;
             let source = ctx
                 .db
@@ -1369,6 +1512,12 @@ fn apply_leaf_for_pair(
                 dynamic.fixed_distance_yd,
                 &mut run.saved_random_state,
             );
+            let previous_spline_id = ctx
+                .db
+                .game_creature_spline()
+                .guid()
+                .find(guid)
+                .map(|spline| spline.spline_id);
             crate::encounter::move_to_point(
                 ctx,
                 guid,
@@ -1377,6 +1526,17 @@ fn apply_leaf_for_pair(
                 z,
                 relay_runs(ctx, guid, dynamic.movement),
             )?;
+            if dynamic.arrival_relay_id != 0 {
+                schedule_arrival(
+                    ctx,
+                    run,
+                    guid,
+                    target_guid,
+                    dynamic.arrival_relay_id,
+                    (x, y, z),
+                    previous_spline_id,
+                )?;
+            }
             Ok(())
         }
         RelayInstruction::DespawnGameObject(_) => {
@@ -1397,18 +1557,155 @@ fn apply_leaf_for_pair(
                 change.operation,
             )
         }
-        RelayInstruction::ActivateObject(_)
-        | RelayInstruction::SetActive(_)
-        | RelayInstruction::UpdateCreatureTemplate(_)
-        | RelayInstruction::SetGossipMenu(_)
-        | RelayInstruction::SetWorldState(_) => Err(format!(
-            "relay {} reached a typed capability without a gameplay authority binding: {instruction:?}",
-            run.relay_id
-        )),
+        RelayInstruction::ActivateObject(_) => {
+            crate::gameobject::activate_trap_from_relay(ctx, guid, target_guid)
+        }
+        RelayInstruction::SetActive(active) => {
+            super::mobility::set_active_object(ctx, guid, active.enabled)
+        }
+        RelayInstruction::UpdateCreatureTemplate(update) => {
+            crate::creatures::presentation::update_template_from_relay(ctx, guid, update.entry)
+        }
+        RelayInstruction::SetGossipMenu(menu) => {
+            crate::creatures::set_creature_gossip_menu(ctx, guid, Some(menu.menu_id))
+        }
+        RelayInstruction::SetWorldState(world_state) => crate::world::set_relay_world_state(
+            ctx,
+            guid,
+            world_state.world_state_id,
+            world_state.value,
+        ),
         RelayInstruction::TerminateInvocation(_) | RelayInstruction::StartRelay(_) => {
             Err("relay control instruction reached leaf dispatch".to_string())
         }
     }
+}
+
+fn schedule_arrival(
+    ctx: &ReducerContext,
+    run: &mut RelayRun,
+    source_guid: u64,
+    selected_guid: u64,
+    relay_id: u32,
+    destination: (f32, f32, f32),
+    previous_spline_id: Option<u32>,
+) -> Result<(), String> {
+    let source = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(source_guid)
+        .ok_or_else(|| format!("relay arrival mover {source_guid} is unavailable"))?;
+    let spline = ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(source_guid)
+        .filter(|spline| Some(spline.spline_id) != previous_spline_id);
+    let (child_state, parent_state) = next_random(run.saved_random_state);
+    run.saved_random_state = parent_state;
+    let (scheduled_at, spline_id) = spline.map_or((ctx.timestamp, 0), |spline| {
+        let micros = i64::from(spline.dur_ms).saturating_mul(1_000);
+        (
+            spline
+                .start_micros
+                .checked_add(micros as u64)
+                .and_then(|value| i64::try_from(value).ok())
+                .map(Timestamp::from_micros_since_unix_epoch)
+                .unwrap_or(ctx.timestamp),
+            spline.spline_id,
+        )
+    });
+    ctx.db
+        .game_creature_ai_relay_arrival()
+        .insert(RelayArrival {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(scheduled_at),
+            map_id: source.map_id,
+            instance_id: source.instance_id,
+            source_guid,
+            selected_guid,
+            parent_run_id: run.id,
+            relay_id,
+            catalogue_version: run.catalogue_version,
+            lifetime: run.lifetime,
+            saved_random_state: child_state,
+            spline_id,
+            x: destination.0,
+            y: destination.1,
+            z: destination.2,
+        });
+    Ok(())
+}
+
+fn arrival_is_current(
+    source: &crate::WorldEntity,
+    spline: Option<&crate::creatures::CreatureSpline>,
+    arrival: &RelayArrival,
+) -> bool {
+    arrival_motion_matches(
+        source.dead,
+        (source.map_id, source.instance_id),
+        (source.x, source.y, source.z),
+        spline.map(|spline| spline.spline_id),
+        (arrival.map_id, arrival.instance_id),
+        (arrival.x, arrival.y, arrival.z),
+        arrival.spline_id,
+    )
+}
+
+fn arrival_motion_matches(
+    source_dead: bool,
+    source_partition: (u32, u64),
+    source_position: (f32, f32, f32),
+    current_spline_id: Option<u32>,
+    arrival_partition: (u32, u64),
+    destination: (f32, f32, f32),
+    arrival_spline_id: u32,
+) -> bool {
+    !source_dead
+        && source_partition == arrival_partition
+        && distance_sq(source_position, destination) <= f32::EPSILON
+        && (arrival_spline_id == 0
+            || current_spline_id.is_none()
+            || current_spline_id == Some(arrival_spline_id))
+}
+
+/// Source dynamic movement is accepted but does not replace an active combat movement generator.
+fn dynamic_move_should_start(engaged: bool) -> bool {
+    !engaged
+}
+
+#[reducer]
+pub fn resume_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
+    if ctx.sender() != ctx.database_identity() {
+        return;
+    }
+    let Some(source) = ctx.db.game_world_entity().guid().find(arrival.source_guid) else {
+        reap_unused_definitions(ctx);
+        return;
+    };
+    let spline = ctx
+        .db
+        .game_creature_spline()
+        .guid()
+        .find(arrival.source_guid);
+    if !arrival_is_current(&source, spline.as_ref(), &arrival) {
+        reap_unused_definitions(ctx);
+        return;
+    }
+    if let Err(error) = start_relay(
+        ctx,
+        arrival.relay_id,
+        arrival.source_guid,
+        arrival.selected_guid,
+        arrival.saved_random_state,
+        0,
+        Some(arrival.catalogue_version),
+    ) {
+        spacetimedb::log::error!("relay arrival failed: {error}");
+    }
+    reap_unused_definitions(ctx);
 }
 
 fn choose<T: Copy>(choices: &[T], state: &mut u64) -> T {
@@ -1683,6 +1980,10 @@ fn cancel_run_tree(ctx: &ReducerContext, run_id: u64) {
     for child in children {
         cancel_run_tree(ctx, child);
     }
+    let arrivals = ctx.db.game_creature_ai_relay_arrival();
+    for row in arrivals.by_parent_run().filter(&run_id).collect::<Vec<_>>() {
+        arrivals.scheduled_id().delete(row.scheduled_id);
+    }
     remove_run(ctx, run_id);
 }
 
@@ -1697,10 +1998,30 @@ pub(crate) fn cancel_relay_runs_for_instance(ctx: &ReducerContext, instance_id: 
     for run_id in run_ids {
         cancel_run_tree(ctx, run_id);
     }
+    let arrivals = ctx.db.game_creature_ai_relay_arrival();
+    for row in arrivals
+        .by_instance()
+        .filter(&instance_id)
+        .collect::<Vec<_>>()
+    {
+        arrivals.scheduled_id().delete(row.scheduled_id);
+    }
+    crate::gameobject::clear_relay_trap_cooldowns_for_instance(ctx, instance_id);
+    crate::creatures::clear_gossip_menu_overrides_for_instance(ctx, instance_id);
+    crate::world::clear_relay_world_states_for_instance(ctx, instance_id);
     reap_unused_definitions(ctx);
 }
 
 pub(crate) fn cancel_relay_runs_for_source(ctx: &ReducerContext, source_guid: u64) {
+    let arrivals = ctx.db.game_creature_ai_relay_arrival();
+    for row in arrivals
+        .by_source()
+        .filter(&source_guid)
+        .filter(|row| source_lifetime_ends(row.lifetime))
+        .collect::<Vec<_>>()
+    {
+        arrivals.scheduled_id().delete(row.scheduled_id);
+    }
     let run_ids = ctx
         .db
         .game_creature_ai_relay_run()
@@ -1722,6 +2043,12 @@ pub(crate) fn reap_unused_definitions(ctx: &ReducerContext) {
         .iter()
         .map(|run| run.catalogue_version)
         .collect::<std::collections::HashSet<_>>();
+    active_catalogues.extend(
+        ctx.db
+            .game_creature_ai_relay_arrival()
+            .iter()
+            .map(|arrival| arrival.catalogue_version),
+    );
     for start in ctx
         .db
         .game_creature_ai_definition()
@@ -1954,20 +2281,86 @@ mod tests {
     }
 
     #[test]
-    fn loader_refuses_unbound_leaf_capabilities() {
-        let graph = std::collections::BTreeMap::from([(
-            1,
-            vec![step(
+    fn loader_accepts_activate_object_owner() {
+        let mut activate = step(0, RelayInstruction::ActivateObject(RelayActivateObject));
+        activate.participants.target = RelaySubject::NearbyGameObject(RelayNearby {
+            entry: 180_391,
+            radius_yd: 5,
+        });
+        let graph = std::collections::BTreeMap::from([(1, vec![activate])]);
+        assert!(validate_definition_graph(&graph).is_ok());
+    }
+
+    #[test]
+    fn arrival_relays_are_graph_dependencies_and_scheduled_work() {
+        let arrival = |relay_id| {
+            step(
                 0,
-                RelayInstruction::ActivateObject(RelayActivateObject {
-                    animation_id: 0,
-                    custom_animation_id: 0,
+                RelayInstruction::MoveDynamic(RelayDynamicMove {
+                    minimum_distance_yd: 0,
+                    maximum_distance_yd: 0,
+                    fixed_distance_yd: 1,
+                    movement: RelayForcedMovement::Run,
+                    arrival_relay_id: relay_id,
                 }),
-            )],
-        )]);
-        assert!(validate_definition_graph(&graph)
+            )
+        };
+        let missing = std::collections::BTreeMap::from([(1, vec![arrival(20)])]);
+        assert!(validate_definition_graph(&missing)
             .unwrap_err()
-            .contains("no gameplay authority binding"));
+            .contains("dependency 20 is missing"));
+
+        let cycle =
+            std::collections::BTreeMap::from([(1, vec![arrival(20)]), (20, vec![arrival(1)])]);
+        assert!(validate_definition_graph(&cycle)
+            .unwrap_err()
+            .contains("relay cycle: 1 -> 20 -> 1"));
+
+        let mut scheduled_steps = vec![arrival(2)];
+        scheduled_steps.extend(vec![emote(1); 2_048]);
+        let scheduled =
+            std::collections::BTreeMap::from([(1, scheduled_steps), (2, vec![emote(0)])]);
+        assert!(validate_definition_graph(&scheduled)
+            .unwrap_err()
+            .contains("scheduled-work budget"));
+    }
+
+    #[test]
+    fn closure_wire_shapes_are_source_specific() {
+        assert_eq!(
+            parse_instruction("activate-object:use").unwrap(),
+            RelayInstruction::ActivateObject(RelayActivateObject)
+        );
+        assert!(parse_instruction("activate-object:0:0").is_err());
+        assert_eq!(
+            parse_instruction("update-creature-template:12299").unwrap(),
+            RelayInstruction::UpdateCreatureTemplate(RelayTemplateUpdate { entry: 12299 })
+        );
+        assert!(parse_instruction("update-creature-template:12299:0").is_err());
+        assert_eq!(
+            parse_instruction("set-movement:random-home:20:walk").unwrap(),
+            RelayInstruction::SetMovement(RelaySetMovement {
+                idle: RelayMovement::RandomAroundHome(RelayRandomMovement { radius_yd: 20 }),
+                forced: RelayForcedMovement::Walk,
+            })
+        );
+        assert_eq!(
+            parse_instruction("move-dynamic:0:0:1:run:20").unwrap(),
+            RelayInstruction::MoveDynamic(RelayDynamicMove {
+                minimum_distance_yd: 0,
+                maximum_distance_yd: 0,
+                fixed_distance_yd: 1,
+                movement: RelayForcedMovement::Run,
+                arrival_relay_id: 20,
+            })
+        );
+        assert_eq!(
+            parse_instruction("set-world-state:-1:-2").unwrap(),
+            RelayInstruction::SetWorldState(RelayWorldState {
+                world_state_id: -1,
+                value: -2,
+            })
+        );
     }
 
     #[test]
@@ -2031,6 +2424,63 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_movement_preserves_an_active_combat_generator() {
+        assert!(dynamic_move_should_start(false));
+        assert!(!dynamic_move_should_start(true));
+    }
+
+    #[test]
+    fn arrival_relay_requires_its_destination_and_no_active_replacement_leg() {
+        let partition = (1, 42);
+        let destination = (3.0, 4.0, 5.0);
+        assert!(arrival_motion_matches(
+            false,
+            partition,
+            destination,
+            Some(7),
+            partition,
+            destination,
+            7,
+        ));
+        assert!(arrival_motion_matches(
+            false,
+            partition,
+            destination,
+            None,
+            partition,
+            destination,
+            7,
+        ));
+        assert!(!arrival_motion_matches(
+            false,
+            partition,
+            destination,
+            Some(8),
+            partition,
+            destination,
+            7,
+        ));
+        assert!(!arrival_motion_matches(
+            false,
+            partition,
+            (0.0, 0.0, 0.0),
+            Some(7),
+            partition,
+            destination,
+            7,
+        ));
+        assert!(!arrival_motion_matches(
+            true,
+            partition,
+            destination,
+            Some(7),
+            partition,
+            destination,
+            7,
+        ));
+    }
+
+    #[test]
     fn teardown_and_failure_paths_keep_the_durable_cleanup_wired() {
         let relay = include_str!("relay.rs");
         assert!(
@@ -2039,6 +2489,7 @@ mod tests {
         assert!(relay.contains(
             "cancel_run_tree(ctx, continuation.run_id);\n        reap_unused_definitions(ctx);"
         ));
+        assert!(relay.contains("arrivals.by_parent_run().filter(&run_id)"));
         assert!(include_str!("../../instance.rs")
             .contains("crate::creatures::cancel_relay_runs_for_instance(ctx, instance_id)"));
         assert!(include_str!("../tick/lifecycle.rs")

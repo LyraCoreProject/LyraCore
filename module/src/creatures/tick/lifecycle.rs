@@ -48,6 +48,7 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     crate::creatures::cancel_relay_runs_for_source(ctx, guid);
     crate::creatures::reset_creature_lifecycle(ctx, guid);
     crate::creatures::drop_summon_expiry(ctx, guid);
+    let _ = crate::creatures::set_creature_gossip_menu(ctx, guid, None);
     crate::quest::clear_creature_tap(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid); // the LIVE leg row (perf 2.3)
     crate::motion::drop_pending(ctx, guid); // #461: the staged, not-yet-republished payload too

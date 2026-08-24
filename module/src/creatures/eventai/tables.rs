@@ -121,6 +121,12 @@ pub struct CreatureAiState {
     pub ranged_posture_active: bool,
     #[default(0u64)]
     pub definition_revision: u64,
+    /// Source `SetActiveObjectState`: an active creature remains in the cycle outside player cells.
+    #[default(false)]
+    pub active_object: bool,
+    /// Passive 0, defensive 1, aggressive 2. Fresh EventAI creatures are aggressive.
+    #[default(2u8)]
+    pub react_state: u8,
 }
 
 /// Timing and consumption state for one creature and one effective source rule. Module only.

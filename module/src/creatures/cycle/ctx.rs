@@ -280,7 +280,11 @@ impl IdleSink for CtxWorld<'_> {
         eventai::movement::intent(self.ctx, guid)
             .filter(|intent| {
                 intent.idle_active
-                    && intent.idle == AuthoredIdleMovement::RandomAroundCurrentPosition
+                    && matches!(
+                        intent.idle,
+                        AuthoredIdleMovement::RandomAroundHomePosition
+                            | AuthoredIdleMovement::RandomAroundCurrentPosition
+                    )
             })
             .map_or(super::WANDER_RADIUS, |intent| intent.random_radius_yd)
     }
@@ -297,6 +301,9 @@ impl IdleSink for CtxWorld<'_> {
                 wanders: true,
             });
         }
+        let authored_home = eventai::movement::intent(self.ctx, guid).is_some_and(|intent| {
+            intent.idle_active && intent.idle == AuthoredIdleMovement::RandomAroundHomePosition
+        });
         self.ctx
             .db
             .game_creature_spawn()
@@ -308,7 +315,7 @@ impl IdleSink for CtxWorld<'_> {
                     y: spawn.y,
                     z: spawn.z,
                 },
-                wanders: spawn.movement_type == crate::creatures::MOVEMENT_RANDOM,
+                wanders: authored_home || spawn.movement_type == crate::creatures::MOVEMENT_RANDOM,
             })
     }
     fn return_home_of(&self, guid: u64) -> Option<Home> {
@@ -434,6 +441,7 @@ impl EngageSink for CtxWorld<'_> {
                 detect_range_mod: crate::spell::detect_range_mod(self.ctx, c.guid),
                 would_rout: tick::rout_eligible(self.ctx, &c),
                 cannot_act: crate::spell::is_action_blocked(self.ctx, c.guid),
+                react_state: crate::creatures::react_state(self.ctx, c.guid),
             })
             .collect()
     }

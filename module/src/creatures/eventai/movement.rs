@@ -12,6 +12,7 @@ use crate::{game_creature_spawn, game_creature_waypoint, game_world_entity};
 pub enum AuthoredIdleMovement {
     InheritSpawn,
     Stationary,
+    RandomAroundHomePosition,
     RandomAroundCurrentPosition,
     Patrol,
 }
@@ -111,6 +112,10 @@ pub(crate) fn apply(
             intent.path_id = path_id;
             intent.idle = match idle {
                 IdleMovementIntent::Stationary => AuthoredIdleMovement::Stationary,
+                IdleMovementIntent::RandomAroundHomePosition(random) => {
+                    intent.random_radius_yd = random.radius_yd as f32;
+                    AuthoredIdleMovement::RandomAroundHomePosition
+                }
                 IdleMovementIntent::RandomAroundCurrentPosition(random) => {
                     intent.anchor_x = creature.x;
                     intent.anchor_y = creature.y;
@@ -196,6 +201,11 @@ pub(crate) fn apply_relay_idle(
     let revision = super::current_definition_revision(ctx, creature_guid);
     let operation = match idle {
         RelayMovement::Stationary => MovementOperation::ReplaceIdle(IdleMovementIntent::Stationary),
+        RelayMovement::RandomAroundHome(super::relay::RelayRandomMovement { radius_yd }) => {
+            MovementOperation::ReplaceIdle(IdleMovementIntent::RandomAroundHomePosition(
+                super::RandomMovementIntent { radius_yd },
+            ))
+        }
         RelayMovement::RandomAroundCurrent(super::relay::RelayRandomMovement { radius_yd }) => {
             MovementOperation::ReplaceIdle(IdleMovementIntent::RandomAroundCurrentPosition(
                 super::RandomMovementIntent { radius_yd },

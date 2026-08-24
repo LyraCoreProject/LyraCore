@@ -355,6 +355,23 @@ pub(super) fn execute<W: EventAiWorld>(
                 ActionResult::Refused
             }
         }
+        CreatureInstruction::RandomEmote(emote) => {
+            let Some(emote_id) = emote
+                .emote_ids
+                .get(choice as usize % emote.emote_ids.len())
+                .copied()
+            else {
+                return ActionResult::Refused;
+            };
+            if emote_id < 0 {
+                return ActionResult::Applied;
+            }
+            if world.eventai_deliver_emote(context.creature_guid, emote_id as u32, 0) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
         CreatureInstruction::FleeForAssist => {
             let Some(rout_ends_ms) = world.eventai_rout_ends_ms(context.creature_guid) else {
                 return ActionResult::Refused;

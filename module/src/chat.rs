@@ -16,13 +16,16 @@ use lyracore_shared::group::{err as group_err, event_kind as group_event_kind};
 // (`game_character_contact`) is generated there, so it's in scope for `add_friend`/etc. without a
 // `use`. Re-exported implicitly like `game_whisper_event` above.
 
-/// `game_chat_event.chat_type` discriminants for the two BROADCAST chat types this table carries.
+/// `game_chat_event.chat_type` discriminants for the broadcast chat types this table carries.
 /// Whisper and party (work-item 199) are NOT `game_chat_event` rows at all — whisper rides
 /// `game_whisper_event`, party rides `game_group_event` (`party_chat` below) — each has its own
 /// per-recipient shape that doesn't fit this broadcast table's `chat_type` byte. Guild/channel still
 /// need systems that don't exist yet, so they're rejected.
 pub const CHAT_SAY: u8 = 0;
 pub const CHAT_YELL: u8 = 1;
+/// Creature-authored text emote (`CHAT_TYPE_TEXT_EMOTE` on the source wire). It uses the same
+/// broadcast row as Say and Yell; the gateway maps the discriminant to `CHAT_MSG_MONSTER_EMOTE`.
+pub const CHAT_TEXT_EMOTE: u8 = 2;
 
 /// Max stored message length — vanilla caps client input around 255; we hard-cap to bound the row.
 const MAX_CHAT_LEN: usize = 255;
@@ -35,15 +38,15 @@ pub struct ChatEvent {
     #[auto_inc]
     pub id: u64,
     pub sender_guid: u64,
-    pub chat_type: u8, // CHAT_SAY / CHAT_YELL
+    pub chat_type: u8, // CHAT_SAY / CHAT_YELL / CHAT_TEXT_EMOTE
     pub language: u8,  // vanilla Language discriminant, echoed back to clients
     pub message: String,
     pub created_at: Timestamp,
 }
 
-/// True for the chat types this slice relays (say/yell). [pure]
+/// True for the creature broadcast chat types this slice relays. [pure]
 pub fn is_supported_chat_type(chat_type: u8) -> bool {
-    chat_type == CHAT_SAY || chat_type == CHAT_YELL
+    matches!(chat_type, CHAT_SAY | CHAT_YELL | CHAT_TEXT_EMOTE)
 }
 
 /// Trim + length-cap a chat line, returning `None` when nothing is left (so an empty/whitespace line
@@ -757,10 +760,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_say_and_yell_are_supported() {
+    fn only_named_creature_broadcast_types_are_supported() {
         assert!(is_supported_chat_type(CHAT_SAY));
         assert!(is_supported_chat_type(CHAT_YELL));
-        assert!(!is_supported_chat_type(2)); // party/guild/whisper/etc. rejected
+        assert!(is_supported_chat_type(CHAT_TEXT_EMOTE));
+        assert!(!is_supported_chat_type(3)); // party/guild/whisper/etc. rejected
         assert!(!is_supported_chat_type(255));
     }
 

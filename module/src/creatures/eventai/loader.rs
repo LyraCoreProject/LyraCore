@@ -7,20 +7,23 @@ use spacetimedb::{reducer, ReducerContext, Table};
 use super::{
     AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
     CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction,
-    CreaturePresentationInstruction, CreaturePresentationMount, DeathCondition, EmoteInstruction,
-    EvadeInstruction, EventAiRule, EventCondition, EventPredicate, ExecutionPolicy,
-    FacingCondition, FacingInstruction, FriendlyAuraSelection, FriendlyCrowdControlCondition,
-    FriendlyHealthDeficitCondition, FriendlyMissingAuraCondition, IdleMovementIntent,
-    ImmobilizationInstruction, IncrementPhaseInstruction, InstructionSelection, InstructionTarget,
-    KillCondition, MovementOperation, MovementSwitch, NotifyEncounterInstruction,
+    CreaturePresentationInstruction, CreaturePresentationMount, CreatureReactState, DeathCondition,
+    EmoteInstruction, EvadeInstruction, EventAiRule, EventCondition, EventPredicate,
+    ExecutionPolicy, FacingCondition, FacingInstruction, ForceDespawnInstruction,
+    FriendlyAuraSelection, FriendlyCrowdControlCondition, FriendlyHealthDeficitCondition,
+    FriendlyMissingAuraCondition, IdleMovementIntent, ImmobilizationInstruction,
+    IncrementPhaseInstruction, InstructionSelection, InstructionTarget, KillCondition,
+    MissingTextTemplateNoEffect, MovementOperation, MovementSwitch, NotifyEncounterInstruction,
     OutOfCombatSightCondition, PatrolIntent, PatrolPause, PercentageCondition, PhaseSet,
-    PostureAdmission, QuestTakenPredicate, RandomMovementIntent, RandomPhaseInstruction,
-    RandomPhaseRangeInstruction, RangedMode, RangedModeInstruction, RangedPostureInstruction,
-    ReceiveAiEventCondition, ReceiveEmoteCondition, RecurrencePolicy, ScaleAllThreatInstruction,
+    PostureAdmission, QuestTakenPredicate, RandomEmoteInstruction, RandomMovementIntent,
+    RandomPhaseInstruction, RandomPhaseRangeInstruction, RangedMode, RangedModeInstruction,
+    RangedPostureInstruction, ReceiveAiEventCondition, ReceiveEmoteCondition, RecurrencePolicy,
+    RemoveAuraInstruction, RemoveGuardiansInstruction, ScaleAllThreatInstruction,
     ScaleSelectedThreatInstruction, SetLethalDamageFloorInstruction, SetPhaseInstruction,
-    SpawnCondition, SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode,
-    SpellCasterRole, SpellEventCondition, SpellStartMode, SpellTargetRole, StartRelayInstruction,
-    SummonInstruction, TargetRangeCondition, TimeWindow, WalkingMode,
+    SetReactStateInstruction, SetStandStateInstruction, SpawnAtActorInstruction, SpawnCondition,
+    SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode, SpellCasterRole,
+    SpellEventCondition, SpellStartMode, SpellTargetRole, StartRelayInstruction, SummonInstruction,
+    TargetRangeCondition, ThrowAiEventInstruction, TimeWindow, WalkingMode,
 };
 use crate::creatures::presentation::NpcFlagsProjection;
 use crate::game_creature_ai_definition;
@@ -561,6 +564,18 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
             emote_id: parse_u32(emote)?,
             target: parse_target(target)?,
         })),
+        ["random-emote", emotes] => {
+            let emote_ids = emotes
+                .split('.')
+                .map(parse_i32)
+                .collect::<Result<Vec<_>, _>>()?;
+            if emote_ids.len() != 3 {
+                return Err("random-emote needs exactly three source choices".to_string());
+            }
+            Ok(CreatureInstruction::RandomEmote(RandomEmoteInstruction {
+                emote_ids,
+            }))
+        }
         ["flee"] => Ok(CreatureInstruction::FleeForAssist),
         ["help", radius] => Ok(CreatureInstruction::CallForHelp(CallForHelpInstruction {
             radius_yd: parse_u32(radius)?,
@@ -616,6 +631,56 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 target: parse_target(target)?,
             }))
         }
+        ["spawn-at-actor", entry, target, lifetime] => {
+            Ok(CreatureInstruction::SpawnAtActor(SpawnAtActorInstruction {
+                creature_entry: nonzero_u32(entry, "spawn creature entry")?,
+                target: parse_target(target)?,
+                lifetime_ms: parse_u32(lifetime)?,
+            }))
+        }
+        ["remove-aura", spell, target] => {
+            Ok(CreatureInstruction::RemoveAura(RemoveAuraInstruction {
+                spell_id: nonzero_u32(spell, "removed aura spell")?,
+                target: parse_target(target)?,
+            }))
+        }
+        ["force-despawn", delay] => {
+            Ok(CreatureInstruction::ForceDespawn(ForceDespawnInstruction {
+                delay_ms: parse_u32(delay)?,
+            }))
+        }
+        ["throw-ai-event", kind, radius, target] => {
+            Ok(CreatureInstruction::ThrowAiEvent(ThrowAiEventInstruction {
+                kind: parse_ai_event(kind)?,
+                radius_yd: parse_u32(radius)?,
+                target: parse_target(target)?,
+            }))
+        }
+        ["set-stand-state", state] => Ok(CreatureInstruction::SetStandState(
+            SetStandStateInstruction {
+                stand_state: parse_u8(state)?,
+            },
+        )),
+        ["set-react-state", state] => Ok(CreatureInstruction::SetReactState(
+            SetReactStateInstruction {
+                state: match *state {
+                    "passive" => CreatureReactState::Passive,
+                    "defensive" => CreatureReactState::Defensive,
+                    "aggressive" => CreatureReactState::Aggressive,
+                    value => return Err(format!("unknown creature react state: {value}")),
+                },
+            },
+        )),
+        ["remove-guardians", entry] => Ok(CreatureInstruction::RemoveGuardians(
+            RemoveGuardiansInstruction {
+                creature_entry: parse_u32(entry)?,
+            },
+        )),
+        ["no-effect", "missing-text-template", template] => Ok(
+            CreatureInstruction::MissingTextTemplateNoEffect(MissingTextTemplateNoEffect {
+                template_id: nonzero_u32(template, "missing text template")?,
+            }),
+        ),
         ["posture", distance, angle] => Ok(CreatureInstruction::SetRangedPosture(
             RangedPostureInstruction {
                 distance_yd: parse_u32(distance)?,
@@ -1270,5 +1335,63 @@ mod tests {
         assert!(parse_instruction("quest-event:8353:nearest-character").is_err());
         assert!(parse_instruction("cast-credit:12297:456:invoker-beneficiary").is_err());
         assert!(parse_instruction("quest-event:8353:threat-list-characters").is_err());
+    }
+
+    #[test]
+    fn canonical_profile_actions_decode_to_named_capabilities() {
+        assert_eq!(
+            parse_instruction("random-emote:11.18.0").unwrap(),
+            CreatureInstruction::RandomEmote(RandomEmoteInstruction {
+                emote_ids: vec![11, 18, 0],
+            })
+        );
+        assert!(matches!(
+            parse_instruction("spawn-at-actor:6911:opponent:10000").unwrap(),
+            CreatureInstruction::SpawnAtActor(SpawnAtActorInstruction {
+                creature_entry: 6911,
+                lifetime_ms: 10000,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_instruction("remove-aura:8909:self").unwrap(),
+            CreatureInstruction::RemoveAura(RemoveAuraInstruction { spell_id: 8909, .. })
+        ));
+        assert!(matches!(
+            parse_instruction("force-despawn:3000").unwrap(),
+            CreatureInstruction::ForceDespawn(ForceDespawnInstruction { delay_ms: 3000 })
+        ));
+        assert!(matches!(
+            parse_instruction("throw-ai-event:custom-a:50:self").unwrap(),
+            CreatureInstruction::ThrowAiEvent(ThrowAiEventInstruction {
+                kind: AiEventKind::CustomA,
+                radius_yd: 50,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_instruction("set-stand-state:7").unwrap(),
+            CreatureInstruction::SetStandState(SetStandStateInstruction { stand_state: 7 })
+        ));
+        assert!(matches!(
+            parse_instruction("set-react-state:defensive").unwrap(),
+            CreatureInstruction::SetReactState(SetReactStateInstruction {
+                state: CreatureReactState::Defensive
+            })
+        ));
+        assert!(matches!(
+            parse_instruction("remove-guardians:0").unwrap(),
+            CreatureInstruction::RemoveGuardians(RemoveGuardiansInstruction { creature_entry: 0 })
+        ));
+        assert!(matches!(
+            parse_instruction("no-effect:missing-text-template:999999").unwrap(),
+            CreatureInstruction::MissingTextTemplateNoEffect(MissingTextTemplateNoEffect {
+                template_id: 999999
+            })
+        ));
+
+        assert!(parse_instruction("random-emote:11.18").is_err());
+        assert!(parse_instruction("set-react-state:3").is_err());
+        assert!(parse_instruction("no-effect:missing-text-template:0").is_err());
     }
 }

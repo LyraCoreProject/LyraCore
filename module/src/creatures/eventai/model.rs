@@ -371,6 +371,12 @@ pub struct EmoteInstruction {
     pub target: InstructionTarget,
 }
 
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
+pub struct RandomEmoteInstruction {
+    /// Exactly three source choices. A negative choice is the authored empty branch.
+    pub emote_ids: Vec<i32>,
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CallForHelpInstruction {
     pub radius_yd: u32,
@@ -405,6 +411,59 @@ pub struct SummonInstruction {
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpawnAtActorInstruction {
+    pub creature_entry: u32,
+    pub target: InstructionTarget,
+    pub lifetime_ms: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoveAuraInstruction {
+    pub spell_id: u32,
+    pub target: InstructionTarget,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForceDespawnInstruction {
+    pub delay_ms: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ThrowAiEventInstruction {
+    pub kind: AiEventKind,
+    pub radius_yd: u32,
+    pub target: InstructionTarget,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetStandStateInstruction {
+    pub stand_state: u8,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CreatureReactState {
+    Passive,
+    Defensive,
+    Aggressive,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetReactStateInstruction {
+    pub state: CreatureReactState,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoveGuardiansInstruction {
+    /// Zero removes every owned summon. A nonzero entry removes the first matching summon.
+    pub creature_entry: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MissingTextTemplateNoEffect {
+    pub template_id: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RangedPostureInstruction {
     pub distance_yd: u32,
     pub angle_degrees: i32,
@@ -418,6 +477,7 @@ pub struct SetLethalDamageFloorInstruction {
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdleMovementIntent {
     Stationary,
+    RandomAroundHomePosition(RandomMovementIntent),
     RandomAroundCurrentPosition(RandomMovementIntent),
     Patrol(PatrolIntent),
 }
@@ -525,6 +585,7 @@ pub enum CreatureInstruction {
     Speak(SpeakInstruction),
     Cast(CastInstruction),
     Emote(EmoteInstruction),
+    RandomEmote(RandomEmoteInstruction),
     FleeForAssist,
     CallForHelp(CallForHelpInstruction),
     SetPhase(SetPhaseInstruction),
@@ -532,6 +593,14 @@ pub enum CreatureInstruction {
     RandomPhase(RandomPhaseInstruction),
     RandomPhaseRange(RandomPhaseRangeInstruction),
     Summon(SummonInstruction),
+    SpawnAtActor(SpawnAtActorInstruction),
+    RemoveAura(RemoveAuraInstruction),
+    ForceDespawn(ForceDespawnInstruction),
+    ThrowAiEvent(ThrowAiEventInstruction),
+    SetStandState(SetStandStateInstruction),
+    SetReactState(SetReactStateInstruction),
+    RemoveGuardians(RemoveGuardiansInstruction),
+    MissingTextTemplateNoEffect(MissingTextTemplateNoEffect),
     SetRangedPosture(RangedPostureInstruction),
     SetLethalDamageFloor(SetLethalDamageFloorInstruction),
     ForceDeath,

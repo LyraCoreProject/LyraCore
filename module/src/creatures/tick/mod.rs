@@ -345,6 +345,13 @@ pub(crate) fn active_cell_creatures(ctx: &ReducerContext, scope: &TickScope) -> 
             if e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
                 in_combat.push(e.guid);
             }
+            if active_object_enters_scope(
+                e.is_player(),
+                scope.covers(e.instance_id),
+                crate::creatures::active_object(ctx, e.guid),
+            ) {
+                out.insert(e.guid);
+            }
             e.is_player() && scope.covers(e.instance_id)
         })
         .collect();
@@ -376,6 +383,10 @@ pub(crate) fn active_cell_creatures(ctx: &ReducerContext, scope: &TickScope) -> 
         pets,
         in_combat,
     }
+}
+
+fn active_object_enters_scope(is_player: bool, partition_covered: bool, active: bool) -> bool {
+    !is_player && partition_covered && active
 }
 
 /// Everything ONE pass over `game_world_entity` yields for a firing of `tick_creatures` — the
@@ -736,6 +747,14 @@ pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool
 
 #[cfg(test)]
 mod relay_tripwire {
+    #[test]
+    fn active_objects_enter_only_their_creature_partition_sweep() {
+        assert!(super::active_object_enters_scope(false, true, true));
+        assert!(!super::active_object_enters_scope(true, true, true));
+        assert!(!super::active_object_enters_scope(false, false, true));
+        assert!(!super::active_object_enters_scope(false, true, false));
+    }
+
     /// **The relay has ONE writer.** perf 2.3 moved creature legs onto the AOI-scoped
     /// `game_creature_spline` row and, in the same commit, removed the gateway's global subscription
     /// to `game_creature_move_event` on the stated grounds that "nothing writes the table any more".

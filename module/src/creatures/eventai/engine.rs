@@ -133,6 +133,22 @@ pub(crate) trait EventAiWorld {
     );
     /// The fresh summon joins the fight against `target_guid`.
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64);
+    fn eventai_remove_aura(&mut self, target_guid: u64, spell_id: u32) -> bool;
+    fn eventai_force_despawn(&mut self, creature_guid: u64, delay_ms: u32) -> bool;
+    fn eventai_throw_ai_event(
+        &mut self,
+        source_guid: u64,
+        invoker_guid: u64,
+        kind: super::AiEventKind,
+        radius_yd: u32,
+    ) -> bool;
+    fn eventai_set_stand_state(&mut self, creature_guid: u64, stand_state: u8) -> bool;
+    fn eventai_set_react_state(
+        &mut self,
+        creature_guid: u64,
+        state: super::CreatureReactState,
+    ) -> bool;
+    fn eventai_remove_guardians(&mut self, summoner_guid: u64, creature_entry: u32) -> bool;
     fn eventai_set_lethal_damage_floor(
         &mut self,
         creature_guid: u64,
@@ -417,11 +433,13 @@ fn execute_instruction<W: EventAiWorld>(
             ActionResult::Applied
         }
         CreatureInstruction::Emote(_)
+        | CreatureInstruction::RandomEmote(_)
         | CreatureInstruction::FleeForAssist
         | CreatureInstruction::CallForHelp(_) => {
             super::combat::execute(world, context, instruction, linked_choice)
         }
         CreatureInstruction::Summon(_)
+        | CreatureInstruction::SpawnAtActor(_)
         | CreatureInstruction::SetRangedPosture(_)
         | CreatureInstruction::Movement(_)
         | CreatureInstruction::SetFacing(_) => {
@@ -430,6 +448,64 @@ fn execute_instruction<W: EventAiWorld>(
         CreatureInstruction::SetLethalDamageFloor(_) | CreatureInstruction::ForceDeath => {
             super::death::execute(world, context, instruction)
         }
+        CreatureInstruction::RemoveAura(remove) => {
+            let Some(target_guid) =
+                super::combat::unit_target(world, context, remove.target, None, linked_choice)
+            else {
+                return ActionResult::Refused;
+            };
+            if world.eventai_remove_aura(target_guid, remove.spell_id) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
+        CreatureInstruction::ForceDespawn(despawn) => {
+            if world.eventai_force_despawn(context.creature_guid, despawn.delay_ms) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
+        CreatureInstruction::ThrowAiEvent(event) => {
+            let Some(invoker_guid) =
+                super::combat::unit_target(world, context, event.target, None, linked_choice)
+            else {
+                return ActionResult::Refused;
+            };
+            if world.eventai_throw_ai_event(
+                context.creature_guid,
+                invoker_guid,
+                event.kind,
+                event.radius_yd,
+            ) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
+        CreatureInstruction::SetStandState(stand) => {
+            if world.eventai_set_stand_state(context.creature_guid, stand.stand_state) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
+        CreatureInstruction::SetReactState(react) => {
+            if world.eventai_set_react_state(context.creature_guid, react.state) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
+        CreatureInstruction::RemoveGuardians(remove) => {
+            if world.eventai_remove_guardians(context.creature_guid, remove.creature_entry) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
+        CreatureInstruction::MissingTextTemplateNoEffect(_) => ActionResult::Applied,
         CreatureInstruction::ScaleSelectedThreat(_) | CreatureInstruction::ScaleAllThreat(_) => {
             super::threat::execute(world, context, instruction, linked_choice)
         }
@@ -484,10 +560,9 @@ fn execute_instruction<W: EventAiWorld>(
     }
 }
 
-/// Resolve one authored Say or Yell into a line and deliver it. A broadcast text carries its own
-/// chat type; the authored action decides when that is not one this tier relays (a monster emote
-/// line still reaches players as its say/yell). The broadcast text's emote belongs to the line,
-/// so a Refusal at delivery silences both.
+/// Resolve one authored speech action into a line and deliver it. A broadcast text carries its own
+/// supported chat type; the authored mode is the fallback for other source types. The broadcast
+/// text's emote belongs to the line, so a refusal at delivery silences both.
 fn speak<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
@@ -681,7 +756,11 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 CreatureInstruction::Speak(speech) => speech.broadcast_ids.len() > 1,
                 CreatureInstruction::Cast(cast) => random_target(cast.target),
                 CreatureInstruction::Emote(emote) => random_target(emote.target),
+                CreatureInstruction::RandomEmote(_) => true,
                 CreatureInstruction::Summon(summon) => random_target(summon.target),
+                CreatureInstruction::SpawnAtActor(spawn) => random_target(spawn.target),
+                CreatureInstruction::RemoveAura(remove) => random_target(remove.target),
+                CreatureInstruction::ThrowAiEvent(event) => random_target(event.target),
                 CreatureInstruction::ScaleSelectedThreat(scale) => random_target(scale.target),
                 CreatureInstruction::SetFacing(facing) => random_target(facing.target),
                 CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => {
@@ -697,6 +776,11 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 | CreatureInstruction::SetRangedPosture(_)
                 | CreatureInstruction::SetLethalDamageFloor(_)
                 | CreatureInstruction::ForceDeath
+                | CreatureInstruction::ForceDespawn(_)
+                | CreatureInstruction::SetStandState(_)
+                | CreatureInstruction::SetReactState(_)
+                | CreatureInstruction::RemoveGuardians(_)
+                | CreatureInstruction::MissingTextTemplateNoEffect(_)
                 | CreatureInstruction::ScaleAllThreat(_)
                 | CreatureInstruction::Presentation(_)
                 | CreatureInstruction::QuestCredit(_)
@@ -1094,6 +1178,8 @@ impl EventAiWorld for DatabaseWorld<'_> {
                     ranged_angle: 0.0,
                     ranged_posture_active: false,
                     definition_revision: 0,
+                    active_object: false,
+                    react_state: 2,
                 });
             }
         }
@@ -1155,12 +1241,24 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 ranged_angle: 0.0,
                 ranged_posture_active: false,
                 definition_revision: revision.value,
+                active_object: false,
+                react_state: 2,
             }),
         };
         CreatureState::from(row)
     }
 
     fn put_eventai_rule_state(&mut self, creature_guid: u64, rule_id: u64, state: RuleState) {
+        if self
+            .ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(creature_guid)
+            .is_none()
+        {
+            return;
+        }
         let table = self.ctx.db.game_creature_ai_rule_state();
         if let Some(mut row) = table
             .by_creature()
@@ -1310,6 +1408,8 @@ impl EventAiWorld for DatabaseWorld<'_> {
                     ranged_angle: angle_rad,
                     ranged_posture_active: true,
                     definition_revision: 0,
+                    active_object: false,
+                    react_state: 2,
                 });
             }
         }
@@ -1381,6 +1481,65 @@ impl EventAiWorld for DatabaseWorld<'_> {
 
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64) {
         super::mobility::engage_summon(self.ctx, summon_guid, target_guid)
+    }
+
+    fn eventai_remove_aura(&mut self, target_guid: u64, spell_id: u32) -> bool {
+        if self
+            .ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(target_guid)
+            .is_none()
+        {
+            return false;
+        }
+        let rows = self
+            .ctx
+            .db
+            .game_aura()
+            .by_target()
+            .filter(&target_guid)
+            .filter(|aura| aura.spell_id == spell_id)
+            .collect::<Vec<_>>();
+        crate::spell::shed_auras(self.ctx, target_guid, rows);
+        true
+    }
+
+    fn eventai_force_despawn(&mut self, creature_guid: u64, delay_ms: u32) -> bool {
+        super::mobility::force_despawn(self.ctx, creature_guid, delay_ms).is_ok()
+    }
+
+    fn eventai_throw_ai_event(
+        &mut self,
+        source_guid: u64,
+        invoker_guid: u64,
+        kind: super::AiEventKind,
+        radius_yd: u32,
+    ) -> bool {
+        super::edges::send_relay_ai_event(self.ctx, source_guid, invoker_guid, kind, radius_yd)
+            .is_ok()
+    }
+
+    fn eventai_set_stand_state(&mut self, creature_guid: u64, stand_state: u8) -> bool {
+        crate::creatures::presentation::apply_relay_stand_state(
+            self.ctx,
+            creature_guid,
+            stand_state,
+        )
+        .is_ok()
+    }
+
+    fn eventai_set_react_state(
+        &mut self,
+        creature_guid: u64,
+        state: super::CreatureReactState,
+    ) -> bool {
+        super::mobility::set_react_state(self.ctx, creature_guid, state).is_ok()
+    }
+
+    fn eventai_remove_guardians(&mut self, summoner_guid: u64, creature_entry: u32) -> bool {
+        super::mobility::remove_guardians(self.ctx, summoner_guid, creature_entry).is_ok()
     }
 
     fn eventai_set_lethal_damage_floor(
