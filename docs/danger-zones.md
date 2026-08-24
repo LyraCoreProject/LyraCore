@@ -372,10 +372,14 @@ cargo build
 # tables, and then false-aborts on a bogus "Removed table: game_debug_readout"), passes `--yes`, and
 # REFUSES `-c` and any other flag-shaped argument. Plain publish = safe auto-migrate. NEVER -c.
 ./lyracore publish
-# ⚠ That publishes the default database ONLY. A SCHEMA change must reach EVERY shard or the gateway
-# refuses logons on the ones left behind — and a partial publish can present as an unrelated
-# mid-session hang rather than a loud "no such table", because only the default-shard connect
-# fails loudly; a stale extra shard degrades silently. Pass them all in one command:
+# ⚠ With no names, that publishes the FIXTURE topology recorded in this checkout's own
+# `.lyracore/state.json` — normally absent on a production host, which falls back to the default
+# sharded FIXTURE topology (`lyracore`, `lyracore-kalimdor`, `lyracore-instances`, `lyracore-realm`).
+# None of those are production's real database names. It NEVER infers the production database list,
+# on a production host or anywhere else. A SCHEMA change must reach EVERY production shard or the
+# gateway refuses logons on the ones left behind — and a partial publish can present as an unrelated
+# mid-session hang rather than a loud "no such table", because only the default-shard connect fails
+# loudly; a stale extra shard degrades silently. Pass them all in one command, always:
 ./lyracore publish lyracore lyracore-world-1 lyracore-instances lyracore-realm
 
 # Rebuild + restart the GATEWAY (always, if the gateway changed)
