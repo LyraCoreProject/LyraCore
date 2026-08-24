@@ -3,7 +3,7 @@ use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuratio
 use crate::encounter::{
     self, EncounterSignal, DOOR_OPEN_STATE, ENCOUNTER_DONE, ENCOUNTER_FAILED, ENCOUNTER_IN_PROGRESS,
 };
-use crate::{game_creature_template, game_gameobject, game_world_entity};
+use crate::{game_creature_template, game_gameobject, game_instance, game_world_entity};
 
 const MAP_ID: u32 = 230;
 const ENCOUNTER_ID: u32 = 4;
@@ -56,6 +56,7 @@ crate::encounter_package!(BlackrockDepthsTombOfSeven, fn tomb_of_seven(ctx, inst
 
 crate::game_hook!(on_creature_death, fn tomb_dwarf_died(ctx, payload) {
     if !TOMB_DWARVES.contains(&payload.entry)
+        || !instance_belongs_to_blackrock(ctx, payload.instance_id)
         || encounter::get_encounter_state(ctx, payload.instance_id, ENCOUNTER_ID)
             != ENCOUNTER_IN_PROGRESS
     {
@@ -84,6 +85,7 @@ crate::game_hook!(on_creature_death, fn tomb_dwarf_died(ctx, payload) {
 #[reducer]
 pub fn advance_tomb_round(ctx: &ReducerContext, timer: BlackrockTombRound) {
     if ctx.sender() == ctx.database_identity()
+        && instance_belongs_to_blackrock(ctx, timer.instance_id)
         && encounter::get_encounter_state(ctx, timer.instance_id, ENCOUNTER_ID)
             == ENCOUNTER_IN_PROGRESS
     {
@@ -122,12 +124,14 @@ fn activate_dwarf(ctx: &ReducerContext, instance_id: u64, round: u8) -> Result<(
     dwarf.faction_template = DWARF_HOSTILE_FACTION;
     let dwarf_guid = dwarf.guid;
     entities.guid().update(dwarf);
-    if let Err(error) = crate::actor::attack(ctx, dwarf_guid, player_guid) {
+    if !crate::combat::arm_creature_engagement(ctx, dwarf_guid, player_guid, false) {
         if let Some(mut dwarf) = entities.guid().find(dwarf_guid) {
             dwarf.faction_template = original_faction;
             entities.guid().update(dwarf);
         }
-        return Err(error);
+        return Err(format!(
+            "Tomb of Seven dwarf {entry} already has an outgoing engagement"
+        ));
     }
     Ok(())
 }
@@ -156,6 +160,14 @@ fn clear_round_timer(ctx: &ReducerContext, instance_id: u64) {
     for id in ids {
         timers.scheduled_id().delete(id);
     }
+}
+
+fn instance_belongs_to_blackrock(ctx: &ReducerContext, instance_id: u64) -> bool {
+    ctx.db
+        .game_instance()
+        .instance_id()
+        .find(instance_id)
+        .is_some_and(|instance| instance.map_id == MAP_ID)
 }
 
 fn set_gameobject_state(
