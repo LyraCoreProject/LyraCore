@@ -5,6 +5,7 @@ use spacetimedb::{table, ReducerContext, Table};
 use super::edges::game_creature_ai_returning_home;
 use super::mobility::game_creature_ai_summon_origin;
 use super::{DefinitionRevision, IdleMovementIntent, MovementOperation, WalkingMode};
+use super::{RelayForcedMovement, RelayMovement};
 use crate::{game_creature_spawn, game_creature_waypoint, game_world_entity};
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,7 +122,9 @@ pub(crate) fn apply(
             };
         }
         MovementOperation::SetPatrolPaused(pause) => {
-            if !intent.idle_active || intent.idle != AuthoredIdleMovement::Patrol {
+            let authored_patrol = intent.idle_active && intent.idle == AuthoredIdleMovement::Patrol;
+            let inherited_spawn_patrol = !intent.idle_active && path_exists(ctx, creature_guid, 0);
+            if !authored_patrol && !inherited_spawn_patrol {
                 return false;
             }
             intent.patrol_paused = pause.paused;
@@ -182,6 +185,117 @@ pub(crate) fn apply(
         }
     }
     true
+}
+
+pub(crate) fn apply_relay_idle(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    idle: RelayMovement,
+    forced: RelayForcedMovement,
+) -> Result<(), String> {
+    let revision = super::current_definition_revision(ctx, creature_guid);
+    let operation = match idle {
+        RelayMovement::Stationary => MovementOperation::ReplaceIdle(IdleMovementIntent::Stationary),
+        RelayMovement::RandomAroundCurrent(super::relay::RelayRandomMovement { radius_yd }) => {
+            MovementOperation::ReplaceIdle(IdleMovementIntent::RandomAroundCurrentPosition(
+                super::RandomMovementIntent { radius_yd },
+            ))
+        }
+        RelayMovement::Patrol(super::relay::RelayPatrolMovement { path_id }) => {
+            if !path_exists(ctx, creature_guid, path_id) {
+                return Err(format!("relay patrol path {path_id} is missing"));
+            }
+            MovementOperation::ReplaceIdle(IdleMovementIntent::Patrol(super::PatrolIntent {
+                path_id,
+            }))
+        }
+    };
+    if !apply(ctx, creature_guid, revision, operation) {
+        return Err(format!(
+            "relay movement subject {creature_guid} refused idle movement"
+        ));
+    }
+    if forced != RelayForcedMovement::Inherit {
+        apply_relay_walking(ctx, creature_guid, forced)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_relay_walking(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    movement: RelayForcedMovement,
+) -> Result<(), String> {
+    let mode = match movement {
+        RelayForcedMovement::Inherit => return Ok(()),
+        RelayForcedMovement::Walk => WalkingMode::WalkByDefault,
+        RelayForcedMovement::Run => WalkingMode::RunByDefault,
+    };
+    apply(
+        ctx,
+        creature_guid,
+        super::current_definition_revision(ctx, creature_guid),
+        MovementOperation::SetWalking(mode),
+    )
+    .then_some(())
+    .ok_or_else(|| format!("relay movement subject {creature_guid} refused walking mode"))
+}
+
+pub(crate) fn apply_relay_patrol_pause(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    paused: bool,
+) -> Result<(), String> {
+    apply(
+        ctx,
+        creature_guid,
+        super::current_definition_revision(ctx, creature_guid),
+        MovementOperation::SetPatrolPaused(super::PatrolPause { paused }),
+    )
+    .then_some(())
+    .ok_or_else(|| format!("relay movement subject {creature_guid} has no patrol to pause"))
+}
+
+pub(crate) fn apply_relay_facing(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    target_guid: Option<u64>,
+) -> Result<(), String> {
+    let operation = target_guid.map_or(MovementOperation::ResetFacing, MovementOperation::Face);
+    apply(
+        ctx,
+        creature_guid,
+        super::current_definition_revision(ctx, creature_guid),
+        operation,
+    )
+    .then_some(())
+    .ok_or_else(|| format!("relay movement subject {creature_guid} refused facing"))
+}
+
+pub(crate) fn apply_relay_orientation(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    orientation: f32,
+) -> Result<(), String> {
+    if !orientation.is_finite() {
+        return Err("relay orientation must be finite".to_string());
+    }
+    let entities = ctx.db.game_world_entity();
+    let mut creature = entities
+        .guid()
+        .find(creature_guid)
+        .filter(|entity| !entity.is_player() && !entity.dead)
+        .ok_or_else(|| format!("relay facing subject {creature_guid} is unavailable"))?;
+    creature.orientation = orientation;
+    entities.guid().update(creature);
+    Ok(())
+}
+
+pub(crate) fn relay_runs_by_default(ctx: &ReducerContext, creature_guid: u64) -> bool {
+    !matches!(
+        intent(ctx, creature_guid).map(|intent| intent.walking),
+        Some(AuthoredWalkingMode::WalkByDefault | AuthoredWalkingMode::WalkWhileChasing)
+    )
 }
 
 fn empty_intent(

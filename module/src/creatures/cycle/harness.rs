@@ -2187,6 +2187,7 @@ impl EventAiWorld for Scenario {
         source_guid: u64,
         selected_guid: u64,
         random_state: u64,
+        _catalogue_version: u64,
     ) -> bool {
         self.eventai_relay_starts.borrow_mut().push((
             relay_id,

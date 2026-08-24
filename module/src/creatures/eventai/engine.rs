@@ -151,6 +151,7 @@ pub(crate) trait EventAiWorld {
         source_guid: u64,
         selected_guid: u64,
         random_state: u64,
+        catalogue_version: u64,
     ) -> bool;
 }
 
@@ -468,7 +469,13 @@ fn execute_instruction<W: EventAiWorld>(
             else {
                 return ActionResult::Refused;
             };
-            if world.eventai_start_relay(relay_id, selected, context.creature_guid, linked_choice) {
+            if world.eventai_start_relay(
+                relay_id,
+                context.creature_guid,
+                selected,
+                linked_choice,
+                start.catalogue_version,
+            ) {
                 ActionResult::Applied
             } else {
                 ActionResult::Refused
@@ -1409,6 +1416,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
         source_guid: u64,
         selected_guid: u64,
         random_state: u64,
+        catalogue_version: u64,
     ) -> bool {
         super::relay::start_imported_relay(
             self.ctx,
@@ -1416,6 +1424,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             source_guid,
             selected_guid,
             random_state,
+            catalogue_version,
         )
         .is_ok()
     }

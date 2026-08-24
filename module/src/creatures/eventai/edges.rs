@@ -104,6 +104,7 @@ crate::game_hook!(on_creature_death, fn creature_ai_on_creature_death(ctx, paylo
         (payload.current_target_guid != 0).then_some(payload.current_target_guid),
         false,
     );
+    super::cancel_relay_runs_for_source(ctx, payload.creature_guid);
     reset_creature_lifecycle(ctx, payload.creature_guid);
 });
 
@@ -290,6 +291,65 @@ pub(crate) fn eventai_on_receive_ai_event(
     super::evaluate_context(ctx, EventAiRequest::Edge(context));
 }
 
+pub(crate) fn send_relay_ai_event(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    invoker_guid: u64,
+    kind: super::AiEventKind,
+    radius_yd: u32,
+) -> Result<(), String> {
+    let source = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(source_guid)
+        .filter(runs_eventai)
+        .ok_or_else(|| format!("relay AI-event source {source_guid} is unavailable"))?;
+    if ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(invoker_guid)
+        .is_none()
+    {
+        return Err(format!(
+            "relay AI-event invoker {invoker_guid} is unavailable"
+        ));
+    }
+    let recipients = if radius_yd == 0 {
+        vec![source_guid]
+    } else {
+        let radius = radius_yd as f32;
+        let radius_sq = radius * radius;
+        let mut guids = crate::helpers::entities_near(
+            ctx,
+            source.map_id,
+            source.instance_id,
+            source.x,
+            source.y,
+            radius,
+        )
+        .into_iter()
+        .filter(|candidate| {
+            runs_eventai(candidate)
+                && !candidate.dead
+                && (candidate.x - source.x).powi(2)
+                    + (candidate.y - source.y).powi(2)
+                    + (candidate.z - source.z).powi(2)
+                    <= radius_sq
+        })
+        .map(|candidate| candidate.guid)
+        .collect::<Vec<_>>();
+        guids.sort_unstable();
+        guids.dedup();
+        guids
+    };
+    for recipient in recipients {
+        eventai_on_receive_ai_event(ctx, recipient, Some(invoker_guid), source_guid, kind);
+    }
+    Ok(())
+}
+
 #[allow(dead_code, reason = "typed producer seam for pathfinding authority")]
 pub(crate) fn eventai_on_target_not_reachable(ctx: &ReducerContext, creature_guid: u64) {
     let current_target_guid = ctx
@@ -346,6 +406,7 @@ pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return;
     };
+    crate::creatures::presentation::clear_relay_temporary_faction(ctx, creature_guid);
     if !runs_eventai(&creature) {
         return;
     }

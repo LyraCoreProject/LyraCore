@@ -238,6 +238,72 @@ pub(super) fn engage_summon(ctx: &ReducerContext, creature_guid: u64, target_gui
     crate::combat::arm_creature_engagement(ctx, creature_guid, target_guid, true);
 }
 
+pub(super) fn place_relay_summon(
+    ctx: &ReducerContext,
+    summoner_guid: u64,
+    entry: u32,
+    location: SummonLocation,
+    _active: bool,
+    run_by_default: bool,
+) -> Result<u64, String> {
+    let summoner = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(summoner_guid)
+        .map(|entity| super::EventAiUnit {
+            guid: entity.guid,
+            entry: entity.entry,
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+            map_id: entity.map_id,
+            instance_id: entity.instance_id,
+            zone_id: entity.zone_id,
+            health: entity.health,
+            max_health: entity.max_health,
+            power: entity.power,
+            max_power: entity.max_power,
+            power_type: (entity.unit_bytes_0 >> 24) as u8,
+            level: entity.level,
+            faction_template: entity.faction_template,
+            dead: entity.dead,
+            is_player: entity.is_player(),
+            orientation: entity.orientation,
+            owner_guid: entity.owner_guid,
+        })
+        .filter(|unit| !unit.is_player && !unit.dead)
+        .ok_or_else(|| format!("relay summoner {summoner_guid} is unavailable"))?;
+    if ctx
+        .db
+        .game_creature_template()
+        .entry()
+        .find(entry)
+        .is_none()
+    {
+        return Err(format!("relay summon template {entry} is missing"));
+    }
+    if ![location.x, location.y, location.z, location.orientation]
+        .into_iter()
+        .all(f32::is_finite)
+    {
+        return Err("relay summon location must be finite".to_string());
+    }
+    let sequence = claim_summon_sequence(ctx, location.lifetime_ms);
+    let guid = summon_guid(entry, sequence)
+        .ok_or_else(|| "relay summon sequence is unavailable".to_string())?;
+    if ctx.db.game_world_entity().guid().find(guid).is_some() {
+        release_summon_sequence(ctx, sequence);
+        return Err(format!("relay summon guid {guid} is already live"));
+    }
+    place_summon(ctx, sequence, guid, entry, &location, &summoner);
+    super::edges::eventai_on_summoned(ctx, summoner_guid, guid, entry);
+    if run_by_default {
+        super::movement::apply_relay_walking(ctx, guid, super::RelayForcedMovement::Run)?;
+    }
+    Ok(guid)
+}
+
 fn summon_guid(entry: u32, scheduled_id: u64) -> Option<u64> {
     let sequence = scheduled_id.checked_sub(1)? % SUMMON_SEQUENCE_MASK + 1;
     Some(crate::encounter::wave_guid(

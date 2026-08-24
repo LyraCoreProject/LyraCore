@@ -2,8 +2,9 @@
 
 use spacetimedb::{table, ReducerContext, Table};
 
+use super::eventai::RelayFlagOperation;
 use super::eventai::{CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride};
-use crate::{game_creature_template, game_world_entity};
+use crate::{game_creature_ai_state, game_creature_template, game_world_entity};
 
 const NOT_ATTACKABLE: u32 = 0x0000_0002;
 const IMMUNE_TO_PLAYERS: u32 = 0x0000_0100;
@@ -41,6 +42,12 @@ pub struct CreaturePresentation {
     pub rajaxx_client_projection: bool,
     pub mana_emptied: bool,
     pub virtual_main_hand_cleared: bool,
+}
+
+#[table(accessor = game_creature_relay_temporary_faction)]
+pub struct CreatureRelayTemporaryFaction {
+    #[primary_key]
+    pub creature_guid: u64,
 }
 
 /// Apply one named EventAI instruction and refresh the WorldEntity projection.
@@ -157,6 +164,10 @@ pub(crate) fn apply_eventai_instruction(
 
 /// Clear all effects at the lifecycle boundary and restore the static creature projection.
 pub(crate) fn clear_eventai_presentation(ctx: &ReducerContext, creature_guid: u64) {
+    ctx.db
+        .game_creature_relay_temporary_faction()
+        .creature_guid()
+        .delete(creature_guid);
     clear_if(ctx, creature_guid, |_| true);
 }
 
@@ -169,6 +180,169 @@ pub(crate) fn clear_for_definition_revision(
     clear_if(ctx, creature_guid, |state| {
         state.definition_revision != definition_revision
     });
+}
+
+pub(crate) fn apply_relay_faction(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    faction_template: u32,
+    restore_on_combat_stop: bool,
+) -> Result<(), String> {
+    let lifecycle_id = ctx
+        .db
+        .game_creature_ai_state()
+        .creature_guid()
+        .find(creature_guid)
+        .map_or(1, |state| state.lifecycle_id);
+    let revision = super::eventai::current_definition_revision(ctx, creature_guid).value;
+    if !apply_eventai_instruction(
+        ctx,
+        creature_guid,
+        lifecycle_id,
+        revision,
+        CreaturePresentationInstruction::SetFaction { faction_template },
+    ) {
+        return Err(format!(
+            "relay faction subject {creature_guid} refused faction change"
+        ));
+    }
+    let temporary = ctx.db.game_creature_relay_temporary_faction();
+    if restore_on_combat_stop {
+        if temporary.creature_guid().find(creature_guid).is_none() {
+            temporary.insert(CreatureRelayTemporaryFaction { creature_guid });
+        }
+    } else {
+        temporary.creature_guid().delete(creature_guid);
+    }
+    Ok(())
+}
+
+pub(crate) fn clear_relay_temporary_faction(ctx: &ReducerContext, creature_guid: u64) {
+    if !ctx
+        .db
+        .game_creature_relay_temporary_faction()
+        .creature_guid()
+        .delete(creature_guid)
+    {
+        return;
+    }
+    let table = ctx.db.game_creature_presentation();
+    let Some(mut state) = table.creature_guid().find(creature_guid) else {
+        return;
+    };
+    state.has_faction_template_override = false;
+    state.faction_template_override = 0;
+    let entities = ctx.db.game_world_entity();
+    let Some(mut entity) = entities.guid().find(creature_guid) else {
+        return;
+    };
+    let Some(base) = ctx.db.game_creature_template().entry().find(entity.entry) else {
+        return;
+    };
+    project(ctx, &mut entity, &base, &state);
+    entities.guid().update(entity);
+    table.creature_guid().update(state);
+}
+
+pub(crate) fn apply_relay_stand_state(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    stand_state: u8,
+) -> Result<(), String> {
+    let entities = ctx.db.game_world_entity();
+    let mut entity = entities
+        .guid()
+        .find(creature_guid)
+        .filter(|entity| !entity.is_player())
+        .ok_or_else(|| format!("relay stand-state subject {creature_guid} is unavailable"))?;
+    entity.unit_bytes_1 = (entity.unit_bytes_1 & !0xFF) | u32::from(stand_state);
+    entities.guid().update(entity);
+    Ok(())
+}
+
+pub(crate) fn apply_relay_npc_flags(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    flags: u32,
+    operation: RelayFlagOperation,
+) -> Result<(), String> {
+    if flags == 0 || flags & !0x3 != 0 {
+        return Err(format!("relay NPC flags {flags:#x} are not named"));
+    }
+    let entities = ctx.db.game_world_entity();
+    let mut entity = entities
+        .guid()
+        .find(creature_guid)
+        .filter(|entity| !entity.is_player())
+        .ok_or_else(|| format!("relay NPC-flag subject {creature_guid} is unavailable"))?;
+    entity.npc_flags = apply_relay_flags(entity.npc_flags, flags, operation);
+    entities.guid().update(entity);
+    Ok(())
+}
+
+pub(crate) fn apply_relay_unit_flags(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    flags: u32,
+    operation: RelayFlagOperation,
+) -> Result<(), String> {
+    if flags == 0 || flags & !(IMMUNE_TO_PLAYERS | IMMUNE_TO_CREATURES) != 0 {
+        return Err(format!("relay unit flags {flags:#x} are not named"));
+    }
+    let entity = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .ok_or_else(|| format!("relay unit-flag subject {creature_guid} is unavailable"))?;
+    let lifecycle_id = ctx
+        .db
+        .game_creature_ai_state()
+        .creature_guid()
+        .find(creature_guid)
+        .map_or(1, |state| state.lifecycle_id);
+    let revision = super::eventai::current_definition_revision(ctx, creature_guid).value;
+    for (bit, set, clear) in [
+        (
+            IMMUNE_TO_PLAYERS,
+            CreaturePresentationInstruction::SetImmuneToPlayers,
+            CreaturePresentationInstruction::ClearImmuneToPlayers,
+        ),
+        (
+            IMMUNE_TO_CREATURES,
+            CreaturePresentationInstruction::SetImmuneToCreatures,
+            CreaturePresentationInstruction::ClearImmuneToCreatures,
+        ),
+    ] {
+        if flags & bit == 0 {
+            continue;
+        }
+        let enabled = match operation {
+            RelayFlagOperation::Add => true,
+            RelayFlagOperation::Remove => false,
+            RelayFlagOperation::Toggle => entity.unit_flags & bit == 0,
+        };
+        if !apply_eventai_instruction(
+            ctx,
+            creature_guid,
+            lifecycle_id,
+            revision,
+            if enabled { set } else { clear },
+        ) {
+            return Err(format!(
+                "relay unit-flag subject {creature_guid} refused flag change"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn apply_relay_flags(current: u32, flags: u32, operation: RelayFlagOperation) -> u32 {
+    match operation {
+        RelayFlagOperation::Add => current | flags,
+        RelayFlagOperation::Remove => current & !flags,
+        RelayFlagOperation::Toggle => current ^ flags,
+    }
 }
 
 fn clear_if(

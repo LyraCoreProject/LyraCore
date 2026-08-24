@@ -517,6 +517,7 @@ pub struct NotifyEncounterInstruction {
 pub struct StartRelayInstruction {
     pub relay_ids: Vec<u32>,
     pub target: InstructionTarget,
+    pub catalogue_version: u64,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

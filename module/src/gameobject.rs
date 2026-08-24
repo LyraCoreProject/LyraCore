@@ -941,6 +941,16 @@ pub(crate) fn apply_use_gameobject(
     Ok(())
 }
 
+pub(crate) fn despawn_from_relay(ctx: &ReducerContext, go_guid: u64) -> Result<(), String> {
+    if ctx.db.game_gameobject().guid().find(go_guid).is_none() {
+        return Err(format!("relay gameobject {go_guid} is missing"));
+    }
+    crate::loot::reap_corpse_loot_family(ctx, go_guid);
+    ctx.db.game_gameobject_unlocked().go_guid().delete(go_guid);
+    ctx.db.game_gameobject().guid().delete(go_guid);
+    Ok(())
+}
+
 /// Pure DOOR/BUTTON open/closed TOGGLE (ctx-free, unit-tested): the same binary `state` field a CHEST
 /// uses for looted/unlooted, just flipped both directions instead of one-way. Total over every `u8`
 /// input (not just 0/1) so a corrupt/foreign state value can never wedge the reducer — anything

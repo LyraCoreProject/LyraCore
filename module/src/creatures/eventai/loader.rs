@@ -49,6 +49,7 @@ pub fn import_creature_ai_definitions_append(
 
 fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> Result<(), String> {
     let definitions = parse_definition_batch(packed)?;
+    validate_relay_catalogue_pins(ctx, &definitions)?;
     let table = ctx.db.game_creature_ai_definition();
     if !replace {
         for definition in &definitions {
@@ -80,6 +81,40 @@ fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> R
     }
     for definition in definitions {
         table.insert(definition);
+    }
+    super::relay::reap_unused_definitions(ctx);
+    Ok(())
+}
+
+fn validate_relay_catalogue_pins(
+    ctx: &ReducerContext,
+    definitions: &[CreatureAiDefinition],
+) -> Result<(), String> {
+    let current = super::relay::current_catalogue_version(ctx);
+    for definition in definitions {
+        for (rule_id, start) in definition.rules.iter().flat_map(|rule| {
+            rule.instructions.iter().filter_map(move |instruction| {
+                let CreatureInstruction::StartRelay(start) = instruction else {
+                    return None;
+                };
+                Some((rule.source_rule_id, start))
+            })
+        }) {
+            if start.catalogue_version == 0 || Some(start.catalogue_version) != current {
+                return Err(format!(
+                    "EventAI rule {rule_id} pins relay catalogue {}, current is {:?}",
+                    start.catalogue_version, current
+                ));
+            }
+            for relay_id in &start.relay_ids {
+                if !super::relay::catalogue_contains(ctx, start.catalogue_version, *relay_id) {
+                    return Err(format!(
+                        "EventAI rule {rule_id} relay dependency {relay_id} is missing from catalogue {}",
+                        start.catalogue_version
+                    ));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -757,7 +792,7 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 signal: parse_encounter_signal(signal)?,
             },
         )),
-        ["start-relay", relays, target] => {
+        ["start-relay", relays, target, catalogue] => {
             let relay_ids = relays
                 .split('.')
                 .map(parse_u32)
@@ -765,9 +800,14 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
             if relay_ids.is_empty() || relay_ids.contains(&0) {
                 return Err("start-relay needs nonzero definition ids".to_string());
             }
+            let catalogue_version = parse_u64(catalogue)?;
+            if catalogue_version == 0 {
+                return Err("start-relay needs a nonzero catalogue version".to_string());
+            }
             Ok(CreatureInstruction::StartRelay(StartRelayInstruction {
                 relay_ids,
                 target: parse_target(target)?,
+                catalogue_version,
             }))
         }
         _ => Err(format!("unknown creature instruction: {encoded}")),
@@ -1132,6 +1172,20 @@ mod tests {
             CreatureInstruction::ScaleAllThreat(ScaleAllThreatInstruction { percent: -100 })
         ));
         assert!(parse_instruction("threat-all:-101").is_err());
+    }
+
+    #[test]
+    fn relay_starts_require_and_keep_the_catalogue_pin() {
+        assert_eq!(
+            parse_instruction("start-relay:9989.9990.9991:self:77").unwrap(),
+            CreatureInstruction::StartRelay(StartRelayInstruction {
+                relay_ids: vec![9_989, 9_990, 9_991],
+                target: InstructionTarget::SelfActor,
+                catalogue_version: 77,
+            })
+        );
+        assert!(parse_instruction("start-relay:9989:self").is_err());
+        assert!(parse_instruction("start-relay:9989:self:0").is_err());
     }
 
     #[test]

@@ -92,6 +92,7 @@ fn random_relay_selection_keeps_the_invocations_linked_random_state() {
     let instruction = CreatureInstruction::StartRelay(StartRelayInstruction {
         relay_ids: vec![9_989, 9_990, 9_991],
         target: InstructionTarget::SelfActor,
+        catalogue_version: 1,
     });
     let mut world = Scenario::new(1_000_000)
         .creature(
