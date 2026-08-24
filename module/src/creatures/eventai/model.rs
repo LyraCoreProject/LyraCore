@@ -340,6 +340,10 @@ pub(crate) enum SpellCastTarget {
 pub enum SpeechMode {
     Say,
     Yell,
+    /// Source chat type 2: a third-person narrative line. It always carries the universal language
+    /// and reaches clients as a monster emote rather than speech. Appended last so an existing
+    /// encoded rule keeps its variant index.
+    Emote,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

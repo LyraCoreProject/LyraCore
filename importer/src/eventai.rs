@@ -5714,6 +5714,10 @@ fn speech_mode(
         .map(|text| text.chat_type)
     {
         Some(1) => "yell",
+        // Source chat type 2 is a third-person narrative line, not speech. The runtime prefers the
+        // broadcast row's own chat type, so this mode is the fallback when that row cannot be read.
+        // Encoding it as `say` made the fallback disagree with the source.
+        Some(2) => "emote",
         _ => "say",
     }
 }

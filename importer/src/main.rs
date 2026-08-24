@@ -8068,7 +8068,9 @@ mod tests {
         assert!(plan
             .definition_rows
             .iter()
-            .any(|row| row.contains("speak:say:self:903")));
+            // 903 is rewritten to source chat type 2 above, so it encodes as a narrative emote
+            // rather than speech.
+            .any(|row| row.contains("speak:emote:self:903")));
         assert_eq!(plan.event_counts(99), (1, 0, 1, 0));
         assert_eq!(plan.action_counts(99), (3, 0, 3, 0));
     }

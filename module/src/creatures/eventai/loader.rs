@@ -495,6 +495,7 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 mode: match *mode {
                     "say" => SpeechMode::Say,
                     "yell" => SpeechMode::Yell,
+                    "emote" => SpeechMode::Emote,
                     value => return Err(format!("unknown speech mode: {value}")),
                 },
                 broadcast_ids,
@@ -1393,5 +1394,22 @@ mod tests {
         assert!(parse_instruction("random-emote:11.18").is_err());
         assert!(parse_instruction("set-react-state:3").is_err());
         assert!(parse_instruction("no-effect:missing-text-template:0").is_err());
+    }
+
+    /// Source chat type 2 is a narrative line, so the importer encodes `emote` beside `say` and
+    /// `yell`. The loader must round-trip all three or an imported emote silently degrades.
+    #[test]
+    fn every_encoded_speech_mode_round_trips() {
+        for (encoded, expected) in [
+            ("speak:say:self:901", SpeechMode::Say),
+            ("speak:yell:self:901", SpeechMode::Yell),
+            ("speak:emote:self:901", SpeechMode::Emote),
+        ] {
+            let CreatureInstruction::Speak(speech) = parse_instruction(encoded).unwrap() else {
+                panic!("{encoded} did not parse as a speak instruction");
+            };
+            assert_eq!(speech.mode, expected, "{encoded}");
+        }
+        assert!(parse_instruction("speak:whisper:self:901").is_err());
     }
 }

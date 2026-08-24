@@ -10,7 +10,7 @@ use super::{
     InstructionSelection, RecurrencePolicy, RuleState, SpeakInstruction, SpeechMode,
     SummonLocation,
 };
-use crate::chat::{is_supported_chat_type, CHAT_SAY, CHAT_YELL};
+use crate::chat::{is_supported_chat_type, CHAT_SAY, CHAT_TEXT_EMOTE, CHAT_YELL};
 use crate::creatures::ai::TickScope;
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
 use crate::spell::{game_aura, game_spell};
@@ -574,6 +574,7 @@ fn speak<W: EventAiWorld>(
     let chat_type = match speech.mode {
         SpeechMode::Say => CHAT_SAY,
         SpeechMode::Yell => CHAT_YELL,
+        SpeechMode::Emote => CHAT_TEXT_EMOTE,
     };
     let ids = &speech.broadcast_ids;
     let picked = match ids.len() {
