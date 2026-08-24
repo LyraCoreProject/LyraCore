@@ -2030,8 +2030,8 @@ pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
     vec![Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)))]
 }
 
-/// Say/yell chat: the one body both legs run. The speaker always hears
-/// their own line (vanilla); everyone else is `chat_in_range`-gated (SAY ~25yd, YELL ~300yd, map +
+/// Nearby chat: the one body both legs run. A player speaker always hears
+/// their own line; everyone else is `chat_in_range`-gated (say/text emote ~25yd, yell ~300yd, map +
 /// instance fenced), with both endpoints read from the COORDINATOR's global cache — the AOI-scoped
 /// per-player cache could not see a 100–300yd YELL speaker. Missing endpoint → drop (safer than
 /// flooding).
@@ -2075,8 +2075,33 @@ pub(crate) fn chat_event_outbound(
             return Vec::new();
         }
     }
+    let sender_name = if row.sender_guid >> 48 == 0xF130 {
+        let guard = coord.0.coord();
+        let Some(speaker) = guard
+            .conn
+            .db
+            .game_world_entity()
+            .guid()
+            .find(&row.sender_guid)
+        else {
+            return Vec::new();
+        };
+        let Some(template) = guard
+            .conn
+            .db
+            .game_creature_template()
+            .entry()
+            .find(&speaker.entry)
+        else {
+            return Vec::new();
+        };
+        Some(template.name)
+    } else {
+        None
+    };
     let m = codec::build_chat_message(
         row.sender_guid,
+        sender_name,
         row.chat_type,
         row.language,
         row.message.clone(),
