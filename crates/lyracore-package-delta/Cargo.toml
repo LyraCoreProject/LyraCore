@@ -1,0 +1,16 @@
+[package]
+name = "lyracore-package-delta"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+description = "LyraCore: the versioned Package Delta artifact and the claim conflict tracer."
+
+# Pure and deterministic, like `lyracore-shared`: no IO, no clock, no randomness. `serde_json` is the
+# one dependency and is used ONLY to tokenize untrusted JSON; the canonical writer is hand-built so
+# member order, whitespace and number formatting are this crate's promise, not a library's default.
+[dependencies]
+serde_json = "1"

@@ -247,6 +247,7 @@ _Avoid_: weather event, weather state table
 
 **Package**:
 A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons and client overrides to the client packer. Either half alone is a valid Package.
+Its data changes ship as Package Deltas rather than as edits to the base data.
 _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 
 **Reference Package**:
@@ -276,6 +277,35 @@ _Avoid_: data script, script (unqualified), seed script, sandbox
 **Reference Datascript**:
 The maintained, minimal Datascript at `datascripts/src/reference.ts`. It names real Module columns on purpose: it is both the worked example and the standing schema check that fails `tsc --noEmit` when the schema moves under it.
 _Avoid_: sample script, test script
+
+**Package Delta**:
+The versioned artifact recording what one Package changes in the base data: the Package identity,
+the source hash, and one Claim per row. Canonical JSON, so two artifacts that say the same thing are
+byte-identical. A base import replaces whole data families, so deltas are a pipeline stage that
+replays on every reload, never a one-shot edit.
+_Avoid_: patch, override file, diff
+
+**Claim**:
+One Package's statement about one row: the table, the typed primary key, the operation, and the
+columns it sets. An update names only the columns it changes; an insert carries the whole row. Row
+deletion is not supported.
+_Avoid_: edit, patch entry
+
+**Claim Conflict**:
+Two Packages claiming the same column of one row, or inserting the same primary key. Reported with
+both Package identities and the exact claim. There are no priority numbers, so a human chooses.
+_Avoid_: collision (for a claim), merge error
+
+**Package Spell Range**:
+The spell identifiers a Package may invent: 6,000,000 to 6,999,999. Two decimal orders above the
+highest real client spell and above every reserved band, so an inserted spell can never collide with
+imported or fixture data.
+_Avoid_: custom id range, synthetic spell range
+
+**Fixture-Reserved Identifier**:
+An identifier the seeded fixtures own, which no Package may claim under any operation. For spells:
+50,000 to 50,999, plus the project-wide 5,090,000 to 5,099,999 band.
+_Avoid_: test id, reserved id (unqualified)
 
 ### Working method
 
