@@ -197,9 +197,15 @@ sql, so it is safe against a live stack:
 ## `publish` — the one correct deploy
 
 ```bash
-./lyracore publish                                    # the fixture database
+./lyracore publish                                    # every database of the active fixture topology
 ./lyracore publish lyracore lyracore-world-1 realm-core   # several shards, in order
 ```
+
+With no names, this publishes every database of the fixture topology `dev up` and `dev status`
+already read from `.lyracore/state.json` — one database for an active single fixture, all of them
+for an active sharded fixture, or the default sharded topology if nothing has been recorded yet (a
+fresh clone that has never run `dev up`). Naming databases explicitly still publishes exactly those,
+in the order given.
 
 Renders exactly `spacetime publish -s local -p <checkout>/module
 --build-options=--features=debug_reducers --yes <DATABASE>`, runs `preflight` first, and publishes
