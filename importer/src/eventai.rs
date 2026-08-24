@@ -74,8 +74,10 @@ const EVENT_DEATH_PREVENTED: u32 = 35;
 const EVENT_TARGET_NOT_REACHABLE: u32 = 36;
 
 const ACTION_TEXT: u32 = 1;
+const ACTION_SOUND: u32 = 4;
 const ACTION_TEXT_NEW: u32 = 54;
 const ACTION_EMOTE: u32 = 5;
+const ACTION_RANDOM_EMOTE: u32 = 10;
 const ACTION_CAST: u32 = 11;
 const ACTION_SPAWN: u32 = 12;
 const ACTION_THREAT_SINGLE: u32 = 13;
@@ -96,12 +98,16 @@ const ACTION_SET_INSTANCE_DATA: u32 = 34;
 const ACTION_SET_INSTANCE_DATA_GUID: u32 = 35;
 const ACTION_DIE: u32 = 37;
 const ACTION_CALL_FOR_HELP: u32 = 39;
+const ACTION_FORCE_DESPAWN: u32 = 41;
 const ACTION_SET_DEATH_PREVENTION: u32 = 42;
 const ACTION_THROW_AI_EVENT: u32 = 45;
+const ACTION_SET_STAND_STATE: u32 = 47;
 const ACTION_CHANGE_MOVEMENT: u32 = 48;
+const ACTION_SET_REACT_STATE: u32 = 50;
 const ACTION_PAUSE_WAYPOINTS: u32 = 51;
 const ACTION_START_RELAY: u32 = 53;
 const ACTION_ATTACK_START: u32 = 55;
+const ACTION_DESPAWN_GUARDIANS: u32 = 56;
 const ACTION_SET_FACING: u32 = 59;
 const ACTION_SET_RANGED_MODE: u32 = 57;
 const ACTION_SET_WALK: u32 = 58;
@@ -797,6 +803,13 @@ impl SourceProfile {
             "relay_command_types",
             "relay_random_templates",
             "relay_nested_edges",
+            "relay_structural_definitions",
+            "relay_structural_rows",
+            "relay_emitted_steps",
+            "relay_loader_skipped_rows",
+            "relay_arrival_edges",
+            "relay_arrival_dependency_definitions",
+            "relay_arrival_dependency_rows",
         ] {
             if !self.expected_ticket_census.contains_key(required) {
                 return Err(format!(
@@ -865,6 +878,7 @@ impl SourceProfile {
                 .is_ok_and(|value| self.expected_threat_percent_census.contains_key(&value)),
             "unit_flag" => true,
             "rule" => true,
+            "relay_command" | "text_template" => true,
             _ => false,
         }
     }
@@ -1119,16 +1133,10 @@ impl Coverage {
                 "raw_command_ids": self.reachable_relays.command.len(),
                 "recognized_command_types": self.reachable_relays.command
                     .keys()
-                    .filter(|command| **command != 53)
+                    .filter(|command| **command != 45)
                     .count(),
-                "unclassified_command_values": { "53": self.reachable_relays.command.get(&53) },
-                "command_type_classifications": {
-                    "53": {
-                        "count": self.reachable_relays.command.get(&53),
-                        "classification": "unresolved",
-                        "required_owner": "typed_world_state_or_refusal",
-                    }
-                },
+                "unclassified_command_values": {},
+                "command_type_classifications": {},
                 "nested_edges": self.reachable_relays.nested_edges,
                 "movement_rows": self.reachable_relays.movement_values.values().sum::<u64>(),
                 "movement_value_columns": [
@@ -1200,11 +1208,13 @@ struct RelaySource {
     spell_ids: HashSet<u32>,
     creature_entries: HashSet<u32>,
     gameobject_entries: HashSet<u32>,
+    gameobject_trap_spells: HashMap<u32, u32>,
     creature_spawns: HashMap<u32, u32>,
     gameobject_spawns: HashMap<u32, u32>,
     path_ids: HashSet<u32>,
     pool_ids: HashSet<u32>,
     gossip_menu_ids: HashSet<u32>,
+    world_state_ids: HashSet<u32>,
     parse_failures: Vec<String>,
 }
 
@@ -1259,11 +1269,17 @@ impl RelaySource {
                 .into_iter()
                 .filter_map(|row| source_u32(field(&row, 0))),
         );
-        source.gameobject_entries.extend(
-            parse_table(dump, "gameobject_template")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
-        );
+        for row in parse_table(dump, "gameobject_template") {
+            let Some(entry) = source_u32(field(&row, 0)) else {
+                continue;
+            };
+            source.gameobject_entries.insert(entry);
+            if source_u32(field(&row, 1)) == Some(6) {
+                if let Some(spell_id) = source_u32(field(&row, 11)).filter(|id| *id != 0) {
+                    source.gameobject_trap_spells.insert(entry, spell_id);
+                }
+            }
+        }
         source.creature_spawns.extend(
             parse_table(dump, "creature")
                 .into_iter()
@@ -1291,6 +1307,11 @@ impl RelaySource {
         );
         source.gossip_menu_ids.extend(
             parse_table(dump, "gossip_menu")
+                .into_iter()
+                .filter_map(|row| source_u32(field(&row, 0))),
+        );
+        source.world_state_ids.extend(
+            parse_table(dump, "worldstate_name")
                 .into_iter()
                 .filter_map(|row| source_u32(field(&row, 0))),
         );
@@ -1451,6 +1472,12 @@ impl RelaySource {
                 roots.extend(choices);
             }
         }
+        let structural_closure = self.structural_closure(&roots);
+        let structural_rows = structural_closure
+            .iter()
+            .filter_map(|id| self.definitions.get(id))
+            .flatten()
+            .collect::<Vec<_>>();
         let closure = self.closure(&roots);
         let rows = closure
             .iter()
@@ -1476,6 +1503,7 @@ impl RelaySource {
             .filter_map(|id| self.definitions.get(id))
             .map(Vec::len)
             .sum::<usize>();
+        let loader_skipped_rows = rows.iter().filter(|row| row.is_loader_skipped()).count();
         let command_types = rows
             .iter()
             .filter(|row| row.command != 45)
@@ -1507,6 +1535,10 @@ impl RelaySource {
             ),
             ("relay_definitions".to_string(), closure.len() as u64),
             (
+                "relay_structural_definitions".to_string(),
+                structural_closure.len() as u64,
+            ),
+            (
                 "relay_accepted_definitions".to_string(),
                 accepted_closure.len() as u64,
             ),
@@ -1515,6 +1547,18 @@ impl RelaySource {
                 (closure.len() - accepted_closure.len()) as u64,
             ),
             ("relay_rows".to_string(), rows.len() as u64),
+            (
+                "relay_structural_rows".to_string(),
+                structural_rows.len() as u64,
+            ),
+            (
+                "relay_emitted_steps".to_string(),
+                (rows.len() - loader_skipped_rows) as u64,
+            ),
+            (
+                "relay_loader_skipped_rows".to_string(),
+                loader_skipped_rows as u64,
+            ),
             ("relay_accepted_rows".to_string(), accepted_rows as u64),
             (
                 "relay_refused_rows".to_string(),
@@ -1528,6 +1572,20 @@ impl RelaySource {
             (
                 "relay_nested_edges".to_string(),
                 rows.iter().filter(|row| row.command == 45).count() as u64,
+            ),
+            (
+                "relay_arrival_edges".to_string(),
+                rows.iter()
+                    .filter(|row| row.arrival_relay_id().is_some())
+                    .count() as u64,
+            ),
+            (
+                "relay_arrival_dependency_definitions".to_string(),
+                closure.len().saturating_sub(structural_closure.len()) as u64,
+            ),
+            (
+                "relay_arrival_dependency_rows".to_string(),
+                rows.len().saturating_sub(structural_rows.len()) as u64,
             ),
         ])
     }
@@ -1636,6 +1694,9 @@ impl RelaySource {
             })?;
             path.push(relay_id);
             for row in rows {
+                if row.is_loader_skipped() {
+                    continue;
+                }
                 let location = format!(
                     "rule:{rule_id} -> action:{slot} -> {} -> row:{}",
                     relay_path(path),
@@ -1694,12 +1755,10 @@ impl RelaySource {
                         location,
                     ));
                 }
-                if row.command == 45 {
-                    for target in row.nested_targets(source).map_err(|failure| {
-                        failure.mapping_failure(&format!("{location} -> relay_template"))
-                    })? {
-                        visit(source, target, path, steps, scheduled, rule_id, slot)?;
-                    }
+                for target in row.execution_targets(source).map_err(|failure| {
+                    failure.mapping_failure(&format!("{location} -> relay_dependency"))
+                })? {
+                    visit(source, target, path, steps, scheduled, rule_id, slot)?;
                 }
             }
             path.pop();
@@ -1720,7 +1779,7 @@ impl RelaySource {
         )
     }
 
-    fn closure(&self, roots: &BTreeSet<u32>) -> BTreeSet<u32> {
+    fn structural_closure(&self, roots: &BTreeSet<u32>) -> BTreeSet<u32> {
         fn add(source: &RelaySource, id: u32, closure: &mut BTreeSet<u32>) {
             if !closure.insert(id) {
                 return;
@@ -1742,6 +1801,28 @@ impl RelaySource {
         closure
     }
 
+    fn closure(&self, roots: &BTreeSet<u32>) -> BTreeSet<u32> {
+        fn add(source: &RelaySource, id: u32, closure: &mut BTreeSet<u32>) {
+            if !closure.insert(id) {
+                return;
+            }
+            if let Some(rows) = source.definitions.get(&id) {
+                for row in rows {
+                    if let Ok(targets) = row.execution_targets(source) {
+                        for target in targets {
+                            add(source, target, closure);
+                        }
+                    }
+                }
+            }
+        }
+        let mut closure = BTreeSet::new();
+        for root in roots {
+            add(self, *root, &mut closure);
+        }
+        closure
+    }
+
     fn encode_closure(&self, roots: &BTreeSet<u32>) -> Vec<String> {
         self.closure(roots)
             .into_iter()
@@ -1749,6 +1830,7 @@ impl RelaySource {
                 let steps = self.definitions.get(&relay_id)?;
                 let encoded_steps = steps
                     .iter()
+                    .filter(|step| !step.is_loader_skipped())
                     .map(|step| step.encode(self))
                     .collect::<Result<Vec<_>, _>>()
                     .expect("validated relay closure encodes");
@@ -1841,15 +1923,42 @@ impl RelayDependencyFailure {
 }
 
 impl RawRelayStep {
+    fn is_loader_skipped(&self) -> bool {
+        self.command == 1 && self.datalong == 0
+    }
+
+    fn arrival_relay_id(&self) -> Option<u32> {
+        (self.command == 37)
+            .then(|| u32::try_from(self.dataints[1]).ok().filter(|id| *id != 0))
+            .flatten()
+    }
+
+    fn execution_targets(&self, source: &RelaySource) -> Result<Vec<u32>, RelayDependencyFailure> {
+        if self.command == 45 {
+            return self.nested_targets(source);
+        }
+        if self.command != 37 || self.dataints[1] == 0 {
+            return Ok(Vec::new());
+        }
+        let relay_id = u32::try_from(self.dataints[1]).map_err(|_| RelayDependencyFailure {
+            kind: "relay_definition",
+            raw_value: self.dataints[1].unsigned_abs() as u64,
+            reason: "negative_arrival_relay".to_string(),
+        })?;
+        Ok(vec![relay_id])
+    }
+
     fn has_gameplay_authority(&self) -> bool {
         matches!(
             self.command,
             0 | 1
                 | 3
                 | 10
+                | 13
                 | 15
                 | 18
                 | 20
+                | 21
                 | 22
                 | 25
                 | 26
@@ -1862,8 +1971,11 @@ impl RawRelayStep {
                 | 37
                 | 40
                 | 42
+                | 44
                 | 45
                 | 48
+                | 52
+                | 53
         )
     }
 
@@ -1919,6 +2031,11 @@ impl RawRelayStep {
             && (self.flags & SCRIPT_FLAG_BUDDY_BY_GUID != 0 || self.buddy_is_gameobject())
         {
             return Err("all-buddy lookup only supports nearby creatures".to_string());
+        }
+        if self.command == 13
+            && (self.buddy_entry == 0 || self.flags & SCRIPT_FLAG_BUDDY_AS_TARGET == 0)
+        {
+            return Err("activate-object requires a gameobject target".to_string());
         }
         if self.flags & SCRIPT_FLAG_BUDDY_BY_GUID != 0 {
             if self.buddy_is_gameobject() {
@@ -2009,6 +2126,17 @@ impl RawRelayStep {
                     ));
                 }
             }
+            13 => {
+                let Some(spell_id) = source.gameobject_trap_spells.get(&self.buddy_entry) else {
+                    return Err(RelayDependencyFailure::missing(
+                        "gameobject_trap",
+                        self.buddy_entry,
+                    ));
+                };
+                if !source.spell_ids.contains(spell_id) {
+                    return Err(RelayDependencyFailure::missing("spell_template", *spell_id));
+                }
+            }
             15 => {
                 for spell_id in self.random_ids(self.datalong)? {
                     if !source.spell_ids.contains(&spell_id) {
@@ -2049,6 +2177,16 @@ impl RawRelayStep {
                     ));
                 }
             }
+            37 => {
+                for relay_id in self.execution_targets(source)? {
+                    if !source.definitions.contains_key(&relay_id) {
+                        return Err(RelayDependencyFailure::missing(
+                            "relay_definition",
+                            relay_id,
+                        ));
+                    }
+                }
+            }
             44 if !source.creature_entries.contains(&self.datalong) => {
                 return Err(RelayDependencyFailure::missing(
                     "creature_template",
@@ -2063,6 +2201,20 @@ impl RawRelayStep {
                     "gossip_menu",
                     self.datalong,
                 ));
+            }
+            53 => {
+                let world_state_id =
+                    u32::try_from(self.dataints[0]).map_err(|_| RelayDependencyFailure {
+                        kind: "world_state",
+                        raw_value: self.dataints[0].unsigned_abs() as u64,
+                        reason: "negative_id".to_string(),
+                    })?;
+                if !source.world_state_ids.contains(&world_state_id) {
+                    return Err(RelayDependencyFailure::missing(
+                        "world_state",
+                        world_state_id,
+                    ));
+                }
             }
             _ => {}
         }
@@ -2315,7 +2467,14 @@ impl RawRelayStep {
                     self.orientation
                 ))
             }
-            13 => Ok(format!("activate-object:{}", self.datalong)),
+            13 if self.datalong == 0
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok("activate-object:use".to_string())
+            }
+            13 => Err("unsupported activate-object parameters".to_string()),
             15 => Err("cast-spell encoding requires random choices".to_string()),
             18 if self.datalong == 0
                 && self.datalong2 == 0
@@ -2336,8 +2495,13 @@ impl RawRelayStep {
                     {
                         Ok(format!("set-movement:stationary:{forced}"))
                     }
-                    1 if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0 => Ok(format!(
-                        "set-movement:random-current:{}:{forced}",
+                    1 => Ok(format!(
+                        "set-movement:{}:{}:{forced}",
+                        if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0 {
+                            "random-current"
+                        } else {
+                            "random-home"
+                        },
                         self.datalong2
                     )),
                     2 if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL == 0 => {
@@ -2346,7 +2510,14 @@ impl RawRelayStep {
                     _ => Err("unsupported movement kind or origin".to_string()),
                 }
             }
-            21 => Ok(format!("set-active:{}", bool_value(self.datalong))),
+            21 if matches!(self.datalong, 0 | 1)
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok(format!("set-active:{}", bool_value(self.datalong)))
+            }
+            21 => Err("unsupported active-state parameters".to_string()),
             22 => {
                 let lifetime = match self.datalong2 {
                     0 => "permanent",
@@ -2429,23 +2600,21 @@ impl RawRelayStep {
             }
             36 => Err("unsupported facing parameters".to_string()),
             37 => {
-                if self.dataints[1] != 0
-                    || self.dataints[2..] != [0; 2]
+                if self.dataints[2..] != [0; 2]
                     || self.speed != 0.0
                     || self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0
                 {
-                    return Err(format!(
-                        "unsupported dynamic movement flags {}",
-                        self.dataints[1]
-                    ));
+                    return Err("unsupported dynamic movement parameters".to_string());
                 }
+                let arrival_relay = u32::try_from(self.dataints[1])
+                    .map_err(|_| "negative arrival relay".to_string())?;
                 Ok(format!(
                     "move-dynamic:{}:{}:{}:{}:{}",
                     self.datalong2,
                     self.datalong,
                     self.datalong3,
                     forced(self.dataints[0])?,
-                    self.dataints[1]
+                    arrival_relay
                 ))
             }
             40 if self.datalong == 0
@@ -2470,10 +2639,14 @@ impl RawRelayStep {
                 ))
             }
             42 => Err("unsupported equipment parameters".to_string()),
-            44 => Ok(format!(
-                "update-creature-template:{}:{}",
-                self.datalong, self.datalong2
-            )),
+            44 if self.datalong != 0
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok(format!("update-creature-template:{}", self.datalong))
+            }
+            44 => Err("unsupported creature-template update parameters".to_string()),
             45 => Err("nested relay encoding requires relay templates".to_string()),
             48 if matches!(self.datalong, 0x100 | 0x200) => Ok(format!(
                 "modify-unit-flags:{}:{}",
@@ -2481,11 +2654,25 @@ impl RawRelayStep {
                 change(self.datalong2)?
             )),
             48 => Err(format!("unsupported unit flag {:#x}", self.datalong)),
-            52 => Ok(format!("set-gossip-menu:{}", self.datalong)),
-            53 => Ok(format!(
-                "set-world-state:{}:{}",
-                self.dataints[0], self.dataints[1]
-            )),
+            52 if self.datalong != 0
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok(format!("set-gossip-menu:{}", self.datalong))
+            }
+            52 => Err("unsupported gossip-menu parameters".to_string()),
+            53 if self.datalong == 0
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints[2..] == [0; 2] =>
+            {
+                Ok(format!(
+                    "set-world-state:{}:{}",
+                    self.dataints[0], self.dataints[1]
+                ))
+            }
+            53 => Err("unsupported world-state parameters".to_string()),
             command => Err(format!("unsupported command {command}")),
         }
     }
@@ -2901,6 +3088,27 @@ impl EventAiSource {
                     continue;
                 }
             };
+            if rule.actions.iter().any(|action| action[0] == ACTION_SOUND) {
+                plan.coverage
+                    .classify_rule(rule.id, "excluded", "unsupported_sound_playback");
+                record_rule_dimensions(
+                    &mut plan.coverage,
+                    rule,
+                    "excluded",
+                    "unsupported_sound_playback",
+                );
+                for normalization in &rule.normalizations {
+                    plan.coverage.result(
+                        normalization.dimension,
+                        normalization.raw_value,
+                        "excluded",
+                        normalization.reason,
+                        rule.id,
+                        None,
+                    );
+                }
+                continue;
+            }
             let mut failures = Vec::new();
             let event = match map_event(rule, &self.event_predicates) {
                 Ok(event) => Some(event),
@@ -3216,6 +3424,17 @@ impl EventAiSource {
                         rule.id,
                         Some(dependency.path),
                     );
+                }
+                if action.texts.iter().any(|id| {
+                    self.broadcasts
+                        .get(id)
+                        .is_some_and(|text| text.chat_type == 2)
+                }) {
+                    *plan
+                        .coverage
+                        .ticket_census
+                        .entry("text_emote_dependency_occurrences".to_string())
+                        .or_default() += 1;
                 }
                 used_texts.extend(action.texts.iter().copied());
                 if let Some(entry) = action.summon_entry {
@@ -4179,14 +4398,87 @@ fn map_action(
             })
         }
         ACTION_TEXT_NEW => {
+            let target = map_target(action[2]).map_err(|failure| vec![failure])?;
             if action[3] != 0 {
-                return Err(vec![MappingFailure::source(
-                    "action",
-                    u64::from(action[3]),
-                    format!("unsupported_text_template_{}", action[3]),
-                )]);
+                let template_id = action[3];
+                let Some(choices) = relays.string_templates.get(&template_id) else {
+                    return Ok(NativeAction {
+                        encoded: format!("no-effect:missing-text-template:{template_id}"),
+                        raw_kind: kind,
+                        raw_target: Some(action[2]),
+                        raw_cast_flags: None,
+                        threat_percent: None,
+                        dependencies: Vec::new(),
+                        texts: Vec::new(),
+                        summon_entry: None,
+                        summon_location: None,
+                        normalizations: vec![SourceNormalization {
+                            dimension: "text_template",
+                            raw_value: u64::from(template_id),
+                            reason: "source_runtime_missing_text_template_no_effect",
+                        }],
+                    });
+                };
+                let texts = uniform_template_targets(choices).map_err(|reason| {
+                    vec![MappingFailure::dependency(
+                        "eventai_text_template",
+                        u64::from(template_id),
+                        reason,
+                        format!(
+                            "rule:{rule_id} -> action:{slot} -> dbscript_random_templates:{template_id}"
+                        ),
+                    )]
+                })?;
+                let mut failures = Vec::new();
+                for id in &texts {
+                    if !broadcasts.contains_key(id) {
+                        failures.push(MappingFailure::dependency(
+                            "broadcast_text",
+                            u64::from(*id),
+                            "missing",
+                            format!(
+                                "rule:{rule_id} -> action:{slot} -> dbscript_random_templates:{template_id} -> broadcast_text:{id}"
+                            ),
+                        ));
+                    }
+                }
+                let mode = speech_mode(&texts, broadcasts, rule_id, slot, &mut failures);
+                if !failures.is_empty() {
+                    return Err(failures);
+                }
+                let mut dependencies = vec![Dependency {
+                    kind: "eventai_text_template",
+                    path: format!(
+                        "rule:{rule_id} -> action:{slot} -> dbscript_random_templates:{template_id}"
+                    ),
+                }];
+                dependencies.extend(texts.iter().map(|id| Dependency {
+                    kind: "broadcast_text",
+                    path: format!(
+                        "rule:{rule_id} -> action:{slot} -> dbscript_random_templates:{template_id} -> broadcast_text:{id}"
+                    ),
+                }));
+                return Ok(NativeAction {
+                    encoded: format!(
+                        "speak:{mode}:{target}:{}",
+                        texts
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(".")
+                    ),
+                    raw_kind: kind,
+                    raw_target: Some(action[2]),
+                    raw_cast_flags: None,
+                    threat_percent: None,
+                    dependencies,
+                    texts,
+                    summon_entry: None,
+                    summon_location: None,
+                    normalizations: Vec::new(),
+                });
             }
-            if !broadcasts.contains_key(&action[1]) {
+            if action[1] == 0 || !broadcasts.contains_key(&action[1]) {
                 return Err(vec![MappingFailure::dependency(
                     "broadcast_text",
                     u64::from(action[1]),
@@ -4199,7 +4491,6 @@ fn map_action(
             }
             let mut failures = Vec::new();
             let mode = speech_mode(&[action[1]], broadcasts, rule_id, slot, &mut failures);
-            let target = map_target(action[2]).map_err(|failure| vec![failure])?;
             if !failures.is_empty() {
                 return Err(failures);
             }
@@ -4218,6 +4509,21 @@ fn map_action(
         }
         ACTION_EMOTE => Ok(NativeAction {
             encoded: format!("emote:{}:self", action[1]),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            threat_percent: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_RANDOM_EMOTE => Ok(NativeAction {
+            encoded: format!(
+                "random-emote:{}.{}.{}",
+                action[1] as i32, action[2] as i32, action[3] as i32
+            ),
             raw_kind: kind,
             raw_target: None,
             raw_cast_flags: None,
@@ -4374,6 +4680,87 @@ fn map_action(
             summon_location: None,
             normalizations: Vec::new(),
         }),
+        ACTION_SPAWN => {
+            let entry = u64::from(action[1]);
+            let mut failures = Vec::new();
+            if entry == 0 || !importable_templates.contains(&entry) {
+                failures.push(MappingFailure::dependency(
+                    "summon_creature",
+                    entry,
+                    "missing",
+                    format!("rule:{rule_id} -> action:{slot} -> creature_template:{entry}"),
+                ));
+            }
+            if action[3] == 0 {
+                failures.push(MappingFailure::source(
+                    "action",
+                    u64::from(kind),
+                    "invalid_spawn_lifetime",
+                ));
+            }
+            let target = match map_target(action[2]) {
+                Ok(target) => Some(target),
+                Err(failure) => {
+                    failures.push(failure);
+                    None
+                }
+            };
+            if !failures.is_empty() {
+                return Err(failures);
+            }
+            Ok(NativeAction {
+                encoded: format!(
+                    "spawn-at-actor:{}:{}:{}",
+                    action[1],
+                    target.expect("a mapped spawn has a target"),
+                    action[3]
+                ),
+                raw_kind: kind,
+                raw_target: Some(action[2]),
+                raw_cast_flags: None,
+                threat_percent: None,
+                dependencies: vec![Dependency {
+                    kind: "summon_creature",
+                    path: format!("rule:{rule_id} -> action:{slot} -> creature_template:{entry}"),
+                }],
+                texts: Vec::new(),
+                summon_entry: Some(entry),
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
+        ACTION_REMOVE_AURA if action[2] != 0 && action[3] == 0 => {
+            let target = map_target(action[1]).map_err(|failure| vec![failure])?;
+            if !relays.spell_ids.contains(&action[2]) {
+                return Err(vec![MappingFailure::dependency(
+                    "spell_template",
+                    u64::from(action[2]),
+                    "missing",
+                    format!(
+                        "rule:{rule_id} -> action:{slot} -> spell_template:{}",
+                        action[2]
+                    ),
+                )]);
+            }
+            Ok(NativeAction {
+                encoded: format!("remove-aura:{}:{target}", action[2]),
+                raw_kind: kind,
+                raw_target: Some(action[1]),
+                raw_cast_flags: None,
+                threat_percent: None,
+                dependencies: vec![Dependency {
+                    kind: "spell_template",
+                    path: format!(
+                        "rule:{rule_id} -> action:{slot} -> spell_template:{}",
+                        action[2]
+                    ),
+                }],
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
         ACTION_COMBAT_MOVEMENT if action[2] == 0 && action[3] == 0 => Ok(movement_action(
             kind,
             format!("combat-movement:{}", action[1] != 0),
@@ -4545,6 +4932,102 @@ fn map_action(
             summon_location: None,
             normalizations: Vec::new(),
         }),
+        ACTION_FORCE_DESPAWN if action[2..] == [0, 0] => Ok(NativeAction {
+            encoded: format!("force-despawn:{}", action[1]),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            threat_percent: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_THROW_AI_EVENT if action[1] <= 11 => {
+            let target = map_target(action[3]).map_err(|failure| vec![failure])?;
+            Ok(NativeAction {
+                encoded: format!(
+                    "throw-ai-event:{}:{}:{target}",
+                    ai_event_name(action[1]).expect("the bounded AI event kind has a name"),
+                    action[2]
+                ),
+                raw_kind: kind,
+                raw_target: Some(action[3]),
+                raw_cast_flags: None,
+                threat_percent: None,
+                dependencies: Vec::new(),
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
+        ACTION_SET_STAND_STATE if u8::try_from(action[1]).is_ok() && action[2..] == [0, 0] => {
+            Ok(NativeAction {
+                encoded: format!("set-stand-state:{}", action[1]),
+                raw_kind: kind,
+                raw_target: None,
+                raw_cast_flags: None,
+                threat_percent: None,
+                dependencies: Vec::new(),
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
+        ACTION_SET_REACT_STATE if action[2..] == [0, 0] && action[1] <= 2 => Ok(NativeAction {
+            encoded: format!(
+                "set-react-state:{}",
+                match action[1] {
+                    0 => "passive",
+                    1 => "defensive",
+                    2 => "aggressive",
+                    _ => unreachable!("the react state is bounded"),
+                }
+            ),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            threat_percent: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_DESPAWN_GUARDIANS if action[2..] == [0, 0] => {
+            let entry = u64::from(action[1]);
+            if entry != 0 && !importable_templates.contains(&entry) {
+                return Err(vec![MappingFailure::dependency(
+                    "creature_template",
+                    entry,
+                    "missing",
+                    format!("rule:{rule_id} -> action:{slot} -> creature_template:{entry}"),
+                )]);
+            }
+            Ok(NativeAction {
+                encoded: format!("remove-guardians:{}", action[1]),
+                raw_kind: kind,
+                raw_target: None,
+                raw_cast_flags: None,
+                threat_percent: None,
+                dependencies: (entry != 0)
+                    .then(|| Dependency {
+                        kind: "creature_template",
+                        path: format!(
+                            "rule:{rule_id} -> action:{slot} -> creature_template:{entry}"
+                        ),
+                    })
+                    .into_iter()
+                    .collect(),
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
         ACTION_SET_DEATH_PREVENTION if action[1] <= 1 && action[2..] == [0, 0] => {
             Ok(NativeAction {
                 encoded: format!("lethal-floor:{}", if action[1] == 0 { "off" } else { "on" }),
@@ -4627,6 +5110,40 @@ fn map_action(
         ACTION_START_RELAY => {
             let roots = relays.validate_action(action[1], rule_id, slot)?;
             let target = map_target(action[2]).map_err(|failure| vec![failure])?;
+            let root_set = roots.iter().copied().collect::<BTreeSet<_>>();
+            let closure = relays.closure(&root_set);
+            let mut dependencies = roots
+                .iter()
+                .map(|root| Dependency {
+                    kind: "relay_definition",
+                    path: format!("rule:{rule_id} -> action:{slot} -> relay:{root}"),
+                })
+                .collect::<Vec<_>>();
+            for relay_id in &closure {
+                for row in relays.definitions.get(relay_id).into_iter().flatten() {
+                    if let Some(arrival_relay) = row.arrival_relay_id() {
+                        dependencies.push(Dependency {
+                            kind: "relay_arrival",
+                            path: format!(
+                                "rule:{rule_id} -> action:{slot} -> relay:{relay_id} -> row:{} -> arrival-relay:{arrival_relay}",
+                                row.source_order
+                            ),
+                        });
+                    }
+                }
+            }
+            let normalizations = closure
+                .iter()
+                .filter_map(|relay_id| relays.definitions.get(relay_id))
+                .flatten()
+                .any(RawRelayStep::is_loader_skipped)
+                .then_some(SourceNormalization {
+                    dimension: "relay_command",
+                    raw_value: 1,
+                    reason: "source_loader_skipped_empty_emote",
+                })
+                .into_iter()
+                .collect();
             Ok(NativeAction {
                 encoded: format!(
                     "start-relay:{}:{target}:{RELAY_CATALOGUE_VERSION_PLACEHOLDER}",
@@ -4640,17 +5157,11 @@ fn map_action(
                 raw_target: Some(action[2]),
                 raw_cast_flags: None,
                 threat_percent: None,
-                dependencies: roots
-                    .iter()
-                    .map(|root| Dependency {
-                        kind: "relay_definition",
-                        path: format!("rule:{rule_id} -> action:{slot} -> relay:{root}"),
-                    })
-                    .collect(),
+                dependencies,
                 texts: Vec::new(),
                 summon_entry: None,
                 summon_location: None,
-                normalizations: Vec::new(),
+                normalizations,
             })
         }
         ACTION_DIE => Err(vec![MappingFailure::source(
@@ -4968,7 +5479,7 @@ fn speech_mode(
         .filter_map(|id| broadcasts.get(id).map(|text| text.chat_type))
         .collect::<BTreeSet<_>>();
     for mode in &modes {
-        if *mode > 1 {
+        if *mode > 2 {
             failures.push(MappingFailure::dependency(
                 "broadcast_text",
                 u64::from(*mode),
@@ -4977,17 +5488,13 @@ fn speech_mode(
             ));
         }
     }
-    if modes.len() > 1 {
-        failures.push(MappingFailure::source(
-            "action",
-            ACTION_TEXT as u64,
-            "mixed_speech_mode",
-        ));
-    }
-    if modes.first().copied() == Some(1) {
-        "yell"
-    } else {
-        "say"
+    match ids
+        .first()
+        .and_then(|id| broadcasts.get(id))
+        .map(|text| text.chat_type)
+    {
+        Some(1) => "yell",
+        _ => "say",
     }
 }
 
@@ -5672,6 +6179,19 @@ mod tests {
             "set-movement:patrol:7:run"
         );
 
+        let mut random_home = relay_step(20, 1, 0);
+        random_home.datalong2 = 20;
+        random_home.dataints[0] = 1;
+        assert_eq!(
+            random_home.encode_instruction().unwrap(),
+            "set-movement:random-home:20:walk"
+        );
+        random_home.flags = SCRIPT_FLAG_COMMAND_ADDITIONAL;
+        assert_eq!(
+            random_home.encode_instruction().unwrap(),
+            "set-movement:random-current:20:walk"
+        );
+
         let mut terminate = relay_step(31, 177_784, 0);
         terminate.datalong2 = 40;
         terminate.flags = SCRIPT_FLAG_BUDDY_BY_GO | SCRIPT_FLAG_COMMAND_ADDITIONAL;
@@ -5695,13 +6215,13 @@ mod tests {
             world_state.encode_instruction().unwrap(),
             "set-world-state:19990:1"
         );
-        assert!(!world_state.has_gameplay_authority());
+        assert!(world_state.has_gameplay_authority());
 
         let mut dynamic = relay_step(37, 0, 0);
         dynamic.dataints = [2, 20, 0, 0];
         assert_eq!(
-            dynamic.encode_instruction().unwrap_err(),
-            "unsupported dynamic movement flags 20"
+            dynamic.encode_instruction().unwrap(),
+            "move-dynamic:0:0:0:run:20"
         );
     }
 
@@ -5851,6 +6371,100 @@ mod tests {
     }
 
     #[test]
+    fn relay_empty_primary_emote_is_loader_skipped_without_a_runtime_step() {
+        let sql = format!(
+            "INSERT INTO `creature_ai_scripts` VALUES {}; \
+             INSERT INTO `dbscripts_on_relay` VALUES \
+             (1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'loader skips'), \
+             (1,1,0,25,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'run');",
+            rule(
+                10,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_START_RELAY as i64, 1, 0, 0], [0; 4], [0; 4]],
+            )
+        );
+        let source = parse(&sql);
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        assert_eq!(plan.relay_definition_rows.len(), 1);
+        assert!(plan.relay_definition_rows[0].contains("set-run:1"));
+        assert!(!plan.relay_definition_rows[0].contains("emote:"));
+        assert_eq!(plan.coverage.ticket_census["relay_rows"], 2);
+        assert_eq!(plan.coverage.ticket_census["relay_emitted_steps"], 1);
+        assert_eq!(plan.coverage.ticket_census["relay_loader_skipped_rows"], 1);
+
+        let manifest =
+            plan.compatibility_manifest(&fixture_profile(&plan), "fixture", LOADER_CONTRACT);
+        assert!(manifest.is_apply_ready(), "{}", manifest.render());
+        assert!(manifest
+            .render()
+            .contains("source_loader_skipped_empty_emote"));
+    }
+
+    #[test]
+    fn text_new_uses_type_zero_string_templates_and_preserves_linked_choice_modes() {
+        let sql = format!(
+            "INSERT INTO `broadcast_text` VALUES \
+             (7133,'First','First',1,0,0,0,0,0,0,0,0,0,0,0,0,0), \
+             (7134,'Second','Second',2,0,0,0,0,0,0,0,0,0,0,0,0,0); \
+             INSERT INTO `dbscript_random_templates` VALUES \
+             (35,0,7133,0,'string one'),(35,0,7134,0,'string two'), \
+             (36,1,9000,0,'relay'); \
+             INSERT INTO `creature_ai_scripts` VALUES {};",
+            rule(
+                10,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_TEXT_NEW as i64, 0, 0, 35], [0; 4], [0; 4]],
+            )
+        );
+        let source = parse(&sql);
+        assert!(source.relays.string_templates.contains_key(&35));
+        assert!(!source.relays.random_templates.contains_key(&35));
+        assert!(source.relays.random_templates.contains_key(&36));
+
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        assert!(plan.definition_rows[0].contains("speak:yell:self:7133.7134"));
+        assert_eq!(plan.broadcast_rows.len(), 2);
+        assert!(plan
+            .compatibility_manifest(&fixture_profile(&plan), "fixture", LOADER_CONTRACT)
+            .is_apply_ready());
+    }
+
+    #[test]
+    fn missing_text_template_keeps_the_action_slot_as_a_typed_no_effect() {
+        let source = parse(&dump(&[rule(
+            10,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[ACTION_TEXT_NEW as i64, 0, 0, 999], [0; 4], [0; 4]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        assert!(plan.definition_rows[0].contains("no-effect:missing-text-template:999"));
+
+        let mut profile = fixture_profile(&plan);
+        profile.approvals.normalizations.insert((
+            "text_template".to_string(),
+            "999".to_string(),
+            "source_runtime_missing_text_template_no_effect".to_string(),
+        ));
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        assert!(manifest.is_apply_ready(), "{}", manifest.render());
+    }
+
+    #[test]
     fn definitions_keep_subjects_rules_and_instruction_order() {
         let source = parse(&dump(&[
             rule(
@@ -5903,6 +6517,81 @@ mod tests {
 
         let again = source.assemble(&entries, &guids, &templates);
         assert_eq!(plan.definition_rows, again.definition_rows);
+    }
+
+    #[test]
+    fn canonical_direct_actions_use_named_runtime_instructions() {
+        let mut relays = RelaySource::default();
+        relays.spell_ids.insert(8_909);
+        let templates = HashSet::from([6_911]);
+        let cases = [
+            (
+                [ACTION_RANDOM_EMOTE, u32::MAX, 0, 18],
+                "random-emote:-1.0.18",
+            ),
+            (
+                [ACTION_SPAWN, 6_911, TARGET_HOSTILE, 10_000],
+                "spawn-at-actor:6911:opponent:10000",
+            ),
+            (
+                [ACTION_REMOVE_AURA, TARGET_SELF, 8_909, 0],
+                "remove-aura:8909:self",
+            ),
+            ([ACTION_FORCE_DESPAWN, 3_000, 0, 0], "force-despawn:3000"),
+            (
+                [ACTION_THROW_AI_EVENT, 5, 50, TARGET_SELF],
+                "throw-ai-event:custom-a:50:self",
+            ),
+            ([ACTION_SET_STAND_STATE, 7, 0, 0], "set-stand-state:7"),
+            (
+                [ACTION_SET_REACT_STATE, 2, 0, 0],
+                "set-react-state:aggressive",
+            ),
+            ([ACTION_DESPAWN_GUARDIANS, 0, 0, 0], "remove-guardians:0"),
+        ];
+        for (slot, (action, expected)) in cases.into_iter().enumerate() {
+            let mapped = map_action(
+                action,
+                100,
+                10,
+                100,
+                slot,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &HashSet::new(),
+                &templates,
+                &HashMap::new(),
+                &relays,
+            )
+            .unwrap();
+            assert_eq!(mapped.encoded, expected);
+        }
+    }
+
+    #[test]
+    fn sound_exclusion_drops_the_whole_rule_instead_of_emitting_siblings() {
+        let source = parse(&dump(&[rule(
+            10,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [
+                [ACTION_SOUND as i64, 1_018, 0, 0],
+                [ACTION_EMOTE as i64, 15, 0, 0],
+                [0; 4],
+            ],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        assert!(plan.definition_rows.is_empty());
+        assert_eq!(plan.coverage.excluded_rules, 1);
+        assert_eq!(plan.coverage.dropped_rules, 0);
+        let manifest =
+            plan.compatibility_manifest(&fixture_profile(&plan), "fixture", LOADER_CONTRACT);
+        assert!(manifest.is_apply_ready(), "{}", manifest.render());
+        assert!(manifest.render().contains("unsupported_sound_playback"));
     }
 
     #[test]
@@ -6824,14 +7513,8 @@ mod tests {
             5
         );
         assert_eq!(
-            rendered["source_census"]["reachable_relays"]["command_type_classifications"]["53"]
-                ["classification"],
-            "unresolved"
-        );
-        assert_eq!(
-            rendered["source_census"]["reachable_relays"]["command_type_classifications"]["53"]
-                ["required_owner"],
-            "typed_world_state_or_refusal"
+            rendered["source_census"]["reachable_relays"]["unclassified_command_values"],
+            serde_json::json!({})
         );
     }
 
@@ -6882,6 +7565,31 @@ mod tests {
         );
         assert_eq!(source.coverage.total_rules, 10_843);
         assert_eq!(source.coverage.source_guid_rules, 39);
+        let text_template_references = source
+            .rules
+            .iter()
+            .flat_map(|rule| rule.actions)
+            .filter(|action| action[0] == ACTION_TEXT_NEW && action[3] != 0)
+            .map(|action| action[3])
+            .collect::<Vec<_>>();
+        assert_eq!(text_template_references.len(), 109);
+        assert_eq!(source.relays.string_templates.len(), 57);
+        assert!(text_template_references
+            .iter()
+            .all(|template_id| source.relays.string_templates.contains_key(template_id)));
+        assert_eq!(
+            source
+                .broadcasts
+                .values()
+                .filter(|text| text.chat_type == 2)
+                .count(),
+            314
+        );
+        assert_eq!(
+            uniform_template_targets(&source.relays.string_templates[&35]).unwrap(),
+            vec![7_133, 7_134]
+        );
+        assert!(!source.relays.random_templates.contains_key(&35));
         let relays = &source.coverage.reachable_relays;
         assert_eq!(relays.root_references, 141);
         assert_eq!(relays.direct_root_ids.len(), 109);
@@ -7115,29 +7823,8 @@ mod tests {
                 }
             }
         }
-        assert_eq!(accepted_relay_actions, 119);
-        assert_eq!(
-            relay_failures,
-            BTreeMap::from([
-                ("empty_random_choice:relay_definition".to_string(), 3),
-                (
-                    "no_gameplay_authority_for_command_13:relay_definition".to_string(),
-                    1,
-                ),
-                (
-                    "no_gameplay_authority_for_command_21:relay_definition".to_string(),
-                    15,
-                ),
-                (
-                    "no_gameplay_authority_for_command_44:relay_definition".to_string(),
-                    2,
-                ),
-                (
-                    "unsupported dynamic movement flags 20:relay_definition".to_string(),
-                    1,
-                ),
-            ])
-        );
+        assert_eq!(accepted_relay_actions, 141);
+        assert_eq!(relay_failures, BTreeMap::new());
 
         let root_ids = source
             .rules
@@ -7152,6 +7839,16 @@ mod tests {
             .into_iter()
             .flat_map(|id| source.relays.definitions.get(&id).into_iter().flatten())
             .collect::<Vec<_>>();
+        assert_eq!(root_ids.len(), 119);
+        assert_eq!(source.relays.closure(&root_ids).len(), 121);
+        assert_eq!(relay_rows.len(), 451);
+        assert_eq!(
+            relay_rows
+                .iter()
+                .filter(|row| row.is_loader_skipped())
+                .count(),
+            2
+        );
         let unowned_rows = relay_rows
             .iter()
             .filter(|row| !row.has_gameplay_authority())
@@ -7159,24 +7856,25 @@ mod tests {
                 *counts.entry(row.command).or_insert(0) += 1;
                 counts
             });
-        assert_eq!(
-            unowned_rows,
-            BTreeMap::from([(13, 14), (21, 25), (44, 2), (52, 4), (53, 2)])
-        );
+        assert_eq!(unowned_rows, BTreeMap::new());
         let refused_owned_rows = relay_rows
             .iter()
+            .filter(|row| !row.is_loader_skipped())
             .filter(|row| row.has_gameplay_authority())
             .filter_map(|row| row.encode_instruction_with_source(&source.relays).err())
             .fold(BTreeMap::new(), |mut counts, reason| {
                 *counts.entry(reason).or_insert(0) += 1;
                 counts
             });
-        assert_eq!(
-            refused_owned_rows,
-            BTreeMap::from([
-                ("empty_random_choice".to_string(), 2),
-                ("unsupported dynamic movement flags 20".to_string(), 1,),
-            ])
-        );
+        assert_eq!(refused_owned_rows, BTreeMap::new());
+        let emitted_rows = relay_rows
+            .iter()
+            .filter(|row| !row.is_loader_skipped())
+            .map(|row| row.encode_instruction_with_source(&source.relays).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(emitted_rows.len(), 449);
+        assert!(emitted_rows
+            .iter()
+            .any(|instruction| instruction == "set-movement:random-home:20:walk"));
     }
 }

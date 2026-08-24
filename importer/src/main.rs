@@ -562,6 +562,7 @@ pub(crate) const GO_BUTTON: u8 = 1;
 const GO_QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER; // shared const (041) — no drift
 const GO_CHEST: u8 = 3;
 const GO_GOOBER: u8 = 10;
+const RELAY_TRAP_TEMPLATE_ENTRY: u64 = 180_391;
 /// Synthetic — must equal module `go_type::GATHER`. Vanilla's REAL type 25 is
 /// GAMEOBJECT_TYPE_FISHINGHOLE; see the TYPE-25 COLLISION GUARD in `classify_go_type`.
 const GO_GATHER: u8 = 25;
@@ -828,6 +829,8 @@ pub(crate) mod got {
     // raw dump columns.
     pub const DATA0: usize = 8;
     pub const DATA1: usize = 9;
+    pub const DATA3: usize = 11;
+    pub const DATA5: usize = 13;
 }
 mod go {
     // gameobject (spawn): guid, id(=gameobject_template.entry), map, spawnMask, x, y, z, orientation, rot0..3, ...
@@ -2161,6 +2164,8 @@ struct GossipEtl {
     npc_text_rows: Vec<String>,
     npc_text_slot_rows: Vec<String>,
     option_rows: Vec<String>,
+    profile_rows: Vec<String>,
+    profile_option_rows: Vec<String>,
 }
 
 fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64>) -> GossipEtl {
@@ -2251,6 +2256,16 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
         // else: no text found for this creature — gateway falls back to the generic greeting.
     }
 
+    const RELAY_GOSSIP_MENUS: [u64; 4] = [6_623, 6_687, 6_688, 6_949];
+    let mut profile_rows = Vec::new();
+    for menu_id in RELAY_GOSSIP_MENUS {
+        let Some(&text_id) = menu_to_text.get(&menu_id) else {
+            continue;
+        };
+        profile_rows.push(format!("({menu_id},{text_id})"));
+        needed_text_ids.insert(text_id);
+    }
+
     // 5. Emit game_npc_text + game_npc_text_slot rows for all referenced text_ids.
     let mut npc_text_rows: Vec<String> = Vec::new();
     let mut npc_text_slot_rows: Vec<String> = Vec::new();
@@ -2332,15 +2347,49 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
         }
     }
 
+    let mut profile_option_rows = Vec::new();
+    let mut profile_row_id = 1u32;
+    for menu_id in RELAY_GOSSIP_MENUS {
+        let Some(opts) = menu_to_options.get(&menu_id) else {
+            continue;
+        };
+        let mut sorted_opts: Vec<&Vec<String>> = opts.iter().collect();
+        sorted_opts.sort_by_key(|row| field(row, gmo::ID).parse::<u64>().unwrap_or(0));
+        let mut option_index = 0u32;
+        for row in sorted_opts {
+            let icon: u32 = field(row, gmo::OPTION_ICON).parse().unwrap_or(0);
+            let text = resolve_gossip_option_text(row, &broadcast);
+            let action = reclassify_gossip_option_action(
+                &text,
+                field(row, gmo::OPTION_TYPE).parse().unwrap_or(0),
+            );
+            if action == lyracore_shared::constants::gossip_option::QUESTGIVER {
+                continue;
+            }
+            let action_menu_id: u32 = field(row, gmo::ACTION_MENU_ID).parse().unwrap_or(0);
+            let (cond_type, cond_value1, cond_value2) =
+                resolve_gossip_option_condition(row, &conditions);
+            profile_option_rows.push(format!(
+                "({profile_row_id},{menu_id},{option_index},{icon},{},{action},{action_menu_id},{cond_type},{cond_value1},{cond_value2})",
+                sql_text(&text),
+            ));
+            profile_row_id += 1;
+            option_index += 1;
+        }
+    }
+
     eprintln!(
-        "gossip: {} creature→text mappings, {} npc_text strings resolved ({} weighted slot rows), {} menu options",
+        "gossip: {} creature→text mappings, {} npc_text strings resolved ({} weighted slot rows), {} menu options, {} relay profiles, {} relay profile options",
         gossip_rows.len(), npc_text_rows.len(), npc_text_slot_rows.len(), option_rows.len(),
+        profile_rows.len(), profile_option_rows.len(),
     );
     GossipEtl {
         menu_rows: gossip_rows,
         npc_text_rows,
         npc_text_slot_rows,
         option_rows,
+        profile_rows,
+        profile_option_rows,
     }
 }
 
@@ -4187,6 +4236,8 @@ fn build_dump_plan(
         name: String,
         data0: u32,
         data1: u32,
+        trap_spell_id: u32,
+        trap_cooldown_secs: u32,
         size: f32,
     }
     let mut dropped_type25: Vec<u64> = Vec::new();
@@ -4206,6 +4257,16 @@ fn build_dump_plan(
             let name = field(row, got::NAME).to_string();
             let data0: u32 = field(row, got::DATA0).parse().unwrap_or(0);
             let data1: u32 = field(row, got::DATA1).parse().unwrap_or(0);
+            let trap_spell_id = if raw_type == 6 {
+                field(row, got::DATA3).parse().unwrap_or(0)
+            } else {
+                0
+            };
+            let trap_cooldown_secs = if raw_type == 6 {
+                field(row, got::DATA5).parse().unwrap_or(0)
+            } else {
+                0
+            };
             // 0 on an unparseable/absent column — the gateway reads that as "no size stored" and
             // sends 1.0, never an invisible prop.
             let size: f32 = field(row, got::SIZE).parse().unwrap_or(0.0);
@@ -4217,6 +4278,8 @@ fn build_dump_plan(
                     name,
                     data0,
                     data1,
+                    trap_spell_id,
+                    trap_cooldown_secs,
                     size,
                 },
             ))
@@ -4292,11 +4355,18 @@ fn build_dump_plan(
     // lesson). Also builds the per-type coverage histogram + the CHEST lootId set (widened to EVERY
     // imported chest, not a curated allowlist — work-item 210's scoping now spans the whole live set).
     let mut go_template_rows: Vec<String> = Vec::new();
+    let mut go_trap_rows: Vec<String> = Vec::new();
     let mut chest_loot_ids_used: Vec<u32> = Vec::new();
     let mut go_type_histogram: std::collections::BTreeMap<u8, u32> =
         std::collections::BTreeMap::new();
     let mut used_sorted: Vec<u64> = used_go.iter().copied().collect();
+    // The pinned relay closure activates this trap by database GUID. Its static authority must be
+    // present even when the world profile does not include the trap's spawn.
+    if go_meta.contains_key(&RELAY_TRAP_TEMPLATE_ENTRY) {
+        used_sorted.push(RELAY_TRAP_TEMPLATE_ENTRY);
+    }
     used_sorted.sort_unstable();
+    used_sorted.dedup();
     for entry in used_sorted {
         let meta = &go_meta[&entry];
         *go_type_histogram.entry(meta.stored_type).or_insert(0) += 1;
@@ -4310,6 +4380,12 @@ fn build_dump_plan(
             meta.size,
         );
         go_template_rows.push(row);
+        if meta.trap_spell_id != 0 {
+            go_trap_rows.push(format!(
+                "({entry},{},{})",
+                meta.trap_spell_id, meta.trap_cooldown_secs
+            ));
+        }
         if let Some(loot_id) = loot_id_used {
             chest_loot_ids_used.push(loot_id);
         }
@@ -4624,6 +4700,8 @@ fn build_dump_plan(
         // PACKAGE that mints its own gossip (e.g. the dynamic-events guard) uses the high bands —
         // menu.entry ≥ 1_000_000 (above every real creature entry), and option.row_id / text_id /
         // slot.id ≥ 50_000 — so a routine import never wipes package rows. Documented in danger-zones.
+        stmts.push("DELETE FROM game_gossip_menu_profile_option WHERE row_id > 0".into());
+        stmts.push("DELETE FROM game_gossip_menu_profile WHERE menu_id > 0".into());
         stmts.push("DELETE FROM game_gossip_menu WHERE entry > 0 AND entry < 1000000".into());
         stmts.push("DELETE FROM game_npc_text WHERE text_id > 0 AND text_id < 50000".into());
         stmts.push("DELETE FROM game_npc_text_slot WHERE id >= 0 AND id < 50000".into());
@@ -4647,6 +4725,18 @@ fn build_dump_plan(
             &gossip.npc_text_slot_rows,
         );
         push_insert(&mut stmts, "game_gossip_option", "row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2", &gossip.option_rows);
+        push_insert(
+            &mut stmts,
+            "game_gossip_menu_profile",
+            "menu_id,text_id",
+            &gossip.profile_rows,
+        );
+        push_insert(
+            &mut stmts,
+            "game_gossip_menu_profile_option",
+            "row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2",
+            &gossip.profile_option_rows,
+        );
     }
 
     // Quests: clear+reload the static quest tables (header / body text / objectives / cast objectives /
@@ -4709,8 +4799,15 @@ fn build_dump_plan(
     // GOOBER gameobject templates (family "gameobjects" — no-Timestamp → plain SQL clear+reload).
     // The gameobject SPAWNS load separately via the import_gameobjects reducer below (also family-gated).
     if family_active(args, "gameobjects") {
+        stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
         stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
         push_insert(&mut stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", &go_template_rows);
+        push_insert(
+            &mut stmts,
+            "game_gameobject_trap",
+            "entry,spell_id,cooldown_secs",
+            &go_trap_rows,
+        );
     }
     // Trainer spell lists (family "trainers").
     if family_active(args, "trainers") {
@@ -4872,14 +4969,19 @@ fn build_dump_plan(
             (gossip.menu_rows.len()
                 + gossip.npc_text_rows.len()
                 + gossip.npc_text_slot_rows.len()
-                + gossip.option_rows.len()) as u64,
+                + gossip.option_rows.len()
+                + gossip.profile_rows.len()
+                + gossip.profile_option_rows.len()) as u64,
         ));
     }
     if family_active(args, "quests") {
         stamps.push(("quests", quests.templates.len() as u64));
     }
     if family_active(args, "gameobjects") {
-        stamps.push(("gameobjects", go_template_rows.len() as u64));
+        stamps.push((
+            "gameobjects",
+            (go_template_rows.len() + go_trap_rows.len()) as u64,
+        ));
     }
     if family_active(args, "trainers") {
         stamps.push(("trainers", trainer_rows.len() as u64));
@@ -5308,6 +5410,25 @@ mod tests {
         assert_eq!(go_initial_state(GO_GOOBER, 1), 0);
         assert_eq!(go_initial_state(GO_GATHER, 1), 0);
         assert_eq!(go_initial_state(GO_QUESTGIVER, 1), 0);
+    }
+
+    #[test]
+    fn gameobject_family_emits_the_reachable_relay_trap_profile() {
+        let dump = "INSERT INTO `gameobject_template` VALUES \
+            (180391,6,640,'Fel Rune',0,0,0,1,0,0,0,24425,0,0);";
+        let mut args = test_args();
+        args.family = Some("gameobjects".to_string());
+        let plan = build_dump_plan(dump, &args, &None, &None).unwrap();
+
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gameobject_trap (entry,spell_id,cooldown_secs)")
+                && statement.contains("(180391,24425,0)")
+        }));
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gameobject_template")
+                && statement.contains("(180391,6,640,'Fel Rune'")
+        }));
+        assert_eq!(plan.stamps, vec![("gameobjects", 2)]);
     }
 
     #[test]
@@ -6133,6 +6254,40 @@ mod tests {
             "{}",
             etl.option_rows[2]
         );
+    }
+
+    #[test]
+    fn build_gossip_sql_emits_the_four_relay_menu_profiles_and_dense_options() {
+        let dump = "INSERT INTO `gossip_menu` VALUES \
+             (6623,5001,0,0),(6687,5002,0,0),(6688,5003,0,0),(6949,5004,0,0); \
+             INSERT INTO `npc_text` VALUES \
+             (5001,1,0,0,0,0,0,0,0,8001,0,0,0,0,0,0,0), \
+             (5002,1,0,0,0,0,0,0,0,8002,0,0,0,0,0,0,0), \
+             (5003,1,0,0,0,0,0,0,0,8003,0,0,0,0,0,0,0), \
+             (5004,1,0,0,0,0,0,0,0,8004,0,0,0,0,0,0,0); \
+             INSERT INTO `broadcast_text` VALUES \
+             (8001,'One','',0),(8002,'Two','',0),(8003,'Three','',0), \
+             (8004,'Four','',0),(9001,'First option','',0); \
+             INSERT INTO `conditions` VALUES (501,9,777,0); \
+             INSERT INTO `gossip_menu_option` VALUES \
+             (6688,7,1,'Second option',0,1,0,12,0,0,0,0,'',0,501), \
+             (6687,2,0,'9001',0,1,0,0,0,0,0,0,'',0,0);";
+        let etl = build_gossip_sql(dump, &std::collections::HashSet::new());
+
+        assert_eq!(
+            etl.profile_rows,
+            vec!["(6623,5001)", "(6687,5002)", "(6688,5003)", "(6949,5004)",]
+        );
+        assert_eq!(etl.profile_option_rows.len(), 2);
+        assert_eq!(
+            etl.profile_option_rows[0],
+            "(1,6687,0,0,'First option',1,0,0,0,0)"
+        );
+        assert_eq!(
+            etl.profile_option_rows[1],
+            "(2,6688,0,1,'Second option',1,12,1,777,0)"
+        );
+        assert_eq!(etl.npc_text_rows.len(), 4);
     }
 
     #[test]
@@ -7083,6 +7238,114 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires LYRACORE_CLASSIC_DB_SQL pointing at the pinned decompressed SQL or gzip"]
+    fn pinned_alliance_single_plan_is_apply_ready_with_relay_static_dependencies() {
+        let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
+        let dump = read_dump(&path).unwrap();
+        let args = parse_args_from([
+            "--dump",
+            path.as_str(),
+            "--world-profile",
+            "alliance-single",
+            "--eventai-profile",
+            eventai::SOURCE_PROFILE_NAME,
+        ])
+        .unwrap();
+        let plan = build_dump_plan(&dump, &args, &None, &None).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(plan.eventai_manifest.as_deref().unwrap()).unwrap();
+
+        assert_eq!(manifest["apply_ready"], true, "{manifest:#}");
+        assert_eq!(manifest["findings"], serde_json::json!([]));
+        assert_eq!(manifest["counts"]["unapproved_result_groups"], 0);
+        assert_eq!(manifest["counts"]["dropped_rules"], 0);
+        assert_eq!(manifest["counts"]["ticket"]["relay_root_rules"], 141);
+        assert_eq!(
+            manifest["counts"]["ticket"]["relay_accepted_root_rules"],
+            141
+        );
+        assert_eq!(manifest["counts"]["ticket"]["relay_definitions"], 121);
+        assert_eq!(
+            manifest["counts"]["ticket"]["relay_structural_definitions"],
+            120
+        );
+        assert_eq!(manifest["counts"]["ticket"]["relay_rows"], 451);
+        assert_eq!(manifest["counts"]["ticket"]["relay_structural_rows"], 447);
+        assert_eq!(manifest["counts"]["ticket"]["relay_emitted_steps"], 449);
+        assert_eq!(manifest["counts"]["ticket"]["relay_loader_skipped_rows"], 2);
+        assert_eq!(
+            manifest["counts"]["ticket"]["text_emote_dependency_occurrences"],
+            300
+        );
+        let result = |action: u32, classification: &str, reason: &str| {
+            let raw_value = action.to_string();
+            manifest["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|result| {
+                    result["dimension"] == "action"
+                        && result["raw_value"].as_str() == Some(raw_value.as_str())
+                        && result["classification"] == classification
+                        && result["reason"] == reason
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing action result {action}/{classification}/{reason}")
+                })
+        };
+        for (action, rules, occurrences) in [
+            (10, 3, 3),
+            (12, 1, 3),
+            (28, 3, 3),
+            (41, 6, 6),
+            (45, 1, 1),
+            (47, 2, 2),
+            (50, 3, 3),
+            (56, 14, 14),
+        ] {
+            let emitted = result(action, "emitted", "emitted");
+            assert_eq!(emitted["source_rule_ids"].as_array().unwrap().len(), rules);
+            assert_eq!(emitted["occurrences"], occurrences);
+        }
+        let text_new_occurrences = result(54, "emitted", "emitted")["occurrences"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(text_new_occurrences, 62);
+        let text_templates = manifest["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|result| {
+                result["dimension"] == "dependency"
+                    && result["raw_value"] == "eventai_text_template"
+                    && result["classification"] == "emitted"
+                    && result["reason"] == "resolved"
+            })
+            .unwrap();
+        let text_template_occurrences = text_templates["occurrences"].as_u64().unwrap();
+        assert_eq!(text_template_occurrences, 56);
+        assert_eq!(text_new_occurrences - text_template_occurrences, 6);
+        let sound = result(4, "excluded", "unsupported_sound_playback");
+        assert_eq!(
+            sound["source_rule_ids"],
+            serde_json::json!([
+                6901, 29901, 83401, 128401, 192201, 278401, 361601, 793701, 793702, 799901, 1171102
+            ])
+        );
+        assert_eq!(plan.eventai_relay_definition_count, 27);
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gameobject_trap (entry,spell_id,cooldown_secs)")
+                && statement.contains("(180391,24425,0)")
+        }));
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gossip_menu_profile (menu_id,text_id)")
+                && ["(6623,", "(6687,", "(6688,", "(6949,"]
+                    .iter()
+                    .all(|row| statement.contains(row))
+        }));
+    }
+
+    #[test]
     fn creature_template_import_preserves_source_faction_templates() {
         let dump = format!(
             "INSERT INTO `creature` VALUES \\
@@ -7794,11 +8057,17 @@ mod tests {
             ("missing_summon_location", 999),
             ("malformed_rule", 1),
             ("empty_text", 1),
-            ("unsupported_text_template", 77),
-            ("unsupported_chat_type", 2),
         ] {
             assert_eq!(plan.dropped(reason, value), 1, "{reason}/{value}");
         }
+        assert!(plan
+            .definition_rows
+            .iter()
+            .any(|row| row.contains("no-effect:missing-text-template:77")));
+        assert!(plan
+            .definition_rows
+            .iter()
+            .any(|row| row.contains("speak:say:self:903")));
         assert_eq!(plan.event_counts(99), (1, 0, 1, 0));
         assert_eq!(plan.action_counts(99), (3, 0, 3, 0));
     }
