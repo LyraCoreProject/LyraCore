@@ -55,6 +55,7 @@ lyracore account alpha-test-tools grant|revoke REALM_CORE ACCOUNT
 lyracore import [--accept] [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
+lyracore client sync
 lyracore character gm NAME true|false
 lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
 lyracore update
@@ -74,6 +75,7 @@ lyracore update
 | `account alpha-test-tools` | read or set automatic enrollment, or grant or revoke one Account |
 | `import` | replace the seed fixture with the real world — consent notice, then the ETL on every database the fixture populates |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
+| `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
@@ -170,6 +172,31 @@ first, then the value in `config.json` if one is set and still valid, and only t
 the interactive prompt — which, once you type a path that validates, is **saved to `config.json`
 for you**, so a plain `./lyracore import` never asks twice.
 
+## `client sync` — push client content to your own client
+
+```bash
+./lyracore config set client-data /games/WoW-1.12.1/Data   # once, if `import` hasn't already
+./lyracore client sync
+```
+
+A thin wrapper around `lyracore-importer --pack-client <client Data/ dir> --apply` (core repo,
+`importer/src/pack_client.rs`): it builds `patch-3.MPQ` from `client-patch/` plus every enabled
+Package's `client/` directory, installs the addons into `Interface/AddOns/`, and clears the `WDB/`
+cache — so a change to a Package's client-side UI reaches your own client in one command. Refuses
+before touching anything if `config set client-data` was never run, naming that command as the fix.
+
+Collision and licensing-firewall failures — two Packages shipping the same archive path or the same
+addon name, or a raw `.dbc`/`.MPQ` committed where only our own assets belong — are caught before
+any file is written to your client, and name both sources.
+
+There is no managed-content ledger and nothing here deletes an addon. When a Package that used to
+ship an addon is disabled or removed, `client sync` warns (best-effort) that the addon it installed
+earlier is still sitting in your `Interface/AddOns/` and names the Package — removing it is your
+call, by hand. An addon `client sync` never installed (yours, or a third party's) is never flagged.
+
+Client distribution — packaging any of this for someone who is not the operator running the
+command — is out of scope here and tracked separately (#303).
+
 ## `preflight` — the offline deploy gate
 
 ```bash
@@ -249,7 +276,8 @@ Runtime files live in the git-ignored `.lyracore/` — `state.json` for the proc
 1. Starts SpacetimeDB on `127.0.0.1:3000`, **or reuses one already listening there.** A node the CLI
    did not start is never recorded and never stopped by `dev down`.
 2. Builds the gateway.
-3. Runs `preflight`, then publishes **only** `lyracore`, through the same internal command
+3. Runs `preflight`, then publishes **every database in the recorded topology** — all four of the
+   default sharded fixture, or just `lyracore` under `--single` — through the same internal command
    `lyracore publish` uses — which is what guarantees `--features=debug_reducers`, `--yes`,
    `-s local`, and the unreachability of a `-c` wipe. No path here renders a `spacetime publish` any
    other way, clears a database, or re-selects the SpacetimeDB server. A checkout the gate rejects
