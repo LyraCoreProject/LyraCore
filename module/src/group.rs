@@ -241,9 +241,10 @@ pub struct BotInviteIntent {
 /// against the correct authority; this is a pure write, mirroring how a player's own CMSG_GROUP_INVITE
 /// is a pure gateway-side resolve-then-call with no module-side pre-check either.
 ///
-/// Its ONLY caller is the playerbots drop-in, and `packages/` is an optional tree (see the
-/// `package_only!` macro in `actor.rs`): a build that compiled no package in has no caller for
-/// this, which is a designed state — the public mirror ships no packages at all — not dead code.
+/// Its ONLY caller is the playerbots drop-in (see the `package_only!` macro in `actor.rs`): a
+/// build with no REAL package installed — the common case, since only the inert reference Package,
+/// `packages/example/`, ships by default — has no caller for this, which is a designed state, not
+/// dead code.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_bot_invite_intent(ctx: &ReducerContext, inviter_guid: u64, target_guid: u64) {
     ctx.db.game_bot_invite_intent().insert(BotInviteIntent {

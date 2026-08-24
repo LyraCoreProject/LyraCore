@@ -64,11 +64,11 @@ macro_rules! debug_only {
 }
 
 // The same argument for the other optional consumer: `packages/` is a DROP-IN tree that build.rs
-// discovers at build time, and a checkout with none of it installed (the public mirror ships no
-// packages at all, by manifest) is a designed, supported state — so a verb whose only consumer is
-// a package is not dead, it is unbuilt. build.rs emits `has_packages` when it compiled at least
-// one package in; a build that DID gets the lint back, which is still the cue to delete a verb
-// nobody consumes rather than suppress it.
+// discovers at build time, and a checkout with no REAL package installed (only the inert reference
+// Package, `packages/example/`, which every checkout ships) is a designed, supported state — so a
+// verb whose only consumer is a package is not dead, it is unbuilt. build.rs emits `has_packages`
+// when it compiled at least one package OTHER than the reference one in; a build that DID gets the
+// lint back, which is still the cue to delete a verb nobody consumes rather than suppress it.
 macro_rules! package_only {
     ($(pub(crate) use $path:path as $verb:ident;)+) => {
         $(

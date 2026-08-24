@@ -300,11 +300,10 @@ pub(crate) fn repo_root() -> std::path::PathBuf {
 ///
 /// A drop-in package is optional ONE PACKAGE AT A TIME — a missing `packages/playerbots/src/goals.rs`
 /// inside an installed `packages/playerbots/` is a typo, not an uninstalled package — unlike the
-/// private-only tooling trees below, which are optional WHOLESALE. In a maintainer's own checkout
-/// `packages/` itself is always there (checked in, with its own README); on the public mirror
-/// `packages/` is absent entirely, same as those four trees, and every path under it still resolves
-/// correctly here because it maps to its OWN subpackage dir, which is then just as absent as the
-/// parent it lives under.
+/// private-only tooling trees below, which are optional WHOLESALE. `packages/` itself is always
+/// there, in every checkout including the public mirror (it ships the reference Package,
+/// `packages/example/`), so only an individual OTHER package — `packages/<pkg>` — can be absent;
+/// every path under it still resolves correctly here because it maps to its own subpackage dir.
 fn optional_owner(rel: &str) -> Option<String> {
     let mut segs = rel.split('/');
     match segs.next()? {
