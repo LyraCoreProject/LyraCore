@@ -39,6 +39,119 @@ use crate::{
     game_gameobject_template, game_world_entity,
 };
 
+/// Package-owned encounter selected by the EventAI import boundary.
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EncounterBinding {
+    BlackfathomDeepsKelris,
+    BlackrockDepthsTombOfSeven,
+    DireMaulAlzzin,
+    RazorfenKraulWardKeepers,
+    ShadowfangKeepRethilgore,
+    ShadowfangKeepFenrus,
+    ShadowfangKeepNandos,
+    SunkenTempleAvatar,
+    WailingCavernsAnacondra,
+    WailingCavernsCobrahn,
+    WailingCavernsPythas,
+    WailingCavernsSerpentis,
+    WailingCavernsMutanus,
+    ZulGurubOhgan,
+}
+
+impl EncounterBinding {
+    pub fn map_id(self) -> u32 {
+        match self {
+            Self::BlackfathomDeepsKelris => 48,
+            Self::BlackrockDepthsTombOfSeven => 230,
+            Self::DireMaulAlzzin => 429,
+            Self::RazorfenKraulWardKeepers => 47,
+            Self::ShadowfangKeepRethilgore
+            | Self::ShadowfangKeepFenrus
+            | Self::ShadowfangKeepNandos => 33,
+            Self::SunkenTempleAvatar => 109,
+            Self::WailingCavernsAnacondra
+            | Self::WailingCavernsCobrahn
+            | Self::WailingCavernsPythas
+            | Self::WailingCavernsSerpentis
+            | Self::WailingCavernsMutanus => 43,
+            Self::ZulGurubOhgan => 309,
+        }
+    }
+
+    pub fn encounter_id(self) -> u32 {
+        match self {
+            Self::BlackfathomDeepsKelris => 1,
+            Self::BlackrockDepthsTombOfSeven => 4,
+            Self::DireMaulAlzzin => 0,
+            Self::RazorfenKraulWardKeepers => 1,
+            Self::ShadowfangKeepRethilgore => 2,
+            Self::ShadowfangKeepFenrus => 3,
+            Self::ShadowfangKeepNandos => 4,
+            Self::SunkenTempleAvatar => 4,
+            Self::WailingCavernsAnacondra => 0,
+            Self::WailingCavernsCobrahn => 1,
+            Self::WailingCavernsPythas => 2,
+            Self::WailingCavernsSerpentis => 3,
+            Self::WailingCavernsMutanus => 5,
+            Self::ZulGurubOhgan => 5,
+        }
+    }
+}
+
+/// Named notification delivered to the encounter package that owns [`EncounterBinding`].
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EncounterSignal {
+    Begin,
+    Fail,
+    Complete,
+    BreakAlzzinCrumbleWall,
+    InterruptAvatarSuppression,
+    SendMandokirDownstairs,
+}
+
+/// Route one EventAI notification through encounter authority. The binding checks both package
+/// ownership and map scope before any state is changed.
+pub(crate) fn notify_from_eventai(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    binding: EncounterBinding,
+    signal: EncounterSignal,
+) -> Result<(), String> {
+    let source = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(source_guid)
+        .ok_or_else(|| format!("encounter notification source {source_guid} is missing"))?;
+    if source.map_id != binding.map_id() {
+        return Err(format!(
+            "encounter binding {binding:?} belongs to map {}, not source map {}",
+            binding.map_id(),
+            source.map_id
+        ));
+    }
+    if source.instance_id == 0 {
+        return Err(format!(
+            "encounter binding {binding:?} needs an instance-scoped source"
+        ));
+    }
+    Err(format!(
+        "encounter binding {binding:?} has no installed package authority for {signal:?}"
+    ))
+}
+
+#[cfg(test)]
+fn encounter_state_for_signal(signal: EncounterSignal) -> Option<u8> {
+    match signal {
+        EncounterSignal::Begin => Some(ENCOUNTER_IN_PROGRESS),
+        EncounterSignal::Fail => Some(ENCOUNTER_FAILED),
+        EncounterSignal::Complete => Some(ENCOUNTER_DONE),
+        EncounterSignal::BreakAlzzinCrumbleWall
+        | EncounterSignal::InterruptAvatarSuppression
+        | EncounterSignal::SendMandokirDownstairs => None,
+    }
+}
+
 // ===========================================================================================
 //  Encounter state machine values (mangos EncounterState analogue)
 // ===========================================================================================
@@ -819,6 +932,15 @@ mod tests {
         // The virgin sentinel strictly exceeds any pct a watch may hold (1..=99) AND 100,
         // so `w < HP_FIRED_NONE` is true for every legal watch — the first crossing always fires.
         const { assert!(HP_FIRED_NONE > 100) };
+    }
+
+    #[test]
+    fn named_source_states_translate_to_the_internal_encounter_contract() {
+        assert_eq!(encounter_state_for_signal(EncounterSignal::Fail), Some(3));
+        assert_eq!(
+            encounter_state_for_signal(EncounterSignal::Complete),
+            Some(2)
+        );
     }
 
     #[test]

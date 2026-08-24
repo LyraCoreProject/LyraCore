@@ -39,6 +39,21 @@ The complete EventAI import account for one World Import Scope. It records each 
 dependency path as emitted, normalized, excluded, dropped, or unapproved. An unapproved result is a
 Refusal for apply and remains visible in dry run.
 
+**Encounter Binding**:
+The map-scoped link from an imported EventAI action to the package that owns the encounter.
+
+**Encounter Signal**:
+A named Begin, Fail, Complete, or encounter-specific notification delivered through an Encounter
+Binding. Source numeric states do not cross this boundary.
+
+**Relay Definition**:
+A typed, versioned sequence of EventAI steps imported as one validated catalogue. This is Module
+gameplay data, not a Gateway Relay.
+
+**Relay Run**:
+A durable invocation of one Relay Definition. It pins its catalogue and definition versions,
+participants, next step, due time, and saved random state.
+
 **Bounded Map Slice**:
 A named rectangular or circular part of one map, with the anchor used for terrain and navigation
 selection. The anchor is a real ground point on the client heightmap inside the slice, not a WMO

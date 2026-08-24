@@ -5,6 +5,7 @@ mod fixtures;
 mod loader;
 mod model;
 mod presentation;
+mod relay;
 mod tables;
 
 mod combat;
@@ -49,6 +50,7 @@ use presentation::import_verified_rajaxx_spawn_protection;
 pub(crate) use presentation::{
     CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride,
 };
+pub use relay::*;
 pub use tables::*;
 
 use spacetimedb::ReducerContext;
@@ -82,6 +84,7 @@ mod architecture_tests {
             include_str!("fixtures.rs"),
             include_str!("loader.rs"),
             include_str!("presentation.rs"),
+            include_str!("relay.rs"),
             native_tables.as_str(),
         ];
         for forbidden in [
@@ -145,6 +148,9 @@ mod architecture_tests {
             "game_creature_presentation",
             "game_creature_ai_movement_intent",
             "game_creature_ai_movement_path_waypoint",
+            "game_creature_ai_relay_definition",
+            "game_creature_ai_relay_run",
+            "game_creature_ai_relay_continuation",
         ] {
             assert!(
                 !subscriptions.contains(&format!("SELECT * FROM {table}")),

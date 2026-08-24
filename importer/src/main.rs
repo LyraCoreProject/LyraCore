@@ -3558,7 +3558,9 @@ pub(crate) struct DumpPlan {
     pub(crate) go_batches: Vec<String>,
     pub(crate) go_row_count: usize,
     pub(crate) eventai_definition_batches: Vec<String>,
+    pub(crate) eventai_relay_definition_batches: Vec<String>,
     pub(crate) eventai_definition_count: u64,
+    pub(crate) eventai_relay_definition_count: u64,
     pub(crate) eventai_instruction_count: u64,
     pub(crate) eventai_manifest: Option<String>,
     pub(crate) stamps: Vec<(&'static str, u64)>,
@@ -4901,6 +4903,8 @@ fn build_dump_plan(
     let eventai_definition_count = eventai.definition_count();
     let eventai_instruction_count = eventai.instruction_count();
     let eventai_definition_batches = eventai.definition_batches;
+    let eventai_relay_definition_count = eventai.relay_definition_rows.len() as u64;
+    let eventai_relay_definition_batches = eventai.relay_definition_batches;
 
     Ok(DumpPlan {
         stmts,
@@ -4909,7 +4913,9 @@ fn build_dump_plan(
         spawn_batches: batches,
         go_batches,
         eventai_definition_batches,
+        eventai_relay_definition_batches,
         eventai_definition_count,
+        eventai_relay_definition_count,
         eventai_instruction_count,
         eventai_manifest,
         stamps,
@@ -5029,11 +5035,13 @@ fn main() -> Result<()> {
             println!("-- EventAI Compatibility Manifest\n{manifest}\n");
         }
         println!(
-            "-- DRY RUN: {} SQL statements, {} EventAI definition batch(es) for {} definitions and {} instructions, {} creature-spawn batch(es) for {} spawns, and {} gameobject batch(es) (of {SPAWN_BATCH}).\n",
+            "-- DRY RUN: {} SQL statements, {} EventAI definition batch(es) for {} definitions and {} instructions, {} relay definition batch(es) for {} definitions, {} creature-spawn batch(es) for {} spawns, and {} gameobject batch(es) (of {SPAWN_BATCH}).\n",
             plan.stmts.len(),
             plan.eventai_definition_batches.len(),
             plan.eventai_definition_count,
             plan.eventai_instruction_count,
+            plan.eventai_relay_definition_batches.len(),
+            plan.eventai_relay_definition_count,
             plan.spawn_batches.len(),
             plan.spawn_row_count,
             plan.go_batches.len()
@@ -5050,6 +5058,11 @@ fn main() -> Result<()> {
                     .first()
                     .and_then(|batch| batch.lines().next())
                     .unwrap_or("")
+            );
+            println!(
+                "-- load the typed EventAI relay catalogue atomically through the reducer.\n  e.g. spacetime call -s {} {} import_creature_ai_relay_definitions '<catalogue>'",
+                args.server,
+                args.db,
             );
         }
         println!(
@@ -5069,6 +5082,21 @@ fn main() -> Result<()> {
     // are ready before a new creature can raise its spawn edge.
     run_sql_statements(&args, &plan.stmts, "creatures")?;
     if family_active(&args, "creature-ai") {
+        eprintln!(
+            "reducer: loading {} relay definitions in {} batch(es)…",
+            plan.eventai_relay_definition_count,
+            plan.eventai_relay_definition_batches.len()
+        );
+        let relay_catalogue = plan
+            .eventai_relay_definition_batches
+            .first()
+            .context("EventAI relay plan has no atomic catalogue")?;
+        call_reducer(
+            &args,
+            "import_creature_ai_relay_definitions",
+            relay_catalogue,
+        )
+        .context("EventAI relay catalogue")?;
         eprintln!(
             "reducer: loading {} EventAI definitions with {} instructions in {} batch(es)…",
             plan.eventai_definition_count,

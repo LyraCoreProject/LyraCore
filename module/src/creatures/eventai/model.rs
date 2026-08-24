@@ -507,6 +507,18 @@ pub struct FacingInstruction {
     pub reset: bool,
 }
 
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NotifyEncounterInstruction {
+    pub binding: crate::encounter::EncounterBinding,
+    pub signal: crate::encounter::EncounterSignal,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
+pub struct StartRelayInstruction {
+    pub relay_ids: Vec<u32>,
+    pub target: InstructionTarget,
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
 pub enum CreatureInstruction {
     Speak(SpeakInstruction),
@@ -528,6 +540,8 @@ pub enum CreatureInstruction {
     QuestCredit(EventAiQuestCredit),
     Movement(MovementOperation),
     SetFacing(FacingInstruction),
+    NotifyEncounter(NotifyEncounterInstruction),
+    StartRelay(StartRelayInstruction),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

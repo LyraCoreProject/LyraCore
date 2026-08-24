@@ -45,6 +45,7 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     crate::combat::disengage(ctx, guid); // melee rows + threat (clear_for_unit) + stale selections
     crate::threat::clear_taunt_lock(ctx, guid);
     crate::combat::clear_lethal_damage_floor(ctx, guid);
+    crate::creatures::cancel_relay_runs_for_source(ctx, guid);
     crate::creatures::reset_creature_lifecycle(ctx, guid);
     crate::creatures::drop_summon_expiry(ctx, guid);
     crate::quest::clear_creature_tap(ctx, guid);
@@ -358,6 +359,10 @@ mod despawn_checklist_tripwire {
             (
                 "crate::combat::clear_lethal_damage_floor(ctx, guid)",
                 "the EventAI-owned lethal damage floor",
+            ),
+            (
+                "crate::creatures::cancel_relay_runs_for_source(ctx, guid)",
+                "source-creature Relay Runs",
             ),
             (
                 "crate::creatures::drop_summon_expiry(ctx, guid)",

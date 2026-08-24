@@ -12,10 +12,11 @@ use crate::creatures::eventai::{
     EventAiDefinition, EventAiRequest, EventAiRule, EventAiSubject, EventAiUnit, EventAiWorld,
     EventCondition, EventContext, EventKind, EventPredicate, ExecutionPolicy,
     FriendlyHealthDeficitCondition, IdleMovementIntent, InstructionSelection, InstructionTarget,
-    MovementOperation, PhaseSet, PostureAdmission, RangedMode, RangedPostureInstruction,
-    RecurrencePolicy, RuleState, SetPhaseInstruction, SpawnCondition, SpeakInstruction, SpeechMode,
-    SpellCastTarget, SpellCasterAdmission, SpellCasterRole, SpellStartMode, SpellTargetRole,
-    SummonInstruction, SummonLocation, TargetRangeCondition, TimeWindow, WalkingMode,
+    MovementOperation, NotifyEncounterInstruction, PhaseSet, PostureAdmission, RangedMode,
+    RangedPostureInstruction, RecurrencePolicy, RuleState, SetPhaseInstruction, SpawnCondition,
+    SpeakInstruction, SpeechMode, SpellCastTarget, SpellCasterAdmission, SpellCasterRole,
+    SpellStartMode, SpellTargetRole, SummonInstruction, SummonLocation, TargetRangeCondition,
+    TimeWindow, WalkingMode,
 };
 use crate::creatures::{chase_step, rout_window_open};
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
@@ -29,6 +30,8 @@ mod eventai_combat;
 mod eventai_death;
 #[path = "harness/eventai_edges.rs"]
 mod eventai_edges;
+#[path = "harness/eventai_instance_relay.rs"]
+mod eventai_instance_relay;
 #[path = "harness/eventai_legacy.rs"]
 mod eventai_legacy;
 #[path = "harness/eventai_mobility.rs"]
@@ -268,6 +271,8 @@ struct Scenario {
     eventai_summon_expiry: RefCell<HashMap<u64, ScenarioSummonExpiry>>,
     eventai_lethal_floors: RefCell<HashMap<u64, DefinitionRevision>>,
     eventai_forced_deaths: RefCell<Vec<u64>>,
+    eventai_encounter_notifications: RefCell<Vec<(u64, NotifyEncounterInstruction)>>,
+    eventai_relay_starts: RefCell<Vec<(u32, u64, u64, u64)>>,
     eventai_next_summon: Cell<u64>,
     /// Ordered text effects emitted by authored rules.
     eventai_speech: RefCell<Vec<(u64, u8, String)>>,
@@ -2156,6 +2161,39 @@ impl EventAiWorld for Scenario {
             .remove(&creature_guid);
         self.corpses.borrow_mut().insert(creature_guid);
         self.eventai_forced_deaths.borrow_mut().push(creature_guid);
+        true
+    }
+
+    fn eventai_notify_encounter(
+        &mut self,
+        source_guid: u64,
+        notification: NotifyEncounterInstruction,
+    ) -> bool {
+        let Some(source) = self.eventai_unit(source_guid) else {
+            return false;
+        };
+        if source.instance_id == 0 || source.map_id != notification.binding.map_id() {
+            return false;
+        }
+        self.eventai_encounter_notifications
+            .borrow_mut()
+            .push((source_guid, notification));
+        true
+    }
+
+    fn eventai_start_relay(
+        &mut self,
+        relay_id: u32,
+        source_guid: u64,
+        selected_guid: u64,
+        random_state: u64,
+    ) -> bool {
+        self.eventai_relay_starts.borrow_mut().push((
+            relay_id,
+            source_guid,
+            selected_guid,
+            random_state,
+        ));
         true
     }
 }

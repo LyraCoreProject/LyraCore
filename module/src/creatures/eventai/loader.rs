@@ -12,15 +12,15 @@ use super::{
     FacingCondition, FacingInstruction, FriendlyAuraSelection, FriendlyCrowdControlCondition,
     FriendlyHealthDeficitCondition, FriendlyMissingAuraCondition, IdleMovementIntent,
     ImmobilizationInstruction, IncrementPhaseInstruction, InstructionSelection, InstructionTarget,
-    KillCondition, MovementOperation, MovementSwitch, OutOfCombatSightCondition, PatrolIntent,
-    PatrolPause, PercentageCondition, PhaseSet, PostureAdmission, QuestTakenPredicate,
-    RandomMovementIntent, RandomPhaseInstruction, RandomPhaseRangeInstruction, RangedMode,
-    RangedModeInstruction, RangedPostureInstruction, ReceiveAiEventCondition,
-    ReceiveEmoteCondition, RecurrencePolicy, ScaleAllThreatInstruction,
+    KillCondition, MovementOperation, MovementSwitch, NotifyEncounterInstruction,
+    OutOfCombatSightCondition, PatrolIntent, PatrolPause, PercentageCondition, PhaseSet,
+    PostureAdmission, QuestTakenPredicate, RandomMovementIntent, RandomPhaseInstruction,
+    RandomPhaseRangeInstruction, RangedMode, RangedModeInstruction, RangedPostureInstruction,
+    ReceiveAiEventCondition, ReceiveEmoteCondition, RecurrencePolicy, ScaleAllThreatInstruction,
     ScaleSelectedThreatInstruction, SetLethalDamageFloorInstruction, SetPhaseInstruction,
     SpawnCondition, SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode,
-    SpellCasterRole, SpellEventCondition, SpellStartMode, SpellTargetRole, SummonInstruction,
-    TargetRangeCondition, TimeWindow, WalkingMode,
+    SpellCasterRole, SpellEventCondition, SpellStartMode, SpellTargetRole, StartRelayInstruction,
+    SummonInstruction, TargetRangeCondition, TimeWindow, WalkingMode,
 };
 use crate::creatures::presentation::NpcFlagsProjection;
 use crate::game_creature_ai_definition;
@@ -751,6 +751,25 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 combat_only: parse_bool(combat_only)?,
             },
         ))),
+        ["notify-encounter", binding, signal] => Ok(CreatureInstruction::NotifyEncounter(
+            NotifyEncounterInstruction {
+                binding: parse_encounter_binding(binding)?,
+                signal: parse_encounter_signal(signal)?,
+            },
+        )),
+        ["start-relay", relays, target] => {
+            let relay_ids = relays
+                .split('.')
+                .map(parse_u32)
+                .collect::<Result<Vec<_>, _>>()?;
+            if relay_ids.is_empty() || relay_ids.contains(&0) {
+                return Err("start-relay needs nonzero definition ids".to_string());
+            }
+            Ok(CreatureInstruction::StartRelay(StartRelayInstruction {
+                relay_ids,
+                target: parse_target(target)?,
+            }))
+        }
         _ => Err(format!("unknown creature instruction: {encoded}")),
     }
 }
@@ -771,6 +790,40 @@ fn nonzero_u32(value: &str, label: &str) -> Result<u32, String> {
         return Err(format!("{label} must be nonzero"));
     }
     Ok(value)
+}
+
+fn parse_encounter_binding(value: &str) -> Result<crate::encounter::EncounterBinding, String> {
+    use crate::encounter::EncounterBinding::*;
+    match value {
+        "blackfathom-deeps-kelris" => Ok(BlackfathomDeepsKelris),
+        "blackrock-depths-tomb-of-seven" => Ok(BlackrockDepthsTombOfSeven),
+        "dire-maul-alzzin" => Ok(DireMaulAlzzin),
+        "razorfen-kraul-ward-keepers" => Ok(RazorfenKraulWardKeepers),
+        "shadowfang-keep-rethilgore" => Ok(ShadowfangKeepRethilgore),
+        "shadowfang-keep-fenrus" => Ok(ShadowfangKeepFenrus),
+        "shadowfang-keep-nandos" => Ok(ShadowfangKeepNandos),
+        "sunken-temple-avatar" => Ok(SunkenTempleAvatar),
+        "wailing-caverns-anacondra" => Ok(WailingCavernsAnacondra),
+        "wailing-caverns-cobrahn" => Ok(WailingCavernsCobrahn),
+        "wailing-caverns-pythas" => Ok(WailingCavernsPythas),
+        "wailing-caverns-serpentis" => Ok(WailingCavernsSerpentis),
+        "wailing-caverns-mutanus" => Ok(WailingCavernsMutanus),
+        "zul-gurub-ohgan" => Ok(ZulGurubOhgan),
+        _ => Err(format!("unknown encounter binding: {value}")),
+    }
+}
+
+fn parse_encounter_signal(value: &str) -> Result<crate::encounter::EncounterSignal, String> {
+    use crate::encounter::EncounterSignal::*;
+    match value {
+        "begin" => Ok(Begin),
+        "fail" => Ok(Fail),
+        "complete" => Ok(Complete),
+        "break-alzzin-crumble-wall" => Ok(BreakAlzzinCrumbleWall),
+        "interrupt-avatar-suppression" => Ok(InterruptAvatarSuppression),
+        "send-mandokir-downstairs" => Ok(SendMandokirDownstairs),
+        _ => Err(format!("unknown encounter signal: {value}")),
+    }
 }
 
 fn parse_target(value: &str) -> Result<InstructionTarget, String> {

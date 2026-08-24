@@ -140,6 +140,18 @@ pub(crate) trait EventAiWorld {
         enabled: bool,
     ) -> bool;
     fn eventai_force_death(&mut self, creature_guid: u64) -> bool;
+    fn eventai_notify_encounter(
+        &mut self,
+        source_guid: u64,
+        notification: super::NotifyEncounterInstruction,
+    ) -> bool;
+    fn eventai_start_relay(
+        &mut self,
+        relay_id: u32,
+        source_guid: u64,
+        selected_guid: u64,
+        random_state: u64,
+    ) -> bool;
 }
 
 pub(crate) fn evaluate<W: EventAiWorld>(world: &mut W, request: EventAiRequest<'_>) -> u64 {
@@ -433,8 +445,34 @@ fn execute_instruction<W: EventAiWorld>(
                 ActionResult::Refused
             }
         }
+        CreatureInstruction::NotifyEncounter(notification) => {
+            if world.eventai_notify_encounter(context.creature_guid, *notification) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
         CreatureInstruction::QuestCredit(_) => {
             super::quest_credit::execute(world, context, instruction)
+        }
+        CreatureInstruction::StartRelay(start) => {
+            let Some(selected) =
+                super::combat::unit_target(world, context, start.target, None, linked_choice)
+            else {
+                return ActionResult::Refused;
+            };
+            let Some(relay_id) = start
+                .relay_ids
+                .get(linked_choice as usize % start.relay_ids.len())
+                .copied()
+            else {
+                return ActionResult::Refused;
+            };
+            if world.eventai_start_relay(relay_id, selected, context.creature_guid, linked_choice) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
         }
     }
 }
@@ -642,6 +680,9 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => {
                     true
                 }
+                CreatureInstruction::StartRelay(start) => {
+                    start.relay_ids.len() > 1 || random_target(start.target)
+                }
                 CreatureInstruction::FleeForAssist
                 | CreatureInstruction::CallForHelp(_)
                 | CreatureInstruction::SetPhase(_)
@@ -652,7 +693,8 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 | CreatureInstruction::ScaleAllThreat(_)
                 | CreatureInstruction::Presentation(_)
                 | CreatureInstruction::QuestCredit(_)
-                | CreatureInstruction::Movement(_) => false,
+                | CreatureInstruction::Movement(_)
+                | CreatureInstruction::NotifyEncounter(_) => false,
             })
 }
 
@@ -1345,5 +1387,36 @@ impl EventAiWorld for DatabaseWorld<'_> {
 
     fn eventai_force_death(&mut self, creature_guid: u64) -> bool {
         crate::combat::force_creature_death(self.ctx, creature_guid)
+    }
+
+    fn eventai_notify_encounter(
+        &mut self,
+        source_guid: u64,
+        notification: super::NotifyEncounterInstruction,
+    ) -> bool {
+        crate::encounter::notify_from_eventai(
+            self.ctx,
+            source_guid,
+            notification.binding,
+            notification.signal,
+        )
+        .is_ok()
+    }
+
+    fn eventai_start_relay(
+        &mut self,
+        relay_id: u32,
+        source_guid: u64,
+        selected_guid: u64,
+        random_state: u64,
+    ) -> bool {
+        super::relay::start_imported_relay(
+            self.ctx,
+            relay_id,
+            source_guid,
+            selected_guid,
+            random_state,
+        )
+        .is_ok()
     }
 }
