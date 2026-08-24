@@ -1125,6 +1125,9 @@ pub(crate) fn apply_hit(
         commit_death_prevention(ctx, target_guid, attacker_guid);
         return miss;
     }
+    if !target_is_player {
+        crate::quest::record_creature_tap(ctx, target_guid, attacker_guid);
+    }
 
     // 1. Attacker-side gains, before the fork (rage lands on the killing blow too).
     if weapon {

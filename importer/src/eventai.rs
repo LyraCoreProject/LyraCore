@@ -53,12 +53,9 @@ const ACTION_SPAWN: u32 = 12;
 const ACTION_THREAT_SINGLE: u32 = 13;
 const ACTION_THREAT_ALL_PCT: u32 = 14;
 const ACTION_QUEST_EVENT: u32 = 15;
-const ACTION_CAST_EVENT: u32 = 16;
 const ACTION_SET_PHASE: u32 = 22;
 const ACTION_INCREMENT_PHASE: u32 = 23;
 const ACTION_FLEE_FOR_ASSIST: u32 = 25;
-const ACTION_QUEST_EVENT_ALL: u32 = 26;
-const ACTION_CAST_EVENT_ALL: u32 = 27;
 const ACTION_REMOVE_AURA: u32 = 28;
 const ACTION_RANGED_MOVEMENT: u32 = 29;
 const ACTION_RANDOM_PHASE: u32 = 30;
@@ -134,6 +131,7 @@ pub(crate) struct EventAiPlan {
     pub(crate) definition_batches: Vec<String>,
     pub(crate) broadcast_rows: Vec<String>,
     pub(crate) summon_rows: Vec<String>,
+    pub(crate) quest_event_entries: BTreeSet<u32>,
     pub(crate) forced_template_entries: BTreeSet<u64>,
     coverage: Coverage,
 }
@@ -148,7 +146,18 @@ impl EventAiPlan {
     }
 
     pub(crate) fn row_count(&self) -> u64 {
-        (self.definition_rows.len() + self.broadcast_rows.len() + self.summon_rows.len()) as u64
+        (self.definition_rows.len()
+            + self.broadcast_rows.len()
+            + self.summon_rows.len()
+            + self.quest_event_entries.len()) as u64
+    }
+
+    pub(crate) fn quest_event_requirement_rows(&self) -> Vec<String> {
+        self.quest_event_entries
+            .iter()
+            .enumerate()
+            .map(|(index, quest_entry)| format!("({},{quest_entry})", index + 1))
+            .collect()
     }
 
     pub(crate) fn compatibility_manifest(
@@ -1150,9 +1159,10 @@ pub(crate) fn parse(dump: &str) -> EventAiSource {
     broadcasts.extend(parse_legacy_texts(dump, &broadcasts, &mut coverage));
     let summon_locations = parse_summons(dump, &mut coverage);
     let event_predicates = parse_event_predicates(dump);
-    let quest_entries = parse_table(dump, "quest_template")
-        .into_iter()
-        .filter_map(|row| source_u32(field(&row, 0)))
+    let quest_rows = parse_table(dump, "quest_template");
+    let quest_entries = quest_rows
+        .iter()
+        .filter_map(|row| source_u32(field(row, 0)))
         .collect();
     let mut rules = parse_rules(dump, &mut coverage);
     rules.sort_by_key(|rule| rule.id);
@@ -1500,6 +1510,15 @@ impl EventAiSource {
                 }
             }
             for action in actions {
+                if action.raw_kind == ACTION_QUEST_EVENT {
+                    let quest_entry = action
+                        .encoded
+                        .strip_prefix("quest-event:")
+                        .and_then(|encoded| encoded.split_once(':').map(|(entry, _)| entry))
+                        .and_then(|entry| entry.parse().ok())
+                        .expect("a mapped quest event has a numeric quest entry");
+                    plan.quest_event_entries.insert(quest_entry);
+                }
                 Coverage::source_value(&mut plan.coverage.accepted_action, action.raw_kind as u64);
                 Coverage::source_value(&mut plan.coverage.emitted_action, action.raw_kind as u64);
                 plan.coverage.result(
@@ -1972,7 +1991,7 @@ fn source_target_parameter(action: u32) -> Option<usize> {
         | ACTION_SET_INSTANCE_DATA_GUID
         | ACTION_START_RELAY
         | ACTION_TEXT_NEW => Some(2),
-        ACTION_CAST_EVENT | ACTION_THROW_AI_EVENT => Some(3),
+        eventai_presentation::ACTION_SET_UNIT_FIELD | ACTION_THROW_AI_EVENT => Some(3),
         _ => None,
     }
 }
@@ -2831,97 +2850,6 @@ fn map_action(
                 normalizations: Vec::new(),
             })
         }
-        ACTION_CAST_EVENT => {
-            let recipient: &'static str = match action[3] {
-                TARGET_ACTION_INVOKER => Ok("selected-character"),
-                TARGET_BENEFICIARY => Ok("invoker-beneficiary"),
-                target => Err(MappingFailure::source(
-                    "target",
-                    u64::from(target),
-                    "unsupported_quest_recipient_policy",
-                )),
-            }
-            .map_err(|failure| vec![failure])?;
-            credit_creature_action(
-                action,
-                CreditAction {
-                    recipient,
-                    instruction: "cast-credit",
-                    has_spell: true,
-                    raw_target: Some(action[3]),
-                },
-            )
-        }
-        ACTION_QUEST_EVENT_ALL => {
-            let recipient = match action[2] {
-                0 => "eligible-group",
-                1 => "threat-list-characters",
-                value => {
-                    return Err(vec![MappingFailure::source(
-                        "action",
-                        u64::from(value),
-                        "invalid_quest_all_recipient_policy",
-                    )]);
-                }
-            };
-            if action[1] == 0 {
-                return Err(vec![MappingFailure::source("action", 0, "invalid_quest")]);
-            }
-            if !quest_entries.contains(&action[1]) {
-                return Err(vec![MappingFailure::dependency(
-                    "quest_template",
-                    u64::from(action[1]),
-                    "missing",
-                    format!(
-                        "rule:{rule_id} -> action:{slot} -> quest_template:{}",
-                        action[1]
-                    ),
-                )]);
-            }
-            if action[3] != 0 {
-                return Err(vec![MappingFailure::source(
-                    "action",
-                    u64::from(action[3]),
-                    "unexpected_quest_all_parameter",
-                )]);
-            }
-            Ok(NativeAction {
-                encoded: format!("quest-event:{}:{recipient}", action[1]),
-                raw_kind: kind,
-                raw_target: (action[2] == 0).then_some(TARGET_ACTION_INVOKER),
-                raw_cast_flags: None,
-                threat_percent: None,
-                texts: Vec::new(),
-                summon_entry: None,
-                summon_location: None,
-                dependencies: vec![Dependency {
-                    kind: "quest_template",
-                    path: format!(
-                        "rule:{rule_id} -> action:{slot} -> quest_template:{}",
-                        action[1]
-                    ),
-                }],
-                normalizations: Vec::new(),
-            })
-        }
-        ACTION_CAST_EVENT_ALL => {
-            if action[3] != 0 {
-                return Err(vec![MappingFailure::source(
-                    "action",
-                    u64::from(action[3]),
-                    "unexpected_cast_all_parameter",
-                )]);
-            }
-            credit_creature_action(
-                action,
-                CreditAction {
-                    recipient: "threat-list-characters",
-                    instruction: "cast-credit",
-                    has_spell: true,
-                    raw_target: None,
-                },
-            )
-        }
         ACTION_KILLED_MONSTER => {
             if action[2] != TARGET_ACTION_INVOKER {
                 return Err(vec![MappingFailure::source(
@@ -2930,15 +2858,7 @@ fn map_action(
                     "unsupported_quest_recipient_policy",
                 )]);
             }
-            credit_creature_action(
-                action,
-                CreditAction {
-                    recipient: "tap-group",
-                    instruction: "kill-credit",
-                    has_spell: false,
-                    raw_target: Some(action[2]),
-                },
-            )
+            kill_credit_action(action, rule_id, slot, importable_templates)
         }
         ACTION_SET_PHASE
         | ACTION_INCREMENT_PHASE
@@ -2968,16 +2888,11 @@ fn map_threat_percent(raw: u32) -> Result<i32, Vec<MappingFailure>> {
     Ok(percent)
 }
 
-struct CreditAction {
-    recipient: &'static str,
-    instruction: &'static str,
-    has_spell: bool,
-    raw_target: Option<u32>,
-}
-
-fn credit_creature_action(
+fn kill_credit_action(
     action: [u32; 4],
-    credit: CreditAction,
+    rule_id: u64,
+    slot: usize,
+    importable_templates: &HashSet<u64>,
 ) -> Result<NativeAction, Vec<MappingFailure>> {
     let creature_entry = action[1];
     if creature_entry == 0 {
@@ -2987,34 +2902,27 @@ fn credit_creature_action(
             "invalid_credit_creature",
         )]);
     }
-    if credit.has_spell && action[2] == 0 {
-        return Err(vec![MappingFailure::source(
-            "action",
-            0,
-            "invalid_credit_spell",
+    if !importable_templates.contains(&u64::from(creature_entry)) {
+        return Err(vec![MappingFailure::dependency(
+            "credit_creature",
+            u64::from(creature_entry),
+            "missing",
+            format!("rule:{rule_id} -> action:{slot} -> creature_template:{creature_entry}"),
         )]);
     }
-    let encoded = if credit.has_spell {
-        format!(
-            "{}:{creature_entry}:{}:{}",
-            credit.instruction, action[2], credit.recipient
-        )
-    } else {
-        format!(
-            "{}:{creature_entry}:{}",
-            credit.instruction, credit.recipient
-        )
-    };
     Ok(NativeAction {
-        encoded,
+        encoded: format!("kill-credit:{creature_entry}:tap-group"),
         raw_kind: action[0],
-        raw_target: credit.raw_target,
+        raw_target: Some(action[2]),
         raw_cast_flags: None,
         threat_percent: None,
         texts: Vec::new(),
         summon_entry: None,
         summon_location: None,
-        dependencies: Vec::new(),
+        dependencies: vec![Dependency {
+            kind: "credit_creature",
+            path: format!("rule:{rule_id} -> action:{slot} -> creature_template:{creature_entry}"),
+        }],
         normalizations: Vec::new(),
     })
 }
@@ -3706,102 +3614,129 @@ mod tests {
     }
 
     #[test]
-    fn quest_credit_actions_map_to_typed_recipient_policies() {
+    fn pinned_quest_credit_actions_map_to_typed_recipient_policies() {
         let source = parse(&format!(
             "INSERT INTO `quest_template` VALUES (77); {}",
-            dump(&[
-                rule(
-                    10,
-                    100,
-                    EVENT_AGGRO,
-                    100,
-                    0,
-                    [0; 6],
+            dump(&[rule(
+                10,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [
                     [
-                        [
-                            ACTION_QUEST_EVENT as i64,
-                            77,
-                            TARGET_ACTION_INVOKER as i64,
-                            0
-                        ],
-                        [
-                            ACTION_CAST_EVENT as i64,
-                            100,
-                            123,
-                            TARGET_ACTION_INVOKER as i64
-                        ],
-                        [ACTION_QUEST_EVENT_ALL as i64, 77, 0, 0],
+                        ACTION_QUEST_EVENT as i64,
+                        77,
+                        TARGET_ACTION_INVOKER as i64,
+                        0
                     ],
-                ),
-                rule(
-                    11,
-                    100,
-                    EVENT_AGGRO,
-                    100,
-                    0,
-                    [0; 6],
                     [
-                        [ACTION_QUEST_EVENT as i64, 77, TARGET_BENEFICIARY as i64, 0],
-                        [
-                            ACTION_CAST_EVENT as i64,
-                            100,
-                            456,
-                            TARGET_BENEFICIARY as i64
-                        ],
-                        [
-                            ACTION_QUEST_EVENT as i64,
-                            77,
-                            TARGET_ACTION_INVOKER as i64,
-                            1
-                        ],
+                        ACTION_KILLED_MONSTER as i64,
+                        100,
+                        TARGET_ACTION_INVOKER as i64,
+                        0
                     ],
-                ),
-                rule(
-                    12,
-                    100,
-                    EVENT_AGGRO,
-                    100,
-                    0,
-                    [0; 6],
-                    [
-                        [ACTION_QUEST_EVENT_ALL as i64, 77, 1, 0],
-                        [ACTION_CAST_EVENT_ALL as i64, 100, 789, 0],
-                        [
-                            ACTION_KILLED_MONSTER as i64,
-                            100,
-                            TARGET_ACTION_INVOKER as i64,
-                            0
-                        ],
-                    ],
-                ),
-            ])
+                    [0; 4],
+                ],
+            ),])
         ));
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
 
-        assert_eq!(plan.action_counts(ACTION_QUEST_EVENT as u64), (3, 3, 0, 3));
-        assert_eq!(plan.action_counts(ACTION_CAST_EVENT as u64), (2, 2, 0, 2));
-        assert_eq!(
-            plan.action_counts(ACTION_QUEST_EVENT_ALL as u64),
-            (2, 2, 0, 2)
-        );
-        assert_eq!(
-            plan.action_counts(ACTION_CAST_EVENT_ALL as u64),
-            (1, 1, 0, 1)
-        );
+        assert_eq!(plan.action_counts(ACTION_QUEST_EVENT as u64), (1, 1, 0, 1));
         assert_eq!(
             plan.action_counts(ACTION_KILLED_MONSTER as u64),
             (1, 1, 0, 1)
         );
-        assert!(plan.definition_rows.iter().any(|row| row.contains(
-            "quest-event:77:selected-character+cast-credit:100:123:selected-character+quest-event:77:eligible-group"
-        )));
-        assert!(plan.definition_rows.iter().any(|row| row.contains(
-            "quest-event:77:invoker-beneficiary+cast-credit:100:456:invoker-beneficiary+quest-event:77:eligible-group"
-        )));
-        assert!(plan.definition_rows.iter().any(|row| row.contains(
-            "quest-event:77:threat-list-characters+cast-credit:100:789:threat-list-characters+kill-credit:100:tap-group"
-        )));
+        assert!(
+            plan.definition_rows
+                .iter()
+                .any(|row| row
+                    .contains("quest-event:77:selected-character+kill-credit:100:tap-group"))
+        );
+        assert_eq!(plan.quest_event_requirement_rows(), vec!["(1,77)"]);
+    }
+
+    #[test]
+    fn zero_occurrence_quest_credit_actions_are_refused() {
+        let source = parse(&dump(&[
+            rule(
+                10,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[16, 100, 123, TARGET_ACTION_INVOKER as i64], [0; 4], [0; 4]],
+            ),
+            rule(
+                11,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[26, 77, 0, 0], [0; 4], [0; 4]],
+            ),
+            rule(
+                12,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[27, 100, 123, 0], [0; 4], [0; 4]],
+            ),
+        ]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+
+        for action in [16, 26, 27] {
+            assert_eq!(plan.action_counts(action), (1, 0, 1, 0));
+            assert_eq!(plan.dropped("unsupported_action", action), 1);
+        }
+        assert!(plan.definition_rows.is_empty());
+    }
+
+    #[test]
+    fn killed_monster_requires_the_imported_creature_template() {
+        let source = parse(&dump(&[rule(
+            12,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [
+                [
+                    ACTION_KILLED_MONSTER as i64,
+                    999,
+                    TARGET_ACTION_INVOKER as i64,
+                    0,
+                ],
+                [0; 4],
+                [0; 4],
+            ],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let manifest =
+            plan.compatibility_manifest(&fixture_profile(&plan), "fixture", LOADER_CONTRACT);
+        let rendered = assert_refusal(&manifest, "missing:credit_creature");
+        assert_result(
+            &rendered,
+            "dependency",
+            "credit_creature",
+            "dropped",
+            "missing:credit_creature",
+        );
+        assert!(rendered["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|result| result["dependency_paths"].as_array().unwrap())
+            .any(|path| path == "rule:12 -> action:0 -> creature_template:999"));
     }
 
     #[test]

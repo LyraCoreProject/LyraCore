@@ -4747,6 +4747,7 @@ fn build_dump_plan(
     if family_active(args, "creature-ai") {
         stmts.push("DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0".into());
+        stmts.push("DELETE FROM game_quest_event_requirement WHERE id > 0".into());
         push_insert(
             &mut stmts,
             "game_creature_ai_broadcast_text",
@@ -4758,6 +4759,12 @@ fn build_dump_plan(
             "game_creature_ai_summon",
             "id,x,y,z,orientation,lifetime_ms",
             &eventai.summon_rows,
+        );
+        push_insert(
+            &mut stmts,
+            "game_quest_event_requirement",
+            "id,quest_entry",
+            &eventai.quest_event_requirement_rows(),
         );
     }
 
@@ -7106,6 +7113,15 @@ mod tests {
         format!("({})", cols.join(","))
     }
 
+    fn quest_template_row_requiring_event(entry: u64) -> String {
+        const QUEST_SPECIAL_FLAG_EXPLORATION_OR_EVENT: u32 = 0x2;
+        let mut cols = vec!["0".to_string(); qt::REW_MONEY_MAX_LEVEL + 1];
+        cols[qt::ENTRY] = entry.to_string();
+        cols[qt::TITLE] = "'Event requirement'".to_string();
+        cols[qt::SPECIAL_FLAGS] = QUEST_SPECIAL_FLAG_EXPLORATION_OR_EVENT.to_string();
+        format!("({})", cols.join(","))
+    }
+
     #[test]
     fn quest_import_keeps_spell_gated_objective_metadata_private() {
         let dump = format!(
@@ -7129,6 +7145,55 @@ mod tests {
             .find(|statement| statement.starts_with("INSERT INTO game_quest_cast_objective"))
             .unwrap();
         assert!(casts.contains("(1,500,0,456)"), "{casts}");
+    }
+
+    #[test]
+    fn quest_import_does_not_treat_every_special_flag_event_as_eventai_credit() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500);",
+            creature_template_row(100, 0),
+            quest_template_row_requiring_event(500),
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).unwrap();
+        assert!(plan
+            .stmts
+            .iter()
+            .all(|statement| !statement.starts_with("INSERT INTO game_quest_event_requirement")));
+    }
+
+    #[test]
+    fn eventai_import_owns_requirements_for_accepted_quest_events() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500); \
+             INSERT INTO `creature_ai_scripts` VALUES {};",
+            creature_template_row(100, 0),
+            quest_template_row_requiring_event(500),
+            eventai_rule_row(
+                10,
+                100,
+                4,
+                0,
+                100,
+                0,
+                [0; 6],
+                [[15, 500, 6, 0], [0; 4], [0; 4]],
+            ),
+        );
+        let mut args = test_args();
+        args.family = Some("creature-ai".to_string());
+        let plan = build_dump_plan(&dump, &args, &None, &None).unwrap();
+        let requirements = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_quest_event_requirement"))
+            .expect("EventAI event requirement row");
+        assert!(requirements.contains("(1,500)"), "{requirements}");
     }
 
     /// Like `quest_template_row` but also stamps `qt::NEXT_QUEST_IN_CHAIN` / `qt::LIMIT_TIME`
@@ -7329,18 +7394,20 @@ mod tests {
         assert_eq!(plan.stamps, vec![("creature-ai", 8)]);
         assert_eq!(plan.eventai_definition_count, 3);
         assert_eq!(plan.eventai_instruction_count, 17);
-        assert_eq!(plan.stmts.len(), 4, "{:?}", plan.stmts);
+        assert_eq!(plan.stmts.len(), 5, "{:?}", plan.stmts);
         assert_eq!(
-            &plan.stmts[..2],
+            &plan.stmts[..3],
             [
                 "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0",
                 "DELETE FROM game_creature_ai_summon WHERE id > 0",
+                "DELETE FROM game_quest_event_requirement WHERE id > 0",
             ],
             "the family replaces its dependency catalogues"
         );
         assert!(plan.stmts.iter().all(|statement| {
             statement.contains("game_creature_ai_broadcast_text")
                 || statement.contains("game_creature_ai_summon")
+                || statement.contains("game_quest_event_requirement")
         }));
         assert!(!plan.stmts.iter().any(|statement| {
             statement.contains("game_creature_ai_event")

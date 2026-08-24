@@ -21,7 +21,7 @@ use super::{
 };
 use crate::creatures::presentation::NpcFlagsProjection;
 use crate::game_creature_ai_definition;
-use crate::quest::{CastCredit, KillCredit, QuestCreditRecipientPolicy, QuestEvent};
+use crate::quest::{KillCredit, QuestCreditRecipientPolicy, QuestEvent};
 #[cfg(feature = "debug_reducers")]
 use crate::{
     game_creature_ai_rule_state, game_creature_ai_state, game_melee_attack, game_world_entity,
@@ -675,13 +675,6 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 recipient_policy: parse_quest_credit_recipient(recipient)?,
             }),
         )),
-        ["cast-credit", creature, spell, recipient] => Ok(CreatureInstruction::QuestCredit(
-            crate::quest::EventAiQuestCredit::CastCredit(CastCredit {
-                creature_entry: nonzero_u32(creature, "cast credit creature")?,
-                spell_id: nonzero_u32(spell, "cast credit spell")?,
-                recipient_policy: parse_quest_credit_recipient(recipient)?,
-            }),
-        )),
         ["kill-credit", creature, recipient] => Ok(CreatureInstruction::QuestCredit(
             crate::quest::EventAiQuestCredit::KillCredit(KillCredit {
                 creature_entry: nonzero_u32(creature, "kill credit creature")?,
@@ -698,7 +691,6 @@ fn parse_quest_credit_recipient(value: &str) -> Result<QuestCreditRecipientPolic
         "invoker-beneficiary" => Ok(QuestCreditRecipientPolicy::InvokerBeneficiary),
         "tap-group" => Ok(QuestCreditRecipientPolicy::TapGroup),
         "eligible-group" => Ok(QuestCreditRecipientPolicy::EligibleGroup),
-        "threat-list-characters" => Ok(QuestCreditRecipientPolicy::ThreatListCharacters),
         _ => Err(format!("unknown quest credit recipient: {value}")),
     }
 }
@@ -1063,7 +1055,7 @@ mod tests {
     }
 
     #[test]
-    fn quest_credit_instructions_decode_to_typed_requests() {
+    fn pinned_quest_credit_instructions_decode_to_typed_requests() {
         let cases = [
             (
                 "quest-event:8353:selected-character",
@@ -1071,16 +1063,6 @@ mod tests {
                     QuestEvent {
                         quest_entry: 8_353,
                         recipient_policy: QuestCreditRecipientPolicy::SelectedCharacter,
-                    },
-                )),
-            ),
-            (
-                "cast-credit:12297:456:invoker-beneficiary",
-                CreatureInstruction::QuestCredit(crate::quest::EventAiQuestCredit::CastCredit(
-                    CastCredit {
-                        creature_entry: 12_297,
-                        spell_id: 456,
-                        recipient_policy: QuestCreditRecipientPolicy::InvokerBeneficiary,
                     },
                 )),
             ),
@@ -1102,16 +1084,6 @@ mod tests {
                     },
                 )),
             ),
-            (
-                "cast-credit:12297:457:threat-list-characters",
-                CreatureInstruction::QuestCredit(crate::quest::EventAiQuestCredit::CastCredit(
-                    CastCredit {
-                        creature_entry: 12_297,
-                        spell_id: 457,
-                        recipient_policy: QuestCreditRecipientPolicy::ThreatListCharacters,
-                    },
-                )),
-            ),
         ];
 
         for (encoded, expected) in cases {
@@ -1119,5 +1091,7 @@ mod tests {
         }
         assert!(parse_instruction("quest-event:0:selected-character").is_err());
         assert!(parse_instruction("quest-event:8353:nearest-character").is_err());
+        assert!(parse_instruction("cast-credit:12297:456:invoker-beneficiary").is_err());
+        assert!(parse_instruction("quest-event:8353:threat-list-characters").is_err());
     }
 }
