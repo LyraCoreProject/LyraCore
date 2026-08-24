@@ -1,0 +1,14 @@
+# The Module is the only crate here that builds for wasm32-unknown-unknown, and its Runtime Script
+# Host pulls piccolo -> ahash -> getrandom 0.3, which has NO backend on that target and refuses to
+# compile without one. getrandom 0.3 selects its backend by cfg, not by Cargo feature, so this file
+# is the only place the choice can live.
+#
+# "custom" means the Module supplies the implementation itself — see `runtime_script::fixed_entropy`
+# for the function and for why it is a fixed stream. The alternative, getrandom's `wasm_js` backend
+# (what the runtime spike used to get a compile), emits wasm-bindgen imports that a SpacetimeDB host
+# cannot resolve, so a module built that way fails to instantiate.
+#
+# A `RUSTFLAGS` environment variable overrides this table wholesale. That failure is loud (getrandom
+# stops compiling), never silent.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="custom"']

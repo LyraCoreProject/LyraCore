@@ -227,6 +227,38 @@ window runs the creature whatever its health or kind, as often as the rule fires
 An authored stance holding a creature at a scripted distance and angle from its victim instead of
 the melee approach. Set by the script, dropped with the Engagement.
 
+### Runtime Scripts
+
+**Runtime Script**:
+Lua the Module runs on a core gameplay event, supplied from outside the core rather than compiled
+into it. Named so a diagnostic can identify it.
+_Avoid_: plugin, mod, addon, user script
+
+**Runtime Script Host**:
+The Module's embedded Lua interpreter and the boundary around it: one compiler cache, a fresh
+environment per invocation, a Fuel Budget, and the failure containment. Only place a Runtime
+Script executes.
+_Avoid_: sandbox, VM, engine
+
+**Invocation**:
+One run of one Runtime Script for one event. Starts with an empty environment and ends by
+committing its Staged Effects or by producing a Script Diagnostic. Nothing carries to the next one.
+
+**Fuel Budget**:
+The metered VM work one Invocation may spend before the Host cuts it off. The cut-off is a failure,
+so a script that overruns changes nothing.
+_Avoid_: quota, gas, instruction limit
+
+**Staged Effect**:
+A gameplay operation a Runtime Script asked for, recorded and not yet performed. A successful
+Invocation commits its Staged Effects through core operations; any failure discards all of them.
+_Avoid_: pending action, queued effect, side effect
+
+**Script Diagnostic**:
+The bounded record of a failed Invocation: the Runtime Script, the event, the failure kind
+(syntax, runtime or fuel), and a truncated message. The only thing a failed Invocation produces.
+_Avoid_: error log, stack trace
+
 ### Auctions
 
 **Settlement**:

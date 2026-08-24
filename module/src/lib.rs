@@ -305,6 +305,11 @@ mod realm_core;
 mod region;
 mod reputation;
 mod rest;
+// The Runtime Script Host. Package reconciliation and event bindings are separate work, so today
+// the only callers are the tests and the `debug_reducers` lever — hence the allow, which the
+// binding work removes along with the "no caller yet" it describes.
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+mod runtime_script;
 mod seed;
 mod skill;
 mod skilldata;
