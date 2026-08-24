@@ -243,6 +243,12 @@ _Avoid_: server time, game time, local time
 One durable row per zone holding the sky that zone currently shows. The same row is the state a world entry reads and the source a live Relay fires from, so there is no second weather table and no replay ambiguity for a reconnecting client. A zone with no row has fine weather.
 _Avoid_: weather event, weather state table
 
+### Packages
+
+**Package**:
+A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons and client overrides to the client packer. Either half alone is a valid Package.
+_Avoid_: plugin, addon (when meaning the whole folder), mod, extension
+
 ### Working method
 
 **Seam**:
