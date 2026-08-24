@@ -3372,10 +3372,12 @@ mod tests {
                     target,
                     ..
                 } => assert_eq!(target.guid(), 77),
+                // `MonsterEmote` has no addressee field on the wire; its single guid names the
+                // speaker, so the addressed target is legitimately absent here.
                 wow_world_messages::vanilla::SMSG_MESSAGECHAT_ChatType::MonsterEmote {
                     monster,
                     ..
-                } => assert_eq!(monster.guid(), 77),
+                } => assert_eq!(monster.guid(), 0xF130_0000_0000_002A),
                 other => panic!("expected addressable creature chat, got {other:?}"),
             }
         }

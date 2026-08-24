@@ -149,8 +149,11 @@ pub fn build_chat_message_to(
             sender_name,
             target: Guid::new(target_guid),
         },
+        // `MonsterEmote` carries one guid and it names the SPEAKER, paired with the speaker's own
+        // name. The variant has no addressee field on the wire, so an emote's addressed target is
+        // not expressible here and is dropped rather than misfiled into the speaker slot.
         (CHAT_TEXT_EMOTE, Some(monster_name)) => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
-            monster: Guid::new(target_guid),
+            monster: sender,
             monster_name,
         },
         (1, None) => SMSG_MESSAGECHAT_ChatType::Yell {
@@ -158,7 +161,7 @@ pub fn build_chat_message_to(
             speech_bubble_credit: sender,
         },
         (CHAT_TEXT_EMOTE, None) => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
-            monster: Guid::new(target_guid),
+            monster: sender,
             monster_name: String::new(),
         },
         _ => SMSG_MESSAGECHAT_ChatType::Say {
@@ -401,7 +404,8 @@ mod tests {
                 monster,
                 monster_name,
             } => {
-                assert_eq!(monster.guid(), 77);
+                // The guid and the name must describe the same unit: the speaking creature.
+                assert_eq!(monster.guid(), 0xF130_0000_0000_000B);
                 assert_eq!(monster_name, "Defias Thug");
             }
             other => panic!("expected MonsterEmote, got {other:?}"),
