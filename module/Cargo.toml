@@ -29,3 +29,12 @@ blake3 = "1"
 # minor bump here can silently drift the module ahead of what `spacetime` on PATH can publish.
 spacetimedb = { version = "=2.7.1", features = ["unstable"] }
 lyracore-shared.workspace = true
+# The Runtime Script Host's embedded Lua interpreter (src/runtime_script.rs). Pinned exactly, same house
+# rule as the spacetimedb pin above: the fuel constants are sized against THIS version's metering,
+# and the stdlib subset a Runtime Script sees is this version's — a minor bump can move both under
+# scripts that already shipped.
+piccolo = "=0.3.3"
+# Only for the `Error` type the getrandom 0.3 custom backend must return. piccolo reaches getrandom
+# through `ahash`, and `wasm32-unknown-unknown` has no built-in backend; the Module supplies one in
+# `runtime_script::fixed_entropy`, selected by the `getrandom_backend` cfg in `.cargo/config.toml`.
+getrandom = "0.3"

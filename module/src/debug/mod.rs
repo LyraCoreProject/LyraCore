@@ -43,6 +43,7 @@ mod fingerprint;
 mod instance;
 mod readout;
 mod repair;
+mod runtime_script;
 
 pub use audit::*;
 pub use encounter::*;
@@ -50,6 +51,7 @@ pub use fingerprint::*;
 pub use instance::*;
 pub use readout::*;
 pub use repair::*;
+pub use runtime_script::*;
 
 use lyracore_shared::{constants, spatial};
 use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
