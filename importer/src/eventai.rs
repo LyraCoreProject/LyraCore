@@ -1897,6 +1897,30 @@ impl RelaySource {
         closure
     }
 
+    /// Every creature template the accepted relay closure names. An accepted action already forces
+    /// its summon template into the World Import Scope, and a relay leaf carries the same weight: a
+    /// step that names a template the run never writes would ship against content the shard lacks.
+    /// Steps the source loader skips are excluded, matching `encode_closure`.
+    fn closure_template_entries(&self, roots: &BTreeSet<u32>) -> BTreeSet<u64> {
+        let mut entries = BTreeSet::new();
+        for relay_id in self.closure(roots) {
+            let Some(steps) = self.definitions.get(&relay_id) else {
+                continue;
+            };
+            for step in steps.iter().filter(|step| !step.is_loader_skipped()) {
+                let Ok(dependencies) = step.resolved_dependencies(self) else {
+                    continue;
+                };
+                for dependency in dependencies {
+                    if dependency.kind == "creature_template" {
+                        entries.insert(dependency.raw_value);
+                    }
+                }
+            }
+        }
+        entries
+    }
+
     fn encode_closure(&self, roots: &BTreeSet<u32>) -> Vec<String> {
         self.closure(roots)
             .into_iter()
@@ -3647,6 +3671,8 @@ impl EventAiSource {
                 rule.actions.iter().filter(|action| action[0] != 0).count() as u64;
         }
 
+        plan.forced_template_entries
+            .extend(self.relays.closure_template_entries(&accepted_relay_roots));
         plan.relay_definition_rows = self.relays.encode_closure(&accepted_relay_roots);
         let relay_catalogue_version =
             RelaySource::encoded_catalogue_version(&plan.relay_definition_rows);
@@ -6561,6 +6587,39 @@ mod tests {
         assert_ne!(catalogue_version, 0);
         assert!(
             plan.definition_rows[0].contains(&format!("start-relay:1:self:{catalogue_version}"))
+        );
+    }
+
+    /// An accepted action already forces its summon template into the World Import Scope. A relay
+    /// leaf that names a creature template carries the same weight, so the fixpoint must pull it in
+    /// too. Without this the manifest reports the dependency resolved and the profile apply-ready
+    /// while the run emits a relay step naming a template it never writes.
+    #[test]
+    fn an_accepted_relay_forces_the_creature_template_its_step_names() {
+        let sql = format!(
+            "INSERT INTO `creature_template` VALUES (777,'Cured Deer'); \
+             INSERT INTO `creature_ai_scripts` VALUES {}; \
+             INSERT INTO `dbscripts_on_relay` VALUES \
+             (1,0,0,44,777,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'update template');",
+            rule(
+                10,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_START_RELAY as i64, 1, 0, 0], [0; 4], [0; 4]],
+            )
+        );
+        let mut source = parse(&sql);
+        source.relays.creature_entries.insert(777);
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+
+        assert!(
+            plan.forced_template_entries.contains(&777),
+            "the relay's creature template never reached the World Import Scope: {:?}",
+            plan.forced_template_entries
         );
     }
 
