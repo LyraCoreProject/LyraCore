@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/lyracore-package-delta",
     "crates/lyracore-shared",
     "module",
     "gateway",
