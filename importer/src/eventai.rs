@@ -3267,6 +3267,38 @@ mod tests {
     }
 
     #[test]
+    fn presentation_unit_actions_refuse_nonself_targets() {
+        for action in [[17, 23, 0, 1], [18, 256, 1, 0], [19, 2, 1, 0]] {
+            let source = parse(&dump(&[rule(
+                10,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [action, [0; 4], [0; 4]],
+            )]));
+            let (entries, guids, templates) = scope();
+            let plan = source.assemble(&entries, &guids, &templates);
+            let profile = fixture_profile(&plan);
+            let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+
+            let action_parameters = format!(
+                "unsupported_presentation_action_parameters_{}_{}_{}",
+                action[1], action[2], action[3]
+            );
+            let rendered = assert_refusal(&manifest, &action_parameters);
+            assert_result(
+                &rendered,
+                "presentation_action",
+                &action[0].to_string(),
+                "dropped",
+                &action_parameters,
+            );
+        }
+    }
+
+    #[test]
     fn rajaxx_client_projection_requires_the_pinned_rule_and_source_guid() {
         let source = parse(&dump(&[rule(
             1_534_108,

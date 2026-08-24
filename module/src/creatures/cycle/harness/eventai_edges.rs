@@ -1,6 +1,7 @@
 //! Spawn and death EventAI scenarios.
 use super::*;
 use crate::creatures::eventai::*;
+use crate::creatures::presentation::NpcFlagsProjection;
 
 const CREATURE: u64 = 8_101;
 const TARGET: u64 = 8_102;
@@ -1024,7 +1025,35 @@ fn receive_ai_event_keeps_invoker_and_sender_targets_distinct() {
 }
 
 #[test]
-fn native_presentation_instruction_reaches_the_creature_world_seam() {
+fn native_presentation_instructions_reach_the_creature_world_seam_in_order() {
+    let instructions = vec![
+        CreaturePresentationInstruction::SetFaction {
+            faction_template: 777,
+        },
+        CreaturePresentationInstruction::ShowTemplateDisplay {
+            template_entry: 11_284,
+        },
+        CreaturePresentationInstruction::SetCreatureMount {
+            mount: CreaturePresentationMount::TwilightMarauder,
+        },
+        CreaturePresentationInstruction::SetNpcFlags {
+            flags: NpcFlagsProjection::Clear,
+        },
+        CreaturePresentationInstruction::SetNpcFlags {
+            flags: NpcFlagsProjection::GossipAndQuest,
+        },
+        CreaturePresentationInstruction::EmptyMana,
+        CreaturePresentationInstruction::ClearVirtualMainHand,
+        CreaturePresentationInstruction::SetNotAttackable,
+        CreaturePresentationInstruction::ClearNotAttackable,
+        CreaturePresentationInstruction::SetImmuneToPlayers,
+        CreaturePresentationInstruction::ClearImmuneToPlayers,
+        CreaturePresentationInstruction::SetImmuneToCreatures,
+        CreaturePresentationInstruction::ClearImmuneToCreatures,
+        CreaturePresentationInstruction::SetImmuneToPlayersAndCreatures,
+        CreaturePresentationInstruction::ClearImmuneToPlayersAndCreatures,
+        CreaturePresentationInstruction::SetNotSelectable,
+    ];
     let rule = EventAiRule {
         source_rule_id: 81,
         event: EventCondition::OnAggro,
@@ -1034,9 +1063,11 @@ fn native_presentation_instruction_reaches_the_creature_world_seam() {
         selection: InstructionSelection::All,
         execution: ExecutionPolicy::Ordinary,
         posture: PostureAdmission::Any,
-        instructions: vec![CreatureInstruction::Presentation(
-            CreaturePresentationInstruction::SetNotSelectable,
-        )],
+        instructions: instructions
+            .iter()
+            .copied()
+            .map(CreatureInstruction::Presentation)
+            .collect(),
     };
     let definition = EventAiDefinition {
         subject: EventAiSubject::Entry(ENTRY),
@@ -1048,13 +1079,19 @@ fn native_presentation_instruction_reaches_the_creature_world_seam() {
     edge(&mut scenario, EventKind::OnAggro, false);
 
     let state = scenario.eventai_creature_state(CREATURE);
+    let expected: Vec<_> = instructions
+        .into_iter()
+        .map(|instruction| {
+            (
+                CREATURE,
+                state.lifecycle_id,
+                state.definition_revision,
+                instruction,
+            )
+        })
+        .collect();
     assert_eq!(
         scenario.eventai_presentation.borrow().as_slice(),
-        &[(
-            CREATURE,
-            state.lifecycle_id,
-            state.definition_revision,
-            CreaturePresentationInstruction::SetNotSelectable,
-        )]
+        expected.as_slice()
     );
 }
