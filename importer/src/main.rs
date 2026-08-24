@@ -7660,6 +7660,7 @@ mod tests {
              (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\
              (2,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
              INSERT INTO `creature_template` VALUES {},{}; \
+             INSERT INTO `spell_template` VALUES (42); \
              INSERT INTO `broadcast_text` VALUES {},{},{},{}; \
              INSERT INTO `script_texts` VALUES (-1,'Old\\'s','','','','','','','','',0,1,0,2,0); \
              INSERT INTO `creature_ai_summons` VALUES (700,1,2,3,4,5); \
