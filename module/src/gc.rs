@@ -7,8 +7,8 @@ use crate::{
     game_addon_message, game_bot_invite_intent, game_channel_event, game_chat_event,
     game_combat_event, game_duel_event, game_emote_event, game_group_event, game_group_invite,
     game_levelup_event, game_movement_violation, game_roll_event, game_spell_cast_event,
-    game_spell_impact_event, game_teleport_event, game_trade_event, game_trade_session,
-    game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
+    game_spell_impact_event, game_system_message_event, game_teleport_event, game_trade_event,
+    game_trade_session, game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
 use crate::breath_relay::game_breath_relay_event;
 // `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
@@ -80,6 +80,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_channel_event); // channel lines (065)
     reap!(game_emote_event); // emote broadcast (text + animation)
     reap!(game_whisper_event); // private whisper lines (RLS-scoped)
+    reap!(game_system_message_event); // private Package-originated System Messages
     reap!(game_addon_message); // addon-bridge UI messages (184, RLS-scoped)
     reap!(game_roll_event); // /roll broadcast results
     reap!(game_group_event); // group invite/roster notifications (RLS-scoped)

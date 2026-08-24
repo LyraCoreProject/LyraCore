@@ -697,6 +697,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // additionally feeds the per-session cross-shard twins, unchanged.
         "SELECT * FROM game_resurrect_request",
         "SELECT * FROM game_whisper_event",
+        "SELECT * FROM game_system_message_event",
         "SELECT * FROM game_group_event",
         "SELECT * FROM game_trade_event",
         "SELECT * FROM game_duel_event",

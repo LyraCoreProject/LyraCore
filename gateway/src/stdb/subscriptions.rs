@@ -2033,6 +2033,14 @@ pub(crate) fn whisper_event_outbound(row: &WhisperEvent) -> Vec<Outbound> {
     ))]
 }
 
+/// Build a Package System Message after the caller validates the recipient.
+pub(crate) fn system_message_event_outbound(row: &SystemMessageEvent) -> Vec<Outbound> {
+    let message = codec::build_gm_system_message(row.message.clone());
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
+        Box::new(message),
+    ))]
+}
+
 /// Resurrect prompt: the packet body both legs run. Audience: the
 /// offer's target, resolved by the caller.
 pub(crate) fn resurrect_request_outbound(row: &ResurrectRequest) -> Vec<Outbound> {
@@ -3381,6 +3389,27 @@ mod tests {
                 other => panic!("expected addressable creature chat, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn system_message_outbound_reuses_the_existing_system_chat_builder() {
+        let row = SystemMessageEvent {
+            id: 1,
+            recipient_identity: spacetimedb_sdk::Identity::from_byte_array([7; 32]),
+            recipient_guid: 9001,
+            message: "Package loaded".to_string(),
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        };
+        let outbound = system_message_event_outbound(&row);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(actual))] = outbound.as_slice()
+        else {
+            panic!("one System Message packet expected");
+        };
+
+        assert_eq!(
+            **actual,
+            codec::build_gm_system_message(row.message.clone())
+        );
     }
 
     fn duel_event(kind: u8, completion_kind: u8) -> DuelEvent {

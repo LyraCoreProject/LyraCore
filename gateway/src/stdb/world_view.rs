@@ -631,6 +631,12 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     wire_insert_live(db.game_whisper_event(), "game_whisper_event.insert", &view, |v, row| {
         whisper_appeared(v, row)
     });
+    wire_insert_live(
+        db.game_system_message_event(),
+        "game_system_message_event.insert",
+        &view,
+        |v, row| system_message_appeared(v, row),
+    );
     {
         let coord = coord.clone();
         wire_insert_live(db.game_group_event(), "game_group_event.insert", &view, move |v, row| {
@@ -1667,6 +1673,24 @@ fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
     });
 }
 
+/// Queue a Package System Message for its addressed World Session.
+fn system_message_appeared(view: &WorldView, row: &SystemMessageEvent) {
+    let Some(session) = view.session_of_owner(row.recipient_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
+        return;
+    }
+    let row = row.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || {
+        super::subscriptions::system_message_event_outbound(&row)
+    });
+}
+
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
 /// else (same shape as [`whisper_appeared`]) (#120).
 fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
@@ -1968,13 +1992,13 @@ mod family_audience_tests {
     use super::{
         addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
         is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared, teleport_appeared,
-        weather_changed, xp_appeared, zone_crossed, BoundIdentity, ExplorationReplay,
-        MotionPending, OwnerGuid, Viewer, WorldView,
+        system_message_appeared, weather_changed, xp_appeared, zone_crossed, BoundIdentity,
+        ExplorationReplay, MotionPending, OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
         AddonMessage, CharacterExplored, CharacterQuest, LevelupEvent, PlayerReputation,
-        TeleportEvent, XpEvent, ZoneWeather,
+        SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
@@ -2250,6 +2274,49 @@ mod family_audience_tests {
             !private_recipient_audience(0, 0),
             "the all-zero case is a leak, not a match — both sides unset must still deny"
         );
+    }
+
+    #[test]
+    fn a_system_message_reaches_only_its_recipient_and_missing_recipients_are_dropped() {
+        let view = WorldView::new(true);
+        let (recipient_tx, recipient_rx) = SessionTx::with_depth(0);
+        let recipient = viewer_with_tx(1, 9001, identity(1), recipient_tx);
+        let (bystander_tx, bystander_rx) = SessionTx::with_depth(0);
+        let bystander = viewer_with_tx(2, 9002, identity(2), bystander_tx);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(recipient.clone(), anchor, 0);
+        view.add_viewer_on_shard(bystander, anchor, 0);
+
+        let row = SystemMessageEvent {
+            id: 1,
+            recipient_identity: recipient.bound_identity,
+            recipient_guid: recipient.self_guid,
+            message: "Package loaded".to_string(),
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        };
+        system_message_appeared(&view, &row);
+
+        let outbound = queued_job(&recipient_rx);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(actual))] = outbound.as_slice()
+        else {
+            panic!("the recipient must receive one System Message packet");
+        };
+        assert_eq!(
+            **actual,
+            crate::codec::build_gm_system_message(row.message.clone())
+        );
+        assert!(
+            bystander_rx.try_recv().is_err(),
+            "a second Character must receive no queued work"
+        );
+
+        let missing = SystemMessageEvent {
+            recipient_guid: 9999,
+            ..row
+        };
+        system_message_appeared(&view, &missing);
+        assert!(recipient_rx.try_recv().is_err());
+        assert!(bystander_rx.try_recv().is_err());
     }
 
     #[test]

@@ -348,6 +348,60 @@ pub struct WhisperEvent {
     pub recipient_guid: u64,
 }
 
+/// A private System Message for one connected Character. The Gateway addresses the row by guid and
+/// rechecks the recipient before enqueueing. Reaped by the shared event GC. [event]
+#[table(accessor = game_system_message_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
+pub struct SystemMessageEvent {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub recipient_identity: Identity,
+    pub recipient_guid: u64,
+    pub message: String,
+    pub created_at: Timestamp,
+}
+
+/// Emit a private System Message for one online Character on this Shard. Package code calls this
+/// through `actor::system_message`, so it needs no table or protocol knowledge.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn emit_system_message(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    message: String,
+) -> Result<(), String> {
+    let recipient = crate::helpers::character_by_guid(ctx, character_guid)
+        .map(|character| (character.owner_identity, character.online));
+    let event = prepare_system_message(character_guid, recipient, &message, ctx.timestamp)?;
+    ctx.db.game_system_message_event().insert(event);
+    Ok(())
+}
+
+fn prepare_system_message(
+    character_guid: u64,
+    recipient: Option<(Identity, bool)>,
+    message: &str,
+    created_at: Timestamp,
+) -> Result<SystemMessageEvent, String> {
+    let Some((recipient_identity, online)) = recipient else {
+        return Err(format!(
+            "system message recipient {character_guid} is not present on this Shard"
+        ));
+    };
+    if !online {
+        return Err(format!(
+            "system message recipient {character_guid} is offline"
+        ));
+    }
+    let message = normalized_message(message).ok_or_else(|| "empty system message".to_string())?;
+    Ok(SystemMessageEvent {
+        id: 0,
+        recipient_identity,
+        recipient_guid: character_guid,
+        message,
+        created_at,
+    })
+}
+
 /// Whisper (`CMSG_MESSAGECHAT` with the Whisper type): deliver `message` privately to the player named
 /// `target_name`, plus an echo to the sender. The target must be online; an unknown/offline target is
 /// a clean `Err` the gateway turns into `SMSG_CHAT_PLAYER_NOT_FOUND`. Name match is case-insensitive
@@ -794,6 +848,61 @@ mod tests {
         assert_eq!(
             normalized_message(&long).unwrap().chars().count(),
             MAX_CHAT_LEN
+        );
+        let unicode = "🦀".repeat(300);
+        assert_eq!(
+            normalized_message(&unicode).as_deref(),
+            Some("🦀".repeat(MAX_CHAT_LEN).as_str())
+        );
+    }
+
+    #[test]
+    fn an_online_recipient_produces_one_bounded_system_message_event() {
+        let recipient_identity = Identity::from_byte_array([7; 32]);
+        let created_at = Timestamp::from_micros_since_unix_epoch(42);
+        let event = prepare_system_message(
+            9001,
+            Some((recipient_identity, true)),
+            &format!("  {}  ", "🦀".repeat(300)),
+            created_at,
+        )
+        .expect("an online Character accepts one System Message");
+
+        assert_eq!(event.id, 0);
+        assert_eq!(event.recipient_identity, recipient_identity);
+        assert_eq!(event.recipient_guid, 9001);
+        assert_eq!(event.message, "🦀".repeat(MAX_CHAT_LEN));
+        assert_eq!(event.created_at, created_at);
+    }
+
+    #[test]
+    fn a_missing_or_offline_recipient_produces_no_system_message_event() {
+        let now = Timestamp::UNIX_EPOCH;
+        let identity = Identity::from_byte_array([3; 32]);
+
+        assert_eq!(
+            prepare_system_message(9001, None, "hello", now)
+                .err()
+                .as_deref(),
+            Some("system message recipient 9001 is not present on this Shard")
+        );
+        assert_eq!(
+            prepare_system_message(9001, Some((identity, false)), "hello", now)
+                .err()
+                .as_deref(),
+            Some("system message recipient 9001 is offline")
+        );
+    }
+
+    #[test]
+    fn an_empty_system_message_produces_no_event() {
+        let identity = Identity::from_byte_array([3; 32]);
+
+        assert_eq!(
+            prepare_system_message(9001, Some((identity, true)), "  \t ", Timestamp::UNIX_EPOCH)
+                .err()
+                .as_deref(),
+            Some("empty system message")
         );
     }
 
