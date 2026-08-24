@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::{bt, eventai_presentation, field, parse_table, sql_text, world_guid};
+use crate::{bt, eventai_presentation, field, go_guid, parse_table, sql_text, world_guid};
 
 pub(crate) const SOURCE_PROFILE_NAME: &str = "cmangos-classic-z2815";
 pub(crate) const LOADER_CONTRACT: &str = "creature-ai-scripts-24-columns-ordered-by-id-v1";
@@ -12,6 +12,31 @@ const DEFINITION_BATCH_BYTES: usize = 64 * 1024;
 const RELAY_MAX_DEPTH: usize = 16;
 const RELAY_STEP_BUDGET: usize = 4_096;
 const RELAY_SCHEDULED_WORK_BUDGET: usize = 2_048;
+const RELAY_CATALOGUE_VERSION_PLACEHOLDER: &str = "{relay-catalogue-version}";
+
+const SCRIPT_FLAG_BUDDY_AS_TARGET: u32 = 0x001;
+const SCRIPT_FLAG_REVERSE_DIRECTION: u32 = 0x002;
+const SCRIPT_FLAG_SOURCE_TARGETS_SELF: u32 = 0x004;
+const SCRIPT_FLAG_COMMAND_ADDITIONAL: u32 = 0x008;
+const SCRIPT_FLAG_BUDDY_BY_GUID: u32 = 0x010;
+const SCRIPT_FLAG_BUDDY_IS_PET: u32 = 0x020;
+const SCRIPT_FLAG_BUDDY_IS_DESPAWNED: u32 = 0x040;
+const SCRIPT_FLAG_BUDDY_BY_POOL: u32 = 0x080;
+const SCRIPT_FLAG_BUDDY_BY_SPAWN_GROUP: u32 = 0x100;
+const SCRIPT_FLAG_ALL_ELIGIBLE_BUDDIES: u32 = 0x200;
+const SCRIPT_FLAG_BUDDY_BY_GO: u32 = 0x400;
+const SCRIPT_FLAG_BUDDY_BY_STRING_ID: u32 = 0x800;
+const SCRIPT_FLAG_PARTICIPANTS: u32 = SCRIPT_FLAG_BUDDY_AS_TARGET
+    | SCRIPT_FLAG_REVERSE_DIRECTION
+    | SCRIPT_FLAG_SOURCE_TARGETS_SELF
+    | SCRIPT_FLAG_BUDDY_BY_GUID
+    | SCRIPT_FLAG_BUDDY_IS_PET
+    | SCRIPT_FLAG_BUDDY_IS_DESPAWNED
+    | SCRIPT_FLAG_BUDDY_BY_POOL
+    | SCRIPT_FLAG_BUDDY_BY_SPAWN_GROUP
+    | SCRIPT_FLAG_ALL_ELIGIBLE_BUDDIES
+    | SCRIPT_FLAG_BUDDY_BY_GO
+    | SCRIPT_FLAG_BUDDY_BY_STRING_ID;
 
 const EVENT_TIMER_IN_COMBAT: u32 = 0;
 const EVENT_TIMER_OUT_OF_COMBAT: u32 = 1;
@@ -761,8 +786,14 @@ impl SourceProfile {
             "instance_complete",
             "instance_special",
             "relay_root_rules",
+            "relay_accepted_root_rules",
+            "relay_refused_root_rules",
             "relay_definitions",
+            "relay_accepted_definitions",
+            "relay_refused_definitions",
             "relay_rows",
+            "relay_accepted_rows",
+            "relay_refused_rows",
             "relay_command_types",
             "relay_random_templates",
             "relay_nested_edges",
@@ -1163,12 +1194,24 @@ struct RawRule {
 #[derive(Clone, Default)]
 struct RelaySource {
     definitions: BTreeMap<u32, Vec<RawRelayStep>>,
-    random_templates: BTreeMap<u32, Vec<u32>>,
+    random_templates: BTreeMap<u32, Vec<RelayTemplateChoice>>,
+    string_templates: BTreeMap<u32, Vec<RelayTemplateChoice>>,
     broadcast_ids: HashSet<u32>,
+    spell_ids: HashSet<u32>,
     creature_entries: HashSet<u32>,
     gameobject_entries: HashSet<u32>,
+    creature_spawns: HashMap<u32, u32>,
+    gameobject_spawns: HashMap<u32, u32>,
     path_ids: HashSet<u32>,
+    pool_ids: HashSet<u32>,
+    gossip_menu_ids: HashSet<u32>,
     parse_failures: Vec<String>,
+}
+
+#[derive(Clone)]
+struct RelayTemplateChoice {
+    target_id: u32,
+    chance: u32,
 }
 
 #[derive(Clone)]
@@ -1177,17 +1220,18 @@ struct RawRelayStep {
     priority: u32,
     source_order: u32,
     command: u32,
-    value: u32,
-    value2: u32,
-    value3: u32,
+    datalong: u32,
+    datalong2: u32,
+    datalong3: u32,
     buddy_entry: u32,
     search_radius: u32,
     flags: u32,
-    integers: [i32; 4],
+    dataints: [i32; 4],
     x: f32,
     y: f32,
     z: f32,
     orientation: f32,
+    speed: f32,
     condition_id: u32,
 }
 
@@ -1205,6 +1249,11 @@ impl RelaySource {
                 .filter_map(|row| field(&row, 0).parse::<i32>().ok())
                 .map(|id| id as u32),
         );
+        source.spell_ids.extend(
+            parse_table(dump, "spell_template")
+                .into_iter()
+                .filter_map(|row| source_u32(field(&row, 0))),
+        );
         source.creature_entries.extend(
             parse_table(dump, "creature_template")
                 .into_iter()
@@ -1215,8 +1264,33 @@ impl RelaySource {
                 .into_iter()
                 .filter_map(|row| source_u32(field(&row, 0))),
         );
+        source.creature_spawns.extend(
+            parse_table(dump, "creature")
+                .into_iter()
+                .filter_map(|row| Some((source_u32(field(&row, 0))?, source_u32(field(&row, 1))?))),
+        );
+        source.gameobject_spawns.extend(
+            parse_table(dump, "gameobject")
+                .into_iter()
+                .filter_map(|row| Some((source_u32(field(&row, 0))?, source_u32(field(&row, 1))?))),
+        );
         source.path_ids.extend(
             parse_table(dump, "creature_movement_template")
+                .into_iter()
+                .filter_map(|row| source_u32(field(&row, 0))),
+        );
+        source.path_ids.extend(
+            parse_table(dump, "waypoint_path")
+                .into_iter()
+                .filter_map(|row| source_u32(field(&row, 0))),
+        );
+        source.pool_ids.extend(
+            parse_table(dump, "pool_template")
+                .into_iter()
+                .filter_map(|row| source_u32(field(&row, 0))),
+        );
+        source.gossip_menu_ids.extend(
+            parse_table(dump, "gossip_menu")
                 .into_iter()
                 .filter_map(|row| source_u32(field(&row, 0))),
         );
@@ -1258,7 +1332,7 @@ impl RelaySource {
                 };
                 let relay_id = u32_at(0, "id")?;
                 f32_at(14, "datafloat")?;
-                f32_at(19, "speed")?;
+                let speed = f32_at(19, "speed")?;
                 Ok((
                     relay_id,
                     RawRelayStep {
@@ -1266,13 +1340,13 @@ impl RelaySource {
                         priority: u32_at(2, "priority")?,
                         source_order: row_number as u32,
                         command: u32_at(3, "command")?,
-                        value: u32_at(4, "datalong")?,
-                        value2: u32_at(5, "datalong2")?,
-                        value3: u32_at(6, "datalong3")?,
+                        datalong: u32_at(4, "datalong")?,
+                        datalong2: u32_at(5, "datalong2")?,
+                        datalong3: u32_at(6, "datalong3")?,
                         buddy_entry: u32_at(7, "buddy_entry")?,
                         search_radius: u32_at(8, "search_radius")?,
                         flags: u32_at(9, "data_flags")?,
-                        integers: [
+                        dataints: [
                             i32_at(10, "dataint")?,
                             i32_at(11, "dataint2")?,
                             i32_at(12, "dataint3")?,
@@ -1282,6 +1356,7 @@ impl RelaySource {
                         y: f32_at(16, "y")?,
                         z: f32_at(17, "z")?,
                         orientation: f32_at(18, "o")?,
+                        speed,
                         condition_id: u32_at(20, "condition_id")?,
                     },
                 ))
@@ -1304,7 +1379,7 @@ impl RelaySource {
                 ));
                 continue;
             }
-            let parsed = (|| -> Result<(u32, u32, i32), String> {
+            let parsed = (|| -> Result<(u32, u32, i32, u32), String> {
                 let template_id = field(&row, 0).parse::<u32>().map_err(|_| {
                     format!("dbscript_random_templates row {row_number} has invalid id")
                 })?;
@@ -1314,30 +1389,37 @@ impl RelaySource {
                 let target_id = field(&row, 2).parse::<i32>().map_err(|_| {
                     format!("dbscript_random_templates row {row_number} has invalid target_id")
                 })?;
-                field(&row, 3).parse::<i32>().map_err(|_| {
+                let chance = field(&row, 3).parse::<u32>().map_err(|_| {
                     format!("dbscript_random_templates row {row_number} has invalid chance")
                 })?;
-                Ok((template_id, template_type, target_id))
+                Ok((template_id, template_type, target_id, chance))
             })();
-            let (template_id, template_type, relay_id) = match parsed {
+            let (template_id, template_type, target_id, chance) = match parsed {
                 Ok(values) => values,
                 Err(error) => {
                     source.parse_failures.push(error);
                     continue;
                 }
             };
-            if template_type != 1 {
+            if !matches!(template_type, 0 | 1) {
                 continue;
             }
-            if relay_id > 0 {
-                source
-                    .random_templates
+            if target_id > 0 {
+                let templates = if template_type == 0 {
+                    &mut source.string_templates
+                } else {
+                    &mut source.random_templates
+                };
+                templates
                     .entry(template_id)
                     .or_default()
-                    .push(relay_id as u32);
-            } else if relay_id < 0 {
+                    .push(RelayTemplateChoice {
+                        target_id: target_id as u32,
+                        chance,
+                    });
+            } else if target_id < 0 {
                 source.parse_failures.push(format!(
-                    "dbscript_random_templates row {row_number} has nonpositive relay target {relay_id}"
+                    "dbscript_random_templates row {row_number} has nonpositive target {target_id}"
                 ));
             }
         }
@@ -1375,6 +1457,25 @@ impl RelaySource {
             .filter_map(|id| self.definitions.get(id))
             .flatten()
             .collect::<Vec<_>>();
+        let mut accepted_root_rules = 0_u64;
+        let mut accepted_root_ids = BTreeSet::new();
+        for rule in rules {
+            for (slot, action) in rule.actions.iter().enumerate() {
+                if action[0] != ACTION_START_RELAY {
+                    continue;
+                }
+                if let Ok(roots) = self.validate_action(action[1], rule.id, slot) {
+                    accepted_root_rules += 1;
+                    accepted_root_ids.extend(roots);
+                }
+            }
+        }
+        let accepted_closure = self.closure(&accepted_root_ids);
+        let accepted_rows = accepted_closure
+            .iter()
+            .filter_map(|id| self.definitions.get(id))
+            .map(Vec::len)
+            .sum::<usize>();
         let command_types = rows
             .iter()
             .filter(|row| row.command != 45)
@@ -1399,8 +1500,26 @@ impl RelaySource {
                 instance_states.iter().filter(|state| **state == 4).count() as u64,
             ),
             ("relay_root_rules".to_string(), relay_actions.len() as u64),
+            ("relay_accepted_root_rules".to_string(), accepted_root_rules),
+            (
+                "relay_refused_root_rules".to_string(),
+                relay_actions.len() as u64 - accepted_root_rules,
+            ),
             ("relay_definitions".to_string(), closure.len() as u64),
+            (
+                "relay_accepted_definitions".to_string(),
+                accepted_closure.len() as u64,
+            ),
+            (
+                "relay_refused_definitions".to_string(),
+                (closure.len() - accepted_closure.len()) as u64,
+            ),
             ("relay_rows".to_string(), rows.len() as u64),
+            ("relay_accepted_rows".to_string(), accepted_rows as u64),
+            (
+                "relay_refused_rows".to_string(),
+                (rows.len() - accepted_rows) as u64,
+            ),
             (
                 "relay_command_types".to_string(),
                 command_types.len() as u64,
@@ -1419,18 +1538,22 @@ impl RelaySource {
             return Ok(vec![raw_relay]);
         }
         let template_id = signed.unsigned_abs();
-        self.random_templates
-            .get(&template_id)
-            .cloned()
-            .filter(|choices| !choices.is_empty())
-            .ok_or_else(|| {
-                MappingFailure::dependency(
-                    "relay_random_template",
-                    u64::from(template_id),
-                    "missing",
-                    format!("relay_random_template:{template_id}"),
-                )
-            })
+        let choices = self.random_templates.get(&template_id).ok_or_else(|| {
+            MappingFailure::dependency(
+                "relay_random_template",
+                u64::from(template_id),
+                "missing",
+                format!("relay_random_template:{template_id}"),
+            )
+        })?;
+        uniform_template_targets(choices).map_err(|reason| {
+            MappingFailure::dependency(
+                "relay_random_template",
+                u64::from(template_id),
+                reason,
+                format!("relay_random_template:{template_id}"),
+            )
+        })
     }
 
     fn validate_action(
@@ -1469,74 +1592,114 @@ impl RelaySource {
             path: &mut Vec<u32>,
             steps: &mut usize,
             scheduled: &mut usize,
-        ) -> Result<(), String> {
+            rule_id: u64,
+            slot: usize,
+        ) -> Result<(), MappingFailure> {
+            let relay_path = |path: &[u32]| {
+                path.iter()
+                    .map(|id| format!("relay:{id}"))
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            };
             if path.contains(&relay_id) {
                 path.push(relay_id);
-                return Err(format!(
-                    "relay cycle {}",
-                    path.iter()
-                        .map(u32::to_string)
-                        .collect::<Vec<_>>()
-                        .join(" -> ")
+                return Err(MappingFailure::dependency(
+                    "relay_definition",
+                    u64::from(relay_id),
+                    "cycle",
+                    format!("rule:{rule_id} -> action:{slot} -> {}", relay_path(path)),
                 ));
             }
             if path.len() >= RELAY_MAX_DEPTH {
-                return Err(format!(
-                    "relay depth exceeds {RELAY_MAX_DEPTH} at {relay_id}"
+                return Err(MappingFailure::dependency(
+                    "relay_definition",
+                    u64::from(relay_id),
+                    format!("depth_exceeds_{RELAY_MAX_DEPTH}"),
+                    format!(
+                        "rule:{rule_id} -> action:{slot} -> {} -> relay:{relay_id}",
+                        relay_path(path)
+                    ),
                 ));
             }
             let rows = source.definitions.get(&relay_id).ok_or_else(|| {
                 let mut missing_path = path.clone();
                 missing_path.push(relay_id);
-                format!(
-                    "relay dependency path {} is missing",
-                    missing_path
-                        .iter()
-                        .map(u32::to_string)
-                        .collect::<Vec<_>>()
-                        .join(" -> ")
+                MappingFailure::dependency(
+                    "relay_definition",
+                    u64::from(relay_id),
+                    "missing",
+                    format!(
+                        "rule:{rule_id} -> action:{slot} -> {}",
+                        relay_path(&missing_path)
+                    ),
                 )
             })?;
             path.push(relay_id);
             for row in rows {
                 let location = format!(
-                    "relay dependency path {} -> row:{}",
-                    path.iter()
-                        .map(u32::to_string)
-                        .collect::<Vec<_>>()
-                        .join(" -> "),
-                    row.source_order
+                    "rule:{rule_id} -> action:{slot} -> {} -> row:{}",
+                    relay_path(path),
+                    row.source_order,
                 );
                 if row.condition_id != 0 {
-                    return Err(format!(
-                        "{location} has unsupported condition {}",
-                        row.condition_id
+                    return Err(MappingFailure::dependency(
+                        "relay_definition",
+                        u64::from(relay_id),
+                        format!("unsupported_condition_{}", row.condition_id),
+                        location,
                     ));
                 }
                 row.validate_dependencies(source)
-                    .map_err(|reason| format!("{location} {reason}"))?;
-                row.validate_participants()
-                    .map_err(|reason| format!("{location} {reason}"))?;
-                if !matches!(row.command, 0 | 1 | 45) {
-                    return Err(format!(
-                        "{location} has no gameplay authority binding for command {}",
-                        row.command
+                    .map_err(|failure| failure.mapping_failure(&location))?;
+                row.validate_participants(source).map_err(|reason| {
+                    MappingFailure::dependency(
+                        "relay_participant",
+                        u64::from(row.flags),
+                        reason,
+                        format!("{location} -> participant"),
+                    )
+                })?;
+                if !row.has_gameplay_authority() {
+                    return Err(MappingFailure::dependency(
+                        "relay_definition",
+                        u64::from(relay_id),
+                        format!("no_gameplay_authority_for_command_{}", row.command),
+                        location,
                     ));
                 }
-                row.encode_instruction()
-                    .map_err(|reason| format!("{location} {reason}"))?;
+                row.encode_instruction_with_source(source)
+                    .map_err(|reason| {
+                        MappingFailure::dependency(
+                            "relay_definition",
+                            u64::from(relay_id),
+                            reason,
+                            location.clone(),
+                        )
+                    })?;
                 *steps += 1;
                 *scheduled += usize::from(row.offset_ms != 0);
                 if *steps > RELAY_STEP_BUDGET {
-                    return Err(format!("relay step budget exceeds {RELAY_STEP_BUDGET}"));
+                    return Err(MappingFailure::dependency(
+                        "relay_definition",
+                        u64::from(relay_id),
+                        format!("step_budget_exceeds_{RELAY_STEP_BUDGET}"),
+                        location,
+                    ));
                 }
                 if *scheduled > RELAY_SCHEDULED_WORK_BUDGET {
-                    return Err(format!(
-                        "relay scheduled-work budget exceeds {RELAY_SCHEDULED_WORK_BUDGET}"
+                    return Err(MappingFailure::dependency(
+                        "relay_definition",
+                        u64::from(relay_id),
+                        format!("scheduled_work_budget_exceeds_{RELAY_SCHEDULED_WORK_BUDGET}"),
+                        location,
                     ));
                 }
                 if row.command == 45 {
-                    visit(source, row.value, path, steps, scheduled)?;
+                    for target in row.nested_targets(source).map_err(|failure| {
+                        failure.mapping_failure(&format!("{location} -> relay_template"))
+                    })? {
+                        visit(source, target, path, steps, scheduled, rule_id, slot)?;
+                    }
                 }
             }
             path.pop();
@@ -1546,14 +1709,15 @@ impl RelaySource {
         let mut path = Vec::new();
         let mut steps = 0;
         let mut scheduled = 0;
-        visit(self, root, &mut path, &mut steps, &mut scheduled).map_err(|reason| {
-            MappingFailure::dependency(
-                "relay_definition",
-                u64::from(root),
-                reason,
-                format!("rule:{rule_id} -> action:{slot} -> relay:{root}"),
-            )
-        })
+        visit(
+            self,
+            root,
+            &mut path,
+            &mut steps,
+            &mut scheduled,
+            rule_id,
+            slot,
+        )
     }
 
     fn closure(&self, roots: &BTreeSet<u32>) -> BTreeSet<u32> {
@@ -1563,7 +1727,11 @@ impl RelaySource {
             }
             if let Some(rows) = source.definitions.get(&id) {
                 for row in rows.iter().filter(|row| row.command == 45) {
-                    add(source, row.value, closure);
+                    if let Ok(targets) = row.nested_targets(source) {
+                        for target in targets {
+                            add(source, target, closure);
+                        }
+                    }
                 }
             }
         }
@@ -1581,7 +1749,7 @@ impl RelaySource {
                 let steps = self.definitions.get(&relay_id)?;
                 let encoded_steps = steps
                     .iter()
-                    .map(RawRelayStep::encode)
+                    .map(|step| step.encode(self))
                     .collect::<Result<Vec<_>, _>>()
                     .expect("validated relay closure encodes");
                 let steps = encoded_steps.join("~");
@@ -1598,68 +1766,302 @@ impl RelaySource {
             .collect()
     }
 
+    fn encoded_catalogue_version(rows: &[String]) -> u64 {
+        let mut versions = rows
+            .iter()
+            .map(|row| {
+                let mut fields = row.split('@');
+                let relay_id = fields
+                    .next()
+                    .expect("encoded relay has an id")
+                    .parse::<u32>()
+                    .expect("encoded relay id is u32");
+                let version = fields
+                    .next()
+                    .expect("encoded relay has a version")
+                    .parse::<u64>()
+                    .expect("encoded relay version is u64");
+                (relay_id, version)
+            })
+            .collect::<Vec<_>>();
+        versions.sort_unstable();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"lyracore-relay-catalogue-v1");
+        for (relay_id, version) in versions {
+            hasher.update(&relay_id.to_le_bytes());
+            hasher.update(&version.to_le_bytes());
+        }
+        u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap())
+    }
+
     fn closure_broadcast_ids(&self, roots: &BTreeSet<u32>) -> BTreeSet<u32> {
         self.closure(roots)
             .into_iter()
             .filter_map(|relay_id| self.definitions.get(&relay_id))
             .flatten()
             .filter(|step| step.command == 0)
-            .flat_map(|step| step.integers)
-            .filter(|id| *id != 0)
-            .map(|id| id as u32)
+            .flat_map(|step| step.talk_ids(self).unwrap_or_default())
             .collect()
     }
 }
 
+fn uniform_template_targets(choices: &[RelayTemplateChoice]) -> Result<Vec<u32>, String> {
+    if choices.is_empty() {
+        return Err("empty".to_string());
+    }
+    if choices.iter().any(|choice| choice.chance != 0) {
+        return Err("weighted_choices_are_not_supported".to_string());
+    }
+    Ok(choices.iter().map(|choice| choice.target_id).collect())
+}
+
+struct RelayDependencyFailure {
+    kind: &'static str,
+    raw_value: u64,
+    reason: String,
+}
+
+impl RelayDependencyFailure {
+    fn missing(kind: &'static str, raw_value: impl Into<u64>) -> Self {
+        Self {
+            kind,
+            raw_value: raw_value.into(),
+            reason: "missing".to_string(),
+        }
+    }
+
+    fn mapping_failure(self, location: &str) -> MappingFailure {
+        MappingFailure::dependency(
+            self.kind,
+            self.raw_value,
+            self.reason,
+            format!("{location} -> {}:{}", self.kind, self.raw_value),
+        )
+    }
+}
+
 impl RawRelayStep {
-    fn validate_participants(&self) -> Result<(), String> {
-        if self.buddy_entry != 0 {
+    fn has_gameplay_authority(&self) -> bool {
+        matches!(
+            self.command,
+            0 | 1
+                | 3
+                | 10
+                | 15
+                | 18
+                | 20
+                | 22
+                | 25
+                | 26
+                | 28
+                | 29
+                | 31
+                | 32
+                | 35
+                | 36
+                | 37
+                | 40
+                | 42
+                | 45
+                | 48
+        )
+    }
+
+    fn buddy_is_gameobject(&self) -> bool {
+        matches!(self.command, 13 | 40)
+            || matches!(self.command, 31 | 36 | 37) && self.flags & SCRIPT_FLAG_BUDDY_BY_GO != 0
+    }
+
+    fn validate_participants(&self, source: &RelaySource) -> Result<(), String> {
+        let additional_allowed = matches!(self.command, 3 | 10 | 15 | 20 | 31 | 36 | 37);
+        if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0 && !additional_allowed {
             return Err(format!(
-                "needs an unbound buddy participant capability for entry {}",
-                self.buddy_entry
+                "command {} does not define additional flag semantics",
+                self.command
             ));
         }
-        let residual = self.flags & !(0x002 | 0x004);
+        let residual = self.flags & !(SCRIPT_FLAG_PARTICIPANTS | SCRIPT_FLAG_COMMAND_ADDITIONAL);
         if residual != 0 {
+            return Err(format!("unsupported participant flag bits {residual:#x}"));
+        }
+        let unsupported_modes = self.flags
+            & (SCRIPT_FLAG_BUDDY_IS_PET
+                | SCRIPT_FLAG_BUDDY_IS_DESPAWNED
+                | SCRIPT_FLAG_BUDDY_BY_POOL
+                | SCRIPT_FLAG_BUDDY_BY_SPAWN_GROUP
+                | SCRIPT_FLAG_BUDDY_BY_STRING_ID);
+        if unsupported_modes != 0 {
             return Err(format!(
-                "has unsupported participant flags {:#x}",
-                self.flags
+                "unsupported buddy lookup mode {unsupported_modes:#x}"
             ));
+        }
+        let lookup_bits = self.flags
+            & (SCRIPT_FLAG_BUDDY_AS_TARGET
+                | SCRIPT_FLAG_BUDDY_BY_GUID
+                | SCRIPT_FLAG_ALL_ELIGIBLE_BUDDIES);
+        if self.buddy_entry == 0 && lookup_bits != 0 {
+            return Err("buddy lookup flags require a buddy entry".to_string());
+        }
+        if self.buddy_entry == 0 && self.flags & SCRIPT_FLAG_BUDDY_BY_GO != 0 && self.command != 31
+        {
+            return Err("gameobject buddy flag requires a buddy entry".to_string());
+        }
+        if self.buddy_entry != 0
+            && self.flags & SCRIPT_FLAG_BUDDY_BY_GO != 0
+            && !matches!(self.command, 13 | 36 | 37 | 40)
+        {
+            return Err(format!(
+                "command {} cannot resolve a gameobject buddy",
+                self.command
+            ));
+        }
+        if self.flags & SCRIPT_FLAG_ALL_ELIGIBLE_BUDDIES != 0
+            && (self.flags & SCRIPT_FLAG_BUDDY_BY_GUID != 0 || self.buddy_is_gameobject())
+        {
+            return Err("all-buddy lookup only supports nearby creatures".to_string());
+        }
+        if self.flags & SCRIPT_FLAG_BUDDY_BY_GUID != 0 {
+            if self.buddy_is_gameobject() {
+                if source.gameobject_spawns.get(&self.search_radius) != Some(&self.buddy_entry) {
+                    return Err(format!(
+                        "gameobject DB guid {} has no live GUID mapping",
+                        self.search_radius
+                    ));
+                }
+            } else if source.creature_spawns.get(&self.search_radius) != Some(&self.buddy_entry) {
+                return Err(format!(
+                    "creature DB guid {} does not map to entry {}",
+                    self.search_radius, self.buddy_entry
+                ));
+            }
         }
         Ok(())
     }
 
-    fn validate_dependencies(&self, source: &RelaySource) -> Result<(), String> {
+    fn validate_dependencies(&self, source: &RelaySource) -> Result<(), RelayDependencyFailure> {
         if self.buddy_entry != 0 {
-            let exists = if self.flags & 0x400 != 0 {
+            let is_gameobject = self.buddy_is_gameobject();
+            let exists = if is_gameobject {
                 source.gameobject_entries.contains(&self.buddy_entry)
             } else {
                 source.creature_entries.contains(&self.buddy_entry)
             };
             if !exists {
-                let kind = if self.flags & 0x400 != 0 {
+                let kind = if is_gameobject {
                     "gameobject_template"
                 } else {
                     "creature_template"
                 };
-                return Err(format!("is missing {kind}:{}", self.buddy_entry));
+                return Err(RelayDependencyFailure::missing(kind, self.buddy_entry));
+            }
+            if self.flags & SCRIPT_FLAG_BUDDY_BY_GUID != 0 {
+                let (kind, entry) = if is_gameobject {
+                    (
+                        "gameobject_spawn",
+                        source.gameobject_spawns.get(&self.search_radius),
+                    )
+                } else {
+                    (
+                        "creature_spawn",
+                        source.creature_spawns.get(&self.search_radius),
+                    )
+                };
+                match entry {
+                    None => {
+                        return Err(RelayDependencyFailure::missing(kind, self.search_radius));
+                    }
+                    Some(entry) if *entry != self.buddy_entry => {
+                        return Err(RelayDependencyFailure {
+                            kind,
+                            raw_value: u64::from(self.search_radius),
+                            reason: format!("entry_{}_does_not_match_{}", entry, self.buddy_entry),
+                        });
+                    }
+                    Some(_) => {}
+                }
             }
         }
         match self.command {
             0 => {
-                for id in self.integers.iter().copied().filter(|id| *id != 0) {
-                    if !source.broadcast_ids.contains(&(id as u32)) {
-                        return Err(format!("is missing broadcast_text:{id}"));
+                for id in self.talk_ids(source)? {
+                    if !source.broadcast_ids.contains(&id) {
+                        return Err(RelayDependencyFailure::missing("broadcast_text", id));
                     }
                 }
             }
-            10 if !source.creature_entries.contains(&self.value) => {
-                return Err(format!("is missing creature_template:{}", self.value));
+            3 if self.datalong != 0 && !source.definitions.contains_key(&self.datalong) => {
+                return Err(RelayDependencyFailure::missing(
+                    "relay_definition",
+                    self.datalong,
+                ));
             }
-            20 if self.value3 != 0 && !source.path_ids.contains(&self.value3) => {
-                return Err(format!(
-                    "is missing creature_movement_template:{}",
-                    self.value3
+            10 => {
+                if !source.creature_entries.contains(&self.datalong) {
+                    return Err(RelayDependencyFailure::missing(
+                        "creature_template",
+                        self.datalong,
+                    ));
+                }
+                if self.datalong3 != 0 && !source.path_ids.contains(&self.datalong3) {
+                    return Err(RelayDependencyFailure::missing(
+                        "creature_movement_template",
+                        self.datalong3,
+                    ));
+                }
+            }
+            15 => {
+                for spell_id in self.random_ids(self.datalong)? {
+                    if !source.spell_ids.contains(&spell_id) {
+                        return Err(RelayDependencyFailure::missing("spell_template", spell_id));
+                    }
+                }
+            }
+            20 if self.datalong == 2
+                && self.datalong2 != 0
+                && !source.path_ids.contains(&self.datalong2) =>
+            {
+                return Err(RelayDependencyFailure::missing(
+                    "creature_movement_template",
+                    self.datalong2,
+                ));
+            }
+            31 => {
+                if self.datalong != 0 {
+                    let (kind, exists) = if self.flags & SCRIPT_FLAG_BUDDY_BY_GO != 0 {
+                        (
+                            "gameobject_template",
+                            source.gameobject_entries.contains(&self.datalong),
+                        )
+                    } else {
+                        (
+                            "creature_template",
+                            source.creature_entries.contains(&self.datalong),
+                        )
+                    };
+                    if !exists {
+                        return Err(RelayDependencyFailure::missing(kind, self.datalong));
+                    }
+                }
+                if self.datalong3 != 0 && !source.pool_ids.contains(&self.datalong3) {
+                    return Err(RelayDependencyFailure::missing(
+                        "pool_template",
+                        self.datalong3,
+                    ));
+                }
+            }
+            44 if !source.creature_entries.contains(&self.datalong) => {
+                return Err(RelayDependencyFailure::missing(
+                    "creature_template",
+                    self.datalong,
+                ));
+            }
+            45 => {
+                self.nested_targets(source)?;
+            }
+            52 if !source.gossip_menu_ids.contains(&self.datalong) => {
+                return Err(RelayDependencyFailure::missing(
+                    "gossip_menu",
+                    self.datalong,
                 ));
             }
             _ => {}
@@ -1667,131 +2069,429 @@ impl RawRelayStep {
         Ok(())
     }
 
-    fn encode(&self) -> Result<String, String> {
+    fn talk_ids(&self, source: &RelaySource) -> Result<Vec<u32>, RelayDependencyFailure> {
+        if self.datalong == 0 {
+            return self.random_ids(0);
+        }
+        let choices = source.string_templates.get(&self.datalong).ok_or_else(|| {
+            RelayDependencyFailure::missing("relay_string_template", self.datalong)
+        })?;
+        uniform_template_targets(choices).map_err(|reason| RelayDependencyFailure {
+            kind: "relay_string_template",
+            raw_value: u64::from(self.datalong),
+            reason,
+        })
+    }
+
+    fn random_ids(&self, primary: u32) -> Result<Vec<u32>, RelayDependencyFailure> {
+        let mut ids = Vec::new();
+        if primary != 0 {
+            ids.push(primary);
+        }
+        for value in self.dataints {
+            if value == 0 {
+                break;
+            }
+            let id = u32::try_from(value).map_err(|_| RelayDependencyFailure {
+                kind: "relay_definition",
+                raw_value: value.unsigned_abs() as u64,
+                reason: "negative_random_choice".to_string(),
+            })?;
+            ids.push(id);
+        }
+        if ids.is_empty() {
+            return Err(RelayDependencyFailure {
+                kind: "relay_definition",
+                raw_value: u64::from(self.source_order),
+                reason: "empty_random_choice".to_string(),
+            });
+        }
+        Ok(ids)
+    }
+
+    fn nested_targets(&self, source: &RelaySource) -> Result<Vec<u32>, RelayDependencyFailure> {
+        if self.datalong2 == 0 {
+            if self.datalong == 0 {
+                return Err(RelayDependencyFailure::missing("relay_definition", 0_u64));
+            }
+            return Ok(vec![self.datalong]);
+        }
+        let choices = source
+            .random_templates
+            .get(&self.datalong2)
+            .ok_or_else(|| {
+                RelayDependencyFailure::missing("relay_random_template", self.datalong2)
+            })?;
+        uniform_template_targets(choices).map_err(|reason| RelayDependencyFailure {
+            kind: "relay_random_template",
+            raw_value: u64::from(self.datalong2),
+            reason,
+        })
+    }
+
+    fn encode(&self, source: &RelaySource) -> Result<String, String> {
         Ok(format!(
             "{},{},{},{},{}",
             self.offset_ms,
             self.priority,
             self.source_order,
-            self.encode_subject(),
-            self.encode_instruction()?
+            self.encode_subject(source)?,
+            self.encode_instruction_with_source(source)?
         ))
     }
 
-    fn encode_subject(&self) -> String {
-        if self.buddy_entry != 0 {
-            if self.flags & 0x400 != 0 {
-                return format!(
-                    "nearby-gameobject:{}:{}>selected",
-                    self.buddy_entry, self.search_radius
-                );
-            }
-            return format!(
-                "nearby-creature:{}:{}>selected",
+    fn encode_subject(&self, source_data: &RelaySource) -> Result<String, String> {
+        let buddy = if self.buddy_entry == 0 {
+            None
+        } else if self.flags & SCRIPT_FLAG_ALL_ELIGIBLE_BUDDIES != 0 {
+            Some(format!(
+                "all-nearby-creatures:{}:{}",
                 self.buddy_entry, self.search_radius
-            );
+            ))
+        } else if self.flags & SCRIPT_FLAG_BUDDY_BY_GUID != 0 {
+            if self.buddy_is_gameobject() {
+                Some(format!(
+                    "gameobject-guid:{}",
+                    go_guid(u64::from(self.search_radius))
+                ))
+            } else {
+                let entry = source_data
+                    .creature_spawns
+                    .get(&self.search_radius)
+                    .copied()
+                    .ok_or_else(|| format!("creature spawn {} is missing", self.search_radius))?;
+                Some(format!(
+                    "creature-guid:{}",
+                    world_guid(u64::from(entry), u64::from(self.search_radius))
+                ))
+            }
+        } else if self.buddy_is_gameobject() {
+            Some(format!(
+                "nearby-gameobject:{}:{}",
+                self.buddy_entry, self.search_radius
+            ))
+        } else {
+            Some(format!(
+                "nearby-creature:{}:{}",
+                self.buddy_entry, self.search_radius
+            ))
+        };
+        let mut source = "source".to_string();
+        let mut target = "selected".to_string();
+        if let Some(buddy) = buddy {
+            if self.flags & SCRIPT_FLAG_BUDDY_AS_TARGET != 0 {
+                target = buddy;
+            } else {
+                source = buddy;
+            }
         }
-        let (source, other) = if self.flags & 0x002 != 0 {
-            ("selected", "source")
-        } else {
-            ("source", "selected")
-        };
-        let target = if self.flags & 0x004 != 0 {
-            source
-        } else {
-            other
-        };
-        format!("{source}>{target}")
+        if self.flags & SCRIPT_FLAG_REVERSE_DIRECTION != 0 {
+            std::mem::swap(&mut source, &mut target);
+        }
+        if self.flags & SCRIPT_FLAG_SOURCE_TARGETS_SELF != 0 {
+            target.clone_from(&source);
+        }
+        Ok(format!("{source}>{target}"))
+    }
+
+    fn encode_instruction_with_source(&self, source: &RelaySource) -> Result<String, String> {
+        if self.command == 0 {
+            if self.datalong3 != 0 {
+                return Err("unsupported talk parameters".to_string());
+            }
+            let ids = self
+                .talk_ids(source)
+                .map_err(|failure| failure.reason)?
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>();
+            return Ok(format!("talk:{}", ids.join(".")));
+        }
+        if self.command == 1 {
+            if self.datalong3 != 0 {
+                return Err("unsupported emote parameters".to_string());
+            }
+            let ids = self
+                .random_ids(self.datalong)
+                .map_err(|failure| failure.reason)?
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>();
+            return Ok(format!("emote:{}", ids.join(".")));
+        }
+        if self.command == 15 {
+            if self.datalong3 != 0 {
+                return Err("unsupported cast parameters".to_string());
+            }
+            let ids = self
+                .random_ids(self.datalong)
+                .map_err(|failure| failure.reason)?
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>();
+            let cast = match self.datalong2 {
+                0 => "direct",
+                1 => "triggered",
+                value => return Err(format!("unsupported cast flags {value:#x}")),
+            };
+            if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0 {
+                return Err("cast without a target has no gameplay authority".to_string());
+            }
+            return Ok(format!("cast-spell:{}:{cast}", ids.join(".")));
+        }
+        if self.command == 45 {
+            let targets = self
+                .nested_targets(source)
+                .map_err(|failure| failure.reason)?
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>();
+            if targets.len() != 1 {
+                return Err("nested relay random choice has no runtime owner".to_string());
+            }
+            return Ok(format!("start-relay:{}", targets.join(".")));
+        }
+        self.encode_instruction()
     }
 
     fn encode_instruction(&self) -> Result<String, String> {
         let bool_value = |value: u32| u8::from(value != 0);
-        let add = |value: u32| u8::from(value == 0);
+        let forced = |value: i32| match value {
+            0 => Ok("inherit"),
+            1 => Ok("walk"),
+            2 => Ok("run"),
+            _ => Err(format!("unsupported forced movement {value}")),
+        };
+        let change = |value: u32| match value {
+            0 => Ok("remove"),
+            1 => Ok("add"),
+            2 => Ok("toggle"),
+            _ => Err(format!("invalid flag change {value}")),
+        };
         match self.command {
-            0 => {
-                if self.value != 0 {
-                    return Err(format!(
-                        "talk random string template {} is not modeled",
-                        self.value
-                    ));
+            0 => Err("talk encoding requires relay templates".to_string()),
+            1 => Err("emote encoding requires random choices".to_string()),
+            3 => {
+                if self.datalong != 0
+                    || self.datalong2 != 0
+                    || self.dataints != [0; 4]
+                    || self.speed != 0.0
+                    || self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0
+                {
+                    return Err("unsupported move-point parameters".to_string());
                 }
-                let ids = self
-                    .integers
-                    .iter()
-                    .copied()
-                    .filter(|id| *id != 0)
-                    .map(|id| (id as u32).to_string())
-                    .collect::<Vec<_>>();
-                if ids.is_empty() {
-                    Err("talk has no broadcast text".to_string())
+                let forced = forced(self.datalong3 as i32)?;
+                if self.x == 0.0 && self.y == 0.0 && self.z == 0.0 {
+                    if forced != "inherit" {
+                        return Err("facing-only move cannot force movement".to_string());
+                    }
+                    Ok(format!("face-orientation:{}", self.orientation))
+                } else if self.x == 0.0 && self.y == 0.0 {
+                    Err("relative-height move has no gameplay authority".to_string())
                 } else {
-                    Ok(format!("talk:{}", ids.join(".")))
+                    Ok(format!(
+                        "move-point:{forced}:{}:{}:{}:{}",
+                        self.x, self.y, self.z, self.orientation
+                    ))
                 }
             }
-            1 => Ok(format!("emote:{}", self.value)),
-            3 => Ok(format!(
-                "move-to:{}:{}:{}:{}:{}",
-                self.value2, self.x, self.y, self.z, self.orientation
-            )),
-            10 => Ok(format!(
-                "spawn-creature:{}:{}:{}:{}:{}:{}",
-                self.value, self.value2, self.x, self.y, self.z, self.orientation
-            )),
-            13 => Ok("activate-object".to_string()),
-            15 => Ok(format!(
-                "cast-spell:{}:{}",
-                self.value,
-                bool_value(self.value2)
-            )),
-            18 => Ok(format!("despawn-source:{}", self.value)),
-            20 => Ok(format!(
-                "set-movement:{}:{}:{}",
-                self.value, self.value2, self.value3
-            )),
-            21 => Ok(format!("set-active:{}", bool_value(self.value))),
-            22 => Ok(format!(
-                "set-faction:{}:{}",
-                self.value,
-                bool_value(self.value2)
-            )),
-            25 => Ok(format!("set-run:{}", bool_value(self.value))),
-            26 => Ok("attack-start".to_string()),
-            28 => Ok(format!("set-stand-state:{}", self.value)),
+            10 => {
+                if self.datalong3 != 0
+                    || !matches!(self.dataints[0], 0 | 1)
+                    || self.dataints[1..] != [0; 3]
+                    || self.speed != 0.0
+                {
+                    return Err("unsupported spawn-creature parameters".to_string());
+                }
+                Ok(format!(
+                    "spawn-creature:{}:{}:{}:{}:{}:{}:{}:{}",
+                    self.datalong,
+                    self.datalong2,
+                    bool_value(self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL),
+                    self.dataints[0],
+                    self.x,
+                    self.y,
+                    self.z,
+                    self.orientation
+                ))
+            }
+            13 => Ok(format!("activate-object:{}", self.datalong)),
+            15 => Err("cast-spell encoding requires random choices".to_string()),
+            18 if self.datalong == 0
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok("despawn-source:0".to_string())
+            }
+            18 => Err("unsupported despawn parameters".to_string()),
+            20 => {
+                if self.datalong3 != 0 || self.dataints[1..] != [0; 3] || self.speed != 0.0 {
+                    return Err("unsupported movement parameters".to_string());
+                }
+                let forced = forced(self.dataints[0])?;
+                match self.datalong {
+                    0 if self.datalong2 == 0
+                        && self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL == 0 =>
+                    {
+                        Ok(format!("set-movement:stationary:{forced}"))
+                    }
+                    1 if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0 => Ok(format!(
+                        "set-movement:random-current:{}:{forced}",
+                        self.datalong2
+                    )),
+                    2 if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL == 0 => {
+                        Ok(format!("set-movement:patrol:{}:{forced}", self.datalong2))
+                    }
+                    _ => Err("unsupported movement kind or origin".to_string()),
+                }
+            }
+            21 => Ok(format!("set-active:{}", bool_value(self.datalong))),
+            22 => {
+                let lifetime = match self.datalong2 {
+                    0 => "permanent",
+                    36 => "combat-stop-or-respawn",
+                    value => return Err(format!("unsupported faction flags {value:#x}")),
+                };
+                Ok(format!("set-faction:{}:{lifetime}", self.datalong))
+            }
+            25 if matches!(self.datalong, 0 | 1) => {
+                Ok(format!("set-run:{}", bool_value(self.datalong)))
+            }
+            25 => Err(format!("invalid run state {}", self.datalong)),
+            26 if self.datalong == 0
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok("attack-start".to_string())
+            }
+            26 => Err("unsupported attack-start parameters".to_string()),
+            28 if u8::try_from(self.datalong).is_ok()
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok(format!("set-stand-state:{}", self.datalong))
+            }
+            28 => Err("unsupported stand-state parameters".to_string()),
             29 => Ok(format!(
                 "modify-npc-flags:{}:{}",
-                self.value,
-                add(self.value2)
+                self.datalong,
+                change(self.datalong2)?
             )),
-            31 => Ok("terminate-invocation".to_string()),
-            32 => Ok(format!("pause-waypoints:{}", bool_value(self.value))),
-            35 => Ok(format!(
+            31 => {
+                if self.datalong == 0 || self.datalong3 != 0 || self.dataints != [0; 4] {
+                    return Err("unsupported conditional termination parameters".to_string());
+                }
+                let subject = if self.flags & SCRIPT_FLAG_BUDDY_BY_GO != 0 {
+                    format!("nearby-gameobject:{}:{}", self.datalong, self.datalong2)
+                } else {
+                    format!("nearby-creature:{}:{}", self.datalong, self.datalong2)
+                };
+                Ok(format!(
+                    "terminate-if-{}:{subject}",
+                    if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0 {
+                        "present"
+                    } else {
+                        "missing"
+                    }
+                ))
+            }
+            32 if matches!(self.datalong, 0 | 1)
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok(format!("pause-waypoints:{}", bool_value(self.datalong)))
+            }
+            32 => Err("unsupported waypoint pause parameters".to_string()),
+            35 if self.datalong3 == 0 && self.dataints == [0; 4] => Ok(format!(
                 "send-ai-event:{}:{}",
-                ai_event_name(self.value)
-                    .ok_or_else(|| format!("has unknown AI event {}", self.value))?,
-                self.value2
+                ai_event_name(self.datalong)
+                    .ok_or_else(|| format!("unknown AI event {}", self.datalong))?,
+                self.datalong2
             )),
-            36 => Ok(format!("set-facing:{}", self.orientation)),
-            37 => Ok(format!("move-dynamic:{}:{}", self.value, self.value2)),
-            40 => Ok(format!("despawn-gameobject:{}", self.value)),
-            42 => Ok(format!(
-                "set-equipment:{}:{}:{}",
-                self.integers[0], self.integers[1], self.integers[2]
-            )),
+            35 => Err("unsupported AI event payload".to_string()),
+            36 if self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4]
+                && self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL == 0 =>
+            {
+                Ok(format!(
+                    "set-facing:{}",
+                    if self.datalong == 0 {
+                        "target"
+                    } else {
+                        "reset"
+                    }
+                ))
+            }
+            36 => Err("unsupported facing parameters".to_string()),
+            37 => {
+                if self.dataints[1] != 0
+                    || self.dataints[2..] != [0; 2]
+                    || self.speed != 0.0
+                    || self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0
+                {
+                    return Err(format!(
+                        "unsupported dynamic movement flags {}",
+                        self.dataints[1]
+                    ));
+                }
+                Ok(format!(
+                    "move-dynamic:{}:{}:{}:{}:{}",
+                    self.datalong2,
+                    self.datalong,
+                    self.datalong3,
+                    forced(self.dataints[0])?,
+                    self.dataints[1]
+                ))
+            }
+            40 if self.datalong == 0
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints == [0; 4] =>
+            {
+                Ok("despawn-gameobject:0".to_string())
+            }
+            40 => Err("unsupported gameobject despawn parameters".to_string()),
+            42 if matches!(self.datalong, 0 | 1)
+                && self.datalong2 == 0
+                && self.datalong3 == 0
+                && self.dataints[3] == 0 =>
+            {
+                Ok(format!(
+                    "set-equipment:{}:{}:{}:{}",
+                    bool_value(self.datalong),
+                    self.dataints[0],
+                    self.dataints[1],
+                    self.dataints[2]
+                ))
+            }
+            42 => Err("unsupported equipment parameters".to_string()),
             44 => Ok(format!(
                 "update-creature-template:{}:{}",
-                self.value, self.value2
+                self.datalong, self.datalong2
             )),
-            45 if self.value != 0 => Ok(format!("start-relay:{}", self.value)),
-            48 => Ok(format!(
+            45 => Err("nested relay encoding requires relay templates".to_string()),
+            48 if matches!(self.datalong, 0x100 | 0x200) => Ok(format!(
                 "modify-unit-flags:{}:{}",
-                self.value,
-                add(self.value2)
+                self.datalong,
+                change(self.datalong2)?
             )),
-            52 => Ok(format!("set-gossip-menu:{}", self.value)),
-            53 => Ok(format!("set-world-state:{}:{}", self.value, self.value2)),
-            command => Err(format!("has unsupported command {command}")),
+            48 => Err(format!("unsupported unit flag {:#x}", self.datalong)),
+            52 => Ok(format!("set-gossip-menu:{}", self.datalong)),
+            53 => Ok(format!(
+                "set-world-state:{}:{}",
+                self.dataints[0], self.dataints[1]
+            )),
+            command => Err(format!("unsupported command {command}")),
         }
     }
+
+    // Relay validation and encoding are kept together so accepted source rows cannot diverge from
+    // the wire form sent to the Module.
 }
 
 fn parse_source_maps(dump: &str) -> HashMap<u32, BTreeSet<u32>> {
@@ -2532,13 +3232,23 @@ impl EventAiSource {
                 rule.actions.iter().filter(|action| action[0] != 0).count() as u64;
         }
 
+        plan.relay_definition_rows = self.relays.encode_closure(&accepted_relay_roots);
+        let relay_catalogue_version =
+            RelaySource::encoded_catalogue_version(&plan.relay_definition_rows);
+        for rules in definitions.values_mut() {
+            for rule in rules {
+                *rule = rule.replace(
+                    RELAY_CATALOGUE_VERSION_PLACEHOLDER,
+                    &relay_catalogue_version.to_string(),
+                );
+            }
+        }
         plan.definition_rows = definitions
             .into_iter()
             .map(|(subject, rules)| encode_definition(subject, &rules))
             .collect();
         plan.definition_batches = pack_definition_batches(&plan.definition_rows);
         used_texts.extend(self.relays.closure_broadcast_ids(&accepted_relay_roots));
-        plan.relay_definition_rows = self.relays.encode_closure(&accepted_relay_roots);
         plan.relay_definition_batches = vec![plan.relay_definition_rows.join("\n")];
 
         for id in used_texts {
@@ -3896,21 +4606,30 @@ fn map_action(
                     "unsupported_encounter_signal",
                 )]
             })?;
-            Err(vec![MappingFailure::dependency(
-                "encounter_binding",
-                u64::from(map_id),
-                format!("missing_package_authority_for_{signal}"),
-                format!(
-                    "rule:{rule_id} -> action:{slot} -> map:{map_id} -> encounter_binding:{binding} -> package_handler:{signal}"
-                ),
-            )])
+            Ok(NativeAction {
+                encoded: format!("notify-encounter:{binding}:{signal}"),
+                raw_kind: kind,
+                raw_target: None,
+                raw_cast_flags: None,
+                threat_percent: None,
+                dependencies: vec![Dependency {
+                    kind: "encounter_binding",
+                    path: format!(
+                        "rule:{rule_id} -> action:{slot} -> map:{map_id} -> encounter_binding:{binding} -> package_handler:{signal}"
+                    ),
+                }],
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
         }
         ACTION_START_RELAY => {
             let roots = relays.validate_action(action[1], rule_id, slot)?;
             let target = map_target(action[2]).map_err(|failure| vec![failure])?;
             Ok(NativeAction {
                 encoded: format!(
-                    "start-relay:{}:{target}",
+                    "start-relay:{}:{target}:{RELAY_CATALOGUE_VERSION_PLACEHOLDER}",
                     roots
                         .iter()
                         .map(u32::to_string)
@@ -4764,7 +5483,7 @@ mod tests {
     }
 
     #[test]
-    fn instance_source_states_translate_to_named_signals_before_package_refusal() {
+    fn instance_source_states_translate_to_package_owned_signals() {
         assert_eq!(
             encounter_signal("blackfathom-deeps-kelris", 2),
             Some("fail")
@@ -4779,7 +5498,7 @@ mod tests {
         let templates = HashSet::new();
         let maps = HashMap::new();
         let relays = RelaySource::default();
-        let Err(fail) = map_action(
+        let fail = map_action(
             [ACTION_SET_INSTANCE_DATA, 1, 2, 0],
             4_832,
             483_201,
@@ -4791,10 +5510,9 @@ mod tests {
             &templates,
             &maps,
             &relays,
-        ) else {
-            panic!("missing package authority accepted source FAIL");
-        };
-        let Err(complete) = map_action(
+        )
+        .unwrap();
+        let complete = map_action(
             [ACTION_SET_INSTANCE_DATA, 1, 3, 0],
             4_832,
             483_202,
@@ -4806,19 +5524,20 @@ mod tests {
             &templates,
             &maps,
             &relays,
-        ) else {
-            panic!("missing package authority accepted source DONE");
-        };
-        assert!(fail[0]
-            .reason
-            .contains("missing_package_authority_for_fail"));
-        assert!(complete[0]
-            .reason
-            .contains("missing_package_authority_for_complete"));
+        )
+        .unwrap();
+        assert_eq!(
+            fail.encoded,
+            "notify-encounter:blackfathom-deeps-kelris:fail"
+        );
+        assert_eq!(
+            complete.encoded,
+            "notify-encounter:blackfathom-deeps-kelris:complete"
+        );
     }
 
     #[test]
-    fn missing_encounter_package_drops_the_whole_rule() {
+    fn encounter_package_signal_keeps_the_whole_rule() {
         let source = parse(&dump(&[rule(
             10,
             4_832,
@@ -4837,13 +5556,11 @@ mod tests {
         let manifest =
             plan.compatibility_manifest(&fixture_profile(&plan), "fixture", LOADER_CONTRACT);
 
-        assert!(plan.definition_rows.is_empty());
-        assert_eq!(plan.coverage.dropped_rules, 1);
-        let rendered = assert_refusal(
-            &manifest,
-            "missing_package_authority_for_fail:encounter_binding",
-        );
-        assert!(rendered.to_string().contains(
+        assert_eq!(plan.definition_rows.len(), 1);
+        assert_eq!(plan.coverage.dropped_rules, 0);
+        assert!(plan.definition_rows[0]
+            .contains("emote:7:self+notify-encounter:blackfathom-deeps-kelris:fail"));
+        assert!(manifest.render().contains(
             "rule:10 -> action:1 -> map:48 -> encounter_binding:blackfathom-deeps-kelris -> package_handler:fail"
         ));
     }
@@ -4876,25 +5593,116 @@ mod tests {
         );
     }
 
-    fn relay_step(command: u32, value: u32, offset_ms: u32) -> RawRelayStep {
+    fn relay_step(command: u32, datalong: u32, offset_ms: u32) -> RawRelayStep {
         RawRelayStep {
             offset_ms,
             priority: 0,
             source_order: 0,
             command,
-            value,
-            value2: 0,
-            value3: 0,
+            datalong,
+            datalong2: 0,
+            datalong3: 0,
             buddy_entry: 0,
             search_radius: 0,
             flags: 0,
-            integers: [0; 4],
+            dataints: [0; 4],
             x: 0.0,
             y: 0.0,
             z: 0.0,
             orientation: 0.0,
+            speed: 0.0,
             condition_id: 0,
         }
+    }
+
+    #[test]
+    fn relay_participants_apply_buddy_reverse_and_self_flags_in_source_order() {
+        let creature_guid = world_guid(6_251, 99);
+        let gameobject_guid = go_guid(77);
+        let mut source = RelaySource::default();
+        source.creature_entries.insert(6_251);
+        source.creature_spawns.insert(99, 6_251);
+        source.gameobject_entries.insert(180_391);
+        source.gameobject_spawns.insert(77, 180_391);
+
+        let mut creature = relay_step(1, 5, 0);
+        creature.buddy_entry = 6_251;
+        creature.search_radius = 99;
+        creature.flags = SCRIPT_FLAG_BUDDY_AS_TARGET | SCRIPT_FLAG_BUDDY_BY_GUID;
+        creature.validate_participants(&source).unwrap();
+        assert_eq!(
+            creature.encode_subject(&source).unwrap(),
+            format!("source>creature-guid:{creature_guid}")
+        );
+
+        creature.flags |= SCRIPT_FLAG_REVERSE_DIRECTION | SCRIPT_FLAG_SOURCE_TARGETS_SELF;
+        assert_eq!(
+            creature.encode_subject(&source).unwrap(),
+            format!("creature-guid:{creature_guid}>creature-guid:{creature_guid}")
+        );
+
+        let mut gameobject = relay_step(13, 0, 0);
+        gameobject.buddy_entry = 180_391;
+        gameobject.search_radius = 77;
+        gameobject.flags =
+            SCRIPT_FLAG_BUDDY_AS_TARGET | SCRIPT_FLAG_BUDDY_BY_GUID | SCRIPT_FLAG_BUDDY_BY_GO;
+        gameobject.validate_participants(&source).unwrap();
+        assert_eq!(
+            gameobject.encode_subject(&source).unwrap(),
+            format!("source>gameobject-guid:{gameobject_guid}")
+        );
+
+        let mut all = relay_step(35, 5, 0);
+        all.buddy_entry = 6_251;
+        all.search_radius = 50;
+        all.flags = SCRIPT_FLAG_ALL_ELIGIBLE_BUDDIES;
+        assert_eq!(
+            all.encode_subject(&source).unwrap(),
+            "all-nearby-creatures:6251:50>selected"
+        );
+    }
+
+    #[test]
+    fn relay_commands_keep_overloaded_fields_and_refuse_unowned_variants() {
+        let mut movement = relay_step(20, 2, 0);
+        movement.datalong2 = 7;
+        movement.dataints[0] = 2;
+        assert_eq!(
+            movement.encode_instruction().unwrap(),
+            "set-movement:patrol:7:run"
+        );
+
+        let mut terminate = relay_step(31, 177_784, 0);
+        terminate.datalong2 = 40;
+        terminate.flags = SCRIPT_FLAG_BUDDY_BY_GO | SCRIPT_FLAG_COMMAND_ADDITIONAL;
+        assert_eq!(
+            terminate.encode_instruction().unwrap(),
+            "terminate-if-present:nearby-gameobject:177784:40"
+        );
+
+        assert_eq!(
+            relay_step(36, 0, 0).encode_instruction().unwrap(),
+            "set-facing:target"
+        );
+        assert_eq!(
+            relay_step(36, 1, 0).encode_instruction().unwrap(),
+            "set-facing:reset"
+        );
+
+        let mut world_state = relay_step(53, 0, 0);
+        world_state.dataints = [19_990, 1, 0, 0];
+        assert_eq!(
+            world_state.encode_instruction().unwrap(),
+            "set-world-state:19990:1"
+        );
+        assert!(!world_state.has_gameplay_authority());
+
+        let mut dynamic = relay_step(37, 0, 0);
+        dynamic.dataints = [2, 20, 0, 0];
+        assert_eq!(
+            dynamic.encode_instruction().unwrap_err(),
+            "unsupported dynamic movement flags 20"
+        );
     }
 
     #[test]
@@ -4904,9 +5712,11 @@ mod tests {
         let Err(failures) = missing.validate_action(1, 10, 0) else {
             panic!("missing relay dependency was accepted");
         };
-        assert!(failures[0]
-            .reason
-            .contains("relay dependency path 1 -> 2 is missing"));
+        assert_eq!(failures[0].reason, "missing:relay_definition");
+        assert_eq!(
+            failures[0].dependency_path.as_deref(),
+            Some("rule:10 -> action:0 -> relay:1 -> relay:2")
+        );
 
         let mut cycle = RelaySource::default();
         cycle.definitions.insert(1, vec![relay_step(45, 2, 0)]);
@@ -4914,7 +5724,11 @@ mod tests {
         let Err(failures) = cycle.validate_action(1, 10, 0) else {
             panic!("relay cycle was accepted");
         };
-        assert!(failures[0].reason.contains("relay cycle 1 -> 2 -> 1"));
+        assert_eq!(failures[0].reason, "cycle:relay_definition");
+        assert_eq!(
+            failures[0].dependency_path.as_deref(),
+            Some("rule:10 -> action:0 -> relay:1 -> relay:2 -> relay:1")
+        );
 
         let mut expanded = RelaySource::default();
         expanded.definitions.insert(
@@ -4931,9 +5745,10 @@ mod tests {
         let Err(failures) = expanded.validate_action(1, 10, 0) else {
             panic!("expanded relay work was accepted");
         };
-        assert!(failures[0]
-            .reason
-            .contains("relay step budget exceeds 4096"));
+        assert_eq!(
+            failures[0].reason,
+            "step_budget_exceeds_4096:relay_definition"
+        );
     }
 
     #[test]
@@ -4958,10 +5773,7 @@ mod tests {
 
         assert!(plan.definition_rows.is_empty());
         assert_eq!(plan.coverage.dropped_rules, 1);
-        let rendered = assert_refusal(
-            &manifest,
-            "relay dependency path 404 is missing:relay_definition",
-        );
+        let rendered = assert_refusal(&manifest, "missing:relay_definition");
         assert!(rendered
             .to_string()
             .contains("rule:10 -> action:1 -> relay:404"));
@@ -4980,19 +5792,21 @@ mod tests {
     }
 
     #[test]
-    fn relay_talk_random_template_is_refused_before_encoding() {
+    fn relay_talk_random_template_resolves_equal_choices_before_encoding() {
         let mut source = RelaySource::default();
-        let mut talk = relay_step(0, 901, 0);
-        talk.integers = [900, 0, 0, 0];
+        let talk = relay_step(0, 901, 0);
         source.broadcast_ids.insert(900);
+        source.string_templates.insert(
+            901,
+            vec![RelayTemplateChoice {
+                target_id: 900,
+                chance: 0,
+            }],
+        );
         source.definitions.insert(1, vec![talk]);
 
-        let Err(failures) = source.validate_action(1, 10, 0) else {
-            panic!("unmodeled random talk template was accepted");
-        };
-        assert!(failures[0]
-            .reason
-            .contains("talk random string template 901 is not modeled"));
+        assert_eq!(source.validate_action(1, 10, 0).unwrap(), vec![1]);
+        assert!(source.encode_closure(&BTreeSet::from([1]))[0].contains("talk:900"));
     }
 
     #[test]
@@ -5020,6 +5834,20 @@ mod tests {
         assert_eq!(plan.relay_definition_rows.len(), 1);
         assert_eq!(plan.broadcast_rows.len(), 1);
         assert!(plan.broadcast_rows[0].starts_with("(901,"));
+        let relay = &plan.relay_definition_rows[0];
+        let mut relay_fields = relay.split('@');
+        let relay_id = relay_fields.next().unwrap().parse::<u32>().unwrap();
+        let relay_version = relay_fields.next().unwrap().parse::<u64>().unwrap();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"lyracore-relay-catalogue-v1");
+        hasher.update(&relay_id.to_le_bytes());
+        hasher.update(&relay_version.to_le_bytes());
+        let catalogue_version =
+            u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
+        assert_ne!(catalogue_version, 0);
+        assert!(
+            plan.definition_rows[0].contains(&format!("start-relay:1:self:{catalogue_version}"))
+        );
     }
 
     #[test]
@@ -6066,9 +6894,21 @@ mod tests {
             relays
                 .command
                 .keys()
-                .filter(|command| **command != 53)
+                .filter(|command| **command != 45)
                 .count(),
             25
+        );
+        assert_eq!(
+            relays
+                .command
+                .keys()
+                .copied()
+                .filter(|command| *command != 45)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                0, 1, 3, 10, 13, 15, 18, 20, 21, 22, 25, 26, 28, 29, 31, 32, 35, 36, 37, 40, 42,
+                44, 48, 52, 53,
+            ])
         );
         assert_eq!(relays.command.get(&53), Some(&2));
         assert_eq!(relays.nested_edges, 1);
@@ -6177,6 +7017,87 @@ mod tests {
             profile.expected_ticket_census
         );
 
+        let mut encounter_instructions = Vec::new();
+        for rule in &source.rules {
+            for (slot, action) in rule.actions.iter().enumerate() {
+                if action[0] != ACTION_SET_INSTANCE_DATA {
+                    continue;
+                }
+                encounter_instructions.push(
+                    map_action(
+                        *action,
+                        rule.subject,
+                        rule.id,
+                        rule.subject,
+                        slot,
+                        &source.broadcasts,
+                        &source.summon_locations,
+                        &source.quest_entries,
+                        &HashSet::new(),
+                        &source.source_maps,
+                        &source.relays,
+                    )
+                    .unwrap()
+                    .encoded,
+                );
+            }
+        }
+        assert_eq!(encounter_instructions.len(), 37);
+        assert_eq!(
+            encounter_instructions
+                .iter()
+                .filter(|instruction| instruction.ends_with(":begin"))
+                .count(),
+            8
+        );
+        assert_eq!(
+            encounter_instructions
+                .iter()
+                .filter(|instruction| instruction.ends_with(":fail"))
+                .count(),
+            15
+        );
+        assert_eq!(
+            encounter_instructions
+                .iter()
+                .filter(|instruction| instruction.ends_with(":complete"))
+                .count(),
+            11
+        );
+        assert_eq!(
+            encounter_instructions
+                .iter()
+                .filter(|instruction| {
+                    instruction.ends_with(":break-alzzin-crumble-wall")
+                        || instruction.ends_with(":interrupt-avatar-suppression")
+                        || instruction.ends_with(":send-mandokir-downstairs")
+                })
+                .count(),
+            3
+        );
+        assert_eq!(
+            encounter_instructions
+                .iter()
+                .filter_map(|instruction| instruction.split(':').nth(1))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "blackfathom-deeps-kelris",
+                "blackrock-depths-tomb-of-seven",
+                "dire-maul-alzzin",
+                "razorfen-kraul-ward-keepers",
+                "shadowfang-keep-fenrus",
+                "shadowfang-keep-nandos",
+                "shadowfang-keep-rethilgore",
+                "sunken-temple-avatar",
+                "wailing-caverns-anacondra",
+                "wailing-caverns-cobrahn",
+                "wailing-caverns-mutanus",
+                "wailing-caverns-pythas",
+                "wailing-caverns-serpentis",
+                "zul-gurub-ohgan",
+            ])
+        );
+
         let mut accepted_relay_actions = 0;
         let mut relay_failures = BTreeMap::new();
         for rule in &source.rules {
@@ -6187,32 +7108,74 @@ mod tests {
                 match source.relays.validate_action(action[1], rule.id, slot) {
                     Ok(_) => accepted_relay_actions += 1,
                     Err(failures) => {
-                        let reason = &failures[0].reason;
-                        let class = if reason.contains("no gameplay authority binding") {
-                            "unbound_command"
-                        } else if reason.contains("unsupported participant flags") {
-                            "participant_flags"
-                        } else if reason.contains("unbound buddy participant") {
-                            "buddy_participant"
-                        } else if reason.contains("random string template") {
-                            "random_talk_template"
-                        } else {
-                            "missing_dependency"
-                        };
-                        *relay_failures.entry(class).or_insert(0) += 1;
+                        *relay_failures
+                            .entry(failures[0].reason.clone())
+                            .or_insert(0) += 1;
                     }
                 }
             }
         }
-        assert_eq!(accepted_relay_actions, 12);
+        assert_eq!(accepted_relay_actions, 119);
         assert_eq!(
             relay_failures,
             BTreeMap::from([
-                ("buddy_participant", 7),
-                ("missing_dependency", 1),
-                ("participant_flags", 10),
-                ("random_talk_template", 3),
-                ("unbound_command", 108),
+                ("empty_random_choice:relay_definition".to_string(), 3),
+                (
+                    "no_gameplay_authority_for_command_13:relay_definition".to_string(),
+                    1,
+                ),
+                (
+                    "no_gameplay_authority_for_command_21:relay_definition".to_string(),
+                    15,
+                ),
+                (
+                    "no_gameplay_authority_for_command_44:relay_definition".to_string(),
+                    2,
+                ),
+                (
+                    "unsupported dynamic movement flags 20:relay_definition".to_string(),
+                    1,
+                ),
+            ])
+        );
+
+        let root_ids = source
+            .rules
+            .iter()
+            .flat_map(|rule| rule.actions)
+            .filter(|action| action[0] == ACTION_START_RELAY)
+            .flat_map(|action| source.relays.root_choices(action[1]).unwrap_or_default())
+            .collect::<BTreeSet<_>>();
+        let relay_rows = source
+            .relays
+            .closure(&root_ids)
+            .into_iter()
+            .flat_map(|id| source.relays.definitions.get(&id).into_iter().flatten())
+            .collect::<Vec<_>>();
+        let unowned_rows = relay_rows
+            .iter()
+            .filter(|row| !row.has_gameplay_authority())
+            .fold(BTreeMap::new(), |mut counts, row| {
+                *counts.entry(row.command).or_insert(0) += 1;
+                counts
+            });
+        assert_eq!(
+            unowned_rows,
+            BTreeMap::from([(13, 14), (21, 25), (44, 2), (52, 4), (53, 2)])
+        );
+        let refused_owned_rows = relay_rows
+            .iter()
+            .filter(|row| row.has_gameplay_authority())
+            .filter_map(|row| row.encode_instruction_with_source(&source.relays).err())
+            .fold(BTreeMap::new(), |mut counts, reason| {
+                *counts.entry(reason).or_insert(0) += 1;
+                counts
+            });
+        assert_eq!(
+            refused_owned_rows,
+            BTreeMap::from([
+                ("empty_random_choice".to_string(), 2),
+                ("unsupported dynamic movement flags 20".to_string(), 1,),
             ])
         );
     }
