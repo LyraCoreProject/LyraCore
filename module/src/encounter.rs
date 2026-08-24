@@ -36,7 +36,7 @@ use lyracore_shared::{constants, spatial};
 
 use crate::{
     game_creature_spawn, game_creature_spline, game_creature_template, game_gameobject,
-    game_gameobject_template, game_world_entity,
+    game_gameobject_template, game_instance, game_world_entity,
 };
 
 /// Package-owned encounter selected by the EventAI import boundary.
@@ -58,7 +58,27 @@ pub enum EncounterBinding {
     ZulGurubOhgan,
 }
 
+pub(crate) type EncounterPackageHandler =
+    fn(&ReducerContext, u64, EncounterSignal) -> Result<(), String>;
+
 impl EncounterBinding {
+    pub const ALL: [Self; 14] = [
+        Self::BlackfathomDeepsKelris,
+        Self::BlackrockDepthsTombOfSeven,
+        Self::DireMaulAlzzin,
+        Self::RazorfenKraulWardKeepers,
+        Self::ShadowfangKeepRethilgore,
+        Self::ShadowfangKeepFenrus,
+        Self::ShadowfangKeepNandos,
+        Self::SunkenTempleAvatar,
+        Self::WailingCavernsAnacondra,
+        Self::WailingCavernsCobrahn,
+        Self::WailingCavernsPythas,
+        Self::WailingCavernsSerpentis,
+        Self::WailingCavernsMutanus,
+        Self::ZulGurubOhgan,
+    ];
+
     pub fn map_id(self) -> u32 {
         match self {
             Self::BlackfathomDeepsKelris => 48,
@@ -135,9 +155,45 @@ pub(crate) fn notify_from_eventai(
             "encounter binding {binding:?} needs an instance-scoped source"
         ));
     }
-    Err(format!(
-        "encounter binding {binding:?} has no installed package authority for {signal:?}"
-    ))
+    let instance = ctx
+        .db
+        .game_instance()
+        .instance_id()
+        .find(source.instance_id)
+        .ok_or_else(|| {
+            format!(
+                "encounter source instance {} is missing",
+                source.instance_id
+            )
+        })?;
+    if instance.map_id != source.map_id {
+        return Err(format!(
+            "encounter source map {} does not match instance {} map {}",
+            source.map_id, source.instance_id, instance.map_id
+        ));
+    }
+    let handler = package_handler_for(binding, signal, crate::GAME_ENCOUNTER_PACKAGES)?;
+    handler(ctx, source.instance_id, signal)
+}
+
+fn package_handler_for(
+    binding: EncounterBinding,
+    signal: EncounterSignal,
+    installed: &[(EncounterBinding, EncounterPackageHandler)],
+) -> Result<EncounterPackageHandler, String> {
+    let mut handlers = installed
+        .iter()
+        .filter(|(installed, _)| *installed == binding)
+        .map(|(_, handler)| *handler);
+    let handler = handlers.next().ok_or_else(|| {
+        format!("encounter binding {binding:?} has no installed package authority for {signal:?}")
+    })?;
+    if handlers.next().is_some() {
+        return Err(format!(
+            "encounter binding {binding:?} has more than one installed package authority"
+        ));
+    }
+    Ok(handler)
 }
 
 #[cfg(test)]
@@ -862,6 +918,58 @@ pub(crate) fn sweep_encounter_state(ctx: &ReducerContext, instance_id: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_binding_has_exactly_one_installed_package_authority() {
+        let mut from_enum: Vec<String> = EncounterBinding::ALL
+            .iter()
+            .map(|binding| format!("{binding:?}"))
+            .collect();
+        from_enum.sort();
+        assert_eq!(crate::GAME_ENCOUNTER_PACKAGE_BINDING_NAMES, from_enum);
+        assert_eq!(
+            crate::GAME_ENCOUNTER_PACKAGE_BINDING_NAMES,
+            [
+                "BlackfathomDeepsKelris",
+                "BlackrockDepthsTombOfSeven",
+                "DireMaulAlzzin",
+                "RazorfenKraulWardKeepers",
+                "ShadowfangKeepFenrus",
+                "ShadowfangKeepNandos",
+                "ShadowfangKeepRethilgore",
+                "SunkenTempleAvatar",
+                "WailingCavernsAnacondra",
+                "WailingCavernsCobrahn",
+                "WailingCavernsMutanus",
+                "WailingCavernsPythas",
+                "WailingCavernsSerpentis",
+                "ZulGurubOhgan",
+            ]
+        );
+    }
+
+    #[test]
+    fn package_lookup_refuses_missing_and_duplicate_authority() {
+        fn handler(
+            _ctx: &ReducerContext,
+            _instance_id: u64,
+            _signal: EncounterSignal,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        let binding = EncounterBinding::BlackfathomDeepsKelris;
+        let missing = package_handler_for(binding, EncounterSignal::Complete, &[])
+            .err()
+            .expect("missing authority must refuse");
+        assert!(missing.contains("no installed package authority"));
+
+        let duplicate = [(binding, handler as EncounterPackageHandler); 2];
+        let duplicate = package_handler_for(binding, EncounterSignal::Complete, &duplicate)
+            .err()
+            .expect("duplicate authority must refuse");
+        assert!(duplicate.contains("more than one installed package authority"));
+    }
 
     #[test]
     fn crossing_fires_each_watch_once_high_to_low_and_never_refires_after_heal_redrop() {
