@@ -249,6 +249,22 @@ _Avoid_: weather event, weather state table
 A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons and client overrides to the client packer. Either half alone is a valid Package.
 _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 
+**Package Source**:
+Where an installed Package was copied from. Today only a local folder on the Operator's machine; git URLs and Official Packages are separate work.
+_Avoid_: origin, upstream, repo
+
+**Provenance Stamp**:
+The record `lyracore packages add` writes inside an installed Package: its Package Source, its Content Identity at install time, and when it was installed. A Package without one is still a Package; only its history is unknown.
+_Avoid_: manifest, lockfile, metadata
+
+**Content Identity**:
+A hash of an installed Package's files. Comparing the recorded one against the tree on disk is what "locally drifted" means.
+_Avoid_: checksum, fingerprint, version
+
+**Trust Review**:
+The deterministic, read-only inventory `packages add` prints before it asks: what the candidate Package registers, counted the way the build counts it. It is an inventory, never a security verdict. A Package's unclassified Rust is trusted code.
+_Avoid_: audit, scan, security check
+
 ### Working method
 
 **Seam**:

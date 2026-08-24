@@ -56,6 +56,8 @@ lyracore import [--accept] [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
 lyracore client sync
+lyracore packages add FOLDER [--yes]
+lyracore packages list
 lyracore character gm NAME true|false
 lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
 lyracore update
@@ -76,6 +78,8 @@ lyracore update
 | `import` | replace the seed fixture with the real world — consent notice, then the ETL on every database the fixture populates |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
+| `packages add` | install a Package from a folder on this machine, after a trust review and a confirmation |
+| `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
@@ -171,6 +175,63 @@ This is also `import`'s fallback chain, not just a separate command: stage 2 tri
 first, then the value in `config.json` if one is set and still valid, and only then falls back to
 the interactive prompt — which, once you type a path that validates, is **saved to `config.json`
 for you**, so a plain `./lyracore import` never asks twice.
+
+## `packages` — install a Package, and see what is installed
+
+```bash
+./lyracore packages add ~/src/my-package       # asks before it copies anything
+./lyracore packages add ~/src/my-package --yes # answer the confirmation in advance
+./lyracore packages list
+```
+
+A Package is a drop-in folder under `packages/<name>/`. `module/build.rs` discovers it and compiles
+its `src/` into the module wasm; `--pack-client` picks up its `client/` half. Installing one adds
+code that runs inside the module with full access to every table in the database, so `add` is built
+around saying so.
+
+**Everything that can refuse the install happens before anything is copied.** The name must be one
+the build accepts (`[a-zA-Z][a-zA-Z0-9_-]*` — the build maps `my-package` onto the module
+`pkg_my_package` and panics on anything else). The shape must be one the build accepts: client-only
+and Rust-only are both valid, and when `src/` exists, `src/mod.rs` is required. The name must
+collide with neither the enabled nor the disabled inventory, compared on the Rust identifier rather
+than the folder name — `my-package` and `my_package` fold onto the same module.
+
+Then it prints a **Trust Review** and asks. The review is a deterministic, read-only scan of the
+candidate folder using a port of the build's own marker scan, so a commented-out or quoted marker
+registers nothing here either. It reports tables, reducers, hooks, tick passes, character-owned
+sweeps, addons and client overrides. Datascripts and Runtime Scripts have no tooling in this
+checkout yet, so they get an explicit "none detected" row rather than silence. The review states
+plainly that everything else in the Package's Rust is trusted code and that it is an inventory, not
+a security guarantee.
+
+On confirmation the folder is **copied, never symlinked**: a linked Package would compile from a
+folder outside the checkout, so `preflight`, `publish` and `client sync` would each read whatever
+that folder said at the time. A symlink anywhere inside the candidate is refused for the same
+reason. A `.git` directory is skipped.
+
+The install then writes a **Provenance Stamp** — `packages/<name>/.lyracore-package.toml`, holding
+the Package Source, the Content Identity of what was copied, and the install time — and runs
+`preflight`.
+
+**It publishes nothing.** The two remaining steps are printed for you to run:
+
+```bash
+./lyracore publish        # compile the Package in and publish it to every database
+./lyracore client sync    # if the Package ships addons or client overrides
+```
+
+A failed `preflight` leaves the copy in place, says the module on the node is unchanged, and names
+the exact `rm -rf` that undoes the install — so you can fix the Package where it sits and re-run
+`preflight` instead of starting over.
+
+`packages list` reports, per Package: enabled or disabled, its Package Source, its recorded Content
+Identity, whether the tree on disk still matches it (`clean` or `LOCALLY DRIFTED`), and what it
+registers. A Package with no stamp — dropped into `packages/` by hand, or installed before this
+command existed — renders as unrecorded rather than failing the listing.
+
+Enabled Packages live in `packages/`, which is the only place the build looks. Disabling, removing
+and updating a Package are separate work (#299, #300, #302), as are git URL sources and Official
+Package lookup.
 
 ## `client sync` — push client content to your own client
 
