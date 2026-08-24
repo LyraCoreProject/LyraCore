@@ -1501,7 +1501,7 @@ impl RelaySource {
                 if action[0] != ACTION_START_RELAY {
                     continue;
                 }
-                if let Ok(roots) = self.validate_action(action[1], rule.id, slot) {
+                if let Ok(roots) = self.gate_action(action[1], rule.id, slot) {
                     accepted_root_rules += 1;
                     accepted_root_ids.extend(roots);
                 }
@@ -1624,7 +1624,7 @@ impl RelaySource {
         })
     }
 
-    fn validate_action(
+    fn gate_action(
         &self,
         raw_relay: u32,
         rule_id: u64,
@@ -1642,7 +1642,7 @@ impl RelaySource {
         })?;
         let mut failures = Vec::new();
         for root in &roots {
-            if let Err(failure) = self.validate_root(*root, rule_id, slot) {
+            if let Err(failure) = self.gate_root(*root, rule_id, slot) {
                 failures.push(failure);
             }
         }
@@ -1717,7 +1717,7 @@ impl RelaySource {
         dependencies
     }
 
-    fn validate_root(&self, root: u32, rule_id: u64, slot: usize) -> Result<(), MappingFailure> {
+    fn gate_root(&self, root: u32, rule_id: u64, slot: usize) -> Result<(), MappingFailure> {
         fn visit(
             source: &RelaySource,
             relay_id: u32,
@@ -1786,7 +1786,7 @@ impl RelaySource {
                 }
                 row.resolved_dependencies(source)
                     .map_err(|failure| failure.mapping_failure(&location))?;
-                row.validate_participants(source).map_err(|reason| {
+                row.gate_participants(source).map_err(|reason| {
                     MappingFailure::dependency(
                         "relay_participant",
                         u64::from(row.flags),
@@ -1907,7 +1907,11 @@ impl RelaySource {
                     .filter(|step| !step.is_loader_skipped())
                     .map(|step| step.encode(self))
                     .collect::<Result<Vec<_>, _>>()
-                    .expect("validated relay closure encodes");
+                    // Every relay in this closure passed `gate_root` (each instruction encodes) and
+                    // `gate_participants` (each subject resolves), which together cover both
+                    // failure arms of `encode`. A panic here means a closure reached encoding
+                    // without passing one of those two Gates.
+                    .expect("relay closure passed both relay Gates before encoding");
                 let steps = encoded_steps.join("~");
                 let material = format!("{relay_id}@parallel@map-or-instance@{steps}");
                 let mut hasher = blake3::Hasher::new();
@@ -2065,7 +2069,7 @@ impl RawRelayStep {
             || matches!(self.command, 31 | 36 | 37) && self.flags & SCRIPT_FLAG_BUDDY_BY_GO != 0
     }
 
-    fn validate_participants(&self, source: &RelaySource) -> Result<(), String> {
+    fn gate_participants(&self, source: &RelaySource) -> Result<(), String> {
         let additional_allowed = matches!(self.command, 3 | 10 | 15 | 20 | 31 | 36 | 37);
         if self.flags & SCRIPT_FLAG_COMMAND_ADDITIONAL != 0 && !additional_allowed {
             return Err(format!(
@@ -2868,7 +2872,7 @@ impl RawRelayStep {
         }
     }
 
-    // Relay validation and encoding are kept together so accepted source rows cannot diverge from
+    // Relay Gates and encoding are kept together so accepted source rows cannot diverge from
     // the wire form sent to the Module.
 }
 
@@ -5317,7 +5321,7 @@ fn map_action(
             })
         }
         ACTION_START_RELAY => {
-            let roots = relays.validate_action(action[1], rule_id, slot)?;
+            let roots = relays.gate_action(action[1], rule_id, slot)?;
             let target = map_target(action[2]).map_err(|failure| vec![failure])?;
             let root_set = roots.iter().copied().collect::<BTreeSet<_>>();
             let closure = relays.closure(&root_set);
@@ -6326,7 +6330,7 @@ mod tests {
         creature.buddy_entry = 6_251;
         creature.search_radius = 99;
         creature.flags = SCRIPT_FLAG_BUDDY_AS_TARGET | SCRIPT_FLAG_BUDDY_BY_GUID;
-        creature.validate_participants(&source).unwrap();
+        creature.gate_participants(&source).unwrap();
         assert_eq!(
             creature.encode_subject(&source).unwrap(),
             format!("source>creature-guid:{creature_guid}")
@@ -6343,7 +6347,7 @@ mod tests {
         gameobject.search_radius = 77;
         gameobject.flags =
             SCRIPT_FLAG_BUDDY_AS_TARGET | SCRIPT_FLAG_BUDDY_BY_GUID | SCRIPT_FLAG_BUDDY_BY_GO;
-        gameobject.validate_participants(&source).unwrap();
+        gameobject.gate_participants(&source).unwrap();
         assert_eq!(
             gameobject.encode_subject(&source).unwrap(),
             format!("source>gameobject-guid:{gameobject_guid}")
@@ -6419,7 +6423,7 @@ mod tests {
     fn relay_graph_refuses_missing_dependencies_cycles_and_expanded_work() {
         let mut missing = RelaySource::default();
         missing.definitions.insert(1, vec![relay_step(45, 2, 0)]);
-        let Err(failures) = missing.validate_action(1, 10, 0) else {
+        let Err(failures) = missing.gate_action(1, 10, 0) else {
             panic!("missing relay dependency was accepted");
         };
         assert_eq!(failures[0].reason, "missing:relay_definition");
@@ -6431,7 +6435,7 @@ mod tests {
         let mut cycle = RelaySource::default();
         cycle.definitions.insert(1, vec![relay_step(45, 2, 0)]);
         cycle.definitions.insert(2, vec![relay_step(45, 1, 0)]);
-        let Err(failures) = cycle.validate_action(1, 10, 0) else {
+        let Err(failures) = cycle.gate_action(1, 10, 0) else {
             panic!("relay cycle was accepted");
         };
         assert_eq!(failures[0].reason, "cycle:relay_definition");
@@ -6452,7 +6456,7 @@ mod tests {
         expanded
             .definitions
             .insert(2, vec![relay_step(1, 1, 0); 2_048]);
-        let Err(failures) = expanded.validate_action(1, 10, 0) else {
+        let Err(failures) = expanded.gate_action(1, 10, 0) else {
             panic!("expanded relay work was accepted");
         };
         assert_eq!(
@@ -6515,7 +6519,7 @@ mod tests {
         );
         source.definitions.insert(1, vec![talk]);
 
-        assert_eq!(source.validate_action(1, 10, 0).unwrap(), vec![1]);
+        assert_eq!(source.gate_action(1, 10, 0).unwrap(), vec![1]);
         assert!(source.encode_closure(&BTreeSet::from([1]))[0].contains("talk:900"));
     }
 
@@ -8249,7 +8253,7 @@ mod tests {
                 if action[0] != ACTION_START_RELAY {
                     continue;
                 }
-                match source.relays.validate_action(action[1], rule.id, slot) {
+                match source.relays.gate_action(action[1], rule.id, slot) {
                     Ok(_) => accepted_relay_actions += 1,
                     Err(failures) => {
                         *relay_failures
