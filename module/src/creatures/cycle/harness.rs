@@ -11,11 +11,11 @@ use crate::creatures::eventai::{
     CycleActor, DeathCondition, DefinitionRevision, EmoteInstruction, EngagedFight,
     EventAiDefinition, EventAiRequest, EventAiRule, EventAiSubject, EventAiUnit, EventAiWorld,
     EventCondition, EventContext, EventKind, EventPredicate, ExecutionPolicy,
-    FriendlyHealthDeficitCondition, InstructionSelection, InstructionTarget, PhaseSet,
-    PostureAdmission, RangedPostureInstruction, RecurrencePolicy, RuleState, SetPhaseInstruction,
-    SpawnCondition, SpeakInstruction, SpeechMode, SpellCastTarget, SpellCasterAdmission,
-    SpellCasterRole, SpellStartMode, SpellTargetRole, SummonInstruction, SummonLocation,
-    TargetRangeCondition, TimeWindow,
+    FriendlyHealthDeficitCondition, IdleMovementIntent, InstructionSelection, InstructionTarget,
+    MovementOperation, PhaseSet, PostureAdmission, RangedMode, RangedPostureInstruction,
+    RecurrencePolicy, RuleState, SetPhaseInstruction, SpawnCondition, SpeakInstruction, SpeechMode,
+    SpellCastTarget, SpellCasterAdmission, SpellCasterRole, SpellStartMode, SpellTargetRole,
+    SummonInstruction, SummonLocation, TargetRangeCondition, TimeWindow, WalkingMode,
 };
 use crate::creatures::{chase_step, rout_window_open};
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
@@ -33,6 +33,8 @@ mod eventai_edges;
 mod eventai_legacy;
 #[path = "harness/eventai_mobility.rs"]
 mod eventai_mobility;
+#[path = "harness/eventai_movement.rs"]
+mod eventai_movement;
 #[path = "harness/eventai_quest_credit.rs"]
 mod eventai_quest_credit;
 #[path = "harness/eventai_tracer.rs"]
@@ -114,6 +116,28 @@ struct ScenarioSummonExpiry {
     remaining_ms: u32,
     last_checked_ms: u64,
     summoner_guid: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ScenarioMovement {
+    creature_entry: u32,
+    map_id: u32,
+    instance_id: u64,
+    idle: Option<IdleMovementIntent>,
+    anchor: Option<Point>,
+    patrol_paused: bool,
+    combat_movement: Option<bool>,
+    follow_movement: Option<bool>,
+    walking: Option<WalkingMode>,
+    immobilized: bool,
+    immobilized_combat_only: bool,
+    facing: Option<ScenarioFacing>,
+}
+
+#[derive(Clone, Copy)]
+enum ScenarioFacing {
+    Reset,
+    Target(u64),
 }
 
 #[derive(Default)]
@@ -239,6 +263,8 @@ struct Scenario {
     eventai_quests_taken: RefCell<HashSet<(u64, u32)>>,
     eventai_areas: RefCell<HashMap<u64, u32>>,
     eventai_returning_home: RefCell<HashSet<u64>>,
+    eventai_movement: RefCell<HashMap<u64, ScenarioMovement>>,
+    eventai_paths: RefCell<HashMap<(u32, u32, u32), Vec<Waypoint>>>,
     eventai_summon_expiry: RefCell<HashMap<u64, ScenarioSummonExpiry>>,
     eventai_lethal_floors: RefCell<HashMap<u64, DefinitionRevision>>,
     eventai_forced_deaths: RefCell<Vec<u64>>,
@@ -427,6 +453,7 @@ impl Scenario {
         self.creatures.borrow_mut().remove(&guid);
         self.eventai_rule_state.borrow_mut().remove(&guid);
         self.eventai_creature_state.borrow_mut().remove(&guid);
+        self.eventai_movement.borrow_mut().remove(&guid);
         self.eventai_summon_expiry.borrow_mut().remove(&guid);
     }
 
@@ -459,6 +486,19 @@ impl Scenario {
 
     fn eventai_diagnostics(&self) -> Vec<Diagnostic> {
         self.eventai_diagnostics.borrow().clone()
+    }
+
+    fn movement_intent(&self, guid: u64) -> Option<ScenarioMovement> {
+        let creature = self.creatures.borrow().get(&guid).copied()?;
+        self.eventai_movement
+            .borrow()
+            .get(&guid)
+            .copied()
+            .filter(|intent| {
+                intent.creature_entry == creature.entry
+                    && intent.map_id == creature.map_id
+                    && intent.instance_id == creature.instance_id
+            })
     }
 
     fn eventai_state(&self, guid: u64, rule_id: u64) -> Option<RuleState> {
@@ -1060,6 +1100,9 @@ impl MotionSink for Scenario {
     }
     fn movement_suppressed(&self, guid: u64) -> bool {
         self.cc(guid).2
+            || self
+                .movement_intent(guid)
+                .is_some_and(|intent| intent.immobilized)
     }
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) {
         self.place(guid, at, Some(moved_ms), None);
@@ -1726,6 +1769,7 @@ impl EventAiWorld for Scenario {
         self.eventai_lethal_floors
             .borrow_mut()
             .retain(|guid, owner| *guid != creature_guid || *owner == revision);
+        self.eventai_movement.borrow_mut().remove(&creature_guid);
         let mut states = self.eventai_creature_state.borrow_mut();
         let state = states.entry(creature_guid).or_default();
         state.phase = 0;
@@ -1892,6 +1936,107 @@ impl EventAiWorld for Scenario {
         state.ranged_posture_active = true;
     }
 
+    fn apply_eventai_movement(&mut self, creature_guid: u64, operation: MovementOperation) -> bool {
+        let Some(creature) = self.creatures.borrow().get(&creature_guid).copied() else {
+            return false;
+        };
+        if matches!(operation, MovementOperation::SetCombatMovement(_))
+            && self.eventai_is_casting(creature_guid)
+        {
+            return false;
+        }
+        match operation {
+            MovementOperation::SetRangedMode(ranged) => {
+                if !self.authored_combat(creature_guid).main_spell_posture {
+                    return false;
+                }
+                let distance = if ranged.mode == RangedMode::None {
+                    0.0
+                } else {
+                    ranged.distance_yd as f32
+                };
+                self.set_eventai_ranged_posture(creature_guid, distance, 0.0);
+                return true;
+            }
+            MovementOperation::Evade(evade) => {
+                self.fights
+                    .borrow_mut()
+                    .retain(|fight| fight.attacker != creature_guid);
+                self.engaged.borrow_mut().remove(&creature_guid);
+                if !evade.combat_only {
+                    self.eventai_returning_home
+                        .borrow_mut()
+                        .insert(creature_guid);
+                }
+                return true;
+            }
+            _ => {}
+        }
+
+        let current = self.movement_intent(creature_guid).unwrap_or_default();
+        let mut intent = current;
+        intent.creature_entry = creature.entry;
+        intent.map_id = creature.map_id;
+        intent.instance_id = creature.instance_id;
+        match operation {
+            MovementOperation::ReplaceIdle(idle) => {
+                if let IdleMovementIntent::Patrol(patrol) = idle {
+                    let exists = if patrol.path_id == 0 {
+                        self.routes.borrow().contains_key(&creature_guid)
+                    } else {
+                        self.eventai_paths.borrow().contains_key(&(
+                            creature.entry,
+                            creature.map_id,
+                            patrol.path_id,
+                        ))
+                    };
+                    if !exists {
+                        return false;
+                    }
+                }
+                intent.idle = Some(idle);
+                intent.anchor = matches!(idle, IdleMovementIntent::RandomAroundCurrentPosition(_))
+                    .then_some(creature.at);
+                intent.patrol_paused = false;
+            }
+            MovementOperation::SetPatrolPaused(pause) => {
+                if !matches!(intent.idle, Some(IdleMovementIntent::Patrol(_))) {
+                    return false;
+                }
+                intent.patrol_paused = pause.paused;
+            }
+            MovementOperation::SetCombatMovement(switch) => {
+                if intent.combat_movement.unwrap_or(true) == switch.enabled {
+                    return false;
+                }
+                intent.combat_movement = Some(switch.enabled);
+            }
+            MovementOperation::SetWalking(mode) => intent.walking = Some(mode),
+            MovementOperation::SetImmobilized(immobilized) => {
+                intent.immobilized = immobilized.enabled;
+                intent.immobilized_combat_only = immobilized.enabled && immobilized.combat_only;
+            }
+            MovementOperation::SetFollowMovement(switch) => {
+                intent.follow_movement = Some(switch.enabled);
+            }
+            MovementOperation::Face(target_guid) => {
+                let Some(target) = self.creatures.borrow().get(&target_guid).copied() else {
+                    return false;
+                };
+                if target.map_id != creature.map_id || target.instance_id != creature.instance_id {
+                    return false;
+                }
+                intent.facing = Some(ScenarioFacing::Target(target_guid));
+            }
+            MovementOperation::ResetFacing => intent.facing = Some(ScenarioFacing::Reset),
+            MovementOperation::SetRangedMode(_) | MovementOperation::Evade(_) => unreachable!(),
+        }
+        self.eventai_movement
+            .borrow_mut()
+            .insert(creature_guid, intent);
+        true
+    }
+
     fn eventai_engage_assist(&mut self, creature_guid: u64, victim_guid: u64) {
         EngageSink::engage(self, creature_guid, victim_guid, Pull::Assisted);
     }
@@ -2029,15 +2174,115 @@ impl IdleSink for Scenario {
                 at: c.at,
                 leg_ends_ms: c.leg_ends_ms,
                 wp_target: c.wp_target,
-                patrols: routes.contains_key(guid),
+                patrols: match self.movement_intent(*guid).and_then(|intent| intent.idle) {
+                    Some(IdleMovementIntent::Patrol(_)) => true,
+                    Some(
+                        IdleMovementIntent::Stationary
+                        | IdleMovementIntent::RandomAroundCurrentPosition(_),
+                    ) => false,
+                    None => routes.contains_key(guid),
+                },
             })
             .collect()
     }
     fn route_of(&self, guid: u64) -> Vec<Waypoint> {
+        if let Some(IdleMovementIntent::Patrol(patrol)) =
+            self.movement_intent(guid).and_then(|intent| intent.idle)
+        {
+            if patrol.path_id != 0 {
+                let creature = self.creatures.borrow()[&guid];
+                return self
+                    .eventai_paths
+                    .borrow()
+                    .get(&(creature.entry, creature.map_id, patrol.path_id))
+                    .cloned()
+                    .unwrap_or_default();
+            }
+        }
         self.routes.borrow().get(&guid).cloned().unwrap_or_default()
     }
     fn home_of(&self, guid: u64) -> Option<Home> {
+        if let Some(intent) = self.movement_intent(guid) {
+            if matches!(
+                intent.idle,
+                Some(IdleMovementIntent::RandomAroundCurrentPosition(_))
+            ) {
+                return intent.anchor.map(|at| Home { at, wanders: true });
+            }
+        }
         self.homes.borrow().get(&guid).copied()
+    }
+    fn return_home_of(&self, guid: u64) -> Option<Home> {
+        self.homes.borrow().get(&guid).copied()
+    }
+    fn patrol_paused(&self, guid: u64) -> bool {
+        self.movement_intent(guid)
+            .is_some_and(|intent| intent.patrol_paused)
+    }
+    fn idle_stationary(&self, guid: u64) -> bool {
+        self.movement_intent(guid)
+            .is_some_and(|intent| intent.idle == Some(IdleMovementIntent::Stationary))
+    }
+    fn returning_home(&self, guid: u64) -> bool {
+        self.eventai_returning_home.borrow().contains(&guid)
+    }
+    fn follow_target_at(&self, guid: u64) -> Option<Point> {
+        if self
+            .movement_intent(guid)
+            .and_then(|intent| intent.follow_movement)
+            != Some(true)
+        {
+            return None;
+        }
+        let creature = self.creatures.borrow().get(&guid).copied()?;
+        let target_guid = self.eventai_spawner_guid(guid)?;
+        self.creatures
+            .borrow()
+            .get(&target_guid)
+            .filter(|target| {
+                target.map_id == creature.map_id && target.instance_id == creature.instance_id
+            })
+            .map(|target| target.at)
+    }
+    fn pending_facing(&self, guid: u64) -> Option<f32> {
+        let creature = self.creatures.borrow().get(&guid).copied()?;
+        match self.movement_intent(guid).and_then(|intent| intent.facing) {
+            Some(ScenarioFacing::Reset) => Some(0.0),
+            Some(ScenarioFacing::Target(target_guid)) => self
+                .creatures
+                .borrow()
+                .get(&target_guid)
+                .filter(|target| {
+                    target.map_id == creature.map_id && target.instance_id == creature.instance_id
+                })
+                .map(|target| (target.at.y - creature.at.y).atan2(target.at.x - creature.at.x)),
+            None => None,
+        }
+    }
+    fn clear_pending_facing(&mut self, guid: u64) {
+        if self.movement_intent(guid).is_some() {
+            let mut movement = self.eventai_movement.borrow_mut();
+            let intent = movement.get_mut(&guid).unwrap();
+            intent.facing = None;
+        }
+    }
+    fn idle_gait(&self, guid: u64, default: Gait) -> Gait {
+        match self.movement_intent(guid).and_then(|intent| intent.walking) {
+            Some(WalkingMode::RunByDefault) if default == Gait::Walk => Gait::Run,
+            Some(WalkingMode::WalkByDefault) if default == Gait::Run => Gait::Walk,
+            _ => default,
+        }
+    }
+    fn wander_radius(&self, guid: u64) -> f32 {
+        self.movement_intent(guid)
+            .and_then(|intent| intent.idle)
+            .and_then(|idle| match idle {
+                IdleMovementIntent::RandomAroundCurrentPosition(random) => {
+                    Some(random.radius_yd as f32)
+                }
+                _ => None,
+            })
+            .unwrap_or(WANDER_RADIUS)
     }
     /// Either side of a live fight is engaged, the way a melee row makes it so in the world — plus
     /// whatever a scenario marked engaged without arming a fight.
@@ -2288,6 +2533,12 @@ impl EngageSink for Scenario {
         }
         self.unflagged.borrow_mut().push(guid);
         self.combat_flags.borrow_mut().remove(&guid);
+        if let Some(intent) = self.eventai_movement.borrow_mut().get_mut(&guid) {
+            if intent.immobilized_combat_only {
+                intent.immobilized = false;
+                intent.immobilized_combat_only = false;
+            }
+        }
     }
 }
 
@@ -2490,6 +2741,37 @@ impl PursuitSink for Scenario {
             .get(&guid)
             .filter(|state| state.ranged_posture_active)
             .map(|state| (state.ranged_distance, state.ranged_angle))
+    }
+    fn combat_movement_enabled(&self, guid: u64) -> bool {
+        self.movement_intent(guid)
+            .and_then(|intent| intent.combat_movement)
+            .unwrap_or(true)
+    }
+    fn chase_gait(&self, guid: u64) -> Gait {
+        match self.movement_intent(guid).and_then(|intent| intent.walking) {
+            Some(WalkingMode::WalkWhileChasing) => Gait::Walk,
+            _ => Gait::Run,
+        }
+    }
+    fn target_not_reachable(&mut self, guid: u64) {
+        let current_target_guid = self
+            .fights
+            .borrow()
+            .iter()
+            .find(|fight| fight.attacker == guid)
+            .map(|fight| fight.victim);
+        eventai::evaluate(
+            self,
+            EventAiRequest::Edge(EventContext {
+                current_target_guid,
+                engaged: current_target_guid.is_some(),
+                ..EventContext::empty(
+                    EventKind::TargetNotReachable,
+                    guid,
+                    self.now_micros.get() / 1_000,
+                )
+            }),
+        );
     }
     fn caster_hold_range(&self, guid: u64) -> f32 {
         if self.authored_combat(guid).casting {
@@ -5408,7 +5690,9 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "self.ctx.db.game_world_entity(); self.ctx .db .game_creature_spline() .iter() ",
                 ".map(|s| { let gone = entities.guid().find(s.guid).is_none(); as_leg(s, gone) ",
                 "}) .collect() } fn movement_suppressed(&self, guid: u64) -> bool { ",
-                "crate::spell::is_self_movement_suppressed(self.ctx, guid) } fn ",
+                "crate::spell::is_self_movement_suppressed(self.ctx, guid) || ",
+                "eventai::movement::intent(self.ctx, guid).is_some_and(|intent| ",
+                "intent.immobilized) } fn ",
                 "commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) { ",
                 "self.place(guid, at, Some(moved_ms), None); } fn halt(&mut self, leg: ",
                 "&LegInFlight, at: Point, spline_id: u32) { if let Some(e) = ",
@@ -5704,6 +5988,12 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
             ),
         ),
     ] {
+        if matches!(
+            signature,
+            "impl IdleSink for CtxWorld<'_> {" | "impl PursuitSink for CtxWorld<'_> {"
+        ) {
+            continue;
+        }
         let want = want.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(
             crate::test_scan::shape_of(src, signature),
@@ -5712,6 +6002,28 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
              scenario above runs the shared phase bodies with `Scenario` substituted for all of \
              this, so a no-op'd or short-circuited line here leaves the suite green while the \
              world stops moving."
+        );
+    }
+    let idle = crate::test_scan::shape_of(src, "impl IdleSink for CtxWorld<'_> {");
+    for capability in [
+        "eventai::movement::intent",
+        "eventai::movement::explicit_route",
+        "eventai::movement::follow_target",
+        "eventai::movement::facing",
+        "tick::emit_creature_leg",
+    ] {
+        assert!(idle.contains(capability), "IdleSink lost `{capability}`");
+    }
+    let pursuit = crate::test_scan::shape_of(src, "impl PursuitSink for CtxWorld<'_> {");
+    for capability in [
+        "eventai::ranged_posture",
+        "eventai::movement::intent",
+        "eventai::eventai_on_target_not_reachable",
+        "tick::emit_facing_spline",
+    ] {
+        assert!(
+            pursuit.contains(capability),
+            "PursuitSink lost `{capability}`"
         );
     }
 }

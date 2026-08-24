@@ -416,6 +416,64 @@ pub struct SetLethalDamageFloorInstruction {
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IdleMovementIntent {
+    Stationary,
+    RandomAroundCurrentPosition(RandomMovementIntent),
+    Patrol(PatrolIntent),
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RandomMovementIntent {
+    pub radius_yd: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PatrolIntent {
+    pub path_id: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WalkingMode {
+    RunByDefault,
+    WalkByDefault,
+    RunWhileChasing,
+    WalkWhileChasing,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RangedMode {
+    None,
+    FullCaster,
+    Proximity,
+    NoMelee,
+    Distancer,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MovementOperation {
+    ReplaceIdle(IdleMovementIntent),
+    SetPatrolPaused(PatrolPause),
+    SetCombatMovement(MovementSwitch),
+    SetRangedMode(RangedModeInstruction),
+    Face(u64),
+    ResetFacing,
+    SetWalking(WalkingMode),
+    SetImmobilized(ImmobilizationInstruction),
+    SetFollowMovement(MovementSwitch),
+    Evade(EvadeInstruction),
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PatrolPause {
+    pub paused: bool,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MovementSwitch {
+    pub enabled: bool,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScaleSelectedThreatInstruction {
     pub percent: i32,
     pub target: InstructionTarget,
@@ -424,6 +482,29 @@ pub struct ScaleSelectedThreatInstruction {
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScaleAllThreatInstruction {
     pub percent: i32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RangedModeInstruction {
+    pub mode: RangedMode,
+    pub distance_yd: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImmobilizationInstruction {
+    pub enabled: bool,
+    pub combat_only: bool,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvadeInstruction {
+    pub combat_only: bool,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FacingInstruction {
+    pub target: InstructionTarget,
+    pub reset: bool,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
@@ -445,6 +526,8 @@ pub enum CreatureInstruction {
     ScaleAllThreat(ScaleAllThreatInstruction),
     Presentation(CreaturePresentationInstruction),
     QuestCredit(EventAiQuestCredit),
+    Movement(MovementOperation),
+    SetFacing(FacingInstruction),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

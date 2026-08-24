@@ -11,6 +11,7 @@ mod combat;
 mod death;
 mod edges;
 mod mobility;
+pub(crate) mod movement;
 mod quest_credit;
 mod threat;
 
@@ -43,6 +44,7 @@ pub(crate) use mobility::summon_lifetime_after;
 pub(crate) use mobility::{drop_summon_expiry, ranged_posture};
 pub use mobility::{expire_eventai_summon, CreatureAiSummonExpiry, CreatureAiSummonOrigin};
 pub(crate) use model::*;
+pub use movement::{CreatureAiMovementIntent, CreatureAiMovementPathWaypoint};
 use presentation::import_verified_rajaxx_spawn_protection;
 pub(crate) use presentation::{
     CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride,
@@ -141,6 +143,8 @@ mod architecture_tests {
             "game_creature_ai_summon_expiry",
             "game_creature_ai_returning_home",
             "game_creature_presentation",
+            "game_creature_ai_movement_intent",
+            "game_creature_ai_movement_path_waypoint",
         ] {
             assert!(
                 !subscriptions.contains(&format!("SELECT * FROM {table}")),

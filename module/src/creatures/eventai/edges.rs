@@ -349,6 +349,7 @@ pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
     if !runs_eventai(&creature) {
         return;
     }
+    super::movement::reset_engagement(ctx, creature_guid);
 
     let definition = super::combat::definition_for(ctx, creature_guid);
     let known_rule_ids: HashSet<u64> = definition
@@ -467,6 +468,7 @@ fn beneficiary_guid(ctx: &ReducerContext, guid: u64) -> Option<u64> {
 
 pub(crate) fn reset_creature_lifecycle(ctx: &ReducerContext, creature_guid: u64) {
     crate::creatures::presentation::clear_eventai_presentation(ctx, creature_guid);
+    super::movement::drop_lifecycle(ctx, creature_guid);
     ctx.db
         .game_creature_ai_returning_home()
         .creature_guid()

@@ -8,16 +8,19 @@ use super::{
     AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
     CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction,
     CreaturePresentationInstruction, CreaturePresentationMount, DeathCondition, EmoteInstruction,
-    EventAiRule, EventCondition, EventPredicate, ExecutionPolicy, FacingCondition,
-    FriendlyAuraSelection, FriendlyCrowdControlCondition, FriendlyHealthDeficitCondition,
-    FriendlyMissingAuraCondition, IncrementPhaseInstruction, InstructionSelection,
-    InstructionTarget, KillCondition, OutOfCombatSightCondition, PercentageCondition, PhaseSet,
-    PostureAdmission, QuestTakenPredicate, RandomPhaseInstruction, RandomPhaseRangeInstruction,
-    RangedPostureInstruction, ReceiveAiEventCondition, ReceiveEmoteCondition, RecurrencePolicy,
-    ScaleAllThreatInstruction, ScaleSelectedThreatInstruction, SetLethalDamageFloorInstruction,
-    SetPhaseInstruction, SpawnCondition, SpawnMapCondition, SpawnZoneOrAreaCondition,
-    SpeakInstruction, SpeechMode, SpellCasterRole, SpellEventCondition, SpellStartMode,
-    SpellTargetRole, SummonInstruction, TargetRangeCondition, TimeWindow,
+    EvadeInstruction, EventAiRule, EventCondition, EventPredicate, ExecutionPolicy,
+    FacingCondition, FacingInstruction, FriendlyAuraSelection, FriendlyCrowdControlCondition,
+    FriendlyHealthDeficitCondition, FriendlyMissingAuraCondition, IdleMovementIntent,
+    ImmobilizationInstruction, IncrementPhaseInstruction, InstructionSelection, InstructionTarget,
+    KillCondition, MovementOperation, MovementSwitch, OutOfCombatSightCondition, PatrolIntent,
+    PatrolPause, PercentageCondition, PhaseSet, PostureAdmission, QuestTakenPredicate,
+    RandomMovementIntent, RandomPhaseInstruction, RandomPhaseRangeInstruction, RangedMode,
+    RangedModeInstruction, RangedPostureInstruction, ReceiveAiEventCondition,
+    ReceiveEmoteCondition, RecurrencePolicy, ScaleAllThreatInstruction,
+    ScaleSelectedThreatInstruction, SetLethalDamageFloorInstruction, SetPhaseInstruction,
+    SpawnCondition, SpawnMapCondition, SpawnZoneOrAreaCondition, SpeakInstruction, SpeechMode,
+    SpellCasterRole, SpellEventCondition, SpellStartMode, SpellTargetRole, SummonInstruction,
+    TargetRangeCondition, TimeWindow, WalkingMode,
 };
 use crate::creatures::presentation::NpcFlagsProjection;
 use crate::game_creature_ai_definition;
@@ -681,6 +684,73 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 recipient_policy: parse_quest_credit_recipient(recipient)?,
             }),
         )),
+        ["idle", "stationary"] => Ok(CreatureInstruction::Movement(
+            MovementOperation::ReplaceIdle(IdleMovementIntent::Stationary),
+        )),
+        ["idle", "random-current", radius] => Ok(CreatureInstruction::Movement(
+            MovementOperation::ReplaceIdle(IdleMovementIntent::RandomAroundCurrentPosition(
+                RandomMovementIntent {
+                    radius_yd: parse_u32(radius)?,
+                },
+            )),
+        )),
+        ["idle", "patrol", path] => Ok(CreatureInstruction::Movement(
+            MovementOperation::ReplaceIdle(IdleMovementIntent::Patrol(PatrolIntent {
+                path_id: parse_u32(path)?,
+            })),
+        )),
+        ["patrol-paused", paused] => Ok(CreatureInstruction::Movement(
+            MovementOperation::SetPatrolPaused(PatrolPause {
+                paused: parse_bool(paused)?,
+            }),
+        )),
+        ["combat-movement", enabled] => Ok(CreatureInstruction::Movement(
+            MovementOperation::SetCombatMovement(MovementSwitch {
+                enabled: parse_bool(enabled)?,
+            }),
+        )),
+        ["ranged-mode", mode, distance] => Ok(CreatureInstruction::Movement(
+            MovementOperation::SetRangedMode(RangedModeInstruction {
+                mode: match *mode {
+                    "none" => RangedMode::None,
+                    "full-caster" => RangedMode::FullCaster,
+                    "proximity" => RangedMode::Proximity,
+                    "no-melee" => RangedMode::NoMelee,
+                    "distancer" => RangedMode::Distancer,
+                    value => return Err(format!("unknown ranged mode: {value}")),
+                },
+                distance_yd: parse_u32(distance)?,
+            }),
+        )),
+        ["facing", target, reset] => Ok(CreatureInstruction::SetFacing(FacingInstruction {
+            target: parse_target(target)?,
+            reset: parse_bool(reset)?,
+        })),
+        ["walking", mode] => Ok(CreatureInstruction::Movement(
+            MovementOperation::SetWalking(match *mode {
+                "run-default" => WalkingMode::RunByDefault,
+                "walk-default" => WalkingMode::WalkByDefault,
+                "run-chase" => WalkingMode::RunWhileChasing,
+                "walk-chase" => WalkingMode::WalkWhileChasing,
+                value => return Err(format!("unknown walking mode: {value}")),
+            }),
+        )),
+        ["immobilized", enabled, combat_only] => Ok(CreatureInstruction::Movement(
+            MovementOperation::SetImmobilized(ImmobilizationInstruction {
+                enabled: parse_bool(enabled)?,
+                combat_only: parse_bool(combat_only)?,
+            }),
+        )),
+        ["follow-movement", enabled] => Ok(CreatureInstruction::Movement(
+            MovementOperation::SetFollowMovement(MovementSwitch {
+                enabled: parse_bool(enabled)?,
+            }),
+        )),
+        ["evade", combat_only] => Ok(CreatureInstruction::Movement(MovementOperation::Evade(
+            EvadeInstruction {
+                combat_only: parse_bool(combat_only)?,
+            },
+        ))),
         _ => Err(format!("unknown creature instruction: {encoded}")),
     }
 }

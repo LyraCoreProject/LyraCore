@@ -63,7 +63,31 @@ pub(super) fn execute<W: EventAiWorld>(
             world.set_eventai_ranged_posture(context.creature_guid, distance, angle_rad);
             ActionResult::Applied
         }
+        CreatureInstruction::Movement(operation) => {
+            applied(world.apply_eventai_movement(context.creature_guid, *operation))
+        }
+        CreatureInstruction::SetFacing(facing) => {
+            let operation = if facing.reset {
+                super::MovementOperation::ResetFacing
+            } else {
+                let Some(target_guid) =
+                    super::combat::unit_target(world, context, facing.target, None, choice)
+                else {
+                    return ActionResult::Refused;
+                };
+                super::MovementOperation::Face(target_guid)
+            };
+            applied(world.apply_eventai_movement(context.creature_guid, operation))
+        }
         _ => ActionResult::Unsupported,
+    }
+}
+
+fn applied(applied: bool) -> ActionResult {
+    if applied {
+        ActionResult::Applied
+    } else {
+        ActionResult::Refused
     }
 }
 

@@ -53,8 +53,10 @@ const ACTION_SPAWN: u32 = 12;
 const ACTION_THREAT_SINGLE: u32 = 13;
 const ACTION_THREAT_ALL_PCT: u32 = 14;
 const ACTION_QUEST_EVENT: u32 = 15;
+const ACTION_COMBAT_MOVEMENT: u32 = 21;
 const ACTION_SET_PHASE: u32 = 22;
 const ACTION_INCREMENT_PHASE: u32 = 23;
+const ACTION_EVADE: u32 = 24;
 const ACTION_FLEE_FOR_ASSIST: u32 = 25;
 const ACTION_REMOVE_AURA: u32 = 28;
 const ACTION_RANGED_MOVEMENT: u32 = 29;
@@ -67,10 +69,17 @@ const ACTION_DIE: u32 = 37;
 const ACTION_CALL_FOR_HELP: u32 = 39;
 const ACTION_SET_DEATH_PREVENTION: u32 = 42;
 const ACTION_THROW_AI_EVENT: u32 = 45;
+const ACTION_CHANGE_MOVEMENT: u32 = 48;
+const ACTION_PAUSE_WAYPOINTS: u32 = 51;
 const ACTION_START_RELAY: u32 = 53;
 const ACTION_ATTACK_START: u32 = 55;
 const ACTION_SET_FACING: u32 = 59;
-const ACTION_END: u16 = 65;
+const ACTION_SET_RANGED_MODE: u32 = 57;
+const ACTION_SET_WALK: u32 = 58;
+const ACTION_SET_IMMOBILIZED: u32 = 61;
+const ACTION_SET_FOLLOW_MOVEMENT: u32 = 64;
+const ACTION_RETREAT: u32 = 65;
+const ACTION_END: u16 = 66;
 
 const TARGET_SELF: u32 = 0;
 const TARGET_HOSTILE: u32 = 1;
@@ -837,10 +846,33 @@ struct Coverage {
     presentation_set_unit_flags: BTreeMap<u64, u64>,
     presentation_remove_unit_flags: BTreeMap<u64, u64>,
     presentation_mount_models: BTreeMap<u64, u64>,
+    movement_values: BTreeMap<String, u64>,
+    movement_dependencies: MovementDependencyCensus,
+    reachable_relays: ReachableRelayCensus,
     dropped: BTreeMap<String, u64>,
     dropped_values: BTreeMap<(String, u64), u64>,
     dropped_rule_values: BTreeMap<(String, u64), BTreeSet<u64>>,
     groups: BTreeMap<GroupKey, GroupValue>,
+}
+
+#[derive(Clone, Default)]
+struct MovementDependencyCensus {
+    ranged_mode_actions: u64,
+    ranged_mode_subjects: BTreeSet<i32>,
+    resolved_main_spell_subjects: BTreeSet<i32>,
+    missing_main_spell_subjects: BTreeSet<i32>,
+}
+
+#[derive(Clone, Default)]
+struct ReachableRelayCensus {
+    root_references: u64,
+    direct_root_ids: BTreeSet<u32>,
+    random_template_ids: BTreeSet<u32>,
+    relay_ids: BTreeSet<u32>,
+    rows: u64,
+    command: BTreeMap<u64, u64>,
+    nested_edges: u64,
+    movement_values: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -976,6 +1008,48 @@ impl Coverage {
             "presentation_set_unit_flags": self.presentation_set_unit_flags,
             "presentation_remove_unit_flags": self.presentation_remove_unit_flags,
             "presentation_mount_models": self.presentation_mount_models,
+            "movement_values": self.movement_values,
+            "movement_dependencies": {
+                "ranged_mode_actions": self.movement_dependencies.ranged_mode_actions,
+                "ranged_mode_subjects": self.movement_dependencies.ranged_mode_subjects,
+                "resolved_main_spell_subjects": self
+                    .movement_dependencies
+                    .resolved_main_spell_subjects,
+                "missing_main_spell_subjects": self
+                    .movement_dependencies
+                    .missing_main_spell_subjects,
+            },
+            "reachable_relays": {
+                "root_references": self.reachable_relays.root_references,
+                "direct_root_ids": self.reachable_relays.direct_root_ids,
+                "random_template_ids": self.reachable_relays.random_template_ids,
+                "relay_ids": self.reachable_relays.relay_ids,
+                "relay_count": self.reachable_relays.relay_ids.len(),
+                "rows": self.reachable_relays.rows,
+                "commands": self.reachable_relays.command,
+                "raw_command_ids": self.reachable_relays.command.len(),
+                "recognized_command_types": self.reachable_relays.command
+                    .keys()
+                    .filter(|command| **command != 53)
+                    .count(),
+                "unclassified_command_values": { "53": self.reachable_relays.command.get(&53) },
+                "command_type_classifications": {
+                    "53": {
+                        "count": self.reachable_relays.command.get(&53),
+                        "classification": "unresolved",
+                        "required_owner": "typed_world_state_or_refusal",
+                    }
+                },
+                "nested_edges": self.reachable_relays.nested_edges,
+                "movement_rows": self.reachable_relays.movement_values.values().sum::<u64>(),
+                "movement_value_columns": [
+                    "command", "datalong", "datalong2", "datalong3", "buddy_entry",
+                    "search_radius", "data_flags", "dataint", "dataint2", "dataint3",
+                    "dataint4", "datafloat", "x", "y", "z", "o", "speed",
+                    "condition_id"
+                ],
+                "movement_values": self.reachable_relays.movement_values,
+            },
         })
     }
 
@@ -1166,6 +1240,8 @@ pub(crate) fn parse(dump: &str) -> EventAiSource {
         .collect();
     let mut rules = parse_rules(dump, &mut coverage);
     rules.sort_by_key(|rule| rule.id);
+    coverage.movement_dependencies = movement_dependency_census(&rules);
+    coverage.reachable_relays = reachable_relay_census(dump, &rules);
     let (cast_action_subjects, template_schedule_overlaps, creature_spell_list_overlaps) =
         source_overlap_census(dump, &rules);
     coverage.cast_action_subjects = cast_action_subjects;
@@ -1179,6 +1255,149 @@ pub(crate) fn parse(dump: &str) -> EventAiSource {
         rules,
         coverage,
     }
+}
+
+fn movement_dependency_census(rules: &[RawRule]) -> MovementDependencyCensus {
+    let main_spell_subjects = rules
+        .iter()
+        .filter(|rule| {
+            rule.actions
+                .iter()
+                .any(|action| action[0] == ACTION_CAST && action[3] & CAST_MAIN_SPELL != 0)
+        })
+        .map(|rule| rule.subject)
+        .collect::<BTreeSet<_>>();
+    let mut census = MovementDependencyCensus::default();
+    for rule in rules {
+        for _ in rule
+            .actions
+            .iter()
+            .filter(|action| action[0] == ACTION_SET_RANGED_MODE)
+        {
+            census.ranged_mode_actions += 1;
+            census.ranged_mode_subjects.insert(rule.subject);
+        }
+    }
+    census.resolved_main_spell_subjects = census
+        .ranged_mode_subjects
+        .intersection(&main_spell_subjects)
+        .copied()
+        .collect();
+    census.missing_main_spell_subjects = census
+        .ranged_mode_subjects
+        .difference(&main_spell_subjects)
+        .copied()
+        .collect();
+    census
+}
+
+fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus {
+    const RANDOM_TEMPLATE_SCRIPT: u32 = 1;
+    const COMMAND_MOVE_TO: u32 = 3;
+    const COMMAND_MOVEMENT: u32 = 20;
+    const COMMAND_SET_RUN: u32 = 25;
+    const COMMAND_ATTACK_START: u32 = 26;
+    const COMMAND_PAUSE_WAYPOINTS: u32 = 32;
+    const COMMAND_SET_FACING: u32 = 36;
+    const COMMAND_MOVE_DYNAMIC: u32 = 37;
+    const COMMAND_START_RELAY: u32 = 45;
+
+    let random_templates = parse_table(dump, "dbscript_random_templates")
+        .into_iter()
+        .filter_map(|row| {
+            let template_id = source_u32(field(&row, 0))?;
+            let kind = source_u32(field(&row, 1))?;
+            let relay_id = field(&row, 2).parse::<i64>().ok()?;
+            (kind == RANDOM_TEMPLATE_SCRIPT && relay_id > 0)
+                .then_some((template_id, relay_id as u32))
+        })
+        .fold(
+            BTreeMap::<u32, BTreeSet<u32>>::new(),
+            |mut by_template, value| {
+                by_template.entry(value.0).or_default().insert(value.1);
+                by_template
+            },
+        );
+    let relay_rows = parse_table(dump, "dbscripts_on_relay")
+        .into_iter()
+        .filter_map(|row| Some((source_u32(field(&row, 0))?, row)))
+        .fold(
+            BTreeMap::<u32, Vec<Vec<String>>>::new(),
+            |mut by_id, value| {
+                by_id.entry(value.0).or_default().push(value.1);
+                by_id
+            },
+        );
+
+    let mut census = ReachableRelayCensus::default();
+    let mut pending = BTreeSet::new();
+    let include_template =
+        |template_id: u32, pending: &mut BTreeSet<u32>, census: &mut ReachableRelayCensus| {
+            census.random_template_ids.insert(template_id);
+            if let Some(relay_ids) = random_templates.get(&template_id) {
+                pending.extend(relay_ids.iter().copied());
+            }
+        };
+    for action in rules
+        .iter()
+        .flat_map(|rule| rule.actions)
+        .filter(|action| action[0] == ACTION_START_RELAY)
+    {
+        census.root_references += 1;
+        let relay = action[1] as i32;
+        if relay < 0 {
+            include_template(relay.unsigned_abs(), &mut pending, &mut census);
+        } else if relay > 0 {
+            census.direct_root_ids.insert(relay as u32);
+            pending.insert(relay as u32);
+        }
+    }
+
+    while let Some(relay_id) = pending.pop_first() {
+        if !census.relay_ids.insert(relay_id) {
+            continue;
+        }
+        let Some(rows) = relay_rows.get(&relay_id) else {
+            continue;
+        };
+        for row in rows {
+            census.rows += 1;
+            let Some(command) = source_u32(field(row, 3)) else {
+                continue;
+            };
+            *census.command.entry(u64::from(command)).or_default() += 1;
+            if matches!(
+                command,
+                COMMAND_MOVE_TO
+                    | COMMAND_MOVEMENT
+                    | COMMAND_SET_RUN
+                    | COMMAND_ATTACK_START
+                    | COMMAND_PAUSE_WAYPOINTS
+                    | COMMAND_SET_FACING
+                    | COMMAND_MOVE_DYNAMIC
+            ) {
+                let raw = [
+                    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                ]
+                .into_iter()
+                .map(|index| field(row, index))
+                .collect::<Vec<_>>()
+                .join(":");
+                *census.movement_values.entry(raw).or_default() += 1;
+            }
+            if command == COMMAND_START_RELAY {
+                census.nested_edges += 1;
+                let direct = source_u32(field(row, 4)).unwrap_or(0);
+                let template = source_u32(field(row, 5)).unwrap_or(0);
+                if direct != 0 {
+                    pending.insert(direct);
+                } else if template != 0 {
+                    include_template(template, &mut pending, &mut census);
+                }
+            }
+        }
+    }
+    census
 }
 
 fn source_overlap_census(dump: &str, rules: &[RawRule]) -> (u64, u64, u64) {
@@ -1893,6 +2112,15 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                     *value = parsed;
                 }
                 record_presentation_source_census(coverage, *action);
+                if movement_action_kind(kind) {
+                    *coverage
+                        .movement_values
+                        .entry(format!(
+                            "{}:{}:{}:{}",
+                            kind, action[1], action[2], action[3]
+                        ))
+                        .or_default() += 1;
+                }
                 if let Some(parameter) = source_target_parameter(kind) {
                     Coverage::source_value(&mut coverage.source_target, action[parameter] as u64);
                 }
@@ -1994,6 +2222,23 @@ fn source_target_parameter(action: u32) -> Option<usize> {
         eventai_presentation::ACTION_SET_UNIT_FIELD | ACTION_THROW_AI_EVENT => Some(3),
         _ => None,
     }
+}
+
+fn movement_action_kind(action: u32) -> bool {
+    matches!(
+        action,
+        ACTION_COMBAT_MOVEMENT
+            | ACTION_EVADE
+            | ACTION_RANGED_MOVEMENT
+            | ACTION_CHANGE_MOVEMENT
+            | ACTION_PAUSE_WAYPOINTS
+            | ACTION_SET_RANGED_MODE
+            | ACTION_SET_WALK
+            | ACTION_SET_FACING
+            | ACTION_SET_IMMOBILIZED
+            | ACTION_SET_FOLLOW_MOVEMENT
+            | ACTION_RETREAT
+    )
 }
 
 fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadcast> {
@@ -2688,6 +2933,16 @@ fn map_action(
             summon_location: None,
             normalizations: Vec::new(),
         }),
+        ACTION_COMBAT_MOVEMENT if action[2] == 0 && action[3] == 0 => Ok(movement_action(
+            kind,
+            format!("combat-movement:{}", action[1] != 0),
+            None,
+        )),
+        ACTION_EVADE if action[2] == 0 && action[3] == 0 => Ok(movement_action(
+            kind,
+            format!("evade:{}", action[1] != 0),
+            None,
+        )),
         ACTION_RANGED_MOVEMENT => Ok(NativeAction {
             encoded: format!("posture:{}:{}", action[1], action[2] as i32),
             raw_kind: kind,
@@ -2700,6 +2955,79 @@ fn map_action(
             summon_location: None,
             normalizations: Vec::new(),
         }),
+        ACTION_CHANGE_MOVEMENT if action[3] == 0 => {
+            let encoded = match action[1] {
+                0 if action[2] == 0 => "idle:stationary".to_string(),
+                1 => format!("idle:random-current:{}", action[2]),
+                2 => format!("idle:patrol:{}", action[2]),
+                movement_type => {
+                    return Err(vec![MappingFailure::source(
+                        "movement_type",
+                        u64::from(movement_type),
+                        "unsupported_movement_type",
+                    )]);
+                }
+            };
+            Ok(movement_action(kind, encoded, None))
+        }
+        ACTION_CHANGE_MOVEMENT => Err(vec![MappingFailure::source(
+            "movement_flag",
+            u64::from(action[3]),
+            format!("unsupported_movement_flag_{:#x}", action[3]),
+        )]),
+        ACTION_PAUSE_WAYPOINTS if action[2] == 0 && action[3] == 0 => Ok(movement_action(
+            kind,
+            format!("patrol-paused:{}", action[1] != 0),
+            None,
+        )),
+        ACTION_SET_RANGED_MODE if action[1] <= 4 && action[3] == 0 => {
+            let mode = match action[1] {
+                0 => "none",
+                1 => "full-caster",
+                2 => "proximity",
+                3 => "no-melee",
+                4 => "distancer",
+                _ => unreachable!(),
+            };
+            Ok(movement_action(
+                kind,
+                format!("ranged-mode:{mode}:{}", action[2]),
+                None,
+            ))
+        }
+        ACTION_SET_WALK if action[1] <= 3 && action[2] == 0 && action[3] == 0 => {
+            let mode = match action[1] {
+                0 => "run-default",
+                1 => "walk-default",
+                2 => "run-chase",
+                3 => "walk-chase",
+                _ => unreachable!(),
+            };
+            Ok(movement_action(kind, format!("walking:{mode}"), None))
+        }
+        ACTION_SET_FACING if action[2] <= 1 && action[3] == 0 => {
+            let target = map_target(action[1]).map_err(|failure| vec![failure])?;
+            Ok(movement_action(
+                kind,
+                format!("facing:{target}:{}", action[2] != 0),
+                Some(action[1]),
+            ))
+        }
+        ACTION_SET_IMMOBILIZED if action[3] == 0 => Ok(movement_action(
+            kind,
+            format!("immobilized:{}:{}", action[1] != 0, action[2] != 0),
+            None,
+        )),
+        ACTION_SET_FOLLOW_MOVEMENT if action[2] == 0 && action[3] == 0 => Ok(movement_action(
+            kind,
+            format!("follow-movement:{}", action[1] != 0),
+            None,
+        )),
+        ACTION_RETREAT => Err(vec![MappingFailure::source(
+            "action",
+            u64::from(kind),
+            "unsupported_retreat",
+        )]),
         ACTION_SUMMON_ID => {
             let entry = action[1] as u64;
             let mut failures = Vec::new();
@@ -2927,6 +3255,21 @@ fn kill_credit_action(
     })
 }
 
+fn movement_action(kind: u32, encoded: String, raw_target: Option<u32>) -> NativeAction {
+    NativeAction {
+        encoded,
+        raw_kind: kind,
+        raw_target,
+        raw_cast_flags: None,
+        threat_percent: None,
+        dependencies: Vec::new(),
+        texts: Vec::new(),
+        summon_entry: None,
+        summon_location: None,
+        normalizations: Vec::new(),
+    }
+}
+
 fn map_cast_target_and_flags(
     raw_target: u32,
     raw_flags: u32,
@@ -3144,6 +3487,19 @@ mod tests {
              (900,'Hello','Hello',0,0,0,0,0,0,0,0,0,0,0,0,0,0); \
              INSERT INTO `creature_ai_scripts` VALUES {};",
             rules.join(",")
+        )
+    }
+
+    fn relay_row(
+        id: u32,
+        command: u32,
+        datalong: u32,
+        datalong2: u32,
+        position: [f32; 5],
+    ) -> String {
+        format!(
+            "({id},0,0,{command},{datalong},{datalong2},0,0,0,0,0,0,0,0,0,{},{},{},{},{},0,'fixture')",
+            position[0], position[1], position[2], position[3], position[4]
         )
     }
 
@@ -4325,6 +4681,225 @@ mod tests {
     }
 
     #[test]
+    fn movement_rows_emit_named_intents_and_inventory_the_exact_raw_values() {
+        let source = parse(&dump(&[
+            rule(
+                100,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [
+                    [ACTION_COMBAT_MOVEMENT as i64, 0, 0, 0],
+                    [ACTION_EVADE as i64, 1, 0, 0],
+                    [ACTION_RANGED_MOVEMENT as i64, 10, 150, 0],
+                ],
+            ),
+            rule(
+                101,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [
+                    [ACTION_CHANGE_MOVEMENT as i64, 1, 15, 0],
+                    [ACTION_CHANGE_MOVEMENT as i64, 2, 0, 0],
+                    [ACTION_PAUSE_WAYPOINTS as i64, 0, 0, 0],
+                ],
+            ),
+            rule(
+                102,
+                100,
+                EVENT_SPAWNED,
+                100,
+                0,
+                [0; 6],
+                [
+                    [ACTION_SET_RANGED_MODE as i64, 2, 35, 0],
+                    [ACTION_SET_WALK as i64, 1, 0, 0],
+                    [ACTION_SET_FACING as i64, TARGET_SPAWNER as i64, 0, 0],
+                ],
+            ),
+            rule(
+                103,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [
+                    [ACTION_SET_IMMOBILIZED as i64, 1, 0, 0],
+                    [ACTION_SET_FOLLOW_MOVEMENT as i64, 0, 0, 0],
+                    [0; 4],
+                ],
+            ),
+        ]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let definitions = plan.definition_rows.join("\n");
+
+        for encoded in [
+            "combat-movement:false",
+            "evade:true",
+            "posture:10:150",
+            "idle:random-current:15",
+            "idle:patrol:0",
+            "patrol-paused:false",
+            "ranged-mode:proximity:35",
+            "walking:walk-default",
+            "facing:spawner:false",
+            "immobilized:true:false",
+            "follow-movement:false",
+        ] {
+            assert!(definitions.contains(encoded), "missing `{encoded}`");
+        }
+
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        let rendered: serde_json::Value = serde_json::from_str(manifest.render()).unwrap();
+        for raw in [
+            "21:0:0:0",
+            "24:1:0:0",
+            "29:10:150:0",
+            "48:1:15:0",
+            "48:2:0:0",
+            "51:0:0:0",
+            "57:2:35:0",
+            "58:1:0:0",
+            "59:11:0:0",
+            "61:1:0:0",
+            "64:0:0:0",
+        ] {
+            assert_eq!(rendered["source_census"]["movement_values"][raw], 1);
+        }
+
+        let unsupported = parse(&dump(&[
+            rule(
+                110,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_CHANGE_MOVEMENT as i64, 2, 0, 1], [0; 4], [0; 4]],
+            ),
+            rule(
+                111,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_CHANGE_MOVEMENT as i64, 4, 0, 0], [0; 4], [0; 4]],
+            ),
+            rule(
+                112,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_CHANGE_MOVEMENT as i64, 2, 7, 2], [0; 4], [0; 4]],
+            ),
+            rule(
+                113,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_CHANGE_MOVEMENT as i64, 3, 7, 0], [0; 4], [0; 4]],
+            ),
+        ]))
+        .assemble(&entries, &guids, &templates);
+        assert_eq!(unsupported.dropped("unsupported_movement_flag_0x1", 1), 1);
+        assert_eq!(unsupported.dropped("unsupported_movement_flag_0x2", 2), 1);
+        assert_eq!(unsupported.dropped("unsupported_movement_type", 3), 1);
+        assert_eq!(unsupported.dropped("unsupported_movement_type", 4), 1);
+    }
+
+    #[test]
+    fn reachable_relay_census_expands_templates_and_nested_edges_without_mapping_commands() {
+        let source_rows = dump(&[
+            rule(
+                120,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_START_RELAY as i64, 100, 0, 0], [0; 4], [0; 4]],
+            ),
+            rule(
+                121,
+                100,
+                EVENT_AGGRO,
+                100,
+                0,
+                [0; 6],
+                [[ACTION_START_RELAY as i64, -7, 0, 0], [0; 4], [0; 4]],
+            ),
+        ]);
+        let relay_rows = [
+            relay_row(100, 3, 11, 12, [1.0, 2.0, 3.0, 4.0, 5.0]),
+            relay_row(100, 45, 300, 0, [0.0; 5]),
+            relay_row(100, 53, 8, 9, [0.0; 5]),
+            relay_row(200, 20, 1, 2, [0.0; 5]),
+            relay_row(201, 25, 1, 0, [0.0; 5]),
+            relay_row(300, 36, 6, 0, [0.0; 5]),
+        ];
+        let source = parse(&format!(
+            "{source_rows} INSERT INTO `dbscript_random_templates` VALUES \
+             (7,1,200,50,'first'),(7,1,201,50,'second'); \
+             INSERT INTO `dbscripts_on_relay` VALUES {};",
+            relay_rows.join(",")
+        ));
+        let relays = &source.coverage.reachable_relays;
+
+        assert_eq!(relays.root_references, 2);
+        assert_eq!(relays.direct_root_ids, BTreeSet::from([100]));
+        assert_eq!(relays.random_template_ids, BTreeSet::from([7]));
+        assert_eq!(relays.relay_ids, BTreeSet::from([100, 200, 201, 300]));
+        assert_eq!(relays.rows, 6);
+        assert_eq!(relays.nested_edges, 1);
+        assert_eq!(relays.command.len(), 6);
+        assert_eq!(relays.command.get(&53), Some(&1));
+        assert_eq!(relays.movement_values.values().sum::<u64>(), 4);
+        assert_eq!(
+            relays
+                .movement_values
+                .get("3:11:12:0:0:0:0:0:0:0:0:0:1:2:3:4:5:0"),
+            Some(&1)
+        );
+
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        let profile = fixture_profile(&plan);
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        let rendered: serde_json::Value = serde_json::from_str(manifest.render()).unwrap();
+        assert_eq!(
+            rendered["source_census"]["reachable_relays"]["raw_command_ids"],
+            6
+        );
+        assert_eq!(
+            rendered["source_census"]["reachable_relays"]["recognized_command_types"],
+            5
+        );
+        assert_eq!(
+            rendered["source_census"]["reachable_relays"]["command_type_classifications"]["53"]
+                ["classification"],
+            "unresolved"
+        );
+        assert_eq!(
+            rendered["source_census"]["reachable_relays"]["command_type_classifications"]["53"]
+                ["required_owner"],
+            "typed_world_state_or_refusal"
+        );
+    }
+
+    #[test]
     #[ignore = "requires LYRACORE_CLASSIC_DB_SQL pointing at the pinned decompressed SQL or gzip"]
     fn pinned_full_dump_source_census_matches_the_profile() {
         use std::io::Read;
@@ -4371,6 +4946,51 @@ mod tests {
         );
         assert_eq!(source.coverage.total_rules, 10_843);
         assert_eq!(source.coverage.source_guid_rules, 39);
+        let relays = &source.coverage.reachable_relays;
+        assert_eq!(relays.root_references, 141);
+        assert_eq!(relays.direct_root_ids.len(), 109);
+        assert_eq!(relays.random_template_ids, BTreeSet::from([33, 39, 20_055]));
+        assert_eq!(relays.relay_ids.len(), 120);
+        assert_eq!(relays.rows, 447);
+        assert_eq!(relays.command.values().sum::<u64>(), 447);
+        assert_eq!(relays.command.len(), 26);
+        assert_eq!(
+            relays
+                .command
+                .keys()
+                .filter(|command| **command != 53)
+                .count(),
+            25
+        );
+        assert_eq!(relays.command.get(&53), Some(&2));
+        assert_eq!(relays.nested_edges, 1);
+        for (command, count) in [
+            (3, 104),
+            (20, 11),
+            (25, 14),
+            (26, 3),
+            (32, 16),
+            (36, 20),
+            (37, 2),
+        ] {
+            assert_eq!(relays.command.get(&command), Some(&count));
+        }
+        assert_eq!(relays.movement_values.values().sum::<u64>(), 170);
+        let movement_dependencies = &source.coverage.movement_dependencies;
+        assert_eq!(movement_dependencies.ranged_mode_actions, 701);
+        assert_eq!(movement_dependencies.ranged_mode_subjects.len(), 686);
+        assert_eq!(
+            movement_dependencies.resolved_main_spell_subjects.len(),
+            660
+        );
+        assert_eq!(
+            movement_dependencies.missing_main_spell_subjects,
+            BTreeSet::from([
+                589, 595, 619, 815, 891, 1_013, 1_487, 1_489, 1_490, 1_539, 2_534, 2_638, 3_272,
+                3_502, 4_624, 6_222, 6_223, 6_224, 9_451, 9_460, 10_411, 11_190, 12_856, 15_634,
+                16_096, 16_379,
+            ])
+        );
         assert_eq!(
             source.rules.len(),
             10_843,

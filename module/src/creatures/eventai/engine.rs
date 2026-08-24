@@ -111,6 +111,12 @@ pub(crate) trait EventAiWorld {
     ) -> QuestCreditOutcome;
     fn stamp_eventai_rout(&mut self, creature_guid: u64, ends_ms: u32);
     fn set_eventai_ranged_posture(&mut self, creature_guid: u64, distance_yd: f32, angle_rad: f32);
+    /// Apply one named movement operation. The cycle remains the only movement-leg authority.
+    fn apply_eventai_movement(
+        &mut self,
+        creature_guid: u64,
+        operation: super::MovementOperation,
+    ) -> bool;
     /// The idle friend joins the fight against `victim_guid` as an assist.
     fn eventai_engage_assist(&mut self, creature_guid: u64, victim_guid: u64);
     /// Reserve the next summon sequence number and its lifetime bookkeeping.
@@ -402,7 +408,10 @@ fn execute_instruction<W: EventAiWorld>(
         | CreatureInstruction::CallForHelp(_) => {
             super::combat::execute(world, context, instruction, linked_choice)
         }
-        CreatureInstruction::Summon(_) | CreatureInstruction::SetRangedPosture(_) => {
+        CreatureInstruction::Summon(_)
+        | CreatureInstruction::SetRangedPosture(_)
+        | CreatureInstruction::Movement(_)
+        | CreatureInstruction::SetFacing(_) => {
             super::mobility::execute(world, context, instruction, linked_choice)
         }
         CreatureInstruction::SetLethalDamageFloor(_) | CreatureInstruction::ForceDeath => {
@@ -629,6 +638,7 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 CreatureInstruction::Emote(emote) => random_target(emote.target),
                 CreatureInstruction::Summon(summon) => random_target(summon.target),
                 CreatureInstruction::ScaleSelectedThreat(scale) => random_target(scale.target),
+                CreatureInstruction::SetFacing(facing) => random_target(facing.target),
                 CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => {
                     true
                 }
@@ -641,7 +651,8 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 | CreatureInstruction::ForceDeath
                 | CreatureInstruction::ScaleAllThreat(_)
                 | CreatureInstruction::Presentation(_)
-                | CreatureInstruction::QuestCredit(_) => false,
+                | CreatureInstruction::QuestCredit(_)
+                | CreatureInstruction::Movement(_) => false,
             })
 }
 
@@ -1076,6 +1087,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
         }
 
         let table = self.ctx.db.game_creature_ai_state();
+        super::movement::reset_revision(self.ctx, creature_guid);
         let row = match self.state_row(creature_guid) {
             Some(mut row) => {
                 row.phase = 0;
@@ -1251,6 +1263,46 @@ impl EventAiWorld for DatabaseWorld<'_> {
                     definition_revision: 0,
                 });
             }
+        }
+    }
+
+    fn apply_eventai_movement(
+        &mut self,
+        creature_guid: u64,
+        operation: super::MovementOperation,
+    ) -> bool {
+        if matches!(operation, super::MovementOperation::SetCombatMovement(_))
+            && self.eventai_is_casting(creature_guid)
+        {
+            return false;
+        }
+        match operation {
+            super::MovementOperation::SetRangedMode(ranged) => {
+                if !super::authored_combat(self.ctx, creature_guid).main_spell_posture {
+                    return false;
+                }
+                let distance = if ranged.mode == super::RangedMode::None {
+                    0.0
+                } else {
+                    ranged.distance_yd as f32
+                };
+                self.set_eventai_ranged_posture(creature_guid, distance, 0.0);
+                true
+            }
+            super::MovementOperation::Evade(evade) => {
+                crate::combat::disengage(self.ctx, creature_guid);
+                if !evade.combat_only {
+                    super::eventai_on_evade(self.ctx, creature_guid);
+                }
+                true
+            }
+            operation => super::movement::apply(
+                self.ctx,
+                creature_guid,
+                self.eventai_creature_state(creature_guid)
+                    .definition_revision,
+                operation,
+            ),
         }
     }
 

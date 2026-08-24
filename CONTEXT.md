@@ -277,6 +277,14 @@ definition revision or creature lifetime.
 An authored request that bypasses the Lethal Damage Floor and enters the canonical creature-death
 operation.
 
+**Movement Intent**:
+Durable authored movement selected by EventAI. The creature behavior cycle consumes it, and the
+creature-leg writer remains the only position writer.
+
+**Patrol Pause**:
+The durable pause on an active patrol. It keeps the current waypoint cursor so resuming continues
+the same route.
+
 ### Auctions
 
 **Settlement**:

@@ -162,8 +162,40 @@ pub(crate) trait IdleSink {
     fn idle_creatures(&self, active: &HashSet<u64>) -> Vec<IdleCreature>;
     /// This creature's patrol route; empty for a creature that does not patrol.
     fn route_of(&self, guid: u64) -> Vec<Waypoint>;
+    /// A paused patrol retains its route cursor and emits no leg until resumed.
+    fn patrol_paused(&self, _guid: u64) -> bool {
+        false
+    }
+    /// An authored stationary intent suppresses spawn loitering without changing the spawn row.
+    fn idle_stationary(&self, _guid: u64) -> bool {
+        false
+    }
+    /// A pending evade return outranks every authored idle intent.
+    fn returning_home(&self, _guid: u64) -> bool {
+        false
+    }
+    /// The live position of the unit this creature is following.
+    fn follow_target_at(&self, _guid: u64) -> Option<Point> {
+        None
+    }
+    /// One queued facing operation, resolved to an orientation in the creature's partition.
+    fn pending_facing(&self, _guid: u64) -> Option<f32> {
+        None
+    }
+    fn clear_pending_facing(&mut self, _guid: u64) {}
+    /// Replace the default gait only for the movement generator named by the authored operation.
+    fn idle_gait(&self, _guid: u64, default: Gait) -> Gait {
+        default
+    }
+    fn wander_radius(&self, _guid: u64) -> f32 {
+        WANDER_RADIUS
+    }
     /// Where this creature spawned; `None` for one with no post to return to.
     fn home_of(&self, guid: u64) -> Option<Home>;
+    /// The spawn post used by evade return, before an authored idle anchor can resume.
+    fn return_home_of(&self, guid: u64) -> Option<Home> {
+        self.home_of(guid)
+    }
     /// Is this creature in a fight? Chase and rout own its movement if so.
     fn engaged(&self, guid: u64) -> bool;
     /// Yards per second at `gait`, after snares.
@@ -451,6 +483,13 @@ pub(crate) trait PursuitSink {
     /// The EventAI hold distance and angle, in yards and radians. `Some((0, 0))` explicitly
     /// restores melee posture; `None` leaves the creature's existing caster behavior unchanged.
     fn authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)>;
+    fn combat_movement_enabled(&self, _guid: u64) -> bool {
+        true
+    }
+    fn chase_gait(&self, _guid: u64) -> Gait {
+        Gait::Run
+    }
+    fn target_not_reachable(&mut self, _guid: u64) {}
     /// The longest range this creature can bring an offensive spell to bear from; 0 for anything
     /// that has to close to melee. A creature whose casting an imported script has taken over reads
     /// 0 too: its flat rotation is off, so holding at that rotation's range would leave it standing
@@ -804,7 +843,13 @@ fn patrol<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, active: &Hash
             continue;
         }
         visited += 1;
-        if !moves_itself(w, c.guid) || leg_in_flight(tick.now_ms, c.leg_ends_ms) {
+        if !moves_itself(w, c.guid)
+            || w.patrol_paused(c.guid)
+            || w.returning_home(c.guid)
+            || w.pending_facing(c.guid).is_some()
+            || w.follow_target_at(c.guid).is_some()
+            || leg_in_flight(tick.now_ms, c.leg_ends_ms)
+        {
             continue;
         }
         let mut route = w.route_of(c.guid);
@@ -829,27 +874,29 @@ fn patrol<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, active: &Hash
             continue; // already there — next firing walks to the one after it
         }
         let leg = if dist_sq <= PATROL_DISPLACED_SQ {
-            // Flat WALK speed, so a snare does not slow a patroller. Pre-cycle behavior.
+            let gait = w.idle_gait(c.guid, Gait::Walk);
+            let speed = w.speed_of(c.guid, gait);
             Leg {
                 to: (wp.at.x, wp.at.y),
                 z_fallback: wp.at.z,
-                dur_ms: (dist_sq.sqrt() / constants::speeds::WALK * 1000.0) as u32,
-                gait: Gait::Walk,
+                dur_ms: (dist_sq.sqrt() / speed * 1000.0) as u32,
+                gait,
                 hold_until_landed: true,
             }
         } else {
             // Badly displaced: step toward the waypoint one tick at a time, ground-snapped per
             // leg like `walk_home`, so the creature no longer slides home through terrain.
-            let walk = constants::speeds::WALK;
-            let step = w.navigate(c.guid, (wp.at.x, wp.at.y), walk * tick.tick_secs);
-            let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, walk) else {
+            let gait = w.idle_gait(c.guid, Gait::Walk);
+            let speed = w.speed_of(c.guid, gait);
+            let step = w.navigate(c.guid, (wp.at.x, wp.at.y), speed * tick.tick_secs);
+            let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
                 continue; // nothing to close — the client rejects a zero-length leg
             };
             Leg {
                 to: (x, y),
                 z_fallback: wp.at.z,
                 dur_ms,
-                gait: Gait::Walk,
+                gait,
                 hold_until_landed: false,
             }
         };
@@ -1338,7 +1385,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
     pursuits.sort_unstable_by_key(|c| c.guid);
     let visited = pursuits.len();
     for c in pursuits {
-        if c.routing || w.movement_suppressed(c.guid) {
+        if c.routing || w.movement_suppressed(c.guid) || !w.combat_movement_enabled(c.guid) {
             continue;
         }
         let gap_sq = dist_sq(c.at, c.victim_at);
@@ -1416,7 +1463,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
 ///
 /// `aim.z` is only the FALLBACK height: the leg writer snaps the landing point to the ground under
 /// it, which matters on a slope and where the point is a detour corner nowhere near the victim.
-fn commit_chase_leg<W: MotionSink + IdleSink>(
+fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
     w: &mut W,
     c: &Pursuit,
     aim: Point,
@@ -1429,11 +1476,16 @@ fn commit_chase_leg<W: MotionSink + IdleSink>(
     }
     let dir = ((aim.x - c.at.x) / leg_len, (aim.y - c.at.y) / leg_len);
     let step = w.navigate(c.guid, (aim.x, aim.y), leg_len);
-    if step == (c.at.x, c.at.y) || !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
+    if step == (c.at.x, c.at.y) {
+        w.target_not_reachable(c.guid);
         return;
     }
-    let run = w.speed_of(c.guid, Gait::Run);
-    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, run) else {
+    if !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
+        return;
+    }
+    let gait = w.chase_gait(c.guid);
+    let speed = w.speed_of(c.guid, gait);
+    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
         return;
     };
     w.commit_leg(
@@ -1442,7 +1494,7 @@ fn commit_chase_leg<W: MotionSink + IdleSink>(
             to: (x, y),
             z_fallback: aim.z,
             dur_ms,
-            gait: Gait::Run,
+            gait,
             hold_until_landed: false,
         },
         now_ms,
@@ -1535,7 +1587,7 @@ fn combat_entry<W: EngageSink>(w: &mut W, scope: &TickScope) -> usize {
 ///
 /// Patrollers are the patrol phase's, engaged creatures are chase's, and only a RANDOM-movement
 /// creature loiters (an IDLE one holds its post: quest givers, vendors, guards).
-fn idle_movement<W: IdleSink + MotionSink>(
+fn idle_movement<W: IdleSink + MotionSink + PursuitSink>(
     w: &mut W,
     tick: &TickContext,
     active: &HashSet<u64>,
@@ -1543,7 +1595,31 @@ fn idle_movement<W: IdleSink + MotionSink>(
     let mut visited = 0usize;
     for c in idle_order(w, active) {
         visited += 1;
-        if c.patrols || !moves_itself(w, c.guid) {
+        if !moves_itself(w, c.guid) {
+            continue;
+        }
+        if w.returning_home(c.guid) {
+            let Some(home) = w.return_home_of(c.guid) else {
+                continue;
+            };
+            let (hdx, hdy) = (home.at.x - c.at.x, home.at.y - c.at.y);
+            if hdx * hdx + hdy * hdy > RETURN_LEASH_SQ {
+                walk_home(w, tick, &c, home);
+            } else {
+                w.reached_home(c.guid);
+            }
+            continue;
+        }
+        if let Some(orientation) = w.pending_facing(c.guid) {
+            w.face(c.guid, c.at, orientation, tick.now_ms);
+            w.clear_pending_facing(c.guid);
+            continue;
+        }
+        if let Some(target) = w.follow_target_at(c.guid) {
+            follow_authored(w, tick, &c, target);
+            continue;
+        }
+        if c.patrols || w.idle_stationary(c.guid) {
             continue;
         }
         let Some(home) = w.home_of(c.guid) else {
@@ -1552,12 +1628,45 @@ fn idle_movement<W: IdleSink + MotionSink>(
         let (hdx, hdy) = (home.at.x - c.at.x, home.at.y - c.at.y);
         if hdx * hdx + hdy * hdy > RETURN_LEASH_SQ {
             walk_home(w, tick, &c, home);
-        } else if tick.sense {
+            continue;
+        }
+        if tick.sense {
             w.reached_home(c.guid);
             loiter(w, tick, &c, home);
         }
     }
     visited
+}
+
+const FOLLOW_ARRIVE_YD: f32 = 3.0;
+
+fn follow_authored<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, target: Point) {
+    if leg_in_flight(tick.now_ms, c.leg_ends_ms) {
+        return;
+    }
+    let distance_sq = dist_sq(c.at, target);
+    if distance_sq <= FOLLOW_ARRIVE_YD * FOLLOW_ARRIVE_YD {
+        return;
+    }
+    let distance = distance_sq.sqrt();
+    let gait = w.idle_gait(c.guid, Gait::Walk);
+    let speed = w.speed_of(c.guid, gait);
+    let max_step = (distance - FOLLOW_ARRIVE_YD).min(speed * tick.tick_secs);
+    let step = w.navigate(c.guid, (target.x, target.y), max_step);
+    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
+        return;
+    };
+    w.commit_leg(
+        c.guid,
+        Leg {
+            to: (x, y),
+            z_fallback: target.z,
+            dur_ms,
+            gait,
+            hold_until_landed: false,
+        },
+        tick.now_ms,
+    );
 }
 
 /// One firing's worth of run toward the post, landing ON it rather than short of it. Re-stepped
@@ -1590,17 +1699,19 @@ fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Ho
     if w.roll() % 100 >= WANDER_CHANCE_PCT {
         return;
     }
-    let (hx, hy) = wander_point(home.at.x, home.at.y, w.roll(), w.roll(), WANDER_RADIUS);
-    let walk = w.speed_of(c.guid, Gait::Walk);
-    let step = w.navigate(c.guid, (hx, hy), walk * WANDER_HOP_SECS);
-    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, walk) else {
+    let radius = w.wander_radius(c.guid);
+    let (hx, hy) = wander_point(home.at.x, home.at.y, w.roll(), w.roll(), radius);
+    let gait = w.idle_gait(c.guid, Gait::Walk);
+    let speed = w.speed_of(c.guid, gait);
+    let step = w.navigate(c.guid, (hx, hy), speed * WANDER_HOP_SECS);
+    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
         return;
     };
     let leg = Leg {
         to: (x, y),
         z_fallback: home.at.z,
         dur_ms,
-        gait: Gait::Walk,
+        gait,
         hold_until_landed: true,
     };
     w.commit_leg(c.guid, leg, tick.now_ms);
