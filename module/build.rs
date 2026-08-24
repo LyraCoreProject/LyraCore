@@ -1,9 +1,9 @@
 //! Build-time codegen for the module's self-registration registries.
 //!
 //! Scans every `.rs` file under `src/` AND under each drop-in package's `packages/<name>/src/`
-//! (repo root — the packages contract, `packages/` itself, is not part of the public
-//! mirror) for the three marker invocations and generates, into `$OUT_DIR`, the files the crate
-//! `include!`s:
+//! (repo root — `packages/` ships the maintained reference Package, `packages/example/`, even in
+//! the public mirror; every OTHER package is an operator's own private addition) for the three
+//! marker invocations and generates, into `$OUT_DIR`, the files the crate `include!`s:
 //!
 //! - `character_sweeps.rs` — from `character_owned!` markers: the two `&[fn(...)]`
 //!   const arrays `CHARACTER_OWNED_DELETE_SWEEPS` and `CHARACTER_OWNED_RESTAMP_SWEEPS`, plus
@@ -65,6 +65,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// The folder name of the maintained reference Package (`packages/example/`) that
+/// `lyracore packages new` scaffolds from. It ships in every checkout, including the public
+/// mirror, and is deliberately excluded from the `has_packages` cfg — see its use below.
+const REFERENCE_PACKAGE: &str = "example";
+
 /// The notify-hook event catalog: event name -> the payload type the
 /// handler receives (the struct lives in `src/hooks.rs`). This row is HALF of an event's
 /// definition; the payload struct is the other half. From these rows build.rs generates the
@@ -100,11 +105,9 @@ fn main() {
     let src_dir = Path::new(&manifest_dir).join("src");
     println!("cargo:rerun-if-changed={}", src_dir.display());
 
-    // packages/ lives at the repo root (module/'s parent). In the maintainers' own tree the
-    // directory itself is always present (its README.md is checked in there), so rerun-if-changed
-    // never points at a missing path — but packages/ is NOT part of the public mirror, so a
-    // build from that tree does point rerun-if-changed at a missing path, and cargo reruns this
-    // script on every build as a result. Harmless, just not free.
+    // packages/ lives at the repo root (module/'s parent), holding at minimum the reference
+    // Package (`example/`) — present in every checkout including the public mirror — so
+    // rerun-if-changed never points at a missing path here.
     let packages_dir = Path::new(&manifest_dir)
         .parent()
         .expect("module/ has a parent (the repo root)")
@@ -164,14 +167,17 @@ fn main() {
         }
     }
 
-    // `has_packages`: at least one drop-in package with Rust in it compiled into this crate.
-    // A handful of `actor.rs` verbs and one `group.rs` emitter exist SOLELY for packages to call
-    // (the same shape as the `debug_only!` verbs, whose only consumer is the feature-gated debug
-    // harness), so without this cfg a packages-less build — which is exactly what a cold clone of
-    // the public mirror is — reports them as unused imports and dead code. The check-cfg line is
-    // unconditional so rustc's `unexpected_cfgs` lint knows the name either way.
+    // `has_packages`: at least one drop-in package with Rust in it compiled into this crate, OTHER
+    // than the reference Package (`packages/example/`). A handful of `actor.rs` verbs and one
+    // `group.rs` emitter exist SOLELY for a real package to call (the same shape as the
+    // `debug_only!` verbs, whose only consumer is the feature-gated debug harness), so without this
+    // cfg a build with no such package — which, since the reference Package ships in every
+    // checkout, is now the common case rather than the packages-less one — reports them as unused
+    // imports and dead code. `packages/example/` never calls them, by design (it stays inert), so it
+    // is excluded here rather than counted. The check-cfg line is unconditional so rustc's
+    // `unexpected_cfgs` lint knows the name either way.
     println!("cargo::rustc-check-cfg=cfg(has_packages)");
-    if !pkg_mods.is_empty() {
+    if pkg_mods.iter().any(|(ident, _)| ident != REFERENCE_PACKAGE) {
         println!("cargo::rustc-cfg=has_packages");
     }
 

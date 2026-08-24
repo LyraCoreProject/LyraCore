@@ -58,6 +58,7 @@ lyracore config set client-data PATH
 lyracore client sync
 lyracore packages add FOLDER [--yes]
 lyracore packages list
+lyracore packages new NAME
 lyracore character gm NAME true|false
 lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
 lyracore update
@@ -80,6 +81,7 @@ lyracore update
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
 | `packages add` | install a Package from a folder on this machine, after a trust review and a confirmation |
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
+| `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
@@ -176,12 +178,13 @@ first, then the value in `config.json` if one is set and still valid, and only t
 the interactive prompt — which, once you type a path that validates, is **saved to `config.json`
 for you**, so a plain `./lyracore import` never asks twice.
 
-## `packages` — install a Package, and see what is installed
+## `packages` — install, scaffold, and see what is installed
 
 ```bash
 ./lyracore packages add ~/src/my-package       # asks before it copies anything
 ./lyracore packages add ~/src/my-package --yes # answer the confirmation in advance
 ./lyracore packages list
+./lyracore packages new my-package             # scaffold one from nothing but this checkout
 ```
 
 A Package is a drop-in folder under `packages/<name>/`. `module/build.rs` discovers it and compiles
@@ -228,6 +231,19 @@ the exact `rm -rf` that undoes the install — so you can fix the Package where 
 Identity, whether the tree on disk still matches it (`clean` or `LOCALLY DRIFTED`), and what it
 registers. A Package with no stamp — dropped into `packages/` by hand, or installed before this
 command existed — renders as unrecorded rather than failing the listing.
+
+**`packages new NAME` scaffolds a Package with no network access and nothing external to review.**
+It copies `packages/example/` — the maintained reference Package every LyraCore checkout ships,
+including a fresh public clone — to `packages/NAME/`, renaming the reference's own identifiers into
+the new name, then writes a Provenance Stamp recording a **scaffold** origin rather than a Package
+Source (nothing external was installed, so there is nothing to name) and runs `preflight`. The same
+name and shape refusals as `add` apply before anything is written. The reference Package is
+Rust-only and inert. Its `src/mod.rs` carries one commented hook pattern, and the scaffold has no
+`client/` directory. The printed next steps say to add `client/addons/<Name>/` for addons or `client/mpq/`
+for client-file overrides, and that `client sync` will pack them in once you do. Growing the Rust
+half means wiring more hooks from the catalogue in `module/src/hooks.rs`, following the pattern
+`packages/NAME/src/mod.rs` already shows. Datascripts and Runtime Scripts have no tooling in this
+checkout yet.
 
 Enabled Packages live in `packages/`, which is the only place the build looks. Disabling, removing
 and updating a Package are separate work (#299, #300, #302), as are git URL sources and Official

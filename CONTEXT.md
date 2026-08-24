@@ -249,8 +249,12 @@ _Avoid_: weather event, weather state table
 A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons and client overrides to the client packer. Either half alone is a valid Package.
 _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 
+**Reference Package**:
+The maintained, minimal Package at `packages/example/`, committed to the LyraCore repo and present in every checkout. It doubles as living documentation for a Package's shape and is the template `lyracore packages new` copies and renames. It is deliberately inert: Rust-only, one commented hook pattern, no gameplay behavior.
+_Avoid_: template package, sample package
+
 **Package Source**:
-Where an installed Package was copied from. Today only a local folder on the Operator's machine; git URLs and Official Packages are separate work.
+Where an installed Package was copied from. Today only a local folder on the Operator's machine; git URLs and Official Packages are separate work. A scaffolded Package (`lyracore packages new`) has none. It was not copied from anywhere the Operator chose, so its Provenance Stamp records a scaffold origin instead.
 _Avoid_: origin, upstream, repo
 
 **Provenance Stamp**:
