@@ -39,6 +39,13 @@ const PATCH_MPQ: &str = "patch-3.MPQ";
 /// Source-controlled inputs (ours only) — see the firewall note above.
 const SRC: &str = "client-patch";
 
+/// Dropped inside an installed addon's own folder, naming the source that put it there
+/// (`client-patch` or `package <name>`). This is the ONLY provenance this packer keeps — one file
+/// per addon, gone if the addon folder goes — never a central inventory of every file it has ever
+/// written. It exists solely to power [`stale_addons`]'s warning; nothing here reads it to decide
+/// what to overwrite, and nothing here deletes on its account.
+const SOURCE_MARKER: &str = ".lyracore-source";
+
 /// One file destined for the patch MPQ: the internal archive path (backslash-separated) + its
 /// bytes + which source contributed it (for dry-run provenance and collision messages).
 struct PackFile {
@@ -180,6 +187,13 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     // 3) Addons (ours), already collected per source: → <client>/Interface/AddOns/<Name>/.
     let addons_dst = client_root.join("Interface").join("AddOns");
 
+    // Best-effort: an addon this or an earlier `--apply` installed, whose source (a Package, most
+    // often) is disabled or gone this run. Shown on a dry run too — it costs only a directory
+    // listing and an operator deciding whether to `rm -rf` it should not need `--apply` first.
+    for warning in stale_addons(&addons_dst, &addon_dirs)? {
+        eprintln!("pack-client: WARNING — {warning}");
+    }
+
     if !args.apply {
         println!("-- DRY RUN (--pack-client). Re-run with --apply to write to your client.");
         println!(
@@ -231,6 +245,8 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         let to = addons_dst.join(&a.name);
         copy_dir(&a.path, &to)
             .with_context(|| format!("install addon {} (from {})", a.name, a.source))?;
+        write_source_marker(&to, &a.source)
+            .with_context(|| format!("stamp addon {} with its source", a.name))?;
         eprintln!(
             "pack-client: installed addon {} → {} (from {})",
             a.name,
@@ -287,6 +303,52 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Stamp an installed addon directory with the source that put it there — see [`SOURCE_MARKER`].
+fn write_source_marker(addon_dir: &Path, source: &str) -> Result<()> {
+    fs::write(addon_dir.join(SOURCE_MARKER), source).context("write addon source marker")
+}
+
+/// Best-effort, no-ledger staleness check: which currently-installed addon directories carry a
+/// [`SOURCE_MARKER`] this run's `current` sources no longer produce.
+///
+/// The only file read is the marker inside each candidate addon's own folder, so this can never
+/// flag an addon nobody's `--apply` ever wrote to — an addon the operator installed by hand, or
+/// one from before this marker existed, is silently left alone rather than guessed at. Matches
+/// addon names case-insensitively, the same as the collision checks above (the destination
+/// filesystem may not distinguish case even where the marker's own text does).
+fn stale_addons(addons_dst: &Path, current: &[AddonDir]) -> Result<Vec<String>> {
+    if !addons_dst.is_dir() {
+        return Ok(Vec::new());
+    }
+    let current_names: std::collections::HashSet<String> = current
+        .iter()
+        .map(|a| a.name.to_ascii_lowercase())
+        .collect();
+    let mut names: Vec<String> = fs::read_dir(addons_dst)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+
+    let mut stale = Vec::new();
+    for name in names {
+        if current_names.contains(&name.to_ascii_lowercase()) {
+            continue;
+        }
+        let marker = addons_dst.join(&name).join(SOURCE_MARKER);
+        if let Ok(source) = fs::read_to_string(&marker) {
+            stale.push(format!(
+                "Interface/AddOns/{name} was installed from {} by an earlier sync, and no current \
+                 source provides it (a disabled or removed Package?) — left in place; remove it \
+                 by hand if you no longer want it",
+                source.trim(),
+            ));
+        }
+    }
+    Ok(stale)
 }
 
 /// Delete the `*.wdb` cache files (stale name/tooltip/icon caches mask DBC changes). Idempotent.
@@ -446,5 +508,73 @@ mod tests {
             let err = e.to_string();
             assert!(err.contains("firewall"), "{err}");
         }
+    }
+
+    #[test]
+    fn write_source_marker_round_trips_into_the_addon_directory() {
+        let t = Scratch::new("marker-write");
+        let addon = t.0.join("Interface/AddOns/AutoLoot");
+        fs::create_dir_all(&addon).unwrap();
+        write_source_marker(&addon, "package autoloot").unwrap();
+        let recorded = fs::read_to_string(addon.join(SOURCE_MARKER)).unwrap();
+        assert_eq!(recorded, "package autoloot");
+    }
+
+    #[test]
+    fn stale_addons_flags_only_marked_addons_the_current_sources_no_longer_provide() {
+        let t = Scratch::new("stale-warn");
+        let dst = t.0.join("Interface/AddOns");
+        // Still produced by this run: marked, and named by `current` — never flagged.
+        let current_addon = dst.join("AutoLoot");
+        fs::create_dir_all(&current_addon).unwrap();
+        write_source_marker(&current_addon, "package autoloot").unwrap();
+        // The Package behind it was disabled or removed: marked, but NOT named by `current`.
+        let retired_addon = dst.join("Retired");
+        fs::create_dir_all(&retired_addon).unwrap();
+        write_source_marker(&retired_addon, "package retired").unwrap();
+        // The operator's own addon: never marked by any sync, so it must never be flagged.
+        t.write("Interface/AddOns/BigWigs/BigWigs.toc", b"");
+
+        let current = vec![AddonDir {
+            name: "AutoLoot".to_string(),
+            path: t.0.join("client-patch/addons/AutoLoot"),
+            source: "package autoloot".to_string(),
+        }];
+        let warnings = stale_addons(&dst, &current).unwrap();
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("Retired"), "{warnings:?}");
+        assert!(warnings[0].contains("package retired"), "{warnings:?}");
+        assert!(
+            !warnings.iter().any(|w| w.contains("BigWigs")),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("AutoLoot")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn stale_addons_matches_names_case_insensitively_like_the_collision_checks() {
+        let t = Scratch::new("stale-case");
+        let dst = t.0.join("Interface/AddOns");
+        let addon = dst.join("AutoLoot");
+        fs::create_dir_all(&addon).unwrap();
+        write_source_marker(&addon, "package autoloot").unwrap();
+
+        let current = vec![AddonDir {
+            name: "AUTOLOOT".to_string(),
+            path: t.0.join("client-patch/addons/AutoLoot"),
+            source: "package autoloot".to_string(),
+        }];
+        assert!(stale_addons(&dst, &current).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stale_addons_is_empty_on_a_fresh_client_with_no_addons_dir_yet() {
+        let t = Scratch::new("stale-fresh");
+        let dst = t.0.join("Interface/AddOns");
+        assert!(stale_addons(&dst, &[]).unwrap().is_empty());
     }
 }
