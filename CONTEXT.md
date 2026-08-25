@@ -323,6 +323,10 @@ A drop-in folder under `packages/<name>/` that adds content to the realm with no
 Its data changes ship as Package Deltas rather than as edits to the base data.
 _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 
+**Package Inventory**:
+The two directories that hold installed Packages. `packages/` holds the enabled ones, which the build compiles. `.lyracore/packages-disabled/` holds the disabled ones, which it cannot see. A Package's location IS its enabled state; no file records it, so nothing can disagree with the disk about what the next build compiles. `lyracore packages enable` and `lyracore packages disable` move one folder between the two.
+_Avoid_: registry, package list, enabled flag, state file
+
 **Reference Package**:
 The maintained, minimal Package at `packages/example/`, committed to the LyraCore repo and present in every checkout. It doubles as living documentation for a Package's shape and is the template `lyracore packages new` copies and renames. It is deliberately inert: Rust-only, one commented hook pattern, no gameplay behavior.
 _Avoid_: template package, sample package
