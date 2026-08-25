@@ -6,6 +6,9 @@ In this project we focus on building complex things as simple as possible. We lo
 
 - Before implementing, refactoring, or reviewing code, read `CODING_STANDARDS.md`. Apply it to
   changed code without churning unrelated legacy code.
+- Boy scout rule: fix defects in code you are already changing. Exceptions: the fix spreads to other
+  files, or changes behaviour the user must weigh. Name those in one line and carry on. Fix
+  everything else, even when it feels too big. That feeling reads high.
 
 ## Prose
 
