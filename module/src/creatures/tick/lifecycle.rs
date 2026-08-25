@@ -44,15 +44,18 @@ use super::*;
 pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     crate::combat::disengage(ctx, guid); // melee rows + threat (clear_for_unit) + stale selections
     crate::threat::clear_taunt_lock(ctx, guid);
+    crate::combat::clear_lethal_damage_floor(ctx, guid);
+    crate::creatures::cancel_relay_runs_for_source(ctx, guid);
     crate::creatures::reset_creature_lifecycle(ctx, guid);
     crate::creatures::drop_summon_expiry(ctx, guid);
+    let _ = crate::creatures::set_creature_gossip_menu(ctx, guid, None);
+    crate::quest::clear_creature_tap(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid); // the LIVE leg row (perf 2.3)
     crate::motion::drop_pending(ctx, guid); // #461: the staged, not-yet-republished payload too
     ctx.db.game_entity_motion().guid().delete(guid); // motion row dies with the entity (perf 2.1)
     crate::loot::reap_corpse_loot_family(ctx, guid); // item rows (withheld-safe) + eligibility + rolls + votes
     ctx.db.game_world_entity().guid().delete(guid); // last — the on_delete relay destroys the object
 }
-
 
 /// Pass 3 — decay (runs before respawn): a corpse whose decay window elapsed is DESTROYed and its
 /// respawn timer armed to a FUTURE time (so respawn does NOT re-create it the same tick). Reaps the
@@ -174,7 +177,6 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
     visited
 }
 
-
 /// Pass 2 — respawn: re-create any creature whose live entity is gone and whose `respawn_at`
 /// elapsed, from its persistent spawn record + template. Runs AFTER decay (decay arms a future
 /// `respawn_at`, so a just-decayed creature isn't re-spawned this tick).
@@ -199,19 +201,25 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         .collect();
     for spawn in due {
         let guid = spawn.guid;
+        crate::combat::clear_lethal_damage_floor(ctx, guid);
+        // The new life reuses this guid, so nothing an earlier life scheduled may reach it.
+        crate::creatures::cancel_relay_runs_for_new_life(ctx, guid);
+        // ADVANCE + DISARM, before the entity exists, so every reader this tick already sees the new
+        // life. The advance is what lets a durable row keyed on this guid tell the life that made it
+        // from the one standing here now. The disarm is what keeps the range-scan index useful — a
+        // fired-but-still-past timer would put the row back in every subsequent scan, and it is also
+        // how a freshly IMPORTED spawn (which arms `respawn_at = now` deliberately, so it
+        // materialises on the first tick) leaves the scan after that first tick.
+        if let Some(mut s) = spawns.guid().find(guid) {
+            s.respawn_at = crate::creatures::timer_never(ctx);
+            s.life_seq = s.life_seq.saturating_add(1);
+            spawns.guid().update(s);
+        }
         if let Some(tmpl) = templates.entry().find(spawn.entry) {
             super::spawn::insert_creature_entity(
                 ctx,
                 build_creature_entity(&spawn, &tmpl, ctx.random(), 0),
             );
-        }
-        // DISARM: the timer has fired and the creature is alive again. This is what keeps the index
-        // useful — a fired-but-still-past timer would put the row back in every subsequent scan, and
-        // it is also how a freshly IMPORTED spawn (which arms `respawn_at = now` deliberately, so it
-        // materialises on the first tick) leaves the scan after that first tick.
-        if let Some(mut s) = spawns.guid().find(guid) {
-            s.respawn_at = crate::creatures::timer_never(ctx);
-            spawns.guid().update(s);
         }
     }
     visited
@@ -312,6 +320,29 @@ mod due_timer_tripwire {
             respawn.contains("by_respawn_at()") && respawn.contains("filter(..=now_ts)"),
             "`pass_respawn` no longer range-scans `by_respawn_at`. Body was:\n{respawn}"
         );
+        // A creature respawns under the guid it already had. Death is the wrong place to end a
+        // Relay Run, because a death-triggered relay is authored to act on the corpse, so respawn
+        // is the boundary that must clear anything an earlier life left scheduled.
+        assert!(
+            respawn.contains("crate::creatures::cancel_relay_runs_for_new_life(ctx, guid)"),
+            "`pass_respawn` no longer ends the previous life's Relay Runs, so a run started before \
+             the creature died can resume against the new life under the same guid. Body \
+             was:\n{respawn}"
+        );
+        // The life counter is what lets a durable row keyed on a reused guid tell the life that
+        // wrote it from the life standing here now. It must advance BEFORE the entity exists, or a
+        // reader in this same tick still sees the previous life.
+        let advance = respawn
+            .find("s.life_seq = s.life_seq.saturating_add(1)")
+            .expect("`pass_respawn` no longer advances the spawn point's life counter");
+        let materialise = respawn
+            .find("insert_creature_entity(")
+            .expect("`pass_respawn` no longer materialises the creature");
+        assert!(
+            advance < materialise,
+            "`pass_respawn` advances the life counter after materialising the creature, so a \
+             reader in this tick sees the previous life. Body was:\n{respawn}"
+        );
         assert!(
             respawn.contains("respawn_at = crate::creatures::timer_never(ctx)"),
             "`pass_respawn` no longer disarms `respawn_at` after materialising the creature. Every \
@@ -355,8 +386,20 @@ mod despawn_checklist_tripwire {
                 "the creature's EventAI rule state, phase, and ranged posture",
             ),
             (
+                "crate::combat::clear_lethal_damage_floor(ctx, guid)",
+                "the EventAI-owned lethal damage floor",
+            ),
+            (
+                "crate::creatures::cancel_relay_runs_for_source(ctx, guid)",
+                "source-creature Relay Runs",
+            ),
+            (
                 "crate::creatures::drop_summon_expiry(ctx, guid)",
                 "the one-shot lifetime row for a temporary EventAI summon",
+            ),
+            (
+                "crate::quest::clear_creature_tap(ctx, guid)",
+                "the first-damage party snapshot EventAI kill credit reads",
             ),
             (
                 "ctx.db.game_creature_spline().guid().delete(guid)",

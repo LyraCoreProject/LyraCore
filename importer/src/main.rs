@@ -10,6 +10,7 @@
 //!   --dump <classic-db .sql[.gz]>   cmangos creature/etc ETL
 //!                                   [--world-profile alliance-eastern|alliance-kalimdor|
 //!                                    alliance-single|instances]
+//!                                   [--eventai-profile cmangos-classic-z2815]
 //!                                   [advanced: --map 0 --center X,Y,Z --radius 180]
 //!                                   [--print-extents derives --box from the dump's real spawn
 //!                                    extents; always a dry run]
@@ -41,6 +42,7 @@
 mod collision;
 mod dbc;
 mod eventai;
+mod eventai_presentation;
 mod go_model;
 mod nav;
 mod pack_client;
@@ -461,6 +463,7 @@ mod qt {
     pub const REQ_ITEM_COUNT1: usize = 44; // ..=47
     pub const REQ_CREATURE_OR_GO_ID1: usize = 56; // ..=59; >0 = creature entry, <0 = gameobject (skip)
     pub const REQ_CREATURE_OR_GO_COUNT1: usize = 60; // ..=63
+    pub const REQ_SPELL_CAST1: usize = 64; // ..=67; 0 = ordinary kill/use objective
     pub const REW_CHOICE_ITEM_ID1: usize = 68; // ..=73 RewChoiceItemId1-6 (pick-1-of-N choice rewards)
     pub const REW_CHOICE_ITEM_COUNT1: usize = 74; // ..=79 RewChoiceItemCount1-6
     pub const REW_ITEM_ID1: usize = 80; // ..=83 (guaranteed reward items)
@@ -559,6 +562,7 @@ pub(crate) const GO_BUTTON: u8 = 1;
 const GO_QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER; // shared const (041) — no drift
 const GO_CHEST: u8 = 3;
 const GO_GOOBER: u8 = 10;
+const RELAY_TRAP_TEMPLATE_ENTRY: u64 = 180_391;
 /// Synthetic — must equal module `go_type::GATHER`. Vanilla's REAL type 25 is
 /// GAMEOBJECT_TYPE_FISHINGHOLE; see the TYPE-25 COLLISION GUARD in `classify_go_type`.
 const GO_GATHER: u8 = 25;
@@ -825,6 +829,8 @@ pub(crate) mod got {
     // raw dump columns.
     pub const DATA0: usize = 8;
     pub const DATA1: usize = 9;
+    pub const DATA3: usize = 11;
+    pub const DATA5: usize = 13;
 }
 mod go {
     // gameobject (spawn): guid, id(=gameobject_template.entry), map, spawnMask, x, y, z, orientation, rot0..3, ...
@@ -1008,8 +1014,9 @@ pub(crate) struct Args {
     pub(crate) family: Option<String>, // --family <name> (work-item 216): reload ONE --dump family's
     // clear+reload instead of the full ETL. `None` = full run (byte-identical to pre-216 behavior).
     pub(crate) source_sha: String, // --source-sha <sha> (work-item 216): the resolved cmangos
-                                   // classic-db commit this dump came from — threaded into every `stamp_import_meta` call this run
-                                   // makes. Empty string ("") when not given (no external provenance to record).
+    // classic-db commit this dump came from. It is threaded into every `stamp_import_meta` call this
+    // run makes. Empty string ("") when not given (no external provenance to record).
+    pub(crate) eventai_profile: String,
 }
 
 fn parse_args() -> Result<Args> {
@@ -1050,6 +1057,7 @@ where
         apply: false,
         family: None,
         source_sha: String::new(),
+        eventai_profile: eventai::SOURCE_PROFILE_NAME.to_string(),
     };
     let mut legacy_spatial_args: Vec<&'static str> = Vec::new();
     let mut it = args.into_iter().map(Into::into);
@@ -1239,6 +1247,11 @@ where
                 a.family = Some(v);
             }
             "--source-sha" => a.source_sha = it.next().context("--source-sha <sha>")?,
+            "--eventai-profile" => {
+                let profile = it.next().context("--eventai-profile <name>")?;
+                eventai::source_profile(&profile).map_err(anyhow::Error::msg)?;
+                a.eventai_profile = profile;
+            }
             "--center" => {
                 legacy_spatial_args.push("--center");
                 let v = it.next().context("--center X,Y,Z")?;
@@ -2151,6 +2164,8 @@ struct GossipEtl {
     npc_text_rows: Vec<String>,
     npc_text_slot_rows: Vec<String>,
     option_rows: Vec<String>,
+    profile_rows: Vec<String>,
+    profile_option_rows: Vec<String>,
 }
 
 fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64>) -> GossipEtl {
@@ -2241,6 +2256,16 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
         // else: no text found for this creature — gateway falls back to the generic greeting.
     }
 
+    const RELAY_GOSSIP_MENUS: [u64; 4] = [6_623, 6_687, 6_688, 6_949];
+    let mut profile_rows = Vec::new();
+    for menu_id in RELAY_GOSSIP_MENUS {
+        let Some(&text_id) = menu_to_text.get(&menu_id) else {
+            continue;
+        };
+        profile_rows.push(format!("({menu_id},{text_id})"));
+        needed_text_ids.insert(text_id);
+    }
+
     // 5. Emit game_npc_text + game_npc_text_slot rows for all referenced text_ids.
     let mut npc_text_rows: Vec<String> = Vec::new();
     let mut npc_text_slot_rows: Vec<String> = Vec::new();
@@ -2322,24 +2347,59 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
         }
     }
 
+    let mut profile_option_rows = Vec::new();
+    let mut profile_row_id = 1u32;
+    for menu_id in RELAY_GOSSIP_MENUS {
+        let Some(opts) = menu_to_options.get(&menu_id) else {
+            continue;
+        };
+        let mut sorted_opts: Vec<&Vec<String>> = opts.iter().collect();
+        sorted_opts.sort_by_key(|row| field(row, gmo::ID).parse::<u64>().unwrap_or(0));
+        let mut option_index = 0u32;
+        for row in sorted_opts {
+            let icon: u32 = field(row, gmo::OPTION_ICON).parse().unwrap_or(0);
+            let text = resolve_gossip_option_text(row, &broadcast);
+            let action = reclassify_gossip_option_action(
+                &text,
+                field(row, gmo::OPTION_TYPE).parse().unwrap_or(0),
+            );
+            if action == lyracore_shared::constants::gossip_option::QUESTGIVER {
+                continue;
+            }
+            let action_menu_id: u32 = field(row, gmo::ACTION_MENU_ID).parse().unwrap_or(0);
+            let (cond_type, cond_value1, cond_value2) =
+                resolve_gossip_option_condition(row, &conditions);
+            profile_option_rows.push(format!(
+                "({profile_row_id},{menu_id},{option_index},{icon},{},{action},{action_menu_id},{cond_type},{cond_value1},{cond_value2})",
+                sql_text(&text),
+            ));
+            profile_row_id += 1;
+            option_index += 1;
+        }
+    }
+
     eprintln!(
-        "gossip: {} creature→text mappings, {} npc_text strings resolved ({} weighted slot rows), {} menu options",
+        "gossip: {} creature→text mappings, {} npc_text strings resolved ({} weighted slot rows), {} menu options, {} relay profiles, {} relay profile options",
         gossip_rows.len(), npc_text_rows.len(), npc_text_slot_rows.len(), option_rows.len(),
+        profile_rows.len(), profile_option_rows.len(),
     );
     GossipEtl {
         menu_rows: gossip_rows,
         npc_text_rows,
         npc_text_slot_rows,
         option_rows,
+        profile_rows,
+        profile_option_rows,
     }
 }
 
 /// The normalized quest rows the ETL produces (SQL value-tuples ready to INSERT) plus the reward-item
-/// entry set the item-template load must include. A struct (not a tuple) so the six outputs stay named.
+/// entry set the item-template load must include. A struct (not a tuple) so its outputs stay named.
 struct QuestEtl {
     templates: Vec<String>,
     texts: Vec<String>,
     objectives: Vec<String>,
+    cast_objectives: Vec<String>,
     reward_items: Vec<String>,
     reward_choices: Vec<String>,
     relations: Vec<String>,
@@ -2673,6 +2733,7 @@ fn build_quests(
     let mut quest_rows: Vec<String> = Vec::new();
     let mut quest_text_rows: Vec<String> = Vec::new();
     let mut objective_rows: Vec<String> = Vec::new();
+    let mut cast_objective_rows: Vec<String> = Vec::new();
     let mut reward_item_rows: Vec<String> = Vec::new();
     let mut reward_choice_rows: Vec<String> = Vec::new();
     let mut reward_item_entries: HashSet<u64> = HashSet::new();
@@ -2681,6 +2742,7 @@ fn build_quests(
     let mut chained_count: usize = 0;
     let mut timed_count: usize = 0;
     let mut obj_id: u64 = 1;
+    let mut cast_obj_id: u64 = 1;
     let mut rew_id: u64 = 1;
     let mut rew_choice_id: u64 = 1;
     // Per-quest count of emitted objectives → the next obj_index for area-trigger objectives (added after
@@ -2764,6 +2826,7 @@ fn build_quests(
             let count: u32 = field(&row, qt::REQ_CREATURE_OR_GO_COUNT1 + i)
                 .parse()
                 .unwrap_or(0);
+            let spell_id: u32 = field(&row, qt::REQ_SPELL_CAST1 + i).parse().unwrap_or(0);
             if count == 0 {
                 continue;
             }
@@ -2771,6 +2834,11 @@ fn build_quests(
                 objective_rows.push(format!(
                     "({obj_id},{entry},{obj_index},0,{id},{count})", // kind 0 = KILL_CREATURE
                 ));
+                if spell_id != 0 {
+                    cast_objective_rows
+                        .push(format!("({cast_obj_id},{entry},{obj_index},{spell_id})"));
+                    cast_obj_id += 1;
+                }
                 obj_id += 1;
                 obj_index += 1;
             } else if id < 0 {
@@ -2781,6 +2849,11 @@ fn build_quests(
                     objective_rows.push(format!(
                         "({obj_id},{entry},{obj_index},2,{go_entry},{count})", // kind 2 = USE_GAMEOBJECT
                     ));
+                    if spell_id != 0 {
+                        cast_objective_rows
+                            .push(format!("({cast_obj_id},{entry},{obj_index},{spell_id})"));
+                        cast_obj_id += 1;
+                    }
                     obj_id += 1;
                     obj_index += 1;
                 }
@@ -2933,6 +3006,7 @@ fn build_quests(
         templates: quest_rows,
         texts: quest_text_rows,
         objectives: objective_rows,
+        cast_objectives: cast_objective_rows,
         reward_items: reward_item_rows,
         reward_choices: reward_choice_rows,
         relations: creature_quest_rows,
@@ -3532,6 +3606,12 @@ pub(crate) struct DumpPlan {
     pub(crate) spawn_row_count: usize,
     pub(crate) go_batches: Vec<String>,
     pub(crate) go_row_count: usize,
+    pub(crate) eventai_definition_batches: Vec<String>,
+    pub(crate) eventai_relay_definition_batches: Vec<String>,
+    pub(crate) eventai_definition_count: u64,
+    pub(crate) eventai_relay_definition_count: u64,
+    pub(crate) eventai_instruction_count: u64,
+    pub(crate) eventai_manifest: Option<String>,
     pub(crate) stamps: Vec<(&'static str, u64)>,
 }
 
@@ -3743,9 +3823,11 @@ fn build_dump_plan(
                 template_is_importable(&row).then_some(entry)
             })
             .collect();
-    let eventai = if family_active(args, "creature-ai") {
+    let (eventai, eventai_manifest) = if family_active(args, "creature-ai") {
+        let profile = eventai::source_profile(&args.eventai_profile).map_err(anyhow::Error::msg)?;
+        let observed_sql_sha256 = sha256_hex(dump.as_bytes())?;
         let source = eventai::parse(dump);
-        loop {
+        let plan = loop {
             let plan = source.assemble(&entries, &imported_guid_entries, &importable_templates);
             let added = plan
                 .forced_template_entries
@@ -3756,13 +3838,16 @@ fn build_dump_plan(
             if added == 0 {
                 break plan;
             }
+        };
+        let manifest =
+            plan.compatibility_manifest(&profile, &observed_sql_sha256, eventai::LOADER_CONTRACT);
+        if args.apply {
+            manifest.require_apply_ready().map_err(anyhow::Error::msg)?;
         }
+        (plan, Some(manifest.render().to_string()))
     } else {
-        eventai::EventAiPlan::default()
+        (eventai::EventAiPlan::default(), None)
     };
-    if family_active(args, "creature-ai") {
-        eventai.report();
-    }
     for slice in &scope.bounded_slices {
         let count = spawns
             .iter()
@@ -4151,6 +4236,8 @@ fn build_dump_plan(
         name: String,
         data0: u32,
         data1: u32,
+        trap_spell_id: u32,
+        trap_cooldown_secs: u32,
         size: f32,
     }
     let mut dropped_type25: Vec<u64> = Vec::new();
@@ -4170,6 +4257,16 @@ fn build_dump_plan(
             let name = field(row, got::NAME).to_string();
             let data0: u32 = field(row, got::DATA0).parse().unwrap_or(0);
             let data1: u32 = field(row, got::DATA1).parse().unwrap_or(0);
+            let trap_spell_id = if raw_type == 6 {
+                field(row, got::DATA3).parse().unwrap_or(0)
+            } else {
+                0
+            };
+            let trap_cooldown_secs = if raw_type == 6 {
+                field(row, got::DATA5).parse().unwrap_or(0)
+            } else {
+                0
+            };
             // 0 on an unparseable/absent column — the gateway reads that as "no size stored" and
             // sends 1.0, never an invisible prop.
             let size: f32 = field(row, got::SIZE).parse().unwrap_or(0.0);
@@ -4181,6 +4278,8 @@ fn build_dump_plan(
                     name,
                     data0,
                     data1,
+                    trap_spell_id,
+                    trap_cooldown_secs,
                     size,
                 },
             ))
@@ -4256,11 +4355,18 @@ fn build_dump_plan(
     // lesson). Also builds the per-type coverage histogram + the CHEST lootId set (widened to EVERY
     // imported chest, not a curated allowlist — work-item 210's scoping now spans the whole live set).
     let mut go_template_rows: Vec<String> = Vec::new();
+    let mut go_trap_rows: Vec<String> = Vec::new();
     let mut chest_loot_ids_used: Vec<u32> = Vec::new();
     let mut go_type_histogram: std::collections::BTreeMap<u8, u32> =
         std::collections::BTreeMap::new();
     let mut used_sorted: Vec<u64> = used_go.iter().copied().collect();
+    // The pinned relay closure activates this trap by database GUID. Its static authority must be
+    // present even when the world profile does not include the trap's spawn.
+    if go_meta.contains_key(&RELAY_TRAP_TEMPLATE_ENTRY) {
+        used_sorted.push(RELAY_TRAP_TEMPLATE_ENTRY);
+    }
     used_sorted.sort_unstable();
+    used_sorted.dedup();
     for entry in used_sorted {
         let meta = &go_meta[&entry];
         *go_type_histogram.entry(meta.stored_type).or_insert(0) += 1;
@@ -4274,6 +4380,12 @@ fn build_dump_plan(
             meta.size,
         );
         go_template_rows.push(row);
+        if meta.trap_spell_id != 0 {
+            go_trap_rows.push(format!(
+                "({entry},{},{})",
+                meta.trap_spell_id, meta.trap_cooldown_secs
+            ));
+        }
         if let Some(loot_id) = loot_id_used {
             chest_loot_ids_used.push(loot_id);
         }
@@ -4402,11 +4514,11 @@ fn build_dump_plan(
     obtainable_items.extend(vendor_stock_item_set(dump, &entries));
     let quests = build_quests(dump, &entries, &used_go, &goober_entries, &obtainable_items);
     eprintln!(
-        "mapped: {} quests, {} text, {} objectives, {} reward items, {} choice rewards, \
+        "mapped: {} quests, {} text, {} objectives, {} cast objectives, {} reward items, {} choice rewards, \
          {} creature giver relations, {} gameobject giver relations, {} chained (next_quest_id>0) [V], \
          {} timed (limit_time>0) [V]",
         quests.templates.len(), quests.texts.len(), quests.objectives.len(),
-        quests.reward_items.len(), quests.reward_choices.len(), quests.relations.len(),
+        quests.cast_objectives.len(), quests.reward_items.len(), quests.reward_choices.len(), quests.relations.len(),
         quests.go_relations.len(), quests.chained_count, quests.timed_count,
     );
 
@@ -4588,6 +4700,8 @@ fn build_dump_plan(
         // PACKAGE that mints its own gossip (e.g. the dynamic-events guard) uses the high bands —
         // menu.entry ≥ 1_000_000 (above every real creature entry), and option.row_id / text_id /
         // slot.id ≥ 50_000 — so a routine import never wipes package rows. Documented in danger-zones.
+        stmts.push("DELETE FROM game_gossip_menu_profile_option WHERE row_id > 0".into());
+        stmts.push("DELETE FROM game_gossip_menu_profile WHERE menu_id > 0".into());
         stmts.push("DELETE FROM game_gossip_menu WHERE entry > 0 AND entry < 1000000".into());
         stmts.push("DELETE FROM game_npc_text WHERE text_id > 0 AND text_id < 50000".into());
         stmts.push("DELETE FROM game_npc_text_slot WHERE id >= 0 AND id < 50000".into());
@@ -4611,15 +4725,28 @@ fn build_dump_plan(
             &gossip.npc_text_slot_rows,
         );
         push_insert(&mut stmts, "game_gossip_option", "row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2", &gossip.option_rows);
+        push_insert(
+            &mut stmts,
+            "game_gossip_menu_profile",
+            "menu_id,text_id",
+            &gossip.profile_rows,
+        );
+        push_insert(
+            &mut stmts,
+            "game_gossip_menu_profile_option",
+            "row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2",
+            &gossip.profile_option_rows,
+        );
     }
 
-    // Quests: clear+reload the 6 static quest tables (header / body text / objectives / reward items /
-    // creature giver relations / gameobject giver relations — work-item 041). game_character_quest
+    // Quests: clear+reload the static quest tables (header / body text / objectives / cast objectives /
+    // reward items / creature giver relations / gameobject giver relations). game_character_quest
     // (per-player progress) is born in the accept reducer, never here.
     if family_active(args, "quests") {
         stmts.push("DELETE FROM game_quest_template WHERE entry > 0".into());
         stmts.push("DELETE FROM game_quest_text WHERE quest_entry > 0".into());
         stmts.push("DELETE FROM game_quest_objective WHERE id > 0".into());
+        stmts.push("DELETE FROM game_quest_cast_objective WHERE id > 0".into());
         stmts.push("DELETE FROM game_quest_reward_item WHERE id > 0".into());
         stmts.push("DELETE FROM game_quest_reward_choice WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_quest WHERE id > 0".into());
@@ -4636,6 +4763,12 @@ fn build_dump_plan(
             "game_quest_objective",
             "id,quest_entry,obj_index,kind,target_entry,required_count",
             &quests.objectives,
+        );
+        push_insert(
+            &mut stmts,
+            "game_quest_cast_objective",
+            "id,quest_entry,obj_index,spell_id",
+            &quests.cast_objectives,
         );
         push_insert(
             &mut stmts,
@@ -4666,8 +4799,15 @@ fn build_dump_plan(
     // GOOBER gameobject templates (family "gameobjects" — no-Timestamp → plain SQL clear+reload).
     // The gameobject SPAWNS load separately via the import_gameobjects reducer below (also family-gated).
     if family_active(args, "gameobjects") {
+        stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
         stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
         push_insert(&mut stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", &go_template_rows);
+        push_insert(
+            &mut stmts,
+            "game_gameobject_trap",
+            "entry,spell_id,cooldown_secs",
+            &go_trap_rows,
+        );
     }
     // Trainer spell lists (family "trainers").
     if family_active(args, "trainers") {
@@ -4704,15 +4844,9 @@ fn build_dump_plan(
     }
 
     if family_active(args, "creature-ai") {
-        stmts.push("DELETE FROM game_creature_ai_event WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0".into());
-        push_insert(
-            &mut stmts,
-            "game_creature_ai_event",
-            "id,creature_entry,event_type,action_type,text,spell_id,initial_min_ms,initial_max_ms,repeat_min_ms,repeat_max_ms,source_rule_id,action_order,creature_guid,chance_pct,allowed_phase_mask,source_flags,repeat_policy,event_param_1,event_param_2,event_param_3,event_param_4,event_param_5,event_param_6,action_param_1,action_param_2,action_param_3,target_policy,cast_options",
-            &eventai.event_rows,
-        );
+        stmts.push("DELETE FROM game_quest_event_requirement WHERE id > 0".into());
         push_insert(
             &mut stmts,
             "game_creature_ai_broadcast_text",
@@ -4724,6 +4858,12 @@ fn build_dump_plan(
             "game_creature_ai_summon",
             "id,x,y,z,orientation,lifetime_ms",
             &eventai.summon_rows,
+        );
+        push_insert(
+            &mut stmts,
+            "game_quest_event_requirement",
+            "id,quest_entry",
+            &eventai.quest_event_requirement_rows(),
         );
     }
 
@@ -4829,14 +4969,19 @@ fn build_dump_plan(
             (gossip.menu_rows.len()
                 + gossip.npc_text_rows.len()
                 + gossip.npc_text_slot_rows.len()
-                + gossip.option_rows.len()) as u64,
+                + gossip.option_rows.len()
+                + gossip.profile_rows.len()
+                + gossip.profile_option_rows.len()) as u64,
         ));
     }
     if family_active(args, "quests") {
         stamps.push(("quests", quests.templates.len() as u64));
     }
     if family_active(args, "gameobjects") {
-        stamps.push(("gameobjects", go_template_rows.len() as u64));
+        stamps.push((
+            "gameobjects",
+            (go_template_rows.len() + go_trap_rows.len()) as u64,
+        ));
     }
     if family_active(args, "trainers") {
         stamps.push(("trainers", trainer_rows.len() as u64));
@@ -4857,12 +5002,24 @@ fn build_dump_plan(
         stamps.push(("spellmeta", spellmeta_row_count));
     }
 
+    let eventai_definition_count = eventai.definition_count();
+    let eventai_instruction_count = eventai.instruction_count();
+    let eventai_definition_batches = eventai.definition_batches;
+    let eventai_relay_definition_count = eventai.relay_definition_rows.len() as u64;
+    let eventai_relay_definition_batches = eventai.relay_definition_batches;
+
     Ok(DumpPlan {
         stmts,
         spawn_row_count: spawn_rows.len(),
         go_row_count: go_packed_rows.len(),
         spawn_batches: batches,
         go_batches,
+        eventai_definition_batches,
+        eventai_relay_definition_batches,
+        eventai_definition_count,
+        eventai_relay_definition_count,
+        eventai_instruction_count,
+        eventai_manifest,
         stamps,
     })
 }
@@ -4976,12 +5133,39 @@ fn main() -> Result<()> {
     let plan = build_dump_plan(&dump, &args, &display_scales, &profession_tier_values)?;
 
     if !args.apply {
+        if let Some(manifest) = &plan.eventai_manifest {
+            println!("-- EventAI Compatibility Manifest\n{manifest}\n");
+        }
         println!(
-            "-- DRY RUN: {} SQL statements, then {} creature-spawn batch(es) for {} spawns + {} gameobject batch(es) (of {SPAWN_BATCH}).\n",
-            plan.stmts.len(), plan.spawn_batches.len(), plan.spawn_row_count, plan.go_batches.len()
+            "-- DRY RUN: {} SQL statements, {} EventAI definition batch(es) for {} definitions and {} instructions, {} relay definition batch(es) for {} definitions, {} creature-spawn batch(es) for {} spawns, and {} gameobject batch(es) (of {SPAWN_BATCH}).\n",
+            plan.stmts.len(),
+            plan.eventai_definition_batches.len(),
+            plan.eventai_definition_count,
+            plan.eventai_instruction_count,
+            plan.eventai_relay_definition_batches.len(),
+            plan.eventai_relay_definition_count,
+            plan.spawn_batches.len(),
+            plan.spawn_row_count,
+            plan.go_batches.len()
         );
         for s in &plan.stmts {
             println!("{s};\n");
+        }
+        if family_active(&args, "creature-ai") {
+            println!(
+                "-- load native EventAI definitions via reducer: batch 0 replaces the family, and later batches append.\n  e.g. spacetime call -s {} {} import_creature_ai_definitions '<batch>'\n  (sample definition: {})",
+                args.server,
+                args.db,
+                plan.eventai_definition_batches
+                    .first()
+                    .and_then(|batch| batch.lines().next())
+                    .unwrap_or("")
+            );
+            println!(
+                "-- load the typed EventAI relay catalogue atomically through the reducer.\n  e.g. spacetime call -s {} {} import_creature_ai_relay_definitions '<catalogue>'",
+                args.server,
+                args.db,
+            );
         }
         println!(
             "-- load spawns via reducer: batch 0 = import_creature_spawns (clears+loads), the rest = import_creature_spawns_append (load only).\n  e.g. spacetime call -s {} {} import_creature_spawns '<batch>'\n  (sample row: {})",
@@ -4996,9 +5180,41 @@ fn main() -> Result<()> {
         bail!("no spawns matched the filter — check --box / --radius / --center");
     }
 
-    // Apply: SQL first (templates + waypoints ready), then the spawn batches (the first resets live
-    // state + loads; the next tick_creatures builds the entities from the just-loaded templates).
+    // Apply static catalogues first, then native EventAI definitions, then spawn batches. Definitions
+    // are ready before a new creature can raise its spawn edge.
     run_sql_statements(&args, &plan.stmts, "creatures")?;
+    if family_active(&args, "creature-ai") {
+        eprintln!(
+            "reducer: loading {} relay definitions in {} batch(es)…",
+            plan.eventai_relay_definition_count,
+            plan.eventai_relay_definition_batches.len()
+        );
+        let relay_catalogue = plan
+            .eventai_relay_definition_batches
+            .first()
+            .context("EventAI relay plan has no atomic catalogue")?;
+        call_reducer(
+            &args,
+            "import_creature_ai_relay_definitions",
+            relay_catalogue,
+        )
+        .context("EventAI relay catalogue")?;
+        eprintln!(
+            "reducer: loading {} EventAI definitions with {} instructions in {} batch(es)…",
+            plan.eventai_definition_count,
+            plan.eventai_instruction_count,
+            plan.eventai_definition_batches.len()
+        );
+        for (index, batch) in plan.eventai_definition_batches.iter().enumerate() {
+            let reducer = if index == 0 {
+                "import_creature_ai_definitions"
+            } else {
+                "import_creature_ai_definitions_append"
+            };
+            call_reducer(&args, reducer, batch)
+                .with_context(|| format!("EventAI definition batch {index}"))?;
+        }
+    }
     if family_active(&args, "creatures") {
         eprintln!(
             "reducer: loading {} spawns in {} batch(es)…",
@@ -5194,6 +5410,25 @@ mod tests {
         assert_eq!(go_initial_state(GO_GOOBER, 1), 0);
         assert_eq!(go_initial_state(GO_GATHER, 1), 0);
         assert_eq!(go_initial_state(GO_QUESTGIVER, 1), 0);
+    }
+
+    #[test]
+    fn gameobject_family_emits_the_reachable_relay_trap_profile() {
+        let dump = "INSERT INTO `gameobject_template` VALUES \
+            (180391,6,640,'Fel Rune',0,0,0,1,0,0,0,24425,0,0);";
+        let mut args = test_args();
+        args.family = Some("gameobjects".to_string());
+        let plan = build_dump_plan(dump, &args, &None, &None).unwrap();
+
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gameobject_trap (entry,spell_id,cooldown_secs)")
+                && statement.contains("(180391,24425,0)")
+        }));
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gameobject_template")
+                && statement.contains("(180391,6,640,'Fel Rune'")
+        }));
+        assert_eq!(plan.stamps, vec![("gameobjects", 2)]);
     }
 
     #[test]
@@ -6022,6 +6257,40 @@ mod tests {
     }
 
     #[test]
+    fn build_gossip_sql_emits_the_four_relay_menu_profiles_and_dense_options() {
+        let dump = "INSERT INTO `gossip_menu` VALUES \
+             (6623,5001,0,0),(6687,5002,0,0),(6688,5003,0,0),(6949,5004,0,0); \
+             INSERT INTO `npc_text` VALUES \
+             (5001,1,0,0,0,0,0,0,0,8001,0,0,0,0,0,0,0), \
+             (5002,1,0,0,0,0,0,0,0,8002,0,0,0,0,0,0,0), \
+             (5003,1,0,0,0,0,0,0,0,8003,0,0,0,0,0,0,0), \
+             (5004,1,0,0,0,0,0,0,0,8004,0,0,0,0,0,0,0); \
+             INSERT INTO `broadcast_text` VALUES \
+             (8001,'One','',0),(8002,'Two','',0),(8003,'Three','',0), \
+             (8004,'Four','',0),(9001,'First option','',0); \
+             INSERT INTO `conditions` VALUES (501,9,777,0); \
+             INSERT INTO `gossip_menu_option` VALUES \
+             (6688,7,1,'Second option',0,1,0,12,0,0,0,0,'',0,501), \
+             (6687,2,0,'9001',0,1,0,0,0,0,0,0,'',0,0);";
+        let etl = build_gossip_sql(dump, &std::collections::HashSet::new());
+
+        assert_eq!(
+            etl.profile_rows,
+            vec!["(6623,5001)", "(6687,5002)", "(6688,5003)", "(6949,5004)",]
+        );
+        assert_eq!(etl.profile_option_rows.len(), 2);
+        assert_eq!(
+            etl.profile_option_rows[0],
+            "(1,6687,0,0,'First option',1,0,0,0,0)"
+        );
+        assert_eq!(
+            etl.profile_option_rows[1],
+            "(2,6688,0,1,'Second option',1,12,1,777,0)"
+        );
+        assert_eq!(etl.npc_text_rows.len(), 4);
+    }
+
+    #[test]
     fn build_gossip_sql_reindexes_dense_option_order_even_when_cmangos_ids_have_gaps() {
         // cmangos option `id`s aren't guaranteed contiguous (a deleted row leaves a gap) — the importer
         // must still emit a DENSE 0-based `option_index` (the gateway's render/select alignment depends
@@ -6373,6 +6642,32 @@ mod tests {
                 "family=Some(quests) must exclude {name}"
             );
         }
+    }
+
+    #[test]
+    fn command_selects_only_the_committed_eventai_source_profile() {
+        let default = parse_args_from(["--dump", "/path/need-not-exist.sql"])
+            .expect("default EventAI Source Profile");
+        assert_eq!(default.eventai_profile, eventai::SOURCE_PROFILE_NAME);
+
+        let selected = parse_args_from([
+            "--dump",
+            "/path/need-not-exist.sql",
+            "--eventai-profile",
+            eventai::SOURCE_PROFILE_NAME,
+        ])
+        .expect("named EventAI Source Profile");
+        assert_eq!(selected.eventai_profile, eventai::SOURCE_PROFILE_NAME);
+
+        let error = parse_args_from([
+            "--dump",
+            "/definitely/not/read.sql",
+            "--eventai-profile",
+            "cmangos-classic-z2815-moving-target",
+        ])
+        .err()
+        .expect("unknown EventAI Source Profile");
+        assert!(format!("{error:#}").contains("unknown EventAI source profile"));
     }
 
     #[test]
@@ -6938,7 +7233,116 @@ mod tests {
             apply: false,
             family: None,
             source_sha: String::new(),
+            eventai_profile: eventai::SOURCE_PROFILE_NAME.to_string(),
         }
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_CLASSIC_DB_SQL pointing at the pinned decompressed SQL or gzip"]
+    fn pinned_alliance_single_plan_is_apply_ready_with_relay_static_dependencies() {
+        let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
+        let dump = read_dump(&path).unwrap();
+        let args = parse_args_from([
+            "--dump",
+            path.as_str(),
+            "--world-profile",
+            "alliance-single",
+            "--eventai-profile",
+            eventai::SOURCE_PROFILE_NAME,
+        ])
+        .unwrap();
+        let plan = build_dump_plan(&dump, &args, &None, &None).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(plan.eventai_manifest.as_deref().unwrap()).unwrap();
+
+        assert_eq!(manifest["apply_ready"], true, "{manifest:#}");
+        assert_eq!(manifest["findings"], serde_json::json!([]));
+        assert_eq!(manifest["counts"]["unapproved_result_groups"], 0);
+        assert_eq!(manifest["counts"]["dropped_rules"], 0);
+        assert_eq!(manifest["counts"]["ticket"]["relay_root_rules"], 141);
+        assert_eq!(
+            manifest["counts"]["ticket"]["relay_accepted_root_rules"],
+            141
+        );
+        assert_eq!(manifest["counts"]["ticket"]["relay_definitions"], 121);
+        assert_eq!(
+            manifest["counts"]["ticket"]["relay_structural_definitions"],
+            120
+        );
+        assert_eq!(manifest["counts"]["ticket"]["relay_rows"], 451);
+        assert_eq!(manifest["counts"]["ticket"]["relay_structural_rows"], 447);
+        assert_eq!(manifest["counts"]["ticket"]["relay_emitted_steps"], 449);
+        assert_eq!(manifest["counts"]["ticket"]["relay_loader_skipped_rows"], 2);
+        assert_eq!(
+            manifest["counts"]["ticket"]["text_emote_dependency_occurrences"],
+            300
+        );
+        let result = |action: u32, classification: &str, reason: &str| {
+            let raw_value = action.to_string();
+            manifest["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|result| {
+                    result["dimension"] == "action"
+                        && result["raw_value"].as_str() == Some(raw_value.as_str())
+                        && result["classification"] == classification
+                        && result["reason"] == reason
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing action result {action}/{classification}/{reason}")
+                })
+        };
+        for (action, rules, occurrences) in [
+            (10, 3, 3),
+            (12, 1, 3),
+            (28, 3, 3),
+            (41, 6, 6),
+            (45, 1, 1),
+            (47, 2, 2),
+            (50, 3, 3),
+            (56, 14, 14),
+        ] {
+            let emitted = result(action, "emitted", "emitted");
+            assert_eq!(emitted["source_rule_ids"].as_array().unwrap().len(), rules);
+            assert_eq!(emitted["occurrences"], occurrences);
+        }
+        let text_new_occurrences = result(54, "emitted", "emitted")["occurrences"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(text_new_occurrences, 62);
+        let text_templates = manifest["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|result| {
+                result["dimension"] == "dependency"
+                    && result["raw_value"] == "eventai_text_template"
+                    && result["classification"] == "emitted"
+                    && result["reason"] == "resolved"
+            })
+            .unwrap();
+        let text_template_occurrences = text_templates["occurrences"].as_u64().unwrap();
+        assert_eq!(text_template_occurrences, 56);
+        assert_eq!(text_new_occurrences - text_template_occurrences, 6);
+        let sound = result(4, "excluded", "unsupported_sound_playback");
+        assert_eq!(
+            sound["source_rule_ids"],
+            serde_json::json!([
+                6901, 29901, 83401, 128401, 192201, 278401, 361601, 793701, 793702, 799901, 1171102
+            ])
+        );
+        assert_eq!(plan.eventai_relay_definition_count, 27);
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gameobject_trap (entry,spell_id,cooldown_secs)")
+                && statement.contains("(180391,24425,0)")
+        }));
+        assert!(plan.stmts.iter().any(|statement| {
+            statement.starts_with("INSERT INTO game_gossip_menu_profile (menu_id,text_id)")
+                && ["(6623,", "(6687,", "(6688,", "(6949,"]
+                    .iter()
+                    .all(|row| statement.contains(row))
+        }));
     }
 
     #[test]
@@ -6984,6 +7388,103 @@ mod tests {
         cols[qt::ENTRY] = entry.to_string();
         cols[qt::TITLE] = format!("'{title}'");
         format!("({})", cols.join(","))
+    }
+
+    fn quest_template_row_with_cast_objective(
+        entry: u64,
+        creature_entry: u32,
+        spell_id: u32,
+    ) -> String {
+        let mut cols = vec!["0".to_string(); qt::REW_MONEY_MAX_LEVEL + 1];
+        cols[qt::ENTRY] = entry.to_string();
+        cols[qt::TITLE] = "'Cast objective'".to_string();
+        cols[qt::REQ_CREATURE_OR_GO_ID1] = creature_entry.to_string();
+        cols[qt::REQ_CREATURE_OR_GO_COUNT1] = "2".to_string();
+        cols[qt::REQ_SPELL_CAST1] = spell_id.to_string();
+        format!("({})", cols.join(","))
+    }
+
+    fn quest_template_row_requiring_event(entry: u64) -> String {
+        const QUEST_SPECIAL_FLAG_EXPLORATION_OR_EVENT: u32 = 0x2;
+        let mut cols = vec!["0".to_string(); qt::REW_MONEY_MAX_LEVEL + 1];
+        cols[qt::ENTRY] = entry.to_string();
+        cols[qt::TITLE] = "'Event requirement'".to_string();
+        cols[qt::SPECIAL_FLAGS] = QUEST_SPECIAL_FLAG_EXPLORATION_OR_EVENT.to_string();
+        format!("({})", cols.join(","))
+    }
+
+    #[test]
+    fn quest_import_keeps_spell_gated_objective_metadata_private() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500);",
+            creature_template_row(100, 0),
+            quest_template_row_with_cast_objective(500, 12297, 456),
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).unwrap();
+        let objectives = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_quest_objective"))
+            .unwrap();
+        assert!(objectives.contains("(1,500,0,0,12297,2)"), "{objectives}");
+        let casts = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_quest_cast_objective"))
+            .unwrap();
+        assert!(casts.contains("(1,500,0,456)"), "{casts}");
+    }
+
+    #[test]
+    fn quest_import_does_not_treat_every_special_flag_event_as_eventai_credit() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500);",
+            creature_template_row(100, 0),
+            quest_template_row_requiring_event(500),
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).unwrap();
+        assert!(plan
+            .stmts
+            .iter()
+            .all(|statement| !statement.starts_with("INSERT INTO game_quest_event_requirement")));
+    }
+
+    #[test]
+    fn eventai_import_owns_requirements_for_accepted_quest_events() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500); \
+             INSERT INTO `creature_ai_scripts` VALUES {};",
+            creature_template_row(100, 0),
+            quest_template_row_requiring_event(500),
+            eventai_rule_row(
+                10,
+                100,
+                4,
+                0,
+                100,
+                0,
+                [0; 6],
+                [[15, 500, 6, 0], [0; 4], [0; 4]],
+            ),
+        );
+        let mut args = test_args();
+        args.family = Some("creature-ai".to_string());
+        let plan = build_dump_plan(&dump, &args, &None, &None).unwrap();
+        let requirements = plan
+            .stmts
+            .iter()
+            .find(|statement| statement.starts_with("INSERT INTO game_quest_event_requirement"))
+            .expect("EventAI event requirement row");
+        assert!(requirements.contains("(1,500)"), "{requirements}");
     }
 
     /// Like `quest_template_row` but also stamps `qt::NEXT_QUEST_IN_CHAIN` / `qt::LIMIT_TIME`
@@ -7064,7 +7565,7 @@ mod tests {
                 10,
                 100,
                 0,
-                2,
+                64,
                 100,
                 0x421,
                 [1_000, 2_000, 3_000, 4_000, 0, 0],
@@ -7153,14 +7654,17 @@ mod tests {
                 [[11, 42, target, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
             ));
         }
+        let second_insert = rules.split_off(8);
         format!(
             "x INSERT INTO `creature` VALUES \
              (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),\
              (2,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
              INSERT INTO `creature_template` VALUES {},{}; \
+             INSERT INTO `spell_template` VALUES (42); \
              INSERT INTO `broadcast_text` VALUES {},{},{},{}; \
              INSERT INTO `script_texts` VALUES (-1,'Old\\'s','','','','','','','','',0,1,0,2,0); \
              INSERT INTO `creature_ai_summons` VALUES (700,1,2,3,4,5); \
+             INSERT INTO `creature_ai_scripts` VALUES {}; \
              INSERT INTO `creature_ai_scripts` VALUES {}; y",
             creature_template_row(100, 0),
             creature_template_row(200, 0),
@@ -7169,6 +7673,7 @@ mod tests {
             eventai_broadcast_row(902, "Two", "Two"),
             eventai_broadcast_row(903, "Unused", "Unused"),
             rules.join(","),
+            second_insert.join(","),
         )
     }
 
@@ -7178,60 +7683,62 @@ mod tests {
         let mut args = test_args();
         args.family = Some("creature-ai".to_string());
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
-        assert_eq!(plan.stamps, vec![("creature-ai", 24)]);
-        assert_eq!(plan.stmts.len(), 6, "{:?}", plan.stmts);
+        assert_eq!(plan.stamps, vec![("creature-ai", 8)]);
+        assert_eq!(plan.eventai_definition_count, 3);
+        assert_eq!(plan.eventai_instruction_count, 17);
+        assert_eq!(plan.stmts.len(), 5, "{:?}", plan.stmts);
         assert_eq!(
             &plan.stmts[..3],
             [
-                "DELETE FROM game_creature_ai_event WHERE id > 0",
                 "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0",
                 "DELETE FROM game_creature_ai_summon WHERE id > 0",
+                "DELETE FROM game_quest_event_requirement WHERE id > 0",
             ],
-            "a full EventAI reload replaces both imported rows and reserved fixtures"
+            "the family replaces its dependency catalogues"
         );
         assert!(plan.stmts.iter().all(|statement| {
-            statement.contains("game_creature_ai_event")
-                || statement.contains("game_creature_ai_broadcast_text")
+            statement.contains("game_creature_ai_broadcast_text")
                 || statement.contains("game_creature_ai_summon")
+                || statement.contains("game_quest_event_requirement")
         }));
         assert!(!plan.stmts.iter().any(|statement| {
-            statement.contains("game_creature_ai_state")
+            statement.contains("game_creature_ai_event")
+                || statement.contains("game_creature_ai_definition")
+                || statement.contains("game_creature_ai_state")
                 || statement.contains("game_creature_ai_rule_state")
         }));
 
-        let events = plan
-            .stmts
-            .iter()
-            .find(|statement| statement.starts_with("INSERT INTO game_creature_ai_event"))
-            .expect("EventAI rows");
+        let definitions = plan.eventai_definition_batches.join("\n");
         assert!(
-            events.contains("(4611686018427387944,100,1,0,''"),
-            "{events}"
+            definitions.contains("entry:100@")
+                && definitions.contains(&format!("guid:{}@", world_guid(100, 2)))
+                && definitions.contains("entry:200@"),
+            "{definitions}"
         );
         assert!(
-            events.contains(",10,0,0,100,4294967293,3,1,1000,2000,3000,4000"),
-            "{events}"
+            definitions.contains(
+                "10,timer-combat:1000:2000,100,4294967231,repeat:3000:4000,random,combat,any-posture,speak:yell:self:900.901.902"
+            ),
+            "{definitions}"
         );
         assert!(
-            events.contains(",11,0,0,75,4294967295,0,0,20,80,100,200"),
-            "{events}"
+            definitions.contains(
+                "11,health:20:80:0,75,4294967295,once,all,ordinary,any-posture,cast:42:opponent:1:direct:actor:selected:1:1:1:0:0+emote:7:self+flee"
+            ),
+            "{definitions}"
         );
         assert!(
-            events.contains(",15,0,0,100,4294967295,0,0,0,0,0,0,0,0,900,0,0,0,0)"),
-            "{events}"
+            definitions.contains(
+                "14,range:5:20,100,4294967295,once,all,ordinary,any-posture,posture:15:-45"
+            ),
+            "{definitions}"
         );
         assert!(
-            events.contains(&format!(",16,0,{},100,4294967295", world_guid(100, 2))),
-            "{events}"
+            definitions.contains(
+                "15,aggro,100,4294967295,once,all,ordinary,any-posture,speak:yell:opponent:900"
+            ),
+            "{definitions}"
         );
-        assert!(events.contains(",17,0,0,100,4294967295,0,0"), "{events}");
-        assert!(events.contains(",15,4294967251,0,0,0)"), "{events}");
-        for target in [0, 1, 3, 4, 5, 6, 8, 9, 10] {
-            assert!(
-                events.contains(&format!(",{target},")),
-                "missing native target {target}: {events}"
-            );
-        }
         let texts = plan
             .stmts
             .iter()
@@ -7241,36 +7748,66 @@ mod tests {
         assert!(texts.contains("Old''s"), "{texts}");
         assert!(!texts.contains("Unused"), "{texts}");
         assert!(texts.contains(",8,5,9,6,10,7)"), "{texts}");
+        let manifest = plan.eventai_manifest.as_deref().expect("manifest");
+        assert!(manifest.contains("\"source_rules\": 15"), "{manifest}");
+        assert!(
+            manifest.contains("\"emitted_instructions\": 17"),
+            "{manifest}"
+        );
+        assert!(manifest.contains("\"apply_ready\": false"), "{manifest}");
 
         let again = build_dump_plan(&dump, &args, &None, &None).expect("repeat EventAI plan");
         assert_eq!(plan.stmts, again.stmts);
+        assert_eq!(
+            plan.eventai_definition_batches,
+            again.eventai_definition_batches
+        );
+        assert_eq!(plan.eventai_manifest, again.eventai_manifest);
     }
 
     #[test]
-    fn eventai_row_carries_the_entry_or_the_spawn_guid_but_never_both() {
-        // The Module decodes a subject as (entry, 0) or (0, guid) and refuses a row that sets both,
-        // so a guid-scoped source rule has to clear the entry column it resolved the guid through.
+    fn eventai_definition_uses_entry_or_remapped_guid_subject() {
         let dump = eventai_fixture_dump();
         let mut args = test_args();
         args.family = Some("creature-ai".to_string());
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("EventAI plan");
-        let events = plan
-            .stmts
-            .iter()
-            .find(|statement| statement.starts_with("INSERT INTO game_creature_ai_event"))
-            .expect("EventAI rows");
+        let definitions = plan.eventai_definition_batches.join("\n");
 
-        // Source rule 16 names spawn guid 2 (`creature_id` -2); source rule 17 names entry 200.
+        // Source rule 16 names spawn guid 2. Source rule 17 names entry 200.
         assert!(
-            events.contains(&format!(
-                "(4611686018427387968,0,3,0,'',0,0,0,0,0,16,0,{},100,",
-                world_guid(100, 2)
-            )),
-            "{events}"
+            definitions
+                .lines()
+                .any(|definition| definition.starts_with(&format!("guid:{}@", world_guid(100, 2)))),
+            "{definitions}"
         );
         assert!(
-            events.contains("(4611686018427387972,200,5,0,'',0,0,0,0,0,17,0,0,100,"),
-            "{events}"
+            definitions
+                .lines()
+                .any(|definition| definition.starts_with("entry:200@")),
+            "{definitions}"
+        );
+    }
+
+    #[test]
+    fn eventai_apply_refuses_during_pure_plan_construction() {
+        let dump = eventai_fixture_dump();
+        let mut args = test_args();
+        args.family = Some("creature-ai".to_string());
+        args.apply = true;
+
+        let error = build_dump_plan(&dump, &args, &None, &None)
+            .err()
+            .expect("the compact dump cannot satisfy the full source profile")
+            .to_string();
+
+        assert!(
+            error.contains("compatibility manifest is not approved"),
+            "{error}"
+        );
+        assert!(error.contains("sql_sha256 expected="), "{error}");
+        assert!(
+            error.contains("source_rule_count expected=10843 observed=15"),
+            "{error}"
         );
     }
 
@@ -7307,12 +7844,11 @@ mod tests {
             plan.stmts
         );
         assert!(
-            !plan
-                .stmts
+            plan.eventai_definition_batches
                 .iter()
-                .any(|statement| statement.starts_with("INSERT INTO game_creature_ai_event")),
+                .all(|batch| !batch.contains("entry:100@")),
             "{:?}",
-            plan.stmts
+            plan.eventai_definition_batches
         );
     }
 
@@ -7379,7 +7915,7 @@ mod tests {
                 0,
                 0,
                 100,
-                2,
+                64,
                 [0, 1, 0, 1, 0, 0],
                 [[1, 900, 0, 0]; 3],
             ),
@@ -7513,7 +8049,7 @@ mod tests {
             ("unsupported_event", 99),
             ("invalid_chance", 0),
             ("empty_phase_mask", u32::MAX as u64),
-            ("unsupported_flag", 2),
+            ("unsupported_flag", 64),
             ("unsupported_action", 99),
             ("missing_broadcast_text", 999),
             ("invalid_spell", 0),
@@ -7521,15 +8057,20 @@ mod tests {
             ("missing_summon_creature", 999),
             ("missing_summon_location", 999),
             ("malformed_rule", 1),
-            ("invalid_numeric", 13),
-            ("unsupported_text_template", 77),
-            ("unsupported_chat_type", 2),
-            ("unsupported_target", 10),
-            ("unsupported_triggered_cast", 2),
-            ("unsupported_force_cast", 4),
+            ("empty_text", 1),
         ] {
             assert_eq!(plan.dropped(reason, value), 1, "{reason}/{value}");
         }
+        assert!(plan
+            .definition_rows
+            .iter()
+            .any(|row| row.contains("no-effect:missing-text-template:77")));
+        assert!(plan
+            .definition_rows
+            .iter()
+            // 903 is rewritten to source chat type 2 above, so it encodes as a narrative emote
+            // rather than speech.
+            .any(|row| row.contains("speak:emote:self:903")));
         assert_eq!(plan.event_counts(99), (1, 0, 1, 0));
         assert_eq!(plan.action_counts(99), (3, 0, 3, 0));
     }

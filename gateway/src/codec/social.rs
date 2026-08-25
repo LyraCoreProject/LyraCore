@@ -11,6 +11,9 @@ use wow_world_messages::vanilla::{
 };
 use wow_world_messages::Guid;
 
+/// Internal `game_chat_event` mode for a creature-authored text emote.
+pub(crate) const CHAT_TEXT_EMOTE: u8 = 2;
+
 // ─── /who panel ──────────────────────────────────────────────────────────────
 
 /// One online character row as needed by the WHO response — flat ints the codec converts.
@@ -110,31 +113,69 @@ pub fn build_friend_status(result: FriendResult, guid: u64) -> SMSG_FRIEND_STATU
     }
 }
 
-/// Build `SMSG_MESSAGECHAT` for a Say/Yell broadcast (social tier). The sender guid rides inside the
-/// `ChatType` variant (`chat_credit == speech_bubble_credit == sender`, so the client attributes the
-/// line and floats the speech bubble over the speaker). `language` echoes the speaker's (falls back to
-/// Universal on an unknown discriminant); `tag` is None. `chat_type`: 1 = Yell, else Say.
-pub fn build_chat_message(
+/// Build `SMSG_MESSAGECHAT` for nearby player or creature speech.
+///
+/// Creature packets carry the speaker name and use the matching monster variant. Unknown source
+/// modes retain the existing player-say fallback.
+#[cfg(test)]
+fn build_chat_message(
     sender_guid: u64,
+    sender_name: Option<String>,
+    chat_type: u8,
+    language: u8,
+    message: String,
+) -> SMSG_MESSAGECHAT {
+    build_chat_message_to(sender_guid, sender_name, 0, chat_type, language, message)
+}
+
+/// Build creature speech while retaining the addressed target chosen by EventAI.
+pub fn build_chat_message_to(
+    sender_guid: u64,
+    sender_name: Option<String>,
+    target_guid: u64,
     chat_type: u8,
     language: u8,
     message: String,
 ) -> SMSG_MESSAGECHAT {
     let sender = Guid::new(sender_guid);
-    let kind = if chat_type == 1 {
-        SMSG_MESSAGECHAT_ChatType::Yell {
+    let kind = match (chat_type, sender_name) {
+        (0, Some(sender_name)) => SMSG_MESSAGECHAT_ChatType::MonsterSay {
+            sender1: sender,
+            sender_name,
+            target: Guid::new(target_guid),
+        },
+        (1, Some(sender_name)) => SMSG_MESSAGECHAT_ChatType::MonsterYell {
+            sender1: sender,
+            sender_name,
+            target: Guid::new(target_guid),
+        },
+        // `MonsterEmote` carries one guid and it names the SPEAKER, paired with the speaker's own
+        // name. The variant has no addressee field on the wire, so an emote's addressed target is
+        // not expressible here and is dropped rather than misfiled into the speaker slot.
+        (CHAT_TEXT_EMOTE, Some(monster_name)) => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+            monster: sender,
+            monster_name,
+        },
+        (1, None) => SMSG_MESSAGECHAT_ChatType::Yell {
             chat_credit: sender,
             speech_bubble_credit: sender,
-        }
-    } else {
-        SMSG_MESSAGECHAT_ChatType::Say {
+        },
+        (CHAT_TEXT_EMOTE, None) => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+            monster: sender,
+            monster_name: String::new(),
+        },
+        _ => SMSG_MESSAGECHAT_ChatType::Say {
             chat_credit: sender,
             speech_bubble_credit: sender,
-        }
+        },
     };
     SMSG_MESSAGECHAT {
         chat_type: kind,
-        language: Language::try_from(language).unwrap_or(Language::Universal),
+        language: if chat_type == CHAT_TEXT_EMOTE {
+            Language::Universal
+        } else {
+            Language::try_from(language).unwrap_or(Language::Universal)
+        },
         message,
         tag: PlayerChatTag::None,
     }
@@ -271,7 +312,7 @@ mod tests {
     fn chat_message_carries_sender_type_and_serializes() {
         // Say: sender guid rides in the Say variant (both credit fields); message + language survive
         // the writer. Yell: the variant flips. Serialize each so the writer runs over the new path.
-        let say = build_chat_message(7, 0, 0, "hello world".into());
+        let say = build_chat_message(7, None, 0, 0, "hello world".into());
         match &say.chat_type {
             SMSG_MESSAGECHAT_ChatType::Say {
                 chat_credit,
@@ -287,13 +328,94 @@ mod tests {
         say.write_unencrypted_server(&mut buf).unwrap();
         assert!(!buf.is_empty());
 
-        let yell = build_chat_message(9, 1, 0, "RUN".into());
+        let yell = build_chat_message(9, None, 1, 0, "RUN".into());
         assert!(matches!(
             yell.chat_type,
             SMSG_MESSAGECHAT_ChatType::Yell { .. }
         ));
         // An unknown language discriminant falls back to Universal rather than panicking.
-        let weird = build_chat_message(1, 0, 250, "x".into());
+        let creature_say = build_chat_message(
+            0xF130_0000_0000_000B,
+            Some("Defias Thug".into()),
+            0,
+            0,
+            "You there!".into(),
+        );
+        match creature_say.chat_type {
+            SMSG_MESSAGECHAT_ChatType::MonsterSay {
+                sender1,
+                sender_name,
+                target,
+            } => {
+                assert_eq!(sender1.guid(), 0xF130_0000_0000_000B);
+                assert_eq!(sender_name, "Defias Thug");
+                assert_eq!(target.guid(), 0);
+            }
+            other => panic!("expected MonsterSay, got {other:?}"),
+        }
+        let creature_yell = build_chat_message(
+            0xF130_0000_0000_000B,
+            Some("Defias Thug".into()),
+            1,
+            0,
+            "Run!".into(),
+        );
+        match creature_yell.chat_type {
+            SMSG_MESSAGECHAT_ChatType::MonsterYell {
+                sender1,
+                sender_name,
+                target,
+            } => {
+                assert_eq!(sender1.guid(), 0xF130_0000_0000_000B);
+                assert_eq!(sender_name, "Defias Thug");
+                assert_eq!(target.guid(), 0);
+            }
+            other => panic!("expected MonsterYell, got {other:?}"),
+        }
+
+        let addressed = build_chat_message_to(
+            0xF130_0000_0000_000B,
+            Some("Defias Thug".into()),
+            77,
+            0,
+            0,
+            "You there!".into(),
+        );
+        match &addressed.chat_type {
+            SMSG_MESSAGECHAT_ChatType::MonsterSay { target, .. } => {
+                assert_eq!(target.guid(), 77);
+            }
+            other => panic!("expected addressed MonsterSay, got {other:?}"),
+        }
+        let mut buf = Vec::new();
+        addressed.write_unencrypted_server(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+
+        let emote = build_chat_message_to(
+            0xF130_0000_0000_000B,
+            Some("Defias Thug".into()),
+            77,
+            CHAT_TEXT_EMOTE,
+            0,
+            "laughs.".into(),
+        );
+        match &emote.chat_type {
+            SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+                monster,
+                monster_name,
+            } => {
+                // The guid and the name must describe the same unit: the speaking creature.
+                assert_eq!(monster.guid(), 0xF130_0000_0000_000B);
+                assert_eq!(monster_name, "Defias Thug");
+            }
+            other => panic!("expected MonsterEmote, got {other:?}"),
+        }
+        assert_eq!(emote.language, Language::Universal);
+        let mut buf = Vec::new();
+        emote.write_unencrypted_server(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+
+        let weird = build_chat_message(1, None, 0, 250, "x".into());
         assert_eq!(weird.language, Language::Universal);
     }
 

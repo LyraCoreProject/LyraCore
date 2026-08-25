@@ -13,8 +13,7 @@
 # classic-db content itself NEVER does — see the pull script's licensing-firewall note and this repo's
 # .gitignore ("/.import/").
 #
-# CLASSIC_DB_SHA256 is the digest of the ASSEMBLED dump (.import/classic-db-full.sql), not of any file
-# in the upstream repo — it therefore also pins the assembly step, so a change to ASSEMBLE_GLOB or to
-# the decompress/concatenate loop shows up here as a mismatch instead of passing unnoticed.
-CLASSIC_DB_SHA="4d230bb1bd477948cac61c107d2718b3ea04a5b8"
-CLASSIC_DB_SHA256="5cb0b6f8d2b8ac96fdc60d81bfc2403aad111bb852265df866b829557f546f5e"
+# CLASSIC_DB_SHA256 is the digest of the decompressed SQL bytes written to
+# .import/classic-db-full.sql. The EventAI source profile checks the same bytes before apply.
+CLASSIC_DB_SHA="cd0c426a3b2ff56dd518bf009025299468e60fdb"
+CLASSIC_DB_SHA256="d2083bcd2670451279cbf93af138eadae04c6d183a4cd0ff0357047e4a565de6"

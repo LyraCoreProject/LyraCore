@@ -13,6 +13,7 @@ pub struct ChatEvent {
     pub language: u8,
     pub message: String,
     pub created_at: __sdk::Timestamp,
+    pub target_guid: u64,
 }
 
 impl __sdk::InModule for ChatEvent {
@@ -29,6 +30,7 @@ pub struct ChatEventCols {
     pub language: __sdk::__query_builder::Col<ChatEvent, u8>,
     pub message: __sdk::__query_builder::Col<ChatEvent, String>,
     pub created_at: __sdk::__query_builder::Col<ChatEvent, __sdk::Timestamp>,
+    pub target_guid: __sdk::__query_builder::Col<ChatEvent, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for ChatEvent {
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for ChatEvent {
             language: __sdk::__query_builder::Col::new(table_name, "language"),
             message: __sdk::__query_builder::Col::new(table_name, "message"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
+            target_guid: __sdk::__query_builder::Col::new(table_name, "target_guid"),
         }
     }
 }

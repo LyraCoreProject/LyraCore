@@ -14,6 +14,11 @@ pub struct CreatureAiRuleState {
     pub consumed: bool,
     pub lifecycle_id: u64,
     pub engagement_id: u64,
+    pub invocation_seed: u64,
+    pub invocation_started: bool,
+    pub executing: bool,
+    pub invocation_branch: u32,
+    pub paused_at_ms: u64,
 }
 
 impl __sdk::InModule for CreatureAiRuleState {
@@ -31,6 +36,11 @@ pub struct CreatureAiRuleStateCols {
     pub consumed: __sdk::__query_builder::Col<CreatureAiRuleState, bool>,
     pub lifecycle_id: __sdk::__query_builder::Col<CreatureAiRuleState, u64>,
     pub engagement_id: __sdk::__query_builder::Col<CreatureAiRuleState, u64>,
+    pub invocation_seed: __sdk::__query_builder::Col<CreatureAiRuleState, u64>,
+    pub invocation_started: __sdk::__query_builder::Col<CreatureAiRuleState, bool>,
+    pub executing: __sdk::__query_builder::Col<CreatureAiRuleState, bool>,
+    pub invocation_branch: __sdk::__query_builder::Col<CreatureAiRuleState, u32>,
+    pub paused_at_ms: __sdk::__query_builder::Col<CreatureAiRuleState, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureAiRuleState {
@@ -44,6 +54,11 @@ impl __sdk::__query_builder::HasCols for CreatureAiRuleState {
             consumed: __sdk::__query_builder::Col::new(table_name, "consumed"),
             lifecycle_id: __sdk::__query_builder::Col::new(table_name, "lifecycle_id"),
             engagement_id: __sdk::__query_builder::Col::new(table_name, "engagement_id"),
+            invocation_seed: __sdk::__query_builder::Col::new(table_name, "invocation_seed"),
+            invocation_started: __sdk::__query_builder::Col::new(table_name, "invocation_started"),
+            executing: __sdk::__query_builder::Col::new(table_name, "executing"),
+            invocation_branch: __sdk::__query_builder::Col::new(table_name, "invocation_branch"),
+            paused_at_ms: __sdk::__query_builder::Col::new(table_name, "paused_at_ms"),
         }
     }
 }

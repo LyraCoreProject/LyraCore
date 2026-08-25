@@ -30,6 +30,30 @@ by one World Import Profile. Accepted EventAI summons force their summoned templ
 scope, to a fixpoint. It decides spatial import membership for dump, terrain, navigation,
 and vmap modes.
 
+**EventAI Source Profile**:
+A named, pinned EventAI input contract. It binds exact decompressed SQL bytes, the source loader,
+source censuses, and approved compatibility results.
+
+**Compatibility Manifest**:
+The complete EventAI import account for one World Import Scope. It records each source value and
+dependency path as emitted, normalized, excluded, dropped, or unapproved. An unapproved result is a
+Refusal for apply and remains visible in dry run.
+
+**Encounter Binding**:
+The map-scoped link from an imported EventAI action to the package that owns the encounter.
+
+**Encounter Signal**:
+A named Begin, Fail, Complete, or encounter-specific notification delivered through an Encounter
+Binding. Source numeric states do not cross this boundary.
+
+**Relay Definition**:
+A typed, versioned sequence of EventAI steps imported as one validated catalogue. This is Module
+gameplay data, not a Gateway Relay.
+
+**Relay Run**:
+A durable invocation of one Relay Definition. It pins its catalogue and definition versions,
+participants, next step, due time, and saved random state.
+
 **Bounded Map Slice**:
 A named rectangular or circular part of one map, with the anchor used for terrain and navigation
 selection. The anchor is a real ground point on the client heightmap inside the slice, not a WMO
@@ -258,6 +282,23 @@ _Avoid_: pending action, queued effect, side effect
 The bounded record of a failed Invocation: the Runtime Script, the event, the failure kind
 (syntax, runtime or fuel), and a truncated message. The only thing a failed Invocation produces.
 _Avoid_: error log, stack trace
+
+**Lethal Damage Floor**:
+Combat-owned protection that reduces a creature's final lethal damage so it remains at one health.
+It is applied after mitigation and absorbs, persists across Engagements, and is cleared by its
+definition revision or creature lifetime.
+
+**Forced Death**:
+An authored request that bypasses the Lethal Damage Floor and enters the canonical creature-death
+operation.
+
+**Movement Intent**:
+Durable authored movement selected by EventAI. The creature behavior cycle consumes it, and the
+creature-leg writer remains the only position writer.
+
+**Patrol Pause**:
+The durable pause on an active patrol. It keeps the current waypoint cursor so resuming continues
+the same route.
 
 ### Auctions
 

@@ -90,6 +90,8 @@ export SLICE=0
 { [ "$MAP" != 0 ] || [ -n "${BOX:-}" ]; } && export SLICE=1
 # shellcheck source=importer/scripts/import-manifest.sh
 source importer/scripts/import-manifest.sh   # FLOOR_* assertion minimums — see that file's header
+# shellcheck source=importer/scripts/classic-db.lock
+source importer/scripts/classic-db.lock
 
 PROFILE_FLAGS=()
 PROFILE_MAPS=""
@@ -110,6 +112,7 @@ fi
 
 DUMP="${DUMP:-.import/classic-db-full.sql}"
 DBC="${DBC:-../wowclient/Data}"
+EVENTAI_PROFILE="${EVENTAI_PROFILE:-cmangos-classic-z2815}"
 # [V] X0,X1,Y0,Y1 — full-Elwynn + full-Westfall + ALL of Redridge (Lakeshire, the natural Human L15-25
 # zone) + north-Duskwood spillover. Redridge sits entirely within the X band (-11400..-8000) and was
 # excluded ONLY by the old Y-floor -1600; dropping it to -3100 admits Lakeshire/Camp Everstill/Stonewatch
@@ -387,7 +390,8 @@ fi
 run_checked_step "world content for $WORLD_PROFILE into $DB" \
   "filter:|mapped|applied|error|abort|WARNING" 12 \
   ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
-  --dump "$DUMP" --dbc "$DBC" "${SCOPE_FLAGS[@]}" --apply || exit 1
+  --dump "$DUMP" --dbc "$DBC" "${SCOPE_FLAGS[@]}" \
+  --eventai-profile "$EVENTAI_PROFILE" --source-sha "$CLASSIC_DB_SHA" --apply || exit 1
 # Terrain heightmap ETL: --terrain honors --box (terrain.rs::slice_cell_range),
 # so this covers the SAME widened Elwynn+Westfall rectangle as the creature ETL above — continuous
 # ground-z across the zone border. --center stays the Northshire default (inside the box), which
@@ -616,108 +620,31 @@ verify_caster_spell_catalogue() {
     fail=1
   fi
 }
-# EVENTAI VERIFY BEGIN — extracted by import-manifest-smoke.sh.
-# The native values the Module accepts in game_creature_ai_event. Declared once and read by the
-# checks below, so the verifier has no second copy to drift from.
-# `cargo test -p lyracore-importer eventai_verifier` pins every set here against the importer's own
-# NATIVE_* constants: a value the importer emits that the verifier then calls unsupported is a
-# silent, import-time-only failure otherwise.
-# SUPPORTED NATIVE VALUES BEGIN
-EVENTAI_EVENT_TYPES='0|1|2|3|4|5|6'
-EVENTAI_ACTION_TYPES='0|1|2|3|4|5|6|7|8'
-EVENTAI_TARGET_POLICIES='0|1|2|3|4|5|6|7|8|9|10'
-EVENTAI_REPEAT_POLICIES='0|1'
-EVENTAI_SOURCE_FLAGS_MASK=3
-EVENTAI_CAST_OPTIONS_MASK=31
-# SUPPORTED NATIVE VALUES END
-unresolved_references() { # <referenced-ids> <catalogue-ids> — how many referenced ids have no row
-  comm -23 \
-    <(printf '%s\n' "$1" | grep -E '^[0-9]+$' | sort -u) \
-    <(printf '%s\n' "$2" | grep -E '^[0-9]+$' | sort -u) | grep -c '^'
-}
-verify_eventai_catalogue() { # O(1) `spacetime sql` calls: six, whatever the rule count is. One pull
-      # per column set, then the per-rule grouping and the reference checks run locally. Column order
-      # below IS the awk field order, so keep the SELECT list and the field numbers in step.
-  local events kind count rule grouped duplicate=0 mismatch=0 missing=0 unsupported=0
-  local templates spawns spells texts summons referenced
-  events="$(q_table "SELECT source_rule_id, action_order, event_type, action_type, target_policy, repeat_policy, source_flags, cast_options, chance_pct, allowed_phase_mask, creature_entry, creature_guid, spell_id, action_param_1, action_param_2, action_param_3, event_param_1, event_param_2, event_param_3, event_param_4, event_param_5, event_param_6 FROM game_creature_ai_event")"
-  rule="$(printf '%s\n' "$events" | awk 'NF && $1 > 0 { rows++ } END { print rows + 0 }')"
-  if [ "$rule" -eq 0 ]; then
-    echo "  ..    EventAI: no supported source rules in this World Import Scope"
+# EVENTAI VERIFY BEGIN, extracted by import-manifest-smoke.sh.
+# The importer's Compatibility Manifest owns value and dependency approval before apply. This
+# post-import check only verifies the durable definition boundary that the Module reads.
+verify_eventai_catalogue() {
+  local definitions count malformed duplicate
+  definitions="$(q_table "SELECT id, creature_entry, creature_guid, definition_revision FROM game_creature_ai_definition")"
+  count="$(printf '%s\n' "$definitions" | awk 'NF && $1 > 0 { rows++ } END { print rows + 0 }')"
+  if [ "$count" -eq 0 ]; then
+    echo "  ..    EventAI: no native definitions in this World Import Scope"
     return 0
   fi
-  chk "EventAI source rule actions" 1 "$rule"
-  while read -r kind count; do
-    [ -n "$kind" ] || continue
-    case "|$EVENTAI_EVENT_TYPES|" in
-      *"|$kind|"*) chk "EventAI enabled event type $kind" 1 "$count" ;;
-      *) unsupported=$((unsupported + 1)) ;;
-    esac
-  done <<EOF
-$(printf '%s\n' "$events" | awk 'NF { rows[$3]++ } END { for (kind in rows) print kind, rows[kind] }' | sort -n)
-EOF
-  while read -r kind count; do
-    [ -n "$kind" ] || continue
-    case "|$EVENTAI_ACTION_TYPES|" in
-      *"|$kind|"*) chk "EventAI enabled action type $kind" 1 "$count" ;;
-      *) unsupported=$((unsupported + 1)) ;;
-    esac
-  done <<EOF
-$(printf '%s\n' "$events" | awk 'NF { rows[$4]++ } END { for (kind in rows) print kind, rows[kind] }' | sort -n)
-EOF
-  for kind in $(printf '%s\n' "$events" | awk 'NF { print $5 }' | sort -nu); do
-    case "|$EVENTAI_TARGET_POLICIES|" in *"|$kind|"*) ;; *) unsupported=$((unsupported + 1)) ;; esac
-  done
-  for kind in $(printf '%s\n' "$events" | awk 'NF { print $6 }' | sort -nu); do
-    case "|$EVENTAI_REPEAT_POLICIES|" in *"|$kind|"*) ;; *) unsupported=$((unsupported + 1)) ;; esac
-  done
-  for kind in $(printf '%s\n' "$events" | awk 'NF { print $7 }' | sort -nu); do
-    [ $((kind & ~EVENTAI_SOURCE_FLAGS_MASK)) -eq 0 ] || unsupported=$((unsupported + 1))
-  done
-  for kind in $(printf '%s\n' "$events" | awk 'NF { print $8 }' | sort -nu); do
-    [ $((kind & ~EVENTAI_CAST_OPTIONS_MASK)) -eq 0 ] || unsupported=$((unsupported + 1))
-  done
-  templates="$(q_table "SELECT entry FROM game_creature_template")"
-  spawns="$(q_table "SELECT guid FROM game_creature_spawn")"
-  spells="$(q_table "SELECT spell_id FROM game_spell")"
-  texts="$(q_table "SELECT id FROM game_creature_ai_broadcast_text")"
-  summons="$(q_table "SELECT id FROM game_creature_ai_summon")"
-  referenced="$(printf '%s\n' "$events" | awk 'NF && $11 > 0 { print $11 }')"
-  [ "$(unresolved_references "$referenced" "$templates")" -eq 0 ] || missing=1
-  referenced="$(printf '%s\n' "$events" | awk 'NF && $12 > 0 { print $12 }')"
-  [ "$(unresolved_references "$referenced" "$spawns")" -eq 0 ] || missing=1
-  referenced="$(printf '%s\n' "$events" | awk 'NF && $13 > 0 { print $13 }')"
-  [ "$(unresolved_references "$referenced" "$spells")" -eq 0 ] || missing=1
-  referenced="$(printf '%s\n' "$events" | awk 'NF && $4 == 0 { for (i = 14; i <= 16; i++) if ($i > 0) print $i }')"
-  [ "$(unresolved_references "$referenced" "$texts")" -eq 0 ] || missing=1
-  referenced="$(printf '%s\n' "$events" | awk 'NF && $4 == 7 && $14 > 0 { print $14 }')"
-  [ "$(unresolved_references "$referenced" "$templates")" -eq 0 ] || missing=1
-  referenced="$(printf '%s\n' "$events" | awk 'NF && $4 == 7 && $16 > 0 { print $16 }')"
-  [ "$(unresolved_references "$referenced" "$summons")" -eq 0 ] || missing=1
-  # Every row of one source rule repeats that rule's event and grouping columns; two rows disagreeing
-  # means the reload interleaved rules, and two rows sharing an action_order means one was lost.
-  grouped="$(printf '%s\n' "$events" | awk '
-    # event_type, repeat_policy, source_flags, chance_pct, allowed_phase_mask, creature_entry,
-    # creature_guid, event_param_1..6: every column that describes the RULE, not the action.
-    BEGIN { split("3 6 7 9 10 11 12 17 18 19 20 21 22", grouped_columns, " ") }
-    NF && $1 > 0 {
-      if (++orders[$1 SUBSEP $2] == 2) duplicate++
-      for (slot in grouped_columns) {
-        column = grouped_columns[slot]
-        key = $1 SUBSEP column
-        if (!(key in first)) first[key] = $column
-        else if (first[key] != $column && !(key in flagged)) { flagged[key] = 1; mismatch++ }
-      }
+  chk "EventAI native definitions" 1 "$count"
+  malformed="$(printf '%s\n' "$definitions" | awk 'NF && (($2 == 0) == ($3 == 0)) { rows++ } END { print rows + 0 }')"
+  duplicate="$(printf '%s\n' "$definitions" | awk '
+    NF {
+      subject = ($2 > 0 ? "entry:" $2 : "guid:" $3)
+      if (++seen[subject] == 2) rows++
     }
-    END { print duplicate + 0, mismatch + 0 }')"
-  duplicate="${grouped%% *}"
-  mismatch="${grouped##* }"
+    END { print rows + 0 }')"
   sql_check_abort
-  if [ "$duplicate" -ne 0 ] || [ "$mismatch" -ne 0 ] || [ "$missing" -ne 0 ] || [ "$unsupported" -ne 0 ]; then
-    echo "  FAIL  EventAI linkage: duplicate-action-orders=$duplicate metadata-mismatches=$mismatch missing-references=$missing unsupported-native-values=$unsupported"
+  if [ "$malformed" -ne 0 ] || [ "$duplicate" -ne 0 ]; then
+    echo "  FAIL  EventAI definitions: malformed-subjects=$malformed duplicate-subjects=$duplicate"
     fail=1
   else
-    echo "  ok    EventAI enabled types, grouping, subjects, spells, texts, and summon locations resolve"
+    echo "  ok    EventAI native definitions have unique entry or guid subjects"
   fi
 }
 # EVENTAI VERIFY END

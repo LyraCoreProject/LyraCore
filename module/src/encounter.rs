@@ -20,8 +20,8 @@
 //!    compile-time-const `GAME_HOOKS_ON_HP_THRESHOLD.is_empty()`, so a tree with no registered
 //!    consumer pays one predictable branch per damage event and nothing else.
 //! 3. **Primitives** — thin package-callable choreography verbs: [`open_door`], [`spawn_wave`]
-//!    (with despawn-on-reset bookkeeping via `game_encounter_spawn`), [`equip_swap`] (module-side
-//!    virtual-item rows; client rendering is `[V]`, see the fn doc), [`move_to_point`] (the
+//!    (with despawn-on-reset bookkeeping via `game_encounter_spawn`), [`equip_swap`] (durable
+//!    virtual-item display projection), [`move_to_point`] (the
 //!    existing creature move-event emission pattern, used directly — work-item 181's shared leg
 //!    chokepoint is NOT built yet; fold this in when it lands), and [`encounter_reset`].
 //!
@@ -34,10 +34,181 @@ use spacetimedb::{table, ReducerContext, Table};
 
 use lyracore_shared::{constants, spatial};
 
+use crate::game_item_template;
+
 use crate::{
     game_creature_spawn, game_creature_spline, game_creature_template, game_gameobject,
-    game_gameobject_template, game_world_entity,
+    game_gameobject_template, game_instance, game_world_entity,
 };
+
+/// Package-owned encounter selected by the EventAI import boundary.
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EncounterBinding {
+    BlackfathomDeepsKelris,
+    BlackrockDepthsTombOfSeven,
+    DireMaulAlzzin,
+    RazorfenKraulWardKeepers,
+    ShadowfangKeepRethilgore,
+    ShadowfangKeepFenrus,
+    ShadowfangKeepNandos,
+    SunkenTempleAvatar,
+    WailingCavernsAnacondra,
+    WailingCavernsCobrahn,
+    WailingCavernsPythas,
+    WailingCavernsSerpentis,
+    WailingCavernsMutanus,
+    ZulGurubOhgan,
+}
+
+pub(crate) type EncounterPackageHandler =
+    fn(&ReducerContext, u64, EncounterSignal) -> Result<(), String>;
+
+impl EncounterBinding {
+    pub const ALL: [Self; 14] = [
+        Self::BlackfathomDeepsKelris,
+        Self::BlackrockDepthsTombOfSeven,
+        Self::DireMaulAlzzin,
+        Self::RazorfenKraulWardKeepers,
+        Self::ShadowfangKeepRethilgore,
+        Self::ShadowfangKeepFenrus,
+        Self::ShadowfangKeepNandos,
+        Self::SunkenTempleAvatar,
+        Self::WailingCavernsAnacondra,
+        Self::WailingCavernsCobrahn,
+        Self::WailingCavernsPythas,
+        Self::WailingCavernsSerpentis,
+        Self::WailingCavernsMutanus,
+        Self::ZulGurubOhgan,
+    ];
+
+    pub fn map_id(self) -> u32 {
+        match self {
+            Self::BlackfathomDeepsKelris => 48,
+            Self::BlackrockDepthsTombOfSeven => 230,
+            Self::DireMaulAlzzin => 429,
+            Self::RazorfenKraulWardKeepers => 47,
+            Self::ShadowfangKeepRethilgore
+            | Self::ShadowfangKeepFenrus
+            | Self::ShadowfangKeepNandos => 33,
+            Self::SunkenTempleAvatar => 109,
+            Self::WailingCavernsAnacondra
+            | Self::WailingCavernsCobrahn
+            | Self::WailingCavernsPythas
+            | Self::WailingCavernsSerpentis
+            | Self::WailingCavernsMutanus => 43,
+            Self::ZulGurubOhgan => 309,
+        }
+    }
+
+    pub fn encounter_id(self) -> u32 {
+        match self {
+            Self::BlackfathomDeepsKelris => 1,
+            Self::BlackrockDepthsTombOfSeven => 4,
+            Self::DireMaulAlzzin => 0,
+            Self::RazorfenKraulWardKeepers => 1,
+            Self::ShadowfangKeepRethilgore => 2,
+            Self::ShadowfangKeepFenrus => 3,
+            Self::ShadowfangKeepNandos => 4,
+            Self::SunkenTempleAvatar => 4,
+            Self::WailingCavernsAnacondra => 0,
+            Self::WailingCavernsCobrahn => 1,
+            Self::WailingCavernsPythas => 2,
+            Self::WailingCavernsSerpentis => 3,
+            Self::WailingCavernsMutanus => 5,
+            Self::ZulGurubOhgan => 5,
+        }
+    }
+}
+
+/// Named notification delivered to the encounter package that owns [`EncounterBinding`].
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EncounterSignal {
+    Begin,
+    Fail,
+    Complete,
+    BreakAlzzinCrumbleWall,
+    InterruptAvatarSuppression,
+    SendMandokirDownstairs,
+}
+
+/// Route one EventAI notification through encounter authority. The binding checks both package
+/// ownership and map scope before any state is changed.
+pub(crate) fn notify_from_eventai(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    binding: EncounterBinding,
+    signal: EncounterSignal,
+) -> Result<(), String> {
+    let source = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(source_guid)
+        .ok_or_else(|| format!("encounter notification source {source_guid} is missing"))?;
+    if source.map_id != binding.map_id() {
+        return Err(format!(
+            "encounter binding {binding:?} belongs to map {}, not source map {}",
+            binding.map_id(),
+            source.map_id
+        ));
+    }
+    if source.instance_id == 0 {
+        return Err(format!(
+            "encounter binding {binding:?} needs an instance-scoped source"
+        ));
+    }
+    let instance = ctx
+        .db
+        .game_instance()
+        .instance_id()
+        .find(source.instance_id)
+        .ok_or_else(|| {
+            format!(
+                "encounter source instance {} is missing",
+                source.instance_id
+            )
+        })?;
+    if instance.map_id != source.map_id {
+        return Err(format!(
+            "encounter source map {} does not match instance {} map {}",
+            source.map_id, source.instance_id, instance.map_id
+        ));
+    }
+    let handler = package_handler_for(binding, signal, crate::GAME_ENCOUNTER_PACKAGES)?;
+    handler(ctx, source.instance_id, signal)
+}
+
+fn package_handler_for(
+    binding: EncounterBinding,
+    signal: EncounterSignal,
+    installed: &[(EncounterBinding, EncounterPackageHandler)],
+) -> Result<EncounterPackageHandler, String> {
+    let mut handlers = installed
+        .iter()
+        .filter(|(installed, _)| *installed == binding)
+        .map(|(_, handler)| *handler);
+    let handler = handlers.next().ok_or_else(|| {
+        format!("encounter binding {binding:?} has no installed package authority for {signal:?}")
+    })?;
+    if handlers.next().is_some() {
+        return Err(format!(
+            "encounter binding {binding:?} has more than one installed package authority"
+        ));
+    }
+    Ok(handler)
+}
+
+#[cfg(test)]
+fn encounter_state_for_signal(signal: EncounterSignal) -> Option<u8> {
+    match signal {
+        EncounterSignal::Begin => Some(ENCOUNTER_IN_PROGRESS),
+        EncounterSignal::Fail => Some(ENCOUNTER_FAILED),
+        EncounterSignal::Complete => Some(ENCOUNTER_DONE),
+        EncounterSignal::BreakAlzzinCrumbleWall
+        | EncounterSignal::InterruptAvatarSuppression
+        | EncounterSignal::SendMandokirDownstairs => None,
+    }
+}
 
 // ===========================================================================================
 //  Encounter state machine values (mangos EncounterState analogue)
@@ -107,13 +278,11 @@ pub struct EncounterSpawn {
     pub guid: u64,
 }
 
-/// Module-side virtual-item slots for a creature (Mr. Smite's weapon swaps): the durable source of
-/// truth [`equip_swap`] writes. `[V]` CLIENT RENDERING IS NOT WIRED YET — the 5875 client shows
-/// these via `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY` partial-VALUES, which must route through the
-/// gateway's `dirty_reset` path (danger-zones §1.3 — a partial VALUES that re-sends
-/// OBJECT_FIELD_TYPE crashes the client; design doc gap #11). When that relay lands it reads this
-/// row. Swept per instance ([`sweep_encounter_state`]) and per tracked despawn. [server]
-#[table(accessor = game_encounter_equip, index(accessor = by_instance, btree(columns = [instance_id])))]
+/// Client-visible virtual-item display slots for a creature. [`equip_swap`] resolves authored item
+/// entries through `game_item_template` before writing this projection. The gateway relays the three
+/// display fields through its crash-safe partial VALUES path and replays them after a peer CREATE.
+/// Swept per instance ([`sweep_encounter_state`]) and per tracked despawn. [entity]
+#[table(accessor = game_encounter_equip, public, index(accessor = by_instance, btree(columns = [instance_id])))]
 pub struct EncounterEquip {
     #[primary_key]
     pub creature_guid: u64,
@@ -514,6 +683,7 @@ pub fn spawn_wave(
             despawn_at: crate::creatures::timer_never(ctx), // not armed until this add actually dies
             movement_type: crate::creatures::MOVEMENT_IDLE, // holds its post until aggro
             respawn_secs: u32::MAX,                         // "never" — see the fn doc
+            life_seq: 0,
         };
         let entity =
             crate::creatures::build_creature_entity(&spawn, &tmpl, ctx.random(), instance_id);
@@ -530,12 +700,10 @@ pub fn spawn_wave(
     guids
 }
 
-/// Write a creature's virtual-item slots (Mr. Smite: sword+board → two-hander → dual maces) —
-/// module-side ONLY today: the durable `game_encounter_equip` row is the source of truth; `[V]`
-/// the client-visible `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY` partial-VALUES relay is NOT wired (it must
-/// go through the gateway `dirty_reset` path, danger-zones §1.3 — flagged in the work item; the
-/// entity-row columns it will read from require a `world.rs` edit owned elsewhere this wave).
-/// Upserts; errs for a missing/player guid.
+/// Write a creature's virtual-item slots (Mr. Smite: sword+board → two-hander → dual maces).
+/// Authored values are item entries; the durable row carries the corresponding display ids expected
+/// by `UNIT_VIRTUAL_ITEM_SLOT_DISPLAY`. Zero unequips a slot. Upserts; errs for a missing creature
+/// or item template so a relay never reports success without an observable projection.
 pub fn equip_swap(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -548,6 +716,18 @@ pub fn equip_swap(
     if e.is_player() {
         return Err("equip_swap targets creatures only".to_string());
     }
+    let display = |entry: u32| -> Result<u32, String> {
+        if entry == 0 {
+            return Ok(0);
+        }
+        ctx.db
+            .game_item_template()
+            .entry()
+            .find(entry)
+            .map(|item| item.display_id)
+            .ok_or_else(|| format!("virtual equipment item {entry} is missing"))
+    };
+    let (main_hand, off_hand, ranged) = (display(main_hand)?, display(off_hand)?, display(ranged)?);
     let t = ctx.db.game_encounter_equip();
     match t.creature_guid().find(creature_guid) {
         Some(mut row) => {
@@ -751,6 +931,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_binding_has_exactly_one_installed_package_authority() {
+        let mut from_enum: Vec<String> = EncounterBinding::ALL
+            .iter()
+            .map(|binding| format!("{binding:?}"))
+            .collect();
+        from_enum.sort();
+        assert_eq!(crate::GAME_ENCOUNTER_PACKAGE_BINDING_NAMES, from_enum);
+        assert_eq!(
+            crate::GAME_ENCOUNTER_PACKAGE_BINDING_NAMES,
+            [
+                "BlackfathomDeepsKelris",
+                "BlackrockDepthsTombOfSeven",
+                "DireMaulAlzzin",
+                "RazorfenKraulWardKeepers",
+                "ShadowfangKeepFenrus",
+                "ShadowfangKeepNandos",
+                "ShadowfangKeepRethilgore",
+                "SunkenTempleAvatar",
+                "WailingCavernsAnacondra",
+                "WailingCavernsCobrahn",
+                "WailingCavernsMutanus",
+                "WailingCavernsPythas",
+                "WailingCavernsSerpentis",
+                "ZulGurubOhgan",
+            ]
+        );
+    }
+
+    #[test]
+    fn package_lookup_refuses_missing_and_duplicate_authority() {
+        fn handler(
+            _ctx: &ReducerContext,
+            _instance_id: u64,
+            _signal: EncounterSignal,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        let binding = EncounterBinding::BlackfathomDeepsKelris;
+        let missing = package_handler_for(binding, EncounterSignal::Complete, &[])
+            .err()
+            .expect("missing authority must refuse");
+        assert!(missing.contains("no installed package authority"));
+
+        let duplicate = [(binding, handler as EncounterPackageHandler); 2];
+        let duplicate = package_handler_for(binding, EncounterSignal::Complete, &duplicate)
+            .err()
+            .expect("duplicate authority must refuse");
+        assert!(duplicate.contains("more than one installed package authority"));
+    }
+
+    #[test]
     fn crossing_fires_each_watch_once_high_to_low_and_never_refires_after_heal_redrop() {
         // Smite's 66/33 pattern. First hit to 60%: 66 fires, 33 doesn't.
         let watches = [66u8, 33u8];
@@ -819,6 +1051,15 @@ mod tests {
         // The virgin sentinel strictly exceeds any pct a watch may hold (1..=99) AND 100,
         // so `w < HP_FIRED_NONE` is true for every legal watch — the first crossing always fires.
         const { assert!(HP_FIRED_NONE > 100) };
+    }
+
+    #[test]
+    fn named_source_states_translate_to_the_internal_encounter_contract() {
+        assert_eq!(encounter_state_for_signal(EncounterSignal::Fail), Some(3));
+        assert_eq!(
+            encounter_state_for_signal(EncounterSignal::Complete),
+            Some(2)
+        );
     }
 
     #[test]

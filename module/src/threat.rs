@@ -68,6 +68,23 @@ pub struct ThreatEntry {
     pub threat: i64,
 }
 
+/// Scale one existing source row on a creature's threat table. EventAI uses this operation instead
+/// of editing `game_threat` itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScaleSelectedThreat {
+    pub creature_guid: u64,
+    pub source_guid: u64,
+    pub percent: i32,
+}
+
+/// Scale every existing source row on a creature's threat table. EventAI uses this operation
+/// instead of editing `game_threat` itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScaleAllThreat {
+    pub creature_guid: u64,
+    pub percent: i32,
+}
+
 // ===========================================================================================
 //  Tuning — threat modifiers as PERMILLE (×1000) so the fractional multipliers are exact integer math
 //  (mirrors the rank HP/damage multipliers in creatures/ and combat/).
@@ -111,6 +128,15 @@ pub fn threat_after_reduction(current: i64, amount: i64) -> i64 {
         return current;
     }
     (current - amount).max(0)
+}
+
+/// Scale a nonnegative threat value by `100 + percent`, rounded down to the next whole threat
+/// point. The wide intermediate makes the result stable at the `i64` boundary. A `-100` percent
+/// scale returns zero; callers retain the row so a later source action can observe it.
+pub fn threat_after_percent_scale(current: i64, percent: i32) -> i64 {
+    let multiplier = i64::from(percent).saturating_add(100).max(0);
+    let scaled = i128::from(current.max(0)) * i128::from(multiplier) / 100;
+    scaled.min(i128::from(i64::MAX)) as i64
 }
 
 // ===========================================================================================
@@ -167,6 +193,39 @@ pub fn add_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: u64, am
             source_guid,
             threat: amount,
         });
+    }
+}
+
+/// Apply one percent scale to `operation.source_guid`'s existing threat row. A source absent from
+/// the table stays absent. A zero result remains an entry, matching a percent change rather than a
+/// threat clear.
+pub fn scale_selected_threat(ctx: &ReducerContext, operation: ScaleSelectedThreat) {
+    let threats = ctx.db.game_threat();
+    if let Some(mut row) = threats
+        .by_creature()
+        .filter(&operation.creature_guid)
+        .find(|row| row.source_guid == operation.source_guid)
+    {
+        row.threat = threat_after_percent_scale(row.threat, operation.percent);
+        threats.id().update(row);
+    }
+}
+
+/// Apply one percent scale to every existing threat row on `operation.creature_guid`. Rows stay in
+/// place when they reach zero, and each row is collected before an update so the table is never
+/// changed while it is read.
+pub fn scale_all_threat(ctx: &ReducerContext, operation: ScaleAllThreat) {
+    let threats = ctx.db.game_threat();
+    let rows: Vec<u64> = threats
+        .by_creature()
+        .filter(&operation.creature_guid)
+        .map(|row| row.id)
+        .collect();
+    for id in rows {
+        if let Some(mut row) = threats.id().find(id) {
+            row.threat = threat_after_percent_scale(row.threat, operation.percent);
+            threats.id().update(row);
+        }
     }
 }
 
@@ -447,5 +506,13 @@ mod tests {
         assert_eq!(threat_after_reduction(100, -10), 100);
         // Monotonic: a bigger Feint removes at least as much.
         assert!(threat_after_reduction(1000, 100) >= threat_after_reduction(1000, 200));
+    }
+
+    #[test]
+    fn percent_scales_use_fixed_point_rounding_and_keep_zero() {
+        assert_eq!(threat_after_percent_scale(5, 50), 7);
+        assert_eq!(threat_after_percent_scale(5, -50), 2);
+        assert_eq!(threat_after_percent_scale(5, -100), 0);
+        assert_eq!(threat_after_percent_scale(i64::MAX, 100), i64::MAX);
     }
 }

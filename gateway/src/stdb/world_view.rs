@@ -499,6 +499,28 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         entity_vanished(v, row)
     });
 
+    // ---- game_encounter_equip ---------------------------------------------------------------
+    // Creature virtual-item displays. The durable row feeds a late observer's peer CREATE path;
+    // these callbacks keep already-visible creatures live without re-creating the object.
+    wire_insert(
+        db.game_encounter_equip(),
+        "game_encounter_equip.insert",
+        &view,
+        move |v, row| encounter_equip_changed(v, shard, row, false),
+    );
+    wire_update(
+        db.game_encounter_equip(),
+        "game_encounter_equip.update",
+        &view,
+        move |v, _old, row| encounter_equip_changed(v, shard, row, false),
+    );
+    wire_delete(
+        db.game_encounter_equip(),
+        "game_encounter_equip.delete",
+        &view,
+        move |v, row| encounter_equip_changed(v, shard, row, true),
+    );
+
     // ---- game_gameobject -------------------------------------------------------------------
     wire_insert(db.game_gameobject(), "game_gameobject.insert", &view, move |v, row| {
         gameobject_appeared(v, shard, row)
@@ -912,6 +934,35 @@ fn entity_vanished(view: &WorldView, row: &WorldEntity) {
         .unwrap_or_else(|| entity_key(row));
     for session in view.world_entity_recipients(row.guid, key) {
         destroy_job(view, session, row.guid, row.owner_guid);
+    }
+}
+
+fn encounter_equip_changed(view: &WorldView, shard: ShardId, row: &EncounterEquip, cleared: bool) {
+    let Some(coord) = view.shard(shard) else {
+        return;
+    };
+    let Some(entity) = coord
+        .0
+        .coord()
+        .conn
+        .db
+        .game_world_entity()
+        .guid()
+        .find(&row.creature_guid)
+    else {
+        return;
+    };
+    let key = entity_key(&entity);
+    let row = Arc::new(row.clone());
+    for session in view.world_entity_recipients(row.creature_guid, key) {
+        let Some(viewer) = view.viewer(session) else {
+            continue;
+        };
+        let row = row.clone();
+        let tx = viewer.tx.clone();
+        enqueue(&tx, move || {
+            super::subscriptions::encounter_equip_outbound(&viewer, &row, cleared)
+        });
     }
 }
 

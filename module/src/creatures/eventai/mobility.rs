@@ -4,7 +4,8 @@ use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuratio
 
 use super::engine::EventAiWorld;
 use super::{
-    ActionKind, ActionResult, EventAiUnit, EventContext, RuleAction, SummonLocation, TargetPolicy,
+    ActionResult, CreatureAiState, CreatureInstruction, CreatureReactState, EventAiUnit,
+    EventContext, InstructionTarget, SummonLocation,
 };
 use crate::{game_creature_ai_state, game_creature_template, game_world_entity};
 
@@ -27,26 +28,313 @@ pub struct CreatureAiSummonExpiry {
     pub lifetime_ms: u32,
     pub remaining_ms: u32,
     pub last_checked_ms: u64,
+    /// Which summon life holds `creature_guid`. A summon guid repeats, because the summon sequence
+    /// wraps, so the guid alone cannot tell two summon lives apart. This carries the FIRST
+    /// `scheduled_id` this summon was claimed with, which `auto_inc` never issues twice. It cannot
+    /// be `scheduled_id` itself: the lifetime check re-inserts this row, so that column names one
+    /// check rather than one life.
+    /// END-appended + defaulted (migration rule).
+    #[default(0u64)]
+    pub life_seq: u64,
+}
+
+/// The EventAI creature that created one temporary summon. Module only.
+#[table(accessor = game_creature_ai_summon_origin)]
+pub struct CreatureAiSummonOrigin {
+    #[primary_key]
+    #[unique]
+    pub creature_guid: u64,
+    pub summoner_guid: u64,
+}
+
+/// One authored delayed source despawn. Module only.
+#[table(
+    accessor = game_creature_ai_forced_despawn,
+    scheduled(fire_eventai_forced_despawn)
+)]
+pub struct CreatureAiForcedDespawn {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    #[unique]
+    pub creature_guid: u64,
 }
 
 pub(super) fn execute<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    action: &RuleAction,
+    instruction: &CreatureInstruction,
+    choice: u64,
 ) -> ActionResult {
-    match action.kind {
-        ActionKind::Summon => summon(world, context, action),
-        ActionKind::SetRangedPosture => {
-            let distance_yd = action.params[0] as f32;
-            let angle_rad = if action.params[0] == 0 {
+    match instruction {
+        CreatureInstruction::Summon(summon_instruction) => summon(
+            world,
+            context,
+            summon_instruction.creature_entry,
+            summon_instruction.summon_location_id,
+            summon_instruction.target,
+            choice,
+        ),
+        CreatureInstruction::SpawnAtActor(spawn) => spawn_at_actor(
+            world,
+            context,
+            spawn.creature_entry,
+            spawn.lifetime_ms,
+            spawn.target,
+            choice,
+        ),
+        CreatureInstruction::SetRangedPosture(posture) => {
+            let distance = posture.distance_yd as f32;
+            let angle_rad = if posture.distance_yd == 0 {
                 0.0
             } else {
-                (action.params[1] as i32 as f32).to_radians()
+                (posture.angle_degrees as f32).to_radians()
             };
-            world.set_eventai_ranged_posture(context.creature_guid, distance_yd, angle_rad);
+            world.set_eventai_ranged_posture(context.creature_guid, distance, angle_rad);
             ActionResult::Applied
         }
+        CreatureInstruction::Movement(operation) => {
+            applied(world.apply_eventai_movement(context.creature_guid, *operation))
+        }
+        CreatureInstruction::SetFacing(facing) => {
+            let operation = if facing.reset {
+                super::MovementOperation::ResetFacing
+            } else {
+                let Some(target_guid) =
+                    super::combat::unit_target(world, context, facing.target, None, choice)
+                else {
+                    return ActionResult::Refused;
+                };
+                super::MovementOperation::Face(target_guid)
+            };
+            applied(world.apply_eventai_movement(context.creature_guid, operation))
+        }
         _ => ActionResult::Unsupported,
+    }
+}
+
+fn spawn_at_actor<W: EventAiWorld>(
+    world: &mut W,
+    context: &EventContext,
+    creature_entry: u32,
+    lifetime_ms: u32,
+    target: InstructionTarget,
+    choice: u64,
+) -> ActionResult {
+    let Some(summoner) = world.eventai_unit(context.creature_guid) else {
+        return ActionResult::Refused;
+    };
+    if !world.eventai_summon_template_exists(creature_entry) {
+        return ActionResult::Refused;
+    }
+    let selected_target = super::combat::unit_target(world, context, target, None, choice);
+    if target != InstructionTarget::SelfActor && selected_target.is_none() {
+        return ActionResult::Refused;
+    }
+    let sequence = world.eventai_claim_summon_sequence(lifetime_ms);
+    let Some(guid) = summon_guid(creature_entry, sequence) else {
+        world.eventai_release_summon_sequence(sequence);
+        return ActionResult::Refused;
+    };
+    let location = SummonLocation {
+        x: summoner.x,
+        y: summoner.y,
+        z: summoner.z,
+        orientation: summoner.orientation,
+        lifetime_ms,
+    };
+    world.eventai_place_summon(sequence, guid, creature_entry, &location, &summoner);
+    if target != InstructionTarget::SelfActor {
+        if let Some(target_guid) = selected_target {
+            world.eventai_engage_summon(guid, target_guid);
+        }
+    }
+    ActionResult::Applied
+}
+
+fn default_state(ctx: &ReducerContext, creature_guid: u64) -> CreatureAiState {
+    CreatureAiState {
+        creature_guid,
+        phase: 0,
+        lifecycle_id: crate::creatures::current_life_seq(ctx, creature_guid),
+        engagement_id: 1,
+        ranged_distance: 0.0,
+        ranged_angle: 0.0,
+        ranged_posture_active: false,
+        definition_revision: 0,
+        active_object: false,
+        react_state: 2,
+    }
+}
+
+pub(crate) fn set_active_object(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    active: bool,
+) -> Result<(), String> {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .filter(|entity| !entity.is_player() && !entity.dead)
+        .ok_or_else(|| format!("active-object creature {creature_guid} is unavailable"))?;
+    let table = ctx.db.game_creature_ai_state();
+    let mut state = table
+        .creature_guid()
+        .find(creature_guid)
+        .unwrap_or_else(|| default_state(ctx, creature_guid));
+    state.active_object = active;
+    if table.creature_guid().find(creature_guid).is_some() {
+        table.creature_guid().update(state);
+    } else {
+        table.insert(state);
+    }
+    Ok(())
+}
+
+pub(crate) fn set_react_state(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    react: CreatureReactState,
+) -> Result<(), String> {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .filter(|entity| !entity.is_player() && !entity.dead)
+        .ok_or_else(|| format!("react-state creature {creature_guid} is unavailable"))?;
+    let table = ctx.db.game_creature_ai_state();
+    let mut state = table
+        .creature_guid()
+        .find(creature_guid)
+        .unwrap_or_else(|| default_state(ctx, creature_guid));
+    state.react_state = match react {
+        CreatureReactState::Passive => 0,
+        CreatureReactState::Defensive => 1,
+        CreatureReactState::Aggressive => 2,
+    };
+    if table.creature_guid().find(creature_guid).is_some() {
+        table.creature_guid().update(state);
+    } else {
+        table.insert(state);
+    }
+    Ok(())
+}
+
+pub(crate) fn react_state(ctx: &ReducerContext, creature_guid: u64) -> CreatureReactState {
+    match ctx
+        .db
+        .game_creature_ai_state()
+        .creature_guid()
+        .find(creature_guid)
+        .map(|state| state.react_state)
+        .unwrap_or(2)
+    {
+        0 => CreatureReactState::Passive,
+        1 => CreatureReactState::Defensive,
+        _ => CreatureReactState::Aggressive,
+    }
+}
+
+pub(crate) fn active_object(ctx: &ReducerContext, creature_guid: u64) -> bool {
+    ctx.db
+        .game_creature_ai_state()
+        .creature_guid()
+        .find(creature_guid)
+        .is_some_and(|state| state.active_object)
+}
+
+pub(crate) fn force_despawn(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    delay_ms: u32,
+) -> Result<(), String> {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .filter(|entity| !entity.is_player())
+        .ok_or_else(|| format!("forced-despawn creature {creature_guid} is unavailable"))?;
+    if delay_ms == 0 {
+        crate::creatures::despawn_creature_entity(ctx, creature_guid);
+        return Ok(());
+    }
+    ctx.db
+        .game_creature_ai_forced_despawn()
+        .creature_guid()
+        .delete(creature_guid);
+    ctx.db
+        .game_creature_ai_forced_despawn()
+        .insert(CreatureAiForcedDespawn {
+            scheduled_id: 0,
+            scheduled_at: schedule_after(ctx, delay_ms),
+            creature_guid,
+        });
+    Ok(())
+}
+
+pub(crate) fn drop_forced_despawn(ctx: &ReducerContext, creature_guid: u64) {
+    ctx.db
+        .game_creature_ai_forced_despawn()
+        .creature_guid()
+        .delete(creature_guid);
+}
+
+#[reducer]
+pub fn fire_eventai_forced_despawn(ctx: &ReducerContext, row: CreatureAiForcedDespawn) {
+    if ctx.sender() != ctx.database_identity() {
+        return;
+    }
+    if ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(row.creature_guid)
+        .is_some()
+    {
+        crate::creatures::despawn_creature_entity(ctx, row.creature_guid);
+    }
+}
+
+pub(crate) fn remove_guardians(
+    ctx: &ReducerContext,
+    summoner_guid: u64,
+    creature_entry: u32,
+) -> Result<(), String> {
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(summoner_guid)
+        .filter(|entity| !entity.is_player())
+        .ok_or_else(|| format!("guardian owner {summoner_guid} is unavailable"))?;
+    if let Some(pet) = crate::creatures::pet_of(ctx, summoner_guid) {
+        if creature_entry == 0 || pet.entry == creature_entry {
+            crate::creatures::despawn_pets(ctx, summoner_guid);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn mark_summon_origin_for_debug(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    summoner_guid: u64,
+) {
+    ctx.db
+        .game_creature_ai_summon_origin()
+        .insert(CreatureAiSummonOrigin {
+            creature_guid,
+            summoner_guid,
+        });
+}
+
+fn applied(applied: bool) -> ActionResult {
+    if applied {
+        ActionResult::Applied
+    } else {
+        ActionResult::Refused
     }
 }
 
@@ -72,20 +360,27 @@ pub(crate) fn drop_summon_expiry(ctx: &ReducerContext, creature_guid: u64) {
         .game_creature_ai_summon_expiry()
         .creature_guid()
         .delete(creature_guid);
+    ctx.db
+        .game_creature_ai_summon_origin()
+        .creature_guid()
+        .delete(creature_guid);
 }
 
 fn summon<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
-    action: &RuleAction,
+    creature_entry: u32,
+    summon_location_id: u32,
+    target: InstructionTarget,
+    choice: u64,
 ) -> ActionResult {
     let Some(summoner) = world.eventai_unit(context.creature_guid) else {
         return ActionResult::Refused;
     };
-    let Some(location) = world.eventai_summon_location(action.params[2]) else {
+    let Some(location) = world.eventai_summon_location(summon_location_id) else {
         return ActionResult::Refused;
     };
-    if !world.eventai_summon_template_exists(action.params[0]) {
+    if !world.eventai_summon_template_exists(creature_entry) {
         return ActionResult::Refused;
     }
     if ![location.x, location.y, location.z, location.orientation]
@@ -95,9 +390,12 @@ fn summon<W: EventAiWorld>(
         return ActionResult::Refused;
     }
 
-    let selected_target = super::combat::target(world, context, action);
+    let selected_target = super::combat::unit_target(world, context, target, None, choice);
+    if target != InstructionTarget::SelfActor && selected_target.is_none() {
+        return ActionResult::Refused;
+    }
     let sequence = world.eventai_claim_summon_sequence(location.lifetime_ms);
-    let Some(guid) = summon_guid(action.params[0], sequence) else {
+    let Some(guid) = summon_guid(creature_entry, sequence) else {
         world.eventai_release_summon_sequence(sequence);
         return ActionResult::Refused;
     };
@@ -105,9 +403,9 @@ fn summon<W: EventAiWorld>(
         world.eventai_release_summon_sequence(sequence);
         return ActionResult::Refused;
     }
-    world.eventai_place_summon(sequence, guid, action.params[0], &location, &summoner);
+    world.eventai_place_summon(sequence, guid, creature_entry, &location, &summoner);
 
-    if action.target != TargetPolicy::SelfActor {
+    if target != InstructionTarget::SelfActor {
         if let Some(target_guid) = selected_target {
             world.eventai_engage_summon(guid, target_guid);
         }
@@ -116,6 +414,16 @@ fn summon<W: EventAiWorld>(
 }
 
 /// Reserve the durable expiry slot whose id is the summon's sequence number.
+/// The life number of the summon holding `creature_guid`, or zero when no summon does. Reached
+/// through the unique guid index, so this is one probe rather than a scan.
+pub(crate) fn summon_life_seq(ctx: &ReducerContext, creature_guid: u64) -> u64 {
+    ctx.db
+        .game_creature_ai_summon_expiry()
+        .creature_guid()
+        .find(creature_guid)
+        .map_or(0, |expiry| expiry.life_seq)
+}
+
 pub(super) fn claim_summon_sequence(ctx: &ReducerContext, lifetime_ms: u32) -> u64 {
     ctx.db
         .game_creature_ai_summon_expiry()
@@ -126,6 +434,8 @@ pub(super) fn claim_summon_sequence(ctx: &ReducerContext, lifetime_ms: u32) -> u
             lifetime_ms,
             remaining_ms: lifetime_ms,
             last_checked_ms: timestamp_ms(ctx),
+            // `place_summon` stamps this with the id `auto_inc` assigns to this very row.
+            life_seq: 0,
         })
         .scheduled_id
 }
@@ -149,8 +459,17 @@ pub(super) fn place_summon(
     let expiry_table = ctx.db.game_creature_ai_summon_expiry();
     if let Some(mut expiry) = expiry_table.scheduled_id().find(sequence) {
         expiry.creature_guid = guid;
+        // The claim's own id, pinned before any lifetime check can re-insert the row and take a
+        // new one. This is the number that names this summon life for as long as it stands.
+        expiry.life_seq = sequence;
         expiry_table.scheduled_id().update(expiry);
     }
+    ctx.db
+        .game_creature_ai_summon_origin()
+        .insert(CreatureAiSummonOrigin {
+            creature_guid: guid,
+            summoner_guid: summoner.guid,
+        });
     let Some(template) = ctx.db.game_creature_template().entry().find(entry) else {
         return;
     };
@@ -167,6 +486,7 @@ pub(super) fn place_summon(
         despawn_at: crate::creatures::timer_never(ctx),
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: u32::MAX,
+        life_seq: 0,
     };
     let entity = crate::creatures::build_creature_entity(
         &spawn,
@@ -178,22 +498,76 @@ pub(super) fn place_summon(
 }
 
 pub(super) fn engage_summon(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
-    if crate::combat::apply_start_attack(ctx, creature_guid, target_guid).is_err() {
-        return;
+    crate::combat::arm_creature_engagement(ctx, creature_guid, target_guid, true);
+}
+
+pub(super) fn place_relay_summon(
+    ctx: &ReducerContext,
+    summoner_guid: u64,
+    entry: u32,
+    location: SummonLocation,
+    active: bool,
+    run_by_default: bool,
+) -> Result<u64, String> {
+    let summoner = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(summoner_guid)
+        .map(|entity| super::EventAiUnit {
+            guid: entity.guid,
+            entry: entity.entry,
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+            map_id: entity.map_id,
+            instance_id: entity.instance_id,
+            zone_id: entity.zone_id,
+            health: entity.health,
+            max_health: entity.max_health,
+            power: entity.power,
+            max_power: entity.max_power,
+            power_type: (entity.unit_bytes_0 >> 24) as u8,
+            level: entity.level,
+            faction_template: entity.faction_template,
+            dead: entity.dead,
+            is_player: entity.is_player(),
+            orientation: entity.orientation,
+            owner_guid: entity.owner_guid,
+        })
+        .filter(|unit| !unit.is_player && !unit.dead)
+        .ok_or_else(|| format!("relay summoner {summoner_guid} is unavailable"))?;
+    if ctx
+        .db
+        .game_creature_template()
+        .entry()
+        .find(entry)
+        .is_none()
+    {
+        return Err(format!("relay summon template {entry} is missing"));
     }
-    let entities = ctx.db.game_world_entity();
-    if let Some(mut creature) = entities.guid().find(creature_guid) {
-        creature.target_guid = target_guid;
-        entities.guid().update(creature);
+    if ![location.x, location.y, location.z, location.orientation]
+        .into_iter()
+        .all(f32::is_finite)
+    {
+        return Err("relay summon location must be finite".to_string());
     }
-    crate::hooks::fire_on_aggro(
-        ctx,
-        &crate::hooks::AggroPayload {
-            creature_guid,
-            target_guid,
-            assist: true,
-        },
-    );
+    let sequence = claim_summon_sequence(ctx, location.lifetime_ms);
+    let guid = summon_guid(entry, sequence)
+        .ok_or_else(|| "relay summon sequence is unavailable".to_string())?;
+    if ctx.db.game_world_entity().guid().find(guid).is_some() {
+        release_summon_sequence(ctx, sequence);
+        return Err(format!("relay summon guid {guid} is already live"));
+    }
+    place_summon(ctx, sequence, guid, entry, &location, &summoner);
+    super::edges::eventai_on_summoned(ctx, summoner_guid, guid, entry);
+    if active {
+        set_active_object(ctx, guid, true)?;
+    }
+    if run_by_default {
+        super::movement::apply_relay_walking(ctx, guid, super::RelayForcedMovement::Run)?;
+    }
+    Ok(guid)
 }
 
 fn summon_guid(entry: u32, scheduled_id: u64) -> Option<u64> {
@@ -275,6 +649,8 @@ pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpir
             lifetime_ms: expiry.lifetime_ms,
             remaining_ms,
             last_checked_ms: now_ms,
+            // Carried, not re-taken: the summon is the same life across its lifetime checks.
+            life_seq: expiry.life_seq,
         });
 }
 
@@ -285,6 +661,7 @@ fn despawn_temporary_summon(ctx: &ReducerContext, creature_guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_scan::code_of;
 
     #[test]
     fn summon_guids_reuse_the_eventai_band_without_corrupting_entry_bits() {
@@ -296,5 +673,16 @@ mod tests {
             SUMMON_LOW_BAND | 1
         );
         assert!(summon_guid(123, 0).is_none());
+    }
+
+    #[test]
+    fn guardian_removal_includes_spell_created_pets() {
+        let body = code_of(
+            include_str!("mobility.rs"),
+            "pub(crate) fn remove_guardians(",
+        );
+        assert!(body.contains("crate::creatures::pet_of(ctx, summoner_guid)"));
+        assert!(body.contains("crate::creatures::despawn_pets(ctx, summoner_guid)"));
+        assert!(!body.contains("game_creature_ai_summon_origin"));
     }
 }

@@ -15,6 +15,81 @@ use crate::helpers::entity_by_owner;
 use crate::spell::game_resurrect_request;
 use crate::{game_character, game_character_buyback, game_corpse, game_instance};
 
+/// Named source world-state variables admitted by authored runtime instructions. Module only.
+#[table(accessor = game_world_state_name)]
+pub struct WorldStateName {
+    #[primary_key]
+    pub variable_id: i32,
+}
+
+/// One durable map-or-instance world-state value. Module only.
+#[table(
+    accessor = game_world_state,
+    index(accessor = by_partition, btree(columns = [map_id, instance_id])),
+    index(accessor = by_instance, btree(columns = [instance_id]))
+)]
+pub struct WorldState {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub variable_id: i32,
+    pub value: i32,
+}
+
+pub(crate) fn set_relay_world_state(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    variable_id: i32,
+    value: i32,
+) -> Result<(), String> {
+    let source = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(source_guid)
+        .ok_or_else(|| format!("world-state source {source_guid} is unavailable"))?;
+    if ctx
+        .db
+        .game_world_state_name()
+        .variable_id()
+        .find(variable_id)
+        .is_none()
+    {
+        return Err(format!("world-state variable {variable_id} is not named"));
+    }
+    let states = ctx.db.game_world_state();
+    if let Some(mut row) = states
+        .by_partition()
+        .filter((source.map_id, source.instance_id))
+        .find(|row| row.variable_id == variable_id)
+    {
+        row.value = value;
+        states.id().update(row);
+    } else {
+        states.insert(WorldState {
+            id: 0,
+            map_id: source.map_id,
+            instance_id: source.instance_id,
+            variable_id,
+            value,
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instance_id: u64) {
+    let states = ctx.db.game_world_state();
+    for row in states
+        .by_instance()
+        .filter(&instance_id)
+        .collect::<Vec<_>>()
+    {
+        states.id().delete(row.id);
+    }
+}
+
 // ===========================================================================================
 //  Live in-world entity [entity] — public, field-sync source
 // ===========================================================================================

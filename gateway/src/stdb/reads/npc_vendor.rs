@@ -7,18 +7,49 @@ use spacetimedb_sdk::Table;
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
 
+fn active_gossip_menu_id(db: &RemoteTables, entity: &WorldEntity) -> Option<u32> {
+    let menu = db
+        .game_creature_gossip_menu_override()
+        .creature_guid()
+        .find(&entity.guid);
+    matching_gossip_menu_id(
+        entity.guid,
+        entity.map_id,
+        entity.instance_id,
+        menu.as_ref(),
+    )
+}
+
+fn matching_gossip_menu_id(
+    creature_guid: u64,
+    map_id: u32,
+    instance_id: u64,
+    menu: Option<&CreatureGossipMenuOverride>,
+) -> Option<u32> {
+    menu.filter(|menu| {
+        menu.creature_guid == creature_guid
+            && menu.map_id == map_id
+            && menu.instance_id == instance_id
+    })
+    .map(|menu| menu.menu_id)
+}
+
 impl Coordinator {
-    /// Look up the `title_text_id` to put in `SMSG_GOSSIP_MESSAGE` for the given NPC. Resolves:
-    /// entity.guid → entity.entry → `game_gossip_menu.entry` → `game_gossip_menu.text_id`.
-    /// Falls back to `GOSSIP_GREETING_TEXT_ID = 1` when no row is found (generic greeting).
+    /// Resolve the active title text for one NPC, with a per-creature menu override before the
+    /// entry-owned default menu.
     pub fn npc_gossip_text_id(&self, npc_guid: u64) -> u32 {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let entry = match db.game_world_entity().guid().find(&npc_guid) {
-            Some(e) => e.entry,
+        let entity = match db.game_world_entity().guid().find(&npc_guid) {
+            Some(entity) => entity,
             None => return crate::codec::GOSSIP_GREETING_TEXT_ID,
         };
-        match db.game_gossip_menu().entry().find(&entry) {
+        if let Some(menu_id) = active_gossip_menu_id(db, &entity) {
+            if let Some(menu) = db.game_gossip_menu_profile().menu_id().find(&menu_id) {
+                return menu.text_id;
+            }
+        }
+        match db.game_gossip_menu().entry().find(&entity.entry) {
             Some(row) => row.text_id,
             None => crate::codec::GOSSIP_GREETING_TEXT_ID,
         }
@@ -61,38 +92,59 @@ impl Coordinator {
         Some(view)
     }
 
-    /// The imported gossip menu options for the NPC at `guid`, sorted by
-    /// `option_index` (the render/select order) — RAW, unfiltered by condition; the dispatcher applies
-    /// [`crate::codec::option_condition_holds`] identically at HELLO and SELECT_OPTION. Empty when the
-    /// creature has no imported options (the gateway falls back to the flag-derived synthesis).
+    /// Return the active imported options for one NPC. A live per-creature override replaces the
+    /// entry-owned default options. The dispatcher applies conditions at both HELLO and SELECT.
     pub fn gossip_options(&self, npc_guid: u64) -> Result<Vec<crate::codec::GossipOptionView>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let Some(entry) = db
-            .game_world_entity()
-            .guid()
-            .find(&npc_guid)
-            .map(|e| e.entry)
-        else {
+        let Some(entity) = db.game_world_entity().guid().find(&npc_guid) else {
             return Ok(Vec::new());
         };
+        if let Some(menu_id) = active_gossip_menu_id(db, &entity) {
+            if db
+                .game_gossip_menu_profile()
+                .menu_id()
+                .find(&menu_id)
+                .is_some()
+            {
+                let mut rows: Vec<_> = db
+                    .game_gossip_menu_profile_option()
+                    .iter()
+                    .filter(|option| option.menu_id == menu_id)
+                    .collect();
+                rows.sort_by_key(|option| option.option_index);
+                return Ok(rows
+                    .into_iter()
+                    .map(|option| crate::codec::GossipOptionView {
+                        row_id: option.row_id,
+                        icon: option.icon,
+                        text: option.text,
+                        action: option.action,
+                        action_menu_id: option.action_menu_id,
+                        cond_type: option.cond_type,
+                        cond_value1: option.cond_value1,
+                        cond_value2: option.cond_value2,
+                    })
+                    .collect());
+            }
+        }
         let mut rows: Vec<_> = db
             .game_gossip_option()
             .iter()
-            .filter(|o| o.entry == entry)
+            .filter(|option| option.entry == entity.entry)
             .collect();
-        rows.sort_by_key(|o| o.option_index);
+        rows.sort_by_key(|option| option.option_index);
         Ok(rows
             .into_iter()
-            .map(|o| crate::codec::GossipOptionView {
-                row_id: o.row_id,
-                icon: o.icon,
-                text: o.text,
-                action: o.action,
-                action_menu_id: o.action_menu_id,
-                cond_type: o.cond_type,
-                cond_value1: o.cond_value1,
-                cond_value2: o.cond_value2,
+            .map(|option| crate::codec::GossipOptionView {
+                row_id: option.row_id,
+                icon: option.icon,
+                text: option.text,
+                action: option.action,
+                action_menu_id: option.action_menu_id,
+                cond_type: option.cond_type,
+                cond_value1: option.cond_value1,
+                cond_value2: option.cond_value2,
             })
             .collect())
     }
@@ -302,5 +354,25 @@ impl Coordinator {
                 profession: t.learn_skill_line != 0,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gossip_override_is_scoped_to_the_exact_creature_instance() {
+        let menu = CreatureGossipMenuOverride {
+            creature_guid: 41,
+            menu_id: 6687,
+            map_id: 43,
+            instance_id: 9,
+        };
+
+        assert_eq!(matching_gossip_menu_id(41, 43, 9, Some(&menu)), Some(6687));
+        assert_eq!(matching_gossip_menu_id(42, 43, 9, Some(&menu)), None);
+        assert_eq!(matching_gossip_menu_id(41, 43, 10, Some(&menu)), None);
+        assert_eq!(matching_gossip_menu_id(41, 44, 9, Some(&menu)), None);
     }
 }

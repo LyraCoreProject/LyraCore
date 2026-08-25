@@ -251,11 +251,18 @@ pub(crate) enum CastOrigin {
     /// A **Triggered Cast**: a fired Proc's own cast. Every hit it deals is a Triggered hit, and it
     /// lands only on units that are in the world and alive.
     Triggered,
+    /// A Triggered Cast authorized by a creature callback that can run after lethal damage. It may
+    /// apply self effects to the dead caster, but it still skips every other dead resolved unit.
+    DeadCreatureCallbackTriggered,
 }
 
 impl CastOrigin {
     fn is_triggered(self) -> bool {
-        matches!(self, Self::Triggered)
+        matches!(self, Self::Triggered | Self::DeadCreatureCallbackTriggered)
+    }
+
+    fn allows_dead_self(self) -> bool {
+        matches!(self, Self::DeadCreatureCallbackTriggered)
     }
 
     /// `(is_completion, client_initiated)` for the cast-GO row. A Triggered Cast is neither.
@@ -265,7 +272,7 @@ impl CastOrigin {
                 is_completion,
                 client_initiated,
             } => (is_completion, client_initiated),
-            Self::Triggered => (false, false),
+            Self::Triggered | Self::DeadCreatureCallbackTriggered => (false, false),
         }
     }
 }
@@ -275,6 +282,16 @@ impl CastOrigin {
 /// emits it when it fires. One derivation, read by both the cost charge and the effect loop.
 fn queues_next_swing(effects: &[SpellEffect]) -> bool {
     effects.iter().any(|e| e.kind == E_NEXT_SWING)
+}
+
+fn remember_hit_target(
+    ordered: &mut Vec<u64>,
+    seen: &mut std::collections::HashSet<u64>,
+    guid: u64,
+) {
+    if guid != 0 && seen.insert(guid) {
+        ordered.push(guid);
+    }
 }
 
 // One argument per axis the two callers differ on; the shared body is the loop itself.
@@ -303,6 +320,8 @@ fn run_spell_effects(
     origin: CastOrigin,
     dest: Option<(f32, f32, f32)>,
 ) {
+    let mut hit_targets = Vec::new();
+    let mut seen_hit_targets = std::collections::HashSet::new();
     let triggered = origin.is_triggered();
     let mut total_damage: u32 = 0;
     let mut total_healed: u32 = 0;
@@ -323,7 +342,7 @@ fn run_spell_effects(
             // A Triggered Cast lands only on the living: `select_targets` already resolves T_SELF to the
             // Carrier, so a self-buff proc still fires off a killing blow while the effect aimed at the
             // dead Counterparty simply does not run.
-            if triggered && !is_alive(ctx, t) {
+            if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {
                 continue;
             }
             // `target_guid` is the cast's EXPLICIT target (the enemy); `t` is this effect's RESOLVED target
@@ -341,6 +360,7 @@ fn run_spell_effects(
                 dest,
                 triggered,
             );
+            remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
             // Only hits on the PRIMARY target feed the single-target damage log (crit/resist/absorb too).
             if t == target_guid {
                 total_damage = total_damage.saturating_add(hit.dealt);
@@ -353,6 +373,15 @@ fn run_spell_effects(
     }
     if queues_next_swing(effects) {
         return; // parked on the next swing — the swing emits the GO row, not this cast
+    }
+    for target in hit_targets {
+        crate::creatures::eventai_on_spell_hit(
+            ctx,
+            caster_guid,
+            target,
+            hdr.spell_id,
+            u32::from(hdr.school_mask),
+        );
     }
     // SpellSchool INDEX from the header's school BITMASK — the one shared mask→index rule, so the
     // gateway stays dumb and no two damage-log rows disagree about what school a mask names.
@@ -392,6 +421,15 @@ fn is_alive(ctx: &ReducerContext, guid: u64) -> bool {
         .is_some_and(|e| !e.dead)
 }
 
+fn triggered_target_admitted(
+    origin: CastOrigin,
+    caster_guid: u64,
+    target_guid: u64,
+    target_alive: bool,
+) -> bool {
+    target_alive || (origin.allows_dead_self() && target_guid == caster_guid)
+}
+
 /// Start a **Triggered Cast** of `spell_id` from `caster_guid` at `target_guid` — what a fired Proc
 /// does. It runs the shared effect loop and emits its cast-GO row, and NOTHING else: no Gate sweep, no
 /// cost, no dismount, no stealth break, no reagents, no engage-on-hostile-cast arm, no global cooldown,
@@ -407,6 +445,24 @@ pub(crate) fn cast_triggered(
     spell_id: u32,
     level: u8,
     target_guid: u64,
+) -> Result<(), String> {
+    cast_triggered_with_origin(
+        ctx,
+        caster_guid,
+        spell_id,
+        level,
+        target_guid,
+        CastOrigin::Triggered,
+    )
+}
+
+fn cast_triggered_with_origin(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    level: u8,
+    target_guid: u64,
+    origin: CastOrigin,
 ) -> Result<(), String> {
     let hdr = ctx
         .db
@@ -430,10 +486,198 @@ pub(crate) fn cast_triggered(
         caster_guid,
         target_guid,
         level,
-        CastOrigin::Triggered,
+        origin,
         None,
     );
     Ok(())
+}
+
+/// The spell authority entry used by creature control planes. The request names whether spell
+/// authority should apply the normal cast gates or the Triggered Cast contract. It does not expose
+/// the source system's force flags.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CreatureSpellStartMode {
+    Direct,
+    Triggered,
+}
+
+/// Whether creature control authorizes this start only while the caster is alive, or from its
+/// a committed creature callback that can run after lethal damage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CreatureSpellCasterAdmission {
+    Living,
+    DeadCreatureCallback,
+}
+
+/// Durable authorization carried across a timed dead-creature callback cast without changing
+/// PendingCast.
+#[spacetimedb::table(accessor = game_creature_dead_callback_cast_admission)]
+pub struct CreatureDeadCallbackCastAdmission {
+    #[primary_key]
+    #[unique]
+    pub caster_guid: u64,
+    pub spell_id: u32,
+}
+
+fn dead_callback_cast_admitted(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> bool {
+    ctx.db
+        .game_creature_dead_callback_cast_admission()
+        .caster_guid()
+        .find(caster_guid)
+        .is_some_and(|admission| admission.spell_id == spell_id)
+}
+
+fn put_dead_callback_cast_admission(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) {
+    let admissions = ctx.db.game_creature_dead_callback_cast_admission();
+    let admission = CreatureDeadCallbackCastAdmission {
+        caster_guid,
+        spell_id,
+    };
+    if admissions.caster_guid().find(caster_guid).is_some() {
+        admissions.caster_guid().update(admission);
+    } else {
+        admissions.insert(admission);
+    }
+}
+
+pub(crate) fn clear_dead_callback_cast_admission(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+) {
+    let admissions = ctx.db.game_creature_dead_callback_cast_admission();
+    if admissions
+        .caster_guid()
+        .find(caster_guid)
+        .is_some_and(|admission| admission.spell_id == spell_id)
+    {
+        admissions.caster_guid().delete(caster_guid);
+    }
+}
+
+/// The target shape presented to spell authority. `None` keeps a targetless spell targetless, while
+/// `CasterArea` tells area selection to anchor on the caster without inventing a direct unit target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CreatureSpellTarget {
+    Unit(u64),
+    None,
+    CasterArea,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CreatureSpellStart {
+    pub caster_guid: u64,
+    pub caster_level: u8,
+    pub spell_id: u32,
+    pub mode: CreatureSpellStartMode,
+    pub target: CreatureSpellTarget,
+    pub interrupt_previous: bool,
+    pub admission: CreatureSpellCasterAdmission,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CreatureSpellRoute {
+    mode: CreatureSpellStartMode,
+    target_guid: u64,
+    interrupt_previous: bool,
+    admission: CreatureSpellCasterAdmission,
+}
+
+fn creature_spell_route(request: CreatureSpellStart) -> CreatureSpellRoute {
+    CreatureSpellRoute {
+        mode: request.mode,
+        target_guid: match request.target {
+            CreatureSpellTarget::Unit(guid) => guid,
+            CreatureSpellTarget::None | CreatureSpellTarget::CasterArea => 0,
+        },
+        interrupt_previous: request.interrupt_previous,
+        admission: request.admission,
+    }
+}
+
+/// Start one creature spell through the appropriate spell contract. Targetless and caster-area
+/// starts both pass the spell engine's no-explicit-target sentinel; the typed request keeps those
+/// cases distinct at the authority boundary.
+pub(crate) fn start_creature_spell(
+    ctx: &ReducerContext,
+    request: CreatureSpellStart,
+) -> Result<(), String> {
+    let route = creature_spell_route(request);
+    if route.interrupt_previous {
+        match route.mode {
+            CreatureSpellStartMode::Direct => {
+                let hdr = ctx
+                    .db
+                    .game_spell()
+                    .spell_id()
+                    .find(request.spell_id)
+                    .ok_or_else(|| format!("unknown spell {}", request.spell_id))?;
+                let caster = ctx
+                    .db
+                    .game_world_entity()
+                    .guid()
+                    .find(request.caster_guid)
+                    .ok_or_else(|| format!("unknown caster {}", request.caster_guid))?;
+                let mut effects: Vec<SpellEffect> = ctx
+                    .db
+                    .game_spell_effect()
+                    .by_spell()
+                    .filter(&request.spell_id)
+                    .collect();
+                effects.sort_by_key(|effect| (effect.kind != E_INTERRUPT, effect.effect_index));
+                check_cast_gates_with_admission(
+                    ctx,
+                    &caster,
+                    &hdr,
+                    &effects,
+                    route.target_guid,
+                    request.spell_id,
+                    request.caster_level,
+                    route.admission == CreatureSpellCasterAdmission::DeadCreatureCallback,
+                )?;
+            }
+            CreatureSpellStartMode::Triggered => {
+                if ctx
+                    .db
+                    .game_spell()
+                    .spell_id()
+                    .find(request.spell_id)
+                    .is_none()
+                {
+                    return Err(format!("unknown spell {}", request.spell_id));
+                }
+            }
+        }
+        crate::spell::break_channel(ctx, request.caster_guid);
+    }
+    match route.mode {
+        CreatureSpellStartMode::Direct => begin_cast_with_admission(
+            ctx,
+            request.caster_guid,
+            request.spell_id,
+            request.caster_level,
+            route.target_guid,
+            false,
+            None,
+            route.admission,
+        ),
+        CreatureSpellStartMode::Triggered => {
+            let origin = match route.admission {
+                CreatureSpellCasterAdmission::Living => CastOrigin::Triggered,
+                CreatureSpellCasterAdmission::DeadCreatureCallback => {
+                    CastOrigin::DeadCreatureCallbackTriggered
+                }
+            };
+            cast_triggered_with_origin(
+                ctx,
+                request.caster_guid,
+                request.spell_id,
+                request.caster_level,
+                route.target_guid,
+                origin,
+            )
+        }
+    }
 }
 
 /// The GATE SWEEP `resolve_cast_at` runs before spending anything — extracted (381) from what used to be
@@ -457,6 +701,35 @@ fn check_cast_gates(
     spell_id: u32,
     level: u8,
 ) -> Result<(), String> {
+    let allow_dead_creature = dead_callback_cast_admitted(ctx, caster.guid, spell_id);
+    check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
+    crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
+    check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_cast_gates_with_admission(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    hdr: &Spell,
+    effects: &[SpellEffect],
+    target_guid: u64,
+    spell_id: u32,
+    level: u8,
+    allow_dead_creature: bool,
+) -> Result<(), String> {
+    check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
+    crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
+    check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
+}
+
+fn check_cast_gate_prefix(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    effects: &[SpellEffect],
+    target_guid: u64,
+    allow_dead_creature: bool,
+) -> Result<(), String> {
     let caster_guid = caster.guid;
 
     // CC: an ACTION-blocked caster (stunned, polymorphed, OR feared) cannot cast. This is the chokepoint
@@ -468,10 +741,9 @@ fn check_cast_gates(
         return Err(format!("caster {caster_guid} cannot act (stun/poly/fear)"));
     }
 
-    // A DEAD caster cannot cast (mirrors the movement_update dead gate) — closes a dead-player-casting
-    // exploit where a corpse buffs itself / debuffs enemies during the death/corpse run. This is the
-    // shared chokepoint, so it covers every path (player, instant, delayed completion, creature cast).
-    if caster.dead {
+    // Only a committed creature callback that can run after lethal damage may start or finish a cast
+    // from its corpse. Player paths and ordinary creature casts keep the shared dead-caster refusal.
+    if !caster_life_allows(caster.is_player(), caster.dead, allow_dead_creature) {
         return Err(format!("caster {caster_guid} is dead"));
     }
 
@@ -481,10 +753,20 @@ fn check_cast_gates(
         crate::creatures::validate_tame(ctx, caster, target_guid)?;
     }
 
-    // LAND-MOUNT gate: a spell carrying `A_MOUNTED` needs a trained rider of the right line and rank,
-    // alive, out of combat, outdoors and not submerged. A no-op for every other spell. It belongs in
-    // this read-only sweep so a refused mount spends nothing — no item, no aura, no cooldown.
-    crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_cast_gate_suffix(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    hdr: &Spell,
+    effects: &[SpellEffect],
+    target_guid: u64,
+    spell_id: u32,
+    level: u8,
+) -> Result<(), String> {
+    let caster_guid = caster.guid;
 
     // Level gate: a CHARACTER cannot cast a rank above its level. Pairs with the trainer level-gate so a
     // higher rank is both UNBUYABLE and UNCASTABLE until you level up — the leveling spine. Keyed on the
@@ -814,6 +1096,10 @@ fn check_cast_gates(
     Ok(())
 }
 
+fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool {
+    !dead || (dead_callback && !is_player)
+}
+
 /// Resolve a SELF-cast (target == caster) — the thin wrapper preserving the original `resolve_cast`
 /// signature so `debug_force_cast` (debug.rs) compiles + behaves unchanged. Self effects ignore the
 /// target guid, so self-targeting them is a no-op.
@@ -854,6 +1140,29 @@ pub(crate) fn begin_cast(
     // completion (`fire_pending_cast`) can anchor the patch at the click. `None` for every normal cast.
     dest: Option<(f32, f32, f32)>,
 ) -> Result<(), String> {
+    begin_cast_with_admission(
+        ctx,
+        caster_guid,
+        spell_id,
+        level,
+        target_guid,
+        client_initiated,
+        dest,
+        CreatureSpellCasterAdmission::Living,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn begin_cast_with_admission(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    level: u8,
+    target_guid: u64,
+    client_initiated: bool,
+    dest: Option<(f32, f32, f32)>,
+    admission: CreatureSpellCasterAdmission,
+) -> Result<(), String> {
     let hdr = ctx
         .db
         .game_spell()
@@ -867,6 +1176,9 @@ pub(crate) fn begin_cast(
     // The per-tick missile triggers go straight through `resolve_cast_at` (NOT begin_cast), so a channel
     // never breaks itself. No-op without an active channel/cast (the common path).
     break_channel(ctx, caster_guid);
+    if admission == CreatureSpellCasterAdmission::DeadCreatureCallback {
+        put_dead_callback_cast_admission(ctx, caster_guid, spell_id);
+    }
 
     // A CHANNELED spell resolves IMMEDIATELY (it never schedules a cast-bar `PendingCast`) — the cast runs
     // the gates + cost ONCE up front, and its `A_PERIODIC_TRIGGER` self-aura then ticks the per-tick missile
@@ -893,7 +1205,7 @@ pub(crate) fn begin_cast(
     if !completed_channel && (cast_ms == 0 || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0) {
         // Instant / channel: resolves NOW (no pending cast bar), so it is NOT a completion — the gateway
         // sends the full instant START(0)+GO+COOLDOWN sequence.
-        return resolve_cast_at(
+        let result = resolve_cast_at(
             ctx,
             caster_guid,
             spell_id,
@@ -903,6 +1215,8 @@ pub(crate) fn begin_cast(
             client_initiated,
             dest,
         );
+        clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
+        return result;
     }
 
     let completion_ms = if completed_channel {
@@ -1035,5 +1349,122 @@ pub(crate) fn apply_spell_auras(
             level,
             points,
         );
+    }
+}
+
+#[cfg(test)]
+mod eventai_hit_tests {
+    use super::*;
+
+    fn effect(kind: u8) -> SpellEffect {
+        SpellEffect {
+            id: 1,
+            spell_id: 1,
+            effect_index: 0,
+            kind,
+            base_points: 0,
+            die_sides: 0,
+            per_level: 0.0,
+            period_ms: 0,
+            target: 0,
+            radius_yd: 0.0,
+            chain_targets: 0,
+            trigger_spell: 0,
+            effect_mechanic: 0,
+            p0: 0,
+            p0_kind: 0,
+            p1: 0,
+            script_id: 0,
+            enters_combat: false,
+        }
+    }
+
+    #[test]
+    fn resolved_unit_targets_are_unique_and_keep_first_seen_order() {
+        let mut ordered = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for guid in [20, 10, 20, 0, 30, 10] {
+            remember_hit_target(&mut ordered, &mut seen, guid);
+        }
+
+        assert_eq!(ordered, vec![20, 10, 30]);
+    }
+
+    #[test]
+    fn a_next_swing_effect_parks_instead_of_dispatching_at_queue_time() {
+        assert!(queues_next_swing(&[effect(E_NEXT_SWING)]));
+        assert!(!queues_next_swing(&[effect(E_DAMAGE)]));
+        assert!(!queues_next_swing(&[]));
+    }
+
+    #[test]
+    fn creature_spell_routes_keep_mode_target_shape_and_interrupt_intent() {
+        let direct = creature_spell_route(CreatureSpellStart {
+            caster_guid: 10,
+            caster_level: 5,
+            spell_id: 20,
+            mode: CreatureSpellStartMode::Direct,
+            target: CreatureSpellTarget::Unit(30),
+            interrupt_previous: true,
+            admission: CreatureSpellCasterAdmission::Living,
+        });
+        let triggered = creature_spell_route(CreatureSpellStart {
+            caster_guid: 10,
+            caster_level: 5,
+            spell_id: 20,
+            mode: CreatureSpellStartMode::Triggered,
+            target: CreatureSpellTarget::CasterArea,
+            interrupt_previous: false,
+            admission: CreatureSpellCasterAdmission::DeadCreatureCallback,
+        });
+
+        assert_eq!(
+            direct,
+            CreatureSpellRoute {
+                mode: CreatureSpellStartMode::Direct,
+                target_guid: 30,
+                interrupt_previous: true,
+                admission: CreatureSpellCasterAdmission::Living,
+            }
+        );
+        assert_eq!(
+            triggered,
+            CreatureSpellRoute {
+                mode: CreatureSpellStartMode::Triggered,
+                target_guid: 0,
+                interrupt_previous: false,
+                admission: CreatureSpellCasterAdmission::DeadCreatureCallback,
+            }
+        );
+    }
+
+    #[test]
+    fn only_a_dead_creature_callback_cast_can_apply_to_its_dead_caster() {
+        assert!(!triggered_target_admitted(
+            CastOrigin::Triggered,
+            10,
+            10,
+            false,
+        ));
+        assert!(triggered_target_admitted(
+            CastOrigin::DeadCreatureCallbackTriggered,
+            10,
+            10,
+            false,
+        ));
+        assert!(!triggered_target_admitted(
+            CastOrigin::DeadCreatureCallbackTriggered,
+            10,
+            20,
+            false,
+        ));
+    }
+
+    #[test]
+    fn dead_callback_admission_is_limited_to_dead_creatures() {
+        assert!(caster_life_allows(false, true, true));
+        assert!(!caster_life_allows(false, true, false));
+        assert!(!caster_life_allows(true, true, true));
+        assert!(caster_life_allows(true, false, false));
     }
 }

@@ -14,6 +14,9 @@ pub struct CreatureAiState {
     pub ranged_distance: f32,
     pub ranged_angle: f32,
     pub ranged_posture_active: bool,
+    pub definition_revision: u64,
+    pub active_object: bool,
+    pub react_state: u8,
 }
 
 impl __sdk::InModule for CreatureAiState {
@@ -31,6 +34,9 @@ pub struct CreatureAiStateCols {
     pub ranged_distance: __sdk::__query_builder::Col<CreatureAiState, f32>,
     pub ranged_angle: __sdk::__query_builder::Col<CreatureAiState, f32>,
     pub ranged_posture_active: __sdk::__query_builder::Col<CreatureAiState, bool>,
+    pub definition_revision: __sdk::__query_builder::Col<CreatureAiState, u64>,
+    pub active_object: __sdk::__query_builder::Col<CreatureAiState, bool>,
+    pub react_state: __sdk::__query_builder::Col<CreatureAiState, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureAiState {
@@ -47,6 +53,12 @@ impl __sdk::__query_builder::HasCols for CreatureAiState {
                 table_name,
                 "ranged_posture_active",
             ),
+            definition_revision: __sdk::__query_builder::Col::new(
+                table_name,
+                "definition_revision",
+            ),
+            active_object: __sdk::__query_builder::Col::new(table_name, "active_object"),
+            react_state: __sdk::__query_builder::Col::new(table_name, "react_state"),
         }
     }
 }

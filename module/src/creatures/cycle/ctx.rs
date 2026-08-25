@@ -20,10 +20,10 @@ use super::{
 use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
+use crate::creatures::eventai::movement::{AuthoredIdleMovement, AuthoredWalkingMode};
 use crate::creatures::eventai::{self, EventAiRequest};
 use crate::creatures::pet;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
-use crate::spell::game_pending_cast;
 use crate::{
     game_aura, game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
     game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
@@ -143,6 +143,7 @@ impl MotionSink for CtxWorld<'_> {
     }
     fn movement_suppressed(&self, guid: u64) -> bool {
         crate::spell::is_self_movement_suppressed(self.ctx, guid)
+            || eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.immobilized)
     }
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) {
         self.place(guid, at, Some(moved_ms), None);
@@ -176,20 +177,49 @@ impl IdleSink for CtxWorld<'_> {
             .iter()
             .filter_map(|guid| entities.guid().find(guid))
             .filter(|c| !c.is_player() && !c.dead)
-            .map(|c| IdleCreature {
-                guid: c.guid,
-                at: Point {
-                    x: c.x,
-                    y: c.y,
-                    z: c.z,
-                },
-                leg_ends_ms: c.leg_ends_ms,
-                wp_target: c.wp_target,
-                patrols: waypoints.by_creature().filter(&c.guid).next().is_some(),
+            .map(|c| {
+                let authored = eventai::movement::intent(self.ctx, c.guid);
+                let spawn_patrol = waypoints.by_creature().filter(&c.guid).next().is_some();
+                let patrols = authored.as_ref().map_or(spawn_patrol, |intent| {
+                    if !intent.idle_active {
+                        spawn_patrol
+                    } else {
+                        intent.idle == AuthoredIdleMovement::Patrol
+                    }
+                });
+                IdleCreature {
+                    guid: c.guid,
+                    at: Point {
+                        x: c.x,
+                        y: c.y,
+                        z: c.z,
+                    },
+                    leg_ends_ms: c.leg_ends_ms,
+                    wp_target: c.wp_target,
+                    patrols,
+                }
             })
             .collect()
     }
     fn route_of(&self, guid: u64) -> Vec<Waypoint> {
+        if let Some(intent) = eventai::movement::intent(self.ctx, guid) {
+            if intent.idle_active
+                && intent.idle == AuthoredIdleMovement::Patrol
+                && intent.path_id != 0
+            {
+                return eventai::movement::explicit_route(self.ctx, guid, intent.path_id)
+                    .into_iter()
+                    .map(|waypoint| Waypoint {
+                        id: u64::from(waypoint.point),
+                        at: Point {
+                            x: waypoint.x,
+                            y: waypoint.y,
+                            z: waypoint.z,
+                        },
+                    })
+                    .collect();
+            }
+        }
         self.ctx
             .db
             .game_creature_waypoint()
@@ -205,19 +235,102 @@ impl IdleSink for CtxWorld<'_> {
             })
             .collect()
     }
+    fn patrol_paused(&self, guid: u64) -> bool {
+        eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.patrol_paused)
+    }
+    fn idle_stationary(&self, guid: u64) -> bool {
+        eventai::movement::intent(self.ctx, guid).is_some_and(|intent| {
+            intent.idle_active && intent.idle == AuthoredIdleMovement::Stationary
+        })
+    }
+    fn returning_home(&self, guid: u64) -> bool {
+        eventai::movement::returning_home(self.ctx, guid)
+    }
+    fn follow_target_at(&self, guid: u64) -> Option<Point> {
+        let creature = self.ctx.db.game_world_entity().guid().find(guid)?;
+        let target_guid = eventai::movement::follow_target(self.ctx, guid)?;
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(target_guid)
+            .filter(|target| {
+                target.map_id == creature.map_id && target.instance_id == creature.instance_id
+            })
+            .map(|target| Point {
+                x: target.x,
+                y: target.y,
+                z: target.z,
+            })
+    }
+    fn pending_facing(&self, guid: u64) -> Option<f32> {
+        eventai::movement::facing(self.ctx, guid)
+    }
+    fn clear_pending_facing(&mut self, guid: u64) {
+        eventai::movement::clear_facing(self.ctx, guid);
+    }
+    fn idle_gait(&self, guid: u64, default: Gait) -> Gait {
+        match eventai::movement::intent(self.ctx, guid).map(|intent| intent.walking) {
+            Some(AuthoredWalkingMode::RunByDefault) if default == Gait::Walk => Gait::Run,
+            Some(AuthoredWalkingMode::WalkByDefault) if default == Gait::Run => Gait::Walk,
+            _ => default,
+        }
+    }
+    fn wander_radius(&self, guid: u64) -> f32 {
+        eventai::movement::intent(self.ctx, guid)
+            .filter(|intent| {
+                intent.idle_active
+                    && matches!(
+                        intent.idle,
+                        AuthoredIdleMovement::RandomAroundHomePosition
+                            | AuthoredIdleMovement::RandomAroundCurrentPosition
+                    )
+            })
+            .map_or(super::WANDER_RADIUS, |intent| intent.random_radius_yd)
+    }
     fn home_of(&self, guid: u64) -> Option<Home> {
+        if let Some(intent) = eventai::movement::intent(self.ctx, guid).filter(|intent| {
+            intent.idle_active && intent.idle == AuthoredIdleMovement::RandomAroundCurrentPosition
+        }) {
+            return Some(Home {
+                at: Point {
+                    x: intent.anchor_x,
+                    y: intent.anchor_y,
+                    z: intent.anchor_z,
+                },
+                wanders: true,
+            });
+        }
+        let authored_home = eventai::movement::intent(self.ctx, guid).is_some_and(|intent| {
+            intent.idle_active && intent.idle == AuthoredIdleMovement::RandomAroundHomePosition
+        });
         self.ctx
             .db
             .game_creature_spawn()
             .guid()
             .find(guid)
-            .map(|s| Home {
+            .map(|spawn| Home {
                 at: Point {
-                    x: s.x,
-                    y: s.y,
-                    z: s.z,
+                    x: spawn.x,
+                    y: spawn.y,
+                    z: spawn.z,
                 },
-                wanders: s.movement_type == crate::creatures::MOVEMENT_RANDOM,
+                wanders: authored_home || spawn.movement_type == crate::creatures::MOVEMENT_RANDOM,
+            })
+    }
+    fn return_home_of(&self, guid: u64) -> Option<Home> {
+        self.ctx
+            .db
+            .game_creature_spawn()
+            .guid()
+            .find(guid)
+            .map(|spawn| Home {
+                at: Point {
+                    x: spawn.x,
+                    y: spawn.y,
+                    z: spawn.z,
+                },
+                wanders: false,
             })
     }
     fn engaged(&self, guid: u64) -> bool {
@@ -252,6 +365,9 @@ impl IdleSink for CtxWorld<'_> {
             e.wp_target = waypoint_id;
             entities.guid().update(e);
         }
+    }
+    fn reached_home(&mut self, guid: u64) {
+        crate::creatures::eventai_on_reached_home(self.ctx, guid);
     }
     fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32) {
         if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
@@ -325,6 +441,7 @@ impl EngageSink for CtxWorld<'_> {
                 detect_range_mod: crate::spell::detect_range_mod(self.ctx, c.guid),
                 would_rout: tick::rout_eligible(self.ctx, &c),
                 cannot_act: crate::spell::is_action_blocked(self.ctx, c.guid),
+                react_state: crate::creatures::react_state(self.ctx, c.guid),
             })
             .collect()
     }
@@ -342,35 +459,7 @@ impl EngageSink for CtxWorld<'_> {
             })
     }
     fn engage(&mut self, creature: u64, victim: u64, pull: Pull) {
-        let melee = self.ctx.db.game_melee_attack();
-        if melee.attacker_guid().find(creature).is_none() {
-            melee.insert(MeleeAttack {
-                attacker_guid: creature,
-                target_guid: victim,
-                last_swing_ms: 0,   // swing on the next melee tick
-                ranged_spell_id: 0, // proximity and pack aggro are melee
-                last_offhand_swing_ms: 0,
-                rout_ends_ms: 0,
-                pursuit_ends_ms: 0,
-                leash_x: 0.0,
-                leash_y: 0.0,
-            });
-        }
-        let entities = self.ctx.db.game_world_entity();
-        if let Some(mut c) = entities.guid().find(creature) {
-            if c.target_guid != victim {
-                c.target_guid = victim;
-                entities.guid().update(c);
-            }
-        }
-        crate::hooks::fire_on_aggro(
-            self.ctx,
-            &crate::hooks::AggroPayload {
-                creature_guid: creature,
-                target_guid: victim,
-                assist: pull == Pull::Assisted,
-            },
-        );
+        crate::combat::arm_creature_engagement(self.ctx, creature, victim, pull == Pull::Assisted);
     }
     fn engagements(&self) -> Vec<Engagement> {
         let entities = self.ctx.db.game_world_entity();
@@ -516,7 +605,6 @@ impl CtxWorld<'_> {
 impl CastSink for CtxWorld<'_> {
     fn casters(&self, scope: &TickScope) -> Vec<Caster> {
         let entities = self.ctx.db.game_world_entity();
-        let pending = self.ctx.db.game_pending_cast();
         // Same candidate discovery as chase: the engaged rows ARE the set, one per attacker.
         self.ctx
             .db
@@ -525,7 +613,7 @@ impl CastSink for CtxWorld<'_> {
             .filter_map(|row| {
                 let c = tick::movable_creature(self.ctx, row.attacker_guid, scope)?;
                 let guid = c.guid;
-                let casting = pending.by_caster().filter(&guid).next().is_some();
+                let casting = crate::spell::is_non_melee_spell_casting(self.ctx, guid);
                 Some(Caster {
                     guid,
                     victim: row.target_guid,
@@ -674,6 +762,19 @@ impl PursuitSink for CtxWorld<'_> {
     }
     fn authored_ranged_posture(&self, guid: u64) -> Option<(f32, f32)> {
         eventai::ranged_posture(self.ctx, guid)
+    }
+    fn combat_movement_enabled(&self, guid: u64) -> bool {
+        eventai::movement::intent(self.ctx, guid)
+            .is_none_or(|intent| !intent.combat_movement_active || intent.combat_movement_enabled)
+    }
+    fn chase_gait(&self, guid: u64) -> Gait {
+        match eventai::movement::intent(self.ctx, guid).map(|intent| intent.walking) {
+            Some(AuthoredWalkingMode::WalkWhileChasing) => Gait::Walk,
+            _ => Gait::Run,
+        }
+    }
+    fn target_not_reachable(&mut self, guid: u64) {
+        eventai::eventai_on_target_not_reachable(self.ctx, guid);
     }
     fn caster_hold_range(&self, guid: u64) -> f32 {
         if eventai::authored_combat(self.ctx, guid).casting {

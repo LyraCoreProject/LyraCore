@@ -353,6 +353,7 @@ pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
         despawn_at: crate::creatures::timer_never(ctx),
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: 0,
+        life_seq: 0,
     });
     crate::creatures::insert_creature_entity(
         ctx,

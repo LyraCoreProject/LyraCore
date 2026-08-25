@@ -79,8 +79,7 @@ pub fn debug_encounter_spawn_wave(
     Ok(())
 }
 
-/// Write a creature's virtual-item slots (`encounter::equip_swap`) — module-side row only; the
-/// client-visible UNIT_VIRTUAL_ITEM_SLOT_DISPLAY relay is [V]-deferred (see game_encounter_equip).
+/// Write a creature's client-visible virtual-item slots (`encounter::equip_swap`).
 #[reducer]
 pub fn debug_encounter_equip(
     ctx: &ReducerContext,

@@ -75,6 +75,23 @@ impl Standalone {
         ]));
     }
 
+    #[allow(dead_code)] // Used when a developer's cached token is not valid for an isolated server.
+    pub fn publish_module_anonymous(&self) {
+        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace = module_dir.parent().unwrap();
+        assert_success(Command::new(&self.spacetime).current_dir(workspace).args([
+            "publish",
+            "-s",
+            &self.server,
+            "--module-path",
+            module_dir.to_str().unwrap(),
+            "--build-options=--features=debug_reducers",
+            "--anonymous",
+            "-y",
+            &self.database,
+        ]));
+    }
+
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
         let mut command = Command::new(&self.spacetime);
         command.args(["call", "-s", &self.server, &self.database, reducer]);
@@ -84,6 +101,21 @@ impl Standalone {
 
     pub fn assert_call(&self, reducer: &str, args: &[&str]) {
         assert_output_success(self.call(reducer, args));
+    }
+
+    #[allow(dead_code)] // Paired with `publish_module_anonymous` for isolated local servers.
+    pub fn assert_call_anonymous(&self, reducer: &str, args: &[&str]) {
+        let mut command = Command::new(&self.spacetime);
+        command.args([
+            "call",
+            "-s",
+            &self.server,
+            "--anonymous",
+            &self.database,
+            reducer,
+        ]);
+        command.args(args);
+        assert_output_success(command.output().expect("failed to call reducer"));
     }
 
     #[allow(dead_code)] // Used by integration targets that inspect committed table state.

@@ -73,6 +73,383 @@ fn world(now_micros: u64) -> Scenario {
         .creature(CREATURE, point(0.0))
         .entry(CREATURE, ENTRY)
         .player(TARGET, point(2.0))
+        .at_war(BEASTS, ALLIANCE)
+}
+
+fn native_definition(subject: EventAiSubject, mut rules: Vec<EventAiRule>) -> EventAiDefinition {
+    rules.sort_by_key(|rule| rule.source_rule_id);
+    EventAiDefinition {
+        subject,
+        revision: normalized_revision(subject, &rules),
+        rules,
+    }
+}
+
+fn aggro_rule(source_rule_id: u64, instructions: Vec<CreatureInstruction>) -> EventAiRule {
+    EventAiRule {
+        source_rule_id,
+        event: EventCondition::OnAggro,
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::Once,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions,
+    }
+}
+
+fn say(broadcast_id: u32) -> CreatureInstruction {
+    CreatureInstruction::Speak(SpeakInstruction {
+        mode: SpeechMode::Say,
+        broadcast_ids: vec![broadcast_id],
+        legacy_text: String::new(),
+        target: InstructionTarget::SelfActor,
+    })
+}
+
+fn native_rule(
+    source_rule_id: u64,
+    event: EventCondition,
+    recurrence: RecurrencePolicy,
+    allowed_phases: u32,
+    instructions: Vec<CreatureInstruction>,
+) -> EventAiRule {
+    EventAiRule {
+        source_rule_id,
+        event,
+        chance_pct: 100,
+        allowed_phases: PhaseSet {
+            bits: allowed_phases,
+        },
+        recurrence,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions,
+    }
+}
+
+#[test]
+fn native_rule_runs_more_than_three_instructions_in_order() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(10, vec![say(1), say(2), say(3), say(4)])],
+    );
+    let mut scenario = world(0)
+        .eventai_native_definition(definition)
+        .eventai_broadcast(1, "one", 0)
+        .eventai_broadcast(2, "two", 0)
+        .eventai_broadcast(3, "three", 0)
+        .eventai_broadcast(4, "four", 0);
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![
+            (CREATURE, 0, "one".to_string()),
+            (CREATURE, 0, "two".to_string()),
+            (CREATURE, 0, "three".to_string()),
+            (CREATURE, 0, "four".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn friendly_cycle_events_wait_their_authored_initial_window() {
+    let friend = CREATURE + 20;
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![native_rule(
+            11,
+            EventCondition::FriendlyHealthDeficit(FriendlyHealthDeficitCondition {
+                missing_health: 10,
+                radius_yd: 8,
+                percent: false,
+            }),
+            RecurrencePolicy::Repeat(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            u32::MAX,
+            vec![say(11)],
+        )],
+    );
+    let mut scenario = world(0)
+        .attacking(CREATURE, TARGET)
+        .creature(friend, point(3.0))
+        .entry(friend, ENTRY + 1)
+        .hurt(friend, 50)
+        .attacking(friend, TARGET)
+        .eventai_broadcast(11, "ready", 0)
+        .eventai_native_definition(definition);
+
+    fire(&mut scenario);
+    scenario.advance_clock(999_000);
+    fire(&mut scenario);
+    assert!(scenario.eventai_speech().is_empty());
+
+    scenario.advance_clock(1_000);
+    fire(&mut scenario);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "ready".to_string())]
+    );
+}
+
+#[test]
+fn phase_denial_pauses_an_authored_timer() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![native_rule(
+            12,
+            EventCondition::TimedGeneric(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            RecurrencePolicy::Repeat(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            1 << 1,
+            vec![say(12)],
+        )],
+    );
+    let mut scenario = world(0)
+        .awake([CREATURE])
+        .eventai_broadcast(12, "resumed", 0)
+        .eventai_native_definition(definition);
+
+    fire(&mut scenario);
+    scenario.advance_clock(2_000_000);
+    EventAiWorld::set_eventai_phase(&mut scenario, CREATURE, 1);
+    fire(&mut scenario);
+    scenario.advance_clock(999_000);
+    fire(&mut scenario);
+    assert!(scenario.eventai_speech().is_empty());
+
+    scenario.advance_clock(1_000);
+    fire(&mut scenario);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "resumed".to_string())]
+    );
+}
+
+#[test]
+fn generic_timer_state_survives_an_engagement_reset() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![native_rule(
+            13,
+            EventCondition::TimedGeneric(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            RecurrencePolicy::Repeat(TimeWindow {
+                min_ms: 1_000,
+                max_ms: 1_000,
+            }),
+            u32::MAX,
+            vec![say(13)],
+        )],
+    );
+    let mut scenario = world(0)
+        .awake([CREATURE])
+        .eventai_broadcast(13, "generic", 0)
+        .eventai_native_definition(definition);
+
+    fire(&mut scenario);
+    let before = scenario.eventai_state(CREATURE, 13).unwrap();
+    EngageSink::leave_combat(&mut scenario, CREATURE);
+    let after = scenario.eventai_state(CREATURE, 13).unwrap();
+
+    assert_eq!(after.next_eligible_ms, before.next_eligible_ms);
+    assert_eq!(after.engagement_id, before.engagement_id + 1);
+    scenario.advance_clock(1_000_000);
+    fire(&mut scenario);
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "generic".to_string())]
+    );
+}
+
+#[test]
+fn repeat_on_event_rearms_target_not_reachable_without_a_timer() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![native_rule(
+            14,
+            EventCondition::TargetNotReachable,
+            RecurrencePolicy::RepeatOnEvent,
+            u32::MAX,
+            vec![say(14)],
+        )],
+    );
+    let mut scenario = world(0)
+        .eventai_broadcast(14, "blocked", 0)
+        .eventai_native_definition(definition);
+    let context = EventContext {
+        current_target_guid: Some(TARGET),
+        engaged: true,
+        ..EventContext::empty(EventKind::TargetNotReachable, CREATURE, 0)
+    };
+
+    evaluate(&mut scenario, EventAiRequest::Edge(context));
+    evaluate(&mut scenario, EventAiRequest::Edge(context));
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![
+            (CREATURE, 0, "blocked".to_string()),
+            (CREATURE, 0, "blocked".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn changed_definition_cleans_only_the_next_visited_creature_without_edge_replay() {
+    let other = CREATURE + 10;
+    let old = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(
+            20,
+            vec![
+                say(5),
+                CreatureInstruction::SetPhase(SetPhaseInstruction { phase: 3 }),
+                CreatureInstruction::SetRangedPosture(RangedPostureInstruction {
+                    distance_yd: 18,
+                    angle_degrees: 0,
+                }),
+            ],
+        )],
+    );
+    let mut scenario = world(0)
+        .creature(other, point(1.0))
+        .entry(other, ENTRY)
+        .eventai_broadcast(5, "committed", 0)
+        .eventai_broadcast(6, "new edge", 0)
+        .eventai_native_definition(old.clone());
+    let old_effective_revision = scenario.eventai_definition(CREATURE).revision;
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+    EngageSink::engage(&mut scenario, other, TARGET, Pull::Noticed);
+    scenario
+        .fights
+        .borrow_mut()
+        .retain(|fight| fight.attacker == CREATURE);
+    let unchanged_rule_state = scenario.eventai_state(other, 20).unwrap();
+    let unchanged_creature_state = scenario.eventai_creature_state(other);
+    let stable_rule_state = scenario.eventai_state(CREATURE, 20).unwrap();
+
+    fire(&mut scenario);
+    assert_eq!(
+        scenario.eventai_state(CREATURE, 20),
+        Some(stable_rule_state)
+    );
+    assert_eq!(
+        scenario
+            .eventai_creature_state(CREATURE)
+            .definition_revision,
+        old_effective_revision
+    );
+
+    let changed = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(20, vec![say(6)])],
+    );
+    assert_ne!(old.revision, changed.revision);
+    scenario.replace_eventai_definition(changed.clone());
+    let changed_effective_revision = scenario.eventai_definition(CREATURE).revision;
+    let speech_before_visit = scenario.eventai_speech();
+
+    fire(&mut scenario);
+
+    let visited = scenario.eventai_creature_state(CREATURE);
+    assert_eq!(visited.definition_revision, changed_effective_revision);
+    assert_eq!(visited.phase, 0);
+    assert!(!visited.ranged_posture_active);
+    assert!(scenario.eventai_state(CREATURE, 20).is_none());
+    assert_eq!(scenario.eventai_speech(), speech_before_visit);
+    assert_eq!(
+        scenario.eventai_state(other, 20),
+        Some(unchanged_rule_state)
+    );
+    assert_eq!(
+        scenario.eventai_creature_state(other),
+        unchanged_creature_state
+    );
+}
+
+#[test]
+fn first_native_visit_cleans_reversible_legacy_state_without_a_definition() {
+    let mut scenario = world(0);
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+    scenario.eventai_creature_state.borrow_mut().insert(
+        CREATURE,
+        CreatureState {
+            phase: 4,
+            ranged_distance: 18.0,
+            ranged_angle: 1.0,
+            ranged_posture_active: true,
+            ..CreatureState::default()
+        },
+    );
+    scenario.eventai_rule_state.borrow_mut().insert(
+        CREATURE,
+        HashMap::from([(
+            99,
+            RuleState {
+                next_eligible_ms: 5_000,
+                consumed: true,
+                lifecycle_id: 1,
+                engagement_id: 1,
+                invocation_seed: 0,
+                invocation_started: false,
+                executing: false,
+                invocation_branch: 0,
+                paused_at_ms: 0,
+            },
+        )]),
+    );
+
+    fire(&mut scenario);
+
+    let state = scenario.eventai_creature_state(CREATURE);
+    assert_eq!(state.phase, 0);
+    assert!(!state.ranged_posture_active);
+    assert_eq!(state.ranged_distance, 0.0);
+    assert_eq!(state.ranged_angle, 0.0);
+    assert!(scenario.eventai_state(CREATURE, 99).is_none());
+}
+
+#[test]
+fn entry_and_guid_definitions_compose_in_source_order() {
+    let entry = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(40, vec![say(8)])],
+    );
+    let guid = native_definition(
+        EventAiSubject::Guid(CREATURE),
+        vec![aggro_rule(30, vec![say(7)])],
+    );
+    let mut scenario = world(0)
+        .eventai_broadcast(7, "guid", 0)
+        .eventai_broadcast(8, "entry", 0)
+        .eventai_native_definition(entry)
+        .eventai_native_definition(guid);
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![
+            (CREATURE, 0, "guid".to_string()),
+            (CREATURE, 0, "entry".to_string()),
+        ]
+    );
 }
 
 #[test]
@@ -407,7 +784,9 @@ fn a_combat_action_retries_only_when_its_first_cast_is_refused() {
     EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
     assert!(scenario.casts().is_empty());
     assert!(scenario.eventai_speech().is_empty());
-    assert!(scenario.eventai_state(CREATURE, 610).is_none());
+    assert!(scenario
+        .eventai_state(CREATURE, 610)
+        .is_some_and(|state| state.invocation_started && !state.consumed));
 
     scenario.not_ready.borrow_mut().remove(&62);
     EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
@@ -554,13 +933,11 @@ fn rule_state_cleanup_does_not_scan_other_creatures() {
     eventai::evaluate(
         &mut scenario,
         EventAiRequest::Edge(EventContext {
-            kind: EventKind::OnAggro,
-            creature_guid: CREATURE,
             invoker_guid: Some(TARGET),
-            event_target_guid: Some(TARGET),
+            beneficiary_guid: Some(TARGET),
             current_target_guid: Some(TARGET),
-            assisted: false,
-            now_ms: 0,
+            engaged: true,
+            ..EventContext::empty(EventKind::OnAggro, CREATURE, 0)
         }),
     );
 
@@ -629,7 +1006,7 @@ fn a_missing_summon_is_refused_without_an_unsupported_action_diagnostic() {
 }
 
 #[test]
-fn a_refused_cast_retries_sooner_than_its_repeat_window() {
+fn an_ordinary_refused_cast_spends_its_repeat_opportunity() {
     let rule_id = 920;
     let mut scenario = world(0)
         .attacking(CREATURE, TARGET)
@@ -656,7 +1033,7 @@ fn a_refused_cast_retries_sooner_than_its_repeat_window() {
             .eventai_state(CREATURE, rule_id)
             .unwrap()
             .next_eligible_ms,
-        1_500
+        30_000
     );
 }
 

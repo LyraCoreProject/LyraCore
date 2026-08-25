@@ -14,7 +14,8 @@
 //!     strength/agility), seal-on-swing + queued-strike, the react-window, equipped-weapon/ammo
 //!     lookups, and the `roll_swing`/`roll_ranged_swing` family.
 //!   - `death` — `kill_creature`/`kill_player` (the two death chokepoints) + the shared damage
-//!     pipeline (`fold_incoming_damage`/`apply_hit`) every damage resolver routes through.
+//!     pipeline (`fold_incoming_damage`/`final_damage`/`apply_hit`) every damage resolver routes
+//!     through.
 //!   - `engage` — the engagement model: enter/disengage/queries over `game_melee_attack`, the
 //!     engagement tables, and the start/stop-attack reducers.
 //!   - `swing` — the tick passes (`tick_melee`'s leash/aggro/resolve) + the resolvers that fire a hit

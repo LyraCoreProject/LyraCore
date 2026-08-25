@@ -64,6 +64,7 @@ fn world() -> Scenario {
         .creature(CREATURE, point(0.0, 0.0))
         .entry(CREATURE, ENTRY)
         .player(TARGET, point(20.0, 0.0))
+        .at_war(BEASTS, ALLIANCE)
 }
 
 fn fire(scenario: &mut Scenario, sense: bool) {

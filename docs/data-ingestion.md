@@ -172,8 +172,10 @@ Ship **zero** third-party-derived data. Three streams, each with its own provena
   fetches classic-db from cmangos and transforms locally; we ship the script + our own ETL, never
   their data), but nothing auto-fetches Blizzard-derived content for a casual cloner and the
   association stays out of our default repo graph.
-- **Source tracking: latest `master`**, to benefit from cmangos's ongoing data fixes — NOT pinned by
-  default. Master-vs-pin is purely freshness-vs-reproducibility; it does **not** change the firewall.
+- **Source tracking: pinned for the default import.** The lock now selects classic-db commit
+  `cd0c426a3b2ff56dd518bf009025299468e60fdb` because the default `creature-ai` family requires its
+  exact EventAI Source Profile. A floating `master` fetch remains available with `--skip-verify`, but
+  it cannot pass EventAI apply until a matching profile is reviewed and committed.
 - **Record the resolved commit SHA per import** (in the generated bundle / a small lockfile). Keeps
   master reproducible-after-the-fact and makes "pin if unstable" a one-line change to the recorded
   SHA. (Floating-ref + lock pattern.)
@@ -210,75 +212,73 @@ duplicated on every shard by design.
 
 ## Creature EventAI family
 
-`--family creature-ai` imports the supported CMaNGOS `creature_ai_scripts` rules into the Module-only
-EventAI tables. It clears and reloads `game_creature_ai_event`,
-`game_creature_ai_broadcast_text`, and `game_creature_ai_summon`. It does not clear creature EventAI
-state or rule state rows.
+`--family creature-ai` compiles source rows into Module-owned native definitions. The selected
+EventAI Source Profile defaults to `cmangos-classic-z2815` and is committed at
+`importer/manifests/cmangos-classic-z2815.json`. That profile pins:
 
-One accepted source rule becomes one to three ordered static rows. The row id is
-`0x4000_0000_0000_0000 | (source_rule_id << 2) | action_order`; this keeps imported ids outside the
-reserved fixture range. Rules retain source chance, inverse-phase conversion, repeat policy, and
-source policies. A source random-action flag maps to native policy bit 1 and a combat-action flag to
-bit 0. Event parameters map as follows:
+- CMaNGOS Classic commit `ca0775fe352fb67a0e82dc6051f0563187d569a5` and its 24-column,
+  source-id-ordered EventAI loader contract;
+- classic-db commit `cd0c426a3b2ff56dd518bf009025299468e60fdb` and
+  `Full_DB/ClassicDB_1_12_1_z2815.sql.gz`;
+- SHA-256 `d2083bcd2670451279cbf93af138eadae04c6d183a4cd0ff0357047e4a565de6` over the exact
+  decompressed SQL bytes;
+- 10,843 source rules, including 39 negative source-guid rules.
 
-- creature HP: source `[max_pct, min_pct, repeat_min_ms, repeat_max_ms]` becomes native
-  `[min_pct, max_pct, repeat_min_ms, repeat_max_ms]`;
-- target range: `[min_yd, max_yd, repeat_min_ms, repeat_max_ms]` is retained;
-- friendly HP: `[missing_hp, radius_yd, repeat_min_ms, repeat_max_ms]` is retained. `missing_hp` is
-  an absolute health deficit, not a percentage.
+The pull lock uses the same classic-db snapshot and digest. The pull script writes the decompressed
+bytes without adding a delimiter. A later dump with the same z2815 filename is not the same profile
+unless its digest and censuses match.
 
-The importer accepts timed combat, HP, aggro, death, range, spawn, and friendly-HP events. It accepts
-text, text-new, emote, cast, phase, flee, call-for-help, summon, and ranged-movement actions. Positive
-subjects must be in the World Import Scope. Negative subjects resolve through the imported spawn guid.
-Each row names its creature by template entry or by spawn guid, never both: a guid-scoped rule emits
-`creature_entry` 0, because the Module refuses a row that sets both columns.
-Accepted summon templates enlarge the scope to a fixpoint, so a summoned creature can bring its own
-EventAI dependencies. The importer carries current broadcast text and supported legacy negative
-`script_texts` ids. It reads both the compact 12-column and current 17-column broadcast-text
-tuple vintages. The 17-column shape places emotes at zero-based indexes 10 to 12 and delays at indexes
-13 to 15. The runtime emits the first animation emote with the text. It retains the other two emotes
-and their delays but does not schedule them.
+Run a report without `--apply`:
 
-Source target 12, `TARGET_T_EVENT_SPECIFIC`, maps to the event target selected by friendly-HP and
-other event conditions. Source target 10, `TARGET_T_EVENT_SENDER`, is unsupported. Triggered casts and
-force casts are also unsupported because the Module has no operation with their CMaNGOS behavior.
-The importer drops the complete source rule instead of mapping either flag to an ordinary cast or a
-retry policy. A ranged-movement angle is parsed as a signed 32-bit value and stored in the native
-unsigned carrier without changing its bits. The creature state records when a ranged posture action
-has run, including an explicit zero-distance melee posture. Engagement and lifecycle resets clear it.
+```sh
+./target/debug/lyracore-importer \
+  --dump .import/classic-db-full.sql \
+  --family creature-ai \
+  --eventai-profile cmangos-classic-z2815
+```
 
-Unsupported or invalid values reject the complete source rule and appear in dry-run coverage by source
-value and reason. Event and action histograms show source, accepted, dropped, and emitted counts for
-each value. The report also lists casts whose spell id has no complete source-dump catalogue.
-Spell validation is therefore authoritative after the DBC spell import, through the post-import
-`game_spell` reference check. A nonzero spell id is retained rather than incorrectly rejected because
-it is absent from `spell_template`.
+The dry run prints the complete scoped Compatibility Manifest, including every unapproved result.
+It records source, emitted instruction, normalized, excluded, and dropped counts separately. Event,
+action, target, cast-flag, EventAI-flag, and dependency results remain grouped by source value and
+reason. Dependency results retain the path from source rule and instruction slot to the referenced
+catalogue value.
 
-The mappings follow the CMaNGOS Classic EventAI declarations and loader:
-[event, action, target, and flag values](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAI.h),
-[source tuple load and validation](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAIMgr.cpp),
-the [legacy text loader](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/Globals/ObjectMgr.cpp),
-and [text-new selection](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAI.cpp).
-The source stores legacy text ids as signed values. The current ClassicDB source uses broadcast text
-ids for EventAI text rows; negative ids require a matching `script_texts` row in the supplied
-dump. This is an importer inference from the CMaNGOS action contracts and source data shape. Text-new
-keeps its target policy. Template selection is rejected because the current relay has no template
-lookup, rather than being represented as a direct broadcast.
+Apply constructs and checks that same plan before it returns any work to the caller. A wrong digest,
+loader contract, census, source value, dependency, or classification is a Refusal before any EventAI
+SQL statement or definition reducer call. This is intentional. A profile can remain useful for dry
+run while later compatibility Tickets approve more of the pinned source.
 
-Operator verification needs the exact dump identity supplied for the import, including its resolved
-classic-db commit. On current z2815 data, verify Hogger speech and timed casts, Goldtooth's HP-based
-flee, and one nearby creature with no authored EventAI rules. Goldtooth must break off and run at the
-health band its rule states, not at the fixed 15% flee threshold, and the fixed flee must not fire as
-well. An authored flee replaces the fixed one. The last creature must keep the same
-cycle outcome, durable state, and emitted effects as it had before this family was imported. This is a
-dev-node and real-client check. Do not treat importer unit tests as a substitute for it.
+World Import Scope still controls compatibility claims. Positive subjects must name imported entry
+templates. Negative subjects resolve through an imported spawn guid and become guid subjects.
+Accepted summon dependencies enlarge the scope to a fixpoint. An out-of-scope rule is reported as
+such and is not claimed as compatible.
 
-The shell preflight accepts any subset of supported event and action types because each World Import
-Scope contains different creatures. It prints and checks every type present in the destination. It
-does not require absent families to be fabricated to meet a global count floor. It pulls each column
-set it needs in one query and groups the rows locally, so it costs six queries for any rule count.
-The native values it accepts are declared once in the script and pinned to the importer's constants
-by an importer test.
+One durable definition row owns one entry or guid subject. It contains source-ordered
+`EventAiRule` values, and each rule contains an ordered `Vec<CreatureInstruction>`. The source parser
+still reads three source action slots. The native definition has no three-instruction limit. Entry
+and guid definitions compose by source rule id, with entry order retained for an equal id.
+
+The family replaces native definitions through the operator-only
+`import_creature_ai_definitions` and `import_creature_ai_definitions_append` reducers. Broadcast text
+and summon locations remain family-only SQL catalogues. The old flat `game_creature_ai_event` table
+is retained for migration safety but is no longer a production evaluator boundary. The Gateway does
+not subscribe to any EventAI table.
+
+Each subject revision is derived from its normalized native definition. A creature compares its
+durable revision on its next behavior visit. A mismatch clears that creature's phase, Ranged
+Posture, and Rule State before evaluation, then stamps the new revision. Cleanup does not scan the
+World Shard, touch another creature, replay an edge event, or undo a committed one-shot outcome.
+Unchanged definitions keep their revision and Rule State across scheduled Module calls.
+
+The current instruction compiler preserves the speech, emote, cast, phase, flee, call-for-help,
+summon, and Ranged Posture behavior already supported by the Module. Its source mappings follow the
+pinned CMaNGOS declarations and loader:
+[event, action, target, and flag values](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAI.h) and
+[source tuple load behavior](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAIMgr.cpp).
+
+After import, `import-world.sh` verifies that native definition subjects are well formed and unique.
+The Compatibility Manifest remains the authority for source values and dependency paths. Real-client
+Verification should cover one source-backed rule and one creature with no native definition.
 
 The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
 the other client tables. It validates every endpoint/path reference and every `(path, node_index)`

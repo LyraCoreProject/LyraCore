@@ -998,6 +998,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     // 4. Encounter-kernel state — the 228 splice (documented on sweep_encounter_state): tracked
     //    waves (their untagged spawn rows MUST die here or they'd respawn into instance 0),
     //    encounter state + HP fired-marks, equip rows.
+    crate::creatures::cancel_relay_runs_for_instance(ctx, instance_id);
     crate::encounter::sweep_encounter_state(ctx, instance_id);
 
     // 5. The dedicated 229 tick row (debug_disarm_instance_tick's body) — coverage of the (now

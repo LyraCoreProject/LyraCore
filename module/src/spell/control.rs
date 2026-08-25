@@ -34,6 +34,28 @@ pub fn has_aura(ctx: &ReducerContext, unit_guid: u64, spell_id: u32) -> bool {
     auras_on(ctx, unit_guid).any(|a| a.spell_id == spell_id)
 }
 
+fn is_channel_aura(ctx: &ReducerContext, aura: &Aura) -> bool {
+    aura.eff_kind == A_PERIODIC_TRIGGER
+        || (aura.eff_kind == A_PERIODIC_ENERGIZE
+            && ctx
+                .db
+                .game_spell()
+                .spell_id()
+                .find(aura.spell_id)
+                .is_some_and(|spell| spell.cast_flags & SPELL_ATTR_CHANNELED != 0))
+}
+
+/// True while a cast bar or channel occupies the unit's non-melee spell slot.
+pub(crate) fn is_non_melee_spell_casting(ctx: &ReducerContext, unit_guid: u64) -> bool {
+    ctx.db
+        .game_pending_cast()
+        .by_caster()
+        .filter(&unit_guid)
+        .next()
+        .is_some()
+        || auras_on(ctx, unit_guid).any(|aura| is_channel_aura(ctx, &aura))
+}
+
 /// Is `unit_guid` STUNNED — carrying an active `A_CONTROL(M_STUN)` aura? A stunned unit can neither ACT
 /// (no melee swing, no creature aggro/cast) NOR MOVE — the combat melee tick and EVERY creature pass
 /// gate on this. Pure read over `game_aura` (no entity write); `false` for any unit without an
@@ -367,6 +389,7 @@ pub(crate) fn interrupt_cast(ctx: &ReducerContext, caster_guid: u64) -> bool {
     let interrupted = !hits.is_empty();
     for (id, spell_id) in hits {
         pending.scheduled_id().delete(id);
+        clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
         // INTERRUPT signal: one game_spell_cast_event row (is_interrupted=true) per cancelled cast → the
         // gateway relays SMSG_SPELL_FAILURE{spell, Interrupted} to the caster. cast_time_ms 0 so it does NOT
         // take the START branch; damage 0 so no damage log. All other cols default.
@@ -391,7 +414,6 @@ pub(crate) fn interrupt_cast(ctx: &ReducerContext, caster_guid: u64) -> bool {
 /// never a spell id. [entity]
 pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     let auras = ctx.db.game_aura();
-    let spells = ctx.db.game_spell();
     // A channel is a SELF-aura → it sits on the caster's own `target_guid`; scope by `by_target` then
     // filter the channel kind (the same idiom as break_stealth's A_STEALTH scope). A_PERIODIC_TRIGGER is
     // ALWAYS a channel tick (Arcane Missiles). A_PERIODIC_ENERGIZE is channel-borne ONLY when its parent
@@ -400,15 +422,7 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     let ids: Vec<u64> = auras
         .by_target()
         .filter(&caster_guid)
-        .filter(|a| {
-            a.eff_kind == A_PERIODIC_TRIGGER
-                || (a.eff_kind == A_PERIODIC_ENERGIZE
-                    && spells
-                        .spell_id()
-                        .find(a.spell_id)
-                        .map(|s| s.cast_flags & SPELL_ATTR_CHANNELED != 0)
-                        .unwrap_or(false))
-        })
+        .filter(|aura| is_channel_aura(ctx, aura))
         .map(|a| a.id)
         .collect();
     let broke_channel = !ids.is_empty();
@@ -709,7 +723,10 @@ mod tests {
     #[test]
     fn both_kill_chokepoints_shed_auras_on_death() {
         let src = include_str!("../combat/death.rs");
-        for signature in ["pub(crate) fn kill_player(", "pub(crate) fn kill_creature("] {
+        for signature in [
+            "pub(crate) fn kill_player(",
+            "fn kill_creature_with_attribution(",
+        ] {
             let body = crate::test_scan::code_of(src, signature);
             assert!(
                 body.contains("crate::spell::remove_auras_on_death(ctx, "),
@@ -717,7 +734,7 @@ mod tests {
                  its buffs and the crowd control that was on it. Body was:\n{body}"
             );
         }
-        let creature = crate::test_scan::code_of(src, "pub(crate) fn kill_creature(");
+        let creature = crate::test_scan::code_of(src, "fn kill_creature_with_attribution(");
         let rewards = creature
             .find("award_killer_rewards(ctx, &target, target_guid, killer_guid)")
             .expect("kill_creature still awards the killer before the corpse work");

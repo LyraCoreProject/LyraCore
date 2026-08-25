@@ -1,6 +1,7 @@
 //! Spawn and death EventAI scenarios.
 use super::*;
 use crate::creatures::eventai::*;
+use crate::creatures::presentation::NpcFlagsProjection;
 
 const CREATURE: u64 = 8_101;
 const TARGET: u64 = 8_102;
@@ -15,6 +16,7 @@ fn scenario() -> Scenario {
         .creature(CREATURE, point(0.0))
         .entry(CREATURE, ENTRY)
         .player(TARGET, point(2.0))
+        .at_war(BEASTS, ALLIANCE)
 }
 
 #[expect(
@@ -68,13 +70,12 @@ fn edge(scenario: &mut Scenario, kind: EventKind, assisted: bool) {
     evaluate(
         scenario,
         EventAiRequest::Edge(EventContext {
-            kind,
-            creature_guid: CREATURE,
             invoker_guid: Some(TARGET),
-            event_target_guid: Some(TARGET),
+            beneficiary_guid: Some(TARGET),
             current_target_guid: Some(TARGET),
             assisted,
-            now_ms: 1_000,
+            engaged: true,
+            ..EventContext::empty(kind, CREATURE, 1_000)
         }),
     );
 }
@@ -110,6 +111,7 @@ fn direct_aggro_speaks_once_and_assisted_aggro_keeps_casts() {
         direct.eventai_speech(),
         vec![(CREATURE, 0, "direct".to_string())]
     );
+    assert_eq!(direct.eventai_speech_targets(), vec![(CREATURE, TARGET)]);
 
     let mut assisted = scenario()
         .eventai_broadcast(2, "quiet", 0)
@@ -143,6 +145,256 @@ fn direct_aggro_speaks_once_and_assisted_aggro_keeps_casts() {
 }
 
 #[test]
+fn on_death_direct_and_triggered_self_casts_carry_dead_creature_admission() {
+    let cast = |spell_id, start_mode| {
+        CreatureInstruction::Cast(CastInstruction {
+            spell_id,
+            target: InstructionTarget::SelfActor,
+            interrupt_previous: false,
+            start_mode,
+            caster_role: SpellCasterRole::Actor,
+            target_role: SpellTargetRole::Selected,
+            aura_absent: false,
+            character_only: false,
+            target_must_be_casting: false,
+            main_spell: false,
+            distance_after_start: false,
+        })
+    };
+    let rule = EventAiRule {
+        source_rule_id: 22_5202,
+        event: EventCondition::OnDeath(DeathCondition {
+            predicate: EventPredicate::Always,
+        }),
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::Once,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: vec![
+            cast(9_144, SpellStartMode::Direct),
+            cast(9_145, SpellStartMode::Triggered),
+        ],
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let mut scenario = scenario()
+        .slain(CREATURE)
+        .eventai_native_definition(definition);
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            invoker_guid: Some(TARGET),
+            invoker_is_player: Some(true),
+            beneficiary_guid: Some(TARGET),
+            current_target_guid: Some(TARGET),
+            ..EventContext::empty(EventKind::OnDeath, CREATURE, 1_000)
+        }),
+    );
+
+    assert_eq!(
+        scenario.eventai_spell_starts.borrow().as_slice(),
+        &[
+            (
+                SpellStartMode::Direct,
+                SpellCastTarget::Unit(CREATURE),
+                false,
+                SpellCasterAdmission::DeadCreatureCallback,
+            ),
+            (
+                SpellStartMode::Triggered,
+                SpellCastTarget::Unit(CREATURE),
+                false,
+                SpellCasterAdmission::DeadCreatureCallback,
+            ),
+        ]
+    );
+}
+
+#[test]
+fn spell_hit_callback_can_cast_after_the_creature_dies_from_the_hit() {
+    let cast = |spell_id, start_mode, target| {
+        CreatureInstruction::Cast(CastInstruction {
+            spell_id,
+            target,
+            interrupt_previous: false,
+            start_mode,
+            caster_role: SpellCasterRole::Actor,
+            target_role: match target {
+                InstructionTarget::NoExplicitSpellTarget => SpellTargetRole::None,
+                _ => SpellTargetRole::Selected,
+            },
+            aura_absent: false,
+            character_only: false,
+            target_must_be_casting: false,
+            main_spell: false,
+            distance_after_start: false,
+        })
+    };
+    let rule = EventAiRule {
+        source_rule_id: 113_3802,
+        event: EventCondition::OnSpellHit(SpellEventCondition {
+            spell_id: 0,
+            school_mask: 0,
+        }),
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::RepeatOnEvent,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: vec![
+            cast(
+                22_947,
+                SpellStartMode::Direct,
+                InstructionTarget::NoExplicitSpellTarget,
+            ),
+            cast(
+                22_948,
+                SpellStartMode::Triggered,
+                InstructionTarget::SelfActor,
+            ),
+        ],
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let mut scenario = scenario()
+        .slain(CREATURE)
+        .eventai_native_definition(definition);
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            invoker_guid: Some(TARGET),
+            invoker_is_player: Some(true),
+            spell_id: Some(1),
+            ..EventContext::empty(EventKind::OnSpellHit, CREATURE, 1_000)
+        }),
+    );
+
+    assert_eq!(
+        scenario.eventai_spell_starts.borrow().as_slice(),
+        &[
+            (
+                SpellStartMode::Direct,
+                SpellCastTarget::None,
+                false,
+                SpellCasterAdmission::DeadCreatureCallback,
+            ),
+            (
+                SpellStartMode::Triggered,
+                SpellCastTarget::Unit(CREATURE),
+                false,
+                SpellCasterAdmission::DeadCreatureCallback,
+            ),
+        ]
+    );
+}
+
+#[test]
+fn on_kill_can_check_a_deleted_non_character_invoker_snapshot() {
+    let rule = EventAiRule {
+        source_rule_id: 22_5203,
+        event: EventCondition::OnKill(KillCondition {
+            character_only: false,
+        }),
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::RepeatOnEvent,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: vec![CreatureInstruction::Speak(SpeakInstruction {
+            mode: SpeechMode::Say,
+            broadcast_ids: vec![51],
+            legacy_text: String::new(),
+            target: InstructionTarget::SelfActor,
+        })],
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let deleted_pet = CREATURE + 80;
+    let mut scenario = scenario()
+        .eventai_broadcast(51, "kill", 0)
+        .eventai_native_definition(definition);
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            invoker_guid: Some(deleted_pet),
+            invoker_is_player: Some(false),
+            engaged: true,
+            ..EventContext::empty(EventKind::OnKill, CREATURE, 1_000)
+        }),
+    );
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "kill".to_string())]
+    );
+}
+
+#[test]
+fn on_kill_can_cast_at_its_just_killed_invoker() {
+    let rule = EventAiRule {
+        source_rule_id: 104_7702,
+        event: EventCondition::OnKill(KillCondition {
+            character_only: false,
+        }),
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::RepeatOnEvent,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: vec![CreatureInstruction::Cast(CastInstruction {
+            spell_id: 17_616,
+            target: InstructionTarget::Invoker,
+            interrupt_previous: false,
+            start_mode: SpellStartMode::Direct,
+            caster_role: SpellCasterRole::Actor,
+            target_role: SpellTargetRole::Selected,
+            aura_absent: false,
+            character_only: false,
+            target_must_be_casting: false,
+            main_spell: false,
+            distance_after_start: false,
+        })],
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let mut scenario = scenario()
+        .corpse(TARGET)
+        .eventai_native_definition(definition);
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            invoker_guid: Some(TARGET),
+            invoker_is_player: Some(true),
+            engaged: true,
+            ..EventContext::empty(EventKind::OnKill, CREATURE, 1_000)
+        }),
+    );
+
+    assert_eq!(scenario.casts(), vec![(CREATURE, 17_616, TARGET)]);
+}
+
+#[test]
 fn a_chance_miss_costs_the_opportunity_and_not_the_rule() {
     let mut scenario = scenario()
         .eventai_broadcast(4, "late", 0)
@@ -162,14 +414,13 @@ fn a_chance_miss_costs_the_opportunity_and_not_the_rule() {
     edge(&mut scenario, EventKind::OnSpawn, false);
 
     assert!(scenario.eventai_speech().is_empty());
-    assert!(scenario.eventai_state(CREATURE, 4).is_none());
+    assert!(scenario
+        .eventai_state(CREATURE, 4)
+        .is_some_and(|state| state.consumed));
 
     edge(&mut scenario, EventKind::OnSpawn, false);
 
-    assert_eq!(
-        scenario.eventai_speech(),
-        vec![(CREATURE, 0, "late".to_string())]
-    );
+    assert!(scenario.eventai_speech().is_empty());
 }
 
 #[test]
@@ -464,6 +715,7 @@ fn combat_end_clears_only_engagement_state() {
             ranged_distance: 20.0,
             ranged_angle: 1.0,
             ranged_posture_active: true,
+            definition_revision: DefinitionRevision::default(),
         },
     );
     scenario.eventai_rule_state.borrow_mut().insert(
@@ -476,6 +728,11 @@ fn combat_end_clears_only_engagement_state() {
                     consumed: true,
                     lifecycle_id: 4,
                     engagement_id: 5,
+                    invocation_seed: 0,
+                    invocation_started: false,
+                    executing: false,
+                    invocation_branch: 0,
+                    paused_at_ms: 0,
                 },
             ),
             (
@@ -485,6 +742,11 @@ fn combat_end_clears_only_engagement_state() {
                     consumed: true,
                     lifecycle_id: 4,
                     engagement_id: 5,
+                    invocation_seed: 0,
+                    invocation_started: false,
+                    executing: false,
+                    invocation_branch: 0,
+                    paused_at_ms: 0,
                 },
             ),
         ]),
@@ -503,6 +765,334 @@ fn combat_end_clears_only_engagement_state() {
             ranged_distance: 0.0,
             ranged_angle: 0.0,
             ranged_posture_active: false,
+            definition_revision: DefinitionRevision::default(),
         }
+    );
+}
+
+#[test]
+fn missing_edge_context_targets_refuse_without_fallback() {
+    let mut scenario = scenario();
+    for (offset, target_policy) in [
+        TARGET_INVOKER,
+        TARGET_BENEFICIARY,
+        TARGET_AI_SENDER,
+        TARGET_SPAWNER,
+        TARGET_EVENT,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut action = row(
+            30 + offset as u64,
+            30 + offset as u64,
+            0,
+            EVENT_ON_AGGRO,
+            ACTION_CAST,
+            100,
+            1,
+            REPEAT_ONCE,
+            [300 + offset as u32, 0, 0],
+        );
+        action.target_policy = target_policy;
+        scenario = scenario.eventai_row(action);
+    }
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            engaged: true,
+            ..EventContext::empty(EventKind::OnAggro, CREATURE, 1_000)
+        }),
+    );
+
+    assert!(scenario.casts().is_empty());
+}
+
+#[test]
+fn beneficiary_target_uses_the_invokers_immediate_creature_master() {
+    let minion = CREATURE + 50;
+    let master = CREATURE + 51;
+    let mut action = row(
+        40,
+        40,
+        0,
+        EVENT_ON_AGGRO,
+        ACTION_CAST,
+        100,
+        1,
+        REPEAT_ONCE,
+        [383, 0, 0],
+    );
+    action.target_policy = TARGET_BENEFICIARY;
+    let mut scenario = scenario()
+        .creature(master, point(3.0))
+        .entry(master, ENTRY + 1)
+        .pet(minion, master, point(2.0))
+        .eventai_row(action);
+    let beneficiary = beneficiary_guid(&scenario, minion);
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            invoker_guid: Some(minion),
+            beneficiary_guid: beneficiary,
+            engaged: true,
+            ..EventContext::empty(EventKind::OnAggro, CREATURE, 1_000)
+        }),
+    );
+
+    assert_eq!(beneficiary, Some(master));
+    assert_eq!(scenario.casts(), vec![(CREATURE, 383, master)]);
+}
+
+#[test]
+fn death_quest_predicate_requires_a_character_who_has_taken_the_quest() {
+    let quest_entry = 7_734;
+    let rule = EventAiRule {
+        source_rule_id: 54_4102,
+        event: EventCondition::OnDeath(DeathCondition {
+            predicate: EventPredicate::QuestTaken(QuestTakenPredicate { quest_entry }),
+        }),
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::Once,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: vec![CreatureInstruction::Speak(SpeakInstruction {
+            mode: SpeechMode::Say,
+            broadcast_ids: vec![50],
+            legacy_text: String::new(),
+            target: InstructionTarget::SelfActor,
+        })],
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let npc_killer = CREATURE + 60;
+    let mut scenario = scenario()
+        .creature(npc_killer, point(3.0))
+        .entry(npc_killer, ENTRY + 2)
+        .eventai_broadcast(50, "accepted", 0)
+        .eventai_native_definition(definition)
+        .eventai_quest_taken(TARGET, quest_entry);
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            invoker_guid: Some(npc_killer),
+            beneficiary_guid: Some(npc_killer),
+            ..EventContext::empty(EventKind::OnDeath, CREATURE, 1_000)
+        }),
+    );
+    assert!(scenario.eventai_speech().is_empty());
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            invoker_guid: Some(TARGET),
+            beneficiary_guid: Some(TARGET),
+            ..EventContext::empty(EventKind::OnDeath, CREATURE, 1_000)
+        }),
+    );
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "accepted".to_string())]
+    );
+}
+
+#[test]
+fn a_pending_evade_return_fires_reached_home_once() {
+    let rule = EventAiRule {
+        source_rule_id: 60,
+        event: EventCondition::OnReachedHome,
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::Once,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: vec![CreatureInstruction::Speak(SpeakInstruction {
+            mode: SpeechMode::Say,
+            broadcast_ids: vec![60],
+            legacy_text: String::new(),
+            target: InstructionTarget::SelfActor,
+        })],
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let mut scenario = Scenario::new(1_000_000)
+        .creature(CREATURE, point(0.0))
+        .entry(CREATURE, ENTRY)
+        .home(CREATURE, point(0.0), false)
+        .awake([CREATURE])
+        .eventai_broadcast(60, "home", 0)
+        .eventai_native_definition(definition);
+    scenario
+        .eventai_returning_home
+        .borrow_mut()
+        .insert(CREATURE);
+
+    let tick = scenario.tick(
+        true,
+        TickScope::CatchAll {
+            dedicated: HashSet::new(),
+        },
+    );
+    run_cycle(&mut scenario, tick);
+    let tick = scenario.tick(
+        true,
+        TickScope::CatchAll {
+            dedicated: HashSet::new(),
+        },
+    );
+    run_cycle(&mut scenario, tick);
+
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, 0, "home".to_string())]
+    );
+}
+
+#[test]
+fn receive_ai_event_keeps_invoker_and_sender_targets_distinct() {
+    let sender = CREATURE + 70;
+    let invoker = CREATURE + 71;
+    let cast = |spell_id, target| {
+        CreatureInstruction::Cast(CastInstruction {
+            spell_id,
+            target,
+            interrupt_previous: false,
+            start_mode: SpellStartMode::Direct,
+            caster_role: SpellCasterRole::Actor,
+            target_role: SpellTargetRole::Selected,
+            aura_absent: false,
+            character_only: false,
+            target_must_be_casting: false,
+            main_spell: false,
+            distance_after_start: false,
+        })
+    };
+    let rule = EventAiRule {
+        source_rule_id: 70,
+        event: EventCondition::OnReceiveAiEvent(ReceiveAiEventCondition {
+            kind: AiEventKind::CustomA,
+            sender_entry: ENTRY + 3,
+        }),
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::RepeatOnEvent,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: vec![
+            cast(701, InstructionTarget::Invoker),
+            cast(702, InstructionTarget::AiSender),
+        ],
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let mut scenario = scenario()
+        .creature(sender, point(3.0))
+        .entry(sender, ENTRY + 3)
+        .creature(invoker, point(4.0))
+        .entry(invoker, ENTRY + 4)
+        .eventai_native_definition(definition);
+
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            invoker_guid: Some(invoker),
+            ai_sender_guid: Some(sender),
+            ai_event: Some(AiEventKind::CustomA),
+            ..EventContext::empty(EventKind::OnReceiveAiEvent, CREATURE, 1_000)
+        }),
+    );
+
+    assert_eq!(
+        scenario.casts(),
+        vec![(CREATURE, 701, invoker), (CREATURE, 702, sender)]
+    );
+}
+
+#[test]
+fn native_presentation_instructions_reach_the_creature_world_seam_in_order() {
+    let instructions = vec![
+        CreaturePresentationInstruction::SetFaction {
+            faction_template: 777,
+        },
+        CreaturePresentationInstruction::ShowTemplateDisplay {
+            template_entry: 11_284,
+        },
+        CreaturePresentationInstruction::SetCreatureMount {
+            mount: CreaturePresentationMount::TwilightMarauder,
+        },
+        CreaturePresentationInstruction::SetNpcFlags {
+            flags: NpcFlagsProjection::Clear,
+        },
+        CreaturePresentationInstruction::SetNpcFlags {
+            flags: NpcFlagsProjection::GossipAndQuest,
+        },
+        CreaturePresentationInstruction::EmptyMana,
+        CreaturePresentationInstruction::ClearVirtualMainHand,
+        CreaturePresentationInstruction::SetNotAttackable,
+        CreaturePresentationInstruction::ClearNotAttackable,
+        CreaturePresentationInstruction::SetImmuneToPlayers,
+        CreaturePresentationInstruction::ClearImmuneToPlayers,
+        CreaturePresentationInstruction::SetImmuneToCreatures,
+        CreaturePresentationInstruction::ClearImmuneToCreatures,
+        CreaturePresentationInstruction::SetImmuneToPlayersAndCreatures,
+        CreaturePresentationInstruction::ClearImmuneToPlayersAndCreatures,
+        CreaturePresentationInstruction::SetNotSelectable,
+    ];
+    let rule = EventAiRule {
+        source_rule_id: 81,
+        event: EventCondition::OnAggro,
+        chance_pct: 100,
+        allowed_phases: PhaseSet { bits: u32::MAX },
+        recurrence: RecurrencePolicy::Once,
+        selection: InstructionSelection::All,
+        execution: ExecutionPolicy::Ordinary,
+        posture: PostureAdmission::Any,
+        instructions: instructions
+            .iter()
+            .copied()
+            .map(CreatureInstruction::Presentation)
+            .collect(),
+    };
+    let definition = EventAiDefinition {
+        subject: EventAiSubject::Entry(ENTRY),
+        revision: normalized_revision(EventAiSubject::Entry(ENTRY), std::slice::from_ref(&rule)),
+        rules: vec![rule],
+    };
+    let mut scenario = scenario().eventai_native_definition(definition);
+
+    edge(&mut scenario, EventKind::OnAggro, false);
+
+    let state = scenario.eventai_creature_state(CREATURE);
+    let expected: Vec<_> = instructions
+        .into_iter()
+        .map(|instruction| {
+            (
+                CREATURE,
+                state.lifecycle_id,
+                state.definition_revision,
+                instruction,
+            )
+        })
+        .collect();
+    assert_eq!(
+        scenario.eventai_presentation.borrow().as_slice(),
+        expected.as_slice()
     );
 }

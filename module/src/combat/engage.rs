@@ -53,6 +53,46 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     entities.guid().update(e);
 }
 
+/// Arm a creature's first outgoing melee engagement and dispatch its aggro edge once.
+pub(crate) fn arm_creature_engagement(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    target_guid: u64,
+    assist: bool,
+) -> bool {
+    let melee = ctx.db.game_melee_attack();
+    if melee.attacker_guid().find(creature_guid).is_some() {
+        return false;
+    }
+    melee.insert(MeleeAttack {
+        attacker_guid: creature_guid,
+        target_guid,
+        last_swing_ms: 0,
+        ranged_spell_id: 0,
+        last_offhand_swing_ms: 0,
+        rout_ends_ms: 0,
+        pursuit_ends_ms: 0,
+        leash_x: 0.0,
+        leash_y: 0.0,
+    });
+    let entities = ctx.db.game_world_entity();
+    if let Some(mut creature) = entities.guid().find(creature_guid) {
+        if creature.target_guid != target_guid {
+            creature.target_guid = target_guid;
+            entities.guid().update(creature);
+        }
+    }
+    crate::hooks::fire_on_aggro(
+        ctx,
+        &crate::hooks::AggroPayload {
+            creature_guid,
+            target_guid,
+            assist,
+        },
+    );
+    true
+}
+
 /// Refresh the pursuit leash on the CREATURE side of a damage exchange: deadline to
 /// `now + PURSUIT_WINDOW_MS`, remembered position to wherever that creature stands. Fed both guids, so
 /// the creature's own damage refreshes it like the player's.
@@ -358,12 +398,9 @@ pub struct CombatEvent {
     /// END-appended + `#[default(false)]` → auto-migrates. [event]
     #[default(false)]
     pub spell_swing: bool,
-    /// Projectile travel time (ms) for a RANGED shot — dist / Spell.dbc speed (Auto Shot 40 yd/s,
-    /// wand 20 yd/s). 0 = melee (instant). The shot's DAMAGE lands at fire + this: the module's
-    /// `ranged_impact` schedule applies health/kill then, and the gateway delays the
-    /// SMSG_SPELLNONMELEEDAMAGELOG by the same amount — so the number lands WITH the arrow, not at
-    /// the muzzle (user bug: "damage lands earlier than the projectile"). The SMSG_SPELL_GO
-    /// (arrow launch) still relays immediately. END-appended + `#[default(0)]` → auto-migrates. [event]
+    /// Projectile travel time (ms) for a RANGED shot. The launch row carries SMSG_SPELL_GO only;
+    /// `ranged_impact` applies health and emits the damage log at fire + this delay. 0 = melee.
+    /// END-appended + `#[default(0)]` → auto-migrates. [event]
     #[default(0)]
     pub impact_delay_ms: u32,
     // --- AOI columns (perf catalog 2.3), END-appended + TYPED defaults (a bare `0` on a u64
@@ -427,9 +464,8 @@ pub struct MeleeSchedule {
 
 /// One in-flight RANGED projectile (097): scheduled at fire + travel time; `ranged_impact` then
 /// applies the frozen post-mitigation damage (health/lethal/threat/rage/skill/combat-flag) so the
-/// server-side hit lands when the client's arrow does. Damage is FROZEN at launch (rolled + folded
-/// there — vanilla folds absorb at impact, but freezing keeps the delayed damage LOG equal to what
-/// actually lands; the ≤1s divergence window is noise). Module-private (not gateway-subscribed).
+/// server-side hit lands when the client's arrow does. The final damage and its client log are both
+/// committed at impact, after fresh lethal-floor and health checks. Module-private.
 #[table(accessor = game_ranged_impact_schedule, scheduled(ranged_impact))]
 pub struct RangedImpactSchedule {
     #[primary_key]
@@ -440,6 +476,12 @@ pub struct RangedImpactSchedule {
     pub target_guid: u64,
     /// Post-mitigation damage frozen at launch (0 = a fully-absorbed shot: nothing to apply).
     pub damage: u32,
+    /// The ranged ability named by the launch event. The impact uses it for the authoritative
+    /// damage log after the final damage decision.
+    #[default(0u32)]
+    pub ranged_spell_id: u32,
+    #[default(false)]
+    pub is_crit: bool,
 }
 
 // ===========================================================================================

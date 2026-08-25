@@ -147,6 +147,96 @@ pub struct GossipMenu {
     pub text_id: u32, // → game_npc_text.text_id (the npc_text row to show)
 }
 
+/// A source gossip menu retained by menu id for per-creature runtime selection. [static]
+#[table(accessor = game_gossip_menu_profile, public)]
+pub struct GossipMenuProfile {
+    #[primary_key]
+    pub menu_id: u32,
+    pub text_id: u32,
+}
+
+/// One imported option belonging to a runtime-selectable gossip menu. [static]
+#[table(
+    accessor = game_gossip_menu_profile_option,
+    public,
+    index(accessor = by_menu, btree(columns = [menu_id]))
+)]
+pub struct GossipMenuProfileOption {
+    #[primary_key]
+    pub row_id: u32,
+    pub menu_id: u32,
+    pub option_index: u32,
+    pub icon: u32,
+    pub text: String,
+    pub action: u32,
+    pub action_menu_id: u32,
+    pub cond_type: u32,
+    pub cond_value1: u32,
+    pub cond_value2: u32,
+}
+
+/// The active per-creature menu selection. Public so the gossip reader can resolve by creature guid.
+#[table(
+    accessor = game_creature_gossip_menu_override,
+    public,
+    index(accessor = by_instance, btree(columns = [instance_id]))
+)]
+pub struct CreatureGossipMenuOverride {
+    #[primary_key]
+    pub creature_guid: u64,
+    pub menu_id: u32,
+    pub map_id: u32,
+    pub instance_id: u64,
+}
+
+/// Install or remove one exact creature's runtime gossip menu. Packages and relays share this owner.
+pub fn set_creature_gossip_menu(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    menu_id: Option<u32>,
+) -> Result<(), String> {
+    let table = ctx.db.game_creature_gossip_menu_override();
+    let Some(menu_id) = menu_id else {
+        table.creature_guid().delete(creature_guid);
+        return Ok(());
+    };
+    let creature = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .filter(|entity| !entity.is_player() && !entity.dead)
+        .ok_or_else(|| format!("gossip creature {creature_guid} is unavailable"))?;
+    if ctx
+        .db
+        .game_gossip_menu_profile()
+        .menu_id()
+        .find(menu_id)
+        .is_none()
+    {
+        return Err(format!("gossip menu profile {menu_id} is missing"));
+    }
+    let row = CreatureGossipMenuOverride {
+        creature_guid,
+        menu_id,
+        map_id: creature.map_id,
+        instance_id: creature.instance_id,
+    };
+    if table.creature_guid().find(creature_guid).is_some() {
+        table.creature_guid().update(row);
+    } else {
+        table.insert(row);
+    }
+    Ok(())
+}
+
+pub(crate) fn clear_gossip_menu_overrides_for_instance(ctx: &ReducerContext, instance_id: u64) {
+    let table = ctx.db.game_creature_gossip_menu_override();
+    for row in table.by_instance().filter(&instance_id).collect::<Vec<_>>() {
+        table.creature_guid().delete(row.creature_guid);
+    }
+}
+
 /// Per-id NPC greeting text: the body of the gossip window's title panel, resolved by the client
 /// via `CMSG_NPC_TEXT_QUERY` → `SMSG_NPC_TEXT_UPDATE`. `text_id` matches `game_gossip_menu.text_id`
 /// and the `title_text_id` in `SMSG_GOSSIP_MESSAGE`. `text` is the first non-empty slot from the
@@ -459,6 +549,33 @@ pub struct CreatureSpawn {
     /// END-appended + defaulted (migration rule) — no `-c` wipe needed.
     #[default(0)]
     pub respawn_secs: u32,
+
+    /// Which life of this spawn point is current. A creature keeps its guid across death and
+    /// respawn, so a guid alone cannot tell two lives apart, and a durable row keyed on the guid can
+    /// outlive the creature that made it. `pass_respawn` advances this counter as it materialises
+    /// the next life, inside the write that disarms the respawn timer.
+    ///
+    /// This row is the only per-creature state that survives death, which is why the counter lives
+    /// here rather than on the entity or on `game_creature_ai_state`.
+    /// END-appended + defaulted (migration rule).
+    #[default(0u64)]
+    pub life_seq: u64,
+}
+
+/// Which life of `creature_guid` is standing right now.
+///
+/// A creature keeps its guid across death and respawn, so a durable row keyed on the guid needs this
+/// number to tell the life that wrote it from the life reading it. Compare the stored number with
+/// this one and refuse the row when they differ.
+///
+/// A summon has no spawn row. It carries its own life number on `game_creature_ai_summon_expiry`,
+/// which stands for as long as the summon does, so it answers here too. Zero means no creature of
+/// either kind holds this guid right now, which is itself a life a stored number cannot match.
+pub(crate) fn current_life_seq(ctx: &spacetimedb::ReducerContext, creature_guid: u64) -> u64 {
+    if let Some(spawn) = ctx.db.game_creature_spawn().guid().find(creature_guid) {
+        return spawn.life_seq;
+    }
+    crate::creatures::eventai::summon_life_seq(ctx, creature_guid)
 }
 
 /// Roll a creature's `(level, health)` within its template's `[min, max]` range from a random `u32`.
@@ -1034,6 +1151,7 @@ fn load_spawn_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             despawn_at: timer_never(ctx), // not a corpse — nothing to decay yet
             movement_type: pu8(f[7])?,
             respawn_secs: if f.len() == 9 { pu32(f[8])? } else { 0 },
+            life_seq: 0,
         };
         // try_insert: a duplicate guid within the payload (shouldn't happen — guids are unique per
         // spawn) fails the run cleanly rather than panicking the reducer.

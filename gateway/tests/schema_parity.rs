@@ -578,6 +578,16 @@ parity_test!(parity_game_gossip_option, "game_gossip_option", lyracore_module::G
     row_id, entry, option_index, icon, text, action, action_menu_id, cond_type, cond_value1,
     cond_value2,
 });
+parity_test!(parity_game_gossip_menu_profile, "game_gossip_menu_profile", lyracore_module::GossipMenuProfile, bindings::gossip_menu_profile_type::GossipMenuProfile, {
+    menu_id, text_id,
+});
+parity_test!(parity_game_gossip_menu_profile_option, "game_gossip_menu_profile_option", lyracore_module::GossipMenuProfileOption, bindings::gossip_menu_profile_option_type::GossipMenuProfileOption, {
+    row_id, menu_id, option_index, icon, text, action, action_menu_id, cond_type, cond_value1,
+    cond_value2,
+});
+parity_test!(parity_game_creature_gossip_menu_override, "game_creature_gossip_menu_override", lyracore_module::CreatureGossipMenuOverride, bindings::creature_gossip_menu_override_type::CreatureGossipMenuOverride, {
+    creature_guid, menu_id, map_id, instance_id,
+});
 parity_test!(parity_game_npc_text, "game_npc_text", lyracore_module::NpcText, bindings::npc_text_type::NpcText, {
     text_id, text,
 });
@@ -773,11 +783,14 @@ parity_test!(parity_game_faction_template, "game_faction_template", lyracore_mod
     id, faction, faction_group, friend_group, enemy_group,
     enemy_0, enemy_1, enemy_2, enemy_3, friend_0, friend_1, friend_2, friend_3,
 });
+parity_test!(parity_game_encounter_equip, "game_encounter_equip", lyracore_module::EncounterEquip, bindings::encounter_equip_type::EncounterEquip, {
+    creature_guid, instance_id, main_hand, off_hand, ranged,
+});
 // The per-player connections subscribe these two for the say/yell + emote relays, so they stay in
 // the manifest for the same reason every coordinator table is — a column added module-side without
 // the matching binding edit corrupts every row the relay decodes.
 parity_test!(parity_game_chat_event, "game_chat_event", lyracore_module::ChatEvent, bindings::chat_event_type::ChatEvent, {
-    id, sender_guid, chat_type, language, message, created_at,
+    id, sender_guid, chat_type, language, message, created_at, target_guid,
 });
 parity_test!(parity_game_emote_event, "game_emote_event", lyracore_module::EmoteEvent, bindings::emote_event_type::EmoteEvent, {
     id, sender_guid, text_emote, emote_anim, created_at, target_guid, map_id, instance_id,
@@ -839,6 +852,9 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_npc_vendor",
     "game_gossip_menu",
     "game_gossip_option",
+    "game_gossip_menu_profile",
+    "game_gossip_menu_profile_option",
+    "game_creature_gossip_menu_override",
     "game_npc_text",
     "game_npc_text_slot",
     "game_quest_template",
@@ -885,6 +901,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_auction_operation_receipt",
     "game_faction",
     "game_faction_template",
+    "game_encounter_equip",
 ];
 
 // ---------------------------------------------------------------------------------------------
