@@ -332,11 +332,19 @@ The maintained, minimal Package at `packages/example/`, committed to the LyraCor
 _Avoid_: template package, sample package
 
 **Package Source**:
-Where an installed Package was copied from. Today only a local folder on the Operator's machine; git URLs and Official Packages are separate work. A scaffolded Package (`lyracore packages new`) has none. It was not copied from anywhere the Operator chose, so its Provenance Stamp records a scaffold origin instead.
+Where an installed Package was copied from: a local folder on the Operator's machine, or a Git Package Source. Official Packages are separate work. A scaffolded Package (`lyracore packages new`) has none. It was not copied from anywhere the Operator chose, so its Provenance Stamp records a scaffold origin instead.
 _Avoid_: origin, upstream, repo
 
+**Git Package Source**:
+A repository whose root is one Package, named by a URL. `lyracore packages add <git-url>` clones it and installs a copy of its tree, without the `.git`. An installed Package is never a working copy, so `lyracore packages update` re-clones rather than pulling. A Package installed this way is Git-backed, and it is the only kind `update` can advance.
+_Avoid_: git remote, upstream repo, checkout
+
+**Recorded Revision**:
+The exact commit a Git-backed Package was installed at, held in its Provenance Stamp. `lyracore packages update` advances from this rather than from whatever the repository's branch points at now, so it can name both commits when it reports or restores.
+_Avoid_: version, tag, pin
+
 **Provenance Stamp**:
-The record `lyracore packages add` writes inside an installed Package: its Package Source, its Content Identity at install time, and when it was installed. A Package without one is still a Package; only its history is unknown.
+The record `lyracore packages add` writes inside an installed Package: its Package Source, its Content Identity at install time, when it was installed, and, for a Git Package Source, its Recorded Revision. A Package without one is still a Package; only its history is unknown.
 _Avoid_: manifest, lockfile, metadata
 
 **Content Identity**:
