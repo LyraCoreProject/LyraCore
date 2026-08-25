@@ -521,6 +521,7 @@ pub mod game_spell_reagent_table;
 pub mod game_spell_table;
 pub mod game_start_item_table;
 pub mod game_start_position_table;
+pub mod game_system_message_event_table;
 pub mod game_talent_tab_table;
 pub mod game_talent_table;
 pub mod game_taunt_lock_table;
@@ -916,6 +917,7 @@ pub mod summon_instruction_type;
 pub mod sunken_temple_suppression_table;
 pub mod sunken_temple_suppression_type;
 pub mod sync_group_mirror_reducer;
+pub mod system_message_event_type;
 pub mod talent_tab_type;
 pub mod talent_type;
 pub mod target_range_condition_type;
@@ -1481,6 +1483,7 @@ pub use game_spell_reagent_table::*;
 pub use game_spell_table::*;
 pub use game_start_item_table::*;
 pub use game_start_position_table::*;
+pub use game_system_message_event_table::*;
 pub use game_talent_tab_table::*;
 pub use game_talent_table::*;
 pub use game_taunt_lock_table::*;
@@ -1876,6 +1879,7 @@ pub use summon_instruction_type::SummonInstruction;
 pub use sunken_temple_suppression_table::*;
 pub use sunken_temple_suppression_type::SunkenTempleSuppression;
 pub use sync_group_mirror_reducer::sync_group_mirror;
+pub use system_message_event_type::SystemMessageEvent;
 pub use talent_tab_type::TalentTab;
 pub use talent_type::Talent;
 pub use target_range_condition_type::TargetRangeCondition;
@@ -6849,6 +6853,7 @@ pub struct DbUpdate {
     game_spell_reagent: __sdk::TableUpdate<SpellReagent>,
     game_start_item: __sdk::TableUpdate<StartItem>,
     game_start_position: __sdk::TableUpdate<StartPosition>,
+    game_system_message_event: __sdk::TableUpdate<SystemMessageEvent>,
     game_talent: __sdk::TableUpdate<Talent>,
     game_talent_tab: __sdk::TableUpdate<TalentTab>,
     game_taunt_lock: __sdk::TableUpdate<TauntLock>,
@@ -7547,6 +7552,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_start_position" => db_update
                     .game_start_position
                     .append(game_start_position_table::parse_table_update(table_update)?),
+                "game_system_message_event" => db_update.game_system_message_event.append(
+                    game_system_message_event_table::parse_table_update(table_update)?,
+                ),
                 "game_talent" => db_update
                     .game_talent
                     .append(game_talent_table::parse_table_update(table_update)?),
@@ -8594,6 +8602,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_start_position = cache
             .apply_diff_to_table::<StartPosition>("game_start_position", &self.game_start_position)
             .with_updates_by_pk(|row| &row.race_class);
+        diff.game_system_message_event = cache
+            .apply_diff_to_table::<SystemMessageEvent>(
+                "game_system_message_event",
+                &self.game_system_message_event,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_talent = cache
             .apply_diff_to_table::<Talent>("game_talent", &self.game_talent)
             .with_updates_by_pk(|row| &row.talent_id);
@@ -9366,6 +9380,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_start_position" => db_update
                     .game_start_position
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_system_message_event" => db_update
+                    .game_system_message_event
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_talent" => db_update
                     .game_talent
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10093,6 +10110,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_start_position" => db_update
                     .game_start_position
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_system_message_event" => db_update
+                    .game_system_message_event
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_talent" => db_update
                     .game_talent
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10427,6 +10447,7 @@ pub struct AppliedDiff<'r> {
     game_spell_reagent: __sdk::TableAppliedDiff<'r, SpellReagent>,
     game_start_item: __sdk::TableAppliedDiff<'r, StartItem>,
     game_start_position: __sdk::TableAppliedDiff<'r, StartPosition>,
+    game_system_message_event: __sdk::TableAppliedDiff<'r, SystemMessageEvent>,
     game_talent: __sdk::TableAppliedDiff<'r, Talent>,
     game_talent_tab: __sdk::TableAppliedDiff<'r, TalentTab>,
     game_taunt_lock: __sdk::TableAppliedDiff<'r, TauntLock>,
@@ -11420,6 +11441,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<StartPosition>(
             "game_start_position",
             &self.game_start_position,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<SystemMessageEvent>(
+            "game_system_message_event",
+            &self.game_system_message_event,
             event,
         );
         callbacks.invoke_table_row_callbacks::<Talent>("game_talent", &self.game_talent, event);
@@ -12472,6 +12498,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_spell_reagent_table::register_table(client_cache);
         game_start_item_table::register_table(client_cache);
         game_start_position_table::register_table(client_cache);
+        game_system_message_event_table::register_table(client_cache);
         game_talent_table::register_table(client_cache);
         game_talent_tab_table::register_table(client_cache);
         game_taunt_lock_table::register_table(client_cache);
@@ -12712,6 +12739,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_spell_reagent",
         "game_start_item",
         "game_start_position",
+        "game_system_message_event",
         "game_talent",
         "game_talent_tab",
         "game_taunt_lock",

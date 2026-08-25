@@ -779,9 +779,9 @@ pub(crate) mod print_macro_tripwire {
     }
 }
 
-/// ENFORCEMENT tripwire (issue #379): `gc.rs`'s `reap!` list — the fourteen event tables reaped on
-/// their 1s `EVENT_TTL_MICROS`, plus the handful of tables with their own ad-hoc TTL block right
-/// below it — is hand-maintained prose with no tripwire of its own. A NEW short-lived event table
+/// ENFORCEMENT tripwire (issue #379): `gc.rs` has a hand-maintained `reap!` list. It covers the
+/// fifteen event tables reaped on their 1s `EVENT_TTL_MICROS` and the handful of tables with their
+/// own ad-hoc TTL block below it. A NEW short-lived event table
 /// that forgets to add its line leaks forever, silently: nothing else ever deletes its rows.
 ///
 /// This scans every `#[table]` struct across the compiled tree (same file set and same

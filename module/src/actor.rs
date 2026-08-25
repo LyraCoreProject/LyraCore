@@ -36,6 +36,7 @@
 //! | `respond_resurrect` | `spell::do_resurrect_response` | consume the actor's pending rez offer; accept revives IN PLACE at the offer's % |
 //! | `spirit_res` | `world::do_spirit_healer_res` | ghost actor res at the spirit healer (sickness applies) |
 //! | `accept_group_invite` | `group::accept_invite_for` | pending invite exists + inviter still leads + group not full; roster events fire |
+//! | `system_message` | `chat::emit_system_message` | recipient exists and is online on this Shard; text is trimmed, bounded, and non-empty |
 //!
 //! Adding a verb = add the row above + the `use ... as` below; if the underlying core is still
 //! inlined in a `ctx.sender()`-gated player reducer, factor it out FIRST (code motion, reducer
@@ -149,4 +150,7 @@ package_only! {
 
 // ---- social ----
 
-package_only! { pub(crate) use crate::group::accept_invite_for as accept_group_invite; }
+package_only! {
+    pub(crate) use crate::chat::emit_system_message as system_message;
+    pub(crate) use crate::group::accept_invite_for as accept_group_invite;
+}

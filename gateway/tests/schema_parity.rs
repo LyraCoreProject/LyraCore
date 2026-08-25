@@ -435,6 +435,9 @@ parity_test!(parity_game_bot_invite_intent, "game_bot_invite_intent", lyracore_m
 parity_test!(parity_game_whisper_event, "game_whisper_event", lyracore_module::WhisperEvent, bindings::whisper_event_type::WhisperEvent, {
     id, recipient_identity, other_guid, is_inform, message, created_at, recipient_guid,
 });
+parity_test!(parity_game_system_message_event, "game_system_message_event", lyracore_module::SystemMessageEvent, bindings::system_message_event_type::SystemMessageEvent, {
+    id, recipient_identity, recipient_guid, message, created_at,
+});
 // Private (no per-player subscriber to decode these — every wire-visible roll transition still
 // rides `game_group_event`, unchanged). Subscribed so the gateway's loot-roll relay
 // (`world::loot::relay_tick`) can promote a world shard's staging roll onto realm-core and read
@@ -826,6 +829,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_trade_event",
     "game_duel_event",
     "game_whisper_event",
+    "game_system_message_event",
     "game_loot_roll",
     "game_loot_roll_vote",
     "game_guid_allocator",
