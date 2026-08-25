@@ -568,15 +568,14 @@ pub struct CreatureSpawn {
 /// number to tell the life that wrote it from the life reading it. Compare the stored number with
 /// this one and refuse the row when they differ.
 ///
-/// A creature with no spawn row is not respawned by `pass_respawn` and reports life zero. That
-/// covers a summon, whose guid band wraps on its own sequence. Nothing distinguishes two summon
-/// lives on one guid, so a summon still depends on the despawn checklist alone.
+/// A summon has no spawn row. It carries its own life number on `game_creature_ai_summon_expiry`,
+/// which stands for as long as the summon does, so it answers here too. Zero means no creature of
+/// either kind holds this guid right now, which is itself a life a stored number cannot match.
 pub(crate) fn current_life_seq(ctx: &spacetimedb::ReducerContext, creature_guid: u64) -> u64 {
-    ctx.db
-        .game_creature_spawn()
-        .guid()
-        .find(creature_guid)
-        .map_or(0, |spawn| spawn.life_seq)
+    if let Some(spawn) = ctx.db.game_creature_spawn().guid().find(creature_guid) {
+        return spawn.life_seq;
+    }
+    crate::creatures::eventai::summon_life_seq(ctx, creature_guid)
 }
 
 /// Roll a creature's `(level, health)` within its template's `[min, max]` range from a random `u32`.

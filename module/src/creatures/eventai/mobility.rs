@@ -28,6 +28,14 @@ pub struct CreatureAiSummonExpiry {
     pub lifetime_ms: u32,
     pub remaining_ms: u32,
     pub last_checked_ms: u64,
+    /// Which summon life holds `creature_guid`. A summon guid repeats, because the summon sequence
+    /// wraps, so the guid alone cannot tell two summon lives apart. This carries the FIRST
+    /// `scheduled_id` this summon was claimed with, which `auto_inc` never issues twice. It cannot
+    /// be `scheduled_id` itself: the lifetime check re-inserts this row, so that column names one
+    /// check rather than one life.
+    /// END-appended + defaulted (migration rule).
+    #[default(0u64)]
+    pub life_seq: u64,
 }
 
 /// The EventAI creature that created one temporary summon. Module only.
@@ -145,11 +153,11 @@ fn spawn_at_actor<W: EventAiWorld>(
     ActionResult::Applied
 }
 
-fn default_state(creature_guid: u64) -> CreatureAiState {
+fn default_state(ctx: &ReducerContext, creature_guid: u64) -> CreatureAiState {
     CreatureAiState {
         creature_guid,
         phase: 0,
-        lifecycle_id: 1,
+        lifecycle_id: crate::creatures::current_life_seq(ctx, creature_guid),
         engagement_id: 1,
         ranged_distance: 0.0,
         ranged_angle: 0.0,
@@ -175,7 +183,7 @@ pub(crate) fn set_active_object(
     let mut state = table
         .creature_guid()
         .find(creature_guid)
-        .unwrap_or_else(|| default_state(creature_guid));
+        .unwrap_or_else(|| default_state(ctx, creature_guid));
     state.active_object = active;
     if table.creature_guid().find(creature_guid).is_some() {
         table.creature_guid().update(state);
@@ -200,7 +208,7 @@ pub(crate) fn set_react_state(
     let mut state = table
         .creature_guid()
         .find(creature_guid)
-        .unwrap_or_else(|| default_state(creature_guid));
+        .unwrap_or_else(|| default_state(ctx, creature_guid));
     state.react_state = match react {
         CreatureReactState::Passive => 0,
         CreatureReactState::Defensive => 1,
@@ -406,6 +414,16 @@ fn summon<W: EventAiWorld>(
 }
 
 /// Reserve the durable expiry slot whose id is the summon's sequence number.
+/// The life number of the summon holding `creature_guid`, or zero when no summon does. Reached
+/// through the unique guid index, so this is one probe rather than a scan.
+pub(crate) fn summon_life_seq(ctx: &ReducerContext, creature_guid: u64) -> u64 {
+    ctx.db
+        .game_creature_ai_summon_expiry()
+        .creature_guid()
+        .find(creature_guid)
+        .map_or(0, |expiry| expiry.life_seq)
+}
+
 pub(super) fn claim_summon_sequence(ctx: &ReducerContext, lifetime_ms: u32) -> u64 {
     ctx.db
         .game_creature_ai_summon_expiry()
@@ -416,6 +434,8 @@ pub(super) fn claim_summon_sequence(ctx: &ReducerContext, lifetime_ms: u32) -> u
             lifetime_ms,
             remaining_ms: lifetime_ms,
             last_checked_ms: timestamp_ms(ctx),
+            // `place_summon` stamps this with the id `auto_inc` assigns to this very row.
+            life_seq: 0,
         })
         .scheduled_id
 }
@@ -439,6 +459,9 @@ pub(super) fn place_summon(
     let expiry_table = ctx.db.game_creature_ai_summon_expiry();
     if let Some(mut expiry) = expiry_table.scheduled_id().find(sequence) {
         expiry.creature_guid = guid;
+        // The claim's own id, pinned before any lifetime check can re-insert the row and take a
+        // new one. This is the number that names this summon life for as long as it stands.
+        expiry.life_seq = sequence;
         expiry_table.scheduled_id().update(expiry);
     }
     ctx.db
@@ -626,6 +649,8 @@ pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpir
             lifetime_ms: expiry.lifetime_ms,
             remaining_ms,
             last_checked_ms: now_ms,
+            // Carried, not re-taken: the summon is the same life across its lifetime checks.
+            life_seq: expiry.life_seq,
         });
 }
 

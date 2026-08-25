@@ -562,16 +562,46 @@ mod eventai_gate_tripwire {
     #[test]
     fn creature_state_seeds_its_lifecycle_from_the_spawn_points_life_counter() {
         let engine = include_str!("engine.rs");
-        for signature in [
-            "fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8) {",
-            "fn adopt_eventai_revision(\n        &mut self,\n        creature_guid: u64,\n        revision: DefinitionRevision,\n    ) -> CreatureState {",
+        let mobility = include_str!("mobility.rs");
+        for (source, signature) in [
+            (
+                engine,
+                "fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8) {",
+            ),
+            (
+                engine,
+                "fn adopt_eventai_revision(\n        &mut self,\n        creature_guid: u64,\n        revision: DefinitionRevision,\n    ) -> CreatureState {",
+            ),
+            (mobility, "fn default_state("),
         ] {
-            let body = code_of(engine, signature);
+            let body = code_of(source, signature);
             assert!(
                 body.contains("lifecycle_id: crate::creatures::current_life_seq("),
                 "`{signature}` no longer seeds `lifecycle_id` from the spawn point's life counter,                  so every lifecycle comparison silently passes. Body was:\n{body}"
             );
         }
+    }
+
+    /// A summon guid repeats, because the summon sequence wraps. The summon's life number therefore
+    /// has to survive every lifetime check: `expire_eventai_summon` re-inserts its row and `auto_inc`
+    /// hands out a fresh `scheduled_id` each time, so the number must be CARRIED, never re-taken.
+    /// Re-taking it would refuse a Relay Run on the next check of a perfectly healthy summon.
+    #[test]
+    fn a_summon_keeps_one_life_number_across_its_lifetime_checks() {
+        let mobility = include_str!("mobility.rs");
+        let place = code_of(mobility, "pub(super) fn place_summon(");
+        assert!(
+            place.contains("expiry.life_seq = sequence;"),
+            "`place_summon` no longer pins the claim's own id as the summon's life number, so the \
+             summon has no identity to Gate on. Body was:\n{place}"
+        );
+        let expire = code_of(mobility, "pub fn expire_eventai_summon(");
+        assert!(
+            expire.contains("life_seq: expiry.life_seq,"),
+            "`expire_eventai_summon` no longer carries the summon's life number across its \
+             re-insert, so a healthy summon changes identity on every lifetime check and its Relay \
+             Runs are refused. Body was:\n{expire}"
+        );
     }
 
     /// The three Gates below decide WHICH creature EventAI touches and WHERE its speech leaves the
