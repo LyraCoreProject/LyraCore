@@ -188,12 +188,18 @@ pub(crate) fn apply_relay_faction(
     faction_template: u32,
     restore_on_combat_stop: bool,
 ) -> Result<(), String> {
+    // Fall back to the spawn point's current life, not a constant: a creature that has not built
+    // EventAI state yet still belongs to a definite life, and tagging it 1 would let a row written
+    // before a respawn match the creature standing here now.
     let lifecycle_id = ctx
         .db
         .game_creature_ai_state()
         .creature_guid()
         .find(creature_guid)
-        .map_or(1, |state| state.lifecycle_id);
+        .map_or_else(
+            || crate::creatures::current_life_seq(ctx, creature_guid),
+            |state| state.lifecycle_id,
+        );
     let revision = super::eventai::current_definition_revision(ctx, creature_guid).value;
     if !apply_eventai_instruction(
         ctx,
@@ -363,12 +369,18 @@ pub(crate) fn apply_relay_unit_flags(
         .guid()
         .find(creature_guid)
         .ok_or_else(|| format!("relay unit-flag subject {creature_guid} is unavailable"))?;
+    // Fall back to the spawn point's current life, not a constant: a creature that has not built
+    // EventAI state yet still belongs to a definite life, and tagging it 1 would let a row written
+    // before a respawn match the creature standing here now.
     let lifecycle_id = ctx
         .db
         .game_creature_ai_state()
         .creature_guid()
         .find(creature_guid)
-        .map_or(1, |state| state.lifecycle_id);
+        .map_or_else(
+            || crate::creatures::current_life_seq(ctx, creature_guid),
+            |state| state.lifecycle_id,
+        );
     let revision = super::eventai::current_definition_revision(ctx, creature_guid).value;
     for (bit, set, clear) in [
         (

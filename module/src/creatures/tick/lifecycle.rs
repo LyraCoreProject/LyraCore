@@ -204,19 +204,22 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         crate::combat::clear_lethal_damage_floor(ctx, guid);
         // The new life reuses this guid, so nothing an earlier life scheduled may reach it.
         crate::creatures::cancel_relay_runs_for_new_life(ctx, guid);
+        // ADVANCE + DISARM, before the entity exists, so every reader this tick already sees the new
+        // life. The advance is what lets a durable row keyed on this guid tell the life that made it
+        // from the one standing here now. The disarm is what keeps the range-scan index useful — a
+        // fired-but-still-past timer would put the row back in every subsequent scan, and it is also
+        // how a freshly IMPORTED spawn (which arms `respawn_at = now` deliberately, so it
+        // materialises on the first tick) leaves the scan after that first tick.
+        if let Some(mut s) = spawns.guid().find(guid) {
+            s.respawn_at = crate::creatures::timer_never(ctx);
+            s.life_seq = s.life_seq.saturating_add(1);
+            spawns.guid().update(s);
+        }
         if let Some(tmpl) = templates.entry().find(spawn.entry) {
             super::spawn::insert_creature_entity(
                 ctx,
                 build_creature_entity(&spawn, &tmpl, ctx.random(), 0),
             );
-        }
-        // DISARM: the timer has fired and the creature is alive again. This is what keeps the index
-        // useful — a fired-but-still-past timer would put the row back in every subsequent scan, and
-        // it is also how a freshly IMPORTED spawn (which arms `respawn_at = now` deliberately, so it
-        // materialises on the first tick) leaves the scan after that first tick.
-        if let Some(mut s) = spawns.guid().find(guid) {
-            s.respawn_at = crate::creatures::timer_never(ctx);
-            spawns.guid().update(s);
         }
     }
     visited
@@ -325,6 +328,20 @@ mod due_timer_tripwire {
             "`pass_respawn` no longer ends the previous life's Relay Runs, so a run started before \
              the creature died can resume against the new life under the same guid. Body \
              was:\n{respawn}"
+        );
+        // The life counter is what lets a durable row keyed on a reused guid tell the life that
+        // wrote it from the life standing here now. It must advance BEFORE the entity exists, or a
+        // reader in this same tick still sees the previous life.
+        let advance = respawn
+            .find("s.life_seq = s.life_seq.saturating_add(1)")
+            .expect("`pass_respawn` no longer advances the spawn point's life counter");
+        let materialise = respawn
+            .find("insert_creature_entity(")
+            .expect("`pass_respawn` no longer materialises the creature");
+        assert!(
+            advance < materialise,
+            "`pass_respawn` advances the life counter after materialising the creature, so a \
+             reader in this tick sees the previous life. Body was:\n{respawn}"
         );
         assert!(
             respawn.contains("respawn_at = crate::creatures::timer_never(ctx)"),

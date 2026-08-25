@@ -463,6 +463,7 @@ pub(super) fn place_summon(
         despawn_at: crate::creatures::timer_never(ctx),
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: u32::MAX,
+        life_seq: 0,
     };
     let entity = crate::creatures::build_creature_entity(
         &spawn,

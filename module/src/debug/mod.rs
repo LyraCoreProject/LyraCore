@@ -290,6 +290,7 @@ pub fn debug_spawn_at_feet(
         // wander pass interfered with verification — see the harness memory).
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: 0, // not imported — falls back to the flat legacy respawn timer (a debug spawn's death is a one-off harness action)
+        life_seq: 0,
     };
     // Build the live entity from a reference (fixed roll 0 → deterministic min level/health) BEFORE
     // moving the spawn into its table, so we never depend on the row type deriving Clone. The

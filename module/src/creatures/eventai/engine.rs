@@ -1184,7 +1184,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 table.insert(CreatureAiState {
                     creature_guid,
                     phase,
-                    lifecycle_id: 1,
+                    lifecycle_id: crate::creatures::current_life_seq(self.ctx, creature_guid),
                     engagement_id: 1,
                     ranged_distance: 0.0,
                     ranged_angle: 0.0,
@@ -1247,7 +1247,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             None => table.insert(CreatureAiState {
                 creature_guid,
                 phase: 0,
-                lifecycle_id: 1,
+                lifecycle_id: crate::creatures::current_life_seq(self.ctx, creature_guid),
                 engagement_id: 1,
                 ranged_distance: 0.0,
                 ranged_angle: 0.0,

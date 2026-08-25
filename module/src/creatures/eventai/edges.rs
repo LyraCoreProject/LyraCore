@@ -554,6 +554,26 @@ pub(crate) fn reset_creature_lifecycle(ctx: &ReducerContext, creature_guid: u64)
 mod eventai_gate_tripwire {
     use crate::test_scan::code_of;
 
+    /// `CreatureAiState.lifecycle_id` is compared in `engine::rule_state_for` and in
+    /// `presentation::apply_eventai_instruction` to decide whether stored state belongs to the
+    /// creature standing here now. Both comparisons are vacuous unless the field is seeded from the
+    /// spawn point's life counter: it once held a hardcoded 1 everywhere, so every comparison read
+    /// `1 == 1` and passed. That failure is invisible — the code reads correctly and guards nothing.
+    #[test]
+    fn creature_state_seeds_its_lifecycle_from_the_spawn_points_life_counter() {
+        let engine = include_str!("engine.rs");
+        for signature in [
+            "fn set_eventai_phase(&mut self, creature_guid: u64, phase: u8) {",
+            "fn adopt_eventai_revision(\n        &mut self,\n        creature_guid: u64,\n        revision: DefinitionRevision,\n    ) -> CreatureState {",
+        ] {
+            let body = code_of(engine, signature);
+            assert!(
+                body.contains("lifecycle_id: crate::creatures::current_life_seq("),
+                "`{signature}` no longer seeds `lifecycle_id` from the spawn point's life counter,                  so every lifecycle comparison silently passes. Body was:\n{body}"
+            );
+        }
+    }
+
     /// The three Gates below decide WHICH creature EventAI touches and WHERE its speech leaves the
     /// Module. Each reads durable state through a `ReducerContext`, which this crate has no test
     /// harness for, and each fails silently when it is dropped: a tamed beast quietly runs its wild

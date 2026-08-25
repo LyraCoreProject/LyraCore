@@ -275,6 +275,7 @@ fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Op
         despawn_at: ctx.timestamp,
         movement_type: 0, // IDLE — irrelevant (a pet has no spawn row, so the wander/return passes skip it)
         respawn_secs: 0, // irrelevant — this transient spawn is never inserted, so no decay/respawn pass ever reads it
+        life_seq: 0,
     };
     let mut pet = build_creature_entity(&spawn, &tmpl, ctx.random(), 0);
     pet.owner_guid = owner.guid; // THIS is what makes it a pet (the cycle's pet phase keys on owner_guid != 0)

@@ -549,6 +549,34 @@ pub struct CreatureSpawn {
     /// END-appended + defaulted (migration rule) — no `-c` wipe needed.
     #[default(0)]
     pub respawn_secs: u32,
+
+    /// Which life of this spawn point is current. A creature keeps its guid across death and
+    /// respawn, so a guid alone cannot tell two lives apart, and a durable row keyed on the guid can
+    /// outlive the creature that made it. `pass_respawn` advances this counter as it materialises
+    /// the next life, inside the write that disarms the respawn timer.
+    ///
+    /// This row is the only per-creature state that survives death, which is why the counter lives
+    /// here rather than on the entity or on `game_creature_ai_state`.
+    /// END-appended + defaulted (migration rule).
+    #[default(0u64)]
+    pub life_seq: u64,
+}
+
+/// Which life of `creature_guid` is standing right now.
+///
+/// A creature keeps its guid across death and respawn, so a durable row keyed on the guid needs this
+/// number to tell the life that wrote it from the life reading it. Compare the stored number with
+/// this one and refuse the row when they differ.
+///
+/// A creature with no spawn row is not respawned by `pass_respawn` and reports life zero. That
+/// covers a summon, whose guid band wraps on its own sequence. Nothing distinguishes two summon
+/// lives on one guid, so a summon still depends on the despawn checklist alone.
+pub(crate) fn current_life_seq(ctx: &spacetimedb::ReducerContext, creature_guid: u64) -> u64 {
+    ctx.db
+        .game_creature_spawn()
+        .guid()
+        .find(creature_guid)
+        .map_or(0, |spawn| spawn.life_seq)
 }
 
 /// Roll a creature's `(level, health)` within its template's `[min, max]` range from a random `u32`.
@@ -1124,6 +1152,7 @@ fn load_spawn_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             despawn_at: timer_never(ctx), // not a corpse — nothing to decay yet
             movement_type: pu8(f[7])?,
             respawn_secs: if f.len() == 9 { pu32(f[8])? } else { 0 },
+            life_seq: 0,
         };
         // try_insert: a duplicate guid within the payload (shouldn't happen — guids are unique per
         // spawn) fails the run cleanly rather than panicking the reducer.

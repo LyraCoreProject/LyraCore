@@ -459,6 +459,7 @@ pub fn debug_assert_floor_snap(
             despawn_at: crate::creatures::timer_never(ctx),
             movement_type: crate::creatures::MOVEMENT_IDLE,
             respawn_secs: 0,
+            life_seq: 0,
         };
         let entity = build_creature_entity(&spawn, &tmpl, 0, 0);
         ctx.db.game_creature_spawn().insert(spawn);

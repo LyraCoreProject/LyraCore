@@ -683,6 +683,7 @@ pub fn spawn_wave(
             despawn_at: crate::creatures::timer_never(ctx), // not armed until this add actually dies
             movement_type: crate::creatures::MOVEMENT_IDLE, // holds its post until aggro
             respawn_secs: u32::MAX,                         // "never" — see the fn doc
+            life_seq: 0,
         };
         let entity =
             crate::creatures::build_creature_entity(&spawn, &tmpl, ctx.random(), instance_id);

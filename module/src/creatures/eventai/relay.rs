@@ -283,6 +283,13 @@ pub struct RelayRun {
     pub concurrency: RelayConcurrency,
     pub lifetime: RelayLifetime,
     pub parent_run_id: u64,
+    /// Which life of `source_guid` started this run. The guid is reused when the creature respawns,
+    /// so a run that outlives its source would otherwise resolve to whichever creature holds the
+    /// guid next. Cleanup at the respawn boundary removes such a run; this field is what makes a
+    /// run that survives anyway refuse to act instead of acting on the wrong creature.
+    /// END-appended + defaulted (migration rule).
+    #[default(0u64)]
+    pub source_life_seq: u64,
 }
 
 #[table(
@@ -1237,6 +1244,7 @@ fn start_relay(
         concurrency: definition.concurrency,
         lifetime: definition.lifetime,
         parent_run_id,
+        source_life_seq: crate::creatures::current_life_seq(ctx, source_guid),
     });
     if let Err(error) = advance_run(ctx, run.id) {
         cancel_run_tree(ctx, run.id);
@@ -1251,6 +1259,15 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
     let Some(mut run) = runs.id().find(run_id) else {
         return Ok(());
     };
+    // The source creature keeps its guid across death and respawn. A run started by an earlier life
+    // must not act on the creature standing here now, so it ends here rather than continuing against
+    // the wrong one. Cleanup at the respawn boundary normally removes such a run first; this is what
+    // holds if one reaches this point anyway.
+    if run.source_life_seq != crate::creatures::current_life_seq(ctx, run.source_guid) {
+        cancel_run_tree(ctx, run_id);
+        reap_unused_definitions(ctx);
+        return Ok(());
+    }
     let definition = ctx
         .db
         .game_creature_ai_relay_definition()
@@ -2332,6 +2349,29 @@ mod tests {
         assert!(validate_definition_graph(&cycle)
             .unwrap_err()
             .contains("relay cycle: 1 -> 2 -> 1"));
+    }
+
+    /// A creature keeps its guid across death and respawn, so a Relay Run carries the life that
+    /// started it and refuses to act for any other. Cleanup at the respawn boundary normally removes
+    /// such a run first; this Gate is what holds when one survives anyway, and it is the half that
+    /// fails safe rather than acting on the wrong creature.
+    #[test]
+    fn a_run_gates_on_the_life_that_started_it() {
+        let relay = crate::test_scan::code_of(include_str!("relay.rs"), "fn advance_run(");
+        assert!(
+            relay.contains(
+                "run.source_life_seq != crate::creatures::current_life_seq(ctx, run.source_guid)"
+            ),
+            "`advance_run` no longer compares the run's life against the source's current life, so \
+             a run from a previous life can act on the creature holding that guid now. Body \
+             was:\n{relay}"
+        );
+        let start = crate::test_scan::code_of(include_str!("relay.rs"), "fn start_relay(");
+        assert!(
+            start.contains("source_life_seq: crate::creatures::current_life_seq(ctx, source_guid)"),
+            "`start_relay` no longer stamps the source's life onto the run, so the Gate above \
+             compares against a default and never refuses. Body was:\n{start}"
+        );
     }
 
     #[test]
