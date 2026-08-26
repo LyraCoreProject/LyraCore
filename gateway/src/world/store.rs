@@ -45,6 +45,14 @@ pub trait WorldStore:
         ""
     }
 
+    /// Undelivered private System Messages addressed to this character, oldest-first. A Package
+    /// `on_login` hook emits its message INSIDE `player_login`, before the session is in the
+    /// viewer registry, so the live insert relay has nobody to address — world entry replays what
+    /// is still parked in the shard cache. Defaults to none for mocks.
+    fn pending_system_messages(&self, _self_guid: u64) -> Vec<String> {
+        Vec::new()
+    }
+
     // --- Cross-database transfer. Every one defaults to the single-database posture, so a
     // --- store that does not shard (and every mock that does not exercise transfers) is unchanged.
 

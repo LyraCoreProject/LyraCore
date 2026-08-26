@@ -433,6 +433,10 @@ impl WorldStore for Coordinator {
         self.effective_armor(guid)
     }
 
+    fn pending_system_messages(&self, self_guid: u64) -> Vec<String> {
+        self.system_messages_for(self_guid)
+    }
+
     fn npc_refuses_interaction(&self, npc_guid: u64, player_guid: u64) -> Result<bool> {
         self.npc_refuses_interaction(npc_guid, player_guid)
     }

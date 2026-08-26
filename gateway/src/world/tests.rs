@@ -327,6 +327,8 @@ struct InMemoryStore {
     channel_messages: std::sync::Mutex<Vec<(String, String)>>,
     /// The lootable copper `loot_target_money` reports for any target (default 0).
     corpse_money: u32,
+    /// Parked private System Messages world entry replays (a Package `on_login` hook's output).
+    pending_system_messages: Vec<String>,
     /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid.
     money_looted: std::sync::Mutex<Vec<u64>>,
     /// Recorded target and slot for `CMSG_AUTOSTORE_LOOT_ITEM`.
@@ -795,6 +797,9 @@ impl WorldStore for InMemoryStore {
             _ => self.home.clone(),
         };
         resolved.map(|h| h as std::sync::Arc<dyn WorldStore>)
+    }
+    fn pending_system_messages(&self, _self_guid: u64) -> Vec<String> {
+        self.pending_system_messages.clone()
     }
     fn shard_name(&self) -> &str {
         &self.shard
@@ -3742,6 +3747,43 @@ fn warrior_entity() -> codec::EntityView {
 }
 
 #[test]
+fn login_replays_a_pending_package_system_message() {
+    // A Package `on_login` hook emits its System Message INSIDE `player_login` — before the
+    // session is in the viewer registry, so the live insert relay has nobody to address. World
+    // entry must replay the parked row right after the entry sequence.
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        pending_system_messages: vec!["Example Package is active.".to_string()],
+        ..tester_store(7)
+    });
+
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    let replay = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    let ServerOpcodeMessage::SMSG_MESSAGECHAT(actual) = replay else {
+        panic!("expected the parked System Message after the entry sequence, got {replay:?}");
+    };
+    assert_eq!(
+        *actual,
+        codec::build_gm_system_message("Example Package is active.".to_string())
+    );
+
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
 fn player_login_emits_sequence_then_self_create() {
     // CMSG_PLAYER_LOGIN must yield the full login sequence (in order), then the self
     // CREATE_OBJECT2 at the correct position/guid, then the current zone's weather — the clock
@@ -4055,10 +4097,10 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD
-    // (11 messages, not 12): a verify-world resend commands a second load of the just-loaded map.
+    // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD:
+    // a verify-world resend commands a second load of the just-loaded map.
     let mut create_guid = None;
-    for _ in 0..11 {
+    for _ in 0..(WORLD_ENTRY_PACKETS - 1) {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => {
                 panic!(
@@ -4147,7 +4189,8 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..11 {
+    // The re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
+    for _ in 0..(WORLD_ENTRY_PACKETS - 1) {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
