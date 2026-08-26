@@ -53,3 +53,8 @@ __pycache__/
 # never client bytes, but it is the operator's own derived data and stays on the operator's machine.
 /datascripts/generated/
 /datascripts/node_modules/
+
+# Packages installed on a host (`lyracore packages add`) are host-local, not repository
+# content. The committed first-party Packages stay tracked — an ignore rule never affects a
+# tracked file — but a NEW file inside one needs `git add -f`.
+/packages/
