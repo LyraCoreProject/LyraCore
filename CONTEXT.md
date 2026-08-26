@@ -332,19 +332,27 @@ The maintained, minimal Package at `packages/example/`, committed to the LyraCor
 _Avoid_: template package, sample package
 
 **Package Source**:
-Where an installed Package was copied from: a local folder on the Operator's machine, or a Git Package Source. Official Packages are separate work. A scaffolded Package (`lyracore packages new`) has none. It was not copied from anywhere the Operator chose, so its Provenance Stamp records a scaffold origin instead.
+Where an installed Package was copied from: a local folder on the Operator's machine, a Git Package Source, or an Official Package Source. A scaffolded Package (`lyracore packages new`) has none. It was not copied from anywhere the Operator chose, so its Provenance Stamp records a scaffold origin instead.
 _Avoid_: origin, upstream, repo
 
 **Git Package Source**:
 A repository whose root is one Package, named by a URL. `lyracore packages add <git-url>` clones it and installs a copy of its tree, without the `.git`. An installed Package is never a working copy, so `lyracore packages update` re-clones rather than pulling. A Package installed this way is Git-backed, and it is the only kind `update` can advance.
 _Avoid_: git remote, upstream repo, checkout
 
+**Official Package Collection**:
+The one repository, `LyraCoreProject/packages`, that holds several first-party Packages side by side, one top-level directory each. `lyracore packages add <name>` resolves a bare Package name against it: a folder on the Operator's machine or a Git URL keeps its own rules, and only a name that matches neither falls back to the collection.
+_Avoid_: registry, package repository, marketplace
+
+**Official Package Source**:
+The top-level directory of the Official Package Collection that a bare `lyracore packages add <name>` installed. Its Provenance Stamp records the collection's URL and the Recorded Revision the directory was resolved at, the same way a Git Package Source records its repository and commit. The commit is pinned at install time: `lyracore packages update` refuses this kind by name, so a later commit to the collection cannot silently change what is installed.
+_Avoid_: registry entry, published package
+
 **Recorded Revision**:
-The exact commit a Git-backed Package was installed at, held in its Provenance Stamp. `lyracore packages update` advances from this rather than from whatever the repository's branch points at now, so it can name both commits when it reports or restores.
+The exact commit a Git Package Source or an Official Package Source was installed at, held in its Provenance Stamp. `lyracore packages update` advances a Git Package Source from this rather than from whatever the repository's branch points at now, so it can name both commits when it reports or restores.
 _Avoid_: version, tag, pin
 
 **Provenance Stamp**:
-The record `lyracore packages add` writes inside an installed Package: its Package Source, its Content Identity at install time, when it was installed, and, for a Git Package Source, its Recorded Revision. A Package without one is still a Package; only its history is unknown.
+The record `lyracore packages add` writes inside an installed Package: its Package Source, its Content Identity at install time, when it was installed, and, for a Git or Official Package Source, its Recorded Revision. A Package without one is still a Package; only its history is unknown.
 _Avoid_: manifest, lockfile, metadata
 
 **Content Identity**:

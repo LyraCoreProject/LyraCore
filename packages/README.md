@@ -15,5 +15,9 @@ the enabled state, so this listing stays the whole truth about what compiles.
 itself, and records the commit it came from. `lyracore packages update <name>` advances that Package
 to the repository's current commit, keeping the old folder until the new one preflights.
 
+`lyracore packages add <name>` installs a first-party Package by bare name instead, resolved from
+the Official Package Collection (`LyraCoreProject/packages`) and pinned to the commit it was
+resolved at. `packages update` does not advance this kind.
+
 See `docs/development-cli.md` for `lyracore packages add`, `list`, `new`, `enable`, `disable`,
 `remove`, and `update`.

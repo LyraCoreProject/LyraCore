@@ -56,7 +56,7 @@ lyracore import [--accept] [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
 lyracore client sync
-lyracore packages add FOLDER|GIT-URL [--yes]
+lyracore packages add FOLDER|GIT-URL|NAME [--yes]
 lyracore packages build
 lyracore packages disable NAME
 lyracore packages enable NAME
@@ -84,7 +84,7 @@ lyracore update
 | `import` | replace the seed fixture with the real world — consent notice, then the ETL on every database the fixture populates |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
-| `packages add` | install a Package from a folder on this machine or from a Git URL, after a trust review and a confirmation |
+| `packages add` | install a Package from a folder on this machine, from a Git URL, or by bare name from the Official Package Collection, after a trust review and a confirmation |
 | `packages build` | regenerate the Module schema typings, then typecheck every Datascript against them |
 | `packages disable` | move an enabled Package out of the build's sight, keeping it on disk |
 | `packages enable` | move a disabled Package back into the build |
@@ -194,6 +194,7 @@ for you**, so a plain `./lyracore import` never asks twice.
 ./lyracore packages add ~/src/my-package       # asks before it copies anything
 ./lyracore packages add ~/src/my-package --yes # answer the confirmation in advance
 ./lyracore packages add https://host/greeter.git   # clone a repository whose root is one Package
+./lyracore packages add greeter                # bare name: resolve from the Official Package Collection
 ./lyracore packages list
 ./lyracore packages new my-package             # scaffold one from nothing but this checkout
 ```
@@ -228,13 +229,26 @@ The install then writes a **Provenance Stamp** — `packages/<name>/.lyracore-pa
 the Package Source, the Content Identity of what was copied, and the install time — and runs
 `preflight`. A Git Package Source records one key more: the exact commit that was installed.
 
-**An argument that looks like a URL is a Git Package Source.** `https://`, `ssh://`, `git://` and
-the scp-style `git@host:path` are cloned; everything else is a path on this machine, as it always
-was. The repository's root is the Package, so the Package takes the repository's name without the
-`.git` suffix, and a repository whose name the build would refuse is refused here. The clone lands
-in scratch space under `.lyracore/`, and what gets installed is a copy of its tree without the
-`.git`. An installed Package is a fixed tree, never a working copy. The clone needs credentials or
-it fails; it never sits waiting on a hidden prompt.
+**An argument that looks like a URL is a Git Package Source.** `https://`, `http://`, `ssh://`,
+`git://` and the scp-style `git@host:path` are cloned. Everything else is a path on this machine, as
+it always was, other than a bare word that resolves as neither (see below). The repository's root is
+the Package, so the Package takes the repository's name without the `.git` suffix, and a repository
+whose name the build would refuse is refused here. The clone lands in scratch space under
+`.lyracore/`, and what gets installed is a copy of its tree without the `.git`. An installed Package
+is a fixed tree, never a working copy. The clone needs credentials or it fails; it never sits
+waiting on a hidden prompt.
+
+**A bare word that is not a path on this machine is an Official Package Source.** `packages add
+greeter` resolves `greeter` against the one Official Package Collection this CLI knows,
+`LyraCoreProject/packages`, which holds several first-party Packages side by side, one top-level
+directory each. The collection is cloned the same way a Git Package Source is, the named directory
+goes through the same Trust Review and consent question as any other install, and the rest of the
+clone is discarded. An unknown name is refused before anything is copied; a name that only differs
+from one already in the collection by hyphen/underscore folding is named in the refusal instead of
+installed in its place. The Provenance Stamp records the collection's URL and the exact commit the
+directory was resolved at. That commit is pinned at install time: `packages update` refuses this
+kind by name (see below), so a later commit to the collection can never silently change what is
+installed. Picking up a newer one means removing the Package and adding it again.
 
 **It publishes nothing.** The two remaining steps are printed for you to run:
 
@@ -313,10 +327,11 @@ Save them outside the checkout first, or delete the folder by hand.
 
 **Only a Git-backed Package can be updated.** With a name, anything else is refused by name and told
 why: a Package installed from a local folder has no newer revision to fetch, a scaffold has no
-Package Source at all, and a Package Source kind this CLI does not know is not cloned on the chance
-that it might be a repository. With no name, `update` walks both inventories and takes the
-Git-backed Packages, disabled ones included. A disabled Package that comes back later should not
-bring an old revision with it.
+Package Source at all, an Official Package Source has its commit pinned at install time on purpose,
+and a Package Source kind this CLI does not otherwise know is not cloned on the chance that it might
+be a repository. With no name, `update` walks both inventories and takes the Git-backed Packages,
+disabled ones included. A disabled Package that comes back later should not bring an old revision
+with it.
 
 Each update clones the recorded repository and compares the commit it finds against the recorded
 one. Same commit, nothing to do. A newer commit gets the same Trust Review and the same question as
@@ -333,8 +348,8 @@ then is the old folder deleted. If anything fails, the previous revision goes ba
 the candidate is discarded, and the error names both commits. `update` publishes nothing and
 synchronizes no client; it prints the steps it did not run.
 
-Applying and replaying Package Deltas, bare-name installs and Official Package lookup (#302) remain
-separate work.
+Applying and replaying Package Deltas, and advancing an Official Package Source through `packages
+update`, remain separate work.
 
 ## `packages build` — Datascript typings and the typecheck gate
 
