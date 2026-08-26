@@ -56,13 +56,14 @@ lyracore import [--accept] [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
 lyracore client sync
-lyracore packages add FOLDER [--yes]
+lyracore packages add FOLDER|GIT-URL [--yes]
 lyracore packages build
 lyracore packages disable NAME
 lyracore packages enable NAME
 lyracore packages list
 lyracore packages new NAME
 lyracore packages remove NAME [--yes]
+lyracore packages update [NAME] [--yes]
 lyracore character gm NAME true|false
 lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
 lyracore update
@@ -83,13 +84,14 @@ lyracore update
 | `import` | replace the seed fixture with the real world — consent notice, then the ETL on every database the fixture populates |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
-| `packages add` | install a Package from a folder on this machine, after a trust review and a confirmation |
+| `packages add` | install a Package from a folder on this machine or from a Git URL, after a trust review and a confirmation |
 | `packages build` | regenerate the Module schema typings, then typecheck every Datascript against them |
 | `packages disable` | move an enabled Package out of the build's sight, keeping it on disk |
 | `packages enable` | move a disabled Package back into the build |
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
 | `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
 | `packages remove` | delete a disabled Package, after a confirmation and a check for local changes |
+| `packages update` | advance a Git-backed Package, or every one of them, to the repository's current commit |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
@@ -191,6 +193,7 @@ for you**, so a plain `./lyracore import` never asks twice.
 ```bash
 ./lyracore packages add ~/src/my-package       # asks before it copies anything
 ./lyracore packages add ~/src/my-package --yes # answer the confirmation in advance
+./lyracore packages add https://host/greeter.git   # clone a repository whose root is one Package
 ./lyracore packages list
 ./lyracore packages new my-package             # scaffold one from nothing but this checkout
 ```
@@ -223,7 +226,15 @@ reason. A `.git` directory is skipped.
 
 The install then writes a **Provenance Stamp** — `packages/<name>/.lyracore-package.toml`, holding
 the Package Source, the Content Identity of what was copied, and the install time — and runs
-`preflight`.
+`preflight`. A Git Package Source records one key more: the exact commit that was installed.
+
+**An argument that looks like a URL is a Git Package Source.** `https://`, `ssh://`, `git://` and
+the scp-style `git@host:path` are cloned; everything else is a path on this machine, as it always
+was. The repository's root is the Package, so the Package takes the repository's name without the
+`.git` suffix, and a repository whose name the build would refuse is refused here. The clone lands
+in scratch space under `.lyracore/`, and what gets installed is a copy of its tree without the
+`.git`. An installed Package is a fixed tree, never a working copy. The clone needs credentials or
+it fails; it never sits waiting on a hidden prompt.
 
 **It publishes nothing.** The two remaining steps are printed for you to run:
 
@@ -292,8 +303,38 @@ Save them outside the checkout first, or delete the folder by hand.
 
 **None of the three publishes or synchronizes a client.** Each prints the steps it did not run.
 
-Applying and replaying Package Deltas, updating a Package (#299), git URL sources, bare-name installs
-(#302) and Official Package lookup remain separate work.
+## `packages update` — advancing a Git-backed Package
+
+```bash
+./lyracore packages update my-package        # advance one Package, asks first
+./lyracore packages update                   # advance every Git-backed Package
+./lyracore packages update --yes             # answer the questions in advance
+```
+
+**Only a Git-backed Package can be updated.** With a name, anything else is refused by name and told
+why: a Package installed from a local folder has no newer revision to fetch, a scaffold has no
+Package Source at all, and a Package Source kind this CLI does not know is not cloned on the chance
+that it might be a repository. With no name, `update` walks both inventories and takes the
+Git-backed Packages, disabled ones included. A disabled Package that comes back later should not
+bring an old revision with it.
+
+Each update clones the recorded repository and compares the commit it finds against the recorded
+one. Same commit, nothing to do. A newer commit gets the same Trust Review and the same question as
+an install, and the question names both commits.
+
+**A folder that has drifted from its Provenance Stamp is refused, and nothing is discarded.** An
+update replaces the whole folder, so it may only run when every byte in that folder is recorded
+somewhere else. That is `packages remove`'s rule, for the same reason: local edits to an installed
+copy are recorded nowhere, and neither command can get them back.
+
+**The previous revision is kept until the new one is proven.** The old folder moves out of the
+inventory, the new revision installs in its place, and `preflight` runs with it compiled in. Only
+then is the old folder deleted. If anything fails, the previous revision goes back byte for byte,
+the candidate is discarded, and the error names both commits. `update` publishes nothing and
+synchronizes no client; it prints the steps it did not run.
+
+Applying and replaying Package Deltas, bare-name installs and Official Package lookup (#302) remain
+separate work.
 
 ## `packages build` — Datascript typings and the typecheck gate
 
