@@ -214,6 +214,15 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now spacetimedb-standalone
 ```
 
+`sudo ./lyracore service reconcile` is the encoded form of the last three commands, plus a restart
+and the readback below. It reads every expected value out of the tracked unit rather than carrying
+a copy, refuses when another active service already owns the node's data directory or listen
+address, and reports a host whose `ActiveState`, `LimitNOFILE` or `StandardError` does not match as
+NOT reconciled rather than as a success. The first three commands stay manual on purpose: it never
+creates the service account, the directories, or the binary, and refuses by name when one of them
+is missing. [`docs/development-cli.md`](./development-cli.md) has its full ordered plan. Prefer it
+over typing these by hand, so a repaired host matches the checkout rather than the last operator.
+
 Inspect the service and its durable stderr capture with:
 
 ```bash
