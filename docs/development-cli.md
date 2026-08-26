@@ -7,8 +7,10 @@
 `lyracore` runs the local developer fixture — since #327 a **sharded** one, four databases split
 along the continental divide and the open-world/instance one
 (§"Sharded out of the box, on purpose"; `--single` collapses it back to one). It
-deliberately does not manage production realms, backups, system services, or the installation of
-Rust and SpacetimeDB.
+deliberately does not manage production realms, backups, or the installation of Rust and
+SpacetimeDB. The one system service it can touch is the Standalone Supervisor tracked in this
+checkout, and only when [`service reconcile`](#service-reconcile--make-a-host-match-the-tracked-unit)
+asks it to.
 
 **The CLI lives in its own repository**, [`LyraCoreProject/lyracore-cli`](https://github.com/LyraCoreProject/lyracore-cli).
 This repo does not vendor it.
@@ -66,6 +68,7 @@ lyracore packages remove NAME [--yes]
 lyracore packages update [NAME] [--yes]
 lyracore character gm NAME true|false
 lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
+lyracore service reconcile
 lyracore update
 ```
 
@@ -94,6 +97,7 @@ lyracore update
 | `packages update` | advance a Git-backed Package, or every one of them, to the repository's current commit |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
+| `service reconcile` | make a production host's Standalone Supervisor match the unit tracked in this checkout. Root only |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
 
 **The CLI shells out to nothing in `scripts/`.** It drives this checkout through its *files* —
@@ -780,6 +784,48 @@ zeroized buffer, and is absent from rendered commands, logs, error messages, and
 ```bash
 printf 'hunter2' | ./lyracore account create TEST --password-stdin
 ```
+
+## `service reconcile` — make a host match the tracked unit
+
+```bash
+sudo ./lyracore service reconcile
+```
+
+For a **production host** only, and the encoded form of the manual install in
+[`docs/danger-zones.md`](./danger-zones.md) §3. It makes the host's Standalone Supervisor match
+`deploy/systemd/spacetimedb-standalone.service` in this checkout. Service Reconciliation is one
+job, so the verb owns the git steps too:
+
+1. `id -u`, before the fetch. The plan resets the checkout and then writes to
+   `/etc/systemd/system`, so it asks for the privilege once rather than stopping halfway for a
+   password.
+2. The same checkout update `update` does. A tracked local edit still refuses everything, the
+   service change included.
+3. The host prerequisites the unit names: its `User=` account, its `ExecStart` binary, its
+   `--data-dir`, and the directory holding its `StandardError=append:` log. Each missing one is a
+   refusal naming the command that fixes it. None is created for you.
+4. Conflicting-service detection. Every active unit whose `ExecStart` or `WorkingDirectory` claims
+   the same data directory or listen address. A hand-rolled legacy `spacetimedb.service` is named
+   and refused, never migrated and never stopped on your behalf, so two nodes cannot race for one
+   port and one data directory.
+5. `install -o root -g root -m 0644` into `/etc/systemd/system/`, then `systemctl daemon-reload`,
+   `enable`, `restart`.
+6. Verification. `systemctl show` must report `ActiveState=active` plus the `LimitNOFILE` and
+   `StandardError` the tracked unit declares. A node that came back with the inherited
+   1024-descriptor ceiling is reported as NOT reconciled instead of passing.
+
+Every expected value is read out of the tracked unit rather than duplicated in the CLI, so it
+cannot certify a host against a contract this checkout no longer ships. The node's persistent
+database directory is only ever checked for existence: never created, moved or deleted. Two runs
+converge on the same end state, and it runs even when the checkout already sits on `origin/main`,
+because deployment drift is independent of git drift. It restarts the node every time, so every run
+costs a short outage.
+
+Steps 3 to 6 read the host before they change it, so a refusal there leaves the checkout on
+`origin/main` and the host as it was. The reset in step 2 comes first on purpose: the unit to
+install, and the contract to check the host against, are read out of the updated checkout.
+
+No gateway rebuild, module publish or schema migration is implied. Those stay operator decisions.
 
 ## `update` — pull and restart
 

@@ -71,6 +71,16 @@ The wasm that holds all durable state and all game logic. The same wasm runs on 
 **Operator**:
 The identity that publishes and owns the shards, and the only caller of Gateway Verbs.
 
+**Standalone Supervisor**:
+The systemd unit that runs a host's `spacetimedb-standalone` process. The tracked artifact is
+`deploy/systemd/spacetimedb-standalone.service`. It restarts every standalone exit, gives each
+restart 524288 file descriptors, and appends standalone stderr to a durable log.
+
+**Service Reconciliation**:
+Making a host's Standalone Supervisor match the unit tracked in the checkout. `lyracore service
+reconcile` performs it, reading every expected value out of the tracked unit. A host that does not
+match afterwards is reported as NOT reconciled, never as a success.
+
 ### Gateway and module
 
 **Gateway Verb**:
