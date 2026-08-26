@@ -21,6 +21,10 @@ anyhow = "1"
 blake3 = "1"
 flate2 = "1"
 lyracore-shared.workspace = true
+# The Package Delta artifact and the claim conflict tracer: the importer parses each enabled
+# Package's generated artifacts so a refusal names the FILE, and re-emits them in canonical form for
+# the module's apply reducer, which parses them again as its own trust boundary.
+lyracore-package-delta.workspace = true
 serde_json = "1"
 wow-adt = "=0.7.0"
 wow-m2 = "=0.7.0"

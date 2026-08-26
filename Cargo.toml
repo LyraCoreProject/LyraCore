@@ -45,3 +45,4 @@ publish = false
 
 [workspace.dependencies]
 lyracore-shared = { path = "crates/lyracore-shared" }
+lyracore-package-delta = { path = "crates/lyracore-package-delta" }

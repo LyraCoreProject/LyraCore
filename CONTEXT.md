@@ -381,12 +381,30 @@ _Avoid_: data script, script (unqualified), seed script, sandbox
 The maintained, minimal Datascript at `datascripts/src/reference.ts`. It names real Module columns on purpose: it is both the worked example and the standing schema check that fails `tsc --noEmit` when the schema moves under it.
 _Avoid_: sample script, test script
 
+**Import Family**:
+One named slice of base data the importer loads as a unit, cleared and reloaded whole — "spell",
+"creatures", "quests". It is the granularity of import provenance (`game_import_meta`, one row per
+family) and of a Package Delta apply: a family's Package claims are reapplied as the last stage of
+that family's import, in one transaction.
+_Avoid_: data family, import group, dataset
+
 **Package Delta**:
 The versioned artifact recording what one Package changes in the base data: the Package identity,
 the source hash, and one Claim per row. Canonical JSON, so two artifacts that say the same thing are
 byte-identical. A base import replaces whole data families, so deltas are a pipeline stage that
 replays on every reload, never a one-shot edit.
+A Package's generated artifacts live at `packages/<name>/data/.generated/*.json`, inside the Package
+folder, so enabling or disabling the Package moves them with it. What the importer can see IS the
+enabled set; there is no second list to disagree with the Package Inventory.
 _Avoid_: patch, override file, diff
+
+**Package Import**:
+The record of what one Package contributed to the last apply of one Import Family: the artifact
+digest, the source hash, the row counts, and the base import generation the claims sit on. One row
+per family and Package, rewritten wholesale on every apply, so it answers "what Packages is this
+shard running now" rather than "what did it ever run". Distinct from a Provenance Stamp, which
+records where a Package was installed from.
+_Avoid_: apply log, history, audit trail
 
 **Claim**:
 One Package's statement about one row: the table, the typed primary key, the operation, and the

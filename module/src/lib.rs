@@ -307,6 +307,10 @@ mod motion;
 /// idempotent dismount every removal path converges on.
 mod mount;
 pub mod nav;
+/// Package Deltas applied to the spell tables as the last stage of their base import, and the
+/// per-Package provenance that records what landed. Not re-exported below, for the same reason
+/// `import_meta` is not: nothing outside this module reads its table.
+mod package_import;
 mod professions;
 /// Deploy-safety tripwire (#223): source-scans `scripts/**` + `tools/**` for a destructive
 /// `spacetime publish -c`, and pins the sanctioned deploy script's own argv guard and required
