@@ -4055,10 +4055,10 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD
-    // (11 messages, not 12): a verify-world resend commands a second load of the just-loaded map.
+    // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD:
+    // a verify-world resend commands a second load of the just-loaded map.
     let mut create_guid = None;
-    for _ in 0..11 {
+    for _ in 0..(WORLD_ENTRY_PACKETS - 1) {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => {
                 panic!(
@@ -4147,7 +4147,8 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..11 {
+    // The re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
+    for _ in 0..(WORLD_ENTRY_PACKETS - 1) {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 

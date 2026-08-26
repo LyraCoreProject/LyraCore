@@ -353,8 +353,8 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    // 11, not 12: the re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
-    for _ in 0..11 {
+    // The re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
+    for _ in 0..(WORLD_ENTRY_PACKETS - 1) {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
     drop(client);
