@@ -327,6 +327,8 @@ struct InMemoryStore {
     channel_messages: std::sync::Mutex<Vec<(String, String)>>,
     /// The lootable copper `loot_target_money` reports for any target (default 0).
     corpse_money: u32,
+    /// Parked private System Messages world entry replays (a Package `on_login` hook's output).
+    pending_system_messages: Vec<String>,
     /// Recorded `loot_money` targets — CMSG_LOOT_MONEY must drive the TRACKED guid.
     money_looted: std::sync::Mutex<Vec<u64>>,
     /// Recorded target and slot for `CMSG_AUTOSTORE_LOOT_ITEM`.
@@ -795,6 +797,9 @@ impl WorldStore for InMemoryStore {
             _ => self.home.clone(),
         };
         resolved.map(|h| h as std::sync::Arc<dyn WorldStore>)
+    }
+    fn pending_system_messages(&self, _self_guid: u64) -> Vec<String> {
+        self.pending_system_messages.clone()
     }
     fn shard_name(&self) -> &str {
         &self.shard
@@ -3739,6 +3744,43 @@ fn warrior_entity() -> codec::EntityView {
         home_y: 0.0,
         home_z: 0.0,
     }
+}
+
+#[test]
+fn login_replays_a_pending_package_system_message() {
+    // A Package `on_login` hook emits its System Message INSIDE `player_login` — before the
+    // session is in the viewer registry, so the live insert relay has nobody to address. World
+    // entry must replay the parked row right after the entry sequence.
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        pending_system_messages: vec!["Example Package is active.".to_string()],
+        ..tester_store(7)
+    });
+
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || {
+        run_world_session(server_end, server_store.as_ref()).unwrap();
+    });
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    let replay = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    let ServerOpcodeMessage::SMSG_MESSAGECHAT(actual) = replay else {
+        panic!("expected the parked System Message after the entry sequence, got {replay:?}");
+    };
+    assert_eq!(
+        *actual,
+        codec::build_gm_system_message("Example Package is active.".to_string())
+    );
+
+    drop(client);
+    server.join().unwrap();
 }
 
 #[test]

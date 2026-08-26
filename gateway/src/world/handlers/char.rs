@@ -156,6 +156,18 @@ fn enter_world<St: WorldStore + ?Sized>(
     for message in build_buyback_view_replay(store, character_guid) {
         send(tx, message)?;
     }
+    // Replay private System Messages emitted inside `player_login` (a Package `on_login` hook):
+    // their insert relayed before this session was registered, so nobody was addressable and the
+    // rows are still parked in the shard cache. (A message landing in the µs window between the
+    // registration above and this replay can arrive twice; a duplicate line beats a swallowed one.)
+    for message in store.pending_system_messages(character_guid) {
+        send(
+            tx,
+            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                codec::build_gm_system_message(message),
+            ))),
+        )?;
+    }
     // Put realm-core's party roster onto the shard this character just entered
     // and re-render the party frame. THIS is what carries a party across a shard boundary now that
     // the old interim blob mirror is gone — and it runs on every world entry, so a party formed while the
