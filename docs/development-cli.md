@@ -58,8 +58,11 @@ lyracore config set client-data PATH
 lyracore client sync
 lyracore packages add FOLDER [--yes]
 lyracore packages build
+lyracore packages disable NAME
+lyracore packages enable NAME
 lyracore packages list
 lyracore packages new NAME
+lyracore packages remove NAME [--yes]
 lyracore character gm NAME true|false
 lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
 lyracore update
@@ -82,8 +85,11 @@ lyracore update
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
 | `packages add` | install a Package from a folder on this machine, after a trust review and a confirmation |
 | `packages build` | regenerate the Module schema typings, then typecheck every Datascript against them |
+| `packages disable` | move an enabled Package out of the build's sight, keeping it on disk |
+| `packages enable` | move a disabled Package back into the build |
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
 | `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
+| `packages remove` | delete a disabled Package, after a confirmation and a check for local changes |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
 | `update` | pull the latest LyraCore into this checkout and tell you how to restart it |
@@ -248,9 +254,46 @@ half means wiring more hooks from the catalogue in `module/src/hooks.rs`, follow
 `packages/NAME/src/mod.rs` already shows. A scaffold ships no Datascript: the authoring toolchain
 in `datascripts/` is checkout-wide today, not per-Package.
 
-Enabled Packages live in `packages/`, which is the only place the build looks. Disabling, removing
-and updating a Package are separate work (#299, #300, #302), as are git URL sources and Official
-Package lookup.
+## `packages enable`, `disable`, `remove` — taking a Package out of the build
+
+```bash
+./lyracore packages disable my-package        # out of the build, still on disk
+./lyracore packages enable my-package         # back into the build
+./lyracore packages remove my-package         # delete a disabled Package, asks first
+./lyracore packages remove my-package --yes   # answer the deletion question in advance
+```
+
+**Enabled is a location, not a recorded flag.** `packages/` is what the build discovers.
+`.lyracore/packages-disabled/` is git-ignored local state the build cannot see. `enable` and
+`disable` rename one folder between the two. Nothing can disagree with the filesystem about which
+Packages the next build compiles.
+
+Both directories are on the same filesystem, so the rename is atomic and each verb is the other's
+undo. That is why neither asks for confirmation. The Provenance Stamp lives inside the folder, so it
+travels with the move and is never rewritten: a re-enabled Package still reports its Package Source
+and still reads as `clean` rather than drifted.
+
+Name collisions fail before anything moves, on the Rust identifier rather than the folder name. A
+disabled `foo_bar` cannot be enabled next to an enabled `foo-bar`, because both fold onto
+`pkg_foo_bar`.
+
+**Before `disable` moves a Package, it reports the Module tables that Package registers.** Disabling
+takes those tables out of the schema, so the next publish is a schema change that removes them.
+`lyracore publish` never passes SpacetimeDB's destructive wipe flag, so a publish that would drop a
+table still holding rows stops instead of deleting them. The report tells you that before you commit
+to the move. It does not block it.
+
+**`packages remove NAME` deletes, so it has gates.** It requires the Package to be disabled already,
+and points at `packages disable` when it is not: the build has to stop compiling a Package before
+the folder goes. It refuses a folder whose Content Identity no longer matches its Provenance Stamp,
+and a folder with no readable stamp at all. Both are the same rule. This command may only delete
+content that is recorded somewhere else, and local edits to an installed copy are recorded nowhere.
+Save them outside the checkout first, or delete the folder by hand.
+
+**None of the three publishes or synchronizes a client.** Each prints the steps it did not run.
+
+Applying and replaying Package Deltas, updating a Package (#299), git URL sources, bare-name installs
+(#302) and Official Package lookup remain separate work.
 
 ## `packages build` — Datascript typings and the typecheck gate
 
