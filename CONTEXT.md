@@ -422,6 +422,14 @@ shard running now" rather than "what did it ever run". Distinct from a Provenanc
 records where a Package was installed from.
 _Avoid_: apply log, history, audit trail
 
+**Build Identity**:
+The recorded inputs `packages build` writes next to a Package's generated artifact, in a sibling
+file rather than inside it: hashes of the Package's Datascript source tree, the generated Module
+typings, the Base Snapshot, the authoring library, and the pinned Datascript toolchain files, plus
+the pinned Bun version and the artifact's own hash. `lyracore packages check` and preflight
+recompute it against the checkout on disk and refuse, naming the input that changed.
+_Avoid_: identity file, build fingerprint, artifact metadata
+
 **Claim**:
 One Package's statement about one row: the table, the typed primary key, the operation, and the
 columns it sets. An update names only the columns it changes; an insert carries the whole row. Row
