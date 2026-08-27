@@ -123,3 +123,43 @@ pub const fn is_fixture_reserved_spell_id(spell_id: u32) -> bool {
     (spell_id >= FIXTURE_SPELL_ID_FLOOR && spell_id <= FIXTURE_SPELL_ID_CEIL)
         || (spell_id >= FIXTURE_RESERVED_ID_FLOOR && spell_id <= FIXTURE_RESERVED_ID_CEIL)
 }
+
+// ===============================================================================================
+//  items
+// ===============================================================================================
+
+/// Lowest item identifier a Package may INSERT.
+///
+/// The second application of the band formula in this module's header. A ClassicDB-shaped
+/// `item_template` dump for this client build tops out under 24,000 (`module/src/seed.rs`'s own
+/// synthetic-fixture comment); two decimal orders above that is still comfortably under
+/// [`RESERVED_ID_CEIL`], so — exactly as for [`PACKAGE_SPELL_ID_FLOOR`] — the reserved bands are
+/// the binding constraint, not the client headroom. The floor sits one whole decade above the
+/// Package spell range so the millions column stays a family-at-a-glance signal across tables, not
+/// only within one: `6` means a Package spell, `7` means a Package item.
+pub const PACKAGE_ITEM_ID_FLOOR: u32 = 7_000_000;
+
+/// Highest item identifier a Package may INSERT. One million identifiers, the same width as the
+/// Package spell range.
+pub const PACKAGE_ITEM_ID_CEIL: u32 = 7_999_999;
+
+const _: () = assert!(PACKAGE_ITEM_ID_FLOOR <= PACKAGE_ITEM_ID_CEIL);
+const _: () = assert!(RESERVED_ID_CEIL < PACKAGE_ITEM_ID_FLOOR);
+
+/// True when a Package may INSERT an item at this identifier.
+#[must_use]
+pub const fn is_package_item_id(entry: u32) -> bool {
+    entry >= PACKAGE_ITEM_ID_FLOOR && entry <= PACKAGE_ITEM_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation.
+///
+/// Unlike spells, items have no family-specific fixture cluster: the seeded item fixtures either
+/// ride real vanilla entries (`module/src/seed.rs`'s starter weapon, Hearthstone, Soul Shard) or
+/// sit inside the project-wide `509xxxx` band (`FIXTURE_BLADE`/`FIXTURE_JERKY`/`FIXTURE_REINS`,
+/// `module/src/seed/fixtures.rs`) — so the project-wide band is the whole check.
+#[must_use]
+pub const fn is_fixture_reserved_item_id(entry: u32) -> bool {
+    entry >= FIXTURE_RESERVED_ID_FLOOR && entry <= FIXTURE_RESERVED_ID_CEIL
+}

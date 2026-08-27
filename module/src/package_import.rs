@@ -33,12 +33,13 @@
 
 #[cfg(test)]
 mod fixtures;
+mod items;
 mod spell;
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
-    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, SPELL_FAMILY,
+    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, ITEM_FAMILY, SPELL_FAMILY,
 };
 
 use crate::helpers::require_operator;
@@ -57,16 +58,19 @@ const ARTIFACT_SEPARATOR: char = '\n';
 enum Family {
     /// `game_spell` and `game_spell_effect`.
     Spell,
+    /// `game_item_template`.
+    Item,
 }
 
 impl Family {
     /// Every family this build applies, in the order a refusal lists them.
-    const ALL: &'static [Self] = &[Self::Spell];
+    const ALL: &'static [Self] = &[Self::Spell, Self::Item];
 
     /// The family name the importer stamps and the reducer takes.
     const fn as_str(self) -> &'static str {
         match self {
             Self::Spell => SPELL_FAMILY,
+            Self::Item => ITEM_FAMILY,
         }
     }
 
@@ -81,13 +85,9 @@ impl Family {
             .copied()
             .find(|family| family.as_str() == name)
             .ok_or_else(|| {
-                let known: Vec<String> = Self::ALL
-                    .iter()
-                    .map(|family| format!("`{}`", family.as_str()))
-                    .collect();
                 format!(
-                    "import family `{name}` has no Package Delta schema; this build applies {} only",
-                    known.join(", ")
+                    "import family `{name}` has no Package Delta schema; this build applies {}",
+                    known_families()
                 )
             })
     }
@@ -96,6 +96,7 @@ impl Family {
     fn update_target(self, ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
         match self {
             Self::Spell => spell::update_target(ctx, row),
+            Self::Item => items::update_target(ctx, row),
         }
     }
 
@@ -104,6 +105,7 @@ impl Family {
     fn clear_package_range(self, ctx: &ReducerContext) {
         match self {
             Self::Spell => spell::clear_package_range(ctx),
+            Self::Item => items::clear_package_range(ctx),
         }
     }
 
@@ -111,7 +113,23 @@ impl Family {
     fn write_row(self, ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
         match self {
             Self::Spell => spell::write_row(ctx, row),
+            Self::Item => items::write_row(ctx, row),
         }
+    }
+}
+
+/// The whole family catalogue as a prose list — "`a`", "`a` or `b`", "`a`, `b` or `c`" — so a
+/// refusal reads naturally whatever `Family::ALL`'s length is. Mirrors
+/// `lyracore_package_delta::error`'s `known_tables`.
+fn known_families() -> String {
+    let quoted: Vec<String> = Family::ALL
+        .iter()
+        .map(|family| format!("`{}`", family.as_str()))
+        .collect();
+    match quoted.split_last() {
+        None => "no import family in this build".to_owned(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
     }
 }
 
@@ -164,6 +182,13 @@ pub struct PackageImport {
     /// development shard), which is a fact worth recording rather than a reason to refuse.
     pub base_source_sha: String,
     pub applied_at: Timestamp,
+    /// Rows this Package invented, across every table its family owns — the family-generic
+    /// successor to `inserted_spells`/`inserted_effects` above. Those two keep their names (a
+    /// durable column is not renamed for a later family); a non-spell family reports through this
+    /// column alone and leaves the legacy pair at zero, and the spell writer fills this one too, as
+    /// the sum of its own two. END-appended + `#[default(0u64)]` → additive auto-migration.
+    #[default(0u64)]
+    pub inserted_rows: u64,
 }
 
 /// Apply the complete set of enabled Package Deltas for one Import Family.
@@ -458,6 +483,7 @@ fn stamp_provenance(ctx: &ReducerContext, family: Family, plan: &ApplyPlan) {
             inserted_effects: planned.counts.inserted_effects,
             base_source_sha: base_source_sha.clone(),
             applied_at: ctx.timestamp,
+            inserted_rows: planned.counts.inserted_rows,
         });
     }
 }
@@ -469,8 +495,8 @@ fn stamp_provenance(ctx: &ReducerContext, family: Family, plan: &ApplyPlan) {
 #[cfg(test)]
 mod tests {
     use super::fixtures::{
-        artifact, effect_claim, plan, spell_claim, HASH_A, PACKAGE_SPELL, REAL_SPELL,
-        WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
+        artifact, effect_claim, item_claim, plan, spell_claim, HASH_A, PACKAGE_ITEM, PACKAGE_SPELL,
+        REAL_SPELL, WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW, WHOLE_SPELL_ROW,
     };
     use super::{check_claims_belong_to, ApplyPlan, Family, ARTIFACT_SEPARATOR};
     use lyracore_package_delta::PackageDelta;
@@ -637,13 +663,15 @@ mod tests {
         let refusal = Family::parse("quests").expect_err("an unsupported family is refused");
 
         assert!(refusal.contains("`quests`"), "{refusal}");
-        assert!(refusal.contains("applies `spell` only"), "{refusal}");
+        assert!(refusal.contains("applies `spell` or `items`"), "{refusal}");
     }
 
     #[test]
-    fn the_spell_family_is_the_one_this_build_applies() {
+    fn the_spell_and_item_families_are_the_ones_this_build_applies() {
         assert_eq!(Family::parse("spell"), Ok(Family::Spell));
         assert_eq!(Family::Spell.as_str(), "spell");
+        assert_eq!(Family::parse("items"), Ok(Family::Item));
+        assert_eq!(Family::Item.as_str(), "items");
     }
 
     /// Every claimable table belongs to the spell family today, so a spell plan is in scope whole.
@@ -657,5 +685,19 @@ mod tests {
         let plan = plan(&[artifact("example.bolt", &claims)]).expect("plan builds");
 
         assert_eq!(check_claims_belong_to(Family::Spell, &plan.rows), Ok(()));
+    }
+
+    /// An items plan is checked against the items family, not the spell family it happens to sit
+    /// beside in this build's catalogue.
+    #[test]
+    fn an_item_plan_claims_only_item_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &item_claim(PACKAGE_ITEM, "insert", WHOLE_ITEM_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(check_claims_belong_to(Family::Item, &plan.rows), Ok(()));
+        assert!(check_claims_belong_to(Family::Spell, &plan.rows).is_err());
     }
 }

@@ -12,7 +12,8 @@ use core::fmt;
 
 use crate::ids::{
     FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR, FIXTURE_SPELL_ID_CEIL,
-    FIXTURE_SPELL_ID_FLOOR, MAX_SPELL_EFFECT_INDEX, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+    FIXTURE_SPELL_ID_FLOOR, MAX_SPELL_EFFECT_INDEX, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR,
+    PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
 };
 use crate::schema::{FieldType, Table};
 
@@ -91,6 +92,16 @@ pub enum DeltaError {
         /// The rejected index.
         effect_index: u8,
     },
+    /// An inserted item sits outside the range a Package may invent.
+    ItemIdNotClientSafe {
+        /// The rejected identifier.
+        entry: u32,
+    },
+    /// The claim targets a seeded fixture row.
+    ItemIdFixtureReserved {
+        /// The rejected identifier.
+        entry: u32,
+    },
     /// A claim names a column the table does not have.
     UnknownField {
         /// The claimed table.
@@ -157,98 +168,130 @@ pub enum DeltaError {
 impl fmt::Display for DeltaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Malformed(detail) => write!(f, "not valid JSON: {detail}"),
-            Self::UnsupportedVersion { found } => write!(
-                f,
-                "unsupported Package Delta version {found}; this build implements version {}",
-                crate::DELTA_VERSION
-            ),
-            Self::MissingMember { path } => write!(f, "missing member `{path}`"),
-            Self::UnexpectedMember { path, member } => {
-                write!(f, "unexpected member `{member}` in `{path}`")
-            }
-            Self::WrongJsonType { path, expected } => {
-                write!(f, "member `{path}` must be {expected}")
-            }
-            Self::InvalidPackageId { found } => write!(
-                f,
-                "`{found}` is not a Package identity: expected 1 to 64 characters of \
-                 a-z, 0-9, `-`, `_` or `.`"
-            ),
-            Self::InvalidSourceHash { found } => write!(
-                f,
-                "`{found}` is not a source hash: expected 64 lowercase hexadecimal characters"
-            ),
-            Self::UnknownTable { found } => write!(
-                f,
-                "unknown table `{found}`; a Package Delta claims {}",
-                known_tables()
-            ),
-            Self::UnknownOperation { found } => {
-                write!(
-                    f,
-                    "unknown operation `{found}`; expected `insert` or `update`"
-                )
-            }
-            Self::DeleteNotSupported => f.write_str(
-                "row deletion is not supported; override the row to inert with an `update` instead",
-            ),
-            Self::MalformedKey { table, detail } => {
-                write!(f, "malformed `{table}` key: {detail}")
-            }
-            Self::SpellIdNotClientSafe { spell_id } => write!(
-                f,
-                "spell {spell_id} is outside the Package spell range \
-                 {PACKAGE_SPELL_ID_FLOOR}..={PACKAGE_SPELL_ID_CEIL}; an inserted spell must use an \
-                 identifier no client and no import can already own"
-            ),
-            Self::SpellIdFixtureReserved { spell_id } => write!(
-                f,
-                "spell {spell_id} is fixture-reserved \
-                 ({FIXTURE_SPELL_ID_FLOOR}..={FIXTURE_SPELL_ID_CEIL} and \
-                 {FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
-            ),
-            Self::EffectIndexOutOfRange { effect_index } => write!(
-                f,
-                "effect index {effect_index} is out of range; a spell has effects \
-                 0..={MAX_SPELL_EFFECT_INDEX}"
-            ),
-            Self::UnknownField { table, field } => {
-                write!(f, "`{table}` has no claimable column `{field}`")
-            }
-            Self::UnknownFieldType { field, found } => {
-                write!(f, "column `{field}` declares unknown type `{found}`")
-            }
-            Self::FieldTypeMismatch {
-                table,
-                field,
-                expected,
-                found,
-            } => write!(
-                f,
-                "`{table}`.`{field}` is `{expected}`, but the claim declares `{found}`"
-            ),
-            Self::ValueOutOfRange { field, ty, literal } => {
-                write!(f, "column `{field}`: `{literal}` does not fit `{ty}`")
-            }
-            Self::KeyColumnClaimed { table, field } => write!(
-                f,
-                "`{table}`.`{field}` is part of the primary key; the claim's `key` already names it"
-            ),
-            Self::IncompleteInsert { table, missing } => write!(
-                f,
-                "an `insert` into `{table}` must carry the whole row; {} column(s) absent: {}",
-                missing.len(),
-                missing.join(", ")
-            ),
-            Self::EmptyUpdate { table } => {
-                write!(f, "an `update` on `{table}` must claim at least one column")
-            }
-            Self::DuplicateClaim { table, key } => write!(
-                f,
-                "`{table}` row {key} is claimed twice by one Package; merge the two claims"
-            ),
+            Self::SpellIdNotClientSafe { .. }
+            | Self::SpellIdFixtureReserved { .. }
+            | Self::EffectIndexOutOfRange { .. }
+            | Self::ItemIdNotClientSafe { .. }
+            | Self::ItemIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
+            other => fmt_general(other, f),
         }
+    }
+}
+
+/// The identifier-band refusals, split out of [`DeltaError`]'s `Display` so neither half of the
+/// message trips `clippy::too_many_lines` as a family's bands add their own variants.
+fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match err {
+        DeltaError::SpellIdNotClientSafe { spell_id } => write!(
+            f,
+            "spell {spell_id} is outside the Package spell range \
+             {PACKAGE_SPELL_ID_FLOOR}..={PACKAGE_SPELL_ID_CEIL}; an inserted spell must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::SpellIdFixtureReserved { spell_id } => write!(
+            f,
+            "spell {spell_id} is fixture-reserved \
+             ({FIXTURE_SPELL_ID_FLOOR}..={FIXTURE_SPELL_ID_CEIL} and \
+             {FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::EffectIndexOutOfRange { effect_index } => write!(
+            f,
+            "effect index {effect_index} is out of range; a spell has effects \
+             0..={MAX_SPELL_EFFECT_INDEX}"
+        ),
+        DeltaError::ItemIdNotClientSafe { entry } => write!(
+            f,
+            "item {entry} is outside the Package item range \
+             {PACKAGE_ITEM_ID_FLOOR}..={PACKAGE_ITEM_ID_CEIL}; an inserted item must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::ItemIdFixtureReserved { entry } => write!(
+            f,
+            "item {entry} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        other => unreachable!("{other:?} is not an identifier-policy refusal"),
+    }
+}
+
+/// Every refusal that is not an identifier-band policy.
+fn fmt_general(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match err {
+        DeltaError::Malformed(detail) => write!(f, "not valid JSON: {detail}"),
+        DeltaError::UnsupportedVersion { found } => write!(
+            f,
+            "unsupported Package Delta version {found}; this build implements version {}",
+            crate::DELTA_VERSION
+        ),
+        DeltaError::MissingMember { path } => write!(f, "missing member `{path}`"),
+        DeltaError::UnexpectedMember { path, member } => {
+            write!(f, "unexpected member `{member}` in `{path}`")
+        }
+        DeltaError::WrongJsonType { path, expected } => {
+            write!(f, "member `{path}` must be {expected}")
+        }
+        DeltaError::InvalidPackageId { found } => write!(
+            f,
+            "`{found}` is not a Package identity: expected 1 to 64 characters of \
+             a-z, 0-9, `-`, `_` or `.`"
+        ),
+        DeltaError::InvalidSourceHash { found } => write!(
+            f,
+            "`{found}` is not a source hash: expected 64 lowercase hexadecimal characters"
+        ),
+        DeltaError::UnknownTable { found } => write!(
+            f,
+            "unknown table `{found}`; a Package Delta claims {}",
+            known_tables()
+        ),
+        DeltaError::UnknownOperation { found } => {
+            write!(
+                f,
+                "unknown operation `{found}`; expected `insert` or `update`"
+            )
+        }
+        DeltaError::DeleteNotSupported => f.write_str(
+            "row deletion is not supported; override the row to inert with an `update` instead",
+        ),
+        DeltaError::MalformedKey { table, detail } => {
+            write!(f, "malformed `{table}` key: {detail}")
+        }
+        DeltaError::UnknownField { table, field } => {
+            write!(f, "`{table}` has no claimable column `{field}`")
+        }
+        DeltaError::UnknownFieldType { field, found } => {
+            write!(f, "column `{field}` declares unknown type `{found}`")
+        }
+        DeltaError::FieldTypeMismatch {
+            table,
+            field,
+            expected,
+            found,
+        } => write!(
+            f,
+            "`{table}`.`{field}` is `{expected}`, but the claim declares `{found}`"
+        ),
+        DeltaError::ValueOutOfRange { field, ty, literal } => {
+            write!(f, "column `{field}`: `{literal}` does not fit `{ty}`")
+        }
+        DeltaError::KeyColumnClaimed { table, field } => write!(
+            f,
+            "`{table}`.`{field}` is part of the primary key; the claim's `key` already names it"
+        ),
+        DeltaError::IncompleteInsert { table, missing } => write!(
+            f,
+            "an `insert` into `{table}` must carry the whole row; {} column(s) absent: {}",
+            missing.len(),
+            missing.join(", ")
+        ),
+        DeltaError::EmptyUpdate { table } => {
+            write!(f, "an `update` on `{table}` must claim at least one column")
+        }
+        DeltaError::DuplicateClaim { table, key } => write!(
+            f,
+            "`{table}` row {key} is claimed twice by one Package; merge the two claims"
+        ),
+        other => unreachable!("{other:?} is an identifier-policy refusal, not a general one"),
     }
 }
 

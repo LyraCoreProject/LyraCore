@@ -17,6 +17,10 @@ use core::fmt;
 /// The Import Family that owns the spell tables.
 pub const SPELL_FAMILY: &str = "spell";
 
+/// The Import Family that owns the item catalogue. The same name the `--dump` importer's `items`
+/// `--family` block stamps, so an apply for this family lines up with the base import it follows.
+pub const ITEM_FAMILY: &str = "items";
+
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
 /// needs no translation step.
 ///
@@ -31,12 +35,15 @@ pub enum Table {
     Spell,
     /// `game_spell_effect` — one effect of a spell.
     SpellEffect,
+    // ---- items ----
+    /// `game_item_template` — the item catalogue header.
+    Item,
 }
 
 impl Table {
     /// Every table this build knows, in canonical order, so a refusal can name the whole catalogue
     /// and a test can walk it. Kept in step with [`Table::parse`] by `tests/families.rs`.
-    pub const ALL: &'static [Self] = &[Self::Spell, Self::SpellEffect];
+    pub const ALL: &'static [Self] = &[Self::Spell, Self::SpellEffect, Self::Item];
 
     /// The durable table name, and the value the artifact's `table` member carries.
     #[must_use]
@@ -44,6 +51,7 @@ impl Table {
         match self {
             Self::Spell => "game_spell",
             Self::SpellEffect => "game_spell_effect",
+            Self::Item => "game_item_template",
         }
     }
 
@@ -56,6 +64,7 @@ impl Table {
     pub const fn family(self) -> &'static str {
         match self {
             Self::Spell | Self::SpellEffect => SPELL_FAMILY,
+            Self::Item => ITEM_FAMILY,
         }
     }
 
@@ -65,6 +74,7 @@ impl Table {
         match name {
             "game_spell" => Some(Self::Spell),
             "game_spell_effect" => Some(Self::SpellEffect),
+            "game_item_template" => Some(Self::Item),
             _ => None,
         }
     }
@@ -80,6 +90,7 @@ impl Table {
         match self {
             Self::Spell => SPELL_COLUMNS,
             Self::SpellEffect => SPELL_EFFECT_COLUMNS,
+            Self::Item => ITEM_COLUMNS,
         }
     }
 
@@ -159,6 +170,74 @@ const SPELL_EFFECT_COLUMNS: &[Column] = &[
     column("p1", FieldType::I32),
     column("script_id", FieldType::U32),
     column("enters_combat", FieldType::Bool),
+];
+
+// ---- items ----
+
+/// `game_item_template` minus its `entry` primary key.
+///
+/// Hand-maintained against `module/src/items/tables.rs`'s `ItemTemplate` struct, the same
+/// convention `SPELL_COLUMNS` follows against `module/src/spell/tables.rs` — declaration order,
+/// name and type must match exactly, or `every_claimable_item_column_has_a_setter`
+/// (`module/src/package_import/items.rs`) fails against a live setter.
+const ITEM_COLUMNS: &[Column] = &[
+    column("class", FieldType::U8),
+    column("subclass", FieldType::U8),
+    column("name", FieldType::Str),
+    column("display_id", FieldType::U32),
+    column("quality", FieldType::U8),
+    column("inventory_type", FieldType::U8),
+    column("item_level", FieldType::U8),
+    column("required_level", FieldType::U8),
+    column("max_durability", FieldType::U32),
+    column("buy_price", FieldType::U32),
+    column("sell_price", FieldType::U32),
+    column("max_stack", FieldType::U32),
+    column("damage_min", FieldType::F32),
+    column("damage_max", FieldType::F32),
+    column("delay_ms", FieldType::U32),
+    column("stat_strength", FieldType::I32),
+    column("stat_agility", FieldType::I32),
+    column("stat_stamina", FieldType::I32),
+    column("stat_intellect", FieldType::I32),
+    column("stat_spirit", FieldType::I32),
+    column("stat_crit", FieldType::I32),
+    column("stat_hit", FieldType::I32),
+    column("stat_armor", FieldType::I32),
+    column("block_value", FieldType::I32),
+    column("restores_power", FieldType::Bool),
+    column("spellid_1", FieldType::U32),
+    column("spelltrigger_1", FieldType::U8),
+    column("spellid_2", FieldType::U32),
+    column("spelltrigger_2", FieldType::U8),
+    column("container_slots", FieldType::U8),
+    column("sheath", FieldType::U8),
+    column("bonding", FieldType::U8),
+    column("holy_res", FieldType::I32),
+    column("fire_res", FieldType::I32),
+    column("nature_res", FieldType::I32),
+    column("frost_res", FieldType::I32),
+    column("shadow_res", FieldType::I32),
+    column("arcane_res", FieldType::I32),
+    column("spellid_3", FieldType::U32),
+    column("spelltrigger_3", FieldType::U8),
+    column("spellid_4", FieldType::U32),
+    column("spelltrigger_4", FieldType::U8),
+    column("spellid_5", FieldType::U32),
+    column("spelltrigger_5", FieldType::U8),
+    column("required_skill", FieldType::U32),
+    column("required_skill_rank", FieldType::U32),
+    column("required_reputation_faction", FieldType::U32),
+    column("required_reputation_rank", FieldType::U32),
+    column("max_count", FieldType::U32),
+    column("item_flags", FieldType::U32),
+    column("page_text", FieldType::U32),
+    column("start_quest", FieldType::U32),
+    column("bag_family", FieldType::U32),
+    column("buy_count", FieldType::U32),
+    column("food_type", FieldType::U8),
+    column("allowed_class", FieldType::U32),
+    column("allowed_race", FieldType::U32),
 ];
 
 /// The type tag a claimed value carries.
