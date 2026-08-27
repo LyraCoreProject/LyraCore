@@ -2,7 +2,10 @@
 
 mod common;
 
-use common::{artifact, effect_claim, spell_claim, PACKAGE_SPELL, REAL_SPELL, WHOLE_SPELL_ROW};
+use common::{
+    artifact, effect_claim, item_claim, spell_claim, PACKAGE_ITEM, PACKAGE_SPELL, REAL_SPELL,
+    WHOLE_ITEM_ROW, WHOLE_SPELL_ROW,
+};
 use lyracore_package_delta::{trace, ClaimConflict, Operation, PackageDelta, Table};
 
 fn delta(package: &str, claims: &str) -> PackageDelta {
@@ -281,4 +284,50 @@ fn tracing_nothing_is_clear() {
 
     assert!(traced.is_clear());
     assert!(traced.rows().is_empty());
+}
+
+/// The item family traces the same way the spell family does: two Packages tuning different
+/// columns of one item merge, cleanly.
+#[test]
+fn two_packages_claiming_different_columns_of_one_item_merge() {
+    let first = delta(
+        "example.first",
+        &item_claim(25, "update", r#"{"buy_price":{"type":"u32","value":100}}"#),
+    );
+    let second = delta(
+        "example.second",
+        &item_claim(25, "update", r#"{"sell_price":{"type":"u32","value":25}}"#),
+    );
+
+    let traced = trace(&[first, second]);
+
+    assert!(traced.is_clear(), "{:?}", traced.conflicts());
+    assert_eq!(traced.rows().len(), 1);
+    assert_eq!(traced.rows()[0].table(), Table::Item);
+}
+
+/// Two Packages inventing the same item entry conflict the same way two Packages inventing the
+/// same spell do.
+#[test]
+fn two_packages_inserting_the_same_item_entry_conflict() {
+    let first = delta(
+        "example.first",
+        &item_claim(PACKAGE_ITEM, "insert", WHOLE_ITEM_ROW),
+    );
+    let second = delta(
+        "example.second",
+        &item_claim(PACKAGE_ITEM, "insert", WHOLE_ITEM_ROW),
+    );
+
+    let traced = trace(&[first, second]);
+
+    let inserted = traced
+        .conflicts()
+        .iter()
+        .find(|c| matches!(c, ClaimConflict::InsertedRow { .. }))
+        .expect("the key collision must be reported");
+    let report = inserted.to_string();
+    assert!(report.contains("example.first"), "{report}");
+    assert!(report.contains("example.second"), "{report}");
+    assert!(report.contains("entry=7000001"), "{report}");
 }

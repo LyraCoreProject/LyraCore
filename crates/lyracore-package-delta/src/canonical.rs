@@ -77,6 +77,11 @@ fn write_key(out: &mut String, key: PrimaryKey) {
             out.push_str(&effect_index.to_string());
             out.push('}');
         }
+        PrimaryKey::Item { entry } => {
+            out.push_str("{\"entry\":");
+            out.push_str(&entry.to_string());
+            out.push('}');
+        }
     }
 }
 

@@ -1345,12 +1345,13 @@ where
     if !a.only.is_empty() && !a.spells {
         bail!("--only is only valid with --spells (the additive Spell.dbc allowlist)");
     }
-    // `spell` is the only Import Family with a Package Delta schema so far, so it is the only one
-    // with a stage that could reapply enabled Package claims.
-    if a.packages.is_some() && !a.spells {
+    // `--packages` needs an import family with a Package Delta stage to reapply: `--spells` (the
+    // `--dbc` spell importer) or an active `items` family (the `--dump` items block). A run that
+    // reaches neither has nothing for the stage to reapply onto.
+    if a.packages.is_some() && !a.spells && !family_active(&a, "items") {
         bail!(
-            "--packages is only valid with --spells (the only import family with a Package Delta \
-             stage)"
+            "--packages is only valid with --spells or an active `items` family (the import \
+             families with a Package Delta stage)"
         );
     }
     // The Base Snapshot is derived from Spell.dbc, so it needs the client dir and nothing else. It
@@ -3650,6 +3651,22 @@ pub(crate) fn family_active(args: &Args, name: &str) -> bool {
     }
 }
 
+/// The items family's Package Delta stage: reapplies every enabled Package's `game_item_template`
+/// claims once the items base rows are back — the `--dump` items block's counterpart to
+/// `spell::run_spells`'s stage. Runs whenever items is part of this invocation (`--family items` or
+/// a full run), on the dry-run path as well as `--apply`: a check has to print the same plan an
+/// apply would send, and `package_delta::reapply` itself decides which of those two this call is.
+fn run_items_package_stage(args: &Args) -> Result<()> {
+    if !family_active(args, "items") {
+        return Ok(());
+    }
+    match &args.packages {
+        Some(root) => package_delta::reapply(args, "items", root)?,
+        None => package_delta::warn_not_reapplied("items"),
+    }
+    Ok(())
+}
+
 /// Everything the `--dump` ETL computes for ONE run: the plain-SQL clear+reload statements (already
 /// family-gated — see `family_active`), the two Timestamp-bearing spawn payloads (packed, batched),
 /// and the provenance `stamps` (family, row_count) for every family that actually had its block
@@ -5229,6 +5246,7 @@ fn main() -> Result<()> {
             "-- load spawns via reducer: batch 0 = import_creature_spawns (clears+loads), the rest = import_creature_spawns_append (load only).\n  e.g. spacetime call -s {} {} import_creature_spawns '<batch>'\n  (sample row: {})",
             args.server, args.db, plan.spawn_batches.first().and_then(|b| b.split(';').next()).unwrap_or("")
         );
+        run_items_package_stage(&args)?;
         return Ok(());
     }
 
@@ -5315,6 +5333,10 @@ fn main() -> Result<()> {
         stamp_family(&args, family, &args.source_sha, &file_hash, *row_count)
             .with_context(|| format!("stamp_import_meta({family})"))?;
     }
+
+    // The Package Delta stage, last: items' base rows are back and stamped, so every enabled
+    // Package's claims go on top of them (mirrors `spell::run_spells`'s placement).
+    run_items_package_stage(&args)?;
     Ok(())
 }
 
@@ -6765,16 +6787,44 @@ mod tests {
     }
 
     #[test]
-    fn an_enabled_packages_root_without_the_spell_importer_is_refused() {
+    fn an_enabled_packages_root_without_a_package_delta_family_is_refused() {
+        // `--family loot` excludes items, and there is no `--spells` here either, so this run
+        // reaches no family with a Package Delta stage to reapply.
         let error = parse_args_from([
             "--dump",
             "/definitely/not/read.sql",
+            "--family",
+            "loot",
             "--packages",
             "packages",
         ])
         .err()
         .expect("--packages needs an import family with a Package Delta stage");
         assert!(format!("{error:#}").contains("--packages is only valid with --spells"));
+    }
+
+    #[test]
+    fn an_enabled_packages_root_with_the_items_family_active_parses() {
+        // A full run (no `--family`) activates items among the rest, so `--packages` is valid
+        // without naming `--family items` explicitly.
+        for argv in [
+            vec![
+                "--dump",
+                "/definitely/not/read.sql",
+                "--packages",
+                "packages",
+            ],
+            vec![
+                "--dump",
+                "/definitely/not/read.sql",
+                "--family",
+                "items",
+                "--packages",
+                "packages",
+            ],
+        ] {
+            parse_args_from(argv.clone()).unwrap_or_else(|e| panic!("{argv:?} must parse: {e}"));
+        }
     }
 
     #[test]

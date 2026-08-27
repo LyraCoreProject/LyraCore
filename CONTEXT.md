@@ -461,7 +461,8 @@ _Avoid_: collision (for a claim), merge error
 The identifiers a Package may invent in one Import Family. Each family that allows inserts owns one
 band, floored two decimal orders above the highest identifier a real client holds for its tables and
 above every reserved band. An apply clears the whole band before it writes, so a Package that leaves
-the enabled set takes its invented rows with it. The Package Spell Range is the worked example.
+the enabled set takes its invented rows with it. The Package Spell Range is the worked example; the
+Package Item Range is the second family to follow it.
 _Avoid_: custom id range, synthetic id range
 
 **Package Spell Range**:
@@ -470,10 +471,17 @@ highest real client spell and above every reserved band, so an inserted spell ca
 imported or fixture data.
 _Avoid_: custom id range, synthetic spell range
 
+**Package Item Range**:
+The items family's Package Identifier Range: 7,000,000 to 7,999,999. Above every reserved band, and
+one whole decade above the Package Spell Range so the millions column stays a family-at-a-glance
+signal across tables, not only within one.
+_Avoid_: custom id range, synthetic item range
+
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation, in any Import
 Family. Two kinds: the project-wide 5,090,000 to 5,099,999 band, and a family's own fixture cluster —
-for spells, 50,000 to 50,999.
+for spells, 50,000 to 50,999. Items have no fixture cluster of their own; their seeded fixtures ride
+real client entries or the project-wide band, so it is the whole check.
 _Avoid_: test id, reserved id (unqualified)
 
 ### Working method

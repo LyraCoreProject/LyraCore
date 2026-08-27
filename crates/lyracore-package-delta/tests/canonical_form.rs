@@ -2,7 +2,9 @@
 
 mod common;
 
-use common::{artifact, effect_claim, one_spell_update, spell_claim, HASH_A, PACKAGE_SPELL};
+use common::{
+    artifact, effect_claim, one_item_update, one_spell_update, spell_claim, HASH_A, PACKAGE_SPELL,
+};
 use lyracore_package_delta::{canonicalize, PackageDelta};
 
 #[test]
@@ -223,6 +225,26 @@ fn a_string_has_one_canonical_escaping() {
             r#""name":{{"type":"string","value":"{expected}"}}"#
         )),
         "{canonical}"
+    );
+}
+
+/// The item family's key shape canonicalizes the same deliberate way the spell family's does:
+/// a fixed member, plain decimal, no whitespace.
+#[test]
+fn an_item_claim_canonicalizes_to_a_pinned_member_order() {
+    let source = one_item_update(
+        "example.pkg",
+        25,
+        r#"{ "buy_price": { "type": "u32", "value": 500 } }"#,
+    );
+
+    let canonical = canonicalize(&source).expect("artifact parses");
+
+    assert_eq!(
+        canonical,
+        format!(
+            r#"{{"version":1,"package":"example.pkg","source_hash":"{HASH_A}","claims":[{{"table":"game_item_template","key":{{"entry":25}},"operation":"update","fields":{{"buy_price":{{"type":"u32","value":500}}}}}}]}}"#
+        )
     );
 }
 

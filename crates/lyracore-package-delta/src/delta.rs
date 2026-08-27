@@ -12,8 +12,8 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_spell_id, is_package_spell_id, packed_spell_effect_id,
-    MAX_SPELL_EFFECT_INDEX,
+    is_fixture_reserved_item_id, is_fixture_reserved_spell_id, is_package_item_id,
+    is_package_spell_id, packed_spell_effect_id, MAX_SPELL_EFFECT_INDEX,
 };
 use crate::schema::{FieldType, FieldValue, Table};
 
@@ -164,6 +164,12 @@ pub enum PrimaryKey {
         /// Which of the spell's effects, 0..=[`MAX_SPELL_EFFECT_INDEX`].
         effect_index: u8,
     },
+    // ---- items ----
+    /// A `game_item_template` row.
+    Item {
+        /// The item.
+        entry: u32,
+    },
 }
 
 impl PrimaryKey {
@@ -193,29 +199,49 @@ impl PrimaryKey {
         })
     }
 
+    /// Names an item row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for entry 0, and [`DeltaError::ItemIdFixtureReserved`] for a
+    /// seeded fixture item.
+    pub fn item(entry: u32) -> Result<Self, DeltaError> {
+        check_claimable_item_id(entry)?;
+        Ok(Self::Item { entry })
+    }
+
     /// The table this row lives in.
     #[must_use]
     pub const fn table(self) -> Table {
         match self {
             Self::Spell { .. } => Table::Spell,
             Self::SpellEffect { .. } => Table::SpellEffect,
+            Self::Item { .. } => Table::Item,
         }
     }
 
-    /// The spell this row belongs to, whichever spell table it is in.
+    /// The spell this row belongs to, for a spell-family key.
     ///
-    /// Total today because every table is a spell table. A family that is not the spell family
-    /// makes this match non-exhaustive, which is the point at which it has to become a question
-    /// only a spell key answers.
+    /// Every caller sits inside the spell family's own dispatch (`module/src/package_import/
+    /// spell.rs`), where `check_claims_belong_to` has already refused a foreign-family row before
+    /// this could run — so a foreign-family key reaching here is an internal invariant break, not
+    /// untrusted input.
+    ///
+    /// # Panics
+    /// If called on an item key.
     #[must_use]
-    pub const fn spell_id(self) -> u32 {
+    pub fn spell_id(self) -> u32 {
         match self {
             Self::Spell { spell_id } | Self::SpellEffect { spell_id, .. } => spell_id,
+            Self::Item { .. } => {
+                unreachable!(
+                    "`spell_id` is a spell-family accessor; a foreign-family key never reaches it"
+                )
+            }
         }
     }
 
     /// The durable primary-key value: `spell_id` for a header, the packed
-    /// `(spell_id << 2) | effect_index` for an effect.
+    /// `(spell_id << 2) | effect_index` for an effect, `entry` for an item.
     #[must_use]
     pub const fn row_id(self) -> u64 {
         match self {
@@ -224,6 +250,7 @@ impl PrimaryKey {
                 spell_id,
                 effect_index,
             } => packed_spell_effect_id(spell_id, effect_index),
+            Self::Item { entry } => entry as u64,
         }
     }
 }
@@ -236,6 +263,7 @@ impl fmt::Display for PrimaryKey {
                 spell_id,
                 effect_index,
             } => write!(f, "{{spell_id={spell_id}, effect_index={effect_index}}}"),
+            Self::Item { entry } => write!(f, "{{entry={entry}}}"),
         }
     }
 }
@@ -253,6 +281,13 @@ fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
                 Err(DeltaError::SpellIdNotClientSafe { spell_id })
             }
         }
+        PrimaryKey::Item { entry } => {
+            if is_package_item_id(entry) {
+                Ok(())
+            } else {
+                Err(DeltaError::ItemIdNotClientSafe { entry })
+            }
+        }
     }
 }
 
@@ -266,6 +301,20 @@ fn check_claimable_spell_id(table: Table, spell_id: u32) -> Result<(), DeltaErro
     }
     if is_fixture_reserved_spell_id(spell_id) {
         return Err(DeltaError::SpellIdFixtureReserved { spell_id });
+    }
+    Ok(())
+}
+
+/// An item identifier is refused the same way under every operation when it is 0 or fixture-owned.
+fn check_claimable_item_id(entry: u32) -> Result<(), DeltaError> {
+    if entry == 0 {
+        return Err(DeltaError::MalformedKey {
+            table: Table::Item,
+            detail: "`entry` 0 is not an item".to_owned(),
+        });
+    }
+    if is_fixture_reserved_item_id(entry) {
+        return Err(DeltaError::ItemIdFixtureReserved { entry });
     }
     Ok(())
 }
@@ -388,6 +437,7 @@ fn is_key_column(table: Table, name: &str) -> bool {
     match table {
         Table::Spell => name == "spell_id",
         Table::SpellEffect => matches!(name, "id" | "spell_id" | "effect_index"),
+        Table::Item => name == "entry",
     }
 }
 
@@ -506,8 +556,15 @@ impl PackageDelta {
         for claim in &self.claims {
             match (claim.operation(), claim.table()) {
                 (Operation::Update, _) => counts.updated_rows += 1,
-                (Operation::Insert, Table::Spell) => counts.inserted_spells += 1,
-                (Operation::Insert, Table::SpellEffect) => counts.inserted_effects += 1,
+                (Operation::Insert, Table::Spell) => {
+                    counts.inserted_spells += 1;
+                    counts.inserted_rows += 1;
+                }
+                (Operation::Insert, Table::SpellEffect) => {
+                    counts.inserted_effects += 1;
+                    counts.inserted_rows += 1;
+                }
+                (Operation::Insert, Table::Item) => counts.inserted_rows += 1,
             }
         }
         counts
@@ -520,6 +577,12 @@ impl PackageDelta {
 /// and a family adds counters rather than renaming these. [`PackageDelta::claim_counts`] tallies
 /// them with a match over every table, which is where a new family states what its inserts count
 /// as.
+///
+/// `inserted_spells`/`inserted_effects` are the spell family's own counts, kept under their
+/// original names rather than renamed for a later family. `inserted_rows` is the family-generic
+/// successor: every family's inserts count here, spell's included, so a reader that knows only this
+/// column still sees the whole picture. A non-spell family (items today) leaves the legacy pair at
+/// zero and reports through `inserted_rows` alone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClaimCounts {
     /// Rows the Package changes but does not own, across every table.
@@ -528,6 +591,8 @@ pub struct ClaimCounts {
     pub inserted_spells: u64,
     /// `game_spell_effect` rows the Package invents.
     pub inserted_effects: u64,
+    /// Rows the Package invents, across every table its family owns.
+    pub inserted_rows: u64,
 }
 
 fn parse_claim(value: &Value, index: usize) -> Result<Claim, DeltaError> {
@@ -568,6 +633,7 @@ fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
     let expected: &[&str] = match table {
         Table::Spell => &["spell_id"],
         Table::SpellEffect => &["effect_index", "spell_id"],
+        Table::Item => &["entry"],
     };
     for name in key.keys() {
         if !expected.contains(&name.as_str()) {
@@ -586,12 +652,19 @@ fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
         }
     }
 
-    let spell_id = key_number(key, table, "spell_id", u64::from(u32::MAX))? as u32;
     match table {
-        Table::Spell => PrimaryKey::spell(spell_id),
+        Table::Spell => {
+            let spell_id = key_number(key, table, "spell_id", u64::from(u32::MAX))? as u32;
+            PrimaryKey::spell(spell_id)
+        }
         Table::SpellEffect => {
+            let spell_id = key_number(key, table, "spell_id", u64::from(u32::MAX))? as u32;
             let effect_index = key_number(key, table, "effect_index", u64::from(u8::MAX))? as u8;
             PrimaryKey::spell_effect(spell_id, effect_index)
+        }
+        Table::Item => {
+            let entry = key_number(key, table, "entry", u64::from(u32::MAX))? as u32;
+            PrimaryKey::item(entry)
         }
     }
 }

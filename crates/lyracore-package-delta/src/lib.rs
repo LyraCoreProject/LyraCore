@@ -61,15 +61,17 @@
 //! Every claimable table belongs to one Import Family, the unit a base import clears and reloads
 //! and the unit an apply runs for. [`Table`] is one closed enum with its variants grouped by
 //! family, and [`Table::family`] names the owner, so an applier called for one family can tell that
-//! a claim belongs to the import it is running. This build's catalogue is the spell family alone.
+//! a claim belongs to the import it is running. This build's catalogue is the spell family and the
+//! item family.
 //!
 //! # Identifier policy
 //!
 //! An inserted row must sit in its family's Package identifier band, which no client and no import
-//! can reach — for spells, [`PACKAGE_SPELL_ID_FLOOR`]..=[`PACKAGE_SPELL_ID_CEIL`]. An update may
-//! name any row — tuning real data is the point — except a fixture-reserved one, which no Package
-//! may touch under any operation. See [`ids`] for the bands, the formula a family's band follows,
-//! and why they sit where they do.
+//! can reach — for spells, [`PACKAGE_SPELL_ID_FLOOR`]..=[`PACKAGE_SPELL_ID_CEIL`]; for items,
+//! [`PACKAGE_ITEM_ID_FLOOR`]..=[`PACKAGE_ITEM_ID_CEIL`]. An update may name any row — tuning real
+//! data is the point — except a fixture-reserved one, which no Package may touch under any
+//! operation. See [`ids`] for the bands, the formula a family's band follows, and why they sit
+//! where they do.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::pedantic)]
@@ -89,10 +91,11 @@ pub use delta::{
 };
 pub use error::DeltaError;
 pub use ids::{
-    is_fixture_reserved_spell_id, is_package_spell_id, packed_spell_effect_id,
-    MAX_SPELL_EFFECT_INDEX, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+    is_fixture_reserved_item_id, is_fixture_reserved_spell_id, is_package_item_id,
+    is_package_spell_id, packed_spell_effect_id, MAX_SPELL_EFFECT_INDEX, PACKAGE_ITEM_ID_CEIL,
+    PACKAGE_ITEM_ID_FLOOR, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
 };
-pub use schema::{Column, FieldType, FieldValue, Table, SPELL_FAMILY};
+pub use schema::{Column, FieldType, FieldValue, Table, ITEM_FAMILY, SPELL_FAMILY};
 pub use trace::{trace, ClaimConflict, ClaimTrace, ClaimedField, TracedRow};
 
 /// Reads an artifact and writes it back in canonical form.

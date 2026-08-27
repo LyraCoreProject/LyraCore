@@ -81,6 +81,75 @@ pub(super) fn effect_claim(
     )
 }
 
+pub(super) const PACKAGE_ITEM: u32 = 7_000_001;
+pub(super) const REAL_ITEM: u32 = 25; // Worn Shortsword — a real imported item template.
+
+pub(super) const WHOLE_ITEM_ROW: &str = r#"{
+    "class": { "type": "u8", "value": 2 },
+    "subclass": { "type": "u8", "value": 7 },
+    "name": { "type": "string", "value": "Kindled Blade" },
+    "display_id": { "type": "u32", "value": 1420 },
+    "quality": { "type": "u8", "value": 1 },
+    "inventory_type": { "type": "u8", "value": 21 },
+    "item_level": { "type": "u8", "value": 5 },
+    "required_level": { "type": "u8", "value": 3 },
+    "max_durability": { "type": "u32", "value": 60 },
+    "buy_price": { "type": "u32", "value": 500 },
+    "sell_price": { "type": "u32", "value": 125 },
+    "max_stack": { "type": "u32", "value": 1 },
+    "damage_min": { "type": "f32", "value": 3.0 },
+    "damage_max": { "type": "f32", "value": 9.0 },
+    "delay_ms": { "type": "u32", "value": 1900 },
+    "stat_strength": { "type": "i32", "value": 1 },
+    "stat_agility": { "type": "i32", "value": 0 },
+    "stat_stamina": { "type": "i32", "value": 0 },
+    "stat_intellect": { "type": "i32", "value": 0 },
+    "stat_spirit": { "type": "i32", "value": 0 },
+    "stat_crit": { "type": "i32", "value": 0 },
+    "stat_hit": { "type": "i32", "value": 0 },
+    "stat_armor": { "type": "i32", "value": 0 },
+    "block_value": { "type": "i32", "value": 0 },
+    "restores_power": { "type": "bool", "value": false },
+    "spellid_1": { "type": "u32", "value": 0 },
+    "spelltrigger_1": { "type": "u8", "value": 0 },
+    "spellid_2": { "type": "u32", "value": 0 },
+    "spelltrigger_2": { "type": "u8", "value": 0 },
+    "container_slots": { "type": "u8", "value": 0 },
+    "sheath": { "type": "u8", "value": 3 },
+    "bonding": { "type": "u8", "value": 0 },
+    "holy_res": { "type": "i32", "value": 0 },
+    "fire_res": { "type": "i32", "value": 0 },
+    "nature_res": { "type": "i32", "value": 0 },
+    "frost_res": { "type": "i32", "value": 0 },
+    "shadow_res": { "type": "i32", "value": 0 },
+    "arcane_res": { "type": "i32", "value": 0 },
+    "spellid_3": { "type": "u32", "value": 0 },
+    "spelltrigger_3": { "type": "u8", "value": 0 },
+    "spellid_4": { "type": "u32", "value": 0 },
+    "spelltrigger_4": { "type": "u8", "value": 0 },
+    "spellid_5": { "type": "u32", "value": 0 },
+    "spelltrigger_5": { "type": "u8", "value": 0 },
+    "required_skill": { "type": "u32", "value": 0 },
+    "required_skill_rank": { "type": "u32", "value": 0 },
+    "required_reputation_faction": { "type": "u32", "value": 0 },
+    "required_reputation_rank": { "type": "u32", "value": 0 },
+    "max_count": { "type": "u32", "value": 0 },
+    "item_flags": { "type": "u32", "value": 0 },
+    "page_text": { "type": "u32", "value": 0 },
+    "start_quest": { "type": "u32", "value": 0 },
+    "bag_family": { "type": "u32", "value": 0 },
+    "buy_count": { "type": "u32", "value": 1 },
+    "food_type": { "type": "u8", "value": 0 },
+    "allowed_class": { "type": "u32", "value": 1503 },
+    "allowed_race": { "type": "u32", "value": 255 }
+}"#;
+
+pub(super) fn item_claim(entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_item_template","key":{{"entry":{entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
 /// A value of the column's declared type, so a test can claim any column without spelling out what
 /// it holds.
 pub(super) fn some_value(column: Column) -> FieldValue {
