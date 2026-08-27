@@ -60,11 +60,13 @@ lyracore config set client-data PATH
 lyracore client sync
 lyracore packages add FOLDER|GIT-URL|NAME [--yes]
 lyracore packages build
+lyracore packages check
 lyracore packages disable NAME
 lyracore packages enable NAME
 lyracore packages list
 lyracore packages new NAME
 lyracore packages remove NAME [--yes]
+lyracore packages replay [DATABASE ...] [--check] [--yes] [--force-all] [--client-data PATH]
 lyracore packages update [NAME] [--yes]
 lyracore character gm NAME true|false
 lyracore production status --server SERVER --gateway-log PATH --realm-core DB DATABASE ...
@@ -88,12 +90,14 @@ lyracore update
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
 | `packages add` | install a Package from a folder on this machine, from a Git URL, or by bare name from the Official Package Collection, after a trust review and a confirmation |
-| `packages build` | regenerate the Module schema typings, then typecheck every Datascript against them |
+| `packages build` | regenerate the Module schema typings, typecheck every Datascript against them, then emit and validate each enabled Package's Datascript-generated Package Delta |
+| `packages check` | verify every enabled Package's generated artifact against its recorded Build Identity, regenerating the Module typings fresh |
 | `packages disable` | move an enabled Package out of the build's sight, keeping it on disk |
 | `packages enable` | move a disabled Package back into the build |
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
 | `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
 | `packages remove` | delete a disabled Package, after a confirmation and a check for local changes |
+| `packages replay` | reapply every enabled Package's claims onto the named databases, or the whole recorded fixture topology by default |
 | `packages update` | advance a Git-backed Package, or every one of them, to the repository's current commit |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
@@ -352,10 +356,10 @@ then is the old folder deleted. If anything fails, the previous revision goes ba
 the candidate is discarded, and the error names both commits. `update` publishes nothing and
 synchronizes no client; it prints the steps it did not run.
 
-Applying and replaying Package Deltas, and advancing an Official Package Source through `packages
-update`, remain separate work.
+Applying and replaying Package Deltas is `packages replay`, below. Advancing an Official Package
+Source through `packages update` remains separate work.
 
-## `packages build` — Datascript typings and the typecheck gate
+## `packages build` — Datascript typings, the typecheck gate, and Package Delta emission
 
 ```bash
 ./lyracore packages build
@@ -363,18 +367,41 @@ update`, remain separate work.
 
 A **Datascript** is author-time TypeScript that describes game data. It is written against the
 Module's own schema, so the names and types in it cannot drift from the Module. `packages build`
-is what enforces that, in three steps:
+enforces that and, once a Package has a Datascript, turns it into a validated Package Delta. A
+version gate, then up to seven steps, in this order:
 
+0. `bun --version` must match the checkout's pin. A hard failure, not a warning: the next two steps
+   run `bun install` and the locked `tsc` for real, against whatever Bun is on `PATH`.
 1. `spacetime generate --lang typescript` extracts the schema **through the module wasm** and writes
    it to `datascripts/generated/`. Offline: it builds the module and reads it, and touches no
    database.
 2. `bun install --frozen-lockfile` installs exactly what `datascripts/bun.lock` records. Frozen, so
    a build never silently resolves a newer dependency than the next author will get.
-3. `tsc --noEmit` is the gate. Nothing is emitted; the answer is the exit code.
+3. `tsc --noEmit` is the typecheck gate. Nothing is emitted; the answer is the exit code.
+
+Steps 4 to 7 run only when an enabled Package carries a Datascript. A checkout with none builds
+exactly as it did before those steps existed:
+
+4. The Base Snapshot must already exist at `datascripts/generated/base-snapshot.json`, or the build
+   fails fast with the exact `lyracore-importer --spell-snapshot` command to build one, once, rather
+   than letting every Datascript fail with the same "cannot read" error in turn.
+5. Every enabled Package's Datascripts run, one `bun run` subprocess per file, in name order. The
+   first script to throw stops the build; later scripts and later Packages never run.
+6. `lyracore-delta-check` traces every enabled Package's generated artifacts together, in one
+   invocation. This is the same authoritative Rust-side check `packages replay` runs before it
+   writes to a Shard, so a Claim Conflict between two Packages is caught by the one implementation
+   that also decides whether it may apply, not by a second, looser one.
+7. A **Build Identity** sidecar is written next to each artifact that just validated: the hashes
+   `packages check` and preflight later recompute to tell whether the artifact is still current.
+   Written only after step 6 succeeds, so a sidecar never describes an artifact this build itself
+   would have refused.
 
 Generating **first** is what gives the gate teeth. Rename a column in the Module, run
 `packages build`, and a Datascript still using the old name fails with the file and line to fix —
 at author time, rather than at apply time.
+
+Typechecking **before emission** carries the same reasoning one step further: a Datascript that
+fails to typecheck should not run at all, so step 3 gates step 5 the way step 1 gates step 3.
 
 The typings cover **core and installed Package tables alike**, and by construction rather than by a
 second mechanism: `module/build.rs` compiles every enabled Package into the same module wasm, so a
@@ -411,8 +438,65 @@ Install the pinned version with
 `curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.7"`.
 
 Datascripts are **trusted author-time code**, run from this checkout by the person who wrote them.
-They are not sandboxed and are not described as sandboxed. Building a Package Delta from a
-Datascript, and applying one, are separate work (#315, #320).
+They are not sandboxed and are not described as sandboxed. `packages build` above is what turns one
+into a Package Delta; `packages replay`, below, is what applies it to a Shard.
+
+## `packages replay` — reapply Package Deltas across the Realm
+
+A Package Delta is not a one-shot edit. A base import replaces a whole Import Family, so a
+Package's claims replay as the last stage of that family's import. The spell catalogue lives on
+every World Shard and Instance Pool that owns a copy, so the claims have to reach all of them.
+
+    lyracore packages replay [DATABASE ...] [--check] [--yes] [--force-all] [--client-data PATH]
+
+With no names it targets every database of the recorded fixture topology. Named databases are used
+exactly as given. It takes database NAMES only; anything flag-shaped is refused before a process
+starts, and it never infers a production Shard list.
+
+The run has three stages:
+
+1. Preflight. Every enabled Package's artifact is read and digested once, and every target's
+   provenance is read. An unreadable artifact, a Package named twice, a Claim Conflict, or an
+   unreachable Shard fails the run before the first write.
+2. Apply. One importer per Shard, in order. Each Shard reimports Spell.dbc, then replays the claims.
+3. Stop at the first failure, naming the Shards that completed, the one that failed, and the ones
+   never touched, then printing the command to resume.
+
+Resume is the default. Each Shard records what it applied in `game_package_import`. A Shard is
+reported complete and skipped when every enabled Package is recorded with the digest this checkout
+produces, no Package is recorded that is no longer enabled, and every row sits on the Shard's
+current base import stamp. Re-running after a failure therefore costs nothing on the Shards that
+finished. `--force-all` replays anyway.
+
+`--check` runs the whole plan and writes nothing, and asks nothing.
+
+Disabling a Package is a replay, not a deletion: its folder leaves `packages/`, so its artifact
+leaves the payload, and the reducer clears the Package spell range as it applies.
+
+## `packages check` — is every Package Delta still current?
+
+```bash
+./lyracore packages check
+```
+
+`packages build` writes a Build Identity next to each artifact it emits. `packages check`
+recomputes every recorded input from the checkout on disk right now and refuses, naming the
+specific input, the moment one no longer matches. `preflight` folds the same report into its own
+gate on `publish`'s behalf, so a stale artifact never reaches a Shard.
+
+`datascripts/generated/` is regenerated fresh, every run, with the same `spacetime generate`
+invocation `packages build`'s typegen step uses, so a Module schema change makes a committed
+artifact stale even on a clean checkout that never ran `packages build` itself. Nothing else is
+regenerated: this command never runs Bun and never re-emits a Datascript, so it needs neither Bun
+nor a Base Snapshot to do its job.
+
+A missing Base Snapshot is reported and does not fail the check: the snapshot is the Operator's own
+client-derived data, and a CI machine holding none cannot regenerate one to compare against. A Base
+Snapshot that is present and no longer matches its recorded hash is a real mismatch and fails like
+any other input. A missing sidecar is treated as stale; it predates identity tracking, so there is
+nothing to compare against.
+
+A checkout with no Packages at all, or none carrying a generated artifact, is a clean no-op.
 
 ## `client sync` — push client content to your own client
 

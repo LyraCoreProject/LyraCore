@@ -117,6 +117,11 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
   `Timestamp` column, go through a reducer that stamps `ctx.timestamp`.
 - **`spacetime call` mangles u64 guids > 2^53** (JSON number truncation) — pass big integers as
   **string** arguments.
+- **`game_package_import` is private and has no gateway binding.** Read it with `spacetime sql`
+  only, and with an EQUALITY filter on `family` (a range filter on one column can wrongly return 0
+  rows). `lyracore packages replay` is the supported way to change it; never write it by hand.
+  An empty Package Delta payload is not "unknown" — it means "no Package claims this family" and
+  CLEARS the Package spell range.
 - **`auto_inc` sequences sit BEHIND explicitly-numbered imported rows.** A content import writes
   quest / vendor / trainer / creature-loot rows with explicit ids WITHOUT advancing the table's
   sequence, so any later `id: 0` insert (from a reducer) or SQL `VALUES (0, …)` allocates a COLLIDING
