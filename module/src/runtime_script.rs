@@ -20,21 +20,52 @@
 //! that succeeded, and collects a bounded diagnostic for the ones that did not. One bad script
 //! never stops the next one, and never stops the core work that follows.
 //!
-//! What this host deliberately does NOT do: durable script storage or event bindings, a broad
-//! gameplay host API, or any Lua state that outlives an invocation.
+//! # The curated gameplay surface
 //!
-//! Each Invocation receives its own copies of piccolo's standard-library tables. Stateful
-//! interpreter operations such as `math.random`, `math.randomseed`, and `collectgarbage` are not
-//! exposed. Durable randomness belongs in a later core gameplay operation, where the Module can use
-//! `ReducerContext::rng`.
+//! An Invocation sees one global per host operation and one `event` table, and nothing else of the
+//! Module:
+//!
+//! ```lua
+//! event.name              -- the event label, a string
+//! event.actor             -- the Entity Handle that caused the event, or nil
+//! event.target            -- the Entity Handle the event acted on, or nil
+//!
+//! -- An Entity Handle's readable fields, snapshotted when the Invocation started:
+//! e.name, e.is_player, e.level, e.health, e.max_health, e.map_id, e.x, e.y, e.z
+//!
+//! heal(entity, amount)    -- stage a heal, crediting heal-threat to event.actor
+//! send_chat(player, text) -- stage a System Message to one online player
+//! grant_xp(player, amount)-- stage an experience grant
+//! ```
+//!
+//! An Entity Handle is opaque: a script cannot read a guid out of it and cannot mint one, so the
+//! only entities a Runtime Script can act on are the ones the Host resolved for that Invocation.
+//! Every readable field is a snapshot taken before the script ran; writing to one changes nothing.
+//!
+//! A host operation called with a missing entity, the wrong type, an out-of-range amount, or past
+//! the staging cap raises a Lua error naming the call and the fault. That fails the Invocation —
+//! a [`ScriptDiagnostic`], no staged effect committed — and never panics out of the reducer.
+//!
+//! # What an Invocation is allowed
+//!
+//! The environment is built from [`ALLOWED_GLOBALS`] and [`ALLOWED_LIBRARY_MEMBERS`], name by name,
+//! into tables made for that Invocation. A name outside those lists is nil inside a Runtime Script,
+//! and a write to an allowed library table is invisible to the next Invocation.
+//!
+//! What this host deliberately does NOT do: durable script storage, event bindings, damage, items,
+//! spawning, scheduling, any query surface over the database, or any Lua state that outlives an
+//! Invocation.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use spacetimedb::log;
+
 use piccolo::closure::UpValueState;
 use piccolo::{
-    Callback, CallbackReturn, Closure, Executor, Fuel, Lua, StashedClosure, Table, Value,
+    Callback, CallbackReturn, Closure, Context, Error, Executor, Fuel, IntoValue, Lua, MetaMethod,
+    StashedClosure, Table, UserData, Value,
 };
 
 /// Fuel handed to one `Executor::step`. The interpreter checks its budget between operations, so a
@@ -69,6 +100,85 @@ const DIAGNOSTIC_MESSAGE_CAP: usize = 512;
 const DIAGNOSTIC_LABEL_CAP: usize = 128;
 
 const TRUNCATION_MARK: &str = "…[truncated]";
+
+/// Largest amount any host operation accepts. Far above any authored heal or experience award, so a
+/// bigger number is a script defect rather than a design; refusing it reads as a Script Diagnostic
+/// instead of disappearing into a clamp against max health.
+const MAX_EFFECT_AMOUNT: i64 = 1_000_000;
+
+/// Most Staged Effects one Invocation may hold. The Fuel Budget meters interpreter work, not
+/// durable writes, and a tight loop around a host call buys thousands of them inside the budget.
+/// This is the bound on what one script can ask a single reducer transaction to perform. Crossing
+/// it fails the Invocation, so a script cannot half-commit its way past the cap either.
+const MAX_STAGED_EFFECTS_PER_INVOCATION: usize = 256;
+
+/// The exact global names an Invocation receives from piccolo's core library.
+///
+/// Deliberately absent: `collectgarbage` (interpreter state, not gameplay), `coroutine` (an
+/// Invocation is one straight run under one Fuel Budget, so a suspended thread has nothing to
+/// resume into), and `_G` (globals-as-state does not survive an Invocation, so handing a script a
+/// mirror of its environment only invites the idiom that cannot work). `print` never arrives
+/// because the Host builds on `Lua::core()`, which loads no I/O library.
+const ALLOWED_GLOBALS: &[&str] = &[
+    "assert",
+    "error",
+    "getmetatable",
+    "ipairs",
+    "next",
+    "pairs",
+    "pcall",
+    "rawget",
+    "rawset",
+    "select",
+    "setmetatable",
+    "tostring",
+    "type",
+];
+
+/// The allowlisted members of each standard-library table, by library name.
+///
+/// Each library is rebuilt from these names into a table made for the Invocation, so a member this
+/// list omits is nil and a write to one of these tables is invisible to the next Invocation.
+///
+/// `math.random` and `math.randomseed` are omitted: the Module's `getrandom` backend is a fixed
+/// stream on purpose (see [`fixed_entropy`]), so `math.random` returns the same sequence on every
+/// replica and every replay. Durable randomness comes from `ReducerContext::rng` on the Module
+/// side of a host operation, never from the interpreter.
+const ALLOWED_LIBRARY_MEMBERS: &[(&str, &[&str])] = &[
+    (
+        "math",
+        &[
+            "abs",
+            "acos",
+            "asin",
+            "atan",
+            "ceil",
+            "cos",
+            "deg",
+            "exp",
+            "floor",
+            "fmod",
+            "huge",
+            "log",
+            "max",
+            "maxinteger",
+            "min",
+            "mininteger",
+            "modf",
+            "pi",
+            "rad",
+            "sin",
+            "sqrt",
+            "tan",
+            "tointeger",
+            "type",
+            "ult",
+        ],
+    ),
+    ("string", &["len", "lower", "reverse", "sub", "upper"]),
+    // `concat` is the shim's, loaded into the shared globals at Host construction.
+    ("table", &["concat", "pack", "unpack"]),
+];
 
 /// piccolo's stdlib subset omits `table.concat`, which transpiler output uses constantly. Loaded
 /// once into the shared globals at host construction, in the form the Runtime Script Prototype
@@ -165,11 +275,24 @@ fn bounded(text: &str, cap: usize) -> String {
 /// A gameplay operation a Runtime Script asked for. Held, not performed, until the invocation
 /// that staged it succeeds.
 ///
-/// Deliberately one variant: this proves commit-on-success and discard-on-failure against a real
-/// core operation. Growing this into a gameplay host API is separate work.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Every guid here was resolved by the Host from an Entity Handle. A Runtime Script never supplies
+/// one, so a staged effect can only name an entity the Host already put in front of that
+/// Invocation.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum StagedEffect {
-    GrantXp { character_guid: u64, amount: u32 },
+    GrantXp {
+        character_guid: u64,
+        amount: u32,
+    },
+    Heal {
+        healer_guid: u64,
+        target_guid: u64,
+        amount: u32,
+    },
+    SendChat {
+        recipient_guid: u64,
+        message: String,
+    },
 }
 
 /// Everything one SUCCESSFUL invocation staged, in the order the script staged it. A failed
@@ -186,6 +309,15 @@ impl StagedEffects {
                     character_guid,
                     amount,
                 } => sink.grant_xp(character_guid, amount),
+                StagedEffect::Heal {
+                    healer_guid,
+                    target_guid,
+                    amount,
+                } => sink.heal(healer_guid, target_guid, amount),
+                StagedEffect::SendChat {
+                    recipient_guid,
+                    message,
+                } => sink.send_chat(recipient_guid, &message),
             }
         }
     }
@@ -194,6 +326,49 @@ impl StagedEffects {
 /// The seam staged effects commit through: the real database in the Module, a Fake in tests.
 pub(crate) trait EffectSink {
     fn grant_xp(&mut self, character_guid: u64, amount: u32);
+    fn heal(&mut self, healer_guid: u64, target_guid: u64, amount: u32);
+    fn send_chat(&mut self, recipient_guid: u64, message: &str);
+}
+
+/// The curated read of one creature or player, taken before the Invocation ran. A Runtime Script
+/// reads these fields off an Entity Handle and can act on the entity through a host operation, but
+/// never learns its guid and never reaches a row.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) struct EntityView {
+    pub guid: u64,
+    pub name: String,
+    pub is_player: bool,
+    pub level: u32,
+    pub health: u32,
+    pub max_health: u32,
+    pub map_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+/// What one Invocation is running for: the event label and the entities it involves.
+///
+/// `actor` caused the event, `target` is what it acted on. Either can be absent — an event with no
+/// target leaves `event.target` nil, which is the defined result a script tests for rather than a
+/// failure it has to survive.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub(crate) struct ScriptEvent {
+    pub name: String,
+    pub actor: Option<EntityView>,
+    pub target: Option<EntityView>,
+}
+
+/// What an Entity Handle carries: the identity the Host acts on, and nothing a script can read.
+///
+/// It lives inside a Lua userdata, which a Runtime Script can pass around but cannot construct,
+/// inspect, or forge — so the Host can trust that every handle reaching a host operation is one it
+/// minted. The handle lasts exactly as long as the Invocation, because the environment holding it
+/// is built fresh for that Invocation and nothing carries to the next one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct EntityHandle {
+    guid: u64,
+    is_player: bool,
 }
 
 /// One Runtime Script as the host sees it: a name for diagnostics and the Lua to run.
@@ -248,14 +423,14 @@ impl RuntimeScriptHost {
     pub(crate) fn invoke(
         &mut self,
         script: RuntimeScript<'_>,
-        event: &str,
+        event: &ScriptEvent,
     ) -> Result<StagedEffects, ScriptDiagnostic> {
-        let chunk = self.compiled(script, event)?;
+        let chunk = self.compiled(script, &event.name)?;
 
         let staged: Rc<RefCell<Vec<StagedEffect>>> = Rc::new(RefCell::new(Vec::new()));
         let staging_handle = Rc::clone(&staged);
         let executor = self.lua.enter(|ctx| {
-            let env = fresh_environment(ctx, staging_handle);
+            let env = fresh_environment(ctx, event, staging_handle);
             let closure = ctx.fetch(&chunk);
             // Rebinding the cached chunk's `_ENV` upvalue is what makes the compiler cache a
             // CODE cache: the compiled prototype is reused, the environment it closes over is not.
@@ -281,7 +456,7 @@ impl RuntimeScriptHost {
             {
                 return Err(ScriptDiagnostic::new(
                     script.name,
-                    event,
+                    &event.name,
                     FailureKind::Fuel,
                     format!(
                         "exhausted the {FUEL_BUDGET_PER_INVOCATION} fuel budget (spent {fuel_spent})"
@@ -291,7 +466,7 @@ impl RuntimeScriptHost {
             if steps >= MAX_STEPS_PER_INVOCATION && !finished {
                 return Err(ScriptDiagnostic::new(
                     script.name,
-                    event,
+                    &event.name,
                     FailureKind::Fuel,
                     format!(
                         "stalled: {MAX_STEPS_PER_INVOCATION} steps burned only {fuel_spent} fuel"
@@ -314,7 +489,7 @@ impl RuntimeScriptHost {
         if let Err(message) = outcome {
             return Err(ScriptDiagnostic::new(
                 script.name,
-                event,
+                &event.name,
                 FailureKind::Runtime,
                 message,
             ));
@@ -354,58 +529,295 @@ impl RuntimeScriptHost {
     }
 }
 
-/// Build the environment one Invocation sees. Standard-library tables are copied so a write in one
-/// Invocation cannot affect the next one.
+/// Build the environment one Invocation sees: the allowlisted standard library, the `event` table
+/// with its Entity Handles, and one global per host operation.
 fn fresh_environment<'gc>(
-    ctx: piccolo::Context<'gc>,
+    ctx: Context<'gc>,
+    event: &ScriptEvent,
     staged: Rc<RefCell<Vec<StagedEffect>>>,
 ) -> Table<'gc> {
-    let env = isolated_standard_library(ctx);
+    let env = allowlisted_standard_library(ctx);
 
-    let grant_xp = Callback::from_fn(&ctx, move |ctx, _execution, mut stack| {
-        let (character_guid, amount): (u64, u32) = stack.consume(ctx)?;
-        staged.borrow_mut().push(StagedEffect::GrantXp {
-            character_guid,
-            amount,
-        });
-        Ok(CallbackReturn::Return)
-    });
-    let _ = env.set(ctx, "grant_xp", grant_xp);
-    let _ = env.set(ctx, "_G", env);
+    let actor_guid = event.actor.as_ref().map(|actor| actor.guid);
+    set(ctx, env, "event", event_table(ctx, event));
+    set(ctx, env, "heal", heal_operation(ctx, actor_guid, &staged));
+    set(ctx, env, "send_chat", send_chat_operation(ctx, &staged));
+    set(ctx, env, "grant_xp", grant_xp_operation(ctx, &staged));
     env
 }
 
-fn isolated_standard_library<'gc>(ctx: piccolo::Context<'gc>) -> Table<'gc> {
-    let globals = Table::new(&ctx);
-    for (key, value) in ctx.globals().iter() {
-        let value = match value {
-            Value::Table(table) => Value::Table(copy_table(ctx, table)),
-            value => value,
+/// The environment's standard library, rebuilt name by name from [`ALLOWED_GLOBALS`] and
+/// [`ALLOWED_LIBRARY_MEMBERS`].
+///
+/// Each library table is a new table holding the allowlisted members, so a script that writes to
+/// `string` writes to its own copy. The shared globals this reads from are never handed out, which
+/// is what keeps one Invocation's damage to itself.
+fn allowlisted_standard_library<'gc>(ctx: Context<'gc>) -> Table<'gc> {
+    let core = ctx.globals();
+    let env = Table::new(&ctx);
+    for name in ALLOWED_GLOBALS {
+        let value: Value = core.get(ctx, *name);
+        set(ctx, env, name, value);
+    }
+    for (library, members) in ALLOWED_LIBRARY_MEMBERS {
+        let Value::Table(source) = core.get(ctx, *library) else {
+            continue;
         };
-        globals
-            .set_value(&ctx, key, value)
-            .expect("a key copied from a Lua table remains a valid table key");
-    }
-
-    if let Value::Table(math) = globals.get(ctx, "math") {
-        for name in ["random", "randomseed"] {
-            math.set(ctx, name, Value::Nil)
-                .expect("a string is a valid Lua table key");
+        let copy = Table::new(&ctx);
+        for member in *members {
+            let value: Value = source.get(ctx, *member);
+            set(ctx, copy, member, value);
         }
+        set(ctx, env, library, copy);
     }
-    globals
-        .set(ctx, "collectgarbage", Value::Nil)
-        .expect("a string is a valid Lua table key");
-    globals
+    env
 }
 
-fn copy_table<'gc>(ctx: piccolo::Context<'gc>, source: Table<'gc>) -> Table<'gc> {
-    let copy = Table::new(&ctx);
-    for (key, value) in source.iter() {
-        copy.set_value(&ctx, key, value)
-            .expect("a key copied from a Lua table remains a valid table key");
+/// `event` as a Runtime Script reads it. A fresh table each Invocation, so a script that writes to
+/// it changes nothing the Host will ever read.
+fn event_table<'gc>(ctx: Context<'gc>, event: &ScriptEvent) -> Table<'gc> {
+    let table = Table::new(&ctx);
+    set(ctx, table, "name", text(ctx, &event.name));
+    for (field, view) in [("actor", &event.actor), ("target", &event.target)] {
+        let value = match view {
+            Some(view) => Value::UserData(entity_handle(ctx, view)),
+            None => Value::Nil,
+        };
+        set(ctx, table, field, value);
     }
-    copy
+    table
+}
+
+/// Mint the Entity Handle for one entity: an opaque userdata carrying the identity, with a
+/// metatable serving the curated fields snapshotted from `view`.
+fn entity_handle<'gc>(ctx: Context<'gc>, view: &EntityView) -> UserData<'gc> {
+    let fields = Table::new(&ctx);
+    set(ctx, fields, "name", text(ctx, &view.name));
+    set(ctx, fields, "is_player", view.is_player);
+    set(ctx, fields, "level", view.level as i64);
+    set(ctx, fields, "health", view.health as i64);
+    set(ctx, fields, "max_health", view.max_health as i64);
+    set(ctx, fields, "map_id", view.map_id as i64);
+    set(ctx, fields, "x", view.x as f64);
+    set(ctx, fields, "y", view.y as f64);
+    set(ctx, fields, "z", view.z as f64);
+
+    let metatable = Table::new(&ctx);
+    metatable
+        .set(ctx, MetaMethod::Index, fields)
+        .expect("a metamethod name is a valid Lua table key");
+
+    let handle = UserData::new_static(
+        &ctx,
+        EntityHandle {
+            guid: view.guid,
+            is_player: view.is_player,
+        },
+    );
+    handle.set_metatable(&ctx, Some(metatable));
+    handle
+}
+
+/// `heal(entity, amount)`. Credits heal-threat to the Invocation's actor, the way a cast heal
+/// credits its caster; an event with no actor heals without pulling aggro for anyone.
+fn heal_operation<'gc>(
+    ctx: Context<'gc>,
+    actor_guid: Option<u64>,
+    staged: &Rc<RefCell<Vec<StagedEffect>>>,
+) -> Callback<'gc> {
+    let staged = Rc::clone(staged);
+    Callback::from_fn(&ctx, move |ctx, _execution, mut stack| {
+        let (entity, amount): (Value, Value) = stack.consume(ctx)?;
+        let target = entity_argument(ctx, "heal", "target", entity)?;
+        let amount = amount_argument(ctx, "heal", amount)?;
+        stage(
+            ctx,
+            &staged,
+            "heal",
+            StagedEffect::Heal {
+                healer_guid: actor_guid.unwrap_or(0),
+                target_guid: target.guid,
+                amount,
+            },
+        )?;
+        Ok(CallbackReturn::Return)
+    })
+}
+
+/// `send_chat(player, text)`. The text is normalized here, by the same rule the chat core applies,
+/// so what the Invocation staged is exactly what commits.
+fn send_chat_operation<'gc>(
+    ctx: Context<'gc>,
+    staged: &Rc<RefCell<Vec<StagedEffect>>>,
+) -> Callback<'gc> {
+    let staged = Rc::clone(staged);
+    Callback::from_fn(&ctx, move |ctx, _execution, mut stack| {
+        let (entity, text): (Value, Value) = stack.consume(ctx)?;
+        let recipient = player_argument(ctx, "send_chat", "recipient", entity)?;
+        let text = text_argument(ctx, "send_chat", text)?;
+        let message = crate::chat::normalized_message(&text)
+            .ok_or_else(|| host_error(ctx, "send_chat", "the message is empty"))?;
+        stage(
+            ctx,
+            &staged,
+            "send_chat",
+            StagedEffect::SendChat {
+                recipient_guid: recipient.guid,
+                message,
+            },
+        )?;
+        Ok(CallbackReturn::Return)
+    })
+}
+
+/// `grant_xp(player, amount)`.
+fn grant_xp_operation<'gc>(
+    ctx: Context<'gc>,
+    staged: &Rc<RefCell<Vec<StagedEffect>>>,
+) -> Callback<'gc> {
+    let staged = Rc::clone(staged);
+    Callback::from_fn(&ctx, move |ctx, _execution, mut stack| {
+        let (entity, amount): (Value, Value) = stack.consume(ctx)?;
+        let character = player_argument(ctx, "grant_xp", "recipient", entity)?;
+        let amount = amount_argument(ctx, "grant_xp", amount)?;
+        stage(
+            ctx,
+            &staged,
+            "grant_xp",
+            StagedEffect::GrantXp {
+                character_guid: character.guid,
+                amount,
+            },
+        )?;
+        Ok(CallbackReturn::Return)
+    })
+}
+
+/// Record one Staged Effect, refusing once the Invocation has reached
+/// [`MAX_STAGED_EFFECTS_PER_INVOCATION`]. The refusal fails the Invocation, which discards
+/// everything it staged — a script cannot get its first 256 effects committed by overrunning.
+fn stage<'gc>(
+    ctx: Context<'gc>,
+    staged: &Rc<RefCell<Vec<StagedEffect>>>,
+    call: &str,
+    effect: StagedEffect,
+) -> Result<(), Error<'gc>> {
+    let mut staged = staged.borrow_mut();
+    if staged.len() >= MAX_STAGED_EFFECTS_PER_INVOCATION {
+        return Err(host_error(
+            ctx,
+            call,
+            &format!(
+                "one invocation may stage at most {MAX_STAGED_EFFECTS_PER_INVOCATION} effects"
+            ),
+        ));
+    }
+    staged.push(effect);
+    Ok(())
+}
+
+/// Resolve one host-call argument to the Entity Handle the Host minted for it.
+fn entity_argument<'gc>(
+    ctx: Context<'gc>,
+    call: &str,
+    role: &str,
+    value: Value<'gc>,
+) -> Result<EntityHandle, Error<'gc>> {
+    match value {
+        Value::UserData(data) => data
+            .downcast_static::<EntityHandle>()
+            .copied()
+            .map_err(|_| host_error(ctx, call, &format!("the {role} is not an entity"))),
+        Value::Nil => Err(host_error(ctx, call, &format!("there is no {role}"))),
+        other => Err(host_error(
+            ctx,
+            call,
+            &format!("the {role} is a {}, not an entity", other.type_name()),
+        )),
+    }
+}
+
+/// The same, for the operations that only mean anything against a player.
+fn player_argument<'gc>(
+    ctx: Context<'gc>,
+    call: &str,
+    role: &str,
+    value: Value<'gc>,
+) -> Result<EntityHandle, Error<'gc>> {
+    let handle = entity_argument(ctx, call, role, value)?;
+    if !handle.is_player {
+        return Err(host_error(
+            ctx,
+            call,
+            &format!("the {role} is a creature, not a player"),
+        ));
+    }
+    Ok(handle)
+}
+
+/// Resolve an amount argument. Whole numbers inside `1..=`[`MAX_EFFECT_AMOUNT`] only: zero and
+/// negatives are a script defect rather than a no-op worth performing.
+fn amount_argument<'gc>(
+    ctx: Context<'gc>,
+    call: &str,
+    value: Value<'gc>,
+) -> Result<u32, Error<'gc>> {
+    let Some(amount) = value.to_integer() else {
+        return Err(host_error(
+            ctx,
+            call,
+            &format!("the amount is a {}, not a whole number", value.type_name()),
+        ));
+    };
+    if !(1..=MAX_EFFECT_AMOUNT).contains(&amount) {
+        return Err(host_error(
+            ctx,
+            call,
+            &format!("the amount {amount} is outside 1..={MAX_EFFECT_AMOUNT}"),
+        ));
+    }
+    Ok(amount as u32)
+}
+
+/// Resolve a text argument to UTF-8. Lua strings are bytes, so a script can hand over something no
+/// durable column can hold.
+fn text_argument<'gc>(
+    ctx: Context<'gc>,
+    call: &str,
+    value: Value<'gc>,
+) -> Result<String, Error<'gc>> {
+    let Value::String(text) = value else {
+        return Err(host_error(
+            ctx,
+            call,
+            &format!("the message is a {}, not a string", value.type_name()),
+        ));
+    };
+    text.to_str()
+        .map(str::to_string)
+        .map_err(|_| host_error(ctx, call, "the message is not valid UTF-8"))
+}
+
+/// The Lua error a misused host operation raises: the call that was misused and the fault, so the
+/// Script Diagnostic it becomes can be acted on without reading the script.
+fn host_error<'gc>(ctx: Context<'gc>, call: &str, fault: &str) -> Error<'gc> {
+    text(ctx, &format!("{call}: {fault}"))
+        .into_value(ctx)
+        .into()
+}
+
+/// A Lua string holding `source`. piccolo converts only a `&'static str` implicitly, and most of
+/// what this module hands to a script is owned domain text.
+fn text<'gc>(ctx: Context<'gc>, source: &str) -> piccolo::String<'gc> {
+    piccolo::String::from_slice(&ctx, source)
+}
+
+/// Set one key on a Lua table. Every key this module writes is a fixed name, so a failure would
+/// mean a nil or NaN key the code cannot produce.
+fn set<'gc>(ctx: Context<'gc>, table: Table<'gc>, key: &'static str, value: impl IntoValue<'gc>) {
+    table
+        .set(ctx, key, value)
+        .expect("a string is a valid Lua table key");
 }
 
 thread_local! {
@@ -433,7 +845,7 @@ pub(crate) fn with_host<R>(f: impl FnOnce(&mut RuntimeScriptHost) -> R) -> Optio
 pub(crate) fn run_event<S: EffectSink>(
     host: &mut RuntimeScriptHost,
     sink: &mut S,
-    event: &str,
+    event: &ScriptEvent,
     scripts: &[RuntimeScript<'_>],
 ) -> Vec<ScriptDiagnostic> {
     let mut diagnostics = Vec::new();
@@ -462,6 +874,55 @@ impl EffectSink for CoreEffects<'_> {
         crate::xp::grant_xp(self.ctx, &mut entity, amount);
         self.ctx.db.game_world_entity().guid().update(entity);
     }
+
+    fn heal(&mut self, healer_guid: u64, target_guid: u64, amount: u32) {
+        // The amount is bounded by `MAX_EFFECT_AMOUNT`, well inside `i32`.
+        crate::spell::apply_direct_heal(self.ctx, healer_guid, target_guid, amount as i32);
+    }
+
+    fn send_chat(&mut self, recipient_guid: u64, message: &str) {
+        // The recipient was online when the Invocation read it and may not be by now. That is an
+        // ordinary outcome, not a script defect, so it does not become a Script Diagnostic.
+        if let Err(reason) =
+            crate::actor::system_message(self.ctx, recipient_guid, message.to_string())
+        {
+            log::info!("runtime script system message to {recipient_guid} did not land: {reason}");
+        }
+    }
+}
+
+impl EntityView {
+    /// Read the live row for `guid` as the curated view one Invocation sees.
+    ///
+    /// `None` when the guid names nothing an Invocation may act on — including a character in
+    /// transit between Shards, which the acting-entity gate already treats as out of the world.
+    /// A caller with no participant to name passes 0 and gets `None`.
+    pub(crate) fn read(ctx: &spacetimedb::ReducerContext, guid: u64) -> Option<Self> {
+        use crate::game_creature_template;
+        let entity = crate::helpers::acting_entity_by_guid(ctx, guid)?;
+        let is_player = entity.is_player();
+        let name = if is_player {
+            crate::helpers::character_by_guid(ctx, guid).map(|character| character.name)
+        } else {
+            ctx.db
+                .game_creature_template()
+                .entry()
+                .find(entity.entry)
+                .map(|template| template.name)
+        };
+        Some(Self {
+            guid,
+            name: name.unwrap_or_default(),
+            is_player,
+            level: entity.level,
+            health: entity.health,
+            max_health: entity.max_health,
+            map_id: entity.map_id,
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -481,17 +942,103 @@ local names = {}
 for i = 1, 20 do names[i] = "unit" .. i end
 local shouted = map(names, function(name) return string.upper(name) end)
 local roster = table.concat(shouted, ",")
-if #roster > 0 then grant_xp(4242, 25) end
+if #roster > 0 then grant_xp(event.actor, 25) end
 "#;
+
+    const PLAYER_GUID: u64 = 7;
+    const CREATURE_GUID: u64 = 9;
+
+    /// One committed gameplay operation, in the order the sink received it.
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    enum Committed {
+        Xp {
+            character: u64,
+            amount: u32,
+        },
+        Heal {
+            healer: u64,
+            target: u64,
+            amount: u32,
+        },
+        Chat {
+            recipient: u64,
+            message: String,
+        },
+    }
 
     #[derive(Default)]
     struct FakeEffects {
-        granted: Vec<(u64, u32)>,
+        committed: Vec<Committed>,
     }
 
     impl EffectSink for FakeEffects {
         fn grant_xp(&mut self, character_guid: u64, amount: u32) {
-            self.granted.push((character_guid, amount));
+            self.committed.push(Committed::Xp {
+                character: character_guid,
+                amount,
+            });
+        }
+
+        fn heal(&mut self, healer_guid: u64, target_guid: u64, amount: u32) {
+            self.committed.push(Committed::Heal {
+                healer: healer_guid,
+                target: target_guid,
+                amount,
+            });
+        }
+
+        fn send_chat(&mut self, recipient_guid: u64, message: &str) {
+            self.committed.push(Committed::Chat {
+                recipient: recipient_guid,
+                message: message.to_string(),
+            });
+        }
+    }
+
+    fn player() -> EntityView {
+        EntityView {
+            guid: PLAYER_GUID,
+            name: "Thrall".to_string(),
+            is_player: true,
+            level: 12,
+            health: 340,
+            max_health: 420,
+            map_id: 1,
+            x: 1.5,
+            y: -2.5,
+            z: 3.0,
+        }
+    }
+
+    fn creature() -> EntityView {
+        EntityView {
+            guid: CREATURE_GUID,
+            name: "Kobold Miner".to_string(),
+            is_player: false,
+            level: 4,
+            health: 30,
+            max_health: 60,
+            map_id: 1,
+            x: 10.5,
+            y: -20.25,
+            z: 30.75,
+        }
+    }
+
+    /// An event with a label and no participants, for the tests that only care about the label.
+    fn unattended(name: &str) -> ScriptEvent {
+        ScriptEvent {
+            name: name.to_string(),
+            ..ScriptEvent::default()
+        }
+    }
+
+    /// The event most tests run against: a player acting on a creature.
+    fn engagement() -> ScriptEvent {
+        ScriptEvent {
+            name: "on_login".to_string(),
+            actor: Some(player()),
+            target: Some(creature()),
         }
     }
 
@@ -502,30 +1049,48 @@ if #roster > 0 then grant_xp(4242, 25) end
     /// What one invocation actually puts through the sink: run it, then commit whatever it staged.
     fn committed(
         host: &mut RuntimeScriptHost,
+        event: &ScriptEvent,
         source: &str,
-    ) -> Result<Vec<(u64, u32)>, ScriptDiagnostic> {
-        let staged = host.invoke(script("probe", source), "on_login")?;
+    ) -> Result<Vec<Committed>, ScriptDiagnostic> {
+        let staged = host.invoke(script("probe", source), event)?;
         let mut sink = FakeEffects::default();
         staged.commit(&mut sink);
-        Ok(sink.granted)
+        Ok(sink.committed)
+    }
+
+    /// The experience amounts one invocation granted. Several tests use `grant_xp` as the way a
+    /// script reports a number back to Rust.
+    fn granted_amounts(committed: &[Committed]) -> Vec<u32> {
+        committed
+            .iter()
+            .filter_map(|effect| match effect {
+                Committed::Xp { amount, .. } => Some(*amount),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn xp(character: u64, amount: u32) -> Committed {
+        Committed::Xp { character, amount }
     }
 
     #[test]
     fn valid_lua_compiles_once_and_runs_in_every_fresh_invocation() {
         let mut host = RuntimeScriptHost::new();
-        let award = script("award", "grant_xp(7, 40)");
+        let event = engagement();
+        let award = script("award", "grant_xp(event.actor, 40)");
         for _ in 0..3 {
-            let staged = host.invoke(award, "on_login").expect("valid Lua runs");
+            let staged = host.invoke(award, &event).expect("valid Lua runs");
             let mut sink = FakeEffects::default();
             staged.commit(&mut sink);
-            assert_eq!(sink.granted, [(7, 40)]);
+            assert_eq!(sink.committed, [xp(PLAYER_GUID, 40)]);
         }
         assert_eq!(
             host.compilations(),
             1,
             "three invocations of one source must reuse one compiled chunk"
         );
-        host.invoke(script("other", "grant_xp(8, 1)"), "on_login")
+        host.invoke(script("other", "grant_xp(event.actor, 1)"), &event)
             .expect("valid Lua runs");
         assert_eq!(
             host.compilations(),
@@ -537,14 +1102,16 @@ if #roster > 0 then grant_xp(4242, 25) end
     #[test]
     fn a_global_written_in_one_invocation_is_absent_from_the_next() {
         let mut host = RuntimeScriptHost::new();
+        let event = engagement();
         for _ in 0..3 {
             assert_eq!(
                 committed(
                     &mut host,
-                    "visits = (visits or 0) + 1\ngrant_xp(77, visits)"
+                    &event,
+                    "visits = (visits or 0) + 1\ngrant_xp(event.actor, visits)"
                 )
                 .unwrap(),
-                [(77, 1)],
+                [xp(PLAYER_GUID, 1)],
                 "each invocation must start from an empty environment, so `visits` is always nil"
             );
         }
@@ -554,7 +1121,10 @@ if #roster > 0 then grant_xp(4242, 25) end
     fn an_endless_loop_spends_the_fuel_budget_instead_of_stalling_the_tick() {
         let mut host = RuntimeScriptHost::new();
         let failure = host
-            .invoke(script("spin", "while true do end"), "on_damage_taken")
+            .invoke(
+                script("spin", "while true do end"),
+                &unattended("on_damage_taken"),
+            )
             .expect_err("an endless loop cannot succeed");
         assert_eq!(failure.kind, FailureKind::Fuel);
     }
@@ -563,7 +1133,10 @@ if #roster > 0 then grant_xp(4242, 25) end
     fn a_diagnostic_names_the_script_the_event_and_the_failure_kind() {
         let mut host = RuntimeScriptHost::new();
         let failure = host
-            .invoke(script("broken", "this is not lua ==="), "on_levelup")
+            .invoke(
+                script("broken", "this is not lua ==="),
+                &unattended("on_levelup"),
+            )
             .expect_err("malformed source cannot compile");
         assert_eq!(failure.script, "broken");
         assert_eq!(failure.event, "on_levelup");
@@ -579,7 +1152,7 @@ if #roster > 0 then grant_xp(4242, 25) end
             "local s = \"x\"\nfor i = 1, 14 do s = s .. s end\nerror(s)",
         );
         let failure = host
-            .invoke(shouty, "on_login")
+            .invoke(shouty, &unattended("on_login"))
             .expect_err("a raised error is a failure");
         assert_eq!(failure.kind, FailureKind::Runtime);
         assert!(
@@ -609,27 +1182,406 @@ if #roster > 0 then grant_xp(4242, 25) end
         assert!(diagnostic.event.ends_with(TRUNCATION_MARK));
     }
 
+    // ---- the allowlisted environment ----
+
+    /// The whole surface an Invocation gets, pinned. A name arriving here that this list does not
+    /// carry is a widening of the host API, which is a decision rather than an accident.
+    #[test]
+    fn an_invocation_receives_exactly_the_allowlisted_surface() {
+        let mut host = RuntimeScriptHost::new();
+        let staged = Rc::new(RefCell::new(Vec::new()));
+        let names = host.lua.enter(|ctx| {
+            let env = fresh_environment(ctx, &engagement(), staged);
+            let mut names: Vec<String> = env
+                .iter()
+                .filter_map(|(key, _)| match key {
+                    Value::String(name) => Some(name.to_string()),
+                    _ => None,
+                })
+                .collect();
+            names.sort();
+            names
+        });
+        assert_eq!(
+            names,
+            [
+                "assert",
+                "error",
+                "event",
+                "getmetatable",
+                "grant_xp",
+                "heal",
+                "ipairs",
+                "math",
+                "next",
+                "pairs",
+                "pcall",
+                "rawget",
+                "rawset",
+                "select",
+                "send_chat",
+                "setmetatable",
+                "string",
+                "table",
+                "tostring",
+                "type",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_outside_the_allowlist_is_nil_inside_a_script() {
+        let mut host = RuntimeScriptHost::new();
+        let absent = [
+            "collectgarbage",
+            "coroutine",
+            "print",
+            "_G",
+            "require",
+            "load",
+            "math.random",
+            "math.randomseed",
+            "string.format",
+            "table.sort",
+        ];
+        for name in absent {
+            let source = format!("if {name} ~= nil then error(\"{name} is reachable\") end");
+            committed(&mut host, &unattended("on_login"), &source)
+                .unwrap_or_else(|failure| panic!("{failure}"));
+        }
+    }
+
+    #[test]
+    fn a_library_table_written_in_one_invocation_is_clean_in_the_next() {
+        let mut host = RuntimeScriptHost::new();
+        let event = engagement();
+        committed(
+            &mut host,
+            &event,
+            "string.upper = function() return \"\" end\nmath.floor = nil\ntable.saved = 1",
+        )
+        .expect("rewriting its own library tables is a script's business");
+
+        assert_eq!(
+            committed(
+                &mut host,
+                &event,
+                "if table.saved ~= nil or math.floor == nil then error(\"leaked\") end\n\
+                 grant_xp(event.actor, math.floor(#string.upper(\"ab\")))",
+            )
+            .expect("the next Invocation receives clean library tables"),
+            [xp(PLAYER_GUID, 2)]
+        );
+    }
+
     #[test]
     fn a_failed_script_cannot_change_the_next_invocations_standard_library() {
         let mut host = RuntimeScriptHost::new();
+        let event = engagement();
         host.invoke(
             script(
                 "poison",
                 "math.saved = 41\nstring.saved = 42\nerror(\"discard me\")",
             ),
-            "on_login",
+            &event,
         )
         .expect_err("the first Invocation fails after changing its own library tables");
 
         assert_eq!(
             committed(
                 &mut host,
+                &event,
                 "if math.saved ~= nil or string.saved ~= nil then error(\"leaked\") end\n\
-                 grant_xp(1, 1)",
+                 grant_xp(event.actor, 1)",
             )
             .expect("the next Invocation receives clean library tables"),
-            [(1, 1)]
+            [xp(PLAYER_GUID, 1)]
         );
+    }
+
+    // ---- the event and its Entity Handles ----
+
+    #[test]
+    fn a_script_reads_the_curated_fields_of_the_event_actor_and_target() {
+        let mut host = RuntimeScriptHost::new();
+        let read = committed(
+            &mut host,
+            &engagement(),
+            "local a, t = event.actor, event.target\n\
+             send_chat(a, table.concat({\n\
+                 event.name, a.name, tostring(a.is_player), tostring(a.level),\n\
+                 t.name, tostring(t.is_player), tostring(t.health), tostring(t.max_health),\n\
+                 tostring(t.map_id), tostring(t.x), tostring(t.y), tostring(t.z)\n\
+             }, \"|\"))",
+        )
+        .expect("reading the curated fields is not a failure");
+        assert_eq!(
+            read,
+            [Committed::Chat {
+                recipient: PLAYER_GUID,
+                message: "on_login|Thrall|true|12|Kobold Miner|false|30|60|1|10.5|-20.25|30.75"
+                    .to_string(),
+            }]
+        );
+    }
+
+    /// The point of an Entity Handle: a script can act on the entity without ever learning which
+    /// row it is.
+    #[test]
+    fn an_entity_handle_exposes_no_identifier_and_no_row() {
+        let mut host = RuntimeScriptHost::new();
+        assert_eq!(
+            committed(
+                &mut host,
+                &engagement(),
+                "local a = event.actor\n\
+                 if a.guid ~= nil or a.id ~= nil or a.entry ~= nil or a.owner_identity ~= nil then\n\
+                     error(\"an identifier is reachable\")\n\
+                 end\n\
+                 if type(a) ~= \"userdata\" then error(\"a handle must not be a table\") end\n\
+                 grant_xp(a, 1)",
+            )
+            .expect("a handle carries no identifier"),
+            [xp(PLAYER_GUID, 1)]
+        );
+    }
+
+    #[test]
+    fn an_absent_actor_or_target_reads_as_nil_rather_than_failing_the_invocation() {
+        let mut host = RuntimeScriptHost::new();
+        let lonely = ScriptEvent {
+            name: "on_tick".to_string(),
+            actor: Some(player()),
+            target: None,
+        };
+        assert_eq!(
+            committed(
+                &mut host,
+                &lonely,
+                "if event.target ~= nil then error(\"there is no target\") end\n\
+                 grant_xp(event.actor, 5)",
+            )
+            .expect("an absent target is a value a script tests, not a failure"),
+            [xp(PLAYER_GUID, 5)]
+        );
+    }
+
+    // ---- host operations ----
+
+    #[test]
+    fn a_staged_heal_commits_against_the_target_and_credits_the_actor() {
+        let mut host = RuntimeScriptHost::new();
+        assert_eq!(
+            committed(
+                &mut host,
+                &engagement(),
+                "heal(event.target, event.target.max_health - event.target.health)",
+            )
+            .expect("healing the event target is the operation this host exists for"),
+            [Committed::Heal {
+                healer: PLAYER_GUID,
+                target: CREATURE_GUID,
+                amount: 30,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_heal_with_no_actor_credits_no_healer() {
+        let mut host = RuntimeScriptHost::new();
+        let no_actor = ScriptEvent {
+            name: "on_tick".to_string(),
+            actor: None,
+            target: Some(creature()),
+        };
+        assert_eq!(
+            committed(&mut host, &no_actor, "heal(event.target, 5)").unwrap(),
+            [Committed::Heal {
+                healer: 0,
+                target: CREATURE_GUID,
+                amount: 5,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_staged_system_message_is_trimmed_and_bounded_before_it_is_staged() {
+        let mut host = RuntimeScriptHost::new();
+        let shouted = "x".repeat(400);
+        assert_eq!(
+            committed(
+                &mut host,
+                &engagement(),
+                &format!("send_chat(event.actor, \"   {shouted}   \")"),
+            )
+            .unwrap(),
+            [Committed::Chat {
+                recipient: PLAYER_GUID,
+                message: "x".repeat(255),
+            }],
+            "a Runtime Script cannot stage a message the chat core would refuse"
+        );
+    }
+
+    #[test]
+    fn the_effects_of_one_invocation_commit_in_staging_order() {
+        let mut host = RuntimeScriptHost::new();
+        assert_eq!(
+            committed(
+                &mut host,
+                &engagement(),
+                "send_chat(event.actor, \"first\")\n\
+                 heal(event.target, 3)\n\
+                 grant_xp(event.actor, 2)",
+            )
+            .unwrap(),
+            [
+                Committed::Chat {
+                    recipient: PLAYER_GUID,
+                    message: "first".to_string(),
+                },
+                Committed::Heal {
+                    healer: PLAYER_GUID,
+                    target: CREATURE_GUID,
+                    amount: 3,
+                },
+                xp(PLAYER_GUID, 2),
+            ]
+        );
+    }
+
+    // ---- misuse is a Script Diagnostic, never a panic ----
+
+    /// Every one of these is a script defect the Host has to name rather than absorb.
+    #[test]
+    fn a_misused_host_operation_names_the_call_and_the_fault() {
+        let mut host = RuntimeScriptHost::new();
+        let lonely = ScriptEvent {
+            name: "on_tick".to_string(),
+            actor: Some(player()),
+            target: None,
+        };
+        for (event, source, fault) in [
+            (
+                engagement(),
+                "heal(event.target, 0)",
+                "heal: the amount 0 is outside 1..=1000000",
+            ),
+            (
+                engagement(),
+                "heal(event.target, 1000001)",
+                "heal: the amount 1000001 is outside 1..=1000000",
+            ),
+            (
+                engagement(),
+                "heal(event.target, \"lots\")",
+                "heal: the amount is a string, not a whole number",
+            ),
+            (
+                lonely.clone(),
+                "heal(event.target, 5)",
+                "heal: there is no target",
+            ),
+            (
+                engagement(),
+                "local forged = {} heal(forged, 5)",
+                "heal: the target is a table, not an entity",
+            ),
+            (
+                engagement(),
+                "send_chat(event.target, \"hello\")",
+                "send_chat: the recipient is a creature, not a player",
+            ),
+            (
+                engagement(),
+                "send_chat(event.actor, \"   \")",
+                "send_chat: the message is empty",
+            ),
+            (
+                engagement(),
+                "send_chat(event.actor, 12)",
+                "send_chat: the message is a number, not a string",
+            ),
+            (
+                engagement(),
+                "grant_xp(event.target, 10)",
+                "grant_xp: the recipient is a creature, not a player",
+            ),
+            (
+                lonely,
+                "grant_xp(nil, 10)",
+                "grant_xp: there is no recipient",
+            ),
+        ] {
+            let failure = host
+                .invoke(script("misuse", source), &event)
+                .expect_err("a misused host operation must fail its invocation");
+            assert_eq!(failure.kind, FailureKind::Runtime);
+            assert!(
+                failure.message.contains(fault),
+                "`{source}` must report `{fault}`, got `{}`",
+                failure.message
+            );
+        }
+    }
+
+    #[test]
+    fn a_misused_host_operation_discards_what_the_invocation_already_staged() {
+        let mut host = RuntimeScriptHost::new();
+        let mut sink = FakeEffects::default();
+        let diagnostics = run_event(
+            &mut host,
+            &mut sink,
+            &engagement(),
+            &[script(
+                "half_done",
+                "heal(event.target, 5)\nsend_chat(event.target, \"you are not a player\")",
+            )],
+        );
+        assert!(sink.committed.is_empty());
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn the_staging_cap_fails_the_invocation_instead_of_committing_a_flood() {
+        let mut host = RuntimeScriptHost::new();
+        let mut sink = FakeEffects::default();
+        let flood = format!(
+            "for i = 1, {} do heal(event.target, 1) end",
+            MAX_STAGED_EFFECTS_PER_INVOCATION + 1
+        );
+        let diagnostics = run_event(
+            &mut host,
+            &mut sink,
+            &engagement(),
+            &[script("flood", &flood)],
+        );
+        assert!(
+            sink.committed.is_empty(),
+            "an invocation that overran the staging cap must commit nothing at all"
+        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].kind, FailureKind::Runtime);
+        assert!(diagnostics[0]
+            .message
+            .contains("heal: one invocation may stage at most 256 effects"));
+    }
+
+    #[test]
+    fn a_fuel_failure_after_staging_commits_nothing() {
+        let mut host = RuntimeScriptHost::new();
+        let mut sink = FakeEffects::default();
+        let diagnostics = run_event(
+            &mut host,
+            &mut sink,
+            &engagement(),
+            &[script(
+                "spendthrift",
+                "heal(event.target, 10)\ngrant_xp(event.actor, 10)\nwhile true do end",
+            )],
+        );
+        assert!(sink.committed.is_empty());
+        assert_eq!(diagnostics[0].kind, FailureKind::Fuel);
     }
 
     #[test]
@@ -639,18 +1591,25 @@ if #roster > 0 then grant_xp(4242, 25) end
         let diagnostics = run_event(
             &mut host,
             &mut sink,
-            "on_kill",
+            &engagement(),
             &[
-                script("first", "grant_xp(1, 10)"),
+                script("first", "grant_xp(event.actor, 10)"),
                 script("malformed", "="),
-                script("raiser", "grant_xp(2, 20)\nerror(\"nope\")"),
+                script("raiser", "grant_xp(event.actor, 20)\nerror(\"nope\")"),
                 script("spin", "while true do end"),
-                script("last", "grant_xp(3, 30)"),
+                script("last", "heal(event.target, 30)"),
             ],
         );
         assert_eq!(
-            sink.granted,
-            [(1, 10), (3, 30)],
+            sink.committed,
+            [
+                xp(PLAYER_GUID, 10),
+                Committed::Heal {
+                    healer: PLAYER_GUID,
+                    target: CREATURE_GUID,
+                    amount: 30,
+                },
+            ],
             "only the scripts that finished may reach the world, and the one after the failures \
              still runs"
         );
@@ -667,26 +1626,6 @@ if #roster > 0 then grant_xp(4242, 25) end
         );
     }
 
-    #[test]
-    fn a_failure_discards_every_effect_that_invocation_staged() {
-        let mut host = RuntimeScriptHost::new();
-        let mut sink = FakeEffects::default();
-        let diagnostics = run_event(
-            &mut host,
-            &mut sink,
-            "on_loot",
-            &[script(
-                "half_done",
-                "grant_xp(1, 10)\ngrant_xp(2, 20)\nerror(\"too late\")",
-            )],
-        );
-        assert!(
-            sink.granted.is_empty(),
-            "the two effects staged before the error must never land"
-        );
-        assert_eq!(diagnostics.len(), 1);
-    }
-
     /// A defect in the pinned interpreter, recorded so it cannot change unnoticed: piccolo 0.3.3 passes
     /// an inline table constructor's element count as an extra argument, so `f({7, 8, 9})` reaches
     /// a three-parameter `f` as `f(table, 3, nil)` instead of `f(table, nil, nil)`. Passing the
@@ -699,30 +1638,36 @@ if #roster > 0 then grant_xp(4242, 25) end
     #[test]
     fn piccolo_leaks_a_table_constructors_element_count_as_an_extra_argument() {
         let mut host = RuntimeScriptHost::new();
+        let event = engagement();
         // `b` should be nil in every one of these. It is the element count instead.
         for (source, leaked_count) in [
-            ("grant_xp(1, seen({}) + 1)", 1),
-            ("grant_xp(1, seen({7}) + 1)", 2),
-            ("grant_xp(1, seen({7, 8, 9}) + 1)", 4),
+            ("grant_xp(event.actor, seen({}) + 1)", 1),
+            ("grant_xp(event.actor, seen({7}) + 1)", 2),
+            ("grant_xp(event.actor, seen({7, 8, 9}) + 1)", 4),
         ] {
             let preamble = "local function seen(a, b) return b end\n";
             assert_eq!(
-                committed(&mut host, &format!("{preamble}{source}"))
-                    .expect("the leaked value is a number, so the arithmetic succeeds"),
-                [(1, leaked_count)]
+                granted_amounts(
+                    &committed(&mut host, &event, &format!("{preamble}{source}"))
+                        .expect("the leaked value is a number, so the arithmetic succeeds")
+                ),
+                [leaked_count]
             );
         }
         // The same table through a local is passed correctly, which is what makes it a call-site
         // defect rather than a calling-convention one.
         assert_eq!(
-            committed(
-                &mut host,
-                "local function seen(a, b) return tostring(b) end\n\
-                 local t = {7, 8, 9}\n\
-                 grant_xp(1, #seen(t))",
-            )
-            .unwrap(),
-            [(1, 3)],
+            granted_amounts(
+                &committed(
+                    &mut host,
+                    &event,
+                    "local function seen(a, b) return tostring(b) end\n\
+                     local t = {7, 8, 9}\n\
+                     grant_xp(event.actor, #seen(t))",
+                )
+                .unwrap()
+            ),
+            [3],
             "tostring(nil) is the three characters `nil`"
         );
     }
@@ -730,23 +1675,30 @@ if #roster > 0 then grant_xp(4242, 25) end
     #[test]
     fn the_shim_supplies_the_table_concat_piccolo_lacks() {
         let mut host = RuntimeScriptHost::new();
+        let event = engagement();
         for (source, width, joined) in [
             (
-                "grant_xp(1, #table.concat({\"ab\", \"cd\", \"ef\"}, \"-\"))",
+                "grant_xp(event.actor, #table.concat({\"ab\", \"cd\", \"ef\"}, \"-\"))",
                 8,
                 "ab-cd-ef",
             ),
             // No separator: the leaked element count must not be joined in as one.
-            ("grant_xp(1, #table.concat({\"ab\", \"cd\"}))", 4, "abcd"),
             (
-                "local t = {\"ab\", \"cd\"} grant_xp(1, #table.concat(t, \"--\"))",
+                "grant_xp(event.actor, #table.concat({\"ab\", \"cd\"}))",
+                4,
+                "abcd",
+            ),
+            (
+                "local t = {\"ab\", \"cd\"} grant_xp(event.actor, #table.concat(t, \"--\"))",
                 6,
                 "ab--cd",
             ),
         ] {
             assert_eq!(
-                committed(&mut host, source).expect("table.concat must exist"),
-                [(1, width)],
+                granted_amounts(
+                    &committed(&mut host, &event, source).expect("table.concat must exist")
+                ),
+                [width],
                 "`{joined}` is {width} characters"
             );
         }
@@ -755,11 +1707,12 @@ if #roster > 0 then grant_xp(4242, 25) end
     #[test]
     fn the_representative_script_fits_the_fuel_budget_with_room_to_spare() {
         let mut host = RuntimeScriptHost::new();
-        host.invoke(script("representative", REPRESENTATIVE_SCRIPT), "on_login")
+        let event = engagement();
+        host.invoke(script("representative", REPRESENTATIVE_SCRIPT), &event)
             .expect("the workload the budget is sized against must fit");
         // Fifty times the list, still inside the budget: the headroom is real, not marginal.
         let heavier = REPRESENTATIVE_SCRIPT.replace("1, 20 do", "1, 1000 do");
-        host.invoke(script("heavier", &heavier), "on_login")
+        host.invoke(script("heavier", &heavier), &event)
             .expect("fifty times the representative workload must still fit");
     }
 

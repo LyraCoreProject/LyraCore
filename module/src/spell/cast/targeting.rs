@@ -1408,12 +1408,28 @@ fn apply_heal(
 ) -> u32 {
     let sp = spell_power(ctx, caster_guid, hdr.school_mask);
     let scaled = compose_magnitude(points, sp, SPELL_POWER_COEFF_PCT);
+    apply_direct_heal(ctx, caster_guid, target_guid, scaled)
+}
+
+/// Raise `target_guid`'s health by `basis`, clamped to max health, and credit the heal-threat that
+/// pulls aggro onto `healer_guid`. Returns the EFFECTIVE heal — 0 for overheal or a target that is
+/// no longer in the world.
+///
+/// The heal core with no spell in it: `apply_heal` scales its points by spell power first, callers
+/// that already know the health to restore come straight here. `healer_guid` naming nothing (a heal
+/// with no healer) credits no threat, because `add_heal_threat` already ignores a non-player healer.
+pub(crate) fn apply_direct_heal(
+    ctx: &ReducerContext,
+    healer_guid: u64,
+    target_guid: u64,
+    basis: i32,
+) -> u32 {
     if let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) {
         let before = t.health;
-        t.health = healed_value(t.health, t.max_health, scaled);
+        t.health = healed_value(t.health, t.max_health, basis);
         let effective = t.health.saturating_sub(before); // overheal generates no threat (vanilla)
         ctx.db.game_world_entity().guid().update(t);
-        crate::threat::add_heal_threat(ctx, caster_guid, target_guid, effective);
+        crate::threat::add_heal_threat(ctx, healer_guid, target_guid, effective);
         effective
     } else {
         0

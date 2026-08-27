@@ -6,18 +6,29 @@
 
 use spacetimedb::{log, reducer, ReducerContext};
 
-use crate::runtime_script::{run_event, CoreEffects, RuntimeScript};
+use crate::runtime_script::{run_event, CoreEffects, EntityView, RuntimeScript, ScriptEvent};
 
-/// Run `source` as a Runtime Script for `event`. Commits what the script stages if it succeeds;
-/// refuses with the bounded diagnostic if it does not.
+/// Run `source` as a Runtime Script for `event`, with `actor_guid` and `target_guid` as the
+/// event's participants. Commits what the script stages if it succeeds; refuses with the bounded
+/// diagnostic if it does not.
+///
+/// A guid of 0 — or one naming nothing in the world — leaves that participant absent, which is how
+/// an operator exercises the "no actor" and "no target" paths a script has to handle.
 #[reducer]
 pub fn debug_run_runtime_script(
     ctx: &ReducerContext,
     script_name: String,
     event: String,
     source: String,
+    actor_guid: u64,
+    target_guid: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let event = ScriptEvent {
+        name: event,
+        actor: EntityView::read(ctx, actor_guid),
+        target: EntityView::read(ctx, target_guid),
+    };
     let Some((diagnostics, compilations)) = crate::runtime_script::with_host(|host| {
         let diagnostics = run_event(
             host,
@@ -38,8 +49,9 @@ pub fn debug_run_runtime_script(
             // The compilation count is how an operator sees the compiler cache working: call this
             // twice with the same source and it must not move.
             log::info!(
-                "debug_run_runtime_script: `{script_name}` on `{event}` committed \
-                 ({compilations} chunks compiled since this module instance started)"
+                "debug_run_runtime_script: `{script_name}` on `{}` committed \
+                 ({compilations} chunks compiled since this module instance started)",
+                event.name
             );
             Ok(())
         }
