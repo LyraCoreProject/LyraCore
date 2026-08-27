@@ -9,5 +9,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src", "generated"]
+  "include": ["lib", "src", "tests", "generated"]
 }

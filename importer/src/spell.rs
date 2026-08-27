@@ -27,7 +27,8 @@ use wow_world_base::vanilla::AuraMod;
 
 use crate::dbc::{open_chain, read_table};
 use crate::package_delta;
-use crate::{push_insert, run_sql_statements, sql_text, stamp_family, Args};
+use crate::spell_snapshot::{write_snapshot, SpellEffectRow, SpellHeaderRow, SpellRows};
+use crate::{push_insert, run_sql_statements, stamp_family, Args};
 use std::path::Path;
 
 // ===========================================================================================
@@ -383,18 +384,44 @@ fn is_ranged_auto_repeat(attributes_ex2: u32, name: &str) -> bool {
 /// Duration rides the spell HEADER `duration_ms` (Gouge = 4000ms). The break-on-damage flag rides the
 /// header `aura_interrupt` (forced on below). Spells that ALREADY carry a control row in the DBC (Sap 6770)
 /// need NO synthetic add — return None.
-fn synthetic_control_effect(spell_id: u32, name: &str, used_index: u8) -> Option<String> {
+fn synthetic_control_effect(spell_id: u32, name: &str, used_index: u8) -> Option<SpellEffectRow> {
     // Gouge (real spell 1776) — DAMAGE + combo only in the DBC; ADD the incapacitate. The wrapper (1780)
     // is a pure combo-point trigger → no control. Key on the real id so only the cast target gains the CC.
     if !(spell_id == 1776 && name == "Gouge") {
         return None;
     }
-    let id = ((spell_id as u64) << 2) | used_index as u64;
-    Some(format!(
-        // id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,
-        // chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id
-        "({id},{spell_id},{used_index},{A_CONTROL},1,0,0.0,0,{T_TARGET_ENEMY},0.0,0,0,0,{M_POLY},{P_MECHANIC},0,0,false)",
-    ))
+    Some(SpellEffectRow {
+        kind: A_CONTROL,
+        base_points: 1,
+        target: T_TARGET_ENEMY,
+        p0: M_POLY,
+        p0_kind: P_MECHANIC,
+        ..blank_effect(spell_id, used_index)
+    })
+}
+
+/// An effect row with every column at its inert value, for the curated additions to fill in. Naming
+/// only the columns that carry meaning is what makes each synthetic row readable.
+fn blank_effect(spell_id: u32, effect_index: u8) -> SpellEffectRow {
+    SpellEffectRow {
+        spell_id,
+        effect_index,
+        kind: 0,
+        base_points: 0,
+        die_sides: 0,
+        per_level: 0.0,
+        period_ms: 0,
+        target: T_SELF,
+        radius_yd: 0.0,
+        chain_targets: 0,
+        trigger_spell: 0,
+        effect_mechanic: 0,
+        p0: 0,
+        p0_kind: P_NONE,
+        p1: 0,
+        script_id: 0,
+        enters_combat: false,
+    }
 }
 
 /// A synthetic A_MOD_SPEED(MOVE, −30%) effect-row tuple to ADD for Stealth — the sneak move-slow that the
@@ -403,15 +430,21 @@ fn synthetic_control_effect(spell_id: u32, name: &str, used_index: u8) -> Option
 /// Re-added here so the gateway's negative-A_MOD_SPEED(MOVE) sum (Phase 6) slows the stealthed rogue. The
 /// existing A_STEALTH effect is UNTOUCHED — this is an ADDITION (Stealth stays a stealth presence). Self
 /// aura: target = T_SELF; p0 = SPEED_MOVE, p0_kind = P_SPEED_KIND; amount = −30 (signed percent).
-fn synthetic_stealth_slow_effect(spell_id: u32, name: &str, used_index: u8) -> Option<String> {
+fn synthetic_stealth_slow_effect(
+    spell_id: u32,
+    name: &str,
+    used_index: u8,
+) -> Option<SpellEffectRow> {
     if !(spell_id == 1784 && name == "Stealth") {
         return None; // only the real Stealth (1784); the wrapper 1789 just triggers it
     }
-    let id = ((spell_id as u64) << 2) | used_index as u64;
-    Some(format!(
-        // base_points = -30 (signed percent slow); target T_SELF; p0 = SPEED_MOVE / P_SPEED_KIND.
-        "({id},{spell_id},{used_index},{A_MOD_SPEED},-30,0,0.0,0,{T_SELF},0.0,0,0,0,{SPEED_MOVE},{P_SPEED_KIND},0,0,false)",
-    ))
+    Some(SpellEffectRow {
+        kind: A_MOD_SPEED,
+        base_points: -30, // signed percent slow
+        p0: SPEED_MOVE,
+        p0_kind: P_SPEED_KIND,
+        ..blank_effect(spell_id, used_index)
+    })
 }
 
 /// A synthetic `A_SEAL` effect-row tuple to ADD for Seal of the Crusader (21082) — the seal-taxonomy fix.
@@ -430,15 +463,15 @@ fn synthetic_stealth_slow_effect(spell_id: u32, name: &str, used_index: u8) -> O
 /// tuned low (matching a lowbie SoR judgement burst) as this content targets the Elwynn 1-10 band. Keyed on
 /// the real id (21082) so only THIS seal gains the synthetic row — a same-named higher rank would need its
 /// own id here (none exists at the time of writing). Mirrors the Gouge/Stealth synthetic-effect precedent.
-fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<String> {
+fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<SpellEffectRow> {
     if !(spell_id == 21082 && name == "Seal of the Crusader") {
         return None;
     }
-    let id = ((spell_id as u64) << 2) | used_index as u64;
-    Some(format!(
-        // base_points = 20 (flat Judgement-of-the-Crusader holy burst); self aura; no p0.
-        "({id},{spell_id},{used_index},{A_SEAL},20,0,0.0,0,{T_SELF},0.0,0,0,0,{P_NONE},{P_NONE},0,0,false)",
-    ))
+    Some(SpellEffectRow {
+        kind: A_SEAL,
+        base_points: 20, // flat Judgement-of-the-Crusader holy burst; self aura, no p0
+        ..blank_effect(spell_id, used_index)
+    })
 }
 
 /// A `p1` override for Power Word: Shield (real spell 17) — vanilla hardcodes the Weakened Soul (6788)
@@ -1050,19 +1083,23 @@ struct Coverage {
     unmapped_effect: BTreeMap<i32, usize>, // top unmapped instant SpellEffect ids
 }
 
-/// Build the (clear+)reload SQL for `game_spell` + `game_spell_effect` from the client DBC chain, plus
-/// human-readable diagnostics for the dry-run. Returns (statements, coverage, diagnostics). IN-MEMORY only.
+/// Derive the `game_spell` + `game_spell_effect` rows from the client DBC chain, plus human-readable
+/// diagnostics for the dry-run. Returns (rows, coverage, diagnostics). IN-MEMORY only.
+///
+/// The rows are typed rather than pre-spelled SQL because two consumers need them: the reload
+/// statements ([`assemble_spell_sql`]) and the Base Snapshot a Datascript reads
+/// (`spell_snapshot::write_snapshot`). Deriving both from one row is what keeps them agreeing.
 ///
 /// `only`: the additive allowlist. When EMPTY, the full wholesale path runs (clear ALL rows + reload
 /// every spell). When NON-EMPTY, ONLY those spell ids are emitted and the DELETEs are SURGICAL (per-id),
 /// so the import is additive + idempotent — it never touches the curated seed or the synthetic test
 /// fixtures. The diagnostics then list EVERY allowlisted spell's full mapping (header + each effect,
 /// including E_SCRIPTED no-ops) so the operator can see exactly how each ability resolved.
-fn build_spell_sql(
+fn build_spell_rows(
     data_dir: &Path,
     only: &[u32],
     trainers: &[(u32, Vec<u32>)],
-) -> Result<(Vec<String>, Coverage, Vec<String>)> {
+) -> Result<(SpellRows, Coverage, Vec<String>)> {
     let allow: std::collections::HashSet<u32> = only.iter().copied().collect();
     // spell_id → its DBC-derived spell_level, captured during the header build so the trainer rows below
     // get a required_level straight from Spell.dbc (the single firewall-clean source — no cmangos value).
@@ -1088,8 +1125,8 @@ fn build_spell_sql(
     );
 
     let mut cov = Coverage::default();
-    let mut spell_rows: Vec<String> = Vec::new();
-    let mut effect_rows: Vec<String> = Vec::new();
+    let mut spell_rows: Vec<SpellHeaderRow> = Vec::new();
+    let mut effect_rows: Vec<SpellEffectRow> = Vec::new();
     let mut reagent_rows: Vec<String> = Vec::new();
     let mut eventai_metadata_rows: Vec<String> = Vec::new();
     let mut samples: Vec<String> = Vec::new();
@@ -1294,12 +1331,33 @@ fn build_spell_sql(
         // in the wow_dbc fields named proc_chance/proc_charges/max_level.
         let (proc_flags, proc_chance, proc_charges) =
             proc_header_fields(s.proc_chance, s.proc_charges, s.max_level);
-        spell_rows.push(format!(
-            "({spell_id},{name},{power_type},{cost},{cast_time_ms},{gcd_ms},{cooldown_ms},{range_yd},{duration_ms},{school_mask},{dispel_type},{mechanic},{max_stacks},{aura_interrupt},{attributes},{spell_level},{max_level},{neg},{cast_flags},{stances},{family_name},{family_flags},{proc_flags},{proc_chance},{proc_charges})",
-            name = sql_text(&name),
-            // `is_negative` is a BOOL column — SpacetimeDB SQL needs the `true`/`false` literal, not 1/0.
-            neg = if is_negative { "true" } else { "false" },
-        ));
+        spell_rows.push(SpellHeaderRow {
+            spell_id,
+            name: name.clone(),
+            power_type,
+            cost,
+            cast_time_ms,
+            gcd_ms,
+            cooldown_ms,
+            range_yd,
+            duration_ms,
+            school_mask,
+            dispel_type,
+            mechanic,
+            max_stacks,
+            aura_interrupt,
+            attributes,
+            spell_level,
+            max_level,
+            is_negative,
+            cast_flags,
+            stances,
+            family_name,
+            family_flags,
+            proc_flags,
+            proc_chance,
+            proc_charges,
+        });
         cov.spells += 1;
 
         // Allowlist diagnostics: one header line per requested spell so the operator sees the full
@@ -1328,7 +1386,6 @@ fn build_spell_sql(
             }
             used_slots[i] = true;
             let effect_index = i as u8;
-            let id = ((spell_id as u64) << 2) | i as u64;
             let aura = s.effect_aura[i];
 
             let (kind, (p0, p0_kind)) = if is_aura_effect(effect_id) || aura != AuraMod::None {
@@ -1612,14 +1669,28 @@ fn build_spell_sql(
             let script_id = 0u32;
             // [093] data-driven "this energize enters/holds combat": set on Bloodrage (cast 2687 + trickle
             // 29131, BOTH named "Bloodrage") so the E_ENERGIZE / A_PERIODIC_ENERGIZE arms read the flag, not
-            // a spell id. SQL bool literal (true/false, not 1/0). Any energize can opt in by adding the name.
-            let enters_combat = if name == "Bloodrage" { "true" } else { "false" };
+            // a spell id. Any energize can opt in by adding the name.
+            let enters_combat = name == "Bloodrage";
 
-            effect_rows.push(format!(
-                "({id},{spell_id},{effect_index},{kind},{base_points},{die_sides},{per_level},{period_ms},{target},{radius_yd},{chain_targets},{trigger_spell},{effect_mechanic},{p0},{p0_kind},{p1},{script_id},{enters_combat})",
-                per_level = fmt_f32(per_level),
-                radius_yd = fmt_f32(radius_yd),
-            ));
+            effect_rows.push(SpellEffectRow {
+                spell_id,
+                effect_index,
+                kind,
+                base_points,
+                die_sides,
+                per_level,
+                period_ms,
+                target,
+                radius_yd,
+                chain_targets,
+                trigger_spell,
+                effect_mechanic,
+                p0,
+                p0_kind,
+                p1,
+                script_id,
+                enters_combat,
+            });
 
             cov.effects += 1;
             *cov.by_kind.entry(kind).or_default() += 1;
@@ -1656,16 +1727,13 @@ fn build_spell_sql(
             .or_else(|| synthetic_stealth_slow_effect(spell_id, &name, synth_slot))
             .or_else(|| synthetic_seal_effect(spell_id, &name, synth_slot))
         {
-            effect_rows.push(synth.clone());
             cov.effects += 1;
             cov.real += 1;
-            // Histogram by kind (4th comma-separated col is the kind tag).
-            if let Some(k) = synth.split(',').nth(3).and_then(|s| s.parse::<u8>().ok()) {
-                *cov.by_kind.entry(k).or_default() += 1;
-            }
+            *cov.by_kind.entry(synth.kind).or_default() += 1;
             if !allow.is_empty() {
-                samples.push(format!("    [synthetic+curated] {synth}"));
+                samples.push(format!("    [synthetic+curated] {}", synth.sql_values()));
             }
+            effect_rows.push(synth);
         }
     }
 
@@ -1726,19 +1794,61 @@ fn build_spell_sql(
         );
     }
 
-    // Assemble the (clear+)reload statements (both tables have NO Timestamp column → plain SQL).
+    Ok((
+        SpellRows {
+            headers: spell_rows,
+            effects: effect_rows,
+            fishing: fishing_marker_rows(),
+            reagents: reagent_rows,
+            eventai_metadata: eventai_metadata_rows,
+            trainers: trainer_rows,
+        },
+        cov,
+        samples,
+    ))
+}
+
+/// Fishing (060): the E_FISH marker effect rows for the three tier ids (skill 356 — 7620/7731/7732,
+/// PROFESSION_LEARN's fishing entry). The gateway routes CMSG_CAST_SPELL to the `fish` reducer by
+/// this KIND (the enchant-route pattern — never a spell-id list). These are OUR OWN taxonomy rows
+/// (not client data, firewall-clean), written by key AFTER the bulk insert so they replace whatever
+/// the DBC mapped at the same effect slot.
+fn fishing_marker_rows() -> Vec<SpellEffectRow> {
+    const E_FISH: u8 = 0x1C; // lockstep with module taxonomy
+    [7620u32, 7731, 7732]
+        .into_iter()
+        .map(|spell_id| SpellEffectRow {
+            kind: E_FISH,
+            p0_kind: 255,
+            ..blank_effect(spell_id, 0)
+        })
+        .collect()
+}
+
+/// The (clear+)reload statements for one derived pass (both tables have NO Timestamp column → plain
+/// SQL). Pure: the same rows always assemble the same statements, so this is testable without a
+/// client.
+///
+/// `curated_trainers_requested` is the operator's `--trainer` intent, not the row count: an
+/// offering list that resolved to nothing still has to clear the reserved span, or a shrunken list
+/// leaves stale rows behind.
+fn assemble_spell_sql(
+    rows: &SpellRows,
+    only: &[u32],
+    curated_trainers_requested: bool,
+) -> Vec<String> {
     let mut stmts: Vec<String> = spell_delete_statements(only);
     push_insert(
         &mut stmts,
         "game_spell",
         "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges",
-        &spell_rows,
+        &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
         &mut stmts,
         "game_spell_effect",
         "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat",
-        &effect_rows,
+        &rows.effects.iter().map(SpellEffectRow::sql_values).collect::<Vec<_>>(),
     );
     // Reagents (282): same clear-guard as the spell/effect tables (spell_delete_statements only
     // wipes < SYNTHETIC_SPELL_ID_FLOOR, so hand/test-fixture reagents survive a curated reload).
@@ -1746,26 +1856,24 @@ fn build_spell_sql(
         &mut stmts,
         "game_spell_reagent",
         "id,spell_id,item_entry,count",
-        &reagent_rows,
+        &rows.reagents,
     );
     push_insert(
         &mut stmts,
         "game_creature_ai_spell_metadata",
         "spell_id,exclude_caster",
-        &eventai_metadata_rows,
+        &rows.eventai_metadata,
     );
 
-    // Fishing (060): synthesize the E_FISH marker effect rows for the three tier ids (skill 356 —
-    // 7620/7731/7732, PROFESSION_LEARN's fishing entry). The gateway routes CMSG_CAST_SPELL to the
-    // `fish` reducer by this KIND (the enchant-route pattern — never a spell-id list). These are OUR
-    // OWN taxonomy rows (not client data, firewall-clean); deterministic-id delete+insert = idempotent
-    // on every curated re-run.
-    const E_FISH: u8 = 0x1C; // lockstep with module taxonomy
-    for spell in [7620u32, 7731, 7732] {
-        let id = (spell as u64) << 2;
-        stmts.push(format!("DELETE FROM game_spell_effect WHERE id = {id}"));
+    // Deterministic-id delete+insert = idempotent on every curated re-run.
+    for row in &rows.fishing {
         stmts.push(format!(
-            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({id},{spell},0,{E_FISH},0,0,0.0,0,0,0.0,0,0,0,0,255,0,0,false)"
+            "DELETE FROM game_spell_effect WHERE id = {}",
+            row.row_id()
+        ));
+        stmts.push(format!(
+            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES {}",
+            row.sql_values()
         ));
     }
 
@@ -1777,7 +1885,7 @@ fn build_spell_sql(
     // (delete-by-id over the reserved span) and never touches the dump rows or the profession
     // learn-rows. The old wholesale `DELETE WHERE learn_skill_line = 0` wiped the dump's ~4200
     // class rows and replaced them with the curated handful — exactly what 259 removes.
-    if !trainers.is_empty() {
+    if curated_trainers_requested {
         for n in 0..CURATED_TRAINER_ID_SPAN {
             stmts.push(format!(
                 "DELETE FROM game_trainer_spell WHERE id = {}",
@@ -1788,11 +1896,22 @@ fn build_spell_sql(
             &mut stmts,
             "game_trainer_spell",
             "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap",
-            &trainer_rows,
+            &rows.trainers,
         );
     }
 
-    Ok((stmts, cov, samples))
+    stmts
+}
+
+/// The (clear+)reload SQL plus the dry-run diagnostics: the shape every existing caller expects.
+fn build_spell_sql(
+    data_dir: &Path,
+    only: &[u32],
+    trainers: &[(u32, Vec<u32>)],
+) -> Result<(Vec<String>, Coverage, Vec<String>)> {
+    let (rows, cov, samples) = build_spell_rows(data_dir, only, trainers)?;
+    let sql = assemble_spell_sql(&rows, only, !trainers.is_empty());
+    Ok((sql, cov, samples))
 }
 
 /// Reserved `game_trainer_spell` id range for the CURATED override rows (259): far above the --dump
@@ -1865,16 +1984,6 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
 /// nothing is free.
 fn trainer_cost(required_level: u8) -> u32 {
     (required_level.max(1) as u32) * 50
-}
-
-/// Format an f32 for a SpacetimeDB SQL literal — always with a decimal point so the column's F32 type
-/// is unambiguous (a bare `0` could be read as an integer).
-fn fmt_f32(v: f32) -> String {
-    if v.fract() == 0.0 {
-        format!("{v:.1}")
-    } else {
-        format!("{v}")
-    }
 }
 
 /// Human-readable name of a KIND tag (for the coverage histogram).
@@ -1996,6 +2105,34 @@ fn print_coverage(cov: &Coverage) {
         println!("  effect_id {id:<5} {n:>6}");
     }
     println!("======================================\n");
+}
+
+/// `--dbc <Data dir> --spell-snapshot <path>` mode: write the Base Snapshot a Datascript reads, and
+/// touch no database.
+///
+/// The snapshot is the SAME derived rows the import would load, so what an author sees is what a
+/// shard gets. It holds no client bytes — only `game_*` values the taxonomy mapping produced — and
+/// it goes exactly where the operator points it. The author-facing target,
+/// `datascripts/generated/base-snapshot.json`, is git-ignored.
+pub fn run_spell_snapshot(data_dir: &str, path: &str) -> Result<()> {
+    let (rows, cov, _) = build_spell_rows(Path::new(data_dir), &[], &[])?;
+    let json = write_snapshot(&rows);
+
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+    }
+    std::fs::write(path, json.as_bytes()).with_context(|| format!("write {path}"))?;
+
+    eprintln!(
+        "spells: wrote base snapshot to {path} — {} spells, {} effects, {} bytes. No database was touched.",
+        cov.spells,
+        cov.effects,
+        json.len(),
+    );
+    Ok(())
 }
 
 /// `--dbc <Data dir> --spells` mode: import Spell.dbc → game_spell/game_spell_effect. Dry-run by
@@ -2565,10 +2702,11 @@ mod tests {
     fn synthetic_gouge_control_added_by_id_and_name() {
         // Gouge (real 1776) gains an A_CONTROL incapacitate at the given slot; the wrapper (1780) does not.
         let row = synthetic_control_effect(1776, "Gouge", 2).expect("Gouge gains a control effect");
-        // id = (1776<<2)|2 = 7106; kind = A_CONTROL; p0 = M_POLY; p0_kind = P_MECHANIC; target = enemy.
-        assert!(row.starts_with(&format!("({},1776,2,{A_CONTROL},", (1776u64 << 2) | 2)));
-        assert!(row.contains(&format!(",{M_POLY},{P_MECHANIC},")));
-        assert!(row.contains(&format!(",{T_TARGET_ENEMY},")));
+        assert_eq!(row.row_id(), (1776u64 << 2) | 2);
+        assert_eq!(row.kind, A_CONTROL);
+        assert_eq!(row.p0, M_POLY);
+        assert_eq!(row.p0_kind, P_MECHANIC);
+        assert_eq!(row.target, T_TARGET_ENEMY);
         assert!(synthetic_control_effect(1780, "Gouge", 2).is_none()); // the combo wrapper: no control
                                                                        // Sap (6770) already carries A_CONTROL in the DBC → no synthetic add.
         assert!(synthetic_control_effect(6770, "Sap", 2).is_none());
@@ -2580,12 +2718,11 @@ mod tests {
         // Stealth (real 1784) gains A_MOD_SPEED(MOVE, -30) at the slot; the wrapper (1789) does not.
         let row =
             synthetic_stealth_slow_effect(1784, "Stealth", 2).expect("Stealth gains a move-slow");
-        assert!(row.starts_with(&format!(
-            "({},1784,2,{A_MOD_SPEED},-30,",
-            (1784u64 << 2) | 2
-        )));
-        assert!(row.contains(&format!(",{T_SELF},"))); // self aura
-        assert!(row.contains(&format!(",{SPEED_MOVE},{P_SPEED_KIND},"))); // move-speed kind
+        assert_eq!(row.row_id(), (1784u64 << 2) | 2);
+        assert_eq!(row.kind, A_MOD_SPEED);
+        assert_eq!(row.base_points, -30);
+        assert_eq!(row.target, T_SELF); // self aura
+        assert_eq!((row.p0, row.p0_kind), (SPEED_MOVE, P_SPEED_KIND)); // move-speed kind
         assert!(synthetic_stealth_slow_effect(1789, "Stealth", 2).is_none()); // the rank wrapper
         assert!(synthetic_stealth_slow_effect(1784, "Sap", 2).is_none()); // wrong name guard
     }
@@ -2596,8 +2733,10 @@ mod tests {
         // its own eff0 (AP)/eff1 (haste) are untouched by this synthetic add.
         let row = synthetic_seal_effect(21082, "Seal of the Crusader", 2)
             .expect("Seal of the Crusader gains a seal effect");
-        assert!(row.starts_with(&format!("({},21082,2,{A_SEAL},20,", (21082u64 << 2) | 2)));
-        assert!(row.contains(&format!(",{T_SELF},"))); // self aura, like Seal of Righteousness
+        assert_eq!(row.row_id(), (21082u64 << 2) | 2);
+        assert_eq!(row.kind, A_SEAL);
+        assert_eq!(row.base_points, 20);
+        assert_eq!(row.target, T_SELF); // self aura, like Seal of Righteousness
         assert!(synthetic_seal_effect(21082, "Seal of Command", 2).is_none()); // wrong name guard
         assert!(synthetic_seal_effect(21084, "Seal of the Crusader", 2).is_none()); // wrong id guard (a hypothetical other rank)
                                                                                     // Seal of Righteousness reclassifies its OWN inert marker by name — it needs no synthetic add.
@@ -2965,13 +3104,6 @@ mod tests {
         assert!(!is_reducing_modifier_aura(6, PeriodicDamage, -5));
         // An INSTANT effect (not aura-placing) is never a "reducing modifier aura".
         assert!(!is_reducing_modifier_aura(2, ModResistance, -90));
-    }
-
-    #[test]
-    fn f32_literal_always_has_a_point() {
-        assert_eq!(fmt_f32(0.0), "0.0");
-        assert_eq!(fmt_f32(8.0), "8.0");
-        assert_eq!(fmt_f32(2.5), "2.5");
     }
 
     #[test]
