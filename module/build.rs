@@ -142,11 +142,12 @@ fn main() {
             let name = pkg.file_name().unwrap().to_string_lossy().into_owned();
             let pkg_src = pkg.join("src");
             if !pkg_src.is_dir() {
-                // A CLIENT-ONLY package (client/ with no src/ — addons/FrameXML shipped by
-                // --pack-client) is a legal, quiet shape. A package with NEITHER is probably a
-                // typo'd `scr/` folder — warn loudly.
-                if !pkg.join("client").is_dir() {
-                    println!("cargo:warning=packages/{name}: neither src/ nor client/ — nothing registered (typo'd folder?)");
+                // A package needs no Rust half. A CLIENT-ONLY package (client/ — addons/FrameXML
+                // shipped by --pack-client) and a DATA-ONLY package (data/ — the Package Deltas a
+                // Datascript generates, applied by the importer) are both legal, quiet shapes. A
+                // package with none of the three is probably a typo'd `scr/` folder — warn loudly.
+                if !pkg.join("client").is_dir() && !pkg.join("data").is_dir() {
+                    println!("cargo:warning=packages/{name}: none of src/, client/ or data/ — nothing registered (typo'd folder?)");
                 }
                 continue;
             }

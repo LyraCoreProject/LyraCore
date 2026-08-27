@@ -6,9 +6,10 @@
 //! data families, so a Package's row edits have to be a replayable artifact rather than a one-shot
 //! edit that the next import silently reverts.
 //!
-//! This crate is pure and deterministic. It reads no files, keeps no state, reads no clock, and
+//! This library is pure and deterministic. It reads no files, keeps no state, reads no clock, and
 //! writes nothing. It parses, canonicalizes, and traces; applying a delta to a shard is a separate
-//! concern.
+//! concern. The crate also ships `lyracore-delta-check`, a command that reads named artifact files
+//! and prints the plan they form — the IO lives there, outside everything a caller links against.
 //!
 //! # The artifact
 //!

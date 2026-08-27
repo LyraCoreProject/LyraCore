@@ -381,6 +381,22 @@ _Avoid_: data script, script (unqualified), seed script, sandbox
 The maintained, minimal Datascript at `datascripts/src/reference.ts`. It names real Module columns on purpose: it is both the worked example and the standing schema check that fails `tsc --noEmit` when the schema moves under it.
 _Avoid_: sample script, test script
 
+**Authoring Library**:
+The typed API at `datascripts/lib/` that a Datascript writes against: `data.spell(id)`, `.clone(newId)`, `.set(field, value)`, `.effect(0 | 1 | 2)`, and a `run(package, script)` that emits one Package Delta. It reads the Base Snapshot and refuses exactly what the artifact parser refuses, so a Datascript fails at author time rather than at import. Its source lives outside the Package folder; only the generated artifact goes inside.
+_Avoid_: SDK, framework, DSL, builder API
+
+**Base Snapshot**:
+The read-only file of derived base rows a Datascript reads to clone and tune, written by
+`lyracore-importer --dbc <dir> --spell-snapshot <path>`. It carries the same `game_*` values the
+import would load — never client bytes — and is git-ignored, because it is derived from the
+Operator's own client data. It is the ONLY base data a Datascript sees, which is what makes one
+Package unable to observe another's claims.
+_Avoid_: dump, base data file, cache
+
+**Package Spell**:
+A spell a Package invents, at an identifier inside the Package Spell Range. It exists only in the realm's data: an unmodified client renders spells from its own `Spell.dbc` and shows no tooltip for one.
+_Avoid_: custom spell, fake spell
+
 **Import Family**:
 One named slice of base data the importer loads as a unit, cleared and reloaded whole — "spell",
 "creatures", "quests". It is the granularity of import provenance (`game_import_meta`, one row per

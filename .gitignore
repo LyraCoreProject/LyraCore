@@ -47,5 +47,9 @@ __pycache__/
 # `lyracore packages build` reproduces from `spacetime generate --lang typescript` on every run.
 # Committing it would put a large mechanical diff in every schema change and, worse, create a
 # second source of truth that can disagree with the Module. The Module is the schema's authority.
+#
+# `generated/base-snapshot.json` rides the same rule for a second reason: the importer derives it
+# from the OPERATOR's own client data (`--spell-snapshot`). It carries only mapped `game_*` values,
+# never client bytes, but it is the operator's own derived data and stays on the operator's machine.
 /datascripts/generated/
 /datascripts/node_modules/

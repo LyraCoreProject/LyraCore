@@ -21,6 +21,9 @@
 //!                                    Package's Delta claims after the base spell rows are back;
 //!                                    without --apply it prints the plan and writes nothing —
 //!                                    package_delta.rs]
+//!   --spell-snapshot <path>         with --dbc: write the Base Snapshot a Datascript reads (the
+//!                                   same derived spell rows the import would load) and touch no
+//!                                   database — spell_snapshot.rs
 //!   --terrain <client Data/ dir>    ADT heightmap stream (terrain.rs)
 //!   --nav <client Data/ dir>        WMO/M2 nav-grid rasterizer (nav.rs)
 //!   --vmap <client Data/ dir>       exact per-cell collision-triangle extract + pack + import
@@ -52,6 +55,7 @@ mod nav;
 mod pack_client;
 mod package_delta;
 mod spell;
+mod spell_snapshot;
 mod talent;
 mod terrain;
 mod vmap;
@@ -1028,6 +1032,10 @@ pub(crate) struct Args {
     // does not run AND the base import says so loudly: an absent flag is "the operator did not say",
     // never "no Package claims this family".
     pub(crate) packages: Option<String>,
+    // --spell-snapshot <path>: with --dbc, derive the spell rows and write them to <path> as the
+    // Base Snapshot a Datascript reads. A terminal mode — it never loads, never stamps provenance
+    // and never opens a database, so it is safe to run against a live realm's operator machine.
+    pub(crate) spell_snapshot: Option<String>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -1052,6 +1060,7 @@ where
         terrain: None,
         print_extents: false,
         spells: false,
+        spell_snapshot: None,
         talents: false,
         only: Vec::new(),
         trainers: Vec::new(),
@@ -1259,6 +1268,12 @@ where
                 a.family = Some(v);
             }
             "--source-sha" => a.source_sha = it.next().context("--source-sha <sha>")?,
+            "--spell-snapshot" => {
+                a.spell_snapshot = Some(
+                    it.next()
+                        .context("--spell-snapshot needs the path to write the Base Snapshot to")?,
+                )
+            }
             "--packages" => {
                 a.packages = Some(
                     it.next()
@@ -1337,6 +1352,20 @@ where
             "--packages is only valid with --spells (the only import family with a Package Delta \
              stage)"
         );
+    }
+    // The Base Snapshot is derived from Spell.dbc, so it needs the client dir and nothing else. It
+    // is a terminal mode rather than an extra output of `--spells`: an author asking for a snapshot
+    // is not asking to load anything, and `--apply` beside it would read as "and import too".
+    if a.spell_snapshot.is_some() {
+        if a.dbc.is_none() || a.dump.is_some() {
+            bail!("--spell-snapshot needs --dbc <client Data/ dir> and nothing else");
+        }
+        if a.spells || a.talents || a.apply {
+            bail!(
+                "--spell-snapshot writes the Base Snapshot and touches no database; run it on its \
+                 own, then run the import separately"
+            );
+        }
     }
     if !a.include_creatures.is_empty() && a.dump.is_none() {
         bail!("--include-creatures is only valid with --dump (it force-imports cmangos creature rows)");
@@ -5103,6 +5132,9 @@ fn main() -> Result<()> {
         if args.talents {
             return talent::run_talents(&dir, &args);
         }
+        if let Some(path) = args.spell_snapshot.clone() {
+            return spell::run_spell_snapshot(&dir, &path);
+        }
         if args.spells {
             return spell::run_spells(&dir, &args);
         }
@@ -6690,6 +6722,48 @@ mod tests {
         assert_eq!(named.packages.as_deref(), Some("packages"));
     }
 
+    /// The Base Snapshot is an author-time read. Naming it beside an import would leave the operator
+    /// guessing whether anything was loaded, so the two modes stay apart.
+    #[test]
+    fn the_base_snapshot_mode_is_standalone() {
+        let alone = parse_args_from([
+            "--dbc",
+            "/path/need-not-exist",
+            "--spell-snapshot",
+            "datascripts/generated/base-snapshot.json",
+        ])
+        .expect("the snapshot mode parses on its own");
+        assert_eq!(
+            alone.spell_snapshot.as_deref(),
+            Some("datascripts/generated/base-snapshot.json")
+        );
+
+        for extra in [["--spells"], ["--talents"], ["--apply"]] {
+            let mut argv = vec![
+                "--dbc",
+                "/path/need-not-exist",
+                "--spell-snapshot",
+                "out.json",
+            ];
+            argv.extend(extra);
+            let error = parse_args_from(argv)
+                .err()
+                .expect("a snapshot beside an import is refused");
+            assert!(
+                format!("{error:#}").contains("touches no database"),
+                "{error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_base_snapshot_without_client_data_is_refused() {
+        let error = parse_args_from(["--spell-snapshot", "out.json"])
+            .err()
+            .expect("a snapshot with no client dir is refused");
+        assert!(format!("{error:#}").contains("--dbc"), "{error:#}");
+    }
+
     #[test]
     fn an_enabled_packages_root_without_the_spell_importer_is_refused() {
         let error = parse_args_from([
@@ -7268,6 +7342,7 @@ mod tests {
             dbc: None,
             terrain: None,
             packages: None,
+            spell_snapshot: None,
             pack_client: None,
             dump_collision: None,
             nav: None,

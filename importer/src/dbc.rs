@@ -9,6 +9,14 @@
 //! never shipped by us), built from the operator's own base bytes + our additions. The operator's MPQs
 //! live outside the repo (their client install). Native-only, like the whole importer.
 //!
+//! One derived file IS written into the repo tree, and only when the operator asks for it by name:
+//! the Base Snapshot (`--spell-snapshot <path>`, `spell_snapshot.rs`). It holds the mapped `game_*`
+//! values — our own taxonomy, the same rows the import would load — and never a client record, a
+//! client field name or a client byte. It exists because a Datascript author needs base data to
+//! clone from without a shard, and its author-facing target `datascripts/generated/` is git-ignored.
+//! The rule is unchanged in substance: derived values may be written where the operator points them;
+//! client bytes still never touch disk.
+//!
 //! `wow_dbc::T::read` hard-asserts the build-5875 `record_size`/`field_count` for each table, so a
 //! wrong-version / heavily-patched client surfaces as a clear parse error here (the version guard).
 

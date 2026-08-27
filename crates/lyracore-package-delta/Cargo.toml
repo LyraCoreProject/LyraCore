@@ -9,8 +9,17 @@ homepage.workspace = true
 publish.workspace = true
 description = "LyraCore: the versioned Package Delta artifact and the claim conflict tracer."
 
-# Pure and deterministic, like `lyracore-shared`: no IO, no clock, no randomness. `serde_json` is the
-# one dependency and is used ONLY to tokenize untrusted JSON; the canonical writer is hand-built so
-# member order, whitespace and number formatting are this crate's promise, not a library's default.
+# The LIBRARY is pure and deterministic, like `lyracore-shared`: no IO, no clock, no randomness.
+# `serde_json` is the one dependency and is used ONLY to tokenize untrusted JSON; the canonical
+# writer is hand-built so member order, whitespace and number formatting are this crate's promise,
+# not a library's default.
 [dependencies]
 serde_json = "1"
+
+# The author-facing check: parse a set of artifact files, trace them together, print the plan. It is
+# a bin rather than part of the library so the file reading stays out of everything that links this
+# crate — including the wasm module, which never builds a dependency's bins. It carries no client
+# data and no database client, so `lyracore packages build` can run it in under a second.
+[[bin]]
+name = "lyracore-delta-check"
+path = "src/bin/lyracore-delta-check.rs"
