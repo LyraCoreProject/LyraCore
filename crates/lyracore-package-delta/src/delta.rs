@@ -147,10 +147,11 @@ impl fmt::Display for Operation {
 
 /// The row a claim names, typed by its table.
 ///
-/// The ordering is the canonical one: `game_spell` before `game_spell_effect`, then by spell, then
-/// by effect index.
+/// One variant per [`Table`] variant, in the same family-grouped order, so the derived ordering is
+/// the canonical one: `game_spell` before `game_spell_effect`, then by spell, then by effect index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PrimaryKey {
+    // ---- spell ----
     /// A `game_spell` header row.
     Spell {
         /// The spell.
@@ -201,7 +202,11 @@ impl PrimaryKey {
         }
     }
 
-    /// The spell this row belongs to, whichever table it is in.
+    /// The spell this row belongs to, whichever spell table it is in.
+    ///
+    /// Total today because every table is a spell table. A family that is not the spell family
+    /// makes this match non-exhaustive, which is the point at which it has to become a question
+    /// only a spell key answers.
     #[must_use]
     pub const fn spell_id(self) -> u32 {
         match self {
@@ -235,6 +240,22 @@ impl fmt::Display for PrimaryKey {
     }
 }
 
+/// Refuses an `insert` at an identifier outside its family's Package band.
+///
+/// The band is a per-family policy, so this match carries one arm per family and no wildcard: a
+/// family that arrives without stating its band cannot compile.
+fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
+    match key {
+        PrimaryKey::Spell { spell_id } | PrimaryKey::SpellEffect { spell_id, .. } => {
+            if is_package_spell_id(spell_id) {
+                Ok(())
+            } else {
+                Err(DeltaError::SpellIdNotClientSafe { spell_id })
+            }
+        }
+    }
+}
+
 /// A spell identifier is refused the same way under every operation when it is 0 or fixture-owned.
 fn check_claimable_spell_id(table: Table, spell_id: u32) -> Result<(), DeltaError> {
     if spell_id == 0 {
@@ -264,9 +285,9 @@ impl Claim {
     ///
     /// The identifier policy is operation-dependent, and this is the only place it is applied:
     ///
-    ///  * An `insert` invents a row, so its spell must sit in the Package spell range
-    ///    ([`is_package_spell_id`]). Nothing else is safe — a real client identifier would collide
-    ///    with the next base import.
+    ///  * An `insert` invents a row, so its identifier must sit in its family's Package band — for
+    ///    a spell, the Package spell range ([`is_package_spell_id`]). Nothing else is safe: a real
+    ///    client identifier would collide with the next base import.
     ///  * An `update` changes a row someone else owns, so any identifier is allowed except a
     ///    fixture-reserved one, which [`PrimaryKey`] already refused. Tuning real spells is the
     ///    common case and must stay possible.
@@ -282,10 +303,8 @@ impl Claim {
         fields: BTreeMap<String, FieldValue>,
     ) -> Result<Self, DeltaError> {
         let table = key.table();
-        if operation == Operation::Insert && !is_package_spell_id(key.spell_id()) {
-            return Err(DeltaError::SpellIdNotClientSafe {
-                spell_id: key.spell_id(),
-            });
+        if operation == Operation::Insert {
+            check_inventable(key)?;
         }
 
         for (name, value) in &fields {
@@ -496,6 +515,11 @@ impl PackageDelta {
 }
 
 /// How many rows of each kind one Package Delta claims.
+///
+/// These are the counts `game_package_import` records, so the field names are durable column names
+/// and a family adds counters rather than renaming these. [`PackageDelta::claim_counts`] tallies
+/// them with a match over every table, which is where a new family states what its inserts count
+/// as.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClaimCounts {
     /// Rows the Package changes but does not own, across every table.

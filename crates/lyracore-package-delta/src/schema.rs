@@ -1,16 +1,32 @@
 //! The tables a Package Delta may claim, their claimable columns, and the typed values those
 //! columns take.
 //!
-//! The catalogue is hand-written against `module/src/spell/tables.rs`. It is deliberately a closed
-//! list: an unknown table or column fails the parse instead of reaching a writer that would discover
-//! the problem against a live shard.
+//! The catalogue is hand-written against the Module's own table definitions. It is deliberately a
+//! closed list: an unknown table or column fails the parse instead of reaching a writer that would
+//! discover the problem against a live shard.
+//!
+//! # Import Families
+//!
+//! Every table belongs to exactly one Import Family, the unit a base import clears and reloads and
+//! the unit a Package Delta apply runs for. [`Table`] is one closed enum whose variants are grouped
+//! by family rather than a family registry, so the catalogue stays one list and every `match` on it
+//! stays exhaustive.
 
 use core::fmt;
 
+/// The Import Family that owns the spell tables.
+pub const SPELL_FAMILY: &str = "spell";
+
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
 /// needs no translation step.
+///
+/// The variants are grouped by Import Family, in that family's canonical order. A family arrives as
+/// a block of variants; every `match` on this enum that carries no wildcard then fails to compile
+/// until the new tables are handled, which is how the catalogue, the identifier rules, the key
+/// shapes and the Module's setters stay in step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Table {
+    // ---- spell ----
     /// `game_spell` — the spell header.
     Spell,
     /// `game_spell_effect` — one effect of a spell.
@@ -18,12 +34,28 @@ pub enum Table {
 }
 
 impl Table {
+    /// Every table this build knows, in canonical order, so a refusal can name the whole catalogue
+    /// and a test can walk it. Kept in step with [`Table::parse`] by `tests/families.rs`.
+    pub const ALL: &'static [Self] = &[Self::Spell, Self::SpellEffect];
+
     /// The durable table name, and the value the artifact's `table` member carries.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Spell => "game_spell",
             Self::SpellEffect => "game_spell_effect",
+        }
+    }
+
+    /// The Import Family that owns this table.
+    ///
+    /// The same name `game_import_meta.family` records, the `apply_package_deltas` reducer takes,
+    /// and `game_package_import.id` carries before the slash. An applier is called for one family
+    /// at a time, so this is what tells it a claim belongs to the import it is running.
+    #[must_use]
+    pub const fn family(self) -> &'static str {
+        match self {
+            Self::Spell | Self::SpellEffect => SPELL_FAMILY,
         }
     }
 
@@ -79,6 +111,8 @@ pub struct Column {
 const fn column(name: &'static str, ty: FieldType) -> Column {
     Column { name, ty }
 }
+
+// ---- spell ----
 
 /// `game_spell` minus its `spell_id` primary key.
 const SPELL_COLUMNS: &[Column] = &[

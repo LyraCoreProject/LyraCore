@@ -386,7 +386,8 @@ The typed API at `datascripts/lib/` that a Datascript writes against: `data.spel
 _Avoid_: SDK, framework, DSL, builder API
 
 **Base Snapshot**:
-The read-only file of derived base rows a Datascript reads to clone and tune, written by
+The read-only file of derived base rows a Datascript reads to clone and tune, one file per Import
+Family — today the spell family's, written by
 `lyracore-importer --dbc <dir> --spell-snapshot <path>`. It carries the same `game_*` values the
 import would load — never client bytes — and is git-ignored, because it is derived from the
 Operator's own client data. It is the ONLY base data a Datascript sees, which is what makes one
@@ -401,7 +402,8 @@ _Avoid_: custom spell, fake spell
 One named slice of base data the importer loads as a unit, cleared and reloaded whole — "spell",
 "creatures", "quests". It is the granularity of import provenance (`game_import_meta`, one row per
 family) and of a Package Delta apply: a family's Package claims are reapplied as the last stage of
-that family's import, in one transaction.
+that family's import, in one transaction. Every table a Package may claim belongs to exactly one
+family, so an apply for one family never reaches another's rows.
 _Avoid_: data family, import group, dataset
 
 **Package Delta**:
@@ -441,15 +443,23 @@ Two Packages claiming the same column of one row, or inserting the same primary 
 both Package identities and the exact claim. There are no priority numbers, so a human chooses.
 _Avoid_: collision (for a claim), merge error
 
+**Package Identifier Range**:
+The identifiers a Package may invent in one Import Family. Each family that allows inserts owns one
+band, floored two decimal orders above the highest identifier a real client holds for its tables and
+above every reserved band. An apply clears the whole band before it writes, so a Package that leaves
+the enabled set takes its invented rows with it. The Package Spell Range is the worked example.
+_Avoid_: custom id range, synthetic id range
+
 **Package Spell Range**:
-The spell identifiers a Package may invent: 6,000,000 to 6,999,999. Two decimal orders above the
+The spell family's Package Identifier Range: 6,000,000 to 6,999,999. Two decimal orders above the
 highest real client spell and above every reserved band, so an inserted spell can never collide with
 imported or fixture data.
 _Avoid_: custom id range, synthetic spell range
 
 **Fixture-Reserved Identifier**:
-An identifier the seeded fixtures own, which no Package may claim under any operation. For spells:
-50,000 to 50,999, plus the project-wide 5,090,000 to 5,099,999 band.
+An identifier the seeded fixtures own, which no Package may claim under any operation, in any Import
+Family. Two kinds: the project-wide 5,090,000 to 5,099,999 band, and a family's own fixture cluster —
+for spells, 50,000 to 50,999.
 _Avoid_: test id, reserved id (unqualified)
 
 ### Working method

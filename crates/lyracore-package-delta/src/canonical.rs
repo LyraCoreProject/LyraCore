@@ -10,7 +10,8 @@
 //!  * No whitespace anywhere, and no trailing newline.
 //!  * Object members appear in a fixed declared order; `fields` members appear sorted by name.
 //!  * Claims appear sorted by table, then spell, then effect index.
-//!  * Integers are plain decimal, so `1e2`, `100.0` and `100` all become `100`.
+//!  * Integers are plain decimal. An integer column written as `100.0` or `1e2` is refused at the
+//!    parse rather than rounded here, so there is only ever one spelling to write.
 //!  * An unsigned 64-bit value is a decimal string with no sign, no padding and no separators.
 //!  * A float is the shortest decimal that reads back as the same `f32`, always with a decimal
 //!    point, so `1`, `1.0` and `1.00` all become `1.0`.
