@@ -26,6 +26,7 @@ use wow_dbc::{DbcTable, Indexable};
 use wow_world_base::vanilla::AuraMod;
 
 use crate::dbc::{open_chain, read_table};
+use crate::package_delta;
 use crate::{push_insert, run_sql_statements, sql_text, stamp_family, Args};
 use std::path::Path;
 
@@ -2084,6 +2085,14 @@ pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
             }
         }
         eprintln!("spells: dry-run — re-run with --apply to load.");
+    }
+
+    // The Package Delta stage, last: the base rows are back and stamped, so every enabled Package's
+    // claims go on top of them. It runs on the dry-run path too — that IS the read-only check, and
+    // it must print the same plan an --apply would send.
+    match &args.packages {
+        Some(root) => package_delta::reapply(args, "spell", root)?,
+        None => package_delta::warn_not_reapplied("spell"),
     }
 
     // Trainer-offering summary (per --trainer entry): how many game_trainer_spell rows this run emits for

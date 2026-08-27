@@ -75,7 +75,9 @@ pub mod ids;
 mod schema;
 mod trace;
 
-pub use delta::{Claim, Operation, PackageDelta, PackageId, PrimaryKey, SourceHash, DELTA_VERSION};
+pub use delta::{
+    Claim, ClaimCounts, Operation, PackageDelta, PackageId, PrimaryKey, SourceHash, DELTA_VERSION,
+};
 pub use error::DeltaError;
 pub use ids::{
     is_fixture_reserved_spell_id, is_package_spell_id, packed_spell_effect_id,

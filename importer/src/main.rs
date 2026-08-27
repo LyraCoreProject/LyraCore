@@ -17,6 +17,10 @@
 //!   --dbc  <client Data/ dir>       client DBC extraction/checks (dbc.rs); add --spells for the
 //!                                   Spell.dbc importer (spell.rs) or --talents for the
 //!                                   TalentTab.dbc/Talent.dbc importer (talent.rs)
+//!                                   [--packages <enabled packages root> reapplies every enabled
+//!                                    Package's Delta claims after the base spell rows are back;
+//!                                    without --apply it prints the plan and writes nothing —
+//!                                    package_delta.rs]
 //!   --terrain <client Data/ dir>    ADT heightmap stream (terrain.rs)
 //!   --nav <client Data/ dir>        WMO/M2 nav-grid rasterizer (nav.rs)
 //!   --vmap <client Data/ dir>       exact per-cell collision-triangle extract + pack + import
@@ -46,6 +50,7 @@ mod eventai_presentation;
 mod go_model;
 mod nav;
 mod pack_client;
+mod package_delta;
 mod spell;
 mod talent;
 mod terrain;
@@ -1017,6 +1022,12 @@ pub(crate) struct Args {
     // classic-db commit this dump came from. It is threaded into every `stamp_import_meta` call this
     // run makes. Empty string ("") when not given (no external provenance to record).
     pub(crate) eventai_profile: String,
+    // --packages <dir>: the enabled Package Inventory root (normally `packages/`). After a family's
+    // base rows are back, every enabled Package's generated Delta artifacts under
+    // `<dir>/<package>/data/.generated/*.json` are reapplied in one reducer call. `None` = the stage
+    // does not run AND the base import says so loudly: an absent flag is "the operator did not say",
+    // never "no Package claims this family".
+    pub(crate) packages: Option<String>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -1058,6 +1069,7 @@ where
         family: None,
         source_sha: String::new(),
         eventai_profile: eventai::SOURCE_PROFILE_NAME.to_string(),
+        packages: None,
     };
     let mut legacy_spatial_args: Vec<&'static str> = Vec::new();
     let mut it = args.into_iter().map(Into::into);
@@ -1247,6 +1259,12 @@ where
                 a.family = Some(v);
             }
             "--source-sha" => a.source_sha = it.next().context("--source-sha <sha>")?,
+            "--packages" => {
+                a.packages = Some(
+                    it.next()
+                        .context("--packages needs the enabled packages root")?,
+                )
+            }
             "--eventai-profile" => {
                 let profile = it.next().context("--eventai-profile <name>")?;
                 eventai::source_profile(&profile).map_err(anyhow::Error::msg)?;
@@ -1311,6 +1329,14 @@ where
     // `--only` is meaningless without the spell importer (it's the additive-allowlist for Spell.dbc).
     if !a.only.is_empty() && !a.spells {
         bail!("--only is only valid with --spells (the additive Spell.dbc allowlist)");
+    }
+    // `spell` is the only Import Family with a Package Delta schema so far, so it is the only one
+    // with a stage that could reapply enabled Package claims.
+    if a.packages.is_some() && !a.spells {
+        bail!(
+            "--packages is only valid with --spells (the only import family with a Package Delta \
+             stage)"
+        );
     }
     if !a.include_creatures.is_empty() && a.dump.is_none() {
         bail!("--include-creatures is only valid with --dump (it force-imports cmangos creature rows)");
@@ -6644,6 +6670,39 @@ mod tests {
         }
     }
 
+    /// An absent `--packages` is "the operator did not say", which the spell import then warns
+    /// about. It must never read as an empty enabled set, because that would delete every row a
+    /// Package invented.
+    #[test]
+    fn the_enabled_packages_root_is_absent_until_the_operator_names_it() {
+        let unnamed = parse_args_from(["--dbc", "/path/need-not-exist", "--spells"])
+            .expect("the spell importer parses without a packages root");
+        assert_eq!(unnamed.packages, None);
+
+        let named = parse_args_from([
+            "--dbc",
+            "/path/need-not-exist",
+            "--spells",
+            "--packages",
+            "packages",
+        ])
+        .expect("a named packages root parses");
+        assert_eq!(named.packages.as_deref(), Some("packages"));
+    }
+
+    #[test]
+    fn an_enabled_packages_root_without_the_spell_importer_is_refused() {
+        let error = parse_args_from([
+            "--dump",
+            "/definitely/not/read.sql",
+            "--packages",
+            "packages",
+        ])
+        .err()
+        .expect("--packages needs an import family with a Package Delta stage");
+        assert!(format!("{error:#}").contains("--packages is only valid with --spells"));
+    }
+
     #[test]
     fn command_selects_only_the_committed_eventai_source_profile() {
         let default = parse_args_from(["--dump", "/path/need-not-exist.sql"])
@@ -7208,6 +7267,7 @@ mod tests {
             dump: None,
             dbc: None,
             terrain: None,
+            packages: None,
             pack_client: None,
             dump_collision: None,
             nav: None,

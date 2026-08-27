@@ -476,6 +476,34 @@ impl PackageDelta {
     pub fn claims(&self) -> &[Claim] {
         &self.claims
     }
+
+    /// How many rows of each kind this Package claims.
+    ///
+    /// Counted from the claims alone, so it describes this Package on its own — an applier records
+    /// it as provenance and a dry-run check prints it, and both read the same numbers.
+    #[must_use]
+    pub fn claim_counts(&self) -> ClaimCounts {
+        let mut counts = ClaimCounts::default();
+        for claim in &self.claims {
+            match (claim.operation(), claim.table()) {
+                (Operation::Update, _) => counts.updated_rows += 1,
+                (Operation::Insert, Table::Spell) => counts.inserted_spells += 1,
+                (Operation::Insert, Table::SpellEffect) => counts.inserted_effects += 1,
+            }
+        }
+        counts
+    }
+}
+
+/// How many rows of each kind one Package Delta claims.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClaimCounts {
+    /// Rows the Package changes but does not own, across every table.
+    pub updated_rows: u64,
+    /// `game_spell` rows the Package invents.
+    pub inserted_spells: u64,
+    /// `game_spell_effect` rows the Package invents.
+    pub inserted_effects: u64,
 }
 
 fn parse_claim(value: &Value, index: usize) -> Result<Claim, DeltaError> {
