@@ -275,13 +275,27 @@ Script executes.
 _Avoid_: sandbox, VM, engine
 
 **Invocation**:
-One run of one Runtime Script for one event. Starts with an empty environment and ends by
+One run of one Runtime Script for one event. Starts from an environment holding nothing but the
+allowlisted standard library, the event with its Entity Handles, and the Host Operations; ends by
 committing its Staged Effects or by producing a Script Diagnostic. Nothing carries to the next one.
 
 **Fuel Budget**:
 The metered interpreter work one Invocation may spend before the Host cuts it off. The cut-off is a failure,
 so a script that overruns changes nothing.
 _Avoid_: quota, gas, instruction limit
+
+**Entity Handle**:
+The opaque reference a Runtime Script holds to one creature or player. It carries the identity the
+Host acts on and the curated fields the script may read, but no guid and no row, so a script can
+neither forge one nor name an entity the Host did not resolve for that Invocation. It lasts exactly
+as long as the Invocation that minted it.
+_Avoid_: entity id, guid, pointer, reference
+
+**Host Operation**:
+One named gameplay call the Runtime Script Host offers a script — today `heal`, `send_chat` and
+`grant_xp`. Each takes an Entity Handle, records a Staged Effect, and refuses a misuse with a
+Script Diagnostic naming the call and the fault.
+_Avoid_: API function, binding, hook
 
 **Staged Effect**:
 A gameplay operation a Runtime Script asked for, recorded and not yet performed. A successful
