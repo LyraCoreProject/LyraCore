@@ -3,6 +3,10 @@
 //! Every refusal here happens before an applier sees the artifact, so no partial write is possible.
 //! Each variant names the smallest thing that was wrong, because the reader is a package author who
 //! has to fix one line of a Datascript.
+//!
+//! A refusal about an identifier band or a key shape is family-specific and says so in its name
+//! (`SpellIdNotClientSafe`, `EffectIndexOutOfRange`). An Import Family adds its own variants rather
+//! than widening one, so no message loses the detail an author needs to fix the claim.
 
 use core::fmt;
 
@@ -177,9 +181,8 @@ impl fmt::Display for DeltaError {
             ),
             Self::UnknownTable { found } => write!(
                 f,
-                "unknown table `{found}`; a Package Delta claims `{}` or `{}`",
-                Table::Spell,
-                Table::SpellEffect
+                "unknown table `{found}`; a Package Delta claims {}",
+                known_tables()
             ),
             Self::UnknownOperation { found } => {
                 write!(
@@ -250,3 +253,17 @@ impl fmt::Display for DeltaError {
 }
 
 impl std::error::Error for DeltaError {}
+
+/// The whole catalogue as a prose list — "`a`", "`a` or `b`", "`a`, `b` or `c`" — so an Import
+/// Family that adds tables extends the refusal without touching the message.
+fn known_tables() -> String {
+    let quoted: Vec<String> = Table::ALL
+        .iter()
+        .map(|table| format!("`{table}`"))
+        .collect();
+    match quoted.split_last() {
+        None => "no table at all in this build".to_owned(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    }
+}

@@ -1,7 +1,63 @@
-//! Reserved spell identifier bands, and the rule that decides which of them a Package may claim.
+//! Reserved identifier bands, and the rule that decides which of them a Package may claim.
 //!
 //! Every constant here is a policy number, not a derived one. They live together so a maintainer
 //! changes a band in exactly one place.
+//!
+//! # A family's Package identifier band
+//!
+//! Each Import Family whose Packages may INVENT rows gets one band, named
+//! `PACKAGE_<FAMILY>_ID_FLOOR` and `PACKAGE_<FAMILY>_ID_CEIL`. The floor follows one formula, and
+//! the spell band below is the worked example of it:
+//!
+//!  * **Two decimal orders above the highest identifier a real client can hold** for that table.
+//!    One order of headroom is what a fixture floor takes; two removes the question for a later
+//!    client build.
+//!  * **Above [`RESERVED_ID_CEIL`]**, which covers the project-wide fixture band and every curated
+//!    import band, so no reserved row can ever fall inside a Package band.
+//!  * **Readable at a glance**, so the millions column alone says "a Package invented this row".
+//!
+//! Every band states both ends and both ends are checked by `const _: () = assert!(…)` below: floor
+//! at or under ceiling, and floor above [`RESERVED_ID_CEIL`]. A maintainer moving a number gets a
+//! compile error rather than a silently unenforceable policy.
+
+// ===============================================================================================
+//  Reserved bands. Shared by every family: a Package band has to clear all of them.
+// ===============================================================================================
+
+/// Lowest identifier in the project-wide `509xxxx` fixture-reserved band (`docs/danger-zones.md`,
+/// `lyracore_shared::constants::STORAGE_ID_FLOOR`). Nothing outside the fixtures may write into it.
+pub const FIXTURE_RESERVED_ID_FLOOR: u32 = 5_090_000;
+
+/// Highest identifier in the project-wide `509xxxx` fixture-reserved band.
+pub const FIXTURE_RESERVED_ID_CEIL: u32 = 5_099_999;
+
+/// Highest identifier any CURATED import band owns.
+///
+/// The importer hands out fixed identifiers to rows it invents rather than reads, so its own reload
+/// can delete the whole span. The highest such band is the curated trainer overrides
+/// (`CURATED_TRAINER_ID_BASE` 5,200,000 plus a 500-wide span, `importer/src/spell.rs`); the
+/// createinfo item band (`CREATEINFO_ITEM_ID_FLOOR` 1,000,000, `importer/src/main.rs`) sits below
+/// it. A new curated band above this one moves this number.
+pub const CURATED_RESERVED_ID_CEIL: u32 = 5_200_499;
+
+/// Highest identifier ANY reserved band owns. Every family's Package band floor must clear it.
+///
+/// Derived from the bands above rather than restated, so adding a band is one edit.
+pub const RESERVED_ID_CEIL: u32 = higher(FIXTURE_RESERVED_ID_CEIL, CURATED_RESERVED_ID_CEIL);
+
+const fn higher(a: u32, b: u32) -> u32 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+const _: () = assert!(FIXTURE_RESERVED_ID_FLOOR <= FIXTURE_RESERVED_ID_CEIL);
+
+// ===============================================================================================
+//  spell
+// ===============================================================================================
 
 /// Packed `game_spell_effect` primary key: `(spell_id << 2) | effect_index`.
 ///
@@ -23,18 +79,13 @@ pub const MAX_SPELL_EFFECT_INDEX: u8 = 2;
 
 /// Lowest spell identifier a Package may INSERT.
 ///
-/// Chosen to be client-safe, which means three things at once:
-///
-///  * **Above every real client identifier.** `LyraCore` serves build 5875 only, whose highest
-///    `Spell.dbc` entry is far below 50,000 — that is why the importer's `SYNTHETIC_SPELL_ID_FLOOR`
-///    (`importer/src/spell.rs`) sits there. That floor is a *fixture* floor, not a client-safe one:
-///    it leaves less than one decimal order of headroom over real data, and a later client build
-///    would run straight through it. Two orders of magnitude of headroom removes the question.
-///  * **Above every reserved band the project already owns.** The project-wide fixture band ends
-///    at 5,099,999 and the importer's curated trainer band ends at 5,200,499 (both named in
-///    `docs/danger-zones.md`), so the whole `6xxxxxx` decade is unclaimed.
-///  * **Readable at a glance.** A `6` in the millions column means "a Package invented this row",
-///    distinct from the `509xxxx` fixture band and the `52xxxxx` trainer band.
+/// The worked example of the band formula in this module's header. `LyraCore` serves build 5875
+/// only, whose highest `Spell.dbc` entry is far below 50,000 — that is why the importer's
+/// `SYNTHETIC_SPELL_ID_FLOOR` (`importer/src/spell.rs`) sits there. That floor is a *fixture* floor,
+/// not a client-safe one: it leaves less than one decimal order of headroom over real data, and a
+/// later client build would run straight through it. Two orders removes the question, and the whole
+/// `6xxxxxx` decade is above every reserved band and unclaimed, so a `6` in the millions column
+/// means "a Package invented this row".
 ///
 /// A real client renders a spell by looking the identifier up in its OWN `Spell.dbc`, so a Package
 /// spell shows no tooltip on an unmodified client. That is expected: the identifier is safe because
@@ -53,20 +104,10 @@ pub const FIXTURE_SPELL_ID_FLOOR: u32 = 50_000;
 /// Highest spell identifier in the seeded fixture cluster.
 pub const FIXTURE_SPELL_ID_CEIL: u32 = 50_999;
 
-/// Lowest identifier in the project-wide `509xxxx` fixture-reserved band (`docs/danger-zones.md`,
-/// `lyracore-shared`'s `STORAGE_ID_FLOOR`). Nothing outside the fixtures may write into it.
-pub const FIXTURE_RESERVED_ID_FLOOR: u32 = 5_090_000;
-
-/// Highest identifier in the project-wide `509xxxx` fixture-reserved band.
-pub const FIXTURE_RESERVED_ID_CEIL: u32 = 5_099_999;
-
-// The bands must not overlap. A maintainer moving one number gets a compile error rather than a
-// silently unenforceable policy.
 const _: () = assert!(FIXTURE_SPELL_ID_FLOOR <= FIXTURE_SPELL_ID_CEIL);
-const _: () = assert!(FIXTURE_RESERVED_ID_FLOOR <= FIXTURE_RESERVED_ID_CEIL);
 const _: () = assert!(PACKAGE_SPELL_ID_FLOOR <= PACKAGE_SPELL_ID_CEIL);
 const _: () = assert!(FIXTURE_SPELL_ID_CEIL < FIXTURE_RESERVED_ID_FLOOR);
-const _: () = assert!(FIXTURE_RESERVED_ID_CEIL < PACKAGE_SPELL_ID_FLOOR);
+const _: () = assert!(RESERVED_ID_CEIL < PACKAGE_SPELL_ID_FLOOR);
 
 /// True when a Package may INSERT a spell at this identifier.
 #[must_use]

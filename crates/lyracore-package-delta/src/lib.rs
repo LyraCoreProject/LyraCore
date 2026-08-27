@@ -56,12 +56,20 @@
 //! column, or two inserts at one primary key, is a [`ClaimConflict`] naming both Packages and the
 //! exact claim. There are no priority numbers: the tracer reports that a human has to choose.
 //!
+//! # Import Families
+//!
+//! Every claimable table belongs to one Import Family, the unit a base import clears and reloads
+//! and the unit an apply runs for. [`Table`] is one closed enum with its variants grouped by
+//! family, and [`Table::family`] names the owner, so an applier called for one family can tell that
+//! a claim belongs to the import it is running. This build's catalogue is the spell family alone.
+//!
 //! # Identifier policy
 //!
-//! An inserted spell must sit in the Package spell range ([`PACKAGE_SPELL_ID_FLOOR`]..=
-//! [`PACKAGE_SPELL_ID_CEIL`]), which no client and no import can reach. An update may name any
-//! spell — tuning real spells is the point — except a fixture-reserved one, which no Package may
-//! touch under any operation. See [`ids`] for the bands and why they sit where they do.
+//! An inserted row must sit in its family's Package identifier band, which no client and no import
+//! can reach — for spells, [`PACKAGE_SPELL_ID_FLOOR`]..=[`PACKAGE_SPELL_ID_CEIL`]. An update may
+//! name any row — tuning real data is the point — except a fixture-reserved one, which no Package
+//! may touch under any operation. See [`ids`] for the bands, the formula a family's band follows,
+//! and why they sit where they do.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::pedantic)]
@@ -84,7 +92,7 @@ pub use ids::{
     is_fixture_reserved_spell_id, is_package_spell_id, packed_spell_effect_id,
     MAX_SPELL_EFFECT_INDEX, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
 };
-pub use schema::{Column, FieldType, FieldValue, Table};
+pub use schema::{Column, FieldType, FieldValue, Table, SPELL_FAMILY};
 pub use trace::{trace, ClaimConflict, ClaimTrace, ClaimedField, TracedRow};
 
 /// Reads an artifact and writes it back in canonical form.

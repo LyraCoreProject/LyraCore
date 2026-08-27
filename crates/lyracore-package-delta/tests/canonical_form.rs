@@ -43,6 +43,57 @@ fn member_order_whitespace_and_number_spelling_do_not_change_the_bytes() {
     assert_eq!(one, two);
 }
 
+/// The bytes are frozen, not merely self-consistent.
+///
+/// A shard records `game_package_import.artifact_hash` as the BLAKE3 digest of these bytes, and a
+/// Package's Build Identity records the artifact's own hash. Both are stored on live realms, so a
+/// canonical form that moved — even in a way that still round-trips — would invalidate every stored
+/// digest and force a realm-wide reapply. This case pins one artifact that exercises every value
+/// type, both key shapes and the claim ordering, so any such move fails here first.
+#[test]
+fn a_frozen_artifact_still_canonicalizes_to_the_same_bytes() {
+    let written = format!(
+        r#"{{
+            "package": "example.frozen",
+            "version": 1,
+            "claims": [
+                {{
+                    "table": "game_spell_effect",
+                    "operation": "update",
+                    "key": {{ "effect_index": 0, "spell_id": 133 }},
+                    "fields": {{
+                        "per_level": {{ "type": "f32", "value": 1.50 }},
+                        "base_points": {{ "type": "i32", "value": -120 }}
+                    }}
+                }},
+                {{
+                    "table": "game_spell",
+                    "operation": "update",
+                    "key": {{ "spell_id": 133 }},
+                    "fields": {{
+                        "power_type": {{ "type": "u8", "value": 0 }},
+                        "name": {{ "type": "string", "value": "Kindled\tBolt" }},
+                        "is_negative": {{ "type": "bool", "value": true }},
+                        "family_flags": {{ "type": "u64", "value": "18446744073709551615" }},
+                        "cooldown_ms": {{ "type": "u32", "value": 1500 }},
+                        "aura_interrupt": {{ "type": "u16", "value": 3 }}
+                    }}
+                }}
+            ],
+            "source_hash": "{HASH_A}"
+        }}"#
+    );
+
+    let canonical = canonicalize(&written).expect("the artifact parses");
+
+    assert_eq!(
+        canonical,
+        format!(
+            r#"{{"version":1,"package":"example.frozen","source_hash":"{HASH_A}","claims":[{{"table":"game_spell","key":{{"spell_id":133}},"operation":"update","fields":{{"aura_interrupt":{{"type":"u16","value":3}},"cooldown_ms":{{"type":"u32","value":1500}},"family_flags":{{"type":"u64","value":"18446744073709551615"}},"is_negative":{{"type":"bool","value":true}},"name":{{"type":"string","value":"Kindled\tBolt"}},"power_type":{{"type":"u8","value":0}}}}}},{{"table":"game_spell_effect","key":{{"spell_id":133,"effect_index":0}},"operation":"update","fields":{{"base_points":{{"type":"i32","value":-120}},"per_level":{{"type":"f32","value":1.5}}}}}}]}}"#
+        )
+    );
+}
+
 #[test]
 fn the_canonical_form_reads_back_as_itself() {
     let source = one_spell_update(

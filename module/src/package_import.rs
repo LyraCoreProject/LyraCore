@@ -1,46 +1,131 @@
-//! Applying Package Deltas to the spell tables, and the provenance that records what was applied.
+//! Applying Package Deltas to one Import Family's tables, and the provenance that records what was
+//! applied.
 //!
 //! A base import replaces a whole Import Family, so a Package's row edits cannot be a one-shot edit
 //! — the next reload would silently revert them. They are an artifact that replays as the last
 //! stage of the family's import. This module is that stage's durable half: one operator-gated
-//! reducer that takes the WHOLE enabled plan and applies it in one transaction.
+//! reducer that takes the WHOLE enabled plan for one family and applies it in one transaction.
 //!
 //! Whole-plan, not per-Package, on purpose. Two Packages may claim different columns of one row, so
 //! the merged picture is the only correct unit of work — and a plan that fails halfway would leave
 //! the shard running a set of Packages nobody chose. `lyracore_package_delta::trace` produces the
 //! merged picture and every disagreement; this module refuses on a disagreement before it writes.
 //!
+//! # Family dispatch
+//!
+//! What every family shares lives here: reading the plan, refusing a conflict, refusing an update
+//! whose target row will not be there, the order the durable pass runs in, and the provenance
+//! rewrite. What one family owns lives in its own module: the setters for its tables, where its
+//! Package-invented rows live, and how to find one row of it. [`Family`] is the only place the two
+//! meet, and its matches carry no wildcard, so a family that arrives without an implementation does
+//! not compile.
+//!
 //! # Reconciliation
 //!
-//! A base reimport clears only real spell identifiers, so rows a Package INVENTED (the Package
-//! spell range) survive it untouched. Nothing else would ever remove them, which is why this
-//! reducer clears the whole Package spell range before it applies: a Package that left the enabled
-//! set takes its invented rows with it, with no bookkeeping to disagree with the shard.
+//! A base reimport clears only real identifiers, so rows a Package INVENTED (its family's Package
+//! identifier band) survive it untouched. Nothing else would ever remove them, which is why this
+//! reducer clears the whole band before it applies: a Package that left the enabled set takes its
+//! invented rows with it, with no bookkeeping to disagree with the shard.
 //!
 //! Rows a Package only TUNED are not restored here. Disabling a Package means replaying the base
 //! import and then applying the remaining Packages — there is no pre-image to roll back to, which
 //! is also why a Claim can never delete a row.
 
+#[cfg(test)]
+mod fixtures;
+mod spell;
+
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
-    is_package_spell_id, trace, ClaimCounts, FieldValue, Operation, PackageDelta, PrimaryKey,
-    Table as ClaimTable, TracedRow,
+    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, SPELL_FAMILY,
 };
 
 use crate::helpers::require_operator;
 use crate::import_meta::game_import_meta;
-use crate::spell::{game_spell, game_spell_effect, Spell, SpellEffect};
-
-/// The one Import Family whose Package Deltas this build applies. The Package Delta schema names
-/// `game_spell` and `game_spell_effect` and nothing else, so any other family has no artifact shape
-/// to read yet.
-const SPELL_FAMILY: &str = "spell";
 
 /// Separates the artifacts inside one `apply_package_deltas` payload. A Package Delta's canonical
 /// form escapes every control character, so no artifact can contain this byte and no artifact needs
 /// quoting to travel next to another.
 const ARTIFACT_SEPARATOR: char = '\n';
+
+/// An Import Family this build can apply Package Deltas for.
+///
+/// One variant per family the Package Delta schema names tables for, so a family with no artifact
+/// shape to read cannot be asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Family {
+    /// `game_spell` and `game_spell_effect`.
+    Spell,
+}
+
+impl Family {
+    /// Every family this build applies, in the order a refusal lists them.
+    const ALL: &'static [Self] = &[Self::Spell];
+
+    /// The family name the importer stamps and the reducer takes.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Spell => SPELL_FAMILY,
+        }
+    }
+
+    /// Resolves the reducer's `family` argument.
+    ///
+    /// # Errors
+    /// Names the family that was asked for and the ones this build carries, because the caller is
+    /// an operator running an import stage for a family whose schema has not landed yet.
+    fn parse(name: &str) -> Result<Self, String> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|family| family.as_str() == name)
+            .ok_or_else(|| {
+                let known: Vec<String> = Self::ALL
+                    .iter()
+                    .map(|family| format!("`{}`", family.as_str()))
+                    .collect();
+                format!(
+                    "import family `{name}` has no Package Delta schema; this build applies {} only",
+                    known.join(", ")
+                )
+            })
+    }
+
+    /// What this shard holds for the row an `update` claim names.
+    fn update_target(self, ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
+        match self {
+            Self::Spell => spell::update_target(ctx, row),
+        }
+    }
+
+    /// Removes every row this family's Packages invented, so a Package that left the enabled set
+    /// takes its rows with it.
+    fn clear_package_range(self, ctx: &ReducerContext) {
+        match self {
+            Self::Spell => spell::clear_package_range(ctx),
+        }
+    }
+
+    /// Writes one merged row into this family's tables.
+    fn write_row(self, ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+        match self {
+            Self::Spell => spell::write_row(ctx, row),
+        }
+    }
+}
+
+/// What a shard holds for the row an `update` claim names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateTarget {
+    /// The row is there, so the update lands on it.
+    Present,
+    /// The row is not in this shard at all.
+    Absent,
+    /// The row sits in this family's Package identifier band and no enabled Package inserts it.
+    /// The band is cleared on every apply, so the row is gone by the time the write pass runs.
+    Uninvented,
+}
 
 /// What one Package contributed to the last apply of one Import Family.
 ///
@@ -83,15 +168,15 @@ pub struct PackageImport {
 
 /// Apply the complete set of enabled Package Deltas for one Import Family.
 ///
-/// One reducer call is one transaction, so the whole plan lands or none of it does. An invalid
-/// artifact, a Claim Conflict, or an update whose target row is absent fails the call before any
-/// row is touched, leaving neither spell rows nor provenance behind.
+/// One reducer call is one transaction, so the whole plan lands or none of it does. An unknown
+/// family, an invalid artifact, a Claim Conflict, or an update whose target row is absent fails the
+/// call before any row is touched, leaving neither claimed rows nor provenance behind.
 ///
 /// `packed`: the artifacts' canonical JSON, one per line. The caller sends the WHOLE enabled set,
 /// including none at all — an empty payload is the honest statement "no Package claims this family
-/// any more" and clears the Package spell range accordingly. The importer never sends an empty
-/// payload by accident; it refuses to run this stage at all unless the operator named the enabled
-/// Package root.
+/// any more" and clears the family's Package identifier band accordingly. The importer never sends
+/// an empty payload by accident; it refuses to run this stage at all unless the operator named the
+/// enabled Package root.
 #[reducer]
 pub fn apply_package_deltas(
     ctx: &ReducerContext,
@@ -99,21 +184,17 @@ pub fn apply_package_deltas(
     packed: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    if family != SPELL_FAMILY {
-        return Err(format!(
-            "import family `{family}` has no Package Delta schema; this build applies \
-             `{SPELL_FAMILY}` only"
-        ));
-    }
+    let family = Family::parse(&family)?;
 
     let plan = ApplyPlan::read(&packed)?;
-    check_update_targets(ctx, &plan)?;
+    check_claims_belong_to(family, &plan.rows)?;
+    check_update_targets(ctx, family, &plan)?;
 
-    clear_package_spell_range(ctx);
+    family.clear_package_range(ctx);
     for row in &plan.rows {
-        write_row(ctx, row)?;
+        family.write_row(ctx, row)?;
     }
-    stamp_provenance(ctx, &family, &plan);
+    stamp_provenance(ctx, family, &plan);
     Ok(())
 }
 
@@ -143,6 +224,9 @@ impl ApplyPlan {
     /// The refusals, in order: an artifact that does not parse, two artifacts naming the same
     /// Package, and any Claim Conflict between Packages. A conflict reports EVERY disagreement, not
     /// just the first — the operator fixing them wants the whole list in one pass.
+    ///
+    /// The payload says nothing about which family it is for; that is the caller's argument, and
+    /// [`check_claims_belong_to`] holds the two together.
     fn read(packed: &str) -> Result<Self, String> {
         let mut deltas: Vec<PackageDelta> = Vec::new();
         for (index, artifact) in packed
@@ -194,138 +278,29 @@ impl ApplyPlan {
     }
 }
 
-/// True when a traced update would land on a Package-range row that no enabled Package invents.
+/// Refuses a plan that claims a table this call's family does not own.
 ///
-/// The Package spell range is cleared on every apply, so such a row is gone by the time the write
-/// pass runs: the Package that owns it is not enabled, and the one tuning it is claiming a row that
-/// does not exist. A base spell is different — the base import puts it there.
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_spell_id(row.key().spell_id())
-}
-
-// ===========================================================================================
-//  Row building — pure. The Claim schema and these setters are one contract; the tests below
-//  fail if a claimable column has no setter here.
-// ===========================================================================================
-
-/// A Package spell before any claim has been applied to it. Every claimable column is overwritten
-/// by the insert that follows, so these values never survive; they exist because the row's shape
-/// has no `Default`.
-fn blank_spell(spell_id: u32) -> Spell {
-    Spell {
-        spell_id,
-        name: String::new(),
-        power_type: 0,
-        cost: 0,
-        cast_time_ms: 0,
-        gcd_ms: 0,
-        cooldown_ms: 0,
-        range_yd: 0,
-        duration_ms: 0,
-        school_mask: 0,
-        dispel_type: 0,
-        mechanic: 0,
-        max_stacks: 0,
-        aura_interrupt: 0,
-        attributes: 0,
-        spell_level: 0,
-        max_level: 0,
-        is_negative: false,
-        cast_flags: 0,
-        stances: 0,
-        family_name: 0,
-        family_flags: 0,
-        proc_flags: 0,
-        proc_chance: 0,
-        proc_charges: 0,
-    }
-}
-
-/// A Package spell effect before any claim has been applied to it. `id` is the derived packed key,
-/// never authored.
-fn blank_spell_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
-    SpellEffect {
-        id: lyracore_package_delta::packed_spell_effect_id(spell_id, effect_index),
-        spell_id,
-        effect_index,
-        kind: 0,
-        base_points: 0,
-        die_sides: 0,
-        per_level: 0.0,
-        period_ms: 0,
-        target: 0,
-        radius_yd: 0.0,
-        chain_targets: 0,
-        trigger_spell: 0,
-        effect_mechanic: 0,
-        p0: 0,
-        p0_kind: 0,
-        p1: 0,
-        script_id: 0,
-        enters_combat: false,
-    }
-}
-
-fn apply_spell_field(spell: &mut Spell, field: &str, value: &FieldValue) -> Result<(), String> {
-    match field {
-        "name" => spell.name = as_str(field, value)?,
-        "power_type" => spell.power_type = as_u8(field, value)?,
-        "cost" => spell.cost = as_u32(field, value)?,
-        "cast_time_ms" => spell.cast_time_ms = as_u32(field, value)?,
-        "gcd_ms" => spell.gcd_ms = as_u32(field, value)?,
-        "cooldown_ms" => spell.cooldown_ms = as_u32(field, value)?,
-        "range_yd" => spell.range_yd = as_u32(field, value)?,
-        "duration_ms" => spell.duration_ms = as_u32(field, value)?,
-        "school_mask" => spell.school_mask = as_u8(field, value)?,
-        "dispel_type" => spell.dispel_type = as_u8(field, value)?,
-        "mechanic" => spell.mechanic = as_u8(field, value)?,
-        "max_stacks" => spell.max_stacks = as_u8(field, value)?,
-        "aura_interrupt" => spell.aura_interrupt = as_u16(field, value)?,
-        "attributes" => spell.attributes = as_u32(field, value)?,
-        "spell_level" => spell.spell_level = as_u8(field, value)?,
-        "max_level" => spell.max_level = as_u8(field, value)?,
-        "is_negative" => spell.is_negative = as_bool(field, value)?,
-        "cast_flags" => spell.cast_flags = as_u32(field, value)?,
-        "stances" => spell.stances = as_u8(field, value)?,
-        "family_name" => spell.family_name = as_u8(field, value)?,
-        "family_flags" => spell.family_flags = as_u64(field, value)?,
-        "proc_flags" => spell.proc_flags = as_u32(field, value)?,
-        "proc_chance" => spell.proc_chance = as_u8(field, value)?,
-        "proc_charges" => spell.proc_charges = as_u8(field, value)?,
-        other => return Err(format!("`game_spell` has no claimable column `{other}`")),
-    }
-    Ok(())
-}
-
-fn apply_effect_field(
-    effect: &mut SpellEffect,
-    field: &str,
-    value: &FieldValue,
-) -> Result<(), String> {
-    match field {
-        "kind" => effect.kind = as_u8(field, value)?,
-        "base_points" => effect.base_points = as_i32(field, value)?,
-        "die_sides" => effect.die_sides = as_i32(field, value)?,
-        "per_level" => effect.per_level = as_f32(field, value)?,
-        "period_ms" => effect.period_ms = as_u32(field, value)?,
-        "target" => effect.target = as_u8(field, value)?,
-        "radius_yd" => effect.radius_yd = as_f32(field, value)?,
-        "chain_targets" => effect.chain_targets = as_u8(field, value)?,
-        "trigger_spell" => effect.trigger_spell = as_u32(field, value)?,
-        "effect_mechanic" => effect.effect_mechanic = as_u8(field, value)?,
-        "p0" => effect.p0 = as_i32(field, value)?,
-        "p0_kind" => effect.p0_kind = as_u8(field, value)?,
-        "p1" => effect.p1 = as_i32(field, value)?,
-        "script_id" => effect.script_id = as_u32(field, value)?,
-        "enters_combat" => effect.enters_combat = as_bool(field, value)?,
-        other => {
+/// One apply reloads one family, so a claim on another family's table would be applied out of turn
+/// and then reverted by that family's own import. Every table names its owner, so this is the whole
+/// check.
+fn check_claims_belong_to(family: Family, rows: &[TracedRow]) -> Result<(), String> {
+    for row in rows {
+        if row.table().family() != family.as_str() {
             return Err(format!(
-                "`game_spell_effect` has no claimable column `{other}`"
-            ))
+                "`{}` row {} belongs to the `{}` Import Family, not `{}`",
+                row.table(),
+                row.key(),
+                row.table().family(),
+                family.as_str()
+            ));
         }
     }
     Ok(())
 }
+
+// ===========================================================================================
+//  Row building — pure, and shared by every family's setters below.
+// ===========================================================================================
 
 /// An insert must carry every claimable column of its table. The artifact parser already refuses a
 /// partial insert, so this catches only a schema that moved under a stored artifact.
@@ -347,34 +322,6 @@ fn check_insert_is_whole(row: &TracedRow) -> Result<(), String> {
             missing.join(", ")
         ))
     }
-}
-
-fn built_spell(row: &TracedRow) -> Result<Spell, String> {
-    check_insert_is_whole(row)?;
-    let mut spell = blank_spell(row.key().spell_id());
-    for (field, claimed) in row.fields() {
-        apply_spell_field(&mut spell, field, &claimed.value)?;
-    }
-    Ok(spell)
-}
-
-fn built_spell_effect(row: &TracedRow) -> Result<SpellEffect, String> {
-    check_insert_is_whole(row)?;
-    let PrimaryKey::SpellEffect {
-        spell_id,
-        effect_index,
-    } = row.key()
-    else {
-        return Err(format!(
-            "`game_spell_effect` row {} has no effect index",
-            row.key()
-        ));
-    };
-    let mut effect = blank_spell_effect(spell_id, effect_index);
-    for (field, claimed) in row.fields() {
-        apply_effect_field(&mut effect, field, &claimed.value)?;
-    }
-    Ok(effect)
 }
 
 fn as_u8(field: &str, value: &FieldValue) -> Result<u8, String> {
@@ -447,100 +394,32 @@ fn wrong_type(field: &str, value: &FieldValue) -> String {
 /// Refuses a plan whose updates name rows that will not be there.
 ///
 /// Runs before the first write, so a plan that names a missing row changes nothing at all.
-fn check_update_targets(ctx: &ReducerContext, plan: &ApplyPlan) -> Result<(), String> {
+fn check_update_targets(
+    ctx: &ReducerContext,
+    family: Family,
+    plan: &ApplyPlan,
+) -> Result<(), String> {
     for row in &plan.rows {
         if row.operation() != Operation::Update {
             continue;
         }
-        if updates_an_uninvented_package_row(row) {
-            return Err(format!(
-                "`{}` row {}: an enabled Package tunes it, but no enabled Package inserts it",
-                row.table(),
-                row.key()
-            ));
-        }
-        let present = match row.table() {
-            ClaimTable::Spell => ctx
-                .db
-                .game_spell()
-                .spell_id()
-                .find(row.key().spell_id())
-                .is_some(),
-            ClaimTable::SpellEffect => ctx.db.game_spell_effect().id().find(row.row_id()).is_some(),
-        };
-        if !present {
-            return Err(format!(
-                "`{}` row {} is not in this shard; the base import has to run before its Package \
-                 Deltas",
-                row.table(),
-                row.key()
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Removes every row a Package invented, so a Package that left the enabled set takes its rows with
-/// it. A whole-table pass over both spell tables, once per import, right after the base import
-/// rewrote them anyway.
-fn clear_package_spell_range(ctx: &ReducerContext) {
-    let effects = ctx.db.game_spell_effect();
-    let stale_effects: Vec<u64> = effects
-        .iter()
-        .filter(|effect| is_package_spell_id(effect.spell_id))
-        .map(|effect| effect.id)
-        .collect();
-    for id in stale_effects {
-        effects.id().delete(id);
-    }
-
-    let spells = ctx.db.game_spell();
-    let stale_spells: Vec<u32> = spells
-        .iter()
-        .filter(|spell| is_package_spell_id(spell.spell_id))
-        .map(|spell| spell.spell_id)
-        .collect();
-    for spell_id in stale_spells {
-        spells.spell_id().delete(spell_id);
-    }
-}
-
-fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
-    match (row.table(), row.operation()) {
-        (ClaimTable::Spell, Operation::Insert) => {
-            ctx.db
-                .game_spell()
-                .try_insert(built_spell(row)?)
-                .map_err(|e| format!("`game_spell` row {} did not insert: {e}", row.key()))?;
-        }
-        (ClaimTable::Spell, Operation::Update) => {
-            let spells = ctx.db.game_spell();
-            let mut spell = spells
-                .spell_id()
-                .find(row.key().spell_id())
-                .ok_or_else(|| format!("`game_spell` row {} vanished mid-apply", row.key()))?;
-            for (field, claimed) in row.fields() {
-                apply_spell_field(&mut spell, field, &claimed.value)?;
+        match family.update_target(ctx, row) {
+            UpdateTarget::Present => {}
+            UpdateTarget::Uninvented => {
+                return Err(format!(
+                    "`{}` row {}: an enabled Package tunes it, but no enabled Package inserts it",
+                    row.table(),
+                    row.key()
+                ))
             }
-            spells.spell_id().update(spell);
-        }
-        (ClaimTable::SpellEffect, Operation::Insert) => {
-            ctx.db
-                .game_spell_effect()
-                .try_insert(built_spell_effect(row)?)
-                .map_err(|e| {
-                    format!("`game_spell_effect` row {} did not insert: {e}", row.key())
-                })?;
-        }
-        (ClaimTable::SpellEffect, Operation::Update) => {
-            let effects = ctx.db.game_spell_effect();
-            let mut effect = effects.id().find(row.row_id()).ok_or_else(|| {
-                format!("`game_spell_effect` row {} vanished mid-apply", row.key())
-            })?;
-            for (field, claimed) in row.fields() {
-                apply_effect_field(&mut effect, field, &claimed.value)?;
+            UpdateTarget::Absent => {
+                return Err(format!(
+                    "`{}` row {} is not in this shard; the base import has to run before its \
+                     Package Deltas",
+                    row.table(),
+                    row.key()
+                ))
             }
-            effects.id().update(effect);
         }
     }
     Ok(())
@@ -548,7 +427,8 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
 
 /// Rewrites this family's provenance wholesale, so the table always describes the Packages the
 /// shard is running now rather than every Package it ever ran.
-fn stamp_provenance(ctx: &ReducerContext, family: &str, plan: &ApplyPlan) {
+fn stamp_provenance(ctx: &ReducerContext, family: Family, plan: &ApplyPlan) {
+    let family = family.as_str();
     let base_source_sha = ctx
         .db
         .game_import_meta()
@@ -583,102 +463,17 @@ fn stamp_provenance(ctx: &ReducerContext, family: &str, plan: &ApplyPlan) {
 }
 
 // ===========================================================================================
-//  Tests — the pure half. Row WRITING needs a live ReducerContext, which a native test has no
+//  Tests — the shared half. Row WRITING needs a live ReducerContext, which a native test has no
 //  way to build (same limit `import_meta`'s tests note); the wire suite covers that rung.
 // ===========================================================================================
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use lyracore_package_delta::{Column, FieldType};
-
-    const HASH_A: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    const PACKAGE_SPELL: u32 = 6_000_001;
-    const REAL_SPELL: u32 = 133;
-
-    const WHOLE_SPELL_ROW: &str = r#"{
-        "name": { "type": "string", "value": "Kindled Bolt" },
-        "power_type": { "type": "u8", "value": 0 },
-        "cost": { "type": "u32", "value": 30 },
-        "cast_time_ms": { "type": "u32", "value": 2500 },
-        "gcd_ms": { "type": "u32", "value": 1500 },
-        "cooldown_ms": { "type": "u32", "value": 8000 },
-        "range_yd": { "type": "u32", "value": 30 },
-        "duration_ms": { "type": "u32", "value": 0 },
-        "school_mask": { "type": "u8", "value": 4 },
-        "dispel_type": { "type": "u8", "value": 1 },
-        "mechanic": { "type": "u8", "value": 0 },
-        "max_stacks": { "type": "u8", "value": 1 },
-        "aura_interrupt": { "type": "u16", "value": 3 },
-        "attributes": { "type": "u32", "value": 0 },
-        "spell_level": { "type": "u8", "value": 10 },
-        "max_level": { "type": "u8", "value": 60 },
-        "is_negative": { "type": "bool", "value": true },
-        "cast_flags": { "type": "u32", "value": 0 },
-        "stances": { "type": "u8", "value": 0 },
-        "family_name": { "type": "u8", "value": 3 },
-        "family_flags": { "type": "u64", "value": "18446744073709551615" },
-        "proc_flags": { "type": "u32", "value": 0 },
-        "proc_chance": { "type": "u8", "value": 0 },
-        "proc_charges": { "type": "u8", "value": 0 }
-    }"#;
-
-    const WHOLE_EFFECT_ROW: &str = r#"{
-        "kind": { "type": "u8", "value": 2 },
-        "base_points": { "type": "i32", "value": 120 },
-        "die_sides": { "type": "i32", "value": 10 },
-        "per_level": { "type": "f32", "value": 1.5 },
-        "period_ms": { "type": "u32", "value": 0 },
-        "target": { "type": "u8", "value": 1 },
-        "radius_yd": { "type": "f32", "value": 0.0 },
-        "chain_targets": { "type": "u8", "value": 0 },
-        "trigger_spell": { "type": "u32", "value": 0 },
-        "effect_mechanic": { "type": "u8", "value": 0 },
-        "p0": { "type": "i32", "value": 0 },
-        "p0_kind": { "type": "u8", "value": 255 },
-        "p1": { "type": "i32", "value": 0 },
-        "script_id": { "type": "u32", "value": 0 },
-        "enters_combat": { "type": "bool", "value": false }
-    }"#;
-
-    /// Wraps claims in an artifact envelope, on ONE line. The fixtures above are indented so a
-    /// reader can follow them; an artifact in a payload never is.
-    fn artifact(package: &str, claims: &str) -> String {
-        let claims: String = claims.lines().map(str::trim).collect();
-        format!(
-            r#"{{"version":1,"package":"{package}","source_hash":"{HASH_A}","claims":[{claims}]}}"#
-        )
-    }
-
-    fn spell_claim(spell_id: u32, operation: &str, fields: &str) -> String {
-        format!(
-            r#"{{"table":"game_spell","key":{{"spell_id":{spell_id}}},"operation":"{operation}","fields":{fields}}}"#
-        )
-    }
-
-    fn effect_claim(spell_id: u32, effect_index: u8, operation: &str, fields: &str) -> String {
-        format!(
-            r#"{{"table":"game_spell_effect","key":{{"spell_id":{spell_id},"effect_index":{effect_index}}},"operation":"{operation}","fields":{fields}}}"#
-        )
-    }
-
-    /// A value of the column's declared type, so a test can claim any column without spelling out
-    /// what it holds.
-    fn some_value(column: Column) -> FieldValue {
-        match column.ty {
-            FieldType::U8 => FieldValue::U8(7),
-            FieldType::U16 => FieldValue::U16(7),
-            FieldType::U32 => FieldValue::U32(7),
-            FieldType::U64 => FieldValue::U64(7),
-            FieldType::I32 => FieldValue::I32(-7),
-            FieldType::F32 => FieldValue::F32(7.5),
-            FieldType::Bool => FieldValue::Bool(true),
-            FieldType::Str => FieldValue::Str("seven".to_owned()),
-        }
-    }
-
-    fn plan(artifacts: &[String]) -> Result<ApplyPlan, String> {
-        ApplyPlan::read(&artifacts.join(&ARTIFACT_SEPARATOR.to_string()))
-    }
+    use super::fixtures::{
+        artifact, effect_claim, plan, spell_claim, HASH_A, PACKAGE_SPELL, REAL_SPELL,
+        WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
+    };
+    use super::{check_claims_belong_to, ApplyPlan, Family, ARTIFACT_SEPARATOR};
+    use lyracore_package_delta::PackageDelta;
 
     /// The payload format rests on this: a canonical artifact escapes every control character, so
     /// one line is one artifact and no quoting is needed to put two of them next to each other.
@@ -837,103 +632,30 @@ mod tests {
         assert_eq!(plan.rows[0].fields().len(), 2);
     }
 
-    /// The Package spell range is cleared on every apply, so tuning a Package spell nobody enables
-    /// is a plan that names a row which will not exist.
     #[test]
-    fn tuning_a_package_spell_no_enabled_package_inserts_is_refused() {
-        let plan = plan(&[artifact(
-            "example.tuner",
-            &spell_claim(
-                PACKAGE_SPELL,
-                "update",
-                r#"{"cooldown_ms":{"type":"u32","value":1500}}"#,
-            ),
-        )])
-        .expect("plan builds");
+    fn an_import_family_with_no_delta_schema_is_refused_by_name() {
+        let refusal = Family::parse("quests").expect_err("an unsupported family is refused");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(refusal.contains("`quests`"), "{refusal}");
+        assert!(refusal.contains("applies `spell` only"), "{refusal}");
     }
 
     #[test]
-    fn tuning_a_base_spell_is_not_an_uninvented_package_row() {
-        let plan = plan(&[artifact(
-            "example.tuner",
-            &spell_claim(
-                REAL_SPELL,
-                "update",
-                r#"{"cooldown_ms":{"type":"u32","value":1500}}"#,
-            ),
-        )])
-        .expect("plan builds");
-
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+    fn the_spell_family_is_the_one_this_build_applies() {
+        assert_eq!(Family::parse("spell"), Ok(Family::Spell));
+        assert_eq!(Family::Spell.as_str(), "spell");
     }
 
+    /// Every claimable table belongs to the spell family today, so a spell plan is in scope whole.
     #[test]
-    fn an_inserted_spell_carries_every_claimed_value_onto_the_row() {
-        let plan = plan(&[artifact(
-            "example.bolt",
-            &spell_claim(PACKAGE_SPELL, "insert", WHOLE_SPELL_ROW),
-        )])
-        .expect("plan builds");
+    fn a_spell_plan_claims_only_spell_family_tables() {
+        let claims = [
+            spell_claim(PACKAGE_SPELL, "insert", WHOLE_SPELL_ROW),
+            effect_claim(PACKAGE_SPELL, 0, "insert", WHOLE_EFFECT_ROW),
+        ]
+        .join(",");
+        let plan = plan(&[artifact("example.bolt", &claims)]).expect("plan builds");
 
-        let spell = built_spell(&plan.rows[0]).expect("row builds");
-
-        assert_eq!(spell.spell_id, PACKAGE_SPELL);
-        assert_eq!(spell.name, "Kindled Bolt");
-        assert_eq!(spell.cooldown_ms, 8000);
-        assert_eq!(spell.aura_interrupt, 3);
-        assert_eq!(spell.family_flags, u64::MAX);
-        assert!(spell.is_negative);
-    }
-
-    /// The packed key is derived from the spell and the effect index, never authored, so the built
-    /// row must carry the same value `game_aura.effect_id` is reproducible from.
-    #[test]
-    fn an_inserted_effect_derives_its_packed_key_from_the_spell_and_the_index() {
-        let plan = plan(&[artifact(
-            "example.bolt",
-            &effect_claim(PACKAGE_SPELL, 2, "insert", WHOLE_EFFECT_ROW),
-        )])
-        .expect("plan builds");
-
-        let effect = built_spell_effect(&plan.rows[0]).expect("row builds");
-
-        assert_eq!(effect.id, (u64::from(PACKAGE_SPELL) << 2) | 2);
-        assert_eq!(effect.spell_id, PACKAGE_SPELL);
-        assert_eq!(effect.effect_index, 2);
-        assert_eq!(effect.base_points, 120);
-        assert!((effect.per_level - 1.5).abs() < f32::EPSILON);
-        assert_eq!(effect.p0_kind, 255);
-    }
-
-    /// The Claim schema and the setters above are one contract. A column the schema declares but no
-    /// setter names would fail an apply against a live shard and nowhere else.
-    #[test]
-    fn every_claimable_spell_column_has_a_setter() {
-        let mut spell = blank_spell(PACKAGE_SPELL);
-        for column in ClaimTable::Spell.columns() {
-            apply_spell_field(&mut spell, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_spell` column `{}`: {e}", column.name));
-        }
-    }
-
-    #[test]
-    fn every_claimable_effect_column_has_a_setter() {
-        let mut effect = blank_spell_effect(PACKAGE_SPELL, 0);
-        for column in ClaimTable::SpellEffect.columns() {
-            apply_effect_field(&mut effect, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_spell_effect` column `{}`: {e}", column.name));
-        }
-    }
-
-    #[test]
-    fn a_column_claimed_as_the_wrong_type_is_refused_rather_than_narrowed() {
-        let mut spell = blank_spell(PACKAGE_SPELL);
-
-        let refusal = apply_spell_field(&mut spell, "cooldown_ms", &FieldValue::U8(9))
-            .expect_err("the setter refuses");
-
-        assert!(refusal.contains("cooldown_ms"), "{refusal}");
+        assert_eq!(check_claims_belong_to(Family::Spell, &plan.rows), Ok(()));
     }
 }
