@@ -54,7 +54,18 @@ __pycache__/
 /datascripts/generated/
 /datascripts/node_modules/
 
-# Packages installed on a host (`lyracore packages add`) are host-local, not repository
-# content. The committed first-party Packages stay tracked — an ignore rule never affects a
-# tracked file — but a NEW file inside one needs `git add -f`.
-/packages/
+# Packages installed on a host (`lyracore packages add`) are local to that checkout. Unknown
+# Package directories stay out of Git status. New files and generated artifacts in the committed
+# first-party Packages remain visible.
+/packages/*
+!/packages/blackfathom_deeps/
+!/packages/blackrock_depths/
+!/packages/dire_maul/
+!/packages/eventai_instance_test/
+!/packages/example/
+!/packages/fire_nova/
+!/packages/razorfen_kraul/
+!/packages/shadowfang_keep/
+!/packages/sunken_temple/
+!/packages/wailing_caverns/
+!/packages/zulgurub/
