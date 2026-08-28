@@ -200,6 +200,9 @@ const K: [u8; 40] = [
 /// and its tag vector is the authority on the order.
 pub(super) const WORLD_ENTRY_PACKETS: usize = 13;
 
+/// A world-port re-entry skips SMSG_LOGIN_VERIFY_WORLD because the client has loaded the map.
+pub(super) const WORLD_REENTRY_PACKETS: usize = WORLD_ENTRY_PACKETS - 1;
+
 /// In-memory `WorldStore` returning a fixed session key + character list for one account.
 /// One recorded `movement_update`: (opcode, x, y, z, orientation, timestamp).
 type MoveRecord = (u32, f32, f32, f32, f32, u32);
@@ -4097,10 +4100,9 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // enter_world reruns the login-style sequence for the re-entry — minus SMSG_LOGIN_VERIFY_WORLD:
-    // a verify-world resend commands a second load of the just-loaded map.
+    // Re-entry skips SMSG_LOGIN_VERIFY_WORLD because resending it reloads the current map.
     let mut create_guid = None;
-    for _ in 0..(WORLD_ENTRY_PACKETS - 1) {
+    for _ in 0..WORLD_REENTRY_PACKETS {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => {
                 panic!(
@@ -4189,8 +4191,7 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    // The re-entry sequence omits SMSG_LOGIN_VERIFY_WORLD.
-    for _ in 0..(WORLD_ENTRY_PACKETS - 1) {
+    for _ in 0..WORLD_REENTRY_PACKETS {
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     }
 
