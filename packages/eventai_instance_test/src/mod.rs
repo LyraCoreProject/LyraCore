@@ -7,17 +7,10 @@ use crate::encounter::{
     ENCOUNTER_IN_PROGRESS, ENCOUNTER_NOT_STARTED,
 };
 #[cfg(feature = "debug_reducers")]
-use crate::pkg_blackrock_depths::blackrock_tomb_round;
-#[cfg(feature = "debug_reducers")]
-use crate::pkg_shadowfang_keep::{
-    shadowfang_dark_offering_schedule, shadowfang_fenrus_choreography, shadowfang_voidwalker_group,
-    VOIDWALKER_ROUTE,
-};
-#[cfg(feature = "debug_reducers")]
-use crate::pkg_sunken_temple::sunken_temple_suppression;
-#[cfg(feature = "debug_reducers")]
-use crate::pkg_wailing_caverns::{
-    wailing_escort_progress, wailing_escort_schedule, WailingEscortSchedule,
+use crate::pkg_dungeons::{
+    blackrock_tomb_round, shadowfang_dark_offering_schedule, shadowfang_fenrus_choreography,
+    shadowfang_voidwalker_group, sunken_temple_suppression, wailing_escort_progress,
+    wailing_escort_schedule, WailingEscortSchedule, VOIDWALKER_ROUTE,
 };
 #[cfg(feature = "debug_reducers")]
 use crate::{
