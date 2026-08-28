@@ -930,34 +930,8 @@ pub(crate) fn sweep_encounter_state(ctx: &ReducerContext, instance_id: u64) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn every_binding_has_exactly_one_installed_package_authority() {
-        let mut from_enum: Vec<String> = EncounterBinding::ALL
-            .iter()
-            .map(|binding| format!("{binding:?}"))
-            .collect();
-        from_enum.sort();
-        assert_eq!(crate::GAME_ENCOUNTER_PACKAGE_BINDING_NAMES, from_enum);
-        assert_eq!(
-            crate::GAME_ENCOUNTER_PACKAGE_BINDING_NAMES,
-            [
-                "BlackfathomDeepsKelris",
-                "BlackrockDepthsTombOfSeven",
-                "DireMaulAlzzin",
-                "RazorfenKraulWardKeepers",
-                "ShadowfangKeepFenrus",
-                "ShadowfangKeepNandos",
-                "ShadowfangKeepRethilgore",
-                "SunkenTempleAvatar",
-                "WailingCavernsAnacondra",
-                "WailingCavernsCobrahn",
-                "WailingCavernsMutanus",
-                "WailingCavernsPythas",
-                "WailingCavernsSerpentis",
-                "ZulGurubOhgan",
-            ]
-        );
-    }
+    // Full binding coverage is asserted by the `dungeons` Package's own test, which runs exactly
+    // when that Package is installed. A bare core ships the enum with no authorities.
 
     #[test]
     fn package_lookup_refuses_missing_and_duplicate_authority() {

@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use support::Standalone;
 
-/// Exercises EventAI's production encounter notification boundary against the installed dungeon
-/// packages. The verifier covers every binding and signal, including refusal outside the owning
+/// Exercises EventAI's production encounter notification boundary against the installed `dungeons`
+/// Package. The verifier covers every binding and signal, including refusal outside the owning
 /// map and outside an instance.
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI, the Wasm toolchain, and the dungeons Package installed (lyracore packages add dungeons)"]
 fn eventai_instance_signals_reach_package_owned_outcomes() {
     let standalone = Standalone::start("eventai-instance-packages");
     standalone.publish_module_anonymous();

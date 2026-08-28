@@ -6,15 +6,14 @@
 // in the Module and `tsc --noEmit` fails HERE, at author time, instead of at apply time. Keep it
 // referencing real columns for exactly that reason.
 //
-// `Spell` is a core table; `SunkenTempleSuppression` is an enabled Package's own table
-// (`packages/dungeons`). The Module builds every enabled Package into the same wasm, so
-// `generated/` carries both, and a Datascript typechecks against a Package table the same way it
-// does against a core one.
+// This file references core tables only, because the bare checkout ships no Package with tables.
+// An installed Package's tables land in `generated/` the same way; the `dungeons` Package's
+// verification covers that half when it is installed.
 //
 // It deliberately writes nothing and applies nothing. Building a Package Delta from a Datascript is
 // separate work; this file only proves that the generated schema binds.
 
-import type { Spell, SunkenTempleSuppression } from "../generated/types";
+import type { Spell } from "../generated/types";
 
 /// One derived rank of a Spell, in the shape the schema actually declares.
 ///
@@ -37,10 +36,4 @@ export function spellRank(base: Spell, rank: number): Spell {
 /// generated columns it reads rather than restating them as loose strings.
 export function describeRank(spell: Spell): string {
   return `${spell.name} #${spell.spellId}: ${spell.cost} power, ${spell.cooldownMs}ms cooldown`;
-}
-
-/// The same reading, done against `packages/dungeons`' own table instead of a core one. The
-/// generated typings cover an installed Package exactly as they cover the Module it ships in.
-export function describeSuppressionWindow(row: SunkenTempleSuppression): string {
-  return `suppression #${row.scheduledId} armed for instance ${row.instanceId}`;
 }
