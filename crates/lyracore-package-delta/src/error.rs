@@ -1,27 +1,41 @@
-//! Why a Package Delta was refused.
+//! Why a Package artifact was refused.
 //!
 //! Every refusal here happens before an applier sees the artifact, so no partial write is possible.
 //! Each variant names the smallest thing that was wrong, because the reader is a package author who
 //! has to fix one line of a Datascript.
 //!
 //! A refusal about an identifier band or a key shape is family-specific and says so in its name
-//! (`SpellIdNotClientSafe`, `EffectIndexOutOfRange`). An Import Family adds its own variants rather
-//! than widening one, so no message loses the detail an author needs to fix the claim.
+//! (`SpellIdNotClientSafe`, `EffectIndexOutOfRange`, `ScriptIdNotInPackageBand`). An Import Family
+//! adds its own variants rather than widening one, so no message loses the detail an author needs
+//! to fix the claim. The envelope refusals above them — malformed JSON, an unknown member, a bad
+//! Package identity — are shared, because every artifact kind carries the same envelope.
 
 use core::fmt;
 
 use crate::ids::{
     FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR, FIXTURE_SPELL_ID_CEIL,
     FIXTURE_SPELL_ID_FLOOR, MAX_SPELL_EFFECT_INDEX, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR,
-    PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+    PACKAGE_SCRIPT_ID_CEIL, PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
 };
 use crate::schema::{FieldType, Table};
+use crate::script::HOOK_EVENT_NAMES;
 
-/// A Package Delta that cannot be trusted, and the reason.
+/// A Package artifact that cannot be trusted, and the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeltaError {
     /// The bytes are not JSON at all.
     Malformed(String),
+    /// The bytes hold a different artifact kind than the parser that read them.
+    ///
+    /// One Package's generated directory holds every kind it ships, side by side, so a router that
+    /// hands the wrong file to the wrong parser must be told exactly that rather than shown a
+    /// member-by-member complaint about an artifact that was never meant for it.
+    WrongArtifactKind {
+        /// What the parser reads.
+        expected: &'static str,
+        /// What the bytes actually are.
+        found: String,
+    },
     /// The artifact declares a version this build does not implement.
     UnsupportedVersion {
         /// The declared version.
@@ -163,6 +177,88 @@ pub enum DeltaError {
         /// The row, as the conflict report writes it.
         key: String,
     },
+
+    /// A refusal only the script family can raise.
+    ///
+    /// Grouped rather than flattened in beside the claim refusals: the script family shares this
+    /// enum's envelope variants — malformed JSON, an unknown member, a bad Package identity — and
+    /// nothing else, so its own refusals read better as one named group than as six more arms a
+    /// claim reader has to skip past. A family with refusals of its own follows this shape.
+    Script(ScriptRefusal),
+}
+
+/// Why a Script Artifact was refused, for the refusals no other Import Family can raise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptRefusal {
+    /// A shipped Runtime Script sits outside the range a Package may ship in.
+    IdNotInPackageBand {
+        /// The rejected identifier.
+        script_id: u32,
+    },
+    /// The `name` member is not a usable Runtime Script name.
+    InvalidName {
+        /// The rejected value.
+        found: String,
+    },
+    /// The `event` member names an event outside the Module's hook catalogue.
+    UnknownEvent {
+        /// The rejected name.
+        found: String,
+    },
+    /// A Runtime Script ships no Lua at all. An empty script is a Datascript that emitted nothing,
+    /// not a script that does nothing.
+    EmptySource {
+        /// The script that carries no source.
+        name: String,
+    },
+    /// One Script Artifact ships two scripts at one identifier.
+    DuplicateId {
+        /// The repeated identifier.
+        script_id: u32,
+    },
+    /// One Script Artifact ships two scripts under one name.
+    DuplicateName {
+        /// The repeated name.
+        name: String,
+    },
+}
+
+impl fmt::Display for ScriptRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IdNotInPackageBand { script_id } => write!(
+                f,
+                "script {script_id} is outside the Package script range \
+                 {PACKAGE_SCRIPT_ID_FLOOR}..={PACKAGE_SCRIPT_ID_CEIL}; a shipped Runtime Script \
+                 must use an identifier the range clears for Packages"
+            ),
+            Self::InvalidName { found } => write!(
+                f,
+                "`{found}` is not a Runtime Script name: expected 1 to 64 characters of \
+                 a-z, 0-9, `-`, `_` or `.`"
+            ),
+            Self::UnknownEvent { found } => write!(
+                f,
+                "unknown event `{found}`; a Runtime Script binds to one of {}",
+                known_events()
+            ),
+            Self::EmptySource { name } => write!(
+                f,
+                "Runtime Script `{name}` carries no source; a script that should do nothing is \
+                 shipped disabled, not empty"
+            ),
+            Self::DuplicateId { script_id } => write!(
+                f,
+                "script {script_id} is shipped twice by one Package; every Runtime Script needs \
+                 its own identifier"
+            ),
+            Self::DuplicateName { name } => write!(
+                f,
+                "Runtime Script name `{name}` is shipped twice by one Package; every Runtime \
+                 Script needs its own name"
+            ),
+        }
+    }
 }
 
 impl fmt::Display for DeltaError {
@@ -173,6 +269,9 @@ impl fmt::Display for DeltaError {
             | Self::EffectIndexOutOfRange { .. }
             | Self::ItemIdNotClientSafe { .. }
             | Self::ItemIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
+            // The script family groups its own refusals behind one variant, so it delegates as a
+            // whole rather than adding six arms here.
+            Self::Script(refusal) => refusal.fmt(f),
             other => fmt_general(other, f),
         }
     }
@@ -218,6 +317,11 @@ fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::R
 fn fmt_general(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match err {
         DeltaError::Malformed(detail) => write!(f, "not valid JSON: {detail}"),
+        DeltaError::WrongArtifactKind { expected, found } => write!(
+            f,
+            "these bytes are {found}, not {expected}; one Package ships each artifact kind in \
+             its own file and each is read by its own parser"
+        ),
         DeltaError::UnsupportedVersion { found } => write!(
             f,
             "unsupported Package Delta version {found}; this build implements version {}",
@@ -300,12 +404,25 @@ impl std::error::Error for DeltaError {}
 /// The whole catalogue as a prose list — "`a`", "`a` or `b`", "`a`, `b` or `c`" — so an Import
 /// Family that adds tables extends the refusal without touching the message.
 fn known_tables() -> String {
-    let quoted: Vec<String> = Table::ALL
-        .iter()
-        .map(|table| format!("`{table}`"))
-        .collect();
+    prose_list(
+        Table::ALL.iter().map(|table| format!("`{table}`")),
+        "no table at all in this build",
+    )
+}
+
+/// The hook catalogue as the same prose list, so an event added to the Module extends this refusal
+/// without touching the message.
+fn known_events() -> String {
+    prose_list(
+        HOOK_EVENT_NAMES.iter().map(|event| format!("`{event}`")),
+        "no event at all in this build",
+    )
+}
+
+fn prose_list(items: impl Iterator<Item = String>, empty: &str) -> String {
+    let quoted: Vec<String> = items.collect();
     match quoted.split_last() {
-        None => "no table at all in this build".to_owned(),
+        None => empty.to_owned(),
         Some((last, [])) => last.clone(),
         Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
     }

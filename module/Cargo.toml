@@ -43,3 +43,9 @@ piccolo = "=0.3.3"
 # through `ahash`, and `wasm32-unknown-unknown` has no built-in backend; the Module supplies one in
 # `runtime_script::fixed_entropy`, selected by the `getrandom_backend` cfg in `.cargo/config.toml`.
 getrandom = "0.3"
+
+[dev-dependencies]
+# Integration tests only. `spacetime call` parses every reducer argument as JSON, so a `String`
+# parameter has to arrive as a JSON string literal rather than as bare text — this encodes them.
+# Already in the lockfile through `lyracore-package-delta`, so it adds nothing to the tree.
+serde_json = "1"

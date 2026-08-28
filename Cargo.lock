@@ -1845,6 +1845,7 @@ dependencies = [
  "lyracore-package-delta",
  "lyracore-shared",
  "piccolo",
+ "serde_json",
  "spacetimedb",
 ]
 

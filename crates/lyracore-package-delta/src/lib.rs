@@ -72,6 +72,17 @@
 //! data is the point — except a fixture-reserved one, which no Package may touch under any
 //! operation. See [`ids`] for the bands, the formula a family's band follows, and why they sit
 //! where they do.
+//!
+//! # The other artifact
+//!
+//! [`script`] holds the **Script Artifact**: the whole Runtime Scripts one Package ships. It is a
+//! second kind rather than more tables in the claim schema because a Runtime Script has no base
+//! import behind it, so a Package owns the whole row and two Packages meeting on one is a collision
+//! rather than a merge.
+//!
+//! Both kinds live in one Package's generated directory, so a reader that walks `*.json` meets
+//! both. [`artifact_kind`] reads the root `kind` member alone and says which is which; each
+//! parser refuses the other kind by name rather than complaining about its members.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::pedantic)]
@@ -84,6 +95,7 @@ mod delta;
 mod error;
 pub mod ids;
 mod schema;
+pub mod script;
 mod trace;
 
 pub use delta::{
@@ -92,10 +104,16 @@ pub use delta::{
 pub use error::DeltaError;
 pub use ids::{
     is_fixture_reserved_item_id, is_fixture_reserved_spell_id, is_package_item_id,
-    is_package_spell_id, packed_spell_effect_id, MAX_SPELL_EFFECT_INDEX, PACKAGE_ITEM_ID_CEIL,
-    PACKAGE_ITEM_ID_FLOOR, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+    is_package_script_id, is_package_spell_id, packed_spell_effect_id, MAX_SPELL_EFFECT_INDEX,
+    PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL, PACKAGE_SCRIPT_ID_FLOOR,
+    PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
 };
 pub use schema::{Column, FieldType, FieldValue, Table, ITEM_FAMILY, SPELL_FAMILY};
+pub use script::{
+    artifact_kind, trace_scripts, ArtifactKind, EventBinding, Script, ScriptArtifact,
+    ScriptConflict, ScriptName, ScriptTrace, TracedScript, HOOK_EVENT_NAMES, SCRIPT_ARTIFACT_KIND,
+    SCRIPT_FAMILY, SCRIPT_VERSION,
+};
 pub use trace::{trace, ClaimConflict, ClaimTrace, ClaimedField, TracedRow};
 
 /// Reads an artifact and writes it back in canonical form.

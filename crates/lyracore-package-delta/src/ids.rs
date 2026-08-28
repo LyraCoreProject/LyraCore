@@ -12,13 +12,19 @@
 //!  * **Two decimal orders above the highest identifier a real client can hold** for that table.
 //!    One order of headroom is what a fixture floor takes; two removes the question for a later
 //!    client build.
-//!  * **Above [`RESERVED_ID_CEIL`]**, which covers the project-wide fixture band and every curated
-//!    import band, so no reserved row can ever fall inside a Package band.
-//!  * **Readable at a glance**, so the millions column alone says "a Package invented this row".
+//!  * **Clear of every reserved band** — [`RESERVED_ID_FLOOR`]..=[`RESERVED_ID_CEIL`], which spans
+//!    the project-wide fixture band and every curated import band — so no reserved row can ever
+//!    fall inside a Package band.
+//!  * **Readable at a glance**, so the leading digits alone say "a Package invented this row".
 //!
 //! Every band states both ends and both ends are checked by `const _: () = assert!(…)` below: floor
-//! at or under ceiling, and floor above [`RESERVED_ID_CEIL`]. A maintainer moving a number gets a
-//! compile error rather than a silently unenforceable policy.
+//! at or under ceiling, and the whole band outside the reserved span. A maintainer moving a number
+//! gets a compile error rather than a silently unenforceable policy.
+//!
+//! A table with no real client identifiers takes the same formula with its first clause satisfied
+//! vacuously, so its band may sit BELOW the reserved span rather than above it. The script band is
+//! the worked example of that case, and it is why the reserved span states a floor as well as a
+//! ceiling.
 
 // ===============================================================================================
 //  Reserved bands. Shared by every family: a Package band has to clear all of them.
@@ -40,7 +46,19 @@ pub const FIXTURE_RESERVED_ID_CEIL: u32 = 5_099_999;
 /// it. A new curated band above this one moves this number.
 pub const CURATED_RESERVED_ID_CEIL: u32 = 5_200_499;
 
-/// Highest identifier ANY reserved band owns. Every family's Package band floor must clear it.
+/// Lowest identifier any CURATED import band owns: the createinfo item band
+/// (`CREATEINFO_ITEM_ID_FLOOR`, `importer/src/main.rs`), which sits below the curated trainer
+/// overrides. A new curated band below this one moves this number.
+pub const CURATED_RESERVED_ID_FLOOR: u32 = 1_000_000;
+
+/// Lowest identifier ANY reserved band owns. A Package band that sits below the reserved span must
+/// clear it.
+///
+/// Derived from the bands above rather than restated, so adding a band is one edit.
+pub const RESERVED_ID_FLOOR: u32 = lower(FIXTURE_RESERVED_ID_FLOOR, CURATED_RESERVED_ID_FLOOR);
+
+/// Highest identifier ANY reserved band owns. A Package band that sits above the reserved span must
+/// clear it.
 ///
 /// Derived from the bands above rather than restated, so adding a band is one edit.
 pub const RESERVED_ID_CEIL: u32 = higher(FIXTURE_RESERVED_ID_CEIL, CURATED_RESERVED_ID_CEIL);
@@ -53,7 +71,17 @@ const fn higher(a: u32, b: u32) -> u32 {
     }
 }
 
+const fn lower(a: u32, b: u32) -> u32 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
 const _: () = assert!(FIXTURE_RESERVED_ID_FLOOR <= FIXTURE_RESERVED_ID_CEIL);
+const _: () = assert!(CURATED_RESERVED_ID_FLOOR <= CURATED_RESERVED_ID_CEIL);
+const _: () = assert!(RESERVED_ID_FLOOR <= RESERVED_ID_CEIL);
 
 // ===============================================================================================
 //  spell
@@ -162,4 +190,42 @@ pub const fn is_package_item_id(entry: u32) -> bool {
 #[must_use]
 pub const fn is_fixture_reserved_item_id(entry: u32) -> bool {
     entry >= FIXTURE_RESERVED_ID_FLOOR && entry <= FIXTURE_RESERVED_ID_CEIL
+}
+
+// ===============================================================================================
+//  script
+// ===============================================================================================
+
+/// Lowest `game_script.script_id` a Package may ship.
+///
+/// The band formula's third application, and the case where its first clause is vacuous. A
+/// Runtime Script has no client-side counterpart at all: no DBC holds one, no import reads one, and
+/// no client ever names one. "Two decimal orders above the highest identifier a real client can
+/// hold" is therefore satisfied by any positive number, and the band is free to sit LOW rather than
+/// being pushed above the reserved span the way the spell band was.
+///
+/// It sits low deliberately. Every `game_script` row is Package-shipped, so the leading digits are
+/// not distinguishing a Package row from an imported one — there are no imported ones. What they
+/// distinguish is a shipped script from the two values that are not scripts: `0`, which
+/// `game_spell_effect.script_id` already uses to mean "pure data, no script", and the
+/// `1`..=99,999 span left free below this floor for anything the engine may one day ship itself.
+/// Six digits, and the hundred-thousands column says "a Package shipped this script".
+pub const PACKAGE_SCRIPT_ID_FLOOR: u32 = 100_000;
+
+/// Highest `game_script.script_id` a Package may ship. Nine hundred thousand identifiers, against a
+/// realm that will run tens of scripts.
+pub const PACKAGE_SCRIPT_ID_CEIL: u32 = 999_999;
+
+const _: () = assert!(PACKAGE_SCRIPT_ID_FLOOR <= PACKAGE_SCRIPT_ID_CEIL);
+const _: () = assert!(PACKAGE_SCRIPT_ID_FLOOR > 0);
+/// The whole band sits below every reserved band, which is what makes a fixture-reserved script
+/// identifier unspellable rather than merely refused: there is no runtime fixture check for scripts
+/// because a value inside a reserved band cannot pass the band check above it. Moving either number
+/// into the reserved span fails the build here instead of quietly making that true.
+const _: () = assert!(PACKAGE_SCRIPT_ID_CEIL < RESERVED_ID_FLOOR);
+
+/// True when a Package may ship a Runtime Script at this identifier.
+#[must_use]
+pub const fn is_package_script_id(script_id: u32) -> bool {
+    script_id >= PACKAGE_SCRIPT_ID_FLOOR && script_id <= PACKAGE_SCRIPT_ID_CEIL
 }

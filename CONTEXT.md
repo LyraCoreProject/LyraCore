@@ -265,7 +265,8 @@ the melee approach. Set by the script, dropped with the Engagement.
 
 **Runtime Script**:
 Lua the Module runs on a core gameplay event, supplied from outside the core rather than compiled
-into it. Named so a diagnostic can identify it.
+into it. Named so a diagnostic can identify it. It reaches a Shard only through a Package's Script
+Artifact; there is no upload path.
 _Avoid_: plugin, mod, addon, user script
 
 **Runtime Script Host**:
@@ -460,15 +461,37 @@ _Avoid_: collision (for a claim), merge error
 **Package Identifier Range**:
 The identifiers a Package may invent in one Import Family. Each family that allows inserts owns one
 band, floored two decimal orders above the highest identifier a real client holds for its tables and
-above every reserved band. An apply clears the whole band before it writes, so a Package that leaves
-the enabled set takes its invented rows with it. The Package Spell Range is the worked example; the
-Package Item Range is the second family to follow it.
+clear of every reserved band. An apply clears the whole band before it writes, so a Package that
+leaves the enabled set takes its invented rows with it. The Package Spell Range is the worked
+example; the Package Item Range is the second family to follow it, and the Package Script Range is
+the case where a table has no real client identifiers to clear.
 _Avoid_: custom id range, synthetic id range
 
 **Package Spell Range**:
 The spell family's Package Identifier Range: 6,000,000 to 6,999,999. Two decimal orders above the
 highest real client spell and above every reserved band, so an inserted spell can never collide with
 imported or fixture data.
+
+**Package Script Range**:
+The script family's Package Identifier Range: 100,000 to 999,999. No client and no import holds a
+Runtime Script identifier, so the band has no real data to clear and sits below every reserved band
+rather than above one. It is the whole of `game_script` by construction, which is what makes a
+script apply a total reconciliation.
+
+**Script Artifact**:
+The versioned artifact recording every Runtime Script one Package ships: the Package identity, the
+source revision, and one whole row per script — identifier, name, Event Binding, priority, enabled
+state, and Lua. Distinct from a Package Delta, which states columns of rows a base import owns: a
+Runtime Script has no base import, so the Package owns the whole row and two Packages meeting on one
+is a collision rather than a merge. Both kinds live in `packages/<name>/data/.generated/` and are
+told apart by a top-level kind.
+_Avoid_: script bundle, script manifest, script delta
+
+**Event Binding**:
+The event a Runtime Script runs for, named from the Module's hook catalogue and refused at author
+time if it is not in it. Several scripts may bind to one event: lower priority runs first and the
+script identifier breaks a tie, so every Shard runs one plan in one order.
+_Avoid_: hook registration, subscription, listener
 _Avoid_: custom id range, synthetic spell range
 
 **Package Item Range**:
