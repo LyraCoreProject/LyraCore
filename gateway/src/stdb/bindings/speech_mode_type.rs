@@ -11,6 +11,8 @@ pub enum SpeechMode {
     Say,
 
     Yell,
+
+    Emote,
 }
 
 impl __sdk::InModule for SpeechMode {

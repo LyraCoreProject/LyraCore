@@ -6,40 +6,40 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct DebugVerifyWailingAwakeningArgs {}
+pub(super) struct DebugVerifyEventaiSpellGuardianCleanupArgs {}
 
-impl From<DebugVerifyWailingAwakeningArgs> for super::Reducer {
-    fn from(args: DebugVerifyWailingAwakeningArgs) -> Self {
-        Self::DebugVerifyWailingAwakening
+impl From<DebugVerifyEventaiSpellGuardianCleanupArgs> for super::Reducer {
+    fn from(args: DebugVerifyEventaiSpellGuardianCleanupArgs) -> Self {
+        Self::DebugVerifyEventaiSpellGuardianCleanup
     }
 }
 
-impl __sdk::InModule for DebugVerifyWailingAwakeningArgs {
+impl __sdk::InModule for DebugVerifyEventaiSpellGuardianCleanupArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `debug_verify_wailing_awakening`.
+/// Extension trait for access to the reducer `debug_verify_eventai_spell_guardian_cleanup`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait debug_verify_wailing_awakening {
-    /// Request that the remote module invoke the reducer `debug_verify_wailing_awakening` to run as soon as possible.
+pub trait debug_verify_eventai_spell_guardian_cleanup {
+    /// Request that the remote module invoke the reducer `debug_verify_eventai_spell_guardian_cleanup` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`debug_verify_wailing_awakening:debug_verify_wailing_awakening_then`] to run a callback after the reducer completes.
-    fn debug_verify_wailing_awakening(&self) -> __sdk::Result<()> {
-        self.debug_verify_wailing_awakening_then(|_, _| {})
+    /// /// Use [`debug_verify_eventai_spell_guardian_cleanup:debug_verify_eventai_spell_guardian_cleanup_then`] to run a callback after the reducer completes.
+    fn debug_verify_eventai_spell_guardian_cleanup(&self) -> __sdk::Result<()> {
+        self.debug_verify_eventai_spell_guardian_cleanup_then(|_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `debug_verify_wailing_awakening` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `debug_verify_eventai_spell_guardian_cleanup` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn debug_verify_wailing_awakening_then(
+    fn debug_verify_eventai_spell_guardian_cleanup_then(
         &self,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -48,8 +48,8 @@ pub trait debug_verify_wailing_awakening {
     ) -> __sdk::Result<()>;
 }
 
-impl debug_verify_wailing_awakening for super::RemoteReducers {
-    fn debug_verify_wailing_awakening_then(
+impl debug_verify_eventai_spell_guardian_cleanup for super::RemoteReducers {
+    fn debug_verify_eventai_spell_guardian_cleanup_then(
         &self,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -57,6 +57,6 @@ impl debug_verify_wailing_awakening for super::RemoteReducers {
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(DebugVerifyWailingAwakeningArgs {}, callback)
+            .invoke_reducer_with_callback(DebugVerifyEventaiSpellGuardianCleanupArgs {}, callback)
     }
 }

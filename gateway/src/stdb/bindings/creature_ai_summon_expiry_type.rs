@@ -13,6 +13,7 @@ pub struct CreatureAiSummonExpiry {
     pub lifetime_ms: u32,
     pub remaining_ms: u32,
     pub last_checked_ms: u64,
+    pub life_seq: u64,
 }
 
 impl __sdk::InModule for CreatureAiSummonExpiry {
@@ -29,6 +30,7 @@ pub struct CreatureAiSummonExpiryCols {
     pub lifetime_ms: __sdk::__query_builder::Col<CreatureAiSummonExpiry, u32>,
     pub remaining_ms: __sdk::__query_builder::Col<CreatureAiSummonExpiry, u32>,
     pub last_checked_ms: __sdk::__query_builder::Col<CreatureAiSummonExpiry, u64>,
+    pub life_seq: __sdk::__query_builder::Col<CreatureAiSummonExpiry, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureAiSummonExpiry {
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for CreatureAiSummonExpiry {
             lifetime_ms: __sdk::__query_builder::Col::new(table_name, "lifetime_ms"),
             remaining_ms: __sdk::__query_builder::Col::new(table_name, "remaining_ms"),
             last_checked_ms: __sdk::__query_builder::Col::new(table_name, "last_checked_ms"),
+            life_seq: __sdk::__query_builder::Col::new(table_name, "life_seq"),
         }
     }
 }

@@ -18,6 +18,7 @@ pub struct CreatureSpawn {
     pub despawn_at: __sdk::Timestamp,
     pub movement_type: u8,
     pub respawn_secs: u32,
+    pub life_seq: u64,
 }
 
 impl __sdk::InModule for CreatureSpawn {
@@ -39,6 +40,7 @@ pub struct CreatureSpawnCols {
     pub despawn_at: __sdk::__query_builder::Col<CreatureSpawn, __sdk::Timestamp>,
     pub movement_type: __sdk::__query_builder::Col<CreatureSpawn, u8>,
     pub respawn_secs: __sdk::__query_builder::Col<CreatureSpawn, u32>,
+    pub life_seq: __sdk::__query_builder::Col<CreatureSpawn, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for CreatureSpawn {
@@ -56,6 +58,7 @@ impl __sdk::__query_builder::HasCols for CreatureSpawn {
             despawn_at: __sdk::__query_builder::Col::new(table_name, "despawn_at"),
             movement_type: __sdk::__query_builder::Col::new(table_name, "movement_type"),
             respawn_secs: __sdk::__query_builder::Col::new(table_name, "respawn_secs"),
+            life_seq: __sdk::__query_builder::Col::new(table_name, "life_seq"),
         }
     }
 }
