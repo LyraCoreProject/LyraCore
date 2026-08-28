@@ -177,7 +177,7 @@ pub fn one_item_update(package: &str, entry: u32, fields: &str) -> String {
 pub const PACKAGE_QUEST: u32 = 8_000_001;
 
 /// A real vanilla quest entry, safe to update and never safe to insert.
-pub const REAL_QUEST: u32 = 1; // "Undertaking" — the first Elwynn quest, always imported in-box.
+pub const REAL_QUEST: u32 = 1; // "Undertaking", the first Elwynn quest, always imported in-box.
 
 /// Every claimable `game_quest_template` column, so an `insert` carries the whole row.
 pub const WHOLE_QUEST_ROW: &str = r#"{

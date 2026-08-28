@@ -465,9 +465,9 @@ clear of every reserved band. An apply clears the whole band before it writes, s
 leaves the enabled set takes its invented rows with it. The Package Spell Range is the worked
 example; the Package Item Range is the second family to follow it, and the Package Script Range is
 the case where a table has no real client identifiers to clear. A family whose tables have no
-Package-inventable owning identifier of their own — the Package Loot Range — checks the band
+Package-inventable owning identifier of their own. The Package Loot Range checks the band
 against a row's own identifier instead of an owning one; a family whose child tables share their
-header's owning identifier — the Package Quest Range — checks every child through that one band
+header's owning identifier. The Package Quest Range checks every child through that one band
 rather than owning a second.
 _Avoid_: custom id range, synthetic id range
 
@@ -516,7 +516,7 @@ _Avoid_: custom id range, synthetic quest range
 The loot family's Package Identifier Range: 9,000,000 to 9,999,999. One whole decade above the
 Package Quest Range. No loot table's owning entity (a creature, a gameobject, or a zone) is ever
 Package-invented, so this band is checked against a loot row's own identifier instead of an owning
-one — the same shape the Package Item Range checks against `game_item_template.entry`. Shared across
+one, the same shape the Package Item Range checks against `game_item_template.entry`. Shared across
 all four loot tables (pickpocket, gameobject/chest, skinning, fishing), which cannot collide on it:
 each is an independent SpacetimeDB table with its own primary-key space.
 _Avoid_: custom id range, synthetic loot range

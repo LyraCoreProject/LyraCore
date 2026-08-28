@@ -1,4 +1,4 @@
-//! The loot identifier policy: which rows a Package may claim. Mirrors `item_identifiers.rs` — a
+//! The loot identifier policy: which rows a Package may claim. Mirrors `item_identifiers.rs`. A
 //! loot row's key is flat, the same shape as an item's `entry`, because (unlike the quest family)
 //! no loot table's owning entity (creature, gameobject/chest, or zone) is ever Package-invented.
 //! The band therefore applies to a loot row's OWN `id`, not to an owning identifier.

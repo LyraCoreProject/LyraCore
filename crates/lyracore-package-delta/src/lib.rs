@@ -63,7 +63,7 @@
 //! family, and [`Table::family`] names the owner, so an applier called for one family can tell that
 //! a claim belongs to the import it is running. This build's catalogue is the spell, item, quest
 //! and loot families. `game_creature_quest`/`game_gameobject_quest` (quest givers) and
-//! `game_creature_loot`/`game_npc_vendor` (creature-scoped loot and vendor stock) are out of it —
+//! `game_creature_loot`/`game_npc_vendor` (creature-scoped loot and vendor stock) are out of it.
 //! see [`Table::columns`] and [`LOOT_FAMILY`] for why.
 //!
 //! # Identifier policy
@@ -72,7 +72,7 @@
 //! can reach — for spells, [`PACKAGE_SPELL_ID_FLOOR`]..=[`PACKAGE_SPELL_ID_CEIL`]; for items,
 //! [`PACKAGE_ITEM_ID_FLOOR`]..=[`PACKAGE_ITEM_ID_CEIL`]; for quests,
 //! [`PACKAGE_QUEST_ID_FLOOR`]..=[`PACKAGE_QUEST_ID_CEIL`]; for loot rows,
-//! [`PACKAGE_LOOT_ID_FLOOR`]..=[`PACKAGE_LOOT_ID_CEIL`]. An update may name any row — tuning real
+//! [`PACKAGE_LOOT_ID_FLOOR`]..=[`PACKAGE_LOOT_ID_CEIL`]. An update may name any row. Tuning real
 //! data is the point — except a fixture-reserved one, which no Package may touch under any
 //! operation. See [`ids`] for the bands, the formula a family's band follows, and why they sit
 //! where they do.

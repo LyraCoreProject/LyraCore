@@ -3,7 +3,7 @@
 //!
 //! One band covers the whole family: `game_quest_text` and every child table below name their
 //! owning quest by `quest_entry`, so a child row is only ever as Package-owned as the quest it
-//! belongs to — there is no separate child band to test.
+//! belongs to. There is no separate child band to test.
 
 mod common;
 
@@ -242,7 +242,7 @@ fn a_reward_choice_index_past_six_is_refused() {
 }
 
 /// The key columns (`quest_entry`, `obj_index`/`item_entry`/`choice_index`) may never also appear
-/// in `fields` — the key already names them.
+/// in `fields`. The key already names them.
 #[test]
 fn a_child_table_refuses_its_own_key_column_as_a_field() {
     let json = artifact(

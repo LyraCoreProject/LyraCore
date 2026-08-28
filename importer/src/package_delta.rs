@@ -47,7 +47,7 @@ struct Artifact {
 /// Refuses the whole stage on an unreadable root, an invalid artifact, or a Claim Conflict — the
 /// module would refuse the same plan, and refusing here names the file.
 pub(crate) fn reapply(args: &Args, family: &str, root: &str) -> Result<()> {
-    let artifacts = read_enabled(Path::new(root))?;
+    let artifacts = artifacts_for_family(read_enabled(Path::new(root))?, family)?;
     let deltas: Vec<PackageDelta> = artifacts.iter().map(|a| a.delta.clone()).collect();
     let traced = trace(&deltas);
 
@@ -76,6 +76,39 @@ pub(crate) fn reapply(args: &Args, family: &str, root: &str) -> Result<()> {
         traced.rows().len()
     );
     Ok(())
+}
+
+/// Keep only the claims owned by `family`, preserving the Package and source identities carried by
+/// the original artifact. One Package Delta may span several Import Families, but each reducer call
+/// applies exactly one family.
+fn artifacts_for_family(artifacts: Vec<Artifact>, family: &str) -> Result<Vec<Artifact>> {
+    artifacts
+        .into_iter()
+        .filter_map(|artifact| {
+            let claims = artifact
+                .delta
+                .claims()
+                .iter()
+                .filter(|claim| claim.table().family() == family)
+                .cloned()
+                .collect::<Vec<_>>();
+            if claims.is_empty() {
+                return None;
+            }
+            Some(
+                PackageDelta::new(
+                    artifact.delta.package().clone(),
+                    artifact.delta.source_hash().clone(),
+                    claims,
+                )
+                .map(|delta| Artifact {
+                    path: artifact.path,
+                    delta,
+                })
+                .map_err(anyhow::Error::from),
+            )
+        })
+        .collect()
 }
 
 /// The warning a base import prints when the operator did not name an enabled Package root.
@@ -238,6 +271,12 @@ mod tests {
         )
     }
 
+    fn mixed_family_artifact(package: &str) -> String {
+        format!(
+            r#"{{"version":1,"package":"{package}","source_hash":"{HASH_A}","claims":[{{"table":"game_spell","key":{{"spell_id":{REAL_SPELL}}},"operation":"update","fields":{{"cooldown_ms":{{"type":"u32","value":1500}}}}}},{{"table":"game_item_template","key":{{"entry":25}},"operation":"update","fields":{{"name":{{"type":"string","value":"Worn Shortsword"}}}}}}]}}"#
+        )
+    }
+
     #[test]
     fn artifacts_are_discovered_inside_each_enabled_package() {
         let t = Scratch::new("discover");
@@ -257,6 +296,33 @@ mod tests {
             .map(|a| a.delta.package().to_string())
             .collect();
         assert_eq!(packages, ["example.alpha", "example.zeta"]);
+    }
+
+    #[test]
+    fn one_family_apply_keeps_only_that_familys_claims() {
+        let t = Scratch::new("family-filter");
+        t.write(
+            "mixed/data/.generated/catalogues.json",
+            &mixed_family_artifact("example.mixed"),
+        );
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+
+        let spell = artifacts_for_family(found, "spell").expect("the spell plan filters");
+
+        assert_eq!(spell.len(), 1);
+        assert_eq!(spell[0].delta.claims().len(), 1);
+        assert_eq!(spell[0].delta.claims()[0].table().family(), "spell");
+
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+        let items = artifacts_for_family(found, "items").expect("the items plan filters");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].delta.claims().len(), 1);
+        assert_eq!(items[0].delta.claims()[0].table().family(), "items");
+
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+        assert!(artifacts_for_family(found, "quests")
+            .expect("an absent family is an empty plan")
+            .is_empty());
     }
 
     /// A Package with no data half is the common case, not a problem.

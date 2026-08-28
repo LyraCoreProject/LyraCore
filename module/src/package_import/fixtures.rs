@@ -151,7 +151,7 @@ pub(super) fn item_claim(entry: u32, operation: &str, fields: &str) -> String {
 }
 
 pub(super) const PACKAGE_QUEST: u32 = 8_000_001;
-pub(super) const REAL_QUEST: u32 = 1; // "Undertaking" — the first Elwynn quest, always imported in-box.
+pub(super) const REAL_QUEST: u32 = 1; // "Undertaking", the first Elwynn quest, always imported in-box.
 
 pub(super) const WHOLE_QUEST_ROW: &str = r#"{
     "min_level": { "type": "u32", "value": 1 },

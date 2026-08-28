@@ -3658,13 +3658,13 @@ pub(crate) fn family_active(args: &Args, name: &str) -> bool {
 }
 
 /// Every `--dump` Import Family with a Package Delta stage of its own (`lyracore-package-delta`'s
-/// `Table::family` catalogue) — the families `--packages` is valid alongside, beside `--spells`.
+/// `Table::family` catalogue), the families `--packages` is valid alongside, beside `--spells`.
 /// Extended in the same change that gives a new family its schema; `run_package_stage` and the
 /// `--packages` validation below both read this rather than restating the list.
 const PACKAGE_DELTA_DUMP_FAMILIES: &[&str] = &["items", "loot", "quests"];
 
 /// One family's Package Delta stage: reapplies every enabled Package's claims on `family`'s tables
-/// once its base rows are back — the `--dump` block's counterpart to `spell::run_spells`'s stage.
+/// once its base rows are back. This is the `--dump` block's counterpart to `spell::run_spells`'s stage.
 /// Runs whenever `family` is part of this invocation (`--family <name>` naming it, or a full run),
 /// on the dry-run path as well as `--apply`: a check has to print the same plan an apply would
 /// send, and `package_delta::reapply` itself decides which of those two this call is.

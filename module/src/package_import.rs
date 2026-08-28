@@ -180,6 +180,15 @@ impl ClaimFamily {
             Self::Loot => loot::write_row(ctx, row),
         }
     }
+
+    /// Refuses references that would point at no row after this family lands.
+    fn check_references(self, ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+        match self {
+            Self::Spell | Self::Item => Ok(()),
+            Self::Quest => quest::check_references(ctx, rows),
+            Self::Loot => loot::check_references(ctx, rows),
+        }
+    }
 }
 
 /// The whole family catalogue as a prose list — "`a`", "`a` or `b`", "`a`, `b` or `c`" — so a
@@ -293,6 +302,7 @@ fn apply_claims(
     let plan = ApplyPlan::read(packed)?;
     check_claims_belong_to(family, &plan.rows)?;
     check_update_targets(ctx, family, &plan)?;
+    family.check_references(ctx, &plan.rows)?;
 
     family.clear_package_range(ctx);
     for row in &plan.rows {

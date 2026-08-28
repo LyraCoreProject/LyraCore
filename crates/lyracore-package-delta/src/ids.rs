@@ -239,7 +239,7 @@ pub const fn is_package_script_id(script_id: u32) -> bool {
 /// The third application of the band formula in this module's header, one decade above the
 /// Package item range so the millions column keeps naming a family: `6` spell, `7` item, `8`
 /// quest. A cmangos-shaped `quest_template` dump for this client build stays far below this floor,
-/// so — as for items — [`RESERVED_ID_CEIL`] is the binding constraint, not the client headroom.
+/// so, as for items, [`RESERVED_ID_CEIL`] is the binding constraint, not the client headroom.
 ///
 /// One band covers the whole quest family, the same way the Package spell range covers both
 /// `game_spell` and `game_spell_effect`: every child table (`game_quest_text` and the rest) names
@@ -283,7 +283,7 @@ pub const MAX_QUEST_REWARD_CHOICE_INDEX: u8 = 5;
 /// Packed `game_quest_objective` / `game_quest_cast_objective` primary key:
 /// `(quest_entry << 8) | obj_index`.
 ///
-/// Neither table's real `id` column derives from a formula the way `game_spell_effect.id` does —
+/// Neither table's real `id` column derives from a formula the way `game_spell_effect.id` does.
 /// both are plain surrogates the importer assigns in dump order. A Package Delta needs a
 /// deterministic key it can compute without a live counter, so it derives one here instead,
 /// mirroring [`packed_spell_effect_id`]'s shape: the wide component low, the narrow index high
@@ -306,7 +306,7 @@ pub const fn packed_quest_reward_choice_id(quest_entry: u32, choice_index: u8) -
 /// Packed `game_quest_reward_item` primary key: `(quest_entry << 32) | item_entry`.
 ///
 /// A quest does not guarantee-reward the same item through two separate rows, so the pair is
-/// already a natural unique key; packing it needs no bound beyond each half's own `u32` width —
+/// already a natural unique key. Packing it needs no bound beyond each half's own `u32` width,
 /// the two exactly fill a `u64`.
 #[must_use]
 pub const fn packed_quest_reward_item_id(quest_entry: u32, item_entry: u32) -> u64 {
@@ -322,12 +322,12 @@ pub const fn packed_quest_reward_item_id(quest_entry: u32, item_entry: u32) -> u
 /// The fourth application of the band formula, one decade above the Package quest range: `9`
 /// names a Package loot row.
 ///
-/// Unlike the families above, no loot table's owning entity is ever Package-invented — a
+/// Unlike the families above, no loot table's owning entity is ever Package-invented. A
 /// `game_pickpocket_loot` row's `creature_entry`, a `game_gameobject_loot` row's `loot_id`, a
 /// `game_skinning_loot` row's `skin_loot_id`, and a `game_fishing_loot` row's `zone_id` all name
 /// real client data (creatures, gameobjects, and zones stay out of this issue's scope). So this
 /// band is checked against a loot row's OWN surrogate `id`, the same way [`PACKAGE_ITEM_ID_FLOOR`]
-/// is checked against `game_item_template.entry` — not against an owning identifier the way the
+/// is checked against `game_item_template.entry`, not against an owning identifier the way the
 /// quest family's child tables are. One band still covers the whole family: the four loot tables
 /// are independent `SpacetimeDB` tables with independent primary-key spaces, so sharing one range
 /// across them cannot collide.

@@ -330,7 +330,7 @@ impl PrimaryKey {
     /// # Errors
     /// The same identifier refusals as [`PrimaryKey::quest`], applied to `quest_entry`.
     /// `item_entry` names the OTHER side of the relation (a `game_item_template` row) and is not
-    /// itself checked here — the items family's own policy governs whether that row exists.
+    /// itself checked here. The items family's own policy governs whether that row exists.
     pub fn quest_reward_item(quest_entry: u32, item_entry: u32) -> Result<Self, DeltaError> {
         check_claimable_quest_id(Table::QuestRewardItem, quest_entry)?;
         Ok(Self::QuestRewardItem {
@@ -432,13 +432,13 @@ impl PrimaryKey {
         }
     }
 
-    /// The quest this row belongs to, for a quest-family key. The header's own `entry` counts —
+    /// The quest this row belongs to, for a quest-family key. The header's own `entry` counts,
     /// every child table names the same quest by `quest_entry`, so this is the one identifier a
     /// quest-family row is always Package-owned or not through.
     ///
     /// Every caller sits inside the quest family's own dispatch
     /// (`module/src/package_import/quest.rs`), where `check_claims_belong_to` has already refused
-    /// a foreign-family row before this could run — so a foreign-family key reaching here is an
+    /// a foreign-family row before this could run, so a foreign-family key reaching here is an
     /// internal invariant break, not untrusted input.
     ///
     /// # Panics

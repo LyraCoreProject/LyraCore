@@ -6,7 +6,7 @@
 //! true of loot.
 //!
 //! Unlike items, spells and quests, a loot row's owning entity (a creature, a gameobject/chest, or
-//! a zone) is never Package-invented — creature and gameobject templates stay out of this issue's
+//! a zone) is never Package-invented. Creature and gameobject templates stay out of this issue's
 //! scope. So the Package identifier band applies to a loot row's OWN `id`, exactly the way
 //! `PACKAGE_ITEM_ID_FLOOR` applies to `game_item_template.entry`, rather than to an owning
 //! identifier the way `is_package_quest_id` is checked against `quest_entry`. One band covers all
@@ -26,8 +26,143 @@ use crate::loot::{
     game_fishing_loot, game_gameobject_loot, game_pickpocket_loot, game_skinning_loot,
     GameFishingLoot, GameObjectLoot, GamePickpocketLoot, GameSkinningLoot,
 };
+use crate::{game_creature_template, game_gameobject_template, game_item_template};
 
 use super::{as_bool, as_u32, check_insert_is_whole, UpdateTarget};
+
+/// Refuses a loot claim whose final row would point at data this Shard does not hold.
+pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+    for row in rows {
+        let item_entry = final_u32(ctx, row, "item_entry")?;
+        if item_entry == 0
+            || ctx
+                .db
+                .game_item_template()
+                .entry()
+                .find(item_entry)
+                .is_none()
+        {
+            return Err(missing_reference(row, "item_entry", item_entry));
+        }
+
+        match row.table() {
+            ClaimTable::PickpocketLoot => {
+                let creature_entry = final_u32(ctx, row, "creature_entry")?;
+                if creature_entry == 0
+                    || ctx
+                        .db
+                        .game_creature_template()
+                        .entry()
+                        .find(creature_entry)
+                        .is_none()
+                {
+                    return Err(missing_reference(row, "creature_entry", creature_entry));
+                }
+            }
+            ClaimTable::GameobjectLoot => {
+                let loot_id = final_u32(ctx, row, "loot_id")?;
+                let owned = loot_id != 0
+                    && ctx
+                        .db
+                        .game_gameobject_template()
+                        .iter()
+                        .any(|template| template.type_id == 3 && template.data1 == loot_id);
+                if !owned {
+                    return Err(missing_reference(row, "loot_id", loot_id));
+                }
+            }
+            ClaimTable::SkinningLoot => {
+                let skin_loot_id = final_u32(ctx, row, "skin_loot_id")?;
+                let owned = skin_loot_id != 0
+                    && ctx
+                        .db
+                        .game_creature_template()
+                        .iter()
+                        .any(|template| template.skin_loot_id == skin_loot_id);
+                if !owned {
+                    return Err(missing_reference(row, "skin_loot_id", skin_loot_id));
+                }
+            }
+            ClaimTable::FishingLoot => {
+                let zone_id = final_u32(ctx, row, "zone_id")?;
+                if zone_id == 0 {
+                    return Err(missing_reference(row, "zone_id", zone_id));
+                }
+            }
+            other => unreachable!("loot reference check received {other}"),
+        }
+    }
+    Ok(())
+}
+
+fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, String> {
+    if let Some(FieldValue::U32(value)) = row.fields().get(field).map(|claimed| &claimed.value) {
+        return Ok(*value);
+    }
+
+    let value = match row.table() {
+        ClaimTable::PickpocketLoot => {
+            ctx.db
+                .game_pickpocket_loot()
+                .id()
+                .find(row.row_id())
+                .map(|loot| match field {
+                    "creature_entry" => loot.creature_entry,
+                    "item_entry" => loot.item_entry,
+                    _ => 0,
+                })
+        }
+        ClaimTable::GameobjectLoot => {
+            ctx.db
+                .game_gameobject_loot()
+                .id()
+                .find(row.row_id())
+                .map(|loot| match field {
+                    "loot_id" => loot.loot_id,
+                    "item_entry" => loot.item_entry,
+                    _ => 0,
+                })
+        }
+        ClaimTable::SkinningLoot => {
+            ctx.db
+                .game_skinning_loot()
+                .id()
+                .find(row.row_id())
+                .map(|loot| match field {
+                    "skin_loot_id" => loot.skin_loot_id,
+                    "item_entry" => loot.item_entry,
+                    _ => 0,
+                })
+        }
+        ClaimTable::FishingLoot => ctx
+            .db
+            .game_fishing_loot()
+            .id()
+            .find(row.row_id())
+            .map(|loot| match field {
+                "zone_id" => loot.zone_id,
+                "item_entry" => loot.item_entry,
+                _ => 0,
+            }),
+        other => unreachable!("loot value lookup received {other}"),
+    };
+
+    value.ok_or_else(|| {
+        format!(
+            "`{}` row {} vanished during preflight",
+            row.table(),
+            row.key()
+        )
+    })
+}
+
+fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
+    format!(
+        "`{}` row {} references missing {field} {value}",
+        row.table(),
+        row.key()
+    )
+}
 
 /// What this shard holds for the row an `update` claim names.
 pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
@@ -213,7 +348,7 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
 }
 
 // ===========================================================================================
-//  Row building — pure.
+//  Pure row building.
 // ===========================================================================================
 
 /// The `id` a loot-family row names. Total, not a `Result`: `check_claims_belong_to` has already
@@ -395,7 +530,7 @@ fn built_fishing_loot(row: &TracedRow) -> Result<GameFishingLoot, String> {
 }
 
 // ===========================================================================================
-//  Tests — the pure half. Row WRITING needs a live ReducerContext, which a native test has no way
+//  Pure tests. Row WRITING needs a live ReducerContext, which a native test has no way
 //  to build (same limit `import_meta`'s tests note); the wire suite covers that rung.
 // ===========================================================================================
 #[cfg(test)]

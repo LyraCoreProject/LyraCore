@@ -10,7 +10,7 @@
 //! `game_spell_effect`. `game_quest_text` is 1:1 with its header by `quest_entry`; the other four
 //! tables carry a derived packed key (`quest_entry` plus a natural per-row index), the same shape
 //! `packed_spell_effect_id` documents. `game_creature_quest`/`game_gameobject_quest` (which
-//! creature/gameobject starts or ends a quest) are out of this family's claimable catalogue — see
+//! creature/gameobject starts or ends a quest) are out of this family's claimable catalogue. See
 //! `lyracore_package_delta::Table::columns`'s doc for why.
 //!
 //! The Claim schema and the setters below are one contract; the tests at the bottom fail if a
@@ -28,8 +28,149 @@ use crate::quest::{
     game_quest_reward_item, game_quest_template, game_quest_text, QuestCastObjective,
     QuestObjective, QuestRewardChoice, QuestRewardItem, QuestTemplate, QuestText,
 };
+use crate::{game_creature_template, game_gameobject_template, game_item_template, game_spell};
 
 use super::{as_bool, as_i32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+
+/// Refuses a quest claim whose final row would point at data this Shard does not hold.
+pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+    for row in rows {
+        let quest_entry = row.key().quest_entry();
+        if row.table() != ClaimTable::Quest && !quest_exists_after_apply(ctx, rows, quest_entry) {
+            return Err(missing_reference(row, "quest_entry", quest_entry));
+        }
+
+        match row.table() {
+            ClaimTable::Quest => {
+                for field in ["prev_quest_id", "next_quest_id"] {
+                    if let Some(entry) = claimed_u32(row, field) {
+                        if entry != 0 && !quest_exists_after_apply(ctx, rows, entry) {
+                            return Err(missing_reference(row, field, entry));
+                        }
+                    }
+                }
+                if let Some(entry) = claimed_u32(row, "src_item") {
+                    if entry != 0 && !item_exists(ctx, entry) {
+                        return Err(missing_reference(row, "src_item", entry));
+                    }
+                }
+            }
+            ClaimTable::QuestText => {}
+            ClaimTable::QuestObjective => check_objective_reference(ctx, row)?,
+            ClaimTable::QuestCastObjective => {
+                if let Some(spell_id) = claimed_u32(row, "spell_id") {
+                    if spell_id == 0 || ctx.db.game_spell().spell_id().find(spell_id).is_none() {
+                        return Err(missing_reference(row, "spell_id", spell_id));
+                    }
+                }
+            }
+            ClaimTable::QuestRewardItem => {
+                let PrimaryKey::QuestRewardItem { item_entry, .. } = row.key() else {
+                    unreachable!("quest reward rows have quest reward keys")
+                };
+                if !item_exists(ctx, item_entry) {
+                    return Err(missing_reference(row, "item_entry", item_entry));
+                }
+            }
+            ClaimTable::QuestRewardChoice => {
+                if let Some(item_entry) = claimed_u32(row, "item_entry") {
+                    if !item_exists(ctx, item_entry) {
+                        return Err(missing_reference(row, "item_entry", item_entry));
+                    }
+                }
+            }
+            other => unreachable!("quest reference check received {other}"),
+        }
+    }
+    Ok(())
+}
+
+fn check_objective_reference(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+    let current = if row.operation() == Operation::Update {
+        ctx.db.game_quest_objective().id().find(row.row_id())
+    } else {
+        None
+    };
+    let kind = claimed_u8(row, "kind")
+        .or_else(|| current.as_ref().map(|objective| objective.kind))
+        .ok_or_else(|| format!("`{}` row {} has no objective kind", row.table(), row.key()))?;
+    let target = claimed_u32(row, "target_entry")
+        .or_else(|| current.as_ref().map(|objective| objective.target_entry))
+        .ok_or_else(|| {
+            format!(
+                "`{}` row {} has no objective target",
+                row.table(),
+                row.key()
+            )
+        })?;
+
+    let present = match kind {
+        crate::quest::objective_kind::KILL_CREATURE => ctx
+            .db
+            .game_creature_template()
+            .entry()
+            .find(target)
+            .is_some(),
+        crate::quest::objective_kind::COLLECT_ITEM => item_exists(ctx, target),
+        crate::quest::objective_kind::USE_GAMEOBJECT => ctx
+            .db
+            .game_gameobject_template()
+            .entry()
+            .find(target)
+            .is_some(),
+        crate::quest::objective_kind::EXPLORE_AREATRIGGER => target != 0,
+        _ => {
+            return Err(format!(
+                "`{}` row {} has unsupported objective kind {kind}",
+                row.table(),
+                row.key()
+            ))
+        }
+    };
+    if present {
+        Ok(())
+    } else {
+        Err(missing_reference(row, "target_entry", target))
+    }
+}
+
+fn quest_exists_after_apply(ctx: &ReducerContext, rows: &[TracedRow], entry: u32) -> bool {
+    if is_package_quest_id(entry) {
+        rows.iter().any(|row| {
+            row.table() == ClaimTable::Quest
+                && row.operation() == Operation::Insert
+                && row.key().quest_entry() == entry
+        })
+    } else {
+        ctx.db.game_quest_template().entry().find(entry).is_some()
+    }
+}
+
+fn item_exists(ctx: &ReducerContext, entry: u32) -> bool {
+    entry != 0 && ctx.db.game_item_template().entry().find(entry).is_some()
+}
+
+fn claimed_u32(row: &TracedRow, field: &str) -> Option<u32> {
+    match row.fields().get(field).map(|claimed| &claimed.value) {
+        Some(FieldValue::U32(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+fn claimed_u8(row: &TracedRow, field: &str) -> Option<u8> {
+    match row.fields().get(field).map(|claimed| &claimed.value) {
+        Some(FieldValue::U8(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
+    format!(
+        "`{}` row {} references missing {field} {value}",
+        row.table(),
+        row.key()
+    )
+}
 
 /// What this shard holds for the row an `update` claim names.
 pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
@@ -89,7 +230,7 @@ pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarg
 ///
 /// The Package quest range is cleared on every apply, so such a row is gone by the time the write
 /// pass runs: the Package that owns the quest is not enabled, and the one tuning it is claiming a
-/// row that does not exist. A base quest is different — the base import puts it there. Every quest
+/// row that does not exist. A base quest is different because the base import puts it there. Every quest
 /// table checks the same `quest_entry`, because a child row is only ever as Package-owned as the
 /// quest it belongs to.
 fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
@@ -308,7 +449,7 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
 }
 
 // ===========================================================================================
-//  Row building — pure.
+//  Pure row building.
 // ===========================================================================================
 
 fn blank_quest(entry: u32) -> QuestTemplate {
@@ -600,7 +741,7 @@ fn built_quest_reward_choice(row: &TracedRow) -> Result<QuestRewardChoice, Strin
 }
 
 // ===========================================================================================
-//  Tests — the pure half. Row WRITING needs a live ReducerContext, which a native test has no way
+//  Pure tests. Row WRITING needs a live ReducerContext, which a native test has no way
 //  to build (same limit `import_meta`'s tests note); the wire suite covers that rung.
 // ===========================================================================================
 #[cfg(test)]

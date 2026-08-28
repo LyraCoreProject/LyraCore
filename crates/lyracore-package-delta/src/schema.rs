@@ -28,7 +28,7 @@ pub const QUEST_FAMILY: &str = "quests";
 /// The Import Family that owns the non-creature loot tables (pickpocket, gameobject/chest,
 /// skinning, fishing). The same name the `--dump` importer's `loot` `--family` block stamps.
 /// `game_creature_loot` itself reloads under the `items` family (`importer/src/main.rs`) and is
-/// out of this issue's scope — see this crate's `lib.rs` for why.
+/// out of this issue's scope. See this crate's `lib.rs` for why.
 pub const LOOT_FAMILY: &str = "loot";
 
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
@@ -49,26 +49,26 @@ pub enum Table {
     /// `game_item_template` — the item catalogue header.
     Item,
     // ---- quests ----
-    /// `game_quest_template` — the quest header.
+    /// `game_quest_template`, the quest header.
     Quest,
-    /// `game_quest_text` — a quest's free-text body, 1:1 by `quest_entry`.
+    /// `game_quest_text`, a quest's free-text body, 1:1 by `quest_entry`.
     QuestText,
-    /// `game_quest_objective` — one kill/collect/use objective slot of a quest.
+    /// `game_quest_objective`, one kill/collect/use objective slot of a quest.
     QuestObjective,
-    /// `game_quest_cast_objective` — the spell-cast requirement on one objective slot.
+    /// `game_quest_cast_objective`, the spell-cast requirement on one objective slot.
     QuestCastObjective,
-    /// `game_quest_reward_item` — one guaranteed turn-in reward item.
+    /// `game_quest_reward_item`, one guaranteed turn-in reward item.
     QuestRewardItem,
-    /// `game_quest_reward_choice` — one pick-1-of-N turn-in reward item.
+    /// `game_quest_reward_choice`, one pick-1-of-N turn-in reward item.
     QuestRewardChoice,
     // ---- loot ----
-    /// `game_pickpocket_loot` — a creature's pickpocket table.
+    /// `game_pickpocket_loot`, a creature's pickpocket table.
     PickpocketLoot,
-    /// `game_gameobject_loot` — a lootable gameobject's (chest) table.
+    /// `game_gameobject_loot`, a lootable gameobject's chest table.
     GameobjectLoot,
-    /// `game_skinning_loot` — a level-banded skinning table.
+    /// `game_skinning_loot`, a level-banded skinning table.
     SkinningLoot,
-    /// `game_fishing_loot` — a zone's fishing table.
+    /// `game_fishing_loot`, a zone's fishing table.
     FishingLoot,
 }
 
@@ -165,7 +165,7 @@ impl Table {
     /// `game_creature_quest` and `game_gameobject_quest` (which creature/gameobject starts or ends
     /// a quest) are deliberately NOT in this catalogue: every one of their non-`id` columns names
     /// the relation itself (creature/gameobject, quest, START-or-END role), so a claim on them
-    /// would set zero columns — the shape `tests/families.rs`'s
+    /// would set zero columns. This is the shape `tests/families.rs`'s
     /// `every_table_has_claimable_columns` exists to catch. Reaching a Package quest from a giver
     /// is left as a named gap for a later change, not forced past that guard.
     #[must_use]
@@ -428,7 +428,7 @@ const GAMEOBJECT_LOOT_COLUMNS: &[Column] = &[
     column("quest_only", FieldType::Bool),
 ];
 
-/// `game_skinning_loot` minus its `id` primary key. No `quest_only` — no cmangos skinning row is
+/// `game_skinning_loot` minus its `id` primary key. No cmangos skinning row is
 /// ever quest-gated (`module/src/loot/mod.rs`).
 ///
 /// Hand-maintained against `module/src/loot/mod.rs`'s `GameSkinningLoot` struct.
@@ -440,7 +440,7 @@ const SKINNING_LOOT_COLUMNS: &[Column] = &[
     column("group_id", FieldType::U32),
 ];
 
-/// `game_fishing_loot` minus its `id` primary key. No `quest_only` — fishing junk isn't
+/// `game_fishing_loot` minus its `id` primary key. Fishing junk is not
 /// quest-gated in the family this importer imports (`module/src/loot/mod.rs`).
 ///
 /// Hand-maintained against `module/src/loot/mod.rs`'s `GameFishingLoot` struct.
