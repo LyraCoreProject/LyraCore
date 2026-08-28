@@ -53,3 +53,19 @@ __pycache__/
 # never client bytes, but it is the operator's own derived data and stays on the operator's machine.
 /datascripts/generated/
 /datascripts/node_modules/
+
+# Packages installed on a host (`lyracore packages add`) are local to that checkout. Unknown
+# Package directories stay out of Git status. New files and generated artifacts in the committed
+# first-party Packages remain visible.
+/packages/*
+!/packages/blackfathom_deeps/
+!/packages/blackrock_depths/
+!/packages/dire_maul/
+!/packages/eventai_instance_test/
+!/packages/example/
+!/packages/fire_nova/
+!/packages/razorfen_kraul/
+!/packages/shadowfang_keep/
+!/packages/sunken_temple/
+!/packages/wailing_caverns/
+!/packages/zulgurub/
