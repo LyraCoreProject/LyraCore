@@ -331,3 +331,39 @@ fn two_packages_inserting_the_same_item_entry_conflict() {
     assert!(report.contains("example.second"), "{report}");
     assert!(report.contains("entry=7000001"), "{report}");
 }
+
+#[test]
+fn two_packages_tuning_one_quest_column_conflict() {
+    let claim = |value| {
+        format!(
+            r#"{{"table":"game_quest_template","key":{{"entry":1}},"operation":"update","fields":{{"reward_money":{{"type":"u32","value":{value}}}}}}}"#
+        )
+    };
+    let first = delta("example.first", &claim(100));
+    let second = delta("example.second", &claim(200));
+
+    let traced = trace(&[first, second]);
+
+    assert_eq!(traced.conflicts().len(), 1);
+    let report = traced.conflicts()[0].to_string();
+    assert!(report.contains("game_quest_template"), "{report}");
+    assert!(report.contains("reward_money"), "{report}");
+}
+
+#[test]
+fn two_packages_tuning_one_loot_column_conflict() {
+    let claim = |value| {
+        format!(
+            r#"{{"table":"game_pickpocket_loot","key":{{"id":1}},"operation":"update","fields":{{"chance_bp":{{"type":"u32","value":{value}}}}}}}"#
+        )
+    };
+    let first = delta("example.first", &claim(5_000));
+    let second = delta("example.second", &claim(10_000));
+
+    let traced = trace(&[first, second]);
+
+    assert_eq!(traced.conflicts().len(), 1);
+    let report = traced.conflicts()[0].to_string();
+    assert!(report.contains("game_pickpocket_loot"), "{report}");
+    assert!(report.contains("chance_bp"), "{report}");
+}

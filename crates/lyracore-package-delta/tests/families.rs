@@ -3,7 +3,7 @@
 //! An applier is called for one family at a time, so `Table::family` decides which claims that call
 //! may touch. These cases hold the catalogue, the parser and the family map together.
 
-use lyracore_package_delta::{Table, ITEM_FAMILY, SPELL_FAMILY};
+use lyracore_package_delta::{Table, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SPELL_FAMILY};
 
 /// `Table::ALL`, `Table::as_str` and `Table::parse` are three hand-maintained lists of one
 /// catalogue. The match below carries no wildcard, so a table added to the enum stops this case
@@ -15,6 +15,16 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
             Table::Spell => "game_spell",
             Table::SpellEffect => "game_spell_effect",
             Table::Item => "game_item_template",
+            Table::Quest => "game_quest_template",
+            Table::QuestText => "game_quest_text",
+            Table::QuestObjective => "game_quest_objective",
+            Table::QuestCastObjective => "game_quest_cast_objective",
+            Table::QuestRewardItem => "game_quest_reward_item",
+            Table::QuestRewardChoice => "game_quest_reward_choice",
+            Table::PickpocketLoot => "game_pickpocket_loot",
+            Table::GameobjectLoot => "game_gameobject_loot",
+            Table::SkinningLoot => "game_skinning_loot",
+            Table::FishingLoot => "game_fishing_loot",
         };
 
         assert_eq!(table.as_str(), name);
@@ -23,7 +33,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
 
     assert_eq!(
         Table::ALL.len(),
-        3,
+        13,
         "a table reached the enum without reaching `Table::ALL`"
     );
 }
@@ -39,6 +49,34 @@ fn the_spell_tables_belong_to_the_spell_import_family() {
 fn the_item_table_belongs_to_the_items_import_family() {
     assert_eq!(Table::Item.family(), ITEM_FAMILY);
     assert_eq!(ITEM_FAMILY, "items");
+}
+
+#[test]
+fn the_quest_tables_belong_to_the_quests_import_family() {
+    for table in [
+        Table::Quest,
+        Table::QuestText,
+        Table::QuestObjective,
+        Table::QuestCastObjective,
+        Table::QuestRewardItem,
+        Table::QuestRewardChoice,
+    ] {
+        assert_eq!(table.family(), QUEST_FAMILY, "{table}");
+    }
+    assert_eq!(QUEST_FAMILY, "quests");
+}
+
+#[test]
+fn the_loot_tables_belong_to_the_loot_import_family() {
+    for table in [
+        Table::PickpocketLoot,
+        Table::GameobjectLoot,
+        Table::SkinningLoot,
+        Table::FishingLoot,
+    ] {
+        assert_eq!(table.family(), LOOT_FAMILY, "{table}");
+    }
+    assert_eq!(LOOT_FAMILY, "loot");
 }
 
 /// A family name travels as a reducer argument and as `game_import_meta.family`, where the importer

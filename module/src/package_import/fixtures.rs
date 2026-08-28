@@ -150,6 +150,77 @@ pub(super) fn item_claim(entry: u32, operation: &str, fields: &str) -> String {
     )
 }
 
+pub(super) const PACKAGE_QUEST: u32 = 8_000_001;
+pub(super) const REAL_QUEST: u32 = 1; // "Undertaking", the first Elwynn quest, always imported in-box.
+
+pub(super) const WHOLE_QUEST_ROW: &str = r#"{
+    "min_level": { "type": "u32", "value": 1 },
+    "quest_level": { "type": "u32", "value": 3 },
+    "title": { "type": "string", "value": "A Kindled Errand" },
+    "reward_money": { "type": "u32", "value": 100 },
+    "reward_xp": { "type": "u32", "value": 0 },
+    "prev_quest_id": { "type": "u32", "value": 0 },
+    "required_races": { "type": "u32", "value": 0 },
+    "required_classes": { "type": "u32", "value": 0 },
+    "zone_or_sort": { "type": "i32", "value": 12 },
+    "rew_rep_faction_1": { "type": "u32", "value": 0 },
+    "rew_rep_value_1": { "type": "i32", "value": 0 },
+    "rew_rep_faction_2": { "type": "u32", "value": 0 },
+    "rew_rep_value_2": { "type": "i32", "value": 0 },
+    "src_item": { "type": "u32", "value": 0 },
+    "src_item_count": { "type": "u32", "value": 0 },
+    "repeatable": { "type": "bool", "value": false },
+    "next_quest_id": { "type": "u32", "value": 0 },
+    "limit_time": { "type": "u32", "value": 0 },
+    "reward_money_max_level": { "type": "u32", "value": 0 }
+}"#;
+
+pub(super) fn quest_claim(entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_quest_template","key":{{"entry":{entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn quest_objective_claim(
+    quest_entry: u32,
+    obj_index: u8,
+    operation: &str,
+    fields: &str,
+) -> String {
+    format!(
+        r#"{{"table":"game_quest_objective","key":{{"quest_entry":{quest_entry},"obj_index":{obj_index}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn quest_reward_item_claim(
+    quest_entry: u32,
+    item_entry: u32,
+    operation: &str,
+    fields: &str,
+) -> String {
+    format!(
+        r#"{{"table":"game_quest_reward_item","key":{{"quest_entry":{quest_entry},"item_entry":{item_entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) const PACKAGE_LOOT: u64 = 9_000_001;
+pub(super) const REAL_PICKPOCKET_LOOT: u64 = 1;
+
+pub(super) const WHOLE_PICKPOCKET_LOOT_ROW: &str = r#"{
+    "creature_entry": { "type": "u32", "value": 6 },
+    "item_entry": { "type": "u32", "value": 25 },
+    "chance_bp": { "type": "u32", "value": 5000 },
+    "count": { "type": "u32", "value": 1 },
+    "group_id": { "type": "u32", "value": 0 },
+    "quest_only": { "type": "bool", "value": false }
+}"#;
+
+pub(super) fn pickpocket_loot_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_pickpocket_loot","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
 /// A value of the column's declared type, so a test can claim any column without spelling out what
 /// it holds.
 pub(super) fn some_value(column: Column) -> FieldValue {

@@ -229,3 +229,126 @@ const _: () = assert!(PACKAGE_SCRIPT_ID_CEIL < RESERVED_ID_FLOOR);
 pub const fn is_package_script_id(script_id: u32) -> bool {
     script_id >= PACKAGE_SCRIPT_ID_FLOOR && script_id <= PACKAGE_SCRIPT_ID_CEIL
 }
+
+// ===============================================================================================
+//  quests
+// ===============================================================================================
+
+/// Lowest quest identifier a Package may INSERT.
+///
+/// The third application of the band formula in this module's header, one decade above the
+/// Package item range so the millions column keeps naming a family: `6` spell, `7` item, `8`
+/// quest. A cmangos-shaped `quest_template` dump for this client build stays far below this floor,
+/// so, as for items, [`RESERVED_ID_CEIL`] is the binding constraint, not the client headroom.
+///
+/// One band covers the whole quest family, the same way the Package spell range covers both
+/// `game_spell` and `game_spell_effect`: every child table (`game_quest_text` and the rest) names
+/// its owning quest by `quest_entry`, so a child row is only ever as Package-owned as the quest it
+/// belongs to. Nothing below checks a child table's own surrogate `id` against this band.
+pub const PACKAGE_QUEST_ID_FLOOR: u32 = 8_000_000;
+
+/// Highest quest identifier a Package may INSERT.
+pub const PACKAGE_QUEST_ID_CEIL: u32 = 8_999_999;
+
+const _: () = assert!(PACKAGE_QUEST_ID_FLOOR <= PACKAGE_QUEST_ID_CEIL);
+const _: () = assert!(RESERVED_ID_CEIL < PACKAGE_QUEST_ID_FLOOR);
+
+/// True when a Package may INSERT a quest at this identifier.
+#[must_use]
+pub const fn is_package_quest_id(entry: u32) -> bool {
+    entry >= PACKAGE_QUEST_ID_FLOOR && entry <= PACKAGE_QUEST_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. Quests have no family-specific fixture cluster of their own, so the project-wide
+/// band is the whole check, the same shape as [`is_fixture_reserved_item_id`].
+#[must_use]
+pub const fn is_fixture_reserved_quest_id(entry: u32) -> bool {
+    entry >= FIXTURE_RESERVED_ID_FLOOR && entry <= FIXTURE_RESERVED_ID_CEIL
+}
+
+/// Highest `obj_index` a claim may name on `game_quest_objective` or `game_quest_cast_objective`.
+///
+/// [`crate::quest::MAX_OBJECTIVES`](../../../module/src/quest.rs) caps a quest at 4 objective
+/// slots (0-based), the same "real domain is narrower than the packed field width" shape
+/// [`MAX_SPELL_EFFECT_INDEX`] documents for spell effects.
+pub const MAX_QUEST_OBJECTIVE_INDEX: u8 = 3;
+
+/// Highest `choice_index` a claim may name on `game_quest_reward_choice`.
+///
+/// `QuestRewardChoice::choice_index` is documented `0..=5` in the Module (cmangos carries six
+/// `RewChoiceItemId`/`Count` slots per quest).
+pub const MAX_QUEST_REWARD_CHOICE_INDEX: u8 = 5;
+
+/// Packed `game_quest_objective` / `game_quest_cast_objective` primary key:
+/// `(quest_entry << 8) | obj_index`.
+///
+/// Neither table's real `id` column derives from a formula the way `game_spell_effect.id` does.
+/// both are plain surrogates the importer assigns in dump order. A Package Delta needs a
+/// deterministic key it can compute without a live counter, so it derives one here instead,
+/// mirroring [`packed_spell_effect_id`]'s shape: the wide component low, the narrow index high
+/// enough to never collide with it. `obj_index` is bounded by [`MAX_QUEST_OBJECTIVE_INDEX`], so 8
+/// bits is more room than it ever uses; `quest_entry` keeps its full `u32` width below that.
+#[must_use]
+pub const fn packed_quest_objective_id(quest_entry: u32, obj_index: u8) -> u64 {
+    (quest_entry as u64) << 8 | obj_index as u64
+}
+
+/// Packed `game_quest_reward_choice` primary key: `(quest_entry << 8) | choice_index`.
+///
+/// Same shape and reasoning as [`packed_quest_objective_id`]; `choice_index` is bounded by
+/// [`MAX_QUEST_REWARD_CHOICE_INDEX`].
+#[must_use]
+pub const fn packed_quest_reward_choice_id(quest_entry: u32, choice_index: u8) -> u64 {
+    (quest_entry as u64) << 8 | choice_index as u64
+}
+
+/// Packed `game_quest_reward_item` primary key: `(quest_entry << 32) | item_entry`.
+///
+/// A quest does not guarantee-reward the same item through two separate rows, so the pair is
+/// already a natural unique key. Packing it needs no bound beyond each half's own `u32` width,
+/// the two exactly fill a `u64`.
+#[must_use]
+pub const fn packed_quest_reward_item_id(quest_entry: u32, item_entry: u32) -> u64 {
+    (quest_entry as u64) << 32 | item_entry as u64
+}
+
+// ===============================================================================================
+//  loot
+// ===============================================================================================
+
+/// Lowest loot-row identifier a Package may INSERT.
+///
+/// The fourth application of the band formula, one decade above the Package quest range: `9`
+/// names a Package loot row.
+///
+/// Unlike the families above, no loot table's owning entity is ever Package-invented. A
+/// `game_pickpocket_loot` row's `creature_entry`, a `game_gameobject_loot` row's `loot_id`, a
+/// `game_skinning_loot` row's `skin_loot_id`, and a `game_fishing_loot` row's `zone_id` all name
+/// real client data (creatures, gameobjects, and zones stay out of this issue's scope). So this
+/// band is checked against a loot row's OWN surrogate `id`, the same way [`PACKAGE_ITEM_ID_FLOOR`]
+/// is checked against `game_item_template.entry`, not against an owning identifier the way the
+/// quest family's child tables are. One band still covers the whole family: the four loot tables
+/// are independent `SpacetimeDB` tables with independent primary-key spaces, so sharing one range
+/// across them cannot collide.
+pub const PACKAGE_LOOT_ID_FLOOR: u64 = 9_000_000;
+
+/// Highest loot-row identifier a Package may INSERT.
+pub const PACKAGE_LOOT_ID_CEIL: u64 = 9_999_999;
+
+const _: () = assert!(PACKAGE_LOOT_ID_FLOOR <= PACKAGE_LOOT_ID_CEIL);
+const _: () = assert!((RESERVED_ID_CEIL as u64) < PACKAGE_LOOT_ID_FLOOR);
+
+/// True when a Package may INSERT a loot row at this identifier.
+#[must_use]
+pub const fn is_package_loot_id(id: u64) -> bool {
+    id >= PACKAGE_LOOT_ID_FLOOR && id <= PACKAGE_LOOT_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. Loot rows have no family-specific fixture cluster of their own, so the project-wide
+/// band is the whole check.
+#[must_use]
+pub const fn is_fixture_reserved_loot_id(id: u64) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
+}

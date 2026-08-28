@@ -21,6 +21,16 @@ pub const SPELL_FAMILY: &str = "spell";
 /// `--family` block stamps, so an apply for this family lines up with the base import it follows.
 pub const ITEM_FAMILY: &str = "items";
 
+/// The Import Family that owns the quest tables. The same name the `--dump` importer's `quests`
+/// `--family` block stamps.
+pub const QUEST_FAMILY: &str = "quests";
+
+/// The Import Family that owns the non-creature loot tables (pickpocket, gameobject/chest,
+/// skinning, fishing). The same name the `--dump` importer's `loot` `--family` block stamps.
+/// `game_creature_loot` itself reloads under the `items` family (`importer/src/main.rs`) and is
+/// out of this issue's scope. See this crate's `lib.rs` for why.
+pub const LOOT_FAMILY: &str = "loot";
+
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
 /// needs no translation step.
 ///
@@ -38,12 +48,48 @@ pub enum Table {
     // ---- items ----
     /// `game_item_template` — the item catalogue header.
     Item,
+    // ---- quests ----
+    /// `game_quest_template`, the quest header.
+    Quest,
+    /// `game_quest_text`, a quest's free-text body, 1:1 by `quest_entry`.
+    QuestText,
+    /// `game_quest_objective`, one kill/collect/use objective slot of a quest.
+    QuestObjective,
+    /// `game_quest_cast_objective`, the spell-cast requirement on one objective slot.
+    QuestCastObjective,
+    /// `game_quest_reward_item`, one guaranteed turn-in reward item.
+    QuestRewardItem,
+    /// `game_quest_reward_choice`, one pick-1-of-N turn-in reward item.
+    QuestRewardChoice,
+    // ---- loot ----
+    /// `game_pickpocket_loot`, a creature's pickpocket table.
+    PickpocketLoot,
+    /// `game_gameobject_loot`, a lootable gameobject's chest table.
+    GameobjectLoot,
+    /// `game_skinning_loot`, a level-banded skinning table.
+    SkinningLoot,
+    /// `game_fishing_loot`, a zone's fishing table.
+    FishingLoot,
 }
 
 impl Table {
     /// Every table this build knows, in canonical order, so a refusal can name the whole catalogue
     /// and a test can walk it. Kept in step with [`Table::parse`] by `tests/families.rs`.
-    pub const ALL: &'static [Self] = &[Self::Spell, Self::SpellEffect, Self::Item];
+    pub const ALL: &'static [Self] = &[
+        Self::Spell,
+        Self::SpellEffect,
+        Self::Item,
+        Self::Quest,
+        Self::QuestText,
+        Self::QuestObjective,
+        Self::QuestCastObjective,
+        Self::QuestRewardItem,
+        Self::QuestRewardChoice,
+        Self::PickpocketLoot,
+        Self::GameobjectLoot,
+        Self::SkinningLoot,
+        Self::FishingLoot,
+    ];
 
     /// The durable table name, and the value the artifact's `table` member carries.
     #[must_use]
@@ -52,6 +98,16 @@ impl Table {
             Self::Spell => "game_spell",
             Self::SpellEffect => "game_spell_effect",
             Self::Item => "game_item_template",
+            Self::Quest => "game_quest_template",
+            Self::QuestText => "game_quest_text",
+            Self::QuestObjective => "game_quest_objective",
+            Self::QuestCastObjective => "game_quest_cast_objective",
+            Self::QuestRewardItem => "game_quest_reward_item",
+            Self::QuestRewardChoice => "game_quest_reward_choice",
+            Self::PickpocketLoot => "game_pickpocket_loot",
+            Self::GameobjectLoot => "game_gameobject_loot",
+            Self::SkinningLoot => "game_skinning_loot",
+            Self::FishingLoot => "game_fishing_loot",
         }
     }
 
@@ -65,6 +121,16 @@ impl Table {
         match self {
             Self::Spell | Self::SpellEffect => SPELL_FAMILY,
             Self::Item => ITEM_FAMILY,
+            Self::Quest
+            | Self::QuestText
+            | Self::QuestObjective
+            | Self::QuestCastObjective
+            | Self::QuestRewardItem
+            | Self::QuestRewardChoice => QUEST_FAMILY,
+            Self::PickpocketLoot
+            | Self::GameobjectLoot
+            | Self::SkinningLoot
+            | Self::FishingLoot => LOOT_FAMILY,
         }
     }
 
@@ -75,6 +141,16 @@ impl Table {
             "game_spell" => Some(Self::Spell),
             "game_spell_effect" => Some(Self::SpellEffect),
             "game_item_template" => Some(Self::Item),
+            "game_quest_template" => Some(Self::Quest),
+            "game_quest_text" => Some(Self::QuestText),
+            "game_quest_objective" => Some(Self::QuestObjective),
+            "game_quest_cast_objective" => Some(Self::QuestCastObjective),
+            "game_quest_reward_item" => Some(Self::QuestRewardItem),
+            "game_quest_reward_choice" => Some(Self::QuestRewardChoice),
+            "game_pickpocket_loot" => Some(Self::PickpocketLoot),
+            "game_gameobject_loot" => Some(Self::GameobjectLoot),
+            "game_skinning_loot" => Some(Self::SkinningLoot),
+            "game_fishing_loot" => Some(Self::FishingLoot),
             _ => None,
         }
     }
@@ -83,14 +159,31 @@ impl Table {
     ///
     /// Primary-key columns are absent on purpose. A claim carries them in its `key`, so naming one
     /// in `fields` would let a Package state the same identifier twice and disagree with itself.
-    /// `game_spell_effect.id` is absent for the same reason plus one more: it is derived, never
-    /// authored.
+    /// A derived `id` (`game_spell_effect`, and every packed quest child key below) is absent for
+    /// the same reason plus one more: it is derived, never authored.
+    ///
+    /// `game_creature_quest` and `game_gameobject_quest` (which creature/gameobject starts or ends
+    /// a quest) are deliberately NOT in this catalogue: every one of their non-`id` columns names
+    /// the relation itself (creature/gameobject, quest, START-or-END role), so a claim on them
+    /// would set zero columns. This is the shape `tests/families.rs`'s
+    /// `every_table_has_claimable_columns` exists to catch. Reaching a Package quest from a giver
+    /// is left as a named gap for a later change, not forced past that guard.
     #[must_use]
     pub const fn columns(self) -> &'static [Column] {
         match self {
             Self::Spell => SPELL_COLUMNS,
             Self::SpellEffect => SPELL_EFFECT_COLUMNS,
             Self::Item => ITEM_COLUMNS,
+            Self::Quest => QUEST_COLUMNS,
+            Self::QuestText => QUEST_TEXT_COLUMNS,
+            Self::QuestObjective => QUEST_OBJECTIVE_COLUMNS,
+            Self::QuestCastObjective => QUEST_CAST_OBJECTIVE_COLUMNS,
+            Self::QuestRewardItem => QUEST_REWARD_ITEM_COLUMNS,
+            Self::QuestRewardChoice => QUEST_REWARD_CHOICE_COLUMNS,
+            Self::PickpocketLoot => PICKPOCKET_LOOT_COLUMNS,
+            Self::GameobjectLoot => GAMEOBJECT_LOOT_COLUMNS,
+            Self::SkinningLoot => SKINNING_LOOT_COLUMNS,
+            Self::FishingLoot => FISHING_LOOT_COLUMNS,
         }
     }
 
@@ -238,6 +331,125 @@ const ITEM_COLUMNS: &[Column] = &[
     column("food_type", FieldType::U8),
     column("allowed_class", FieldType::U32),
     column("allowed_race", FieldType::U32),
+];
+
+// ---- quests ----
+
+/// `game_quest_template` minus its `entry` primary key.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `QuestTemplate` struct, the same convention
+/// `ITEM_COLUMNS` follows.
+const QUEST_COLUMNS: &[Column] = &[
+    column("min_level", FieldType::U32),
+    column("quest_level", FieldType::U32),
+    column("title", FieldType::Str),
+    column("reward_money", FieldType::U32),
+    column("reward_xp", FieldType::U32),
+    column("prev_quest_id", FieldType::U32),
+    column("required_races", FieldType::U32),
+    column("required_classes", FieldType::U32),
+    column("zone_or_sort", FieldType::I32),
+    column("rew_rep_faction_1", FieldType::U32),
+    column("rew_rep_value_1", FieldType::I32),
+    column("rew_rep_faction_2", FieldType::U32),
+    column("rew_rep_value_2", FieldType::I32),
+    column("src_item", FieldType::U32),
+    column("src_item_count", FieldType::U32),
+    column("repeatable", FieldType::Bool),
+    column("next_quest_id", FieldType::U32),
+    column("limit_time", FieldType::U32),
+    column("reward_money_max_level", FieldType::U32),
+];
+
+/// `game_quest_text` minus its `quest_entry` primary key.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `QuestText` struct.
+const QUEST_TEXT_COLUMNS: &[Column] = &[
+    column("details", FieldType::Str),
+    column("objectives", FieldType::Str),
+    column("offer_reward_text", FieldType::Str),
+    column("request_items_text", FieldType::Str),
+];
+
+/// `game_quest_objective` minus its derived `id` key and the `quest_entry` / `obj_index` the key
+/// names.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `QuestObjective` struct.
+const QUEST_OBJECTIVE_COLUMNS: &[Column] = &[
+    column("kind", FieldType::U8),
+    column("target_entry", FieldType::U32),
+    column("required_count", FieldType::U32),
+];
+
+/// `game_quest_cast_objective` minus its derived `id` key and the `quest_entry` / `obj_index` the
+/// key names.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `QuestCastObjective` struct.
+const QUEST_CAST_OBJECTIVE_COLUMNS: &[Column] = &[column("spell_id", FieldType::U32)];
+
+/// `game_quest_reward_item` minus its derived `id` key and the `quest_entry` / `item_entry` the
+/// key names.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `QuestRewardItem` struct.
+const QUEST_REWARD_ITEM_COLUMNS: &[Column] = &[column("count", FieldType::U32)];
+
+/// `game_quest_reward_choice` minus its derived `id` key and the `quest_entry` / `choice_index`
+/// the key names.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `QuestRewardChoice` struct.
+const QUEST_REWARD_CHOICE_COLUMNS: &[Column] = &[
+    column("item_entry", FieldType::U32),
+    column("count", FieldType::U32),
+];
+
+// ---- loot ----
+
+/// `game_pickpocket_loot` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/loot/mod.rs`'s `GamePickpocketLoot` struct.
+const PICKPOCKET_LOOT_COLUMNS: &[Column] = &[
+    column("creature_entry", FieldType::U32),
+    column("item_entry", FieldType::U32),
+    column("chance_bp", FieldType::U32),
+    column("count", FieldType::U32),
+    column("group_id", FieldType::U32),
+    column("quest_only", FieldType::Bool),
+];
+
+/// `game_gameobject_loot` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/loot/mod.rs`'s `GameObjectLoot` struct.
+const GAMEOBJECT_LOOT_COLUMNS: &[Column] = &[
+    column("loot_id", FieldType::U32),
+    column("item_entry", FieldType::U32),
+    column("chance_bp", FieldType::U32),
+    column("count", FieldType::U32),
+    column("group_id", FieldType::U32),
+    column("quest_only", FieldType::Bool),
+];
+
+/// `game_skinning_loot` minus its `id` primary key. No cmangos skinning row is
+/// ever quest-gated (`module/src/loot/mod.rs`).
+///
+/// Hand-maintained against `module/src/loot/mod.rs`'s `GameSkinningLoot` struct.
+const SKINNING_LOOT_COLUMNS: &[Column] = &[
+    column("skin_loot_id", FieldType::U32),
+    column("item_entry", FieldType::U32),
+    column("chance_bp", FieldType::U32),
+    column("count", FieldType::U32),
+    column("group_id", FieldType::U32),
+];
+
+/// `game_fishing_loot` minus its `id` primary key. Fishing junk is not
+/// quest-gated in the family this importer imports (`module/src/loot/mod.rs`).
+///
+/// Hand-maintained against `module/src/loot/mod.rs`'s `GameFishingLoot` struct.
+const FISHING_LOOT_COLUMNS: &[Column] = &[
+    column("zone_id", FieldType::U32),
+    column("item_entry", FieldType::U32),
+    column("chance_bp", FieldType::U32),
+    column("count", FieldType::U32),
+    column("group_id", FieldType::U32),
 ];
 
 /// The type tag a claimed value carries.

@@ -464,13 +464,18 @@ band, floored two decimal orders above the highest identifier a real client hold
 clear of every reserved band. An apply clears the whole band before it writes, so a Package that
 leaves the enabled set takes its invented rows with it. The Package Spell Range is the worked
 example; the Package Item Range is the second family to follow it, and the Package Script Range is
-the case where a table has no real client identifiers to clear.
+the case where a table has no real client identifiers to clear. A family whose tables have no
+Package-inventable owning identifier of their own. The Package Loot Range checks the band
+against a row's own identifier instead of an owning one; a family whose child tables share their
+header's owning identifier. The Package Quest Range checks every child through that one band
+rather than owning a second.
 _Avoid_: custom id range, synthetic id range
 
 **Package Spell Range**:
 The spell family's Package Identifier Range: 6,000,000 to 6,999,999. Two decimal orders above the
 highest real client spell and above every reserved band, so an inserted spell can never collide with
 imported or fixture data.
+_Avoid_: custom id range, synthetic spell range
 
 **Package Script Range**:
 The script family's Package Identifier Range: 100,000 to 999,999. No client and no import holds a
@@ -492,13 +497,29 @@ The event a Runtime Script runs for, named from the Module's hook catalogue and 
 time if it is not in it. Several scripts may bind to one event: lower priority runs first and the
 script identifier breaks a tie, so every Shard runs one plan in one order.
 _Avoid_: hook registration, subscription, listener
-_Avoid_: custom id range, synthetic spell range
 
 **Package Item Range**:
 The items family's Package Identifier Range: 7,000,000 to 7,999,999. Above every reserved band, and
 one whole decade above the Package Spell Range so the millions column stays a family-at-a-glance
 signal across tables, not only within one.
 _Avoid_: custom id range, synthetic item range
+
+**Package Quest Range**:
+The quest family's Package Identifier Range: 8,000,000 to 8,999,999. One whole decade above the
+Package Item Range. Checked against `quest_entry` alone: `game_quest_template` and every child table
+(`game_quest_text` and the rest) are Package-owned exactly when the quest they belong to is, so one
+band covers the whole family the same way the Package Spell Range covers both `game_spell` and
+`game_spell_effect`.
+_Avoid_: custom id range, synthetic quest range
+
+**Package Loot Range**:
+The loot family's Package Identifier Range: 9,000,000 to 9,999,999. One whole decade above the
+Package Quest Range. No loot table's owning entity (a creature, a gameobject, or a zone) is ever
+Package-invented, so this band is checked against a loot row's own identifier instead of an owning
+one, the same shape the Package Item Range checks against `game_item_template.entry`. Shared across
+all four loot tables (pickpocket, gameobject/chest, skinning, fishing), which cannot collide on it:
+each is an independent SpacetimeDB table with its own primary-key space.
+_Avoid_: custom id range, synthetic loot range
 
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation, in any Import

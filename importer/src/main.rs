@@ -1346,12 +1346,18 @@ where
         bail!("--only is only valid with --spells (the additive Spell.dbc allowlist)");
     }
     // `--packages` needs an import family with a Package Delta stage to reapply: `--spells` (the
-    // `--dbc` spell importer) or an active `items` family (the `--dump` items block). A run that
-    // reaches neither has nothing for the stage to reapply onto.
-    if a.packages.is_some() && !a.spells && !family_active(&a, "items") {
+    // `--dbc` spell importer) or an active `--dump` family in `PACKAGE_DELTA_DUMP_FAMILIES`. A run
+    // that reaches neither has nothing for the stage to reapply onto.
+    if a.packages.is_some()
+        && !a.spells
+        && !PACKAGE_DELTA_DUMP_FAMILIES
+            .iter()
+            .any(|family| family_active(&a, family))
+    {
         bail!(
-            "--packages is only valid with --spells or an active `items` family (the import \
-             families with a Package Delta stage)"
+            "--packages is only valid with --spells or an active {} family (the import \
+             families with a Package Delta stage)",
+            PACKAGE_DELTA_DUMP_FAMILIES.join("/")
         );
     }
     // The Base Snapshot is derived from Spell.dbc, so it needs the client dir and nothing else. It
@@ -3651,18 +3657,24 @@ pub(crate) fn family_active(args: &Args, name: &str) -> bool {
     }
 }
 
-/// The items family's Package Delta stage: reapplies every enabled Package's `game_item_template`
-/// claims once the items base rows are back — the `--dump` items block's counterpart to
-/// `spell::run_spells`'s stage. Runs whenever items is part of this invocation (`--family items` or
-/// a full run), on the dry-run path as well as `--apply`: a check has to print the same plan an
-/// apply would send, and `package_delta::reapply` itself decides which of those two this call is.
-fn run_items_package_stage(args: &Args) -> Result<()> {
-    if !family_active(args, "items") {
+/// Every `--dump` Import Family with a Package Delta stage of its own (`lyracore-package-delta`'s
+/// `Table::family` catalogue), the families `--packages` is valid alongside, beside `--spells`.
+/// Extended in the same change that gives a new family its schema; `run_package_stage` and the
+/// `--packages` validation below both read this rather than restating the list.
+const PACKAGE_DELTA_DUMP_FAMILIES: &[&str] = &["items", "loot", "quests"];
+
+/// One family's Package Delta stage: reapplies every enabled Package's claims on `family`'s tables
+/// once its base rows are back. This is the `--dump` block's counterpart to `spell::run_spells`'s stage.
+/// Runs whenever `family` is part of this invocation (`--family <name>` naming it, or a full run),
+/// on the dry-run path as well as `--apply`: a check has to print the same plan an apply would
+/// send, and `package_delta::reapply` itself decides which of those two this call is.
+fn run_package_stage(args: &Args, family: &str) -> Result<()> {
+    if !family_active(args, family) {
         return Ok(());
     }
     match &args.packages {
-        Some(root) => package_delta::reapply(args, "items", root)?,
-        None => package_delta::warn_not_reapplied("items"),
+        Some(root) => package_delta::reapply(args, family, root)?,
+        None => package_delta::warn_not_reapplied(family),
     }
     Ok(())
 }
@@ -5246,7 +5258,9 @@ fn main() -> Result<()> {
             "-- load spawns via reducer: batch 0 = import_creature_spawns (clears+loads), the rest = import_creature_spawns_append (load only).\n  e.g. spacetime call -s {} {} import_creature_spawns '<batch>'\n  (sample row: {})",
             args.server, args.db, plan.spawn_batches.first().and_then(|b| b.split(';').next()).unwrap_or("")
         );
-        run_items_package_stage(&args)?;
+        for family in PACKAGE_DELTA_DUMP_FAMILIES {
+            run_package_stage(&args, family)?;
+        }
         return Ok(());
     }
 
@@ -5334,9 +5348,12 @@ fn main() -> Result<()> {
             .with_context(|| format!("stamp_import_meta({family})"))?;
     }
 
-    // The Package Delta stage, last: items' base rows are back and stamped, so every enabled
-    // Package's claims go on top of them (mirrors `spell::run_spells`'s placement).
-    run_items_package_stage(&args)?;
+    // The Package Delta stage, last, one family at a time: each family's base rows are back and
+    // stamped, so every enabled Package's claims go on top of them (mirrors
+    // `spell::run_spells`'s placement).
+    for family in PACKAGE_DELTA_DUMP_FAMILIES {
+        run_package_stage(&args, family)?;
+    }
     Ok(())
 }
 
@@ -6788,13 +6805,14 @@ mod tests {
 
     #[test]
     fn an_enabled_packages_root_without_a_package_delta_family_is_refused() {
-        // `--family loot` excludes items, and there is no `--spells` here either, so this run
-        // reaches no family with a Package Delta stage to reapply.
+        // `--family creatures` excludes every family in `PACKAGE_DELTA_DUMP_FAMILIES`, and there
+        // is no `--spells` here either, so this run reaches no family with a Package Delta stage
+        // to reapply.
         let error = parse_args_from([
             "--dump",
             "/definitely/not/read.sql",
             "--family",
-            "loot",
+            "creatures",
             "--packages",
             "packages",
         ])
@@ -6804,25 +6822,27 @@ mod tests {
     }
 
     #[test]
-    fn an_enabled_packages_root_with_the_items_family_active_parses() {
-        // A full run (no `--family`) activates items among the rest, so `--packages` is valid
-        // without naming `--family items` explicitly.
-        for argv in [
-            vec![
-                "--dump",
-                "/definitely/not/read.sql",
-                "--packages",
-                "packages",
-            ],
-            vec![
+    fn an_enabled_packages_root_with_a_package_delta_family_active_parses() {
+        // A full run (no `--family`) activates every family among the rest, so `--packages` is
+        // valid without naming one of `PACKAGE_DELTA_DUMP_FAMILIES` explicitly, and so is naming
+        // any one of them.
+        let mut argvs: Vec<Vec<&str>> = vec![vec![
+            "--dump",
+            "/definitely/not/read.sql",
+            "--packages",
+            "packages",
+        ]];
+        for family in PACKAGE_DELTA_DUMP_FAMILIES {
+            argvs.push(vec![
                 "--dump",
                 "/definitely/not/read.sql",
                 "--family",
-                "items",
+                family,
                 "--packages",
                 "packages",
-            ],
-        ] {
+            ]);
+        }
+        for argv in argvs {
             parse_args_from(argv.clone()).unwrap_or_else(|e| panic!("{argv:?} must parse: {e}"));
         }
     }
