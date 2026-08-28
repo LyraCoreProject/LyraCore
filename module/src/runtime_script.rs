@@ -878,6 +878,47 @@ pub(crate) fn run_event<S: EffectSink>(
     diagnostics
 }
 
+/// Run exactly one Runtime Script chosen by identity, for a caller that already knows which script
+/// to invoke and has no Event Binding to look up — the `E_SCRIPTED` spell effect: its `script_id`
+/// names the script outright, so there is no `by_event` dispatch to run. Mirrors what
+/// `script_binding::fire` does around [`run_event`] (one Host borrow, a succeeding invocation's
+/// effects committed to the real database, a failure logged) minus the `by_event` lookup and the
+/// priority ordering `fire` needs only when several scripts answer one event.
+///
+/// Returns whether the invocation succeeded and committed. Every failure shape collapses to
+/// `false` here — a compile/runtime/fuel failure, or the Host already being borrowed by an outer
+/// invocation — because the caller has exactly one thing to decide either way: this effect did not
+/// happen. The failure is still logged, the same `ScriptDiagnostic` line `fire` logs for its own
+/// scripts.
+pub(crate) fn invoke_by_identity(
+    ctx: &spacetimedb::ReducerContext,
+    script: RuntimeScript<'_>,
+    event: &ScriptEvent,
+) -> bool {
+    let Some(diagnostics) = with_host(|host| {
+        run_event(
+            host,
+            &mut CoreEffects { ctx },
+            event,
+            std::slice::from_ref(&script),
+        )
+    }) else {
+        log::warn!(
+            "`{}`: the Runtime Script Host is already running a script, so `{}` did not run.",
+            event.name,
+            script.name
+        );
+        return false;
+    };
+    match diagnostics.into_iter().next() {
+        Some(diagnostic) => {
+            log::warn!("{diagnostic}");
+            false
+        }
+        None => true,
+    }
+}
+
 /// The production [`EffectSink`]: staged effects become real gameplay operations here, and only
 /// here.
 pub(crate) struct CoreEffects<'a> {

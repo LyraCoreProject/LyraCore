@@ -21,6 +21,9 @@ use crate::spell::*;
 // game_skill_ability lives in the skilldata module — its accessor trait must be in scope for the
 // data-driven recipe skill-up (282).
 use crate::skilldata::game_skill_ability;
+// game_script (the Runtime Script identity table) is NOT re-exported at the crate root — see its
+// module doc — so the E_SCRIPTED arm reaches it by explicit path.
+use crate::script_binding::game_script;
 
 /// What one damaging effect dealt + how the hit broke down — surfaced so the cast-GO row can carry the
 /// crit flag + resisted/absorbed for the floating damage log. Non-damaging arms return `EffectHit::none()`.
@@ -1378,9 +1381,44 @@ pub(crate) fn apply_effect(
             }
             EffectHit::none()
         }
+        E_SCRIPTED => {
+            // script_id == 0 is the vanilla no-op — every seed/imported spell (including the
+            // importer's fallback for a raw effect it cannot map to a known kind) carries it, and
+            // this arm changes nothing for them.
+            if e.script_id != 0 {
+                // The precast gate (`check_cast_gate_suffix`) already refused the whole cast if
+                // this script was missing or disabled — this is the SAME lookup, re-run because
+                // the row can change between the gate and here (an Operator disables it mid-cast,
+                // or an earlier effect in this same cast removed it). A miss here fails only THIS
+                // effect: no panic, no late refusal — the cost is already spent and the cast's
+                // other effects still apply.
+                if let Some(script) = ctx.db.game_script().script_id().find(e.script_id) {
+                    if script.enabled {
+                        // Label carries the spell + effect identity a Script Diagnostic names on
+                        // failure, and what `event.name` reads as inside the script. Distinct from
+                        // an Event Binding's event name (there is no binding here — script_id
+                        // names the script outright).
+                        let event = crate::runtime_script::ScriptEvent {
+                            name: format!("spell_effect:{}:{}", e.spell_id, e.effect_index),
+                            actor: crate::runtime_script::EntityView::read(ctx, caster_guid),
+                            target: crate::runtime_script::EntityView::read(ctx, target_guid),
+                        };
+                        crate::runtime_script::invoke_by_identity(
+                            ctx,
+                            crate::runtime_script::RuntimeScript {
+                                name: &script.name,
+                                source: &script.source,
+                            },
+                            &event,
+                        );
+                    }
+                }
+            }
+            EffectHit::none()
+        }
         other => {
-            // Unmapped / E_SCRIPTED residue: a graceful no-op + log (the import safety net — casts and
-            // does nothing, vs doing the wrong thing). Spells that LOOK scripted in the raw DBC but are
+            // Unmapped residue: a graceful no-op + log (the import safety net — casts and does
+            // nothing, vs doing the wrong thing). Spells that LOOK scripted in the raw DBC but are
             // really a known effect (Holy Light → a heal, Life Tap → a resource convert, Charge → a rush)
             // are reclassified to a generic kind at IMPORT time (the importer's curated correction), so
             // they arrive here as E_HEAL / E_CONVERT_RESOURCE / E_CHARGE and never reach this arm.
