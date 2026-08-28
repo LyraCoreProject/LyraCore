@@ -267,7 +267,7 @@ mod exploration;
 #[cfg(feature = "debug_reducers")]
 mod debug;
 // Encounter kernel (work-item 228): instance-scoped encounter state, HP-threshold/death/GO-use
-// hooks, and the shared choreography primitives packages consume (packages/<dungeon>/ own content).
+// hooks, and the shared choreography primitives Packages consume (`packages/dungeons/` owns it).
 mod encounter;
 mod duel;
 mod faction;

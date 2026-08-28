@@ -58,14 +58,7 @@ __pycache__/
 # Package directories stay out of Git status. New files and generated artifacts in the committed
 # first-party Packages remain visible.
 /packages/*
-!/packages/blackfathom_deeps/
-!/packages/blackrock_depths/
-!/packages/dire_maul/
+!/packages/dungeons/
 !/packages/eventai_instance_test/
 !/packages/example/
 !/packages/fire_nova/
-!/packages/razorfen_kraul/
-!/packages/shadowfang_keep/
-!/packages/sunken_temple/
-!/packages/wailing_caverns/
-!/packages/zulgurub/

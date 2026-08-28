@@ -7,7 +7,7 @@
 // referencing real columns for exactly that reason.
 //
 // `Spell` is a core table; `SunkenTempleSuppression` is an enabled Package's own table
-// (`packages/sunken_temple`). The Module builds every enabled Package into the same wasm, so
+// (`packages/dungeons`). The Module builds every enabled Package into the same wasm, so
 // `generated/` carries both, and a Datascript typechecks against a Package table the same way it
 // does against a core one.
 //
@@ -39,7 +39,7 @@ export function describeRank(spell: Spell): string {
   return `${spell.name} #${spell.spellId}: ${spell.cost} power, ${spell.cooldownMs}ms cooldown`;
 }
 
-/// The same reading, done against `packages/sunken_temple`'s own table instead of a core one — the
+/// The same reading, done against `packages/dungeons`' own table instead of a core one. The
 /// generated typings cover an installed Package exactly as they cover the Module it ships in.
 export function describeSuppressionWindow(row: SunkenTempleSuppression): string {
   return `suppression #${row.scheduledId} armed for instance ${row.instanceId}`;
