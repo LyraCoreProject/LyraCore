@@ -4,6 +4,7 @@
 //! one new submodule file plus its `mod`/`pub use` pair. See README.md for the Package boundary.
 
 mod blackfathom_deeps;
+mod eventai_instance_test;
 mod blackrock_depths;
 mod dire_maul;
 mod razorfen_kraul;

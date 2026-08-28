@@ -12,6 +12,8 @@ In this Package:
   `game_hook!`, `game_tick_pass!`, and scheduled-reducer support that choreography needs.
 - Package-owned tables for that choreography (for example `SunkenTempleSuppression`,
   `WailingEscortSchedule`).
+- The `debug_reducers` verification harness (`src/eventai_instance_test.rs`): the `debug_verify_*`
+  reducers the durable encounter tests call. It compiles only under that feature.
 
 Not in this Package:
 
