@@ -35,8 +35,9 @@ pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarg
             .find(row.key().spell_id())
             .is_some(),
         ClaimTable::SpellEffect => ctx.db.game_spell_effect().id().find(row.row_id()).is_some(),
-        ClaimTable::Item => unreachable!(
-            "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch runs"
+        other => unreachable!(
+            "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch \
+             runs, found {other}"
         ),
     };
     if present {
@@ -116,8 +117,9 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
             }
             effects.id().update(effect);
         }
-        (ClaimTable::Item, _) => unreachable!(
-            "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch runs"
+        (other, _) => unreachable!(
+            "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch \
+             runs, found {other}"
         ),
     }
     Ok(())

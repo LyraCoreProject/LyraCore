@@ -12,8 +12,11 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_item_id, is_fixture_reserved_spell_id, is_package_item_id,
-    is_package_spell_id, packed_spell_effect_id, MAX_SPELL_EFFECT_INDEX,
+    is_fixture_reserved_item_id, is_fixture_reserved_loot_id, is_fixture_reserved_quest_id,
+    is_fixture_reserved_spell_id, is_package_item_id, is_package_loot_id, is_package_quest_id,
+    is_package_spell_id, packed_quest_objective_id, packed_quest_reward_choice_id,
+    packed_quest_reward_item_id, packed_spell_effect_id, MAX_QUEST_OBJECTIVE_INDEX,
+    MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
 };
 use crate::schema::{FieldType, FieldValue, Table};
 
@@ -170,6 +173,66 @@ pub enum PrimaryKey {
         /// The item.
         entry: u32,
     },
+    // ---- quests ----
+    /// A `game_quest_template` header row.
+    Quest {
+        /// The quest.
+        entry: u32,
+    },
+    /// A `game_quest_text` row. 1:1 with its quest by `quest_entry`.
+    QuestText {
+        /// The quest this text belongs to.
+        quest_entry: u32,
+    },
+    /// A `game_quest_objective` row. The durable key is derived, never authored.
+    QuestObjective {
+        /// The quest this objective belongs to.
+        quest_entry: u32,
+        /// Which objective slot, 0..=[`MAX_QUEST_OBJECTIVE_INDEX`].
+        obj_index: u8,
+    },
+    /// A `game_quest_cast_objective` row. The durable key is derived, never authored.
+    QuestCastObjective {
+        /// The quest this cast requirement belongs to.
+        quest_entry: u32,
+        /// Which objective slot, 0..=[`MAX_QUEST_OBJECTIVE_INDEX`].
+        obj_index: u8,
+    },
+    /// A `game_quest_reward_item` row. The durable key is derived, never authored.
+    QuestRewardItem {
+        /// The quest this reward belongs to.
+        quest_entry: u32,
+        /// The rewarded item. A quest rewards one item at most once, so this is the natural key.
+        item_entry: u32,
+    },
+    /// A `game_quest_reward_choice` row. The durable key is derived, never authored.
+    QuestRewardChoice {
+        /// The quest this reward belongs to.
+        quest_entry: u32,
+        /// Which choice slot, 0..=[`MAX_QUEST_REWARD_CHOICE_INDEX`].
+        choice_index: u8,
+    },
+    // ---- loot ----
+    /// A `game_pickpocket_loot` row.
+    PickpocketLoot {
+        /// The row.
+        id: u64,
+    },
+    /// A `game_gameobject_loot` row.
+    GameobjectLoot {
+        /// The row.
+        id: u64,
+    },
+    /// A `game_skinning_loot` row.
+    SkinningLoot {
+        /// The row.
+        id: u64,
+    },
+    /// A `game_fishing_loot` row.
+    FishingLoot {
+        /// The row.
+        id: u64,
+    },
 }
 
 impl PrimaryKey {
@@ -209,6 +272,127 @@ impl PrimaryKey {
         Ok(Self::Item { entry })
     }
 
+    /// Names a quest header row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for quest 0, and [`DeltaError::QuestIdFixtureReserved`] for a
+    /// seeded fixture quest.
+    pub fn quest(entry: u32) -> Result<Self, DeltaError> {
+        check_claimable_quest_id(Table::Quest, entry)?;
+        Ok(Self::Quest { entry })
+    }
+
+    /// Names a quest's text row. Shares the quest's own identifier policy: it is 1:1 with the
+    /// header by `quest_entry`, not a separately banded child.
+    ///
+    /// # Errors
+    /// Same as [`PrimaryKey::quest`].
+    pub fn quest_text(quest_entry: u32) -> Result<Self, DeltaError> {
+        check_claimable_quest_id(Table::QuestText, quest_entry)?;
+        Ok(Self::QuestText { quest_entry })
+    }
+
+    /// Names one objective slot of a quest. The packed durable key follows from the two
+    /// components.
+    ///
+    /// # Errors
+    /// The same identifier refusals as [`PrimaryKey::quest`], plus
+    /// [`DeltaError::QuestObjectiveIndexOutOfRange`] for a slot no quest has.
+    pub fn quest_objective(quest_entry: u32, obj_index: u8) -> Result<Self, DeltaError> {
+        check_claimable_quest_id(Table::QuestObjective, quest_entry)?;
+        if obj_index > MAX_QUEST_OBJECTIVE_INDEX {
+            return Err(DeltaError::QuestObjectiveIndexOutOfRange { obj_index });
+        }
+        Ok(Self::QuestObjective {
+            quest_entry,
+            obj_index,
+        })
+    }
+
+    /// Names the spell-cast requirement on one objective slot of a quest.
+    ///
+    /// # Errors
+    /// Same as [`PrimaryKey::quest_objective`].
+    pub fn quest_cast_objective(quest_entry: u32, obj_index: u8) -> Result<Self, DeltaError> {
+        check_claimable_quest_id(Table::QuestCastObjective, quest_entry)?;
+        if obj_index > MAX_QUEST_OBJECTIVE_INDEX {
+            return Err(DeltaError::QuestObjectiveIndexOutOfRange { obj_index });
+        }
+        Ok(Self::QuestCastObjective {
+            quest_entry,
+            obj_index,
+        })
+    }
+
+    /// Names a guaranteed reward-item row. The packed durable key follows from the two
+    /// components.
+    ///
+    /// # Errors
+    /// The same identifier refusals as [`PrimaryKey::quest`], applied to `quest_entry`.
+    /// `item_entry` names the OTHER side of the relation (a `game_item_template` row) and is not
+    /// itself checked here — the items family's own policy governs whether that row exists.
+    pub fn quest_reward_item(quest_entry: u32, item_entry: u32) -> Result<Self, DeltaError> {
+        check_claimable_quest_id(Table::QuestRewardItem, quest_entry)?;
+        Ok(Self::QuestRewardItem {
+            quest_entry,
+            item_entry,
+        })
+    }
+
+    /// Names one choice-reward slot of a quest. The packed durable key follows from the two
+    /// components.
+    ///
+    /// # Errors
+    /// The same identifier refusals as [`PrimaryKey::quest`], plus
+    /// [`DeltaError::QuestRewardChoiceIndexOutOfRange`] for a slot no quest has.
+    pub fn quest_reward_choice(quest_entry: u32, choice_index: u8) -> Result<Self, DeltaError> {
+        check_claimable_quest_id(Table::QuestRewardChoice, quest_entry)?;
+        if choice_index > MAX_QUEST_REWARD_CHOICE_INDEX {
+            return Err(DeltaError::QuestRewardChoiceIndexOutOfRange { choice_index });
+        }
+        Ok(Self::QuestRewardChoice {
+            quest_entry,
+            choice_index,
+        })
+    }
+
+    /// Names a pickpocket-loot row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for id 0, and [`DeltaError::LootIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn pickpocket_loot(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_loot_id(Table::PickpocketLoot, id)?;
+        Ok(Self::PickpocketLoot { id })
+    }
+
+    /// Names a gameobject (chest) loot row.
+    ///
+    /// # Errors
+    /// Same as [`PrimaryKey::pickpocket_loot`].
+    pub fn gameobject_loot(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_loot_id(Table::GameobjectLoot, id)?;
+        Ok(Self::GameobjectLoot { id })
+    }
+
+    /// Names a skinning-loot row.
+    ///
+    /// # Errors
+    /// Same as [`PrimaryKey::pickpocket_loot`].
+    pub fn skinning_loot(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_loot_id(Table::SkinningLoot, id)?;
+        Ok(Self::SkinningLoot { id })
+    }
+
+    /// Names a fishing-loot row.
+    ///
+    /// # Errors
+    /// Same as [`PrimaryKey::pickpocket_loot`].
+    pub fn fishing_loot(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_loot_id(Table::FishingLoot, id)?;
+        Ok(Self::FishingLoot { id })
+    }
+
     /// The table this row lives in.
     #[must_use]
     pub const fn table(self) -> Table {
@@ -216,6 +400,16 @@ impl PrimaryKey {
             Self::Spell { .. } => Table::Spell,
             Self::SpellEffect { .. } => Table::SpellEffect,
             Self::Item { .. } => Table::Item,
+            Self::Quest { .. } => Table::Quest,
+            Self::QuestText { .. } => Table::QuestText,
+            Self::QuestObjective { .. } => Table::QuestObjective,
+            Self::QuestCastObjective { .. } => Table::QuestCastObjective,
+            Self::QuestRewardItem { .. } => Table::QuestRewardItem,
+            Self::QuestRewardChoice { .. } => Table::QuestRewardChoice,
+            Self::PickpocketLoot { .. } => Table::PickpocketLoot,
+            Self::GameobjectLoot { .. } => Table::GameobjectLoot,
+            Self::SkinningLoot { .. } => Table::SkinningLoot,
+            Self::FishingLoot { .. } => Table::FishingLoot,
         }
     }
 
@@ -227,16 +421,40 @@ impl PrimaryKey {
     /// untrusted input.
     ///
     /// # Panics
-    /// If called on an item key.
+    /// If called on a non-spell key.
     #[must_use]
     pub fn spell_id(self) -> u32 {
         match self {
             Self::Spell { spell_id } | Self::SpellEffect { spell_id, .. } => spell_id,
-            Self::Item { .. } => {
-                unreachable!(
-                    "`spell_id` is a spell-family accessor; a foreign-family key never reaches it"
-                )
-            }
+            _ => unreachable!(
+                "`spell_id` is a spell-family accessor; a foreign-family key never reaches it"
+            ),
+        }
+    }
+
+    /// The quest this row belongs to, for a quest-family key. The header's own `entry` counts —
+    /// every child table names the same quest by `quest_entry`, so this is the one identifier a
+    /// quest-family row is always Package-owned or not through.
+    ///
+    /// Every caller sits inside the quest family's own dispatch
+    /// (`module/src/package_import/quest.rs`), where `check_claims_belong_to` has already refused
+    /// a foreign-family row before this could run — so a foreign-family key reaching here is an
+    /// internal invariant break, not untrusted input.
+    ///
+    /// # Panics
+    /// If called on a non-quest key.
+    #[must_use]
+    pub fn quest_entry(self) -> u32 {
+        match self {
+            Self::Quest { entry } => entry,
+            Self::QuestText { quest_entry }
+            | Self::QuestObjective { quest_entry, .. }
+            | Self::QuestCastObjective { quest_entry, .. }
+            | Self::QuestRewardItem { quest_entry, .. }
+            | Self::QuestRewardChoice { quest_entry, .. } => quest_entry,
+            _ => unreachable!(
+                "`quest_entry` is a quest-family accessor; a foreign-family key never reaches it"
+            ),
         }
     }
 
@@ -250,7 +468,28 @@ impl PrimaryKey {
                 spell_id,
                 effect_index,
             } => packed_spell_effect_id(spell_id, effect_index),
-            Self::Item { entry } => entry as u64,
+            Self::Item { entry } | Self::Quest { entry } => entry as u64,
+            Self::QuestText { quest_entry } => quest_entry as u64,
+            Self::QuestObjective {
+                quest_entry,
+                obj_index,
+            }
+            | Self::QuestCastObjective {
+                quest_entry,
+                obj_index,
+            } => packed_quest_objective_id(quest_entry, obj_index),
+            Self::QuestRewardItem {
+                quest_entry,
+                item_entry,
+            } => packed_quest_reward_item_id(quest_entry, item_entry),
+            Self::QuestRewardChoice {
+                quest_entry,
+                choice_index,
+            } => packed_quest_reward_choice_id(quest_entry, choice_index),
+            Self::PickpocketLoot { id }
+            | Self::GameobjectLoot { id }
+            | Self::SkinningLoot { id }
+            | Self::FishingLoot { id } => id,
         }
     }
 }
@@ -263,7 +502,31 @@ impl fmt::Display for PrimaryKey {
                 spell_id,
                 effect_index,
             } => write!(f, "{{spell_id={spell_id}, effect_index={effect_index}}}"),
-            Self::Item { entry } => write!(f, "{{entry={entry}}}"),
+            Self::Item { entry } | Self::Quest { entry } => write!(f, "{{entry={entry}}}"),
+            Self::QuestText { quest_entry } => write!(f, "{{quest_entry={quest_entry}}}"),
+            Self::QuestObjective {
+                quest_entry,
+                obj_index,
+            }
+            | Self::QuestCastObjective {
+                quest_entry,
+                obj_index,
+            } => write!(f, "{{quest_entry={quest_entry}, obj_index={obj_index}}}"),
+            Self::QuestRewardItem {
+                quest_entry,
+                item_entry,
+            } => write!(f, "{{quest_entry={quest_entry}, item_entry={item_entry}}}"),
+            Self::QuestRewardChoice {
+                quest_entry,
+                choice_index,
+            } => write!(
+                f,
+                "{{quest_entry={quest_entry}, choice_index={choice_index}}}"
+            ),
+            Self::PickpocketLoot { id }
+            | Self::GameobjectLoot { id }
+            | Self::SkinningLoot { id }
+            | Self::FishingLoot { id } => write!(f, "{{id={id}}}"),
         }
     }
 }
@@ -288,6 +551,34 @@ fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
                 Err(DeltaError::ItemIdNotClientSafe { entry })
             }
         }
+        PrimaryKey::Quest { entry } => {
+            if is_package_quest_id(entry) {
+                Ok(())
+            } else {
+                Err(DeltaError::QuestIdNotClientSafe { entry })
+            }
+        }
+        PrimaryKey::QuestText { quest_entry }
+        | PrimaryKey::QuestObjective { quest_entry, .. }
+        | PrimaryKey::QuestCastObjective { quest_entry, .. }
+        | PrimaryKey::QuestRewardItem { quest_entry, .. }
+        | PrimaryKey::QuestRewardChoice { quest_entry, .. } => {
+            if is_package_quest_id(quest_entry) {
+                Ok(())
+            } else {
+                Err(DeltaError::QuestIdNotClientSafe { entry: quest_entry })
+            }
+        }
+        PrimaryKey::PickpocketLoot { id }
+        | PrimaryKey::GameobjectLoot { id }
+        | PrimaryKey::SkinningLoot { id }
+        | PrimaryKey::FishingLoot { id } => {
+            if is_package_loot_id(id) {
+                Ok(())
+            } else {
+                Err(DeltaError::LootIdNotClientSafe { id })
+            }
+        }
     }
 }
 
@@ -301,6 +592,36 @@ fn check_claimable_spell_id(table: Table, spell_id: u32) -> Result<(), DeltaErro
     }
     if is_fixture_reserved_spell_id(spell_id) {
         return Err(DeltaError::SpellIdFixtureReserved { spell_id });
+    }
+    Ok(())
+}
+
+/// A quest identifier is refused the same way under every operation, on every table that names
+/// one, when it is 0 or fixture-owned.
+fn check_claimable_quest_id(table: Table, quest_entry: u32) -> Result<(), DeltaError> {
+    if quest_entry == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: "`quest_entry` 0 is not a quest".to_owned(),
+        });
+    }
+    if is_fixture_reserved_quest_id(quest_entry) {
+        return Err(DeltaError::QuestIdFixtureReserved { entry: quest_entry });
+    }
+    Ok(())
+}
+
+/// A loot row identifier is refused the same way under every operation when it is 0 or
+/// fixture-owned.
+fn check_claimable_loot_id(table: Table, id: u64) -> Result<(), DeltaError> {
+    if id == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: "`id` 0 is not a row".to_owned(),
+        });
+    }
+    if is_fixture_reserved_loot_id(id) {
+        return Err(DeltaError::LootIdFixtureReserved { id });
     }
     Ok(())
 }
@@ -437,7 +758,17 @@ fn is_key_column(table: Table, name: &str) -> bool {
     match table {
         Table::Spell => name == "spell_id",
         Table::SpellEffect => matches!(name, "id" | "spell_id" | "effect_index"),
-        Table::Item => name == "entry",
+        Table::Item | Table::Quest => name == "entry",
+        Table::QuestText => name == "quest_entry",
+        Table::QuestObjective | Table::QuestCastObjective => {
+            matches!(name, "id" | "quest_entry" | "obj_index")
+        }
+        Table::QuestRewardItem => matches!(name, "id" | "quest_entry" | "item_entry"),
+        Table::QuestRewardChoice => matches!(name, "id" | "quest_entry" | "choice_index"),
+        Table::PickpocketLoot
+        | Table::GameobjectLoot
+        | Table::SkinningLoot
+        | Table::FishingLoot => name == "id",
     }
 }
 
@@ -591,7 +922,20 @@ impl PackageDelta {
                     counts.inserted_effects += 1;
                     counts.inserted_rows += 1;
                 }
-                (Operation::Insert, Table::Item) => counts.inserted_rows += 1,
+                (
+                    Operation::Insert,
+                    Table::Item
+                    | Table::Quest
+                    | Table::QuestText
+                    | Table::QuestObjective
+                    | Table::QuestCastObjective
+                    | Table::QuestRewardItem
+                    | Table::QuestRewardChoice
+                    | Table::PickpocketLoot
+                    | Table::GameobjectLoot
+                    | Table::SkinningLoot
+                    | Table::FishingLoot,
+                ) => counts.inserted_rows += 1,
             }
         }
         counts
@@ -660,7 +1004,15 @@ fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
     let expected: &[&str] = match table {
         Table::Spell => &["spell_id"],
         Table::SpellEffect => &["effect_index", "spell_id"],
-        Table::Item => &["entry"],
+        Table::Item | Table::Quest => &["entry"],
+        Table::QuestText => &["quest_entry"],
+        Table::QuestObjective | Table::QuestCastObjective => &["obj_index", "quest_entry"],
+        Table::QuestRewardItem => &["item_entry", "quest_entry"],
+        Table::QuestRewardChoice => &["choice_index", "quest_entry"],
+        Table::PickpocketLoot
+        | Table::GameobjectLoot
+        | Table::SkinningLoot
+        | Table::FishingLoot => &["id"],
     };
     for name in key.keys() {
         if !expected.contains(&name.as_str()) {
@@ -692,6 +1044,50 @@ fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
         Table::Item => {
             let entry = key_number(key, table, "entry", u64::from(u32::MAX))? as u32;
             PrimaryKey::item(entry)
+        }
+        Table::Quest => {
+            let entry = key_number(key, table, "entry", u64::from(u32::MAX))? as u32;
+            PrimaryKey::quest(entry)
+        }
+        Table::QuestText => {
+            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
+            PrimaryKey::quest_text(quest_entry)
+        }
+        Table::QuestObjective => {
+            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
+            let obj_index = key_number(key, table, "obj_index", u64::from(u8::MAX))? as u8;
+            PrimaryKey::quest_objective(quest_entry, obj_index)
+        }
+        Table::QuestCastObjective => {
+            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
+            let obj_index = key_number(key, table, "obj_index", u64::from(u8::MAX))? as u8;
+            PrimaryKey::quest_cast_objective(quest_entry, obj_index)
+        }
+        Table::QuestRewardItem => {
+            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
+            let item_entry = key_number(key, table, "item_entry", u64::from(u32::MAX))? as u32;
+            PrimaryKey::quest_reward_item(quest_entry, item_entry)
+        }
+        Table::QuestRewardChoice => {
+            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
+            let choice_index = key_number(key, table, "choice_index", u64::from(u8::MAX))? as u8;
+            PrimaryKey::quest_reward_choice(quest_entry, choice_index)
+        }
+        Table::PickpocketLoot => {
+            let id = key_number(key, table, "id", u64::MAX)?;
+            PrimaryKey::pickpocket_loot(id)
+        }
+        Table::GameobjectLoot => {
+            let id = key_number(key, table, "id", u64::MAX)?;
+            PrimaryKey::gameobject_loot(id)
+        }
+        Table::SkinningLoot => {
+            let id = key_number(key, table, "id", u64::MAX)?;
+            PrimaryKey::skinning_loot(id)
+        }
+        Table::FishingLoot => {
+            let id = key_number(key, table, "id", u64::MAX)?;
+            PrimaryKey::fishing_loot(id)
         }
     }
 }

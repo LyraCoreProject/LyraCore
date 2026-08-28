@@ -46,14 +46,16 @@
 #[cfg(test)]
 mod fixtures;
 mod items;
+mod loot;
+mod quest;
 mod script;
 mod spell;
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
-    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, ITEM_FAMILY, SCRIPT_FAMILY,
-    SPELL_FAMILY,
+    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, ITEM_FAMILY, LOOT_FAMILY,
+    QUEST_FAMILY, SCRIPT_FAMILY, SPELL_FAMILY,
 };
 
 use crate::helpers::require_operator;
@@ -93,6 +95,10 @@ enum ClaimFamily {
     Spell,
     /// `game_item_template`.
     Item,
+    /// The six quest tables (`game_quest_template` and its children).
+    Quest,
+    /// The four non-creature loot tables (pickpocket, gameobject/chest, skinning, fishing).
+    Loot,
 }
 
 impl Family {
@@ -100,6 +106,8 @@ impl Family {
     const ALL: &'static [Self] = &[
         Self::Claims(ClaimFamily::Spell),
         Self::Claims(ClaimFamily::Item),
+        Self::Claims(ClaimFamily::Quest),
+        Self::Claims(ClaimFamily::Loot),
         Self::Script,
     ];
 
@@ -137,6 +145,8 @@ impl ClaimFamily {
         match self {
             Self::Spell => SPELL_FAMILY,
             Self::Item => ITEM_FAMILY,
+            Self::Quest => QUEST_FAMILY,
+            Self::Loot => LOOT_FAMILY,
         }
     }
 
@@ -145,6 +155,8 @@ impl ClaimFamily {
         match self {
             Self::Spell => spell::update_target(ctx, row),
             Self::Item => items::update_target(ctx, row),
+            Self::Quest => quest::update_target(ctx, row),
+            Self::Loot => loot::update_target(ctx, row),
         }
     }
 
@@ -154,6 +166,8 @@ impl ClaimFamily {
         match self {
             Self::Spell => spell::clear_package_range(ctx),
             Self::Item => items::clear_package_range(ctx),
+            Self::Quest => quest::clear_package_range(ctx),
+            Self::Loot => loot::clear_package_range(ctx),
         }
     }
 
@@ -162,6 +176,8 @@ impl ClaimFamily {
         match self {
             Self::Spell => spell::write_row(ctx, row),
             Self::Item => items::write_row(ctx, row),
+            Self::Quest => quest::write_row(ctx, row),
+            Self::Loot => loot::write_row(ctx, row),
         }
     }
 }
@@ -586,8 +602,10 @@ fn stamp_provenance(ctx: &ReducerContext, family: Family, packages: &[PlannedPac
 #[cfg(test)]
 mod tests {
     use super::fixtures::{
-        artifact, effect_claim, item_claim, plan, spell_claim, HASH_A, PACKAGE_ITEM, PACKAGE_SPELL,
-        REAL_SPELL, WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW, WHOLE_SPELL_ROW,
+        artifact, effect_claim, item_claim, pickpocket_loot_claim, plan, quest_claim, spell_claim,
+        HASH_A, PACKAGE_ITEM, PACKAGE_LOOT, PACKAGE_QUEST, PACKAGE_SPELL, REAL_SPELL,
+        WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW, WHOLE_PICKPOCKET_LOOT_ROW, WHOLE_QUEST_ROW,
+        WHOLE_SPELL_ROW,
     };
     use super::{check_claims_belong_to, ApplyPlan, ClaimFamily, Family, ARTIFACT_SEPARATOR};
     use lyracore_package_delta::PackageDelta;
@@ -751,11 +769,13 @@ mod tests {
 
     #[test]
     fn an_import_family_with_no_artifact_schema_is_refused_by_name() {
-        let refusal = Family::parse("quests").expect_err("an unsupported family is refused");
+        let refusal = Family::parse("gossip").expect_err("an unsupported family is refused");
 
-        assert!(refusal.contains("`quests`"), "{refusal}");
+        assert!(refusal.contains("`gossip`"), "{refusal}");
         assert!(refusal.contains("`spell`"), "{refusal}");
         assert!(refusal.contains("`items`"), "{refusal}");
+        assert!(refusal.contains("`quests`"), "{refusal}");
+        assert!(refusal.contains("`loot`"), "{refusal}");
         assert!(refusal.contains("`script`"), "{refusal}");
     }
 
@@ -769,6 +789,11 @@ mod tests {
             Family::parse("items"),
             Ok(Family::Claims(ClaimFamily::Item))
         );
+        assert_eq!(
+            Family::parse("quests"),
+            Ok(Family::Claims(ClaimFamily::Quest))
+        );
+        assert_eq!(Family::parse("loot"), Ok(Family::Claims(ClaimFamily::Loot)));
         assert_eq!(Family::parse("script"), Ok(Family::Script));
         for family in Family::ALL {
             assert_eq!(Family::parse(family.as_str()), Ok(*family));
@@ -818,5 +843,39 @@ mod tests {
             Ok(())
         );
         assert!(check_claims_belong_to(ClaimFamily::Spell, &plan.rows).is_err());
+    }
+
+    /// A quest plan is checked against the quest family, not a sibling family it happens to sit
+    /// beside in this build's catalogue.
+    #[test]
+    fn a_quest_plan_claims_only_quest_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &quest_claim(PACKAGE_QUEST, "insert", WHOLE_QUEST_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Quest, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Item, &plan.rows).is_err());
+    }
+
+    /// A loot plan is checked against the loot family, not a sibling family it happens to sit
+    /// beside in this build's catalogue.
+    #[test]
+    fn a_loot_plan_claims_only_loot_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &pickpocket_loot_claim(PACKAGE_LOOT, "insert", WHOLE_PICKPOCKET_LOOT_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Loot, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Item, &plan.rows).is_err());
     }
 }

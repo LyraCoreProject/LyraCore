@@ -14,8 +14,10 @@ use core::fmt;
 
 use crate::ids::{
     FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR, FIXTURE_SPELL_ID_CEIL,
-    FIXTURE_SPELL_ID_FLOOR, MAX_SPELL_EFFECT_INDEX, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR,
-    PACKAGE_SCRIPT_ID_CEIL, PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+    FIXTURE_SPELL_ID_FLOOR, MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX,
+    MAX_SPELL_EFFECT_INDEX, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL,
+    PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL,
+    PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
 };
 use crate::schema::{FieldType, Table};
 use crate::script::HOOK_EVENT_NAMES;
@@ -115,6 +117,36 @@ pub enum DeltaError {
     ItemIdFixtureReserved {
         /// The rejected identifier.
         entry: u32,
+    },
+    /// An inserted quest sits outside the range a Package may invent.
+    QuestIdNotClientSafe {
+        /// The rejected identifier.
+        entry: u32,
+    },
+    /// The claim targets a seeded fixture row.
+    QuestIdFixtureReserved {
+        /// The rejected identifier.
+        entry: u32,
+    },
+    /// The objective index names a slot no quest has.
+    QuestObjectiveIndexOutOfRange {
+        /// The rejected index.
+        obj_index: u8,
+    },
+    /// The reward-choice index names a slot no quest has.
+    QuestRewardChoiceIndexOutOfRange {
+        /// The rejected index.
+        choice_index: u8,
+    },
+    /// An inserted loot row sits outside the range a Package may invent.
+    LootIdNotClientSafe {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// The claim targets a seeded fixture row.
+    LootIdFixtureReserved {
+        /// The rejected identifier.
+        id: u64,
     },
     /// A claim names a column the table does not have.
     UnknownField {
@@ -268,7 +300,13 @@ impl fmt::Display for DeltaError {
             | Self::SpellIdFixtureReserved { .. }
             | Self::EffectIndexOutOfRange { .. }
             | Self::ItemIdNotClientSafe { .. }
-            | Self::ItemIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
+            | Self::ItemIdFixtureReserved { .. }
+            | Self::QuestIdNotClientSafe { .. }
+            | Self::QuestIdFixtureReserved { .. }
+            | Self::QuestObjectiveIndexOutOfRange { .. }
+            | Self::QuestRewardChoiceIndexOutOfRange { .. }
+            | Self::LootIdNotClientSafe { .. }
+            | Self::LootIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
             // The script family groups its own refusals behind one variant, so it delegates as a
             // whole rather than adding six arms here.
             Self::Script(refusal) => refusal.fmt(f),
@@ -307,6 +345,38 @@ fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::R
         DeltaError::ItemIdFixtureReserved { entry } => write!(
             f,
             "item {entry} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::QuestIdNotClientSafe { entry } => write!(
+            f,
+            "quest {entry} is outside the Package quest range \
+             {PACKAGE_QUEST_ID_FLOOR}..={PACKAGE_QUEST_ID_CEIL}; an inserted quest must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::QuestIdFixtureReserved { entry } => write!(
+            f,
+            "quest {entry} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::QuestObjectiveIndexOutOfRange { obj_index } => write!(
+            f,
+            "objective index {obj_index} is out of range; a quest has objectives \
+             0..={MAX_QUEST_OBJECTIVE_INDEX}"
+        ),
+        DeltaError::QuestRewardChoiceIndexOutOfRange { choice_index } => write!(
+            f,
+            "reward choice index {choice_index} is out of range; a quest has reward choices \
+             0..={MAX_QUEST_REWARD_CHOICE_INDEX}"
+        ),
+        DeltaError::LootIdNotClientSafe { id } => write!(
+            f,
+            "loot row {id} is outside the Package loot range \
+             {PACKAGE_LOOT_ID_FLOOR}..={PACKAGE_LOOT_ID_CEIL}; an inserted loot row must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::LootIdFixtureReserved { id } => write!(
+            f,
+            "loot row {id} is fixture-reserved \
              ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
         ),
         other => unreachable!("{other:?} is not an identifier-policy refusal"),

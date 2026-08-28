@@ -77,9 +77,56 @@ fn write_key(out: &mut String, key: PrimaryKey) {
             out.push_str(&effect_index.to_string());
             out.push('}');
         }
-        PrimaryKey::Item { entry } => {
+        PrimaryKey::Item { entry } | PrimaryKey::Quest { entry } => {
             out.push_str("{\"entry\":");
             out.push_str(&entry.to_string());
+            out.push('}');
+        }
+        PrimaryKey::QuestText { quest_entry } => {
+            out.push_str("{\"quest_entry\":");
+            out.push_str(&quest_entry.to_string());
+            out.push('}');
+        }
+        PrimaryKey::QuestObjective {
+            quest_entry,
+            obj_index,
+        }
+        | PrimaryKey::QuestCastObjective {
+            quest_entry,
+            obj_index,
+        } => {
+            out.push_str("{\"quest_entry\":");
+            out.push_str(&quest_entry.to_string());
+            out.push_str(",\"obj_index\":");
+            out.push_str(&obj_index.to_string());
+            out.push('}');
+        }
+        PrimaryKey::QuestRewardItem {
+            quest_entry,
+            item_entry,
+        } => {
+            out.push_str("{\"quest_entry\":");
+            out.push_str(&quest_entry.to_string());
+            out.push_str(",\"item_entry\":");
+            out.push_str(&item_entry.to_string());
+            out.push('}');
+        }
+        PrimaryKey::QuestRewardChoice {
+            quest_entry,
+            choice_index,
+        } => {
+            out.push_str("{\"quest_entry\":");
+            out.push_str(&quest_entry.to_string());
+            out.push_str(",\"choice_index\":");
+            out.push_str(&choice_index.to_string());
+            out.push('}');
+        }
+        PrimaryKey::PickpocketLoot { id }
+        | PrimaryKey::GameobjectLoot { id }
+        | PrimaryKey::SkinningLoot { id }
+        | PrimaryKey::FishingLoot { id } => {
+            out.push_str("{\"id\":");
+            out.push_str(&id.to_string());
             out.push('}');
         }
     }
