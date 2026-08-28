@@ -1,4 +1,4 @@
-//! Package Config lever (#369): an operator stand-in for the seeding half of
+//! Package Config lever: an operator stand-in for the seeding half of
 //! `crate::package_config`, until an in-tree Package calls `ensure_package_config_default` for
 //! real. A thin `?`-wrapper over that fn, so a live node can be seeded and re-seeded from the
 //! runbook without a Package present, the same role `debug/encounter.rs`'s levers play for

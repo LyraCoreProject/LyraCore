@@ -307,7 +307,7 @@ mod motion;
 /// idempotent dismount every removal path converges on.
 mod mount;
 pub mod nav;
-/// The Operator key-value config surface (#369) any installed Package reads: `game_package_config`,
+/// The Operator key-value config surface any installed Package reads: `game_package_config`,
 /// `set_package_config`, and the `ensure_package_config_default` seeding helper Packages call from
 /// their own ensure/init path. Not re-exported below, for the same reason `import_meta` is not:
 /// nothing outside this module reads its table.

@@ -1,4 +1,4 @@
-//! `game_package_config` (#369): one durable key-value surface any installed Package reads and the
+//! `game_package_config`: one durable key-value surface any installed Package reads and the
 //! Operator edits. A Package that wants an Operator-tunable value has, until now, had to invent its
 //! own table and its own edit story — the module cannot read files at runtime, so a config-file
 //! convention can never exist module-side. This is the one seam instead.
@@ -13,7 +13,8 @@
 //! Convention (also in `packages/README.md`): a Package seeds its own defaults idempotently, from
 //! its own ensure/init path, via [`ensure_package_config_default`] — so listing this table always
 //! shows real keys with live values, never a blank slate an Operator has to populate cold. The
-//! Operator edits a value through [`set_package_config`] today; a CLI verb for it is #370.
+//! Operator edits a value through [`set_package_config`] today; a CLI verb for it is tracked
+//! separately.
 
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
@@ -93,7 +94,7 @@ pub(crate) fn unknown_key_message(package_name: &str, key: &str, known_keys: &[S
     }
 }
 
-/// Operator-gated write to one `(package_name, key)` row (#369): updates an existing row, or inserts
+/// Operator-gated write to one `(package_name, key)` row: updates an existing row, or inserts
 /// a new one only when `allow_new` is set. Refuses an absent key with its package's existing keys
 /// named (sorted) — see [`decide_config_write`] and [`unknown_key_message`] for the pure decision
 /// and message this reducer carries out.
@@ -138,7 +139,7 @@ pub(crate) fn should_seed_default(row_exists: bool) -> bool {
     !row_exists
 }
 
-/// A Package's idempotent default-seeding entry point (#369): inserts `(package, key) = value` only
+/// A Package's idempotent default-seeding entry point: inserts `(package, key) = value` only
 /// when no row exists yet — see [`should_seed_default`] for the decision this carries out. `pub(crate)`
 /// — a Package's own defaults are seeded from inside the module build, not through a reducer an
 /// external caller could hit.
