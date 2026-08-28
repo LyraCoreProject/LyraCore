@@ -26,6 +26,7 @@ pub struct RelayRun {
     pub concurrency: RelayConcurrency,
     pub lifetime: RelayLifetime,
     pub parent_run_id: u64,
+    pub source_life_seq: u64,
 }
 
 impl __sdk::InModule for RelayRun {
@@ -52,6 +53,7 @@ pub struct RelayRunCols {
     pub concurrency: __sdk::__query_builder::Col<RelayRun, RelayConcurrency>,
     pub lifetime: __sdk::__query_builder::Col<RelayRun, RelayLifetime>,
     pub parent_run_id: __sdk::__query_builder::Col<RelayRun, u64>,
+    pub source_life_seq: __sdk::__query_builder::Col<RelayRun, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for RelayRun {
@@ -74,6 +76,7 @@ impl __sdk::__query_builder::HasCols for RelayRun {
             concurrency: __sdk::__query_builder::Col::new(table_name, "concurrency"),
             lifetime: __sdk::__query_builder::Col::new(table_name, "lifetime"),
             parent_run_id: __sdk::__query_builder::Col::new(table_name, "parent_run_id"),
+            source_life_seq: __sdk::__query_builder::Col::new(table_name, "source_life_seq"),
         }
     }
 }

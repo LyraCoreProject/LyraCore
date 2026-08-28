@@ -58,6 +58,5 @@ __pycache__/
 # Package directories stay out of Git status. New files and generated artifacts in the committed
 # first-party Packages remain visible.
 /packages/*
-!/packages/dungeons/
 !/packages/example/
 !/packages/fire_nova/

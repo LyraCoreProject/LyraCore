@@ -6,41 +6,49 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct DebugBeginTombRoundSchedulerArgs {}
+pub(super) struct ApplyPackageDeltasArgs {
+    pub family: String,
+    pub packed: String,
+}
 
-impl From<DebugBeginTombRoundSchedulerArgs> for super::Reducer {
-    fn from(args: DebugBeginTombRoundSchedulerArgs) -> Self {
-        Self::DebugBeginTombRoundScheduler
+impl From<ApplyPackageDeltasArgs> for super::Reducer {
+    fn from(args: ApplyPackageDeltasArgs) -> Self {
+        Self::ApplyPackageDeltas {
+            family: args.family,
+            packed: args.packed,
+        }
     }
 }
 
-impl __sdk::InModule for DebugBeginTombRoundSchedulerArgs {
+impl __sdk::InModule for ApplyPackageDeltasArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `debug_begin_tomb_round_scheduler`.
+/// Extension trait for access to the reducer `apply_package_deltas`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait debug_begin_tomb_round_scheduler {
-    /// Request that the remote module invoke the reducer `debug_begin_tomb_round_scheduler` to run as soon as possible.
+pub trait apply_package_deltas {
+    /// Request that the remote module invoke the reducer `apply_package_deltas` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`debug_begin_tomb_round_scheduler:debug_begin_tomb_round_scheduler_then`] to run a callback after the reducer completes.
-    fn debug_begin_tomb_round_scheduler(&self) -> __sdk::Result<()> {
-        self.debug_begin_tomb_round_scheduler_then(|_, _| {})
+    /// /// Use [`apply_package_deltas:apply_package_deltas_then`] to run a callback after the reducer completes.
+    fn apply_package_deltas(&self, family: String, packed: String) -> __sdk::Result<()> {
+        self.apply_package_deltas_then(family, packed, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `debug_begin_tomb_round_scheduler` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `apply_package_deltas` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn debug_begin_tomb_round_scheduler_then(
+    fn apply_package_deltas_then(
         &self,
+        family: String,
+        packed: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -48,15 +56,17 @@ pub trait debug_begin_tomb_round_scheduler {
     ) -> __sdk::Result<()>;
 }
 
-impl debug_begin_tomb_round_scheduler for super::RemoteReducers {
-    fn debug_begin_tomb_round_scheduler_then(
+impl apply_package_deltas for super::RemoteReducers {
+    fn apply_package_deltas_then(
         &self,
+        family: String,
+        packed: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(DebugBeginTombRoundSchedulerArgs {}, callback)
+            .invoke_reducer_with_callback(ApplyPackageDeltasArgs { family, packed }, callback)
     }
 }

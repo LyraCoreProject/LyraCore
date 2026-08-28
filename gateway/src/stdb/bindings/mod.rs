@@ -10,13 +10,11 @@ pub mod account_type;
 pub mod activate_vmap_generation_reducer;
 pub mod active_taxi_flight_type;
 pub mod addon_message_type;
-pub mod advance_fenrus_choreography_reducer;
 pub mod advance_taxi_flight_reducer;
-pub mod advance_tomb_round_reducer;
-pub mod advance_wailing_escort_reducer;
 pub mod ai_event_kind_type;
 pub mod alpha_test_tools_enrollment_type;
 pub mod append_vmap_generation_chunks_reducer;
+pub mod apply_package_deltas_reducer;
 pub mod areatrigger_teleport_type;
 pub mod arm_all_pools_reducer;
 pub mod auction_bid_decision_type;
@@ -32,8 +30,6 @@ pub mod aura_type;
 pub mod authored_idle_movement_type;
 pub mod authored_walking_mode_type;
 pub mod begin_transfer_reducer;
-pub mod blackrock_tomb_round_table;
-pub mod blackrock_tomb_round_type;
 pub mod bot_invite_intent_type;
 pub mod breath_relay_event_type;
 pub mod breath_schedule_type;
@@ -122,7 +118,6 @@ pub mod debug_auto_bank_item_reducer;
 pub mod debug_backfill_cell_ids_reducer;
 pub mod debug_backfill_go_grid_reducer;
 pub mod debug_begin_cast_reducer;
-pub mod debug_begin_tomb_round_scheduler_reducer;
 pub mod debug_bench_collision_gate_reducer;
 pub mod debug_bench_los_reducer;
 pub mod debug_bind_home_reducer;
@@ -204,6 +199,7 @@ pub mod debug_reset_talents_reducer;
 pub mod debug_respawn_lethal_damage_floor_fixture_reducer;
 pub mod debug_resurrect_response_reducer;
 pub mod debug_retire_region_creatures_reducer;
+pub mod debug_run_runtime_script_reducer;
 pub mod debug_score_movement_reducer;
 pub mod debug_seed_creature_ai_fixtures_reducer;
 pub mod debug_seed_mail_reducer;
@@ -251,15 +247,11 @@ pub mod debug_verify_auction_expiry_fixture_reducer;
 pub mod debug_verify_choice_reward_fixture_reducer;
 pub mod debug_verify_choice_reward_refusal_fixture_reducer;
 pub mod debug_verify_combat_regen_reducer;
-pub mod debug_verify_eventai_instance_packages_reducer;
 pub mod debug_verify_eventai_quest_credit_fixture_reducer;
 pub mod debug_verify_eventai_revision_fixture_reducer;
+pub mod debug_verify_eventai_spell_guardian_cleanup_reducer;
 pub mod debug_verify_lethal_damage_floor_fixture_reducer;
 pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
-pub mod debug_verify_shadowfang_choreography_reducer;
-pub mod debug_verify_tomb_round_scheduler_reducer;
-pub mod debug_verify_wailing_awakening_reducer;
-pub mod debug_verify_wailing_escort_and_begin_awakening_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_reducer;
 pub mod delete_character_reducer;
@@ -289,7 +281,6 @@ pub mod event_reaper_schedule_type;
 pub mod evict_instance_population_reducer;
 pub mod execution_policy_type;
 pub mod expire_auction_reducer;
-pub mod expire_avatar_suppression_reducer;
 pub mod expire_eventai_summon_reducer;
 pub mod facing_condition_type;
 pub mod facing_instruction_type;
@@ -473,6 +464,7 @@ pub mod game_object_trap_type;
 pub mod game_object_type;
 pub mod game_object_unlocked_type;
 pub mod game_operator_table;
+pub mod game_package_import_table;
 pub mod game_pending_cast_table;
 pub mod game_pending_spell_impact_table;
 pub mod game_pet_care_schedule_table;
@@ -499,6 +491,7 @@ pub mod game_rest_state_event_table;
 pub mod game_resurrect_request_table;
 pub mod game_roll_event_table;
 pub mod game_school_lockout_table;
+pub mod game_script_table;
 pub mod game_session_table;
 pub mod game_shard_load_table;
 pub mod game_shard_load_total_table;
@@ -739,6 +732,7 @@ pub mod npc_vendor_type;
 pub mod on_disconnect_reducer;
 pub mod operator_type;
 pub mod out_of_combat_sight_condition_type;
+pub mod package_import_type;
 pub mod patrol_intent_type;
 pub mod patrol_pause_type;
 pub mod pending_cast_type;
@@ -866,6 +860,7 @@ pub mod roll_event_type;
 pub mod scale_all_threat_instruction_type;
 pub mod scale_selected_threat_instruction_type;
 pub mod school_lockout_type;
+pub mod script_type;
 pub mod server_config_type;
 pub mod session_type;
 pub mod set_alpha_test_tools_enrollment_reducer;
@@ -879,8 +874,6 @@ pub mod set_realm_address_reducer;
 pub mod set_region_assignment_reducer;
 pub mod set_stand_state_instruction_type;
 pub mod settle_loot_roll_reducer;
-pub mod shadowfang_fenrus_choreography_table;
-pub mod shadowfang_fenrus_choreography_type;
 pub mod shard_load_total_type;
 pub mod shard_load_type;
 pub mod skill_ability_type;
@@ -914,8 +907,6 @@ pub mod start_item_type;
 pub mod start_position_type;
 pub mod start_relay_instruction_type;
 pub mod summon_instruction_type;
-pub mod sunken_temple_suppression_table;
-pub mod sunken_temple_suppression_type;
 pub mod sync_group_mirror_reducer;
 pub mod system_message_event_type;
 pub mod talent_tab_type;
@@ -954,10 +945,6 @@ pub mod vmap_indoor_cell_type;
 pub mod vmap_nav_coverage_cell_type;
 pub mod vmap_nav_coverage_manifest_type;
 pub mod vmap_nav_coverage_type;
-pub mod wailing_escort_progress_table;
-pub mod wailing_escort_progress_type;
-pub mod wailing_escort_schedule_table;
-pub mod wailing_escort_schedule_type;
 pub mod walking_mode_type;
 pub mod weather_schedule_type;
 pub mod whisper_event_type;
@@ -972,13 +959,11 @@ pub use account_type::Account;
 pub use activate_vmap_generation_reducer::activate_vmap_generation;
 pub use active_taxi_flight_type::ActiveTaxiFlight;
 pub use addon_message_type::AddonMessage;
-pub use advance_fenrus_choreography_reducer::advance_fenrus_choreography;
 pub use advance_taxi_flight_reducer::advance_taxi_flight;
-pub use advance_tomb_round_reducer::advance_tomb_round;
-pub use advance_wailing_escort_reducer::advance_wailing_escort;
 pub use ai_event_kind_type::AiEventKind;
 pub use alpha_test_tools_enrollment_type::AlphaTestToolsEnrollment;
 pub use append_vmap_generation_chunks_reducer::append_vmap_generation_chunks;
+pub use apply_package_deltas_reducer::apply_package_deltas;
 pub use areatrigger_teleport_type::AreatriggerTeleport;
 pub use arm_all_pools_reducer::arm_all_pools;
 pub use auction_bid_decision_type::AuctionBidDecision;
@@ -994,8 +979,6 @@ pub use aura_type::Aura;
 pub use authored_idle_movement_type::AuthoredIdleMovement;
 pub use authored_walking_mode_type::AuthoredWalkingMode;
 pub use begin_transfer_reducer::begin_transfer;
-pub use blackrock_tomb_round_table::*;
-pub use blackrock_tomb_round_type::BlackrockTombRound;
 pub use bot_invite_intent_type::BotInviteIntent;
 pub use breath_relay_event_type::BreathRelayEvent;
 pub use breath_schedule_type::BreathSchedule;
@@ -1084,7 +1067,6 @@ pub use debug_auto_bank_item_reducer::debug_auto_bank_item;
 pub use debug_backfill_cell_ids_reducer::debug_backfill_cell_ids;
 pub use debug_backfill_go_grid_reducer::debug_backfill_go_grid;
 pub use debug_begin_cast_reducer::debug_begin_cast;
-pub use debug_begin_tomb_round_scheduler_reducer::debug_begin_tomb_round_scheduler;
 pub use debug_bench_collision_gate_reducer::debug_bench_collision_gate;
 pub use debug_bench_los_reducer::debug_bench_los;
 pub use debug_bind_home_reducer::debug_bind_home;
@@ -1166,6 +1148,7 @@ pub use debug_reset_talents_reducer::debug_reset_talents;
 pub use debug_respawn_lethal_damage_floor_fixture_reducer::debug_respawn_lethal_damage_floor_fixture;
 pub use debug_resurrect_response_reducer::debug_resurrect_response;
 pub use debug_retire_region_creatures_reducer::debug_retire_region_creatures;
+pub use debug_run_runtime_script_reducer::debug_run_runtime_script;
 pub use debug_score_movement_reducer::debug_score_movement;
 pub use debug_seed_creature_ai_fixtures_reducer::debug_seed_creature_ai_fixtures;
 pub use debug_seed_mail_reducer::debug_seed_mail;
@@ -1213,15 +1196,11 @@ pub use debug_verify_auction_expiry_fixture_reducer::debug_verify_auction_expiry
 pub use debug_verify_choice_reward_fixture_reducer::debug_verify_choice_reward_fixture;
 pub use debug_verify_choice_reward_refusal_fixture_reducer::debug_verify_choice_reward_refusal_fixture;
 pub use debug_verify_combat_regen_reducer::debug_verify_combat_regen;
-pub use debug_verify_eventai_instance_packages_reducer::debug_verify_eventai_instance_packages;
 pub use debug_verify_eventai_quest_credit_fixture_reducer::debug_verify_eventai_quest_credit_fixture;
 pub use debug_verify_eventai_revision_fixture_reducer::debug_verify_eventai_revision_fixture;
+pub use debug_verify_eventai_spell_guardian_cleanup_reducer::debug_verify_eventai_spell_guardian_cleanup;
 pub use debug_verify_lethal_damage_floor_fixture_reducer::debug_verify_lethal_damage_floor_fixture;
 pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
-pub use debug_verify_shadowfang_choreography_reducer::debug_verify_shadowfang_choreography;
-pub use debug_verify_tomb_round_scheduler_reducer::debug_verify_tomb_round_scheduler;
-pub use debug_verify_wailing_awakening_reducer::debug_verify_wailing_awakening;
-pub use debug_verify_wailing_escort_and_begin_awakening_reducer::debug_verify_wailing_escort_and_begin_awakening;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_reducer::debug_vmap_ray;
 pub use delete_character_reducer::delete_character;
@@ -1251,7 +1230,6 @@ pub use event_reaper_schedule_type::EventReaperSchedule;
 pub use evict_instance_population_reducer::evict_instance_population;
 pub use execution_policy_type::ExecutionPolicy;
 pub use expire_auction_reducer::expire_auction;
-pub use expire_avatar_suppression_reducer::expire_avatar_suppression;
 pub use expire_eventai_summon_reducer::expire_eventai_summon;
 pub use facing_condition_type::FacingCondition;
 pub use facing_instruction_type::FacingInstruction;
@@ -1435,6 +1413,7 @@ pub use game_object_trap_type::GameObjectTrap;
 pub use game_object_type::GameObject;
 pub use game_object_unlocked_type::GameObjectUnlocked;
 pub use game_operator_table::*;
+pub use game_package_import_table::*;
 pub use game_pending_cast_table::*;
 pub use game_pending_spell_impact_table::*;
 pub use game_pet_care_schedule_table::*;
@@ -1461,6 +1440,7 @@ pub use game_rest_state_event_table::*;
 pub use game_resurrect_request_table::*;
 pub use game_roll_event_table::*;
 pub use game_school_lockout_table::*;
+pub use game_script_table::*;
 pub use game_session_table::*;
 pub use game_shard_load_table::*;
 pub use game_shard_load_total_table::*;
@@ -1701,6 +1681,7 @@ pub use npc_vendor_type::NpcVendor;
 pub use on_disconnect_reducer::on_disconnect;
 pub use operator_type::Operator;
 pub use out_of_combat_sight_condition_type::OutOfCombatSightCondition;
+pub use package_import_type::PackageImport;
 pub use patrol_intent_type::PatrolIntent;
 pub use patrol_pause_type::PatrolPause;
 pub use pending_cast_type::PendingCast;
@@ -1828,6 +1809,7 @@ pub use roll_event_type::RollEvent;
 pub use scale_all_threat_instruction_type::ScaleAllThreatInstruction;
 pub use scale_selected_threat_instruction_type::ScaleSelectedThreatInstruction;
 pub use school_lockout_type::SchoolLockout;
+pub use script_type::Script;
 pub use server_config_type::ServerConfig;
 pub use session_type::Session;
 pub use set_alpha_test_tools_enrollment_reducer::set_alpha_test_tools_enrollment;
@@ -1841,8 +1823,6 @@ pub use set_realm_address_reducer::set_realm_address;
 pub use set_region_assignment_reducer::set_region_assignment;
 pub use set_stand_state_instruction_type::SetStandStateInstruction;
 pub use settle_loot_roll_reducer::settle_loot_roll;
-pub use shadowfang_fenrus_choreography_table::*;
-pub use shadowfang_fenrus_choreography_type::ShadowfangFenrusChoreography;
 pub use shard_load_total_type::ShardLoadTotal;
 pub use shard_load_type::ShardLoad;
 pub use skill_ability_type::SkillAbility;
@@ -1876,8 +1856,6 @@ pub use start_item_type::StartItem;
 pub use start_position_type::StartPosition;
 pub use start_relay_instruction_type::StartRelayInstruction;
 pub use summon_instruction_type::SummonInstruction;
-pub use sunken_temple_suppression_table::*;
-pub use sunken_temple_suppression_type::SunkenTempleSuppression;
 pub use sync_group_mirror_reducer::sync_group_mirror;
 pub use system_message_event_type::SystemMessageEvent;
 pub use talent_tab_type::TalentTab;
@@ -1916,10 +1894,6 @@ pub use vmap_indoor_cell_type::VmapIndoorCell;
 pub use vmap_nav_coverage_cell_type::VmapNavCoverageCell;
 pub use vmap_nav_coverage_manifest_type::VmapNavCoverageManifest;
 pub use vmap_nav_coverage_type::VmapNavCoverage;
-pub use wailing_escort_progress_table::*;
-pub use wailing_escort_progress_type::WailingEscortProgress;
-pub use wailing_escort_schedule_table::*;
-pub use wailing_escort_schedule_type::WailingEscortSchedule;
 pub use walking_mode_type::WalkingMode;
 pub use weather_schedule_type::WeatherSchedule;
 pub use whisper_event_type::WhisperEvent;
@@ -1941,20 +1915,15 @@ pub enum Reducer {
     ActivateVmapGeneration {
         generation_id: u64,
     },
-    AdvanceFenrusChoreography {
-        choreography: ShadowfangFenrusChoreography,
-    },
     AdvanceTaxiFlight {
         schedule: TaxiFlightSchedule,
     },
-    AdvanceTombRound {
-        timer: BlackrockTombRound,
-    },
-    AdvanceWailingEscort {
-        scheduled: WailingEscortSchedule,
-    },
     AppendVmapGenerationChunks {
         generation_id: u64,
+        packed: String,
+    },
+    ApplyPackageDeltas {
+        family: String,
         packed: String,
     },
     ArmAllPools,
@@ -2042,7 +2011,6 @@ pub enum Reducer {
         spell_id: u32,
         target_guid: u64,
     },
-    DebugBeginTombRoundScheduler,
     DebugBenchCollisionGate {
         map: u32,
         min_x: f32,
@@ -2396,6 +2364,13 @@ pub enum Reducer {
         gy_min: i32,
         gy_max: i32,
     },
+    DebugRunRuntimeScript {
+        script_name: String,
+        event: String,
+        source: String,
+        actor_guid: u64,
+        target_guid: u64,
+    },
     DebugScoreMovement {
         guid: u64,
         old_x: f32,
@@ -2586,13 +2561,13 @@ pub enum Reducer {
     DebugVerifyCombatRegen {
         character_guid: u64,
     },
-    DebugVerifyEventaiInstancePackages,
     DebugVerifyEventaiQuestCreditFixture,
     DebugVerifyEventaiRevisionFixture {
         creature_guid: u64,
         source_rule_id: u64,
         expect_rule_state: bool,
     },
+    DebugVerifyEventaiSpellGuardianCleanup,
     DebugVerifyLethalDamageFloorFixture {
         creature_guid: u64,
         expected_health: u32,
@@ -2607,10 +2582,6 @@ pub enum Reducer {
         expected_health: u32,
         expected_damage_log: u32,
     },
-    DebugVerifyShadowfangChoreography,
-    DebugVerifyTombRoundScheduler,
-    DebugVerifyWailingAwakening,
-    DebugVerifyWailingEscortAndBeginAwakening,
     DebugVmapAreaInfo {
         map: u32,
         x: f32,
@@ -2648,9 +2619,6 @@ pub enum Reducer {
     },
     ExpireAuction {
         schedule: AuctionExpiry,
-    },
-    ExpireAvatarSuppression {
-        timer: SunkenTempleSuppression,
     },
     ExpireEventaiSummon {
         expiry: CreatureAiSummonExpiry,
@@ -3490,11 +3458,9 @@ impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
             Reducer::ActivateVmapGeneration { .. } => "activate_vmap_generation",
-            Reducer::AdvanceFenrusChoreography { .. } => "advance_fenrus_choreography",
             Reducer::AdvanceTaxiFlight { .. } => "advance_taxi_flight",
-            Reducer::AdvanceTombRound { .. } => "advance_tomb_round",
-            Reducer::AdvanceWailingEscort { .. } => "advance_wailing_escort",
             Reducer::AppendVmapGenerationChunks { .. } => "append_vmap_generation_chunks",
+            Reducer::ApplyPackageDeltas { .. } => "apply_package_deltas",
             Reducer::ArmAllPools => "arm_all_pools",
             Reducer::BeginTransfer { .. } => "begin_transfer",
             Reducer::ClaimGuidRange { .. } => "claim_guid_range",
@@ -3521,7 +3487,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugBackfillCellIds => "debug_backfill_cell_ids",
             Reducer::DebugBackfillGoGrid => "debug_backfill_go_grid",
             Reducer::DebugBeginCast { .. } => "debug_begin_cast",
-            Reducer::DebugBeginTombRoundScheduler => "debug_begin_tomb_round_scheduler",
             Reducer::DebugBenchCollisionGate { .. } => "debug_bench_collision_gate",
             Reducer::DebugBenchLos { .. } => "debug_bench_los",
             Reducer::DebugBindHome { .. } => "debug_bind_home",
@@ -3610,6 +3575,7 @@ impl __sdk::Reducer for Reducer {
             }
             Reducer::DebugResurrectResponse { .. } => "debug_resurrect_response",
             Reducer::DebugRetireRegionCreatures { .. } => "debug_retire_region_creatures",
+            Reducer::DebugRunRuntimeScript { .. } => "debug_run_runtime_script",
             Reducer::DebugScoreMovement { .. } => "debug_score_movement",
             Reducer::DebugSeedCreatureAiFixtures => "debug_seed_creature_ai_fixtures",
             Reducer::DebugSeedMail { .. } => "debug_seed_mail",
@@ -3669,24 +3635,20 @@ impl __sdk::Reducer for Reducer {
                 "debug_verify_choice_reward_refusal_fixture"
             }
             Reducer::DebugVerifyCombatRegen { .. } => "debug_verify_combat_regen",
-            Reducer::DebugVerifyEventaiInstancePackages => "debug_verify_eventai_instance_packages",
             Reducer::DebugVerifyEventaiQuestCreditFixture => {
                 "debug_verify_eventai_quest_credit_fixture"
             }
             Reducer::DebugVerifyEventaiRevisionFixture { .. } => {
                 "debug_verify_eventai_revision_fixture"
             }
+            Reducer::DebugVerifyEventaiSpellGuardianCleanup => {
+                "debug_verify_eventai_spell_guardian_cleanup"
+            }
             Reducer::DebugVerifyLethalDamageFloorFixture { .. } => {
                 "debug_verify_lethal_damage_floor_fixture"
             }
             Reducer::DebugVerifyRangedLethalDamageFloorFixture { .. } => {
                 "debug_verify_ranged_lethal_damage_floor_fixture"
-            }
-            Reducer::DebugVerifyShadowfangChoreography => "debug_verify_shadowfang_choreography",
-            Reducer::DebugVerifyTombRoundScheduler => "debug_verify_tomb_round_scheduler",
-            Reducer::DebugVerifyWailingAwakening => "debug_verify_wailing_awakening",
-            Reducer::DebugVerifyWailingEscortAndBeginAwakening => {
-                "debug_verify_wailing_escort_and_begin_awakening"
             }
             Reducer::DebugVmapAreaInfo { .. } => "debug_vmap_area_info",
             Reducer::DebugVmapRay { .. } => "debug_vmap_ray",
@@ -3696,7 +3658,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::EstablishSession { .. } => "establish_session",
             Reducer::EvictInstancePopulation { .. } => "evict_instance_population",
             Reducer::ExpireAuction { .. } => "expire_auction",
-            Reducer::ExpireAvatarSuppression { .. } => "expire_avatar_suppression",
             Reducer::ExpireEventaiSummon { .. } => "expire_eventai_summon",
             Reducer::FinalizeVmapNavCoverage { .. } => "finalize_vmap_nav_coverage",
             Reducer::FinishTransfer { .. } => "finish_transfer",
@@ -3895,31 +3856,23 @@ impl __sdk::Reducer for Reducer {
 }             => __sats::bsatn::to_vec(&activate_vmap_generation_reducer::ActivateVmapGenerationArgs {
                 generation_id: generation_id.clone(),
 }),
-            Reducer::AdvanceFenrusChoreography{
-                choreography,
-}             => __sats::bsatn::to_vec(&advance_fenrus_choreography_reducer::AdvanceFenrusChoreographyArgs {
-                choreography: choreography.clone(),
-}),
             Reducer::AdvanceTaxiFlight{
                 schedule,
 }             => __sats::bsatn::to_vec(&advance_taxi_flight_reducer::AdvanceTaxiFlightArgs {
                 schedule: schedule.clone(),
-}),
-            Reducer::AdvanceTombRound{
-                timer,
-}             => __sats::bsatn::to_vec(&advance_tomb_round_reducer::AdvanceTombRoundArgs {
-                timer: timer.clone(),
-}),
-            Reducer::AdvanceWailingEscort{
-                scheduled,
-}             => __sats::bsatn::to_vec(&advance_wailing_escort_reducer::AdvanceWailingEscortArgs {
-                scheduled: scheduled.clone(),
 }),
             Reducer::AppendVmapGenerationChunks{
                 generation_id,
                 packed,
 }             => __sats::bsatn::to_vec(&append_vmap_generation_chunks_reducer::AppendVmapGenerationChunksArgs {
                 generation_id: generation_id.clone(),
+                packed: packed.clone(),
+}),
+            Reducer::ApplyPackageDeltas{
+                family,
+                packed,
+}             => __sats::bsatn::to_vec(&apply_package_deltas_reducer::ApplyPackageDeltasArgs {
+                family: family.clone(),
                 packed: packed.clone(),
 }),
             Reducer::ArmAllPools => __sats::bsatn::to_vec(&arm_all_pools_reducer::ArmAllPoolsArgs {
@@ -4076,9 +4029,7 @@ Reducer::DebugBeginCast{
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
 }),
-            Reducer::DebugBeginTombRoundScheduler => __sats::bsatn::to_vec(&debug_begin_tomb_round_scheduler_reducer::DebugBeginTombRoundSchedulerArgs {
-                }),
-Reducer::DebugBenchCollisionGate{
+            Reducer::DebugBenchCollisionGate{
                 map,
                 min_x,
                 min_y,
@@ -4708,6 +4659,19 @@ Reducer::DebugRepop{
                 gy_min: gy_min.clone(),
                 gy_max: gy_max.clone(),
 }),
+            Reducer::DebugRunRuntimeScript{
+                script_name,
+                event,
+                source,
+                actor_guid,
+                target_guid,
+}             => __sats::bsatn::to_vec(&debug_run_runtime_script_reducer::DebugRunRuntimeScriptArgs {
+                script_name: script_name.clone(),
+                event: event.clone(),
+                source: source.clone(),
+                actor_guid: actor_guid.clone(),
+                target_guid: target_guid.clone(),
+}),
             Reducer::DebugScoreMovement{
                 guid,
                 old_x,
@@ -5048,9 +5012,7 @@ Reducer::DebugVerifyChoiceRewardFixture{
 }             => __sats::bsatn::to_vec(&debug_verify_combat_regen_reducer::DebugVerifyCombatRegenArgs {
                 character_guid: character_guid.clone(),
 }),
-            Reducer::DebugVerifyEventaiInstancePackages => __sats::bsatn::to_vec(&debug_verify_eventai_instance_packages_reducer::DebugVerifyEventaiInstancePackagesArgs {
-                }),
-Reducer::DebugVerifyEventaiQuestCreditFixture => __sats::bsatn::to_vec(&debug_verify_eventai_quest_credit_fixture_reducer::DebugVerifyEventaiQuestCreditFixtureArgs {
+            Reducer::DebugVerifyEventaiQuestCreditFixture => __sats::bsatn::to_vec(&debug_verify_eventai_quest_credit_fixture_reducer::DebugVerifyEventaiQuestCreditFixtureArgs {
                 }),
 Reducer::DebugVerifyEventaiRevisionFixture{
                 creature_guid,
@@ -5061,7 +5023,9 @@ Reducer::DebugVerifyEventaiRevisionFixture{
                 source_rule_id: source_rule_id.clone(),
                 expect_rule_state: expect_rule_state.clone(),
 }),
-            Reducer::DebugVerifyLethalDamageFloorFixture{
+            Reducer::DebugVerifyEventaiSpellGuardianCleanup => __sats::bsatn::to_vec(&debug_verify_eventai_spell_guardian_cleanup_reducer::DebugVerifyEventaiSpellGuardianCleanupArgs {
+                }),
+Reducer::DebugVerifyLethalDamageFloorFixture{
                 creature_guid,
                 expected_health,
                 expected_dead,
@@ -5087,15 +5051,7 @@ Reducer::DebugVerifyEventaiRevisionFixture{
                 expected_health: expected_health.clone(),
                 expected_damage_log: expected_damage_log.clone(),
 }),
-            Reducer::DebugVerifyShadowfangChoreography => __sats::bsatn::to_vec(&debug_verify_shadowfang_choreography_reducer::DebugVerifyShadowfangChoreographyArgs {
-                }),
-Reducer::DebugVerifyTombRoundScheduler => __sats::bsatn::to_vec(&debug_verify_tomb_round_scheduler_reducer::DebugVerifyTombRoundSchedulerArgs {
-                }),
-Reducer::DebugVerifyWailingAwakening => __sats::bsatn::to_vec(&debug_verify_wailing_awakening_reducer::DebugVerifyWailingAwakeningArgs {
-                }),
-Reducer::DebugVerifyWailingEscortAndBeginAwakening => __sats::bsatn::to_vec(&debug_verify_wailing_escort_and_begin_awakening_reducer::DebugVerifyWailingEscortAndBeginAwakeningArgs {
-                }),
-Reducer::DebugVmapAreaInfo{
+            Reducer::DebugVmapAreaInfo{
                 map,
                 x,
                 y,
@@ -5162,11 +5118,6 @@ Reducer::DebugVmapAreaInfo{
                 schedule,
 }             => __sats::bsatn::to_vec(&expire_auction_reducer::ExpireAuctionArgs {
                 schedule: schedule.clone(),
-}),
-            Reducer::ExpireAvatarSuppression{
-                timer,
-}             => __sats::bsatn::to_vec(&expire_avatar_suppression_reducer::ExpireAvatarSuppressionArgs {
-                timer: timer.clone(),
 }),
             Reducer::ExpireEventaiSummon{
                 expiry,
@@ -6653,7 +6604,6 @@ Reducer::ResumeRelayArrival{
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct DbUpdate {
-    blackrock_tomb_round: __sdk::TableUpdate<BlackrockTombRound>,
     game_account: __sdk::TableUpdate<Account>,
     game_active_taxi_flight: __sdk::TableUpdate<ActiveTaxiFlight>,
     game_addon_message: __sdk::TableUpdate<AddonMessage>,
@@ -6807,6 +6757,7 @@ pub struct DbUpdate {
     game_npc_text_slot: __sdk::TableUpdate<NpcTextSlot>,
     game_npc_vendor: __sdk::TableUpdate<NpcVendor>,
     game_operator: __sdk::TableUpdate<Operator>,
+    game_package_import: __sdk::TableUpdate<PackageImport>,
     game_pending_cast: __sdk::TableUpdate<PendingCast>,
     game_pending_spell_impact: __sdk::TableUpdate<PendingSpellImpact>,
     game_pet_care_schedule: __sdk::TableUpdate<PetCareSchedule>,
@@ -6832,6 +6783,7 @@ pub struct DbUpdate {
     game_resurrect_request: __sdk::TableUpdate<ResurrectRequest>,
     game_roll_event: __sdk::TableUpdate<RollEvent>,
     game_school_lockout: __sdk::TableUpdate<SchoolLockout>,
+    game_script: __sdk::TableUpdate<Script>,
     game_session: __sdk::TableUpdate<Session>,
     game_shard_load: __sdk::TableUpdate<ShardLoad>,
     game_shard_load_total: __sdk::TableUpdate<ShardLoadTotal>,
@@ -6889,10 +6841,6 @@ pub struct DbUpdate {
     game_world_state_name: __sdk::TableUpdate<WorldStateName>,
     game_xp_event: __sdk::TableUpdate<XpEvent>,
     game_zone_weather: __sdk::TableUpdate<ZoneWeather>,
-    shadowfang_fenrus_choreography: __sdk::TableUpdate<ShadowfangFenrusChoreography>,
-    sunken_temple_suppression: __sdk::TableUpdate<SunkenTempleSuppression>,
-    wailing_escort_progress: __sdk::TableUpdate<WailingEscortProgress>,
-    wailing_escort_schedule: __sdk::TableUpdate<WailingEscortSchedule>,
 }
 
 impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
@@ -6901,9 +6849,6 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_update in __sdk::transaction_update_iter_table_updates(raw) {
             match &table_update.table_name[..] {
-                "blackrock_tomb_round" => db_update.blackrock_tomb_round.append(
-                    blackrock_tomb_round_table::parse_table_update(table_update)?,
-                ),
                 "game_account" => db_update
                     .game_account
                     .append(game_account_table::parse_table_update(table_update)?),
@@ -7414,6 +7359,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(game_operator_table::parse_table_update(table_update)?),
+                "game_package_import" => db_update
+                    .game_package_import
+                    .append(game_package_import_table::parse_table_update(table_update)?),
                 "game_pending_cast" => db_update
                     .game_pending_cast
                     .append(game_pending_cast_table::parse_table_update(table_update)?),
@@ -7489,6 +7437,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_school_lockout" => db_update
                     .game_school_lockout
                     .append(game_school_lockout_table::parse_table_update(table_update)?),
+                "game_script" => db_update
+                    .game_script
+                    .append(game_script_table::parse_table_update(table_update)?),
                 "game_session" => db_update
                     .game_session
                     .append(game_session_table::parse_table_update(table_update)?),
@@ -7662,20 +7613,6 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_zone_weather" => db_update
                     .game_zone_weather
                     .append(game_zone_weather_table::parse_table_update(table_update)?),
-                "shadowfang_fenrus_choreography" => {
-                    db_update.shadowfang_fenrus_choreography.append(
-                        shadowfang_fenrus_choreography_table::parse_table_update(table_update)?,
-                    )
-                }
-                "sunken_temple_suppression" => db_update.sunken_temple_suppression.append(
-                    sunken_temple_suppression_table::parse_table_update(table_update)?,
-                ),
-                "wailing_escort_progress" => db_update.wailing_escort_progress.append(
-                    wailing_escort_progress_table::parse_table_update(table_update)?,
-                ),
-                "wailing_escort_schedule" => db_update.wailing_escort_schedule.append(
-                    wailing_escort_schedule_table::parse_table_update(table_update)?,
-                ),
 
                 unknown => {
                     return Err(__sdk::InternalError::unknown_name(
@@ -7702,12 +7639,6 @@ impl __sdk::DbUpdate for DbUpdate {
     ) -> AppliedDiff<'_> {
         let mut diff = AppliedDiff::default();
 
-        diff.blackrock_tomb_round = cache
-            .apply_diff_to_table::<BlackrockTombRound>(
-                "blackrock_tomb_round",
-                &self.blackrock_tomb_round,
-            )
-            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_account = cache
             .apply_diff_to_table::<Account>("game_account", &self.game_account)
             .with_updates_by_pk(|row| &row.id);
@@ -8407,6 +8338,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_operator = cache
             .apply_diff_to_table::<Operator>("game_operator", &self.game_operator)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_package_import = cache
+            .apply_diff_to_table::<PackageImport>("game_package_import", &self.game_package_import)
+            .with_updates_by_pk(|row| &row.id);
         diff.game_pending_cast = cache
             .apply_diff_to_table::<PendingCast>("game_pending_cast", &self.game_pending_cast)
             .with_updates_by_pk(|row| &row.scheduled_id);
@@ -8521,6 +8455,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_school_lockout = cache
             .apply_diff_to_table::<SchoolLockout>("game_school_lockout", &self.game_school_lockout)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_script = cache
+            .apply_diff_to_table::<Script>("game_script", &self.game_script)
+            .with_updates_by_pk(|row| &row.script_id);
         diff.game_session = cache
             .apply_diff_to_table::<Session>("game_session", &self.game_session)
             .with_updates_by_pk(|row| &row.account_id);
@@ -8752,30 +8689,6 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_zone_weather = cache
             .apply_diff_to_table::<ZoneWeather>("game_zone_weather", &self.game_zone_weather)
             .with_updates_by_pk(|row| &row.zone_id);
-        diff.shadowfang_fenrus_choreography = cache
-            .apply_diff_to_table::<ShadowfangFenrusChoreography>(
-                "shadowfang_fenrus_choreography",
-                &self.shadowfang_fenrus_choreography,
-            )
-            .with_updates_by_pk(|row| &row.scheduled_id);
-        diff.sunken_temple_suppression = cache
-            .apply_diff_to_table::<SunkenTempleSuppression>(
-                "sunken_temple_suppression",
-                &self.sunken_temple_suppression,
-            )
-            .with_updates_by_pk(|row| &row.scheduled_id);
-        diff.wailing_escort_progress = cache
-            .apply_diff_to_table::<WailingEscortProgress>(
-                "wailing_escort_progress",
-                &self.wailing_escort_progress,
-            )
-            .with_updates_by_pk(|row| &row.instance_id);
-        diff.wailing_escort_schedule = cache
-            .apply_diff_to_table::<WailingEscortSchedule>(
-                "wailing_escort_schedule",
-                &self.wailing_escort_schedule,
-            )
-            .with_updates_by_pk(|row| &row.scheduled_id);
 
         diff
     }
@@ -8783,9 +8696,6 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
-                "blackrock_tomb_round" => db_update
-                    .blackrock_tomb_round
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_account" => db_update
                     .game_account
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -9242,6 +9152,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_package_import" => db_update
+                    .game_package_import
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_pending_cast" => db_update
                     .game_pending_cast
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -9316,6 +9229,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_school_lockout" => db_update
                     .game_school_lockout
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_script" => db_update
+                    .game_script
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_session" => db_update
                     .game_session
@@ -9487,18 +9403,6 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_zone_weather" => db_update
                     .game_zone_weather
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "shadowfang_fenrus_choreography" => db_update
-                    .shadowfang_fenrus_choreography
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "sunken_temple_suppression" => db_update
-                    .sunken_temple_suppression
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "wailing_escort_progress" => db_update
-                    .wailing_escort_progress
-                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
-                "wailing_escort_schedule" => db_update
-                    .wailing_escort_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -9513,9 +9417,6 @@ impl __sdk::DbUpdate for DbUpdate {
         let mut db_update = DbUpdate::default();
         for table_rows in raw.tables {
             match &table_rows.table[..] {
-                "blackrock_tomb_round" => db_update
-                    .blackrock_tomb_round
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_account" => db_update
                     .game_account
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -9972,6 +9873,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_package_import" => db_update
+                    .game_package_import
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_pending_cast" => db_update
                     .game_pending_cast
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10046,6 +9950,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_school_lockout" => db_update
                     .game_school_lockout
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_script" => db_update
+                    .game_script
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_session" => db_update
                     .game_session
@@ -10217,18 +10124,6 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_zone_weather" => db_update
                     .game_zone_weather
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "shadowfang_fenrus_choreography" => db_update
-                    .shadowfang_fenrus_choreography
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "sunken_temple_suppression" => db_update
-                    .sunken_temple_suppression
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "wailing_escort_progress" => db_update
-                    .wailing_escort_progress
-                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
-                "wailing_escort_schedule" => db_update
-                    .wailing_escort_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 unknown => {
                     return Err(
@@ -10245,7 +10140,6 @@ impl __sdk::DbUpdate for DbUpdate {
 #[allow(non_snake_case)]
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
-    blackrock_tomb_round: __sdk::TableAppliedDiff<'r, BlackrockTombRound>,
     game_account: __sdk::TableAppliedDiff<'r, Account>,
     game_active_taxi_flight: __sdk::TableAppliedDiff<'r, ActiveTaxiFlight>,
     game_addon_message: __sdk::TableAppliedDiff<'r, AddonMessage>,
@@ -10401,6 +10295,7 @@ pub struct AppliedDiff<'r> {
     game_npc_text_slot: __sdk::TableAppliedDiff<'r, NpcTextSlot>,
     game_npc_vendor: __sdk::TableAppliedDiff<'r, NpcVendor>,
     game_operator: __sdk::TableAppliedDiff<'r, Operator>,
+    game_package_import: __sdk::TableAppliedDiff<'r, PackageImport>,
     game_pending_cast: __sdk::TableAppliedDiff<'r, PendingCast>,
     game_pending_spell_impact: __sdk::TableAppliedDiff<'r, PendingSpellImpact>,
     game_pet_care_schedule: __sdk::TableAppliedDiff<'r, PetCareSchedule>,
@@ -10426,6 +10321,7 @@ pub struct AppliedDiff<'r> {
     game_resurrect_request: __sdk::TableAppliedDiff<'r, ResurrectRequest>,
     game_roll_event: __sdk::TableAppliedDiff<'r, RollEvent>,
     game_school_lockout: __sdk::TableAppliedDiff<'r, SchoolLockout>,
+    game_script: __sdk::TableAppliedDiff<'r, Script>,
     game_session: __sdk::TableAppliedDiff<'r, Session>,
     game_shard_load: __sdk::TableAppliedDiff<'r, ShardLoad>,
     game_shard_load_total: __sdk::TableAppliedDiff<'r, ShardLoadTotal>,
@@ -10483,10 +10379,6 @@ pub struct AppliedDiff<'r> {
     game_world_state_name: __sdk::TableAppliedDiff<'r, WorldStateName>,
     game_xp_event: __sdk::TableAppliedDiff<'r, XpEvent>,
     game_zone_weather: __sdk::TableAppliedDiff<'r, ZoneWeather>,
-    shadowfang_fenrus_choreography: __sdk::TableAppliedDiff<'r, ShadowfangFenrusChoreography>,
-    sunken_temple_suppression: __sdk::TableAppliedDiff<'r, SunkenTempleSuppression>,
-    wailing_escort_progress: __sdk::TableAppliedDiff<'r, WailingEscortProgress>,
-    wailing_escort_schedule: __sdk::TableAppliedDiff<'r, WailingEscortSchedule>,
     __unused: std::marker::PhantomData<&'r ()>,
 }
 
@@ -10500,11 +10392,6 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         event: &EventContext,
         callbacks: &mut __sdk::DbCallbacks<RemoteModule>,
     ) {
-        callbacks.invoke_table_row_callbacks::<BlackrockTombRound>(
-            "blackrock_tomb_round",
-            &self.blackrock_tomb_round,
-            event,
-        );
         callbacks.invoke_table_row_callbacks::<Account>("game_account", &self.game_account, event);
         callbacks.invoke_table_row_callbacks::<ActiveTaxiFlight>(
             "game_active_taxi_flight",
@@ -11225,6 +11112,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_operator,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<PackageImport>(
+            "game_package_import",
+            &self.game_package_import,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<PendingCast>(
             "game_pending_cast",
             &self.game_pending_cast,
@@ -11346,6 +11238,7 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_school_lockout,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<Script>("game_script", &self.game_script, event);
         callbacks.invoke_table_row_callbacks::<Session>("game_session", &self.game_session, event);
         callbacks.invoke_table_row_callbacks::<ShardLoad>(
             "game_shard_load",
@@ -11617,26 +11510,6 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<ZoneWeather>(
             "game_zone_weather",
             &self.game_zone_weather,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<ShadowfangFenrusChoreography>(
-            "shadowfang_fenrus_choreography",
-            &self.shadowfang_fenrus_choreography,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<SunkenTempleSuppression>(
-            "sunken_temple_suppression",
-            &self.sunken_temple_suppression,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<WailingEscortProgress>(
-            "wailing_escort_progress",
-            &self.wailing_escort_progress,
-            event,
-        );
-        callbacks.invoke_table_row_callbacks::<WailingEscortSchedule>(
-            "wailing_escort_schedule",
-            &self.wailing_escort_schedule,
             event,
         );
     }
@@ -12299,7 +12172,6 @@ impl __sdk::SpacetimeModule for RemoteModule {
     type QueryBuilder = __sdk::QueryBuilder;
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
-        blackrock_tomb_round_table::register_table(client_cache);
         game_account_table::register_table(client_cache);
         game_active_taxi_flight_table::register_table(client_cache);
         game_addon_message_table::register_table(client_cache);
@@ -12452,6 +12324,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_npc_text_slot_table::register_table(client_cache);
         game_npc_vendor_table::register_table(client_cache);
         game_operator_table::register_table(client_cache);
+        game_package_import_table::register_table(client_cache);
         game_pending_cast_table::register_table(client_cache);
         game_pending_spell_impact_table::register_table(client_cache);
         game_pet_care_schedule_table::register_table(client_cache);
@@ -12477,6 +12350,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_resurrect_request_table::register_table(client_cache);
         game_roll_event_table::register_table(client_cache);
         game_school_lockout_table::register_table(client_cache);
+        game_script_table::register_table(client_cache);
         game_session_table::register_table(client_cache);
         game_shard_load_table::register_table(client_cache);
         game_shard_load_total_table::register_table(client_cache);
@@ -12534,13 +12408,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_world_state_name_table::register_table(client_cache);
         game_xp_event_table::register_table(client_cache);
         game_zone_weather_table::register_table(client_cache);
-        shadowfang_fenrus_choreography_table::register_table(client_cache);
-        sunken_temple_suppression_table::register_table(client_cache);
-        wailing_escort_progress_table::register_table(client_cache);
-        wailing_escort_schedule_table::register_table(client_cache);
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
-        "blackrock_tomb_round",
         "game_account",
         "game_active_taxi_flight",
         "game_addon_message",
@@ -12693,6 +12562,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_npc_text_slot",
         "game_npc_vendor",
         "game_operator",
+        "game_package_import",
         "game_pending_cast",
         "game_pending_spell_impact",
         "game_pet_care_schedule",
@@ -12718,6 +12588,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_resurrect_request",
         "game_roll_event",
         "game_school_lockout",
+        "game_script",
         "game_session",
         "game_shard_load",
         "game_shard_load_total",
@@ -12775,9 +12646,5 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_world_state_name",
         "game_xp_event",
         "game_zone_weather",
-        "shadowfang_fenrus_choreography",
-        "sunken_temple_suppression",
-        "wailing_escort_progress",
-        "wailing_escort_schedule",
     ];
 }
