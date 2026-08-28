@@ -71,34 +71,169 @@ use std::path::{Path, PathBuf};
 /// mirror, and is deliberately excluded from the `has_packages` cfg — see its use below.
 const REFERENCE_PACKAGE: &str = "example";
 
+/// One row of the notify-hook event catalog.
+///
+/// `actor`/`target` are the Runtime Script Event Binding half (#318): Rust expressions, evaluated
+/// against `payload` inside the generated `fire_*`, naming the guid that CAUSED the event and the
+/// guid it acted ON. `"0"` means the event has no such participant, which reaches a Runtime Script
+/// as an absent `event.actor`/`event.target` rather than as an error.
+///
+/// The mapping is a judgement per event, which is why it lives beside the event rather than being
+/// derived: `on_loot`'s target is the corpse, `on_hp_threshold` has no actor at all, and `on_death`
+/// is victim-centric while `on_kill` names the same two guids the other way round.
+struct HookEvent {
+    event: &'static str,
+    payload_ty: &'static str,
+    actor: &'static str,
+    target: &'static str,
+}
+
+const fn hook(
+    event: &'static str,
+    payload_ty: &'static str,
+    actor: &'static str,
+    target: &'static str,
+) -> HookEvent {
+    HookEvent {
+        event,
+        payload_ty,
+        actor,
+        target,
+    }
+}
+
 /// The notify-hook event catalog: event name -> the payload type the
-/// handler receives (the struct lives in `src/hooks.rs`). This row is HALF of an event's
+/// handler receives (the struct lives in `src/hooks.rs`) -> the actor and target guids a Runtime
+/// Script bound to it receives. This row is HALF of an event's
 /// definition; the payload struct is the other half. From these rows build.rs generates the
 /// per-event registry array (`package_registries.rs`) AND the `payload_for` alias + `fire_*`
 /// dispatch fn (`hook_dispatch.rs`) — so adding an event is: payload struct in hooks.rs, one row
 /// here, plus the dispatch call at the new core chokepoint. A `game_hook!` naming any other event
 /// panics below with this list.
-const HOOK_EVENTS: &[(&str, &str)] = &[
-    ("on_damage_taken", "crate::hooks::DamageTakenPayload"),
-    ("on_death_prevented", "crate::hooks::DeathPreventedPayload"),
-    ("on_creature_spawn", "crate::hooks::CreatureSpawnPayload"),
-    ("on_levelup", "crate::hooks::LevelupPayload"),
-    ("on_group_invite", "crate::hooks::GroupInvitePayload"),
-    ("on_death", "crate::hooks::DeathPayload"),
-    ("on_kill", "crate::hooks::KillPayload"),
-    ("on_aggro", "crate::hooks::AggroPayload"),
-    ("on_cast_resolved", "crate::hooks::CastResolvedPayload"),
-    ("on_loot", "crate::hooks::LootPayload"),
-    ("on_quest_accept", "crate::hooks::QuestAcceptPayload"),
-    ("on_quest_turnin", "crate::hooks::QuestTurninPayload"),
-    ("on_login", "crate::hooks::LoginPayload"),
-    ("on_logout", "crate::hooks::LogoutPayload"),
-    ("on_gossip_select", "crate::hooks::GossipSelectPayload"),
+///
+/// The event NAMES are mirrored by `lyracore_package_delta::script::HOOK_EVENT_NAMES`, which a pure
+/// crate needs to refuse a Package binding to an event that does not exist. This build emits
+/// `GAME_HOOK_EVENT_NAMES` from these rows and `module/src/script_binding.rs` asserts the two lists
+/// are identical, so the catalog still cannot drift.
+const HOOK_EVENTS: &[HookEvent] = &[
+    hook(
+        "on_damage_taken",
+        "crate::hooks::DamageTakenPayload",
+        "payload.attacker_guid",
+        "payload.target_guid",
+    ),
+    hook(
+        "on_death_prevented",
+        "crate::hooks::DeathPreventedPayload",
+        "payload.attacker_guid",
+        "payload.creature_guid",
+    ),
+    // The spawning creature is the subject of its own spawn, and there is nothing it acted on.
+    hook(
+        "on_creature_spawn",
+        "crate::hooks::CreatureSpawnPayload",
+        "payload.guid",
+        "0",
+    ),
+    // NOTE: `grant_xp` persists the mutated entity AFTER its ding loop, so a script reading
+    // `event.actor.level` here sees the level BEFORE the ding. Read the level from the payload's
+    // own consumer, not from the actor, until that site is reordered.
+    hook(
+        "on_levelup",
+        "crate::hooks::LevelupPayload",
+        "payload.character_guid",
+        "0",
+    ),
+    hook(
+        "on_group_invite",
+        "crate::hooks::GroupInvitePayload",
+        "payload.inviter_guid",
+        "payload.target_guid",
+    ),
+    hook(
+        "on_death",
+        "crate::hooks::DeathPayload",
+        "payload.killer_guid",
+        "payload.victim_guid",
+    ),
+    hook(
+        "on_kill",
+        "crate::hooks::KillPayload",
+        "payload.killer_guid",
+        "payload.victim_guid",
+    ),
+    hook(
+        "on_aggro",
+        "crate::hooks::AggroPayload",
+        "payload.creature_guid",
+        "payload.target_guid",
+    ),
+    hook(
+        "on_cast_resolved",
+        "crate::hooks::CastResolvedPayload",
+        "payload.caster_guid",
+        "payload.target_guid",
+    ),
+    // The corpse is a loot container, not a live entity, so `event.target` is normally absent here.
+    hook(
+        "on_loot",
+        "crate::hooks::LootPayload",
+        "payload.looter_guid",
+        "payload.corpse_guid",
+    ),
+    hook(
+        "on_quest_accept",
+        "crate::hooks::QuestAcceptPayload",
+        "payload.character_guid",
+        "0",
+    ),
+    hook(
+        "on_quest_turnin",
+        "crate::hooks::QuestTurninPayload",
+        "payload.character_guid",
+        "0",
+    ),
+    hook(
+        "on_login",
+        "crate::hooks::LoginPayload",
+        "payload.character_guid",
+        "0",
+    ),
+    // Fired BEFORE the live entity row is deleted, so the actor still reads.
+    hook(
+        "on_logout",
+        "crate::hooks::LogoutPayload",
+        "payload.character_guid",
+        "0",
+    ),
+    hook(
+        "on_gossip_select",
+        "crate::hooks::GossipSelectPayload",
+        "payload.character_guid",
+        "payload.npc_guid",
+    ),
     // Work-item 228 (encounter kernel): entry-keyed creature death, once-per-instance HP-threshold
     // crossings (fired by encounter::encounter_hp_probe, not a new core chokepoint), and GO use.
-    ("on_creature_death", "crate::hooks::CreatureDeathPayload"),
-    ("on_hp_threshold", "crate::hooks::HpThresholdPayload"),
-    ("on_go_used", "crate::hooks::GoUsedPayload"),
+    hook(
+        "on_creature_death",
+        "crate::hooks::CreatureDeathPayload",
+        "payload.killer_guid",
+        "payload.creature_guid",
+    ),
+    // A threshold crossing has no actor: the probe fires it, not a unit.
+    hook(
+        "on_hp_threshold",
+        "crate::hooks::HpThresholdPayload",
+        "0",
+        "payload.creature_guid",
+    ),
+    // The gameobject is not a world entity, so `event.target` is normally absent here.
+    hook(
+        "on_go_used",
+        "crate::hooks::GoUsedPayload",
+        "payload.user_guid",
+        "payload.go_guid",
+    ),
 ];
 
 fn main() {
@@ -318,7 +453,10 @@ fn main() {
         out.push_str(&format!("    (\"{path}\", {path}),\n"));
     }
     out.push_str("];\n");
-    for (event, payload_ty) in HOOK_EVENTS {
+    for HookEvent {
+        event, payload_ty, ..
+    } in HOOK_EVENTS
+    {
         let mut hooks: Vec<String> = registries
             .hooks
             .iter()
@@ -349,6 +487,14 @@ fn main() {
         out.push_str(&format!("    \"{binding}\",\n"));
     }
     out.push_str("];\n");
+    // Every event name, as plain strings a NATIVE test binary can read without materializing the
+    // fn-pointer arrays above — the same reason `CHARACTER_OWNED_TRANSFER_NAMES` exists. This is
+    // what `script_binding.rs` asserts the Package Delta crate's mirror of the catalog against.
+    out.push_str("pub const GAME_HOOK_EVENT_NAMES: &[&str] = &[\n");
+    for HookEvent { event, .. } in HOOK_EVENTS {
+        out.push_str(&format!("    \"{event}\",\n"));
+    }
+    out.push_str("];\n");
     write_out(&out_dir, "package_registries.rs", &out);
 
     // ---- hook_dispatch.rs ---- included INSIDE src/hooks.rs, so `payload_for` and the
@@ -365,14 +511,28 @@ fn main() {
          /// non-camel-case carve-out.\n",
     );
     out.push_str("#[allow(non_camel_case_types)]\npub mod payload_for {\n");
-    for (event, payload_ty) in HOOK_EVENTS {
+    for HookEvent {
+        event, payload_ty, ..
+    } in HOOK_EVENTS
+    {
         out.push_str(&format!("    pub type {event} = {payload_ty};\n"));
     }
     out.push_str("}\n");
-    for (event, payload_ty) in HOOK_EVENTS {
+    for HookEvent {
+        event,
+        payload_ty,
+        actor,
+        target,
+    } in HOOK_EVENTS
+    {
+        // Two dispatches per event, in this order. The Rust handlers registered by `game_hook!`
+        // are compiled into the build and run first; the Runtime Scripts bound to the event are
+        // data, reconciled onto the shard by a Package, and run after. A Package cannot displace
+        // engine code by shipping a script.
         out.push_str(&format!(
             "pub(crate) fn fire_{event}(ctx: &spacetimedb::ReducerContext, payload: &{payload_ty}) {{\n    \
-                 for f in crate::GAME_HOOKS_{} {{\n        f(ctx, payload);\n    }}\n}}\n",
+                 for f in crate::GAME_HOOKS_{} {{\n        f(ctx, payload);\n    }}\n    \
+                 crate::script_binding::fire(ctx, \"{event}\", {actor}, {target});\n}}\n",
             event.to_uppercase()
         ));
     }
@@ -860,14 +1020,14 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
         "game_hook!",
         |head, line| match try_match_hook(head) {
             Some((event, name)) => {
-                if !HOOK_EVENTS.iter().any(|(e, _)| *e == event) {
+                if !HOOK_EVENTS.iter().any(|h| h.event == event) {
                     panic!(
                         "build.rs: `game_hook!` in {}:{line} names unknown event {event:?} — known \
                          events: {:?}. Extending the catalog means adding the payload struct + \
                          dispatch site in src/hooks.rs and the HOOK_EVENTS row in module/build.rs \
                          (payload_for aliases and fire_* fns are generated from that row).",
                         file.display(),
-                        HOOK_EVENTS.iter().map(|(e, _)| *e).collect::<Vec<_>>()
+                        HOOK_EVENTS.iter().map(|h| h.event).collect::<Vec<_>>()
                     );
                 }
                 check_facade_reexport(file, scan_root, in_package, &name);

@@ -1,5 +1,5 @@
-//! Applying Package Deltas to one Import Family's tables, and the provenance that records what was
-//! applied.
+//! Applying a Package's artifacts to one Import Family's tables, and the provenance that records
+//! what was applied.
 //!
 //! A base import replaces a whole Import Family, so a Package's row edits cannot be a one-shot edit
 //! — the next reload would silently revert them. They are an artifact that replays as the last
@@ -8,24 +8,36 @@
 //!
 //! Whole-plan, not per-Package, on purpose. Two Packages may claim different columns of one row, so
 //! the merged picture is the only correct unit of work — and a plan that fails halfway would leave
-//! the shard running a set of Packages nobody chose. `lyracore_package_delta::trace` produces the
-//! merged picture and every disagreement; this module refuses on a disagreement before it writes.
+//! the shard running a set of Packages nobody chose. The tracer for the family's artifact kind
+//! produces the merged picture and every disagreement; this module refuses on a disagreement before
+//! it writes.
 //!
 //! # Family dispatch
 //!
-//! What every family shares lives here: reading the plan, refusing a conflict, refusing an update
-//! whose target row will not be there, the order the durable pass runs in, and the provenance
-//! rewrite. What one family owns lives in its own module: the setters for its tables, where its
-//! Package-invented rows live, and how to find one row of it. [`Family`] is the only place the two
-//! meet, and its matches carry no wildcard, so a family that arrives without an implementation does
-//! not compile.
+//! Two artifact SHAPES meet here, and [`Family`] is where they are told apart.
+//!
+//! A CLAIM family's Packages state columns of rows a base import owns, so its apply traces and
+//! merges them, asks the shard what a row currently holds, and refuses an update whose target will
+//! not be there. That shell lives in this module and each such family owns only the setters for its
+//! tables, where its Package-invented rows live, and how to find one row of it — [`ClaimFamily`] is
+//! the only place the two meet.
+//!
+//! The SCRIPT family has no base import behind it and no shared rows: a Package ships whole
+//! `game_script` rows it owns outright. Nothing to merge and nothing to look up, so
+//! [`script`] owns its whole apply rather than filling in a claim shell it would have to
+//! answer questions it cannot be asked. What the two still share is the envelope: the operator gate,
+//! the payload separator, and the provenance rewrite.
+//!
+//! No match here carries a wildcard, so a family that arrives without an implementation does not
+//! compile.
 //!
 //! # Reconciliation
 //!
 //! A base reimport clears only real identifiers, so rows a Package INVENTED (its family's Package
 //! identifier band) survive it untouched. Nothing else would ever remove them, which is why this
 //! reducer clears the whole band before it applies: a Package that left the enabled set takes its
-//! invented rows with it, with no bookkeeping to disagree with the shard.
+//! invented rows with it, with no bookkeeping to disagree with the shard. For the script family the
+//! band is the whole table, which makes its apply a total reconciliation.
 //!
 //! Rows a Package only TUNED are not restored here. Disabling a Package means replaying the base
 //! import and then applying the remaining Packages — there is no pre-image to roll back to, which
@@ -34,28 +46,49 @@
 #[cfg(test)]
 mod fixtures;
 mod items;
+mod script;
 mod spell;
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
-    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, ITEM_FAMILY, SPELL_FAMILY,
+    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, ITEM_FAMILY, SCRIPT_FAMILY,
+    SPELL_FAMILY,
 };
 
 use crate::helpers::require_operator;
 use crate::import_meta::game_import_meta;
 
-/// Separates the artifacts inside one `apply_package_deltas` payload. A Package Delta's canonical
-/// form escapes every control character, so no artifact can contain this byte and no artifact needs
-/// quoting to travel next to another.
+/// Separates the artifacts inside one `apply_package_deltas` payload. Every artifact kind's
+/// canonical form escapes every control character, so no artifact can contain this byte and no
+/// artifact needs quoting to travel next to another.
 const ARTIFACT_SEPARATOR: char = '\n';
 
-/// An Import Family this build can apply Package Deltas for.
+/// An Import Family this build can apply a Package's artifacts for.
 ///
-/// One variant per family the Package Delta schema names tables for, so a family with no artifact
-/// shape to read cannot be asked for.
+/// Split by ARTIFACT SHAPE rather than listed flat, because the two shapes have almost nothing in
+/// common below the envelope. A claim family's Packages state columns of rows a base import owns,
+/// so its apply traces and merges them and has to ask the shard what a row currently holds. The
+/// script family has no base import and no shared rows: a Package ships whole rows it owns
+/// outright, and there is nothing to merge or to look up.
+///
+/// Keeping them one flat enum would mean the script family carrying arms for `update_target` and
+/// `write_row`, which take a traced CLAIM — questions it can never be asked. This way each shape's
+/// matches stay exhaustive over exactly the families that answer them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Family {
+    /// A family whose Packages claim columns of rows a base import owns.
+    Claims(ClaimFamily),
+    /// Runtime Scripts. Whole rows, no base import, no merge.
+    Script,
+}
+
+/// An Import Family whose artifact is a Package Delta.
+///
+/// One variant per family the Package Delta schema names tables for, so a family with no claim
+/// shape to read cannot be asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimFamily {
     /// `game_spell` and `game_spell_effect`.
     Spell,
     /// `game_item_template`.
@@ -64,13 +97,17 @@ enum Family {
 
 impl Family {
     /// Every family this build applies, in the order a refusal lists them.
-    const ALL: &'static [Self] = &[Self::Spell, Self::Item];
+    const ALL: &'static [Self] = &[
+        Self::Claims(ClaimFamily::Spell),
+        Self::Claims(ClaimFamily::Item),
+        Self::Script,
+    ];
 
     /// The family name the importer stamps and the reducer takes.
     const fn as_str(self) -> &'static str {
         match self {
-            Self::Spell => SPELL_FAMILY,
-            Self::Item => ITEM_FAMILY,
+            Self::Claims(family) => family.as_str(),
+            Self::Script => SCRIPT_FAMILY,
         }
     }
 
@@ -86,10 +123,21 @@ impl Family {
             .find(|family| family.as_str() == name)
             .ok_or_else(|| {
                 format!(
-                    "import family `{name}` has no Package Delta schema; this build applies {}",
+                    "import family `{name}` has no Package artifact schema; this build \
+                     applies {}",
                     known_families()
                 )
             })
+    }
+}
+
+impl ClaimFamily {
+    /// The family name the importer stamps and the reducer takes.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Spell => SPELL_FAMILY,
+            Self::Item => ITEM_FAMILY,
+        }
     }
 
     /// What this shard holds for the row an `update` claim names.
@@ -211,7 +259,22 @@ pub fn apply_package_deltas(
     require_operator(ctx)?;
     let family = Family::parse(&family)?;
 
-    let plan = ApplyPlan::read(&packed)?;
+    let packages = match family {
+        Family::Claims(claims) => apply_claims(ctx, claims, &packed)?,
+        Family::Script => script::apply(ctx, &packed)?,
+    };
+
+    stamp_provenance(ctx, family, &packages);
+    Ok(())
+}
+
+/// Apply one claim family's whole plan: trace it, refuse it, then clear and rewrite.
+fn apply_claims(
+    ctx: &ReducerContext,
+    family: ClaimFamily,
+    packed: &str,
+) -> Result<Vec<PlannedPackage>, String> {
+    let plan = ApplyPlan::read(packed)?;
     check_claims_belong_to(family, &plan.rows)?;
     check_update_targets(ctx, family, &plan)?;
 
@@ -219,8 +282,7 @@ pub fn apply_package_deltas(
     for row in &plan.rows {
         family.write_row(ctx, row)?;
     }
-    stamp_provenance(ctx, family, &plan);
-    Ok(())
+    Ok(plan.packages)
 }
 
 // ===========================================================================================
@@ -228,12 +290,41 @@ pub fn apply_package_deltas(
 // ===========================================================================================
 
 /// One Package's contribution to a plan, in the shape its provenance row records.
+///
+/// Family-neutral on purpose: it is what [`stamp_provenance`] writes, and every family produces one
+/// per Package however its artifact was shaped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PlannedPackage {
     package: String,
     artifact_hash: String,
     source_hash: String,
-    counts: ClaimCounts,
+    counts: RowCounts,
+}
+
+/// The row counts one Package's provenance row records.
+///
+/// The family-generic `updated_rows`/`inserted_rows` pair is what every family fills; the spell
+/// breakdown below them is filled by the family that has one. A family with no breakdown leaves
+/// them zero rather than growing a column nobody reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RowCounts {
+    updated_rows: u64,
+    inserted_rows: u64,
+    inserted_spells: u64,
+    inserted_effects: u64,
+}
+
+impl From<ClaimCounts> for RowCounts {
+    /// A claim family already tallies both halves, so this only widens the shape: the same numbers,
+    /// in the family-neutral type the provenance row is written from.
+    fn from(counts: ClaimCounts) -> Self {
+        Self {
+            updated_rows: counts.updated_rows,
+            inserted_rows: counts.inserted_rows,
+            inserted_spells: counts.inserted_spells,
+            inserted_effects: counts.inserted_effects,
+        }
+    }
 }
 
 /// The merged picture of every enabled Package's claims, and who contributed what.
@@ -292,7 +383,7 @@ impl ApplyPlan {
                     .to_hex()
                     .to_string(),
                 source_hash: delta.source_hash().to_string(),
-                counts: delta.claim_counts(),
+                counts: delta.claim_counts().into(),
             })
             .collect();
 
@@ -308,7 +399,7 @@ impl ApplyPlan {
 /// One apply reloads one family, so a claim on another family's table would be applied out of turn
 /// and then reverted by that family's own import. Every table names its owner, so this is the whole
 /// check.
-fn check_claims_belong_to(family: Family, rows: &[TracedRow]) -> Result<(), String> {
+fn check_claims_belong_to(family: ClaimFamily, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
         if row.table().family() != family.as_str() {
             return Err(format!(
@@ -421,7 +512,7 @@ fn wrong_type(field: &str, value: &FieldValue) -> String {
 /// Runs before the first write, so a plan that names a missing row changes nothing at all.
 fn check_update_targets(
     ctx: &ReducerContext,
-    family: Family,
+    family: ClaimFamily,
     plan: &ApplyPlan,
 ) -> Result<(), String> {
     for row in &plan.rows {
@@ -452,7 +543,7 @@ fn check_update_targets(
 
 /// Rewrites this family's provenance wholesale, so the table always describes the Packages the
 /// shard is running now rather than every Package it ever ran.
-fn stamp_provenance(ctx: &ReducerContext, family: Family, plan: &ApplyPlan) {
+fn stamp_provenance(ctx: &ReducerContext, family: Family, packages: &[PlannedPackage]) {
     let family = family.as_str();
     let base_source_sha = ctx
         .db
@@ -471,7 +562,7 @@ fn stamp_provenance(ctx: &ReducerContext, family: Family, plan: &ApplyPlan) {
         imports.id().delete(id);
     }
 
-    for planned in &plan.packages {
+    for planned in packages {
         imports.insert(PackageImport {
             id: format!("{family}/{}", planned.package),
             family: family.to_string(),
@@ -498,7 +589,7 @@ mod tests {
         artifact, effect_claim, item_claim, plan, spell_claim, HASH_A, PACKAGE_ITEM, PACKAGE_SPELL,
         REAL_SPELL, WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW, WHOLE_SPELL_ROW,
     };
-    use super::{check_claims_belong_to, ApplyPlan, Family, ARTIFACT_SEPARATOR};
+    use super::{check_claims_belong_to, ApplyPlan, ClaimFamily, Family, ARTIFACT_SEPARATOR};
     use lyracore_package_delta::PackageDelta;
 
     /// The payload format rests on this: a canonical artifact escapes every control character, so
@@ -659,19 +750,41 @@ mod tests {
     }
 
     #[test]
-    fn an_import_family_with_no_delta_schema_is_refused_by_name() {
+    fn an_import_family_with_no_artifact_schema_is_refused_by_name() {
         let refusal = Family::parse("quests").expect_err("an unsupported family is refused");
 
         assert!(refusal.contains("`quests`"), "{refusal}");
-        assert!(refusal.contains("applies `spell` or `items`"), "{refusal}");
+        assert!(refusal.contains("`spell`"), "{refusal}");
+        assert!(refusal.contains("`items`"), "{refusal}");
+        assert!(refusal.contains("`script`"), "{refusal}");
     }
 
     #[test]
-    fn the_spell_and_item_families_are_the_ones_this_build_applies() {
-        assert_eq!(Family::parse("spell"), Ok(Family::Spell));
-        assert_eq!(Family::Spell.as_str(), "spell");
-        assert_eq!(Family::parse("items"), Ok(Family::Item));
-        assert_eq!(Family::Item.as_str(), "items");
+    fn every_family_this_build_applies_resolves_from_its_name() {
+        assert_eq!(
+            Family::parse("spell"),
+            Ok(Family::Claims(ClaimFamily::Spell))
+        );
+        assert_eq!(
+            Family::parse("items"),
+            Ok(Family::Claims(ClaimFamily::Item))
+        );
+        assert_eq!(Family::parse("script"), Ok(Family::Script));
+        for family in Family::ALL {
+            assert_eq!(Family::parse(family.as_str()), Ok(*family));
+        }
+    }
+
+    /// The two shapes are separate enums so neither carries the other's questions. The reducer's
+    /// `family` argument is one namespace all the same, and two families answering to one name
+    /// would make an apply ambiguous.
+    #[test]
+    fn no_two_families_answer_to_one_name() {
+        let mut names: Vec<&str> = Family::ALL.iter().map(|f| f.as_str()).collect();
+        names.sort_unstable();
+        let unique = names.len();
+        names.dedup();
+        assert_eq!(names.len(), unique);
     }
 
     /// Every claimable table belongs to the spell family today, so a spell plan is in scope whole.
@@ -684,7 +797,10 @@ mod tests {
         .join(",");
         let plan = plan(&[artifact("example.bolt", &claims)]).expect("plan builds");
 
-        assert_eq!(check_claims_belong_to(Family::Spell, &plan.rows), Ok(()));
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Spell, &plan.rows),
+            Ok(())
+        );
     }
 
     /// An items plan is checked against the items family, not the spell family it happens to sit
@@ -697,7 +813,10 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert_eq!(check_claims_belong_to(Family::Item, &plan.rows), Ok(()));
-        assert!(check_claims_belong_to(Family::Spell, &plan.rows).is_err());
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Item, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Spell, &plan.rows).is_err());
     }
 }

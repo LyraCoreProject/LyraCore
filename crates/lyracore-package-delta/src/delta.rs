@@ -482,11 +482,38 @@ impl PackageDelta {
     /// Every refusal happens here, before any caller could act on a claim.
     ///
     /// # Errors
-    /// Any [`DeltaError`]. The parse stops at the first problem.
+    /// [`DeltaError::WrongArtifactKind`] when the bytes are another artifact kind — a Package ships
+    /// every kind it has into one directory, so a reader walking `*.json` meets them all and has to
+    /// be told which it is holding rather than shown a complaint about a member. Otherwise any
+    /// [`DeltaError`] the members raise; the parse stops at the first problem.
     pub fn parse(json: &str) -> Result<Self, DeltaError> {
         let root: Value =
             serde_json::from_str(json).map_err(|e| DeltaError::Malformed(e.to_string()))?;
         let root = object(&root, "")?;
+
+        // A Package Delta carries no `kind`: version 1 shipped before there was a second kind to
+        // tell it from, and adding one now would change every artifact's canonical bytes. So a
+        // `kind` member is proof these bytes are NOT this artifact, and it is checked before the
+        // closed member list below, which would otherwise report it as an unexpected member.
+        if let Some(kind) = root.get("kind") {
+            let found = match kind {
+                Value::String(kind) if kind == crate::script::SCRIPT_ARTIFACT_KIND => {
+                    crate::script::ArtifactKind::Script
+                }
+                Value::String(kind) => crate::script::ArtifactKind::Other(kind.clone()),
+                _ => {
+                    return Err(DeltaError::WrongJsonType {
+                        path: "kind".to_owned(),
+                        expected: "a string",
+                    })
+                }
+            };
+            return Err(DeltaError::WrongArtifactKind {
+                expected: "a Package Delta",
+                found: found.to_string(),
+            });
+        }
+
         expect_members(root, "", &["claims", "package", "source_hash", "version"])?;
 
         let version = member(root, "", "version")?;
@@ -768,21 +795,24 @@ fn out_of_range(raw: &Value, field: &str, ty: FieldType) -> DeltaError {
     }
 }
 
-fn object<'a>(value: &'a Value, path: &str) -> Result<&'a Map<String, Value>, DeltaError> {
+pub(crate) fn object<'a>(
+    value: &'a Value,
+    path: &str,
+) -> Result<&'a Map<String, Value>, DeltaError> {
     value.as_object().ok_or(DeltaError::WrongJsonType {
         path: path.to_owned(),
         expected: "an object",
     })
 }
 
-fn string<'a>(value: &'a Value, path: &str) -> Result<&'a str, DeltaError> {
+pub(crate) fn string<'a>(value: &'a Value, path: &str) -> Result<&'a str, DeltaError> {
     value.as_str().ok_or(DeltaError::WrongJsonType {
         path: path.to_owned(),
         expected: "a string",
     })
 }
 
-fn member<'a>(
+pub(crate) fn member<'a>(
     map: &'a Map<String, Value>,
     path: &str,
     name: &str,
@@ -794,7 +824,7 @@ fn member<'a>(
 
 /// Refuses any member outside the closed list. `allowed` is sorted, matching the parsed map, so the
 /// member named in the error is the same one for the same input.
-fn expect_members(
+pub(crate) fn expect_members(
     map: &Map<String, Value>,
     path: &str,
     allowed: &[&str],

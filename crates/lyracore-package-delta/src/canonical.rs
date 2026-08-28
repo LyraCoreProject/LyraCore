@@ -27,9 +27,9 @@ pub(crate) fn write_delta(delta: &PackageDelta) -> String {
     out.push_str("{\"version\":");
     out.push_str(&DELTA_VERSION.to_string());
     out.push_str(",\"package\":");
-    write_string(&mut out, delta.package().as_str());
+    write_json_string(&mut out, delta.package().as_str());
     out.push_str(",\"source_hash\":");
-    write_string(&mut out, delta.source_hash().as_str());
+    write_json_string(&mut out, delta.source_hash().as_str());
     out.push_str(",\"claims\":[");
     for (index, claim) in delta.claims().iter().enumerate() {
         if index > 0 {
@@ -43,17 +43,17 @@ pub(crate) fn write_delta(delta: &PackageDelta) -> String {
 
 fn write_claim(out: &mut String, claim: &Claim) {
     out.push_str("{\"table\":");
-    write_string(out, claim.table().as_str());
+    write_json_string(out, claim.table().as_str());
     out.push_str(",\"key\":");
     write_key(out, claim.key());
     out.push_str(",\"operation\":");
-    write_string(out, claim.operation().as_str());
+    write_json_string(out, claim.operation().as_str());
     out.push_str(",\"fields\":{");
     for (index, (name, value)) in claim.fields().iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
-        write_string(out, name);
+        write_json_string(out, name);
         out.push(':');
         write_value(out, value);
     }
@@ -87,7 +87,7 @@ fn write_key(out: &mut String, key: PrimaryKey) {
 
 fn write_value(out: &mut String, value: &FieldValue) {
     out.push_str("{\"type\":");
-    write_string(out, value.field_type().as_str());
+    write_json_string(out, value.field_type().as_str());
     out.push_str(",\"value\":");
     out.push_str(&scalar_literal(value));
     out.push('}');
@@ -109,7 +109,7 @@ pub(crate) fn scalar_literal(value: &FieldValue) -> String {
         FieldValue::I32(n) => out.push_str(&n.to_string()),
         FieldValue::F32(n) => write_f32(&mut out, *n),
         FieldValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        FieldValue::Str(s) => write_string(&mut out, s),
+        FieldValue::Str(s) => write_json_string(&mut out, s),
     }
     out
 }
@@ -125,7 +125,7 @@ fn write_f32(out: &mut String, value: f32) {
     }
 }
 
-fn write_string(out: &mut String, text: &str) {
+pub(crate) fn write_json_string(out: &mut String, text: &str) {
     out.push('"');
     for ch in text.chars() {
         match ch {

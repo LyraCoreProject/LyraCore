@@ -22,7 +22,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use lyracore_package_delta::{trace, ClaimTrace, Operation, PackageDelta};
+use lyracore_package_delta::{
+    artifact_kind, trace, ArtifactKind, ClaimTrace, Operation, PackageDelta,
+};
 
 use crate::{call_reducer_args, Args};
 
@@ -126,6 +128,17 @@ fn read_enabled(root: &Path) -> Result<Vec<Artifact>> {
         for path in files {
             let json =
                 fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            // One Package ships every artifact kind it has into this one directory, so the glob
+            // above finds a Script Artifact next to a Package Delta. Skipping it is not leniency:
+            // this stage is the CLAIM half of an apply, and the script family has no base import to
+            // run behind. `lyracore packages replay` applies that family separately. Anything this
+            // router cannot read at all still goes to the parser, which names what is wrong with it.
+            if matches!(
+                artifact_kind(&json),
+                Some(ArtifactKind::Script | ArtifactKind::Other(_))
+            ) {
+                continue;
+            }
             let delta = PackageDelta::parse(&json)
                 .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
             artifacts.push(Artifact { path, delta });
@@ -256,6 +269,41 @@ mod tests {
         let found = read_enabled(&t.0).expect("discovery succeeds");
 
         assert!(found.is_empty());
+    }
+
+    /// A Package ships every artifact kind it has into one directory. This stage is the CLAIM half
+    /// of an apply, so a Script Artifact next to a Package Delta is not its business — and must not
+    /// abort the whole spell import the way an unreadable Package Delta would.
+    #[test]
+    fn a_script_artifact_beside_a_package_delta_is_skipped_rather_than_refused() {
+        let t = Scratch::new("mixed-kinds");
+        t.write(
+            "bolt/data/.generated/script.json",
+            &format!(
+                r#"{{"kind":"script","version":1,"package":"example.bolt","source_hash":"{HASH_A}","scripts":[{{"script_id":100001,"name":"bolt.greet","event":"on_login","priority":0,"enabled":true,"source":"grant_xp(event.actor, 1)"}}]}}"#
+            ),
+        );
+        t.write(
+            "bolt/data/.generated/spell.json",
+            &update_artifact("example.bolt", REAL_SPELL, "cooldown_ms", 1500),
+        );
+
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].delta.package().as_str(), "example.bolt");
+    }
+
+    /// The router only skips what it can positively identify as another kind. A file no parser can
+    /// read is still a refusal that names it.
+    #[test]
+    fn a_file_no_parser_can_read_still_refuses_the_stage() {
+        let t = Scratch::new("unreadable");
+        t.write("broken/data/.generated/spell.json", "{ not even valid }");
+
+        let refusal = read_enabled(&t.0).expect_err("discovery is refused");
+
+        assert!(refusal.to_string().contains("spell.json"), "{refusal}");
     }
 
     /// Only `.generated/` counts. An author's own JSON beside their Datascript is not an artifact.

@@ -412,8 +412,28 @@ impl RuntimeScriptHost {
 
     /// How many chunks this host has compiled since it was built. A cache hit does not raise it,
     /// which is how "valid Lua compiles once and runs many times" is observable.
+    ///
+    /// An observation point, not a gameplay path: the tests read it, and so does
+    /// `debug_run_runtime_script` so an Operator can watch the cache work on a live realm. Neither
+    /// is compiled into a default release build, which is what the allow says.
+    #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
     pub(crate) fn compilations(&self) -> usize {
         self.compilations
+    }
+
+    /// Drop every compiled chunk.
+    ///
+    /// The cache is keyed by a hash of the source, so it can never serve stale code and needs no
+    /// invalidation for CORRECTNESS. What it lacks is a reason to ever shrink: without this, every
+    /// script source the Module has seen since the wasm instance started stays compiled in it
+    /// forever, including the ones no Package ships any more.
+    ///
+    /// So there is one eviction point and it is the honest one: a `script` family apply, which is
+    /// the only thing that changes which sources exist. Called from there, the cache holds the
+    /// scripts the Shard is actually running, plus whatever `debug_run_runtime_script` has tried
+    /// since. Nothing durable is lost — a chunk is derived from source and recompiles on demand.
+    pub(crate) fn clear_chunks(&mut self) {
+        self.chunks.clear();
     }
 
     /// Run `script` for `event` in a fresh environment under a fuel budget.

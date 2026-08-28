@@ -322,11 +322,13 @@ mod realm_core;
 mod region;
 mod reputation;
 mod rest;
-// The Runtime Script Host. Package reconciliation and event bindings are separate work, so today
-// the only callers are the tests and the `debug_reducers` lever — hence the allow, which the
-// binding work removes along with the "no caller yet" it describes.
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+// The Runtime Script Host. Called from `script_binding`'s dispatch on every hook event in a
+// default build, so it no longer needs the "no caller yet" allow the host shipped with.
 mod runtime_script;
+/// The `game_script` table and the Event Binding dispatch: which Runtime Scripts run for which
+/// event. Not re-exported below, for the same reason `package_import` is not — nothing outside this
+/// module reads its table.
+mod script_binding;
 mod seed;
 mod skill;
 mod skilldata;
