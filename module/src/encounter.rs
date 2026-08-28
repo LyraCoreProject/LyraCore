@@ -174,28 +174,34 @@ pub(crate) fn notify_from_eventai(
             source.map_id, source.instance_id, instance.map_id
         ));
     }
-    let handler = package_handler_for(binding, signal, crate::GAME_ENCOUNTER_PACKAGES)?;
+    let Some(handler) = package_handler_for(binding, crate::GAME_ENCOUNTER_PACKAGES)? else {
+        // The mangos SetData-without-instance-script semantic: the DATA names an encounter
+        // boundary, but no installed Package claims it — the notification has no consumer.
+        spacetimedb::log::warn!(
+            "encounter binding {binding:?} has no installed package authority — {signal:?} not consumed"
+        );
+        return Ok(());
+    };
     handler(ctx, source.instance_id, signal)
 }
 
 fn package_handler_for(
     binding: EncounterBinding,
-    signal: EncounterSignal,
     installed: &[(EncounterBinding, EncounterPackageHandler)],
-) -> Result<EncounterPackageHandler, String> {
+) -> Result<Option<EncounterPackageHandler>, String> {
     let mut handlers = installed
         .iter()
         .filter(|(installed, _)| *installed == binding)
         .map(|(_, handler)| *handler);
-    let handler = handlers.next().ok_or_else(|| {
-        format!("encounter binding {binding:?} has no installed package authority for {signal:?}")
-    })?;
+    let Some(handler) = handlers.next() else {
+        return Ok(None);
+    };
     if handlers.next().is_some() {
         return Err(format!(
             "encounter binding {binding:?} has more than one installed package authority"
         ));
     }
-    Ok(handler)
+    Ok(Some(handler))
 }
 
 #[cfg(test)]
@@ -930,11 +936,12 @@ pub(crate) fn sweep_encounter_state(ctx: &ReducerContext, instance_id: u64) {
 mod tests {
     use super::*;
 
-    // Full binding coverage is asserted by the `dungeons` Package's own test, which runs exactly
-    // when that Package is installed. A bare core ships the enum with no authorities.
+    // The binding catalog is data-derived (dump-verified `ACTION_T_SET_INSTANCE_DATA` rows), so
+    // it ships with the engine even when no installed Package claims a binding — an unclaimed
+    // notification is a logged no-op, verified below.
 
     #[test]
-    fn package_lookup_refuses_missing_and_duplicate_authority() {
+    fn package_lookup_skips_unclaimed_and_refuses_duplicate_authority() {
         fn handler(
             _ctx: &ReducerContext,
             _instance_id: u64,
@@ -944,13 +951,15 @@ mod tests {
         }
 
         let binding = EncounterBinding::BlackfathomDeepsKelris;
-        let missing = package_handler_for(binding, EncounterSignal::Complete, &[])
-            .err()
-            .expect("missing authority must refuse");
-        assert!(missing.contains("no installed package authority"));
+        // Unclaimed is a valid install state (the data names the boundary, no Package consumes
+        // it), so the lookup yields nothing rather than an error — notify no-ops on it.
+        assert!(matches!(package_handler_for(binding, &[]), Ok(None)));
+
+        let claimed = [(binding, handler as EncounterPackageHandler)];
+        assert!(matches!(package_handler_for(binding, &claimed), Ok(Some(_))));
 
         let duplicate = [(binding, handler as EncounterPackageHandler); 2];
-        let duplicate = package_handler_for(binding, EncounterSignal::Complete, &duplicate)
+        let duplicate = package_handler_for(binding, &duplicate)
             .err()
             .expect("duplicate authority must refuse");
         assert!(duplicate.contains("more than one installed package authority"));
