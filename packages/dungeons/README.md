@@ -22,5 +22,6 @@ Not in this Package:
 
 The Package covers many dungeons and grows by one submodule per dungeon; it is not scoped to a
 single encounter. To add one: create `src/<dungeon>.rs`, add its `mod` and `pub use <dungeon>::*;`
-pair to `src/mod.rs`, and register its handlers with `encounter_package!`. The build collapses every
-file here to one module, so keep item names dungeon-prefixed.
+pair to `src/mod.rs`, and register its handlers with `encounter_package!`.
+The registry scan resolves every file through the Package facade, so keep item names
+dungeon-prefixed.

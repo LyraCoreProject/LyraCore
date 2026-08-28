@@ -39,7 +39,7 @@ export function describeRank(spell: Spell): string {
   return `${spell.name} #${spell.spellId}: ${spell.cost} power, ${spell.cooldownMs}ms cooldown`;
 }
 
-/// The same reading, done against `packages/dungeons`' own table instead of a core one — the
+/// The same reading, done against `packages/dungeons`' own table instead of a core one. The
 /// generated typings cover an installed Package exactly as they cover the Module it ships in.
 export function describeSuppressionWindow(row: SunkenTempleSuppression): string {
   return `suppression #${row.scheduledId} armed for instance ${row.instanceId}`;

@@ -1,6 +1,6 @@
 //! Encounter kernel (work-item 228) — the mangos `InstanceScript` analogue as a PACKAGE-SUPPORT
 //! layer. Ships ZERO encounter content: dungeons' choreography lives in drop-in packages
-//! (`packages/<dungeon>/`, first consumer: 227 Deadmines), which consume three things from here:
+//! (`packages/dungeons/`, first consumer: 227 Deadmines), which consume three things from here:
 //!
 //! 1. **State** — `game_encounter_state`, one row per `(instance_id, encounter_id)` (the playbook's
 //!    PK-pair pattern: synthetic `#[auto_inc]` PK + a btree on the pair, like

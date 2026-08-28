@@ -1,7 +1,7 @@
 //! The `dungeons` Package: encounter choreography for every scripted dungeon, one submodule per
-//! dungeon. The build collapses every file here to `crate::pkg_dungeons`, so each submodule's
-//! markers must stay visible through the glob re-exports below. Adding a dungeon is one new
-//! submodule file plus its `mod`/`pub use` pair — see README.md for the Package boundary.
+//! dungeon. The registry scan resolves every file through `crate::pkg_dungeons`, so each
+//! submodule's markers must stay visible through the glob re-exports below. Adding a dungeon is
+//! one new submodule file plus its `mod`/`pub use` pair. See README.md for the Package boundary.
 
 mod blackfathom_deeps;
 mod blackrock_depths;
