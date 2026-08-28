@@ -16,6 +16,9 @@ use crate::{game_creature_template, game_world_entity, WorldEntity};
 use crate::items::game_item_template;
 // Tables, taxonomy consts, math helpers, and the control predicates are all re-exported by `spell::mod`.
 use crate::spell::*;
+// game_script (the Runtime Script identity table) is NOT re-exported at the crate root — see its
+// module doc — so the scripted-effect gate reaches it by explicit path.
+use crate::script_binding::game_script;
 
 // ===========================================================================================
 //  Cast resolution
@@ -998,6 +1001,28 @@ fn check_cast_gate_suffix(
         return Err(format!(
             "spell {spell_id} (ground-AoE) effect {} has no radius — area size is unauthored data",
             e.effect_index
+        ));
+    }
+
+    // Scripted-effect gate: a cast carrying an E_SCRIPTED effect with a nonzero script_id must
+    // resolve to an ENABLED game_script row before anything is spent. A missing row (bad data,
+    // or a Package that left the enabled set) and a disabled one (an Operator switched it off)
+    // refuse identically — the client sees an ordinary cast failure rather than paying for a
+    // spell whose effect silently does nothing. script_id == 0 (the vanilla no-op) never reaches
+    // this scan.
+    if let Some(e) = effects.iter().find(|e| {
+        e.kind == E_SCRIPTED
+            && e.script_id != 0
+            && !ctx
+                .db
+                .game_script()
+                .script_id()
+                .find(e.script_id)
+                .is_some_and(|script| script.enabled)
+    }) {
+        return Err(format!(
+            "spell {spell_id} effect {} names script {} which is missing or disabled",
+            e.effect_index, e.script_id
         ));
     }
 

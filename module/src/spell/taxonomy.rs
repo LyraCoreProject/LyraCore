@@ -91,7 +91,7 @@ pub(crate) const E_JUDGEMENT: u8 = 0x0B; // unleash the caster's active SEAL: a 
 pub(crate) const E_ADD_COMBO: u8 = 0x0C; // GENERATOR: +1 combo point on the target (Sinister Strike / Gouge / Backstab), capped at 5 — game_combo_point
 pub(crate) const E_FINISHER_DAMAGE: u8 = 0x0D; // FINISHER: damage = base_points (per-point) × the target's combo points, then spend them (Eviscerate)
 pub(crate) const E_RESURRECT: u8 = 0x0E; // revive a DEAD ally: restore base_points% of max hp/power + clear death/ghost (Resurrection)
-pub(crate) const E_SCRIPTED: u8 = 0x0F; // a registered Rust fn (script_id)
+pub(crate) const E_SCRIPTED: u8 = 0x0F; // script_id == 0 is the vanilla no-op; nonzero dispatches to a Runtime Script by identity (game_script.script_id)
 pub(crate) const E_PICKPOCKET: u8 = 0x10; // grant the rogue a small copper pocket from a creature WITHOUT engaging (Pick Pocket)
 pub(crate) const E_INTERRUPT: u8 = 0x11; // cancel the target's in-progress (timed) cast (Kick) — calls interrupt_cast; no-op if not casting. Kick ALSO locks the cast's SCHOOL for ~5s (game_school_lockout, Rogue Slice 3)
 pub(crate) const E_REDUCE_THREAT: u8 = 0x12; // one-time reduction of the CASTER's CURRENT threat by base_points across all its source rows (Feint), floored at 0 — DISTINCT from Fade's A_MOD_COMBAT(COMBAT_THREAT) FUTURE-threat percent
