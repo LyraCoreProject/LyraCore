@@ -6,6 +6,7 @@
 mod blackfathom_deeps;
 mod blackrock_depths;
 mod dire_maul;
+mod eventai_instance_test;
 mod razorfen_kraul;
 mod shadowfang_keep;
 mod sunken_temple;
