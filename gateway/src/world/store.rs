@@ -67,6 +67,22 @@ pub trait WorldStore:
         Ok(self.home_shard(character_guid))
     }
 
+    /// The handle for the shard the Shard Map gives `(map_id, instance_id)`, asked of the handle
+    /// that currently HOLDS the character (so a live dungeon run stays on its pool member).
+    /// `None` = this handle already serves that location, which is what a single-database gateway —
+    /// and every mock — always answers.
+    ///
+    /// [`settle_home_shard`](Self::settle_home_shard) asks the same question from the character's
+    /// own row; this asks it about a location nobody is at yet, which is what a session-less
+    /// crossing needs before it has anything to route from.
+    fn shard_for_location(
+        &self,
+        _map_id: u32,
+        _instance_id: u64,
+    ) -> Option<std::sync::Arc<dyn WorldStore>> {
+        None
+    }
+
     /// The escrow row this shard holds for `character_guid`, if any — the transfer's identity, its
     /// destination and the serialized character. `None` = not mid-transfer here.
     fn escrowed_transfer(&self, _character_guid: u64) -> Option<EscrowedTransfer> {

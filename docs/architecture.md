@@ -354,7 +354,10 @@ Every relay hangs off a coordinator connection, in one of two shapes:
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
   before cross-shard transfer cascade deletes, then destination entry registers a fresh viewer.
 
-`game_bot_invite_intent` is registered once at gateway startup and re-armed through `on_reconnect`.
+`game_bot_invite_intent` and `game_bot_transfer_intent` are registered once at gateway startup and
+re-armed through `on_reconnect`. Both carry a decision the Module cannot execute for a Character with
+no Session: the invite needs realm-core, and the Shard crossing needs the escrowed transfer driven
+from outside any one Shard.
 
 The owner token bypasses recipient RLS, so delivery is gated gateway-side: recipient-keyed lookups
 plus the `private_recipient_audience` predicate for the private tier, per-viewer gates for the

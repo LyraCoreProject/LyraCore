@@ -428,6 +428,11 @@ parity_test!(parity_game_duel_event, "game_duel_event", lyracore_module::DuelEve
 parity_test!(parity_game_bot_invite_intent, "game_bot_invite_intent", lyracore_module::BotInviteIntent, bindings::bot_invite_intent_type::BotInviteIntent, {
     id, inviter_guid, target_guid, created_at,
 });
+// A session-less character's Shard crossing, picked up by the coordinator's
+// `world::transfer::run_bot_transfer` relay — the transfer twin of the row above.
+parity_test!(parity_game_bot_transfer_intent, "game_bot_transfer_intent", lyracore_module::BotTransferIntent, bindings::bot_transfer_intent_type::BotTransferIntent, {
+    id, bot_guid, destination_map, destination_instance, reason, created_at,
+});
 // The private per-recipient whisper relay, now readable on TWO connections — the
 // per-player one under RLS (unchanged) and realm-core's coordinator, which self-filters on the
 // END-appended `recipient_guid`. Both decodes go through this binding, so a drifted column here is a
@@ -815,6 +820,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_xp_event",
     "game_levelup_event",
     "game_bot_invite_intent",
+    "game_bot_transfer_intent",
     "game_addon_message",
     "game_character_explored",
     "game_account",

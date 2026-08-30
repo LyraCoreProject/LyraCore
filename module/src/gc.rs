@@ -15,6 +15,8 @@ use crate::breath_relay::game_breath_relay_event;
 // other event table's accessor trait rides that glob, so this is the one accessor here needing its
 // own import.
 use crate::rest::game_rest_state_event;
+// Same story as `rest` above: `transfer` re-exports only `TransferOut` at crate scope.
+use crate::transfer::game_bot_transfer_intent;
 // `game_movement_event` / `game_creature_move_event` are deliberately NOT imported: nothing writes
 // either table any more, so the reaper no longer touches them (see the notes in `reap_events`).
 
@@ -87,6 +89,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_trade_event); // trade-status relay rows (#120, RLS-scoped)
     reap!(game_duel_event); // Duel lifecycle relay rows (RLS-scoped)
     reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup (issue #54)
+    reap!(game_bot_transfer_intent); // bot-decided Shard crossings awaiting gateway pickup
     reap!(game_movement_violation); // recent anti-cheat diagnostics (issue #211)
                                     // Rest-area zzz/blue-bar relay rows (196). Caught missing by the #379 gc_reap_tripwire: this
                                     // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but

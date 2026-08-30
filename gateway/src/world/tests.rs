@@ -449,6 +449,12 @@ struct InMemoryStore {
     /// between two logins (a shard-map edit, or the realm-core index re-homing a character). `None`
     /// (default): every resolution answers `home`, byte-identical to before this field existed.
     home_after_flip: Option<std::sync::Arc<InMemoryStore>>,
+    /// The one location this handle routes elsewhere, and where to: `(map_id, instance_id, shard)`.
+    /// `None` (derive-Default) = "this handle serves every location", the single-database answer
+    /// `shard_for_location` gives. Keyed by location on purpose — a caller that asks about the
+    /// wrong place gets `None` and the crossing silently becomes a no-op, which is what the tests
+    /// must be able to tell apart from a crossing that ran.
+    location_shard: Option<(u32, u64, std::sync::Arc<InMemoryStore>)>,
     /// How many times `home_shard()` has been asked — drives `home_after_flip`, and is itself the
     /// assertion that routing is resolved ONCE PER WORLD ENTRY and never mid-session. SHARED
     /// between a store and the handles it routes to (like `calls`), so a re-resolution asked of the
@@ -836,6 +842,15 @@ impl WorldStore for InMemoryStore {
         self.rec("bind_shard_session");
         self.bound_sessions.lock().unwrap().push(account_id);
         Ok(())
+    }
+
+    fn shard_for_location(
+        &self,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Option<std::sync::Arc<dyn WorldStore>> {
+        let (m, i, shard) = self.location_shard.as_ref()?;
+        (*m == map_id && *i == instance_id).then(|| shard.clone() as std::sync::Arc<dyn WorldStore>)
     }
 
     fn escrowed_transfer(&self, character_guid: u64) -> Option<super::transfer::EscrowedTransfer> {

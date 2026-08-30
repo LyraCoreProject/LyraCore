@@ -27,11 +27,14 @@
 //! makes the id re-derivable by a gateway that restarted with no memory of what it was doing. That
 //! is the entire recovery mechanism: nothing about an in-flight transfer lives in gateway RAM.
 //!
-//! Deliberate simplification: the driver is SYNCHRONOUS and runs on the world session's own
-//! thread, inside the client's loading screen (the WORLDPORT_ACK handler). Ceiling: a slow or
-//! unreachable destination shard stalls that one session for the reducer timeout. Upgrade path: a
-//! driver task with a work queue, if transfers ever need to happen without a loading screen to
-//! hide in.
+//! Deliberate simplification: the driver is SYNCHRONOUS. For a player it runs on the world
+//! session's own thread, inside the client's loading screen (the WORLDPORT_ACK handler); ceiling: a
+//! slow or unreachable destination shard stalls that one session for the reducer timeout.
+//!
+//! A character with no session has no loading screen to hide in, so [`run_bot_transfer`] runs the
+//! same sequence from the coordinator's own subscription callback instead. Same ceiling, different
+//! victim: a slow destination holds that callback, and the intent rows are written one bot at a
+//! time. Upgrade path for both: a driver task with a work queue.
 
 use anyhow::{anyhow, Result};
 
@@ -306,6 +309,86 @@ pub(super) fn run_transfer_injected(
         }
     }
     abort_point(abort_after, "evict_instance_population", escrow.transfer_id);
+    Ok(())
+}
+
+/// Drive one Shard crossing for a character with **no session** — a playerbot following its party
+/// through a portal, and the same path again on the way out.
+///
+/// A player's crossing is driven inside its own loading screen: the client acks
+/// (`MSG_MOVE_WORLDPORT_ACK`), `route_home` resolves the owning shard and `settle_transfer` runs the
+/// seven steps. A bot has no client to ack, so the module writes a `game_bot_transfer_intent` row
+/// instead and the coordinator relay (`stdb::subscriptions`) calls this. The transfer itself is
+/// unchanged — the same `settle_transfer`, the same escrow, the same Package-registered transfer
+/// arms — because the only thing a bot was ever missing is the driver.
+///
+/// `holder` is the shard the intent row appeared on, which is the shard the bot lives on: the module
+/// wrote both in one transaction.
+///
+/// # What it refuses, and why it refuses rather than drives
+///
+/// The module's writer (`transfer::emit_bot_transfer_intent`) teleports the bot before it records
+/// the intent, so a well-formed intent always names where the durable character row already points.
+/// When the two disagree the row is stale or the bot never moved — a dead bot teleports nowhere —
+/// and driving it would escrow a character to wherever it happens to be standing. Both refusals are
+/// a log line and an `Err`: nothing durable has been touched at that point.
+///
+/// A destination this shard already serves is not a refusal, it is a completed crossing: on a realm
+/// with one Shard the teleport WAS the whole move, and there is nothing left to do.
+pub fn run_bot_transfer(
+    holder: &dyn WorldStore,
+    bot_guid: u64,
+    destination_map: u32,
+    destination_instance: u64,
+    reason: &str,
+) -> Result<()> {
+    let plan = holder.character_destination(bot_guid).ok_or_else(|| {
+        anyhow!(
+            "bot transfer: {} holds no character {bot_guid} to move (map {destination_map} \
+             instance {destination_instance}, {reason})",
+            holder.shard_name()
+        )
+    })?;
+    if (plan.dest_map_id, plan.dest_instance_id) != (destination_map, destination_instance) {
+        return Err(anyhow!(
+            "bot transfer: character {bot_guid} on {} is bound for map {} instance {}, but the \
+             intent asks for map {destination_map} instance {destination_instance} ({reason}) — \
+             refusing, because the module places a bot before it records the crossing, so this row \
+             is stale or its bot never moved",
+            holder.shard_name(),
+            plan.dest_map_id,
+            plan.dest_instance_id
+        ));
+    }
+    let Some(destination) = holder.shard_for_location(destination_map, destination_instance) else {
+        log::debug!(
+            "bot transfer: {} already serves map {destination_map} instance \
+             {destination_instance} — character {bot_guid} is there ({reason})",
+            holder.shard_name()
+        );
+        return Ok(());
+    };
+    log::info!(
+        "bot transfer: character {bot_guid} {} -> {} (map {destination_map} instance \
+         {destination_instance}, {reason})",
+        holder.shard_name(),
+        destination.shard_name()
+    );
+    settle_transfer(holder, destination.as_ref(), bot_guid)?;
+    // The arrival repair a player gets from `world::party::on_world_entry` and a bot would
+    // otherwise never run: re-push realm-core's roster onto the destination, and clear a mirror row
+    // for a party this character has left. Every party op already fans its roster out to every
+    // connected shard, so this is a repair rather than the only push — but those pushes are
+    // best-effort, and a bot that lands on a shard whose mirror missed one runs its kill-XP split,
+    // quest credit, loot rules and `/p` chat against a party that shard has never heard of.
+    // Best-effort here too: the crossing has already committed.
+    if let Err(e) = crate::world::party::sync_arrival_mirror(destination.as_ref(), bot_guid) {
+        log::warn!(
+            "bot transfer: character {bot_guid} arrived on {} but its party mirror did not follow \
+             ({e:#}) — that shard's party reads for them stay stale until the next op",
+            destination.shard_name()
+        );
+    }
     Ok(())
 }
 

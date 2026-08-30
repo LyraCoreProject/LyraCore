@@ -31,6 +31,7 @@ pub mod authored_idle_movement_type;
 pub mod authored_walking_mode_type;
 pub mod begin_transfer_reducer;
 pub mod bot_invite_intent_type;
+pub mod bot_transfer_intent_type;
 pub mod breath_relay_event_type;
 pub mod breath_schedule_type;
 pub mod breath_state_type;
@@ -121,6 +122,7 @@ pub mod debug_begin_cast_reducer;
 pub mod debug_bench_collision_gate_reducer;
 pub mod debug_bench_los_reducer;
 pub mod debug_bind_home_reducer;
+pub mod debug_bot_transfer_reducer;
 pub mod debug_buy_bank_slot_reducer;
 pub mod debug_buy_item_reducer;
 pub mod debug_buy_trainer_spell_reducer;
@@ -316,6 +318,7 @@ pub mod game_auction_table;
 pub mod game_aura_schedule_table;
 pub mod game_aura_table;
 pub mod game_bot_invite_intent_table;
+pub mod game_bot_transfer_intent_table;
 pub mod game_breath_relay_event_table;
 pub mod game_breath_schedule_table;
 pub mod game_breath_state_table;
@@ -980,6 +983,7 @@ pub use authored_idle_movement_type::AuthoredIdleMovement;
 pub use authored_walking_mode_type::AuthoredWalkingMode;
 pub use begin_transfer_reducer::begin_transfer;
 pub use bot_invite_intent_type::BotInviteIntent;
+pub use bot_transfer_intent_type::BotTransferIntent;
 pub use breath_relay_event_type::BreathRelayEvent;
 pub use breath_schedule_type::BreathSchedule;
 pub use breath_state_type::BreathState;
@@ -1070,6 +1074,7 @@ pub use debug_begin_cast_reducer::debug_begin_cast;
 pub use debug_bench_collision_gate_reducer::debug_bench_collision_gate;
 pub use debug_bench_los_reducer::debug_bench_los;
 pub use debug_bind_home_reducer::debug_bind_home;
+pub use debug_bot_transfer_reducer::debug_bot_transfer;
 pub use debug_buy_bank_slot_reducer::debug_buy_bank_slot;
 pub use debug_buy_item_reducer::debug_buy_item;
 pub use debug_buy_trainer_spell_reducer::debug_buy_trainer_spell;
@@ -1265,6 +1270,7 @@ pub use game_auction_table::*;
 pub use game_aura_schedule_table::*;
 pub use game_aura_table::*;
 pub use game_bot_invite_intent_table::*;
+pub use game_bot_transfer_intent_table::*;
 pub use game_breath_relay_event_table::*;
 pub use game_breath_schedule_table::*;
 pub use game_breath_state_table::*;
@@ -2032,6 +2038,16 @@ pub enum Reducer {
     },
     DebugBindHome {
         character_guid: u64,
+    },
+    DebugBotTransfer {
+        character_guid: u64,
+        map_id: u32,
+        instance_id: u64,
+        x: f32,
+        y: f32,
+        z: f32,
+        o: f32,
+        reason: String,
     },
     DebugBuyBankSlot {
         character_guid: u64,
@@ -3490,6 +3506,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugBenchCollisionGate { .. } => "debug_bench_collision_gate",
             Reducer::DebugBenchLos { .. } => "debug_bench_los",
             Reducer::DebugBindHome { .. } => "debug_bind_home",
+            Reducer::DebugBotTransfer { .. } => "debug_bot_transfer",
             Reducer::DebugBuyBankSlot { .. } => "debug_buy_bank_slot",
             Reducer::DebugBuyItem { .. } => "debug_buy_item",
             Reducer::DebugBuyTrainerSpell { .. } => "debug_buy_trainer_spell",
@@ -4069,6 +4086,25 @@ Reducer::DebugBeginCast{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_bind_home_reducer::DebugBindHomeArgs {
                 character_guid: character_guid.clone(),
+}),
+            Reducer::DebugBotTransfer{
+                character_guid,
+                map_id,
+                instance_id,
+                x,
+                y,
+                z,
+                o,
+                reason,
+}             => __sats::bsatn::to_vec(&debug_bot_transfer_reducer::DebugBotTransferArgs {
+                character_guid: character_guid.clone(),
+                map_id: map_id.clone(),
+                instance_id: instance_id.clone(),
+                x: x.clone(),
+                y: y.clone(),
+                z: z.clone(),
+                o: o.clone(),
+                reason: reason.clone(),
 }),
             Reducer::DebugBuyBankSlot{
                 character_guid,
@@ -6621,6 +6657,7 @@ pub struct DbUpdate {
     game_aura: __sdk::TableUpdate<Aura>,
     game_aura_schedule: __sdk::TableUpdate<AuraSchedule>,
     game_bot_invite_intent: __sdk::TableUpdate<BotInviteIntent>,
+    game_bot_transfer_intent: __sdk::TableUpdate<BotTransferIntent>,
     game_breath_relay_event: __sdk::TableUpdate<BreathRelayEvent>,
     game_breath_schedule: __sdk::TableUpdate<BreathSchedule>,
     game_breath_state: __sdk::TableUpdate<BreathState>,
@@ -6903,6 +6940,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                     .append(game_aura_schedule_table::parse_table_update(table_update)?),
                 "game_bot_invite_intent" => db_update.game_bot_invite_intent.append(
                     game_bot_invite_intent_table::parse_table_update(table_update)?,
+                ),
+                "game_bot_transfer_intent" => db_update.game_bot_transfer_intent.append(
+                    game_bot_transfer_intent_table::parse_table_update(table_update)?,
                 ),
                 "game_breath_relay_event" => db_update.game_breath_relay_event.append(
                     game_breath_relay_event_table::parse_table_update(table_update)?,
@@ -7712,6 +7752,12 @@ impl __sdk::DbUpdate for DbUpdate {
             .apply_diff_to_table::<BotInviteIntent>(
                 "game_bot_invite_intent",
                 &self.game_bot_invite_intent,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_bot_transfer_intent = cache
+            .apply_diff_to_table::<BotTransferIntent>(
+                "game_bot_transfer_intent",
+                &self.game_bot_transfer_intent,
             )
             .with_updates_by_pk(|row| &row.id);
         diff.game_breath_relay_event = cache
@@ -8747,6 +8793,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_bot_invite_intent" => db_update
                     .game_bot_invite_intent
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_bot_transfer_intent" => db_update
+                    .game_bot_transfer_intent
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_breath_relay_event" => db_update
                     .game_breath_relay_event
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -9468,6 +9517,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_bot_invite_intent" => db_update
                     .game_bot_invite_intent
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_bot_transfer_intent" => db_update
+                    .game_bot_transfer_intent
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_breath_relay_event" => db_update
                     .game_breath_relay_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10157,6 +10209,7 @@ pub struct AppliedDiff<'r> {
     game_aura: __sdk::TableAppliedDiff<'r, Aura>,
     game_aura_schedule: __sdk::TableAppliedDiff<'r, AuraSchedule>,
     game_bot_invite_intent: __sdk::TableAppliedDiff<'r, BotInviteIntent>,
+    game_bot_transfer_intent: __sdk::TableAppliedDiff<'r, BotTransferIntent>,
     game_breath_relay_event: __sdk::TableAppliedDiff<'r, BreathRelayEvent>,
     game_breath_schedule: __sdk::TableAppliedDiff<'r, BreathSchedule>,
     game_breath_state: __sdk::TableAppliedDiff<'r, BreathState>,
@@ -10459,6 +10512,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<BotInviteIntent>(
             "game_bot_invite_intent",
             &self.game_bot_invite_intent,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<BotTransferIntent>(
+            "game_bot_transfer_intent",
+            &self.game_bot_transfer_intent,
             event,
         );
         callbacks.invoke_table_row_callbacks::<BreathRelayEvent>(
@@ -12189,6 +12247,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_aura_table::register_table(client_cache);
         game_aura_schedule_table::register_table(client_cache);
         game_bot_invite_intent_table::register_table(client_cache);
+        game_bot_transfer_intent_table::register_table(client_cache);
         game_breath_relay_event_table::register_table(client_cache);
         game_breath_schedule_table::register_table(client_cache);
         game_breath_state_table::register_table(client_cache);
@@ -12427,6 +12486,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_aura",
         "game_aura_schedule",
         "game_bot_invite_intent",
+        "game_bot_transfer_intent",
         "game_breath_relay_event",
         "game_breath_schedule",
         "game_breath_state",

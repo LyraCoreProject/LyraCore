@@ -27,8 +27,9 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
      gateway will not compile), and the generator snake-cases digit suffixes (`eff_p0`→`eff_p_0`,
      `cond_value1`→`cond_value_1`), so a regen breaks exactly those columns whose GATEWAY CODE uses
      the non-underscore name. Post-regen hand-patch (verified 2026-07-18 on the exploration-fog
-     regen): put `gossip_option_type.rs` `cond_value1`/`2` and `aura_type.rs`/`mod.rs`
-     `eff_p0`/`1`(`_kind`) back to the no-underscore spelling. BUT LEAVE `spell_effect_type.rs`
+     regen, re-confirmed 2026-08-30 on the bot-transfer-intent regen): put `gossip_option_type.rs`
+     and `gossip_menu_profile_option_type.rs` `cond_value1`/`2`, and `aura_type.rs`/`mod.rs`
+     `eff_p0`/`1`(`_kind`), back to the no-underscore spelling. BUT LEAVE `spell_effect_type.rs`
      `p_0`/`p_1` and `game_object_template_type.rs`/`debug_spawn_gameobject_reducer.rs`
      `data_0`/`data_1` AS GENERATED (with the underscore) — their gateway code uses the underscore
      names. The rule: match the COMMITTED (working) binding's field name, which is what the gateway

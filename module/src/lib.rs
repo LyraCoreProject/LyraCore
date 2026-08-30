@@ -410,7 +410,8 @@ pub use taxi::*;
 pub use threat::*;
 pub use trade::*;
 pub use trainer::*;
-pub use transfer::TransferOut; // re-exported for the gateway schema-parity test (#19)
+// Re-exported for the gateway schema-parity test (#19).
+pub use transfer::{BotTransferIntent, TransferOut};
 pub use weather::*;
 pub use world::*;
 pub use xp::*;

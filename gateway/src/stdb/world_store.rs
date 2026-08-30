@@ -152,6 +152,18 @@ impl WorldStore for Coordinator {
         ))
     }
 
+    /// `instance_shard_for`, not `shard_for`: this handle is the character's HOLDER, and the
+    /// stickiness rule that keeps a live dungeon run on its pool member is written against exactly
+    /// that pair. `settle_home_shard` above resolves a fresh (escrow-free) hop the same way.
+    fn shard_for_location(
+        &self,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Option<std::sync::Arc<dyn WorldStore>> {
+        let shard = self.instance_shard_for(map_id, instance_id, Coordinator::shard_name(self))?;
+        Some(std::sync::Arc::new(shard) as std::sync::Arc<dyn WorldStore>)
+    }
+
     fn escrowed_transfer(
         &self,
         character_guid: u64,

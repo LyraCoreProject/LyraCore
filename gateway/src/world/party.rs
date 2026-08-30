@@ -509,8 +509,24 @@ pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
     store: &St,
     self_guid: u64,
 ) -> Result<()> {
-    let Some(realm) = store.realm_store() else {
+    let Some(roster) = sync_arrival_mirror(store, self_guid)? else {
         return Ok(());
+    };
+    send(tx, Outbound::One(render_list(store, self_guid, &roster)))
+}
+
+/// The mirror half of [`on_world_entry`], without a client: put the party realm-core says
+/// `self_guid` is in onto the shard `store` names, and clear a mirror row of a party they have
+/// left. Answers the roster it pushed, so the caller can render a frame for a player — and so a
+/// session-less arrival (`transfer::run_bot_transfer`) can call the same code and render nothing.
+///
+/// Unsharded → `Ok(None)` before any read: the shard's own tables already are the authority.
+pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
+    store: &St,
+    self_guid: u64,
+) -> Result<Option<GroupRoster>> {
+    let Some(realm) = store.realm_store() else {
+        return Ok(None);
     };
     let roster = realm.group_roster(self_guid)?;
     // A mirror on THIS shard that still has the arriving character in a party realm-core no longer
@@ -538,12 +554,14 @@ pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
             }
         }
     }
-    let Some(roster) = roster else { return Ok(()) };
+    let Some(roster) = roster else {
+        return Ok(None);
+    };
     // The shard the player just entered. `store` is already the session's home-shard handle (every
     // world-entry caller runs under `on_home_shard!`), so this is the one mirror that must exist
     // before the player takes a single action here.
     store.sync_group_mirror(&roster)?;
-    send(tx, Outbound::One(render_list(store, self_guid, &roster)))
+    Ok(Some(roster))
 }
 
 /// Build `SMSG_GROUP_LIST` for `self_guid` from an authoritative roster, filling each member's NAME
