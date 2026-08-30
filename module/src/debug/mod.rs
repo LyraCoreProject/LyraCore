@@ -94,6 +94,58 @@ pub fn debug_teleport(
     Ok(())
 }
 
+/// Record a Transfer Intent for `character_guid`: the session-less Shard crossing a Package's
+/// playerbot decides for itself, driven by hand.
+///
+/// The lever exists because the acceptance test for that crossing must NOT need a Package installed.
+/// It calls the same `transfer::emit_bot_transfer_intent` the Package calls, so what it exercises is
+/// the real contract — the placement and the intent row in one transaction, then the Gateway's
+/// `run_bot_transfer` relay — and never a second way to ask for a crossing.
+///
+/// A character with a live Session will be dragged across the boundary mid-play. That is the point
+/// of a debug lever, and the reason this one is not a Gateway Verb.
+#[reducer]
+#[allow(clippy::too_many_arguments)]
+pub fn debug_bot_transfer(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    map_id: u32,
+    instance_id: u64,
+    x: f32,
+    y: f32,
+    z: f32,
+    o: f32,
+    reason: String,
+) -> Result<(), String> {
+    if ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .is_none()
+    {
+        return Err(format!("no live entity for guid {character_guid}"));
+    }
+    crate::transfer::emit_bot_transfer_intent(
+        ctx,
+        character_guid,
+        crate::transfer::Destination {
+            map_id,
+            instance_id,
+            x,
+            y,
+            z,
+            o,
+        },
+        &reason,
+    );
+    log::info!(
+        "debug_bot_transfer: character {character_guid} -> map {map_id} instance {instance_id} \
+         ({reason})"
+    );
+    Ok(())
+}
+
 /// Deal `amount` DIRECT damage to a live entity through the REAL shared damage pipeline — the same
 /// `fold_incoming_damage` → `final_damage` → `apply_hit` every swing and spell routes through, as a
 /// MAIN-HAND hit. So a debug poke drives everything a real melee swing drives: the attacker's rage

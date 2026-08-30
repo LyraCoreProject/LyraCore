@@ -634,6 +634,12 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // published, or `connect_blocking`'s subscription fails to apply (`coordinator_queries`'s own
         // doc comment).
         "SELECT * FROM game_bot_invite_intent",
+        // Bot-initiated Shard crossings, here for every reason the invite intent above is: a bot has
+        // no session, so no other connection could see the row, and it rides the BASE list because a
+        // single-database realm writes the same rows (the relay finds nothing to cross there and
+        // says so). Its relay is `world::transfer::run_bot_transfer`, which drives the SAME
+        // `settle_transfer` a player's `MSG_MOVE_WORLDPORT_ACK` does.
+        "SELECT * FROM game_bot_transfer_intent",
         // Addon-bridge messages: the server→client UI stream — coordinator-ridden
         // from day one (the coordinator-relay rule). Any addon UI that streams live state rides
         // this, and a dropped frame is a stuck widget on the client.

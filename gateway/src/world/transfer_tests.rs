@@ -1017,3 +1017,222 @@ fn a_resumed_transfer_reuses_the_escrowed_destination_not_the_character_row() {
         "and it must mirror the escrow's instance"
     );
 }
+
+// ===========================================================================================
+//  Session-less crossings — the intent row a Package writes and the coordinator relay executes.
+//
+//  A bot is a real character with no session, so nothing drove it through the escrowed transfer:
+//  the driver was always the client's own loading-screen ack. These tests drive `run_bot_transfer`
+//  against the same two `FakeShardDb`s the player-side tests above use, so the transfer they assert
+//  is the real one, module guards and all.
+// ===========================================================================================
+
+/// The bot's guid. Deliberately not [`XGUID`]: these tests share the party fixture's numbering,
+/// where 5 is the playerbot.
+const BOT_GUID: u64 = super::party_tests::BOT;
+
+/// A source shard holding a session-less character that has ALREADY been placed at
+/// `(dest_map, dest_instance)`, plus the shard the Shard Map serves that destination from. This is
+/// the state `transfer::emit_bot_transfer_intent` leaves behind: the durable row names the
+/// destination, the live entity is gone, and the intent row is on its way to the gateway.
+#[allow(clippy::type_complexity)]
+fn bot_pair(
+    dest_map: u32,
+    dest_instance: u64,
+) -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<FakeShardDb>,
+    std::sync::Arc<FakeShardDb>,
+    ShardCallLog,
+) {
+    let calls: ShardCallLog = Default::default();
+    let src_db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: dest_map,
+            instance_id: dest_instance,
+            payload: "gear+spells".into(),
+        },
+    );
+    let dst_db = FakeShardDb::empty();
+    let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
+    let src = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        xdb: Some(src_db.clone()),
+        location_shard: Some((dest_map, dest_instance, dst)),
+        ..Default::default()
+    });
+    (src, src_db, dst_db, calls)
+}
+
+/// **AC: an intent row moves a session-less character to the shard that serves the destination.**
+#[test]
+fn an_intent_row_crosses_a_session_less_character_to_the_destination_shard() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    super::transfer::run_bot_transfer(src.as_ref(), BOT_GUID, 36, 7, "party crossed the portal")
+        .expect("the crossing runs");
+    assert!(
+        dst_db.live(BOT_GUID),
+        "the bot must be whole and un-fenced on the destination shard"
+    );
+    assert!(
+        !src_db.has(BOT_GUID),
+        "and gone from the source — a durable copy on both sides is the dupe the escrow prevents"
+    );
+    assert_eq!(
+        dst_db.get(BOT_GUID).unwrap().payload,
+        "gear+spells",
+        "its rows must arrive with it: the transfer arms a Package registers are what carry them"
+    );
+    assert!(
+        src_db.settled() && dst_db.settled(),
+        "no escrow may be left"
+    );
+}
+
+/// **AC: the return crossing uses the same row.** The instance shard writes an intent naming the
+/// open world, and the identical relay drives it back.
+#[test]
+fn the_same_intent_row_carries_the_bot_back_out() {
+    let (src, src_db, dst_db, _calls) = bot_pair(0, 0);
+    super::transfer::run_bot_transfer(src.as_ref(), BOT_GUID, 0, 0, "party left the dungeon")
+        .expect("the return crossing runs");
+    assert!(dst_db.live(BOT_GUID) && !src_db.has(BOT_GUID));
+    assert_eq!(dst_db.get(BOT_GUID).unwrap().map_id, 0);
+}
+
+/// **AC: a stale intent is refused with a log line, not a crash.** The module places a bot before
+/// it records the crossing, so a row whose destination the character row does not name describes a
+/// move that never happened — a dead bot teleports nowhere.
+#[test]
+fn an_intent_the_character_row_does_not_name_is_refused() {
+    let (src, src_db, dst_db, calls) = bot_pair(0, 0);
+    let refusal = super::transfer::run_bot_transfer(src.as_ref(), BOT_GUID, 389, 0, "stale")
+        .expect_err("the relay must refuse");
+    assert!(
+        refusal.to_string().contains("389") && refusal.to_string().contains("stale"),
+        "the refusal must name the destination asked for and why the Package asked: {refusal:#}"
+    );
+    assert!(
+        src_db.has(BOT_GUID) && !dst_db.has(BOT_GUID) && src_db.settled(),
+        "a refusal leaves durable state exactly as it was"
+    );
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, c)| c == "begin_transfer"),
+        "and it must refuse BEFORE the first step, not half-way through"
+    );
+}
+
+/// **AC: a dead bot is refused.** Its character row is gone, so there is nothing to escrow.
+#[test]
+fn an_intent_for_a_character_this_shard_does_not_hold_is_refused() {
+    let (src, src_db, dst_db, calls) = bot_pair(36, 7);
+    lk(&src_db.characters).remove(&BOT_GUID);
+    let refusal = super::transfer::run_bot_transfer(src.as_ref(), BOT_GUID, 36, 7, "dead bot")
+        .expect_err("the relay must refuse");
+    assert!(
+        refusal.to_string().contains("holds no character"),
+        "the refusal must say the shard has nobody to move: {refusal:#}"
+    );
+    assert!(!dst_db.has(BOT_GUID));
+    assert!(!calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, c)| c == "begin_transfer"));
+}
+
+/// A realm with one Shard: the module's teleport WAS the whole crossing, so the relay has nothing
+/// to do and must not treat that as a failure. This is the common dev and test topology, and the
+/// same Package code runs on it.
+#[test]
+fn a_destination_this_shard_already_serves_is_a_completed_crossing() {
+    let calls: ShardCallLog = Default::default();
+    let src_db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    let src = xstore("world", src_db.clone(), calls.clone(), None);
+    super::transfer::run_bot_transfer(src.as_ref(), BOT_GUID, 36, 7, "single-shard realm")
+        .expect("nothing to cross is not a failure");
+    assert!(src_db.live(BOT_GUID) && src_db.settled());
+    assert!(calls.lock().unwrap().is_empty(), "and no step may run");
+}
+
+/// **AC: group membership survives the crossing, through the realm group authority.**
+///
+/// The bot is invited on the open-world shard and answers for itself (it has no client), then
+/// crosses. Realm-core owns the membership the whole time; what this pins is that the shard the bot
+/// ARRIVES on can read its party, which is what its kill-XP split, quest credit and loot rules run
+/// against.
+#[test]
+fn the_bots_party_is_readable_on_the_shard_it_arrives_on() {
+    use super::party_tests::{character, GINGER};
+    let calls: ShardCallLog = Default::default();
+    let realm = std::sync::Arc::new(InMemoryStore {
+        shard: "lyracore-realm".into(),
+        calls: calls.clone(),
+        is_realm: true,
+        ..Default::default()
+    });
+    let src_db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    let dst_db = FakeShardDb::empty();
+    let instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        calls: calls.clone(),
+        xdb: Some(dst_db.clone()),
+        realm: Some(realm.clone()),
+        ..Default::default()
+    });
+    let world = std::sync::Arc::new(InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        xdb: Some(src_db.clone()),
+        realm: Some(realm.clone()),
+        location_shard: Some((36, 7, instances.clone())),
+        characters: vec![character(GINGER, "Ginger"), character(BOT_GUID, "Botty")],
+        // The production shape of a playerbot: a live entity that never logged in.
+        live_guids: vec![GINGER, BOT_GUID],
+        offline_guids: vec![BOT_GUID],
+        ..Default::default()
+    });
+    for shard in [&world, &instances] {
+        *shard.peers.lock().unwrap() = vec![world.clone(), instances.clone()];
+    }
+    super::party::run(
+        world.as_ref(),
+        7,
+        GINGER,
+        super::party::Op::Invite(BOT_GUID),
+    )
+    .expect("the bot joins the leader's party");
+
+    super::transfer::run_bot_transfer(world.as_ref(), BOT_GUID, 36, 7, "grouped follow")
+        .expect("the crossing runs");
+
+    assert!(dst_db.live(BOT_GUID), "the bot arrived");
+    let roster = instances
+        .group_roster(BOT_GUID)
+        .expect("the mirror is readable")
+        .expect("the shard the bot arrived on must know which party it is in");
+    assert!(
+        roster.members.contains(&BOT_GUID) && roster.members.contains(&GINGER),
+        "and that party must still be the leader's: {roster:?}"
+    );
+}

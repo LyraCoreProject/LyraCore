@@ -147,6 +147,13 @@ _Avoid_: session (unqualified, when meaning the connection)
 **Transfer**:
 Moving a Character's state from one shard to another. Uses Escrow.
 
+**Transfer Intent**:
+A row a Package writes to ask the Gateway to Transfer a Character that has no Session, naming the
+destination map and instance. The Package places the Character and records the intent in one
+transaction; the Gateway drives the same escrowed Transfer a World Session would. Reaped on the
+shared event TTL, so it is a request, never a record.
+_Avoid_: transfer request, move order
+
 **Home Shard**:
 The shard that currently holds a Character's row.
 

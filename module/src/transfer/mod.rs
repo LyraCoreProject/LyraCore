@@ -156,7 +156,9 @@ mod harness;
 #[cfg(test)]
 mod tests;
 
-use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{
+    log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp,
+};
 
 use crate::auth::game_guid_range;
 use crate::helpers::require_operator;
@@ -270,6 +272,90 @@ crate::character_owned!(delete, fn sweep_delete_game_transfer_out(ctx, character
         inb.transfer_id().delete(id);
     }
 });
+
+// ===========================================================================================
+//  Session-less crossings — the intent a Package writes and the Gateway executes
+// ===========================================================================================
+
+/// A Shard crossing decided for a Character that has no Session: a playerbot whose party walked
+/// through a dungeon portal, and the same row again when the party walks back out.
+///
+/// The escrowed transfer needs no client, but it does need a driver, and every driver we had was a
+/// World Session: the client acks its loading screen (`MSG_MOVE_WORLDPORT_ACK`) and the Gateway
+/// drives the seven steps inside it. A bot has nobody to ack, so this row is its ack —
+/// `world::transfer::run_bot_transfer` picks it up on the Coordinator and drives the identical
+/// sequence against the Shard the Shard Map gives the destination.
+///
+/// Private — no client ever needs to see this, only the Gateway's owner-token Coordinator
+/// connection (the `game_bot_invite_intent` pattern, and the same short life: the shared 1s event
+/// TTL in `gc.rs` reaps it, which is generous, because the Gateway's subscription fires on the
+/// insert rather than on a poll). [server]
+#[table(accessor = game_bot_transfer_intent)]
+pub struct BotTransferIntent {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub bot_guid: u64,
+    pub destination_map: u32,
+    /// 0 for the open world.
+    pub destination_instance: u64,
+    /// Why the Package decided to move this bot, for the Gateway's log line. Never parsed.
+    pub reason: String,
+    pub created_at: Timestamp,
+}
+
+/// Send a session-less Character to `destination`, through the Gateway.
+///
+/// Two writes, and they must be one transaction, which is why this is a helper and not two calls a
+/// Package makes in order:
+///
+/// 1. [`crate::world::teleport_player`] moves the durable `game_character` row to the destination
+///    and despawns the live entity, exactly as a player's portal step does. That row is where
+///    `begin_transfer` reads the destination position from, so the Gateway may never observe the
+///    intent before it.
+/// 2. The intent row, which is what the Gateway observes.
+///
+/// This is a pure write: every Gate lives in the relay and in the escrowed transfer itself (the
+/// `emit_bot_invite_intent` posture). A bot with no live entity teleports nowhere, so the character
+/// row keeps naming where it already is, and the relay refuses the intent rather than driving a
+/// crossing to nowhere.
+///
+/// On a realm with one Shard the crossing is already complete when this returns: the character row
+/// names the new map, and the relay finds nothing to cross. The Package writes the same code for
+/// both topologies.
+///
+/// Its callers are the `packages/` drop-ins (see the `package_only!` macro in `actor.rs`) and the
+/// `debug_bot_transfer` lever, which is how the crossing is accepted without a Package installed. A
+/// build with neither is a designed state, not dead code.
+#[cfg_attr(
+    all(not(has_packages), not(feature = "debug_reducers")),
+    allow(dead_code)
+)]
+pub(crate) fn emit_bot_transfer_intent(
+    ctx: &ReducerContext,
+    bot_guid: u64,
+    destination: Destination,
+    reason: &str,
+) {
+    crate::world::teleport_player(
+        ctx,
+        bot_guid,
+        destination.map_id,
+        destination.instance_id,
+        destination.x,
+        destination.y,
+        destination.z,
+        destination.o,
+    );
+    ctx.db.game_bot_transfer_intent().insert(BotTransferIntent {
+        id: 0,
+        bot_guid,
+        destination_map: destination.map_id,
+        destination_instance: destination.instance_id,
+        reason: reason.to_string(),
+        created_at: ctx.timestamp,
+    });
+}
 
 // ===========================================================================================
 //  Pure core — the entire decision surface of the protocol

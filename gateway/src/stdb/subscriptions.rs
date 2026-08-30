@@ -3257,6 +3257,64 @@ impl Coordinator {
                 }
             });
     }
+
+    /// Wire up the session-less Shard crossing relay, the transfer twin of
+    /// [`spawn_bot_invite_relay`]: one registration per connected WORLD SHARD, called ONCE at
+    /// gateway startup (`main.rs`), with its own reconnect hook so a module republish re-binds the
+    /// callback to the fresh `LiveConn`.
+    ///
+    /// A bot's party walks through a portal and the module writes a `game_bot_transfer_intent` row.
+    /// There is no session to notice it — that is the whole reason the row exists — so this
+    /// connection is the only one that ever could.
+    pub fn spawn_bot_transfer_relay(&self) {
+        for shard in self.all_shards() {
+            shard.arm_bot_transfer_relay();
+            let hook_shard = shard.clone();
+            shard
+                .0
+                .on_reconnect
+                .lock()
+                .unwrap()
+                .push(std::sync::Arc::new(move || {
+                    hook_shard.arm_bot_transfer_relay();
+                }));
+        }
+    }
+
+    /// One shard's half of [`spawn_bot_transfer_relay`], for the same reason
+    /// [`arm_bot_invite_relay`](Self::arm_bot_invite_relay) is split out: the initial call and the
+    /// watchdog's post-reconnect re-arm must run the IDENTICAL registration, and this re-reads
+    /// `self.0.coord()` fresh so the re-arm binds to the NEW connection rather than the dead one.
+    ///
+    /// A refused intent is a `warn!`, not the invite relay's `debug!`: a serendipity invite that
+    /// does not happen is a party that did not form, but a crossing that does not happen is a bot
+    /// left behind on the wrong Shard while its party fights without it.
+    fn arm_bot_transfer_relay(&self) {
+        let store = self.clone();
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_bot_transfer_intent()
+            .on_insert(move |_ctx, row| {
+                if let Err(e) = crate::world::transfer::run_bot_transfer(
+                    &store,
+                    row.bot_guid,
+                    row.destination_map,
+                    row.destination_instance,
+                    &row.reason,
+                ) {
+                    log::warn!(
+                        "playerbots: transfer intent {} (character {} -> map {} instance {}) did \
+                         not execute: {e:#}",
+                        row.id,
+                        row.bot_guid,
+                        row.destination_map,
+                        row.destination_instance
+                    );
+                }
+            });
+    }
 }
 
 #[cfg(test)]
