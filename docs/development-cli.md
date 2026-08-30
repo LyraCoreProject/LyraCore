@@ -61,6 +61,7 @@ lyracore client sync
 lyracore packages add FOLDER|GIT-URL|NAME [--yes]
 lyracore packages build
 lyracore packages check
+lyracore packages config NAME [KEY [VALUE]] [--new]
 lyracore packages disable NAME
 lyracore packages enable NAME
 lyracore packages list
@@ -92,6 +93,7 @@ lyracore update
 | `packages add` | install a Package from a folder on this machine, from a Git URL, or by bare name from the Official Package Collection, after a trust review and a confirmation |
 | `packages build` | regenerate the Module schema typings, typecheck every Datascript against them, then emit and validate each enabled Package's Datascript-generated Package Delta |
 | `packages check` | verify every enabled Package's generated artifact against its recorded Build Identity, regenerating the Module typings fresh |
+| `packages config` | read a Package's key-values, or write one to every Shard of the fixture topology |
 | `packages disable` | move an enabled Package out of the build's sight, keeping it on disk |
 | `packages enable` | move a disabled Package back into the build |
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
@@ -358,6 +360,37 @@ synchronizes no client; it prints the steps it did not run.
 
 Applying and replaying Package Deltas is `packages replay`, below. Advancing an Official Package
 Source through `packages update` remains separate work.
+
+## `packages config` — a Package's key-values, on every Shard
+
+```bash
+./lyracore packages config greeter                       # every key and its value
+./lyracore packages config greeter greeting              # one value
+./lyracore packages config greeter greeting "Hi there"   # write it to every Shard
+./lyracore packages config greeter volume 3 --new        # create a key the Package never seeded
+```
+
+A Package Config row is one durable value a Package reads and the Operator edits. A Package seeds
+its own defaults when it initialises, so the list shows real keys with live values.
+
+**The rows are per-Shard state.** Every database of the fixture topology holds its own copy, and the
+Module coordinates none of them. A write therefore goes to every Shard of the recorded topology, the
+same set `packages replay` uses when no database is named. A read visits every Shard too: when they
+do not agree on a key, the command names each Shard's answer instead of printing one of them. A
+Shard with no row for the key reads as `(unset)`, which is the same kind of disagreement.
+
+**The Module owns which keys exist.** Writing a key the Package never seeded needs `--new`, which is
+the `allow_new` argument of `set_package_config`. Without it the Module refuses the write and names
+the keys the Package does have; the command prints that refusal back unchanged. A Package name that
+is not installed is refused before any Shard is read, with the installed list.
+
+Reads go through `spacetime sql`, because `game_package_config` is a public table. The write calls
+the Operator-gated `set_package_config` reducer over the same bearer-token path `dev up` uses to
+claim the Operator, so the local realm has to be up and claimed.
+
+**A failed write is not rolled back.** The command stops at the Shard that refused and names what
+was written, what stopped it, and what was never touched. Re-running the same command after the
+cause is fixed rewrites the Shards that already took the value, which changes nothing on them.
 
 ## `packages build` — Datascript typings, the typecheck gate, and Package Delta emission
 
