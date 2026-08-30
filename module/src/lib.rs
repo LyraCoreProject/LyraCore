@@ -87,9 +87,10 @@
 /// });
 ///
 /// // Declines. A DECISION written at the table (one-shot relay rows whose durable half lives on the
-/// // character row, or state another database is authoritative for) — and it must ALSO be listed on
-/// // `transfer::NOT_TRANSPORTED` with its reason, which build.rs's generated
-/// // `CHARACTER_OWNED_NOT_TRANSPORTED` cross-checks.
+/// // character row, or state another database is authoritative for). A CORE table must ALSO be
+/// // listed on `transfer::NOT_TRANSPORTED` with its reason, which build.rs's generated
+/// // `CHARACTER_OWNED_NOT_TRANSPORTED` cross-checks. A `packages/` table is not on that list — it
+/// // writes its reason at its own table and nowhere else; see NOT_TRANSPORTED's own doc for why.
 /// crate::character_owned!(not_transported, fn sweep_transfer_game_rest_state_event());
 /// ```
 ///

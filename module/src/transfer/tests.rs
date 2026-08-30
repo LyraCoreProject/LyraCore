@@ -980,7 +980,10 @@ fn the_shared_gate_consults_the_ledger_and_defers_to_the_pure_decision() {
 fn player_login_still_refuses_an_in_transit_character() {
     // #468 stage 4d: the fence lives in the shared login core — both the sender reducer and
     // gw_player_login delegate there, so pinning the core covers both entries.
-    let body = body_of(include_str!("../world.rs"), "pub(crate) fn apply_player_login(");
+    let body = body_of(
+        include_str!("../world.rs"),
+        "pub(crate) fn apply_player_login(",
+    );
     assert!(
         body.contains("is_in_transit"),
         "world::player_login no longer fences in-transit characters. Login is the one path that \
@@ -1301,7 +1304,10 @@ fn owner_identity_is_regenerated_at_the_destination_never_carried() {
     );
     // #468 stage 4d: restamp lives in the shared login core (owner = ctx.sender() on the sender
     // path, the account's bound identity on the gateway path — same regenerate semantics).
-    let login = code_of(include_str!("../world.rs"), "pub(crate) fn apply_player_login(");
+    let login = code_of(
+        include_str!("../world.rs"),
+        "pub(crate) fn apply_player_login(",
+    );
     assert!(
         login.contains("restamp_owned_data"),
         "world::player_login no longer restamps the owned rows from ctx.sender(), which is the \
@@ -1403,6 +1409,10 @@ fn every_manifest_table_can_cross_a_database_boundary() {
 /// table that stops transporting without being justified, and an allowlist entry that quietly
 /// started transporting again (or that names a table which no longer exists).
 ///
+/// CORE tables only. A `packages/` decline is not on either side of this equality — see
+/// [`NOT_TRANSPORTED`]'s doc. What stops a drop-in from declining a CORE table's arm behind this
+/// test's back is build.rs, which refuses a second transport arm for a table that already has one.
+///
 /// What this replaced was a 100-line brace-depth parser plus a documented adversarial arms race
 /// — `contains("move_rows")`, then "exactly once", then "at the top of the arm", then "and its
 /// export closure filters by the guid" — each round added after the previous one was defeated by
@@ -1433,6 +1443,30 @@ fn the_not_transported_allowlist_matches_the_arms_that_decline() {
         "the generated decline list is EMPTY — build.rs's `not_transported` marker scan found \
              nothing, and an empty list makes the equality above pass vacuously the moment \
              NOT_TRANSPORTED is emptied too"
+    );
+}
+
+/// One table, one transport arm — the invariant that keeps
+/// [`the_not_transported_allowlist_matches_the_arms_that_decline`] honest now that it only covers
+/// core tables. A second arm for a table that already has one exports its rows twice, and a second
+/// arm that DECLINES is how a drop-in Package would stop a core table from crossing without any
+/// core file changing. build.rs refuses to emit such a registry at all; this is the outcome of that
+/// refusal, asserted where a reader of the allowlist will find it.
+#[test]
+fn every_transported_table_has_exactly_one_arm() {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut doubled: Vec<&str> = Vec::new();
+    for table in crate::CHARACTER_OWNED_TRANSFER_NAMES {
+        if seen.contains(table) {
+            doubled.push(table);
+        }
+        seen.push(table);
+    }
+    assert!(
+        doubled.is_empty(),
+        "table(s) with two transport arms: {doubled:?} — one arm carries the rows and the other \
+         decides again, and which of the two wins is the order build.rs happened to scan the files \
+         in"
     );
 }
 
