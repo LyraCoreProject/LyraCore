@@ -38,9 +38,15 @@ pub(crate) const HOT_TABLES: &[&str] = &[
 /// export blob is nonsense.
 pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 
-/// The manifest tables whose rows deliberately do NOT cross a database boundary — the ONLY tables
-/// whose arm may be written with the `character_owned!(not_transported, ..)` marker kind (issue #19
-/// review).
+/// The CORE manifest tables whose rows deliberately do NOT cross a database boundary — the only
+/// core tables whose arm may be written with the `character_owned!(not_transported, ..)` marker
+/// kind (issue #19 review).
+///
+/// A Package's decline is not listed here and is not cross-checked against this list. This list
+/// exists so a core table's decision is reviewable in one place by everyone who reads the core; a
+/// drop-in Package is absent from most builds, so naming its tables here would make the equality
+/// below depend on which Packages happen to be installed. A Package writes its reason at its own
+/// table, where the reader of that table looks for it.
 ///
 /// The arm-exists ratchet (`every_manifest_table_can_cross_a_database_boundary`) cannot tell a
 /// transport arm from a declining one, so on its own it is defeated by the one edit it exists to
@@ -49,8 +55,8 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 /// `sweep_transfer_game_item_instance` at `not_transported` left all 468 module tests passing while
 /// deleting every player's gear on every hop.
 ///
-/// So the "not transported" decision is written HERE, with its REASON, as well as at the table,
-/// where build.rs reads it off the marker kind into `CHARACTER_OWNED_NOT_TRANSPORTED`.
+/// So a core table's "not transported" decision is written HERE, with its REASON, as well as at the
+/// table, where build.rs reads it off the marker kind into `CHARACTER_OWNED_NOT_TRANSPORTED`.
 /// `the_not_transported_allowlist_matches_the_arms_that_decline` fails if the two disagree in
 /// either direction. Each entry needs its reason, exactly like `EXEMPT_ACCESSORS` in `tripwires.rs`:
 ///

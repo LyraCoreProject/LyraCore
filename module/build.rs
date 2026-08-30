@@ -366,6 +366,22 @@ fn main() {
     // the `sweep_transfer_<table_accessor>` fn names by the same prefix-strip rule as the delete
     // sweeps — so a transport arm can never name a table that isn't in the manifest.
     registries.transfer.sort();
+    // ONE table, ONE arm. A second arm for a table that already has one exports its rows twice,
+    // and — when the second one declines — is how a drop-in could stop a CORE table from crossing.
+    // `the_not_transported_allowlist_matches_the_arms_that_decline` used to catch that from the
+    // package side; it no longer sees a package-registered decline, so the shape check moves here.
+    let mut claimed: Vec<(&str, &String)> = Vec::new();
+    for path in &registries.transfer {
+        let table = transfer_table_name(path);
+        if let Some((_, first)) = claimed.iter().find(|(claimed, _)| *claimed == table) {
+            panic!(
+                "build.rs: two `character_owned!` transport arms name the table `{table}` \
+                 (`{first}` and `{path}`). A table has exactly one arm — a second one either \
+                 carries its rows twice or overrides the first arm's decision to carry them at all."
+            );
+        }
+        claimed.push((table, path));
+    }
     out.push_str(
         // The `(name, fn)` pair trips `clippy::type_complexity` in the GENERATED file, where nobody
         // can annotate it — emit the allow with it. The pair is the registry's row shape, not an
@@ -978,9 +994,16 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
                     // "these rows deliberately do not cross" is a decision that must be
                     // cross-checkable against `transfer::NOT_TRANSPORTED`'s written reasons
                     // instead of being read back out of the arm's source text (#380).
+                    // A PACKAGE's decline is registered as a transport arm like any other, but it
+                    // is NOT cross-checked against `transfer::NOT_TRANSPORTED`. That list is the
+                    // core's written decision about core tables, and it cannot name a table that
+                    // is absent from most builds — a Package is a drop-in. A Package writes its
+                    // reason where the reader looks for it: at its own table.
                     "not_transported" => {
                         reg.transfer.push(path.clone());
-                        reg.not_transported.push(path);
+                        if !in_package {
+                            reg.not_transported.push(path);
+                        }
                     }
                     _ => unreachable!(),
                 }
