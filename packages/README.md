@@ -26,3 +26,18 @@ resolved at. `packages update` does not advance this kind.
 
 See `docs/development-cli.md` for `lyracore packages add`, `list`, `new`, `enable`, `disable`,
 `remove`, and `update`.
+
+## Operator-tunable config
+
+A Package that wants a value the Operator can change without a republish seeds it as Package
+Config: call `crate::package_config::ensure_package_config_default(ctx, "<your package>", "<key>",
+"<default value>")` from your own ensure/init path, every time it runs. The call only inserts when
+the row is absent, so a repeated call never clobbers a value the Operator has since edited.
+`spacetime sql "select * from game_package_config"` then shows real keys with live values, not a
+blank slate someone has to populate by hand.
+
+The Operator changes a value with the `set_package_config` reducer (`package_name, key, value,
+allow_new`). It refuses an unknown `(package_name, key)` pair — naming the package's existing keys —
+unless `allow_new` is set, so a typo in the key name fails loud instead of writing a key nobody
+reads. A dedicated CLI verb for this reducer is planned (#370); until then, call it directly with
+`spacetime call`.
