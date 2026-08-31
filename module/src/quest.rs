@@ -473,9 +473,13 @@ pub const MAX_OBJECTIVES: usize = 4;
 
 /// Is `cq` complete — has every objective of its quest reached its `required_count`? Joins the quest's
 /// [`QuestObjective`] rows and compares each against `counts[obj_index]` (a missing/short count = not
-/// met). A quest with NO objectives is trivially complete (a pure talk-to-giver quest). Used by
-/// [`turn_in_quest`] and surfaced for tests.
-fn quest_is_complete(ctx: &ReducerContext, cq: &CharacterQuest) -> bool {
+/// met). A quest with NO objectives is trivially complete (a pure talk-to-giver quest).
+///
+/// A seam a Package reads: `apply_turn_in_quest` stays the authority that answers it for real, and a
+/// Package asks the same question before it sends a Character walking to the ender. It answers
+/// objectives ONLY — it does not read `deadline_micros`, so an expired quest reads complete here and
+/// is still refused at turn-in; a caller that cares about the deadline checks it itself.
+pub(crate) fn quest_is_complete(ctx: &ReducerContext, cq: &CharacterQuest) -> bool {
     let has_event_credit = ctx
         .db
         .game_character_quest_event_credit()
@@ -712,14 +716,73 @@ fn giver_has_quest_role(
     }
 }
 
+/// The accept Gates of `tmpl` for `player`, in the order the accept applies them: level, race,
+/// class, prerequisite chain, already held. Every `Err` is the Refusal [`apply_accept_quest`]
+/// returns, verbatim — the text is part of this seam, so rewording one is an observable change.
+///
+/// `Ok` carries the character's existing quest-log row when there is one the accept must RESET in
+/// place instead of inserting a second (a repeatable quest already turned in, or any quest that ran
+/// out of time). Read once here, so a caller that goes on to accept does not scan the log again.
+///
+/// The giver Gates (in range, offers this quest) are not here: they are about the request, not about
+/// this Character and this quest, and a caller asking "could this Character take it at all" has no
+/// giver to name. Bag room is not here either — the accept EFFECTS grant a `src_item` after every
+/// Gate has passed, and that Refusal is `crate::items`'.
+///
+/// Callers: [`apply_accept_quest`] (the authority), [`evaluate_share`]'s party-share preview, and a
+/// Package choosing a quest before it walks a Character to the giver. The Gateway keeps a fourth
+/// copy in `eval_relation` (`gateway/src/stdb/reads/quest.rs`) for the `!` icon: it answers the same
+/// question over its own subscription-cache row types and cannot call Module code, so
+/// `lyracore_shared::quest`'s two mask functions are all the tiers share. A Gate changed here must
+/// visit that predicate too, or the icon offers a quest this reducer refuses.
+pub(crate) fn accept_gates(
+    ctx: &ReducerContext,
+    player: &crate::WorldEntity,
+    tmpl: &QuestTemplate,
+) -> Result<Option<CharacterQuest>, String> {
+    if player.level < tmpl.min_level {
+        return Err(format!("requires level {}", tmpl.min_level));
+    }
+    // Race/class gates (cmangos bitmasks; 0 = all). Race/class live packed in unit_bytes_0
+    // (race | class<<8 | gender<<16 | power<<24) — the same source the XP curve reads.
+    if !lyracore_shared::quest::race_allowed(tmpl.required_races, player.race()) {
+        return Err("quest not available to your race".to_string());
+    }
+    if !lyracore_shared::quest::class_allowed(tmpl.required_classes, player.class()) {
+        return Err("quest not available to your class".to_string());
+    }
+    // Prerequisite chain: the previous quest in the chain must be turned in (rewarded) first. This is
+    // what stops a fresh character from accepting a mid-chain quest (the `!`-over-everything bug).
+    if tmpl.prev_quest_id != 0 && !quest_is_rewarded(ctx, player.guid, tmpl.prev_quest_id) {
+        return Err("must complete the prerequisite quest first".to_string());
+    }
+    // A repeatable quest already turned in (rewarded=true) is RESET in place rather than rejected as a
+    // duplicate — this is the ONLY way a repeatable quest is ever re-taken. The row is UPDATED, never
+    // deleted, so a re-accept only ever flips `rewarded` back to false for the DURATION of the new attempt
+    // (exactly like any other active quest); it never erases the fact the quest was completed before, and
+    // `apply_turn_in_quest` always marks it rewarded again on the next turn-in. Any other existing row
+    // (still active, or a non-repeatable already-rewarded row) is a hard duplicate.
+    // Work-item 194 (timed quests): an existing FAILED row (expired past its deadline) is re-acceptable
+    // exactly like a repeatable-rewarded one — reset in place, never a hard duplicate. This is
+    // independent of `repeatable`: ANY timed quest can be retried after it fails, not just repeatable
+    // ones (vanilla: a failed escort/timed quest can always be picked up again).
+    let existing = character_quest_row(ctx, player.guid, tmpl.entry);
+    if let Some(ref row) = existing {
+        if !(row.failed || (tmpl.repeatable && row.rewarded)) {
+            return Err("already on or completed that quest".to_string());
+        }
+    }
+    Ok(existing)
+}
+
 // ===========================================================================================
 //  Mutation cores (shared by the player reducers + their debug twins)
 // ===========================================================================================
 
 /// Accept quest `quest_entry` from giver `giver_guid` for `player_guid` — the shared core behind the
-/// player `accept_quest` reducer and its debug twin. Validates: the player is in world + alive; the
-/// giver is a real creature in range that OFFERS the quest; the quest exists and the player meets its
-/// `min_level`; and the player doesn't already have it (active or already rewarded — non-repeatable).
+/// player `accept_quest` reducer and its debug twin. Gates: the player is in world + alive; the
+/// giver is a real creature in range that OFFERS the quest; the quest exists; and every
+/// [`accept_gates`] Gate passes.
 /// On success opens a [`CharacterQuest`] row with zeroed `counts` sized to the quest's objective count.
 /// Additive — inserts one quest-log row. [entity]
 pub(crate) fn apply_accept_quest(
@@ -743,44 +806,10 @@ pub(crate) fn apply_accept_quest(
         .entry()
         .find(quest_entry)
         .ok_or_else(|| format!("no such quest {quest_entry}"))?;
-    if player.level < tmpl.min_level {
-        return Err(format!("requires level {}", tmpl.min_level));
-    }
-    // The gates below (level/race/class/prereq/not-held) MUST stay in lockstep with the
-    // gateway's `!`-status `startable` (gateway/src/stdb/reads.rs `eval_relation`), or the icon and
-    // this reducer disagree. Race/class gates (cmangos bitmasks; 0 = all). Race/class live packed in
-    // unit_bytes_0 (race | class<<8 | gender<<16 | power<<24) — the same source the XP curve reads.
-    let race = player.race();
-    let class = player.class();
-    if !lyracore_shared::quest::race_allowed(tmpl.required_races, race) {
-        return Err("quest not available to your race".to_string());
-    }
-    if !lyracore_shared::quest::class_allowed(tmpl.required_classes, class) {
-        return Err("quest not available to your class".to_string());
-    }
-    // Prerequisite chain: the previous quest in the chain must be turned in (rewarded) first. This is
-    // what stops a fresh character from accepting a mid-chain quest (the `!`-over-everything bug).
-    if tmpl.prev_quest_id != 0 && !quest_is_rewarded(ctx, player_guid, tmpl.prev_quest_id) {
-        return Err("must complete the prerequisite quest first".to_string());
-    }
-    // A repeatable quest already turned in (rewarded=true) is RESET in place rather than rejected as a
-    // duplicate — this is the ONLY way a repeatable quest is ever re-taken. The row is UPDATED, never
-    // deleted, so a re-accept only ever flips `rewarded` back to false for the DURATION of the new attempt
-    // (exactly like any other active quest); it never erases the fact the quest was completed before, and
-    // apply_turn_in_quest below always marks it rewarded again on the next turn-in. Any other existing row
-    // (still active, or a non-repeatable already-rewarded row) is a hard duplicate.
-    // Work-item 194 (timed quests): an existing FAILED row (expired past its deadline) is re-acceptable
-    // exactly like a repeatable-rewarded one — reset in place, never a hard duplicate. This is
-    // independent of `repeatable`: ANY timed quest can be retried after it fails, not just repeatable
-    // ones (vanilla: a failed escort/timed quest can always be picked up again).
-    // Bound ONCE — `apply_accept_effects` reuses this same `Option` for the reset-in-place-vs-insert
-    // decision, rather than a second point-scan of the same row.
-    let existing = character_quest_row(ctx, player_guid, quest_entry);
-    if let Some(ref row) = existing {
-        if !(row.failed || (tmpl.repeatable && row.rewarded)) {
-            return Err("already on or completed that quest".to_string());
-        }
-    }
+    // The Gates and their Refusals live in `accept_gates`, which the party-share preview and a
+    // Package ask as well. It hands back the row `apply_accept_effects` resets in place, so the
+    // reset-in-place-vs-insert decision costs no second point-scan of the same row.
+    let existing = accept_gates(ctx, &player, &tmpl)?;
     // Timed quests (work-item 194): a `limit_time > 0` template stamps a deadline (accept-time
     // ctx.timestamp micros + limit_time seconds, as micros); 0 = untimed (the vast majority).
     let deadline_micros = if tmpl.limit_time > 0 {
@@ -2435,16 +2464,15 @@ fn evaluate_share(
     let member_active = existing.as_ref().is_some_and(|q| !q.rewarded && !q.failed);
     let member_finished = existing.as_ref().is_some_and(|q| q.rewarded) && !tmpl.repeatable;
     let log_full = active_quest_count(ctx, member_guid) >= MAX_QUEST_LOG_SIZE;
-    // Same gate set `apply_accept_quest` itself enforces (level/race/class/prereq) — this is a
-    // PREVIEW only (the CANT_TAKE_QUEST feedback line); the actual accept re-validates every one of
-    // these independently, so an inaccurate preview here could never grant a quest the member doesn't
-    // qualify for. ExclusiveGroup + reputation-requirement gates are OUT of scope (194 cuts).
-    let gates_ok = member_entity.as_ref().is_some_and(|e| {
-        e.level >= tmpl.min_level
-            && lyracore_shared::quest::race_allowed(tmpl.required_races, e.race())
-            && lyracore_shared::quest::class_allowed(tmpl.required_classes, e.class())
-            && (tmpl.prev_quest_id == 0 || quest_is_rewarded(ctx, member_guid, tmpl.prev_quest_id))
-    });
+    // The Gates `apply_accept_quest` itself applies — this is a PREVIEW only (the CANT_TAKE_QUEST
+    // feedback line); the accept re-applies every one of them, so an inaccurate preview here could
+    // never grant a quest the member doesn't qualify for. An offline member has no entity to ask, and
+    // [`lyracore_shared::quest::share_result`] answers TOO_FAR for one before it reads this at all.
+    // The already-held Gate is answered ahead of this line as well, by HAVE_QUEST/FINISH_QUEST.
+    // ExclusiveGroup + reputation-requirement gates are OUT of scope (194 cuts).
+    let gates_ok = member_entity
+        .as_ref()
+        .is_some_and(|e| accept_gates(ctx, e, tmpl).is_ok());
     lyracore_shared::quest::share_result(
         member_entity.is_some(),
         same_map_instance,

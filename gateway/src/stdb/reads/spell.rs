@@ -254,12 +254,6 @@ impl Coordinator {
 // find). game_quest_template / game_quest_text / game_item_template / game_creature_template DO have a
 // unique-PK index, so those use .entry()/.quest_entry().find() (point lookups).
 
-/// Evaluate one giver↔quest relation against the player → a [`GiverQuestEval`], or `None` if the quest
-/// template isn't loaded. PARITY: the `startable` predicate MUST stay identical to the module's
-/// `apply_accept_quest` accept gate (`module/src/quest.rs`) — a fresh START relation with level + race +
-/// class met and the prerequisite quest turned in — else the `!` icon shows a quest the reducer rejects.
-/// Sum a player's held quantity of item `entry` over `game_item_instance` (the coordinator reads any
-/// player's items — RLS-bypassed, like the quest log). The gateway twin of the module's `items::item_count`.
 /// cmangos `canStackSpellRanksInSpellBook`: MANA spells (power_type 0) keep EVERY rank
 /// visible in the client book — downranking is a real caster mechanic; PASSIVES and
 /// non-mana-cost spells (rage/energy/health) SUPERSEDE their old rank. Unknown spell → stack
