@@ -237,6 +237,13 @@ pub(crate) fn quest_detail_view(
 /// `quest_entry`/`role` rather than a table row type — `game_creature_quest` and `game_gameobject_quest`
 /// have the identical `(quest_entry, role)` shape, so `quest_giver_evals` calls this
 /// same function for both, keyed only on which relation table it iterated.
+///
+/// PARITY: `startable` answers the same question as the Module's `quest::accept_gates`
+/// (`module/src/quest.rs`) — level, race, class, prerequisite chain, not already held — and the two
+/// must agree, else the `!` icon offers a quest the accept reducer refuses. It stays a second copy
+/// because it reads the Gateway's own subscription-cache row types and cannot call Module code; the
+/// mask functions in `lyracore_shared::quest` are the part both tiers do share. A Gate changed in
+/// `accept_gates` has to be changed here as well.
 fn eval_relation(
     db: &RemoteTables,
     quest_entry: u32,

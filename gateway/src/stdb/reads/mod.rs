@@ -27,7 +27,10 @@ use super::bindings::*;
 // same path it used before the domain split.
 pub(crate) use quest::build_quest_log_slots;
 
-// Shared by `quest::quest_objectives_complete` and `items::viewer_needs_quest_item`.
+/// Sum a player's held quantity of item `entry` over `game_item_instance` (the coordinator reads any
+/// player's items — RLS-bypassed, like the quest log). The gateway twin of the module's
+/// `items::item_count`. Shared by `quest::quest_objectives_complete` and
+/// `items::viewer_needs_quest_item`.
 fn player_item_count(db: &RemoteTables, owner_guid: u64, entry: u32) -> u32 {
     db.game_item_instance()
         .iter()
