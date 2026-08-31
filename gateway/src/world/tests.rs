@@ -468,6 +468,9 @@ struct InMemoryStore {
     /// (the default) leaves every transfer trait method at its "this store does not shard" default,
     /// so every other test in this file is untouched.
     xdb: Option<std::sync::Arc<FakeShardDb>>,
+    /// How many `escrowed_transfer` reads answer `None` before the row shows up — the
+    /// cross-connection lag between a reducer's reply and the coordinator cache, made dialable.
+    escrow_reads_before_visible: std::sync::atomic::AtomicUsize,
     /// The handle `realm_store()` hands back — the database that owns party
     /// membership realm-wide. `None` (derive-Default) is the SINGLE-DATABASE gateway, which is what
     /// every other test in this file is, and it is what routes every party op back onto the
@@ -855,6 +858,17 @@ impl WorldStore for InMemoryStore {
 
     fn escrowed_transfer(&self, character_guid: u64) -> Option<super::transfer::EscrowedTransfer> {
         let db = self.xdb.as_ref()?;
+        if self
+            .escrow_reads_before_visible
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |left| left.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return None;
+        }
         let out = lk(&db.out_rows);
         out.values()
             .find(|e| e.character_guid == character_guid)

@@ -186,6 +186,33 @@ pub fn run_transfer(src: &dyn WorldStore, dst: &dyn WorldStore, plan: &TransferP
     run_transfer_injected(src, dst, plan, abort_after.as_deref())
 }
 
+/// How long the escrow row may take to reach the coordinator cache after `begin_transfer` returned.
+/// The reducer call answers over a call-pipe connection; the row arrives over the coordinator's
+/// own socket, so an immediate read can lose that race and refuse a transfer the module already
+/// froze. Three seconds is far above any observed lag and far below a loading screen.
+const ESCROW_VISIBLE_WITHIN: std::time::Duration = std::time::Duration::from_secs(3);
+const ESCROW_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// The escrow `begin_transfer` just opened, waiting out the cross-connection lag.
+fn escrow_after_begin(src: &dyn WorldStore, plan: &TransferPlan) -> Result<EscrowedTransfer> {
+    let deadline = std::time::Instant::now() + ESCROW_VISIBLE_WITHIN;
+    loop {
+        if let Some(escrow) = src.escrowed_transfer(plan.character_guid) {
+            return Ok(escrow);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(anyhow!(
+                "transfer {}: begin_transfer reported success but no escrow row is readable on {} \
+                 within {ESCROW_VISIBLE_WITHIN:?} — refusing to import a character whose source \
+                 copy is not frozen",
+                plan.transfer_id,
+                src.shard_name()
+            ));
+        }
+        std::thread::sleep(ESCROW_POLL);
+    }
+}
+
 /// `run_transfer` with the fault-injection step passed in rather than read from the environment, so
 /// the tests can drive every crash point without mutating process-global env.
 pub(super) fn run_transfer_injected(
@@ -210,14 +237,7 @@ pub(super) fn run_transfer_injected(
 
     // Read the escrow back rather than trusting `plan`: after a resume the row on disk is the
     // authority (it holds the blob, and its destination is the one the escrow was opened for).
-    let escrow = src.escrowed_transfer(plan.character_guid).ok_or_else(|| {
-        anyhow!(
-            "transfer {}: begin_transfer reported success but no escrow row is readable on {} — \
-             refusing to import a character whose source copy is not frozen",
-            plan.transfer_id,
-            src.shard_name()
-        )
-    })?;
+    let escrow = escrow_after_begin(src, plan)?;
 
     // 2. Mirror the instance BEFORE the import: the arriving character carries a
     //    `game_instance_binding` naming this id, and `player_login`'s stranding guard diverts a
