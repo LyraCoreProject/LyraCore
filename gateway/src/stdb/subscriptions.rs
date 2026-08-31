@@ -1865,6 +1865,41 @@ fn trade_offer_extended(
     })
 }
 
+/// A roster written on realm-core carries no names: the directory database holds no character
+/// rows. Fill every blank from the world shards' caches before the frame reaches a client, which
+/// otherwise renders the member nameless — and a headless client waiting for a name never sees it.
+fn name_the_roster(
+    coord: &Coordinator,
+    members: Vec<(u64, String, bool)>,
+) -> Vec<(u64, String, bool)> {
+    let shards = coord.all_shards();
+    fill_member_names(members, |guid| {
+        std::iter::once(coord)
+            .chain(shards.iter())
+            .find_map(|c| c.character_by_guid(guid).ok().flatten())
+            .map(|c| c.name)
+    })
+}
+
+/// The pure half of [`name_the_roster`]: only a blank name is looked up, and a lookup that fails
+/// leaves it blank rather than dropping the member.
+pub(crate) fn fill_member_names(
+    members: Vec<(u64, String, bool)>,
+    lookup: impl Fn(u64) -> Option<String>,
+) -> Vec<(u64, String, bool)> {
+    members
+        .into_iter()
+        .map(|(guid, name, online)| {
+            let name = if name.is_empty() {
+                lookup(guid).unwrap_or_default()
+            } else {
+                name
+            };
+            (guid, name, online)
+        })
+        .collect()
+}
+
 /// Group / loot-roll / quest-share: the ONE kind-decode body both legs
 /// run. PRIVATE data — the audience (the row's recipient, and nobody else) is resolved by the
 /// caller (RLS on the per-player leg; the owner-session lookup + `private_recipient_audience` on
@@ -1883,6 +1918,7 @@ pub(crate) fn group_event_outbound(
         ))),
         group_kind::LIST => match lyracore_shared::group::decode_roster(&row.payload) {
             Some((leader, loot_method, loot_threshold, master_looter_guid, members)) => {
+                let members = name_the_roster(coord, members);
                 Some(ServerOpcodeMessage::SMSG_GROUP_LIST(Box::new(codec::build_group_list(
                     self_guid, leader, loot_method, loot_threshold, master_looter_guid, &members,
                 ))))
@@ -3320,6 +3356,30 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A realm-core roster arrives nameless; only the blanks are filled, and a name the cache
+    /// cannot answer stays blank instead of removing the member from the frame.
+    #[test]
+    fn a_nameless_roster_member_is_named_from_the_cache_and_a_named_one_is_kept() {
+        let members = vec![
+            (7, String::new(), true),
+            (8, "Ginger".to_string(), true),
+            (9, String::new(), false),
+        ];
+        let named = fill_member_names(members, |guid| match guid {
+            7 => Some("Tankbot1".to_string()),
+            8 => Some("Wrong".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            named,
+            vec![
+                (7, "Tankbot1".to_string(), true),
+                (8, "Ginger".to_string(), true),
+                (9, String::new(), false),
+            ]
+        );
+    }
 
     fn viewer_with_created(creature_guid: u64) -> Viewer {
         let (tx, _rx) = SessionTx::with_depth(0);
