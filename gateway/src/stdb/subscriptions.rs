@@ -3281,6 +3281,68 @@ impl Coordinator {
         }
     }
 
+    /// Wire up the character-gone relay: one registration per connected WORLD SHARD, armed once at
+    /// gateway startup (`main.rs`), re-armed on reconnect like the two intent relays above.
+    ///
+    /// realm-core owns party membership and holds no character rows, so a Character a Shard deletes
+    /// — a despawned playerbot, a deleted character — stays a member there until something asks.
+    /// This watches every Shard's `game_character` deletes and, when the Character exists on no
+    /// Shard at all, makes it leave its realm-core party. A Transfer deletes its source copy only
+    /// after the destination copy exists, so a moved Character is found and left alone.
+    pub fn spawn_character_gone_relay(&self) {
+        for shard in self.all_shards() {
+            shard.arm_character_gone_relay();
+            let hook_shard = shard.clone();
+            shard
+                .0
+                .on_reconnect
+                .lock()
+                .unwrap()
+                .push(std::sync::Arc::new(move || {
+                    hook_shard.arm_character_gone_relay();
+                }));
+        }
+    }
+
+    fn arm_character_gone_relay(&self) {
+        use crate::world::WorldStore as _;
+        let store = self.clone();
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_character()
+            .on_delete(move |_ctx, row| {
+                let Some(realm) = store.realm_store() else {
+                    return; // one database: the Shard's own sweep already removed the member
+                };
+                if crate::world::party::character_anywhere(&store, row.guid)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    return;
+                }
+                match realm.realm_group_op(
+                    lyracore_shared::group::realm_op::LEAVE,
+                    row.guid,
+                    0,
+                    0,
+                    0,
+                ) {
+                    Ok(()) => log::info!(
+                        "party: character {} exists on no Shard and left its realm-core party",
+                        row.guid
+                    ),
+                    Err(e) => log::debug!(
+                        "party: character {} exists on no Shard; realm-core had no party to leave \
+                         ({e:#})",
+                        row.guid
+                    ),
+                }
+            });
+    }
+
     /// One shard's half of [`spawn_bot_transfer_relay`], for the same reason
     /// [`arm_bot_invite_relay`](Self::arm_bot_invite_relay) is split out: the initial call and the
     /// watchdog's post-reconnect re-arm must run the IDENTICAL registration, and this re-reads
