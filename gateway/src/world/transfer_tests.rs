@@ -207,6 +207,31 @@ fn a_character_moves_whole_between_two_databases_with_its_rows() {
     });
 }
 
+/// `begin_transfer` answers over a call-pipe connection while the escrow row travels over the
+/// coordinator's own socket, so the first read after the reply can miss a row the module already
+/// wrote. The driver waits the lag out instead of refusing a character it has just frozen — the
+/// refusal was 5 of 5 crossings on a loaded realm, each leaving a character stuck in escrow.
+#[test]
+fn an_escrow_row_that_lags_the_reducer_reply_is_waited_for_not_refused() {
+    no_hang(30, || {
+        let (src, dst, src_db, dst_db, _) = xdb_pair(None);
+        src.escrow_reads_before_visible
+            .store(3, std::sync::atomic::Ordering::SeqCst);
+        super::transfer::settle_transfer(src.as_ref(), dst.as_ref(), XGUID)
+            .expect("a late escrow row is lag, not a missing escrow");
+        assert!(
+            !src_db.has(XGUID) && dst_db.live(XGUID),
+            "the character must arrive whole once the row shows up"
+        );
+        assert_eq!(
+            src.escrow_reads_before_visible
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the driver must have read past every lagging answer"
+        );
+    });
+}
+
 /// The realm-core character→shard index is written BY THE TRANSFER, not left for
 /// a future login's probe to discover.
 ///
