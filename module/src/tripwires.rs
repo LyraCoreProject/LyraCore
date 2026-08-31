@@ -1125,7 +1125,11 @@ pub(crate) mod grid_cell_tripwire {
                         continue;
                     }
                 }
-                let end = (idx + WINDOW).min(code.len());
+                let mut end = (idx + WINDOW).min(code.len());
+                // The window is a byte count; step past a multi-byte char it would otherwise split.
+                while !code.is_char_boundary(end) {
+                    end += 1;
+                }
                 if !code[idx..end].contains(cell_token) {
                     violations.push(line_of(code, idx));
                 }
