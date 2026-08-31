@@ -535,6 +535,21 @@ all four loot tables (pickpocket, gameobject/chest, skinning, fishing), which ca
 each is an independent SpacetimeDB table with its own primary-key space.
 _Avoid_: custom id range, synthetic loot range
 
+**Package Cast Range**:
+The casts family's Package Identifier Range: 10,000,000 to 10,999,999. One whole decade above the
+Package Loot Range. Checked against `game_creature_spell.id` alone, the loot shape: its owning
+creature is never Package-invented. `game_creature_cast` carries no range of its own — its primary
+key names a creature template, which no Package may invent, so every insert on it is refused
+outright rather than banded.
+_Avoid_: custom id range, synthetic cast range
+
+**Package Trainer Range**:
+The trainers family's Package Identifier Range: 11,000,000 to 11,999,999. One whole decade above
+the Package Cast Range. Checked against `game_trainer_spell.id`, the same loot shape. Distinct from
+the curated trainer overrides the importer hands out fixed identifiers for at 5,200,000
+(`CURATED_TRAINER_ID_BASE`), which is a reserved band this range clears, not a Package range.
+_Avoid_: custom id range, synthetic trainer range
+
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation, in any Import
 Family. Two kinds: the project-wide 5,090,000 to 5,099,999 band, and a family's own fixture cluster —

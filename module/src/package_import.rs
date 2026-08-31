@@ -43,6 +43,7 @@
 //! import and then applying the remaining Packages — there is no pre-image to roll back to, which
 //! is also why a Claim can never delete a row.
 
+mod casts;
 #[cfg(test)]
 mod fixtures;
 mod items;
@@ -50,12 +51,13 @@ mod loot;
 mod quest;
 mod script;
 mod spell;
+mod trainers;
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
-    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, ITEM_FAMILY, LOOT_FAMILY,
-    QUEST_FAMILY, SCRIPT_FAMILY, SPELL_FAMILY,
+    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, CAST_FAMILY, ITEM_FAMILY,
+    LOOT_FAMILY, QUEST_FAMILY, SCRIPT_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
 };
 
 use crate::helpers::require_operator;
@@ -99,6 +101,10 @@ enum ClaimFamily {
     Quest,
     /// The four non-creature loot tables (pickpocket, gameobject/chest, skinning, fishing).
     Loot,
+    /// `game_creature_cast` and `game_creature_spell`.
+    Cast,
+    /// `game_trainer_spell`.
+    Trainer,
 }
 
 impl Family {
@@ -108,6 +114,8 @@ impl Family {
         Self::Claims(ClaimFamily::Item),
         Self::Claims(ClaimFamily::Quest),
         Self::Claims(ClaimFamily::Loot),
+        Self::Claims(ClaimFamily::Cast),
+        Self::Claims(ClaimFamily::Trainer),
         Self::Script,
     ];
 
@@ -147,6 +155,8 @@ impl ClaimFamily {
             Self::Item => ITEM_FAMILY,
             Self::Quest => QUEST_FAMILY,
             Self::Loot => LOOT_FAMILY,
+            Self::Cast => CAST_FAMILY,
+            Self::Trainer => TRAINER_FAMILY,
         }
     }
 
@@ -157,6 +167,8 @@ impl ClaimFamily {
             Self::Item => items::update_target(ctx, row),
             Self::Quest => quest::update_target(ctx, row),
             Self::Loot => loot::update_target(ctx, row),
+            Self::Cast => casts::update_target(ctx, row),
+            Self::Trainer => trainers::update_target(ctx, row),
         }
     }
 
@@ -168,6 +180,8 @@ impl ClaimFamily {
             Self::Item => items::clear_package_range(ctx),
             Self::Quest => quest::clear_package_range(ctx),
             Self::Loot => loot::clear_package_range(ctx),
+            Self::Cast => casts::clear_package_range(ctx),
+            Self::Trainer => trainers::clear_package_range(ctx),
         }
     }
 
@@ -178,6 +192,8 @@ impl ClaimFamily {
             Self::Item => items::write_row(ctx, row),
             Self::Quest => quest::write_row(ctx, row),
             Self::Loot => loot::write_row(ctx, row),
+            Self::Cast => casts::write_row(ctx, row),
+            Self::Trainer => trainers::write_row(ctx, row),
         }
     }
 
@@ -187,6 +203,8 @@ impl ClaimFamily {
             Self::Spell | Self::Item => Ok(()),
             Self::Quest => quest::check_references(ctx, rows),
             Self::Loot => loot::check_references(ctx, rows),
+            Self::Cast => casts::check_references(ctx, rows),
+            Self::Trainer => trainers::check_references(ctx, rows),
         }
     }
 }
@@ -612,10 +630,11 @@ fn stamp_provenance(ctx: &ReducerContext, family: Family, packages: &[PlannedPac
 #[cfg(test)]
 mod tests {
     use super::fixtures::{
-        artifact, effect_claim, item_claim, pickpocket_loot_claim, plan, quest_claim, spell_claim,
-        HASH_A, PACKAGE_ITEM, PACKAGE_LOOT, PACKAGE_QUEST, PACKAGE_SPELL, REAL_SPELL,
-        WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW, WHOLE_PICKPOCKET_LOOT_ROW, WHOLE_QUEST_ROW,
-        WHOLE_SPELL_ROW,
+        artifact, creature_spell_claim, effect_claim, item_claim, pickpocket_loot_claim, plan,
+        quest_claim, spell_claim, trainer_spell_claim, HASH_A, PACKAGE_CREATURE_SPELL,
+        PACKAGE_ITEM, PACKAGE_LOOT, PACKAGE_QUEST, PACKAGE_SPELL, PACKAGE_TRAINER_SPELL,
+        REAL_SPELL, WHOLE_CREATURE_SPELL_ROW, WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW,
+        WHOLE_PICKPOCKET_LOOT_ROW, WHOLE_QUEST_ROW, WHOLE_SPELL_ROW, WHOLE_TRAINER_SPELL_ROW,
     };
     use super::{check_claims_belong_to, ApplyPlan, ClaimFamily, Family, ARTIFACT_SEPARATOR};
     use lyracore_package_delta::PackageDelta;
@@ -786,6 +805,8 @@ mod tests {
         assert!(refusal.contains("`items`"), "{refusal}");
         assert!(refusal.contains("`quests`"), "{refusal}");
         assert!(refusal.contains("`loot`"), "{refusal}");
+        assert!(refusal.contains("`casts`"), "{refusal}");
+        assert!(refusal.contains("`trainers`"), "{refusal}");
         assert!(refusal.contains("`script`"), "{refusal}");
     }
 
@@ -804,6 +825,14 @@ mod tests {
             Ok(Family::Claims(ClaimFamily::Quest))
         );
         assert_eq!(Family::parse("loot"), Ok(Family::Claims(ClaimFamily::Loot)));
+        assert_eq!(
+            Family::parse("casts"),
+            Ok(Family::Claims(ClaimFamily::Cast))
+        );
+        assert_eq!(
+            Family::parse("trainers"),
+            Ok(Family::Claims(ClaimFamily::Trainer))
+        );
         assert_eq!(Family::parse("script"), Ok(Family::Script));
         for family in Family::ALL {
             assert_eq!(Family::parse(family.as_str()), Ok(*family));
@@ -887,5 +916,39 @@ mod tests {
             Ok(())
         );
         assert!(check_claims_belong_to(ClaimFamily::Item, &plan.rows).is_err());
+    }
+
+    /// A cast plan is checked against the casts family, not a sibling family it happens to sit
+    /// beside in this build's catalogue.
+    #[test]
+    fn a_cast_plan_claims_only_cast_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &creature_spell_claim(PACKAGE_CREATURE_SPELL, "insert", WHOLE_CREATURE_SPELL_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Cast, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Loot, &plan.rows).is_err());
+    }
+
+    /// A trainer plan is checked against the trainers family, not a sibling family it happens to
+    /// sit beside in this build's catalogue.
+    #[test]
+    fn a_trainer_plan_claims_only_trainer_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &trainer_spell_claim(PACKAGE_TRAINER_SPELL, "insert", WHOLE_TRAINER_SPELL_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Trainer, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Cast, &plan.rows).is_err());
     }
 }

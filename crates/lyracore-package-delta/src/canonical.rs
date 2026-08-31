@@ -124,9 +124,16 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         PrimaryKey::PickpocketLoot { id }
         | PrimaryKey::GameobjectLoot { id }
         | PrimaryKey::SkinningLoot { id }
-        | PrimaryKey::FishingLoot { id } => {
+        | PrimaryKey::FishingLoot { id }
+        | PrimaryKey::CreatureSpell { id }
+        | PrimaryKey::TrainerSpell { id } => {
             out.push_str("{\"id\":");
             out.push_str(&id.to_string());
+            out.push('}');
+        }
+        PrimaryKey::CreatureCast { creature_entry } => {
+            out.push_str("{\"creature_entry\":");
+            out.push_str(&creature_entry.to_string());
             out.push('}');
         }
     }

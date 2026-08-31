@@ -12,11 +12,12 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_item_id, is_fixture_reserved_loot_id, is_fixture_reserved_quest_id,
-    is_fixture_reserved_spell_id, is_package_item_id, is_package_loot_id, is_package_quest_id,
-    is_package_spell_id, packed_quest_objective_id, packed_quest_reward_choice_id,
-    packed_quest_reward_item_id, packed_spell_effect_id, MAX_QUEST_OBJECTIVE_INDEX,
-    MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
+    is_fixture_reserved_cast_id, is_fixture_reserved_item_id, is_fixture_reserved_loot_id,
+    is_fixture_reserved_quest_id, is_fixture_reserved_spell_id, is_fixture_reserved_trainer_id,
+    is_package_cast_id, is_package_item_id, is_package_loot_id, is_package_quest_id,
+    is_package_spell_id, is_package_trainer_id, packed_quest_objective_id,
+    packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_spell_effect_id,
+    MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
 };
 use crate::schema::{FieldType, FieldValue, Table};
 
@@ -233,6 +234,24 @@ pub enum PrimaryKey {
         /// The row.
         id: u64,
     },
+    // ---- casts ----
+    /// A `game_creature_cast` row. Update-only: the key names a creature template, which no
+    /// Package may invent.
+    CreatureCast {
+        /// The caster creature template.
+        creature_entry: u32,
+    },
+    /// A `game_creature_spell` row.
+    CreatureSpell {
+        /// The row.
+        id: u64,
+    },
+    // ---- trainers ----
+    /// A `game_trainer_spell` row.
+    TrainerSpell {
+        /// The row.
+        id: u64,
+    },
 }
 
 impl PrimaryKey {
@@ -393,6 +412,44 @@ impl PrimaryKey {
         Ok(Self::FishingLoot { id })
     }
 
+    /// Names a caster creature's single-spell cast row.
+    ///
+    /// No fixture or band check: the table is update-only (every insert on it is refused
+    /// regardless of identifier — see [`DeltaError::InsertNotSupported`]), and its key names a
+    /// creature template, which is out of this crate's scope to police.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for creature entry 0.
+    pub fn creature_cast(creature_entry: u32) -> Result<Self, DeltaError> {
+        if creature_entry == 0 {
+            return Err(DeltaError::MalformedKey {
+                table: Table::CreatureCast,
+                detail: "`creature_entry` 0 is not a creature".to_owned(),
+            });
+        }
+        Ok(Self::CreatureCast { creature_entry })
+    }
+
+    /// Names a caster creature's rotation-spell row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for id 0, and [`DeltaError::CastIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn creature_spell(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_cast_id(id)?;
+        Ok(Self::CreatureSpell { id })
+    }
+
+    /// Names one spell a trainer teaches.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for id 0, and [`DeltaError::TrainerIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn trainer_spell(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_trainer_id(id)?;
+        Ok(Self::TrainerSpell { id })
+    }
+
     /// The table this row lives in.
     #[must_use]
     pub const fn table(self) -> Table {
@@ -410,6 +467,9 @@ impl PrimaryKey {
             Self::GameobjectLoot { .. } => Table::GameobjectLoot,
             Self::SkinningLoot { .. } => Table::SkinningLoot,
             Self::FishingLoot { .. } => Table::FishingLoot,
+            Self::CreatureCast { .. } => Table::CreatureCast,
+            Self::CreatureSpell { .. } => Table::CreatureSpell,
+            Self::TrainerSpell { .. } => Table::TrainerSpell,
         }
     }
 
@@ -489,7 +549,10 @@ impl PrimaryKey {
             Self::PickpocketLoot { id }
             | Self::GameobjectLoot { id }
             | Self::SkinningLoot { id }
-            | Self::FishingLoot { id } => id,
+            | Self::FishingLoot { id }
+            | Self::CreatureSpell { id }
+            | Self::TrainerSpell { id } => id,
+            Self::CreatureCast { creature_entry } => creature_entry as u64,
         }
     }
 }
@@ -526,7 +589,12 @@ impl fmt::Display for PrimaryKey {
             Self::PickpocketLoot { id }
             | Self::GameobjectLoot { id }
             | Self::SkinningLoot { id }
-            | Self::FishingLoot { id } => write!(f, "{{id={id}}}"),
+            | Self::FishingLoot { id }
+            | Self::CreatureSpell { id }
+            | Self::TrainerSpell { id } => write!(f, "{{id={id}}}"),
+            Self::CreatureCast { creature_entry } => {
+                write!(f, "{{creature_entry={creature_entry}}}")
+            }
         }
     }
 }
@@ -579,6 +647,26 @@ fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
                 Err(DeltaError::LootIdNotClientSafe { id })
             }
         }
+        // The one arm that is never "inside the band, or refused": `game_creature_cast`'s key
+        // names a creature template, which no Package may invent, so every insert is refused
+        // regardless of identifier.
+        PrimaryKey::CreatureCast { .. } => Err(DeltaError::InsertNotSupported {
+            table: Table::CreatureCast,
+        }),
+        PrimaryKey::CreatureSpell { id } => {
+            if is_package_cast_id(id) {
+                Ok(())
+            } else {
+                Err(DeltaError::CastIdNotClientSafe { id })
+            }
+        }
+        PrimaryKey::TrainerSpell { id } => {
+            if is_package_trainer_id(id) {
+                Ok(())
+            } else {
+                Err(DeltaError::TrainerIdNotClientSafe { id })
+            }
+        }
     }
 }
 
@@ -622,6 +710,36 @@ fn check_claimable_loot_id(table: Table, id: u64) -> Result<(), DeltaError> {
     }
     if is_fixture_reserved_loot_id(id) {
         return Err(DeltaError::LootIdFixtureReserved { id });
+    }
+    Ok(())
+}
+
+/// A `game_creature_spell` identifier is refused the same way under every operation when it is 0
+/// or fixture-owned.
+fn check_claimable_cast_id(id: u64) -> Result<(), DeltaError> {
+    if id == 0 {
+        return Err(DeltaError::MalformedKey {
+            table: Table::CreatureSpell,
+            detail: "`id` 0 is not a row".to_owned(),
+        });
+    }
+    if is_fixture_reserved_cast_id(id) {
+        return Err(DeltaError::CastIdFixtureReserved { id });
+    }
+    Ok(())
+}
+
+/// A `game_trainer_spell` identifier is refused the same way under every operation when it is 0
+/// or fixture-owned.
+fn check_claimable_trainer_id(id: u64) -> Result<(), DeltaError> {
+    if id == 0 {
+        return Err(DeltaError::MalformedKey {
+            table: Table::TrainerSpell,
+            detail: "`id` 0 is not a row".to_owned(),
+        });
+    }
+    if is_fixture_reserved_trainer_id(id) {
+        return Err(DeltaError::TrainerIdFixtureReserved { id });
     }
     Ok(())
 }
@@ -768,7 +886,10 @@ fn is_key_column(table: Table, name: &str) -> bool {
         Table::PickpocketLoot
         | Table::GameobjectLoot
         | Table::SkinningLoot
-        | Table::FishingLoot => name == "id",
+        | Table::FishingLoot
+        | Table::CreatureSpell
+        | Table::TrainerSpell => name == "id",
+        Table::CreatureCast => name == "creature_entry",
     }
 }
 
@@ -934,7 +1055,14 @@ impl PackageDelta {
                     | Table::PickpocketLoot
                     | Table::GameobjectLoot
                     | Table::SkinningLoot
-                    | Table::FishingLoot,
+                    | Table::FishingLoot
+                    // `Table::CreatureCast` never reaches this arm at runtime — `check_inventable`
+                    // refuses every insert on it before a `Claim` can exist — but the match stays
+                    // exhaustive at the type level, the same way the loot tables sit beside tables
+                    // whose own policy is stricter than "any identifier in the band".
+                    | Table::CreatureCast
+                    | Table::CreatureSpell
+                    | Table::TrainerSpell,
                 ) => counts.inserted_rows += 1,
             }
         }
@@ -996,12 +1124,9 @@ fn parse_claim(value: &Value, index: usize) -> Result<Claim, DeltaError> {
     Claim::new(key, operation, fields)
 }
 
-fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
-    let key = value.as_object().ok_or(DeltaError::MalformedKey {
-        table,
-        detail: "expected an object".to_owned(),
-    })?;
-    let expected: &[&str] = match table {
+/// The `key` members a claim on `table` must carry, exactly.
+fn expected_key_members(table: Table) -> &'static [&'static str] {
+    match table {
         Table::Spell => &["spell_id"],
         Table::SpellEffect => &["effect_index", "spell_id"],
         Table::Item | Table::Quest => &["entry"],
@@ -1012,8 +1137,19 @@ fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
         Table::PickpocketLoot
         | Table::GameobjectLoot
         | Table::SkinningLoot
-        | Table::FishingLoot => &["id"],
-    };
+        | Table::FishingLoot
+        | Table::CreatureSpell
+        | Table::TrainerSpell => &["id"],
+        Table::CreatureCast => &["creature_entry"],
+    }
+}
+
+fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
+    let key = value.as_object().ok_or(DeltaError::MalformedKey {
+        table,
+        detail: "expected an object".to_owned(),
+    })?;
+    let expected = expected_key_members(table);
     for name in key.keys() {
         if !expected.contains(&name.as_str()) {
             return Err(DeltaError::MalformedKey {
@@ -1031,6 +1167,13 @@ fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
         }
     }
 
+    build_key(key, table)
+}
+
+/// Builds the typed key once [`parse_key`] has confirmed every expected member is present and no
+/// other member is. Split out so neither function trips `clippy::too_many_lines` as the catalogue
+/// grows.
+fn build_key(key: &Map<String, Value>, table: Table) -> Result<PrimaryKey, DeltaError> {
     match table {
         Table::Spell => {
             let spell_id = key_number(key, table, "spell_id", u64::from(u32::MAX))? as u32;
@@ -1088,6 +1231,19 @@ fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
         Table::FishingLoot => {
             let id = key_number(key, table, "id", u64::MAX)?;
             PrimaryKey::fishing_loot(id)
+        }
+        Table::CreatureCast => {
+            let creature_entry =
+                key_number(key, table, "creature_entry", u64::from(u32::MAX))? as u32;
+            PrimaryKey::creature_cast(creature_entry)
+        }
+        Table::CreatureSpell => {
+            let id = key_number(key, table, "id", u64::MAX)?;
+            PrimaryKey::creature_spell(id)
+        }
+        Table::TrainerSpell => {
+            let id = key_number(key, table, "id", u64::MAX)?;
+            PrimaryKey::trainer_spell(id)
         }
     }
 }

@@ -3,7 +3,9 @@
 //! An applier is called for one family at a time, so `Table::family` decides which claims that call
 //! may touch. These cases hold the catalogue, the parser and the family map together.
 
-use lyracore_package_delta::{Table, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SPELL_FAMILY};
+use lyracore_package_delta::{
+    Table, CAST_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
+};
 
 /// `Table::ALL`, `Table::as_str` and `Table::parse` are three hand-maintained lists of one
 /// catalogue. The match below carries no wildcard, so a table added to the enum stops this case
@@ -25,6 +27,9 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
             Table::GameobjectLoot => "game_gameobject_loot",
             Table::SkinningLoot => "game_skinning_loot",
             Table::FishingLoot => "game_fishing_loot",
+            Table::CreatureCast => "game_creature_cast",
+            Table::CreatureSpell => "game_creature_spell",
+            Table::TrainerSpell => "game_trainer_spell",
         };
 
         assert_eq!(table.as_str(), name);
@@ -33,7 +38,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
 
     assert_eq!(
         Table::ALL.len(),
-        13,
+        16,
         "a table reached the enum without reaching `Table::ALL`"
     );
 }
@@ -77,6 +82,20 @@ fn the_loot_tables_belong_to_the_loot_import_family() {
         assert_eq!(table.family(), LOOT_FAMILY, "{table}");
     }
     assert_eq!(LOOT_FAMILY, "loot");
+}
+
+#[test]
+fn the_cast_tables_belong_to_the_casts_import_family() {
+    for table in [Table::CreatureCast, Table::CreatureSpell] {
+        assert_eq!(table.family(), CAST_FAMILY, "{table}");
+    }
+    assert_eq!(CAST_FAMILY, "casts");
+}
+
+#[test]
+fn the_trainer_table_belongs_to_the_trainers_import_family() {
+    assert_eq!(Table::TrainerSpell.family(), TRAINER_FAMILY);
+    assert_eq!(TRAINER_FAMILY, "trainers");
 }
 
 /// A family name travels as a reducer argument and as `game_import_meta.family`, where the importer

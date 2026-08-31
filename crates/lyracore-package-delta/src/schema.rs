@@ -31,6 +31,14 @@ pub const QUEST_FAMILY: &str = "quests";
 /// out of this issue's scope. See this crate's `lib.rs` for why.
 pub const LOOT_FAMILY: &str = "loot";
 
+/// The Import Family that owns the caster-creature spell tables (`game_creature_cast`,
+/// `game_creature_spell`). The same name the `--dump` importer's `casts` `--family` block stamps.
+pub const CAST_FAMILY: &str = "casts";
+
+/// The Import Family that owns `game_trainer_spell`. The same name the `--dump` importer's
+/// `trainers` `--family` block stamps.
+pub const TRAINER_FAMILY: &str = "trainers";
+
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
 /// needs no translation step.
 ///
@@ -70,6 +78,16 @@ pub enum Table {
     SkinningLoot,
     /// `game_fishing_loot`, a zone's fishing table.
     FishingLoot,
+    // ---- casts ----
+    /// `game_creature_cast` — a caster creature's single nuke/debuff spell. Update-only: the
+    /// primary key names a creature template, which no Package may invent. See
+    /// [`crate::DeltaError::InsertNotSupported`].
+    CreatureCast,
+    /// `game_creature_spell` — one rotation-spell row of a caster creature.
+    CreatureSpell,
+    // ---- trainers ----
+    /// `game_trainer_spell` — one spell a trainer teaches.
+    TrainerSpell,
 }
 
 impl Table {
@@ -89,6 +107,9 @@ impl Table {
         Self::GameobjectLoot,
         Self::SkinningLoot,
         Self::FishingLoot,
+        Self::CreatureCast,
+        Self::CreatureSpell,
+        Self::TrainerSpell,
     ];
 
     /// The durable table name, and the value the artifact's `table` member carries.
@@ -108,6 +129,9 @@ impl Table {
             Self::GameobjectLoot => "game_gameobject_loot",
             Self::SkinningLoot => "game_skinning_loot",
             Self::FishingLoot => "game_fishing_loot",
+            Self::CreatureCast => "game_creature_cast",
+            Self::CreatureSpell => "game_creature_spell",
+            Self::TrainerSpell => "game_trainer_spell",
         }
     }
 
@@ -131,6 +155,8 @@ impl Table {
             | Self::GameobjectLoot
             | Self::SkinningLoot
             | Self::FishingLoot => LOOT_FAMILY,
+            Self::CreatureCast | Self::CreatureSpell => CAST_FAMILY,
+            Self::TrainerSpell => TRAINER_FAMILY,
         }
     }
 
@@ -151,6 +177,9 @@ impl Table {
             "game_gameobject_loot" => Some(Self::GameobjectLoot),
             "game_skinning_loot" => Some(Self::SkinningLoot),
             "game_fishing_loot" => Some(Self::FishingLoot),
+            "game_creature_cast" => Some(Self::CreatureCast),
+            "game_creature_spell" => Some(Self::CreatureSpell),
+            "game_trainer_spell" => Some(Self::TrainerSpell),
             _ => None,
         }
     }
@@ -168,6 +197,12 @@ impl Table {
     /// would set zero columns. This is the shape `tests/families.rs`'s
     /// `every_table_has_claimable_columns` exists to catch. Reaching a Package quest from a giver
     /// is left as a named gap for a later change, not forced past that guard.
+    ///
+    /// `game_creature_cast` is the borderline case that DOES stay in the catalogue: both its
+    /// columns describe the creature-to-spell relation too, but `spell_id` is not a key column, so
+    /// a claim on it sets a real value — retargeting which spell a caster mob uses. It is
+    /// update-only for a different reason: its key names a creature template, which no Package may
+    /// invent. See [`crate::DeltaError::InsertNotSupported`].
     #[must_use]
     pub const fn columns(self) -> &'static [Column] {
         match self {
@@ -184,6 +219,9 @@ impl Table {
             Self::GameobjectLoot => GAMEOBJECT_LOOT_COLUMNS,
             Self::SkinningLoot => SKINNING_LOOT_COLUMNS,
             Self::FishingLoot => FISHING_LOOT_COLUMNS,
+            Self::CreatureCast => CREATURE_CAST_COLUMNS,
+            Self::CreatureSpell => CREATURE_SPELL_COLUMNS,
+            Self::TrainerSpell => TRAINER_SPELL_COLUMNS,
         }
     }
 
@@ -450,6 +488,42 @@ const FISHING_LOOT_COLUMNS: &[Column] = &[
     column("chance_bp", FieldType::U32),
     column("count", FieldType::U32),
     column("group_id", FieldType::U32),
+];
+
+// ---- casts ----
+
+/// `game_creature_cast` minus its `creature_entry` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `CreatureCast` struct. The table is
+/// update-only ([`crate::DeltaError::InsertNotSupported`]), but a claim still names a real column:
+/// `spell_id` is not part of the key.
+const CREATURE_CAST_COLUMNS: &[Column] = &[column("spell_id", FieldType::U32)];
+
+/// `game_creature_spell` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `CreatureSpell` struct.
+const CREATURE_SPELL_COLUMNS: &[Column] = &[
+    column("creature_entry", FieldType::U32),
+    column("spell_id", FieldType::U32),
+    column("priority", FieldType::U8),
+    column("condition", FieldType::U8),
+    column("condition_value", FieldType::U8),
+];
+
+// ---- trainers ----
+
+/// `game_trainer_spell` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/trainer.rs`'s `TrainerSpell` struct. `spell_id` on a
+/// profession offering (`learn_skill_line > 0`) is a synthetic marker, never a `game_spell` row —
+/// see `module/src/package_import/trainers.rs`'s `check_references`.
+const TRAINER_SPELL_COLUMNS: &[Column] = &[
+    column("trainer_entry", FieldType::U32),
+    column("spell_id", FieldType::U32),
+    column("cost", FieldType::U32),
+    column("required_level", FieldType::U8),
+    column("learn_skill_line", FieldType::U32),
+    column("learn_skill_cap", FieldType::U32),
 ];
 
 /// The type tag a claimed value carries.

@@ -352,3 +352,74 @@ pub const fn is_package_loot_id(id: u64) -> bool {
 pub const fn is_fixture_reserved_loot_id(id: u64) -> bool {
     id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
 }
+
+// ===============================================================================================
+//  casts
+// ===============================================================================================
+
+/// Lowest `game_creature_spell.id` a Package may INSERT.
+///
+/// The fifth application of the band formula, one decade above the Package loot range: `10` names
+/// a Package cast row. Past 9,999,999 the millions column takes two digits, which is the cost of
+/// keeping the family-at-a-glance signal going.
+///
+/// `game_creature_cast` carries no band of its own: its primary key is `creature_entry`, a creature
+/// template entry, which no Package may invent
+/// ([`crate::DeltaError::InsertNotSupported`]). Only `game_creature_spell`'s own surrogate `id` is
+/// checked here, the loot shape.
+pub const PACKAGE_CAST_ID_FLOOR: u64 = 10_000_000;
+
+/// Highest `game_creature_spell.id` a Package may INSERT.
+pub const PACKAGE_CAST_ID_CEIL: u64 = 10_999_999;
+
+const _: () = assert!(PACKAGE_CAST_ID_FLOOR <= PACKAGE_CAST_ID_CEIL);
+const _: () = assert!((RESERVED_ID_CEIL as u64) < PACKAGE_CAST_ID_FLOOR);
+
+/// True when a Package may INSERT a `game_creature_spell` row at this identifier.
+#[must_use]
+pub const fn is_package_cast_id(id: u64) -> bool {
+    id >= PACKAGE_CAST_ID_FLOOR && id <= PACKAGE_CAST_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. The cast family has no fixture cluster of its own, so the project-wide band is the
+/// whole check, the same shape as [`is_fixture_reserved_loot_id`].
+#[must_use]
+pub const fn is_fixture_reserved_cast_id(id: u64) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
+}
+
+// ===============================================================================================
+//  trainers
+// ===============================================================================================
+
+/// Lowest `game_trainer_spell.id` a Package may INSERT.
+///
+/// The sixth application of the band formula, one decade above the Package cast range: `11` names
+/// a Package trainer row.
+///
+/// Distinct from [`CURATED_RESERVED_ID_CEIL`]'s `CURATED_TRAINER_ID_BASE` span
+/// (`importer/src/spell.rs`, 5,200,000 plus a 500-wide span): that band is where the IMPORTER hands
+/// out fixed identifiers to curated overrides it invents rather than reads, already covered by
+/// [`RESERVED_ID_CEIL`]. This band is where a PACKAGE may insert one. The two are never merged.
+pub const PACKAGE_TRAINER_ID_FLOOR: u64 = 11_000_000;
+
+/// Highest `game_trainer_spell.id` a Package may INSERT.
+pub const PACKAGE_TRAINER_ID_CEIL: u64 = 11_999_999;
+
+const _: () = assert!(PACKAGE_TRAINER_ID_FLOOR <= PACKAGE_TRAINER_ID_CEIL);
+const _: () = assert!((RESERVED_ID_CEIL as u64) < PACKAGE_TRAINER_ID_FLOOR);
+
+/// True when a Package may INSERT a `game_trainer_spell` row at this identifier.
+#[must_use]
+pub const fn is_package_trainer_id(id: u64) -> bool {
+    id >= PACKAGE_TRAINER_ID_FLOOR && id <= PACKAGE_TRAINER_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. The trainer family has no fixture cluster of its own, so the project-wide band is
+/// the whole check, the same shape as [`is_fixture_reserved_loot_id`].
+#[must_use]
+pub const fn is_fixture_reserved_trainer_id(id: u64) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
+}
