@@ -115,6 +115,10 @@ async fn run() -> Result<()> {
     // through a portal has no loading screen for the escrowed transfer to run inside.
     coordinator.spawn_bot_transfer_relay();
 
+    // A Character deleted on a Shard (a despawned bot, a deleted character) must also leave the
+    // party realm-core still lists it in; no client and no Shard reducer can reach realm-core.
+    coordinator.spawn_character_gone_relay();
+
     // Keep this gateway's lease alive. The module's lease reaper despawns every session bound to
     // a lease that stops heartbeating, so the heartbeat is what bounds ghost lifetime after a
     // gateway crash — and its ABSENCE while sessions are bound is what would despawn a healthy
@@ -482,6 +486,46 @@ mod bot_transfer_relay_wiring_tripwire {
              Crossings keep working until the first coordinator reconnect and then go permanently \
              silent — the exact failure the bot-invite relay's own hook exists to prevent. Body \
              was:\n{body}"
+        );
+    }
+}
+
+/// The character-gone relay: the same three-part contract as the transfer relay above.
+#[cfg(test)]
+mod character_gone_relay_tripwires {
+    use crate::test_scan::code_of;
+
+    #[test]
+    fn main_arms_the_character_gone_relay_at_startup() {
+        let src = include_str!("main.rs");
+        let body = code_of(src, "async fn run() -> Result<()> {");
+        assert!(
+            body.contains("coordinator.spawn_character_gone_relay();"),
+            "`main` no longer calls `spawn_character_gone_relay` — a Character deleted on a Shard \
+             stays in its realm-core party forever. Body was:\n{body}"
+        );
+    }
+
+    #[test]
+    fn the_on_delete_callback_leaves_the_realm_core_party() {
+        let src = include_str!("stdb/subscriptions.rs");
+        let body = code_of(src, "fn arm_character_gone_relay(&self) {");
+        assert!(
+            body.contains("realm_op::LEAVE") && body.contains("character_anywhere("),
+            "`arm_character_gone_relay` no longer checks every Shard and leaves on realm-core — \
+             either a moved Character is kicked mid-Transfer, or a gone one is never removed. Body \
+             was:\n{body}"
+        );
+    }
+
+    #[test]
+    fn spawn_character_gone_relay_installs_the_reconnect_hook() {
+        let src = include_str!("stdb/subscriptions.rs");
+        let body = code_of(src, "pub fn spawn_character_gone_relay(&self) {");
+        assert!(
+            body.contains("on_reconnect") && body.contains("arm_character_gone_relay();"),
+            "`spawn_character_gone_relay` no longer installs the per-shard `on_reconnect` re-arm; \
+             it goes silent after the first module republish. Body was:\n{body}"
         );
     }
 }
