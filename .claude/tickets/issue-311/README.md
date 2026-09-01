@@ -15,6 +15,8 @@ conflict on every file:
   `family`, `columns`, the column lists, the family name const)
 - `crates/lyracore-package-delta/src/delta.rs` (`PrimaryKey`, its constructors, `table`, `row_id`,
   `Display`, `check_inventable`, `parse_key`)
+- `crates/lyracore-package-delta/src/canonical.rs` (`write_key`'s `PrimaryKey` match needs a new
+  arm for every family; T1 found this file missing from the plan)
 - `crates/lyracore-package-delta/src/ids.rs` (the family's Package Identifier Range and its
   compile-time asserts)
 - `crates/lyracore-package-delta/src/error.rs` and `lib.rs` (refusals and re-exports)

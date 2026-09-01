@@ -127,12 +127,15 @@ mirroring `loot.rs`:
   - casts: `spell_id` must be a `game_spell` row, on both tables; `game_creature_spell.creature_entry`
     must be a `game_creature_template` row.
   - trainers: `trainer_entry` must be a `game_creature_template` row. **`spell_id` is checked
-    against `game_spell` only when the row's final `learn_skill_line` is 0.** A profession offering
-    (`learn_skill_line > 0`) carries a synthetic marker `spell_id` (50080 or 50081, see
-    `module/src/trainer.rs`) that is deliberately never resolved to a `game_spell` row, so an
-    unconditional check would refuse a legitimate claim. Read the merged final value the same way
-    `loot.rs`'s `final_u32` does, so an update that changes only one of the two columns is judged on
-    what the row will hold after the apply.
+    against `game_spell` only when the row's final `learn_skill_line` is 0.** The gate is on
+    `learn_skill_line`, not on any list of marker ids. A profession offering (`learn_skill_line >
+    0`) carries a synthetic marker `spell_id`; `module/src/skill.rs`'s `LEARN_*_SPELL_ID` constants
+    list seven of them (50080 Cooking, 50081 Skinning, 50082 Leatherworking, 50085 Alchemy, 50086
+    First Aid, 50087 Tailoring, 50088 Blacksmithing — Mining and Herbalism have markers of their
+    own too, 50083 and 50084). Every one of those markers is deliberately never resolved to a
+    `game_spell` row, so an unconditional check would refuse a legitimate claim. Read the merged
+    final value the same way `loot.rs`'s `final_u32` does, so an update that changes only one of
+    the two columns is judged on what the row will hold after the apply.
 
 Wire both into `package_import.rs`: `ClaimFamily::Cast` and `ClaimFamily::Trainer`, `Family::ALL`,
 `as_str`, and the four dispatch matches. `check_references` gets real arms for both, not `Ok(())`.
@@ -145,7 +148,10 @@ invocation shape: `run_package_stage` reads the constant.
 
 ## Files owned
 
-- `crates/lyracore-package-delta/src/{schema.rs,ids.rs,delta.rs,error.rs,lib.rs}`
+- `crates/lyracore-package-delta/src/{schema.rs,ids.rs,delta.rs,error.rs,lib.rs,canonical.rs}`.
+  `canonical.rs`'s `write_key` match needs a new `PrimaryKey` arm for every family; it is a shared
+  file the same as the other five and every later ticket touches it too (see the README's shared-
+  files note).
 - `crates/lyracore-package-delta/tests/{families.rs,refusals.rs,claim_counts.rs}` and two new files
   `cast_identifiers.rs`, `trainer_identifiers.rs`
 - `module/src/package_import.rs`, `module/src/package_import/fixtures.rs`, and new
