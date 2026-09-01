@@ -23,8 +23,9 @@
 //! | `accept_quest` | `quest::apply_accept_quest` | alive + giver in range offering the quest + level/race/class/prereq/duplicate gates |
 //! | `stage_quest` | `quest::grant_quest_unchecked` | HARNESS/BOT staging: same row shape, all accept gates SKIPPED (giver-less) |
 //! | `turn_in_quest` | `quest::apply_turn_in_quest` | alive + giver in range ending the quest + objectives complete; rewards atomic |
-//! | `take_loot` | `items::apply_take_loot` | alive + corpse/GO on same map within 10yd + slot occupied; inventory-full rolls back |
-//! | `loot_money` | `loot::apply_loot_money` | alive + dead creature corpse, same map, 10yd, money > 0 |
+//! | `open_creature_loot` | `loot::open_creature_corpse` | alive + dead creature corpse on the same map within 10yd + Loot Tag eligibility; authorizes the following read |
+//! | `take_loot` | `items::apply_take_loot` | alive + corpse/GO on same map within 10yd + Loot Tag eligibility for creatures + slot occupied; inventory-full rolls back |
+//! | `loot_money` | `loot::apply_loot_money` | alive + dead creature corpse, same map, 10yd, money > 0 + Loot Tag eligibility |
 //! | `buy_item` | `items::apply_buy_item` | vendor in range + stocked + money; stacks/slots validated |
 //! | `sell_item` | `items::apply_item_sell` | vendor in range + sellable item in slot; feeds the buyback ring |
 //! | `use_item` | `items::apply_item_use` | alive + usable item in slot (consumable/on-use gates) |
@@ -125,6 +126,7 @@ debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest;
 
 package_only! {
     pub(crate) use crate::items::apply_item_use as use_item;
+    pub(crate) use crate::loot::open_creature_corpse as open_creature_loot;
     pub(crate) use crate::items::apply_take_loot as take_loot;
     // `loot_money` also feeds playerbots' drink-at-rest behavior (work-item 154).
     pub(crate) use crate::loot::apply_loot_money as loot_money;

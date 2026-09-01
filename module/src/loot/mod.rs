@@ -46,7 +46,7 @@
 use spacetimedb::{table, ReducerContext, Table};
 
 use crate::character::game_character; // credit_purse's offline-recipient fallback (work-item 221)
-use crate::game_group_member; // clone_quest_loot_for_group's group-roster read (work-item 187 slice 0)
+use crate::game_group_member; // clone_quest_loot_for_group's GameObject roster read
 use crate::game_world_entity;
 use crate::quest::objective_kind;
 use crate::{game_character_quest, game_quest_objective}; // killer_needs_item (fishing's zone resolve now lives in terrain::zone_id_at, #375)
@@ -692,12 +692,107 @@ pub(crate) fn clone_quest_loot_for_group(
     }
 }
 
+/// Clone a quest-only creature-loot row for the other corpse-eligible Characters who still need
+/// it. The resolved eligibility set is the whole recipient ceiling: a current group lookup would
+/// let a later joiner receive a clone.
+pub(crate) fn clone_quest_loot_for_eligible(
+    ctx: &ReducerContext,
+    taker_guid: u64,
+    corpse_guid: u64,
+    item_entry: u32,
+    count: u32,
+) {
+    let others: Vec<(u64, bool)> = corpse_eligible_recipients(ctx, corpse_guid)
+        .into_iter()
+        .filter(|eligible_guid| *eligible_guid != taker_guid)
+        .map(|eligible_guid| {
+            (
+                eligible_guid,
+                killer_needs_item(ctx, Some(eligible_guid), item_entry),
+            )
+        })
+        .collect();
+    let targets = clone_targets(&others);
+    if targets.is_empty() {
+        return;
+    }
+    let used_slots: Vec<u8> = ctx
+        .db
+        .game_corpse_loot()
+        .by_corpse()
+        .filter(&corpse_guid)
+        .map(|loot| loot.slot)
+        .collect();
+    let slots = next_free_slots(&used_slots, targets.len());
+    for (target_guid, slot) in targets.into_iter().zip(slots) {
+        ctx.db.game_corpse_loot().insert(CorpseLoot {
+            id: 0,
+            corpse_guid,
+            slot,
+            item_entry,
+            count,
+            quest_only: true,
+            reserved_for: target_guid,
+            designated_looter_guid: 0,
+            master_only: false,
+            withheld: false,
+        });
+    }
+}
+
 /// Max distance to loot a corpse: (10 yd)². Generous — the vanilla client walks into interaction
 /// range itself before sending `CMSG_LOOT_MONEY`, so this only rejects clearly-out-of-range abuse.
 pub(crate) const LOOT_RANGE_SQ: f32 = 100.0;
 
-/// Shared core: take corpse money by explicit looter guid — the body behind the `loot_money`
-/// reducer and `actor::loot_money` (147/149). Pure code motion; every gate byte-identical.
+/// A corpse is ready for skinning once no item row or money remains.
+pub(crate) fn corpse_is_looted(ctx: &ReducerContext, corpse_guid: u64, money: u32) -> bool {
+    money == 0
+        && ctx
+            .db
+            .game_corpse_loot()
+            .by_corpse()
+            .filter(&corpse_guid)
+            .next()
+            .is_none()
+}
+
+/// Open a creature corpse for the read that follows. This reducer core only authorizes the read;
+/// it does not create durable loot-window state.
+pub(crate) fn open_creature_corpse(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    corpse_guid: u64,
+) -> Result<(), String> {
+    let actor = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(actor_guid)
+        .ok_or_else(|| "looter not in world".to_string())?;
+    if actor.dead {
+        return Err("dead players cannot loot".to_string());
+    }
+    let corpse = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(corpse_guid)
+        .ok_or_else(|| "no such corpse".to_string())?;
+    if corpse.is_player() || !corpse.dead {
+        return Err("target is not a creature corpse".to_string());
+    }
+    if corpse.map_id != actor.map_id || corpse.instance_id != actor.instance_id {
+        return Err("corpse is out of reach".to_string());
+    }
+    let (dx, dy, dz) = (corpse.x - actor.x, corpse.y - actor.y, corpse.z - actor.z);
+    if dx * dx + dy * dy + dz * dz > LOOT_RANGE_SQ {
+        return Err("corpse is out of reach".to_string());
+    }
+    corpse_access_gate(ctx, actor_guid, corpse_guid)
+}
+
+/// Shared core: take corpse money by explicit looter guid, behind the `loot_money` reducer and
+/// `actor::loot_money`. The Loot Tag Gate runs before the corpse purse changes.
 pub(crate) fn apply_loot_money(
     ctx: &ReducerContext,
     looter_guid: u64,
@@ -747,25 +842,17 @@ pub(crate) fn apply_loot_money(
         return Err("corpse out of range".to_string());
     }
 
+    corpse_access_gate(ctx, looter_guid, target_guid)?;
+
     let amount = corpse.money;
     corpse.money = 0;
     entities.guid().update(corpse);
 
-    // Work-item 221: split across the KILL-TIME eligibility snapshot (`game_corpse_loot_eligible`,
-    // work-item 187) instead of recomputing group membership/range at LOOT time — so money and item
-    // eligibility can never drift apart (`apply_group_loot_rules` populates the very same rows). No
-    // snapshot rows for this corpse means the kill never produced a >=2-recipient split
-    // (`apply_group_loot_rules` early-outs below 2 recipients) — that IS the solo case: the whole
-    // amount to the looter, byte-identical to the pre-221 path, and NO `MONEY_SHARE` event (the
-    // looter's own client prints its local "You loot X copper" line; the gateway sends no notify).
-    let recipients: Vec<u64> = ctx
-        .db
-        .game_corpse_loot_eligible()
-        .by_corpse()
-        .filter(&target_guid)
-        .map(|e| e.eligible_guid)
-        .collect();
-    let grouped = !recipients.is_empty();
+    // Split across the resolved corpse-eligibility set, never a current party lookup. The access
+    // Gate above makes an empty set a Refusal. A one-recipient set is solo and sends no
+    // `MONEY_SHARE` event.
+    let recipients = corpse_eligible_recipients(ctx, target_guid);
+    let grouped = money_is_grouped(&recipients);
     let shares = split_money(amount, &recipients, looter_guid);
 
     // Credit the looter's own share in-place (avoid a stale-copy clobber: `looter` is updated ONCE,
@@ -838,15 +925,9 @@ fn credit_purse(ctx: &ReducerContext, recipient_guid: u64, share: u32) {
     }
 }
 
-/// Split `total` copper evenly across `recipients` (the `game_corpse_loot_eligible` KILL-TIME
-/// snapshot), remainder to `looter_guid` (cmangos convention [V] — no live client to confirm the
-/// exact vanilla remainder rule, but this matches the reference emulator's `Group::GetLootMoneyShare`
-/// odd-copper handling). `recipients` empty ⇒ solo/ungrouped: the whole amount to `looter_guid` in a
-/// single entry — byte-identical to the pre-221 unconditional-credit path. If `looter_guid` is NOT
-/// itself among `recipients` (possible only if the looter joined the group strictly after the kill was
-/// snapshotted, or is looting a corpse whose kill credited someone else entirely — [V], unconfirmed
-/// against a live client), the remainder is folded into an EXTRA entry for the looter so no copper is
-/// ever silently dropped and opening the corpse always pays out at least the remainder. Pure.
+/// Split `total` copper evenly across the resolved corpse-eligibility set, with the remainder to
+/// `looter_guid`. The access Gate ensures a real caller is in a non-empty set. The empty case stays
+/// defined for this pure helper's callers and tests, but never authorizes money loot. Pure.
 pub(crate) fn split_money(total: u32, recipients: &[u64], looter_guid: u64) -> Vec<(u64, u32)> {
     if recipients.is_empty() {
         return vec![(looter_guid, total)];
@@ -870,6 +951,11 @@ pub(crate) fn split_money(total: u32, recipients: &[u64], looter_guid: u64) -> V
         shares.push((looter_guid, remainder));
     }
     shares
+}
+
+/// Money shares are a party action only when the corpse has more than one eligible Character.
+pub(crate) fn money_is_grouped(recipients: &[u64]) -> bool {
+    recipients.len() > 1
 }
 
 /// Re-derive `UNIT_DYNFLAG_LOOTABLE` for a corpse from what is actually left on it:
@@ -1296,6 +1382,13 @@ mod tests {
     #[test]
     fn split_money_single_recipient_degrades_to_whole_amount() {
         assert_eq!(split_money(50, &[7], 7), vec![(7, 50)]);
+    }
+
+    #[test]
+    fn only_multiple_eligible_characters_share_money() {
+        assert!(!money_is_grouped(&[]));
+        assert!(!money_is_grouped(&[7]));
+        assert!(money_is_grouped(&[7, 8]));
     }
 
     use crate::test_scan::code_of;

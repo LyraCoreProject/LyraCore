@@ -603,8 +603,9 @@ pub(crate) fn apply_death_durability_loss(ctx: &ReducerContext, player_guid: u64
 /// a fresh owned `ItemInstance` in the first free backpack slot, then DELETES the consumed loot row.
 /// Re-derives the corpse `LOOTABLE` flag after consuming (`loot::refresh_lootable` — cleared only
 /// when no rows remain AND money is 0). Errors if the looter is dead, the corpse is
-/// missing/alive/on another map, the slot has no loot, the item template is missing, or the backpack is
-/// full. Additive — inserts one item row and deletes one loot row. [entity]
+/// missing/alive/on another map, the Loot Tag excludes the looter, the slot has no loot, the item
+/// template is missing, or the backpack is full. Creature corpses clone quest rows to their resolved
+/// eligibility set. GameObjects retain their current-group clone behavior. [entity]
 pub(crate) fn apply_take_loot(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -642,6 +643,9 @@ pub(crate) fn apply_take_loot(
         } else {
             return Err("no such loot source".to_string());
         };
+    if source_is_corpse {
+        crate::loot::corpse_access_gate(ctx, player_guid, corpse_guid)?;
+    }
     if src_map != player.map_id {
         return Err("loot on another map".to_string());
     }
@@ -721,13 +725,27 @@ pub(crate) fn apply_take_loot(
     let (item_entry, count) = (row.item_entry, row.count.max(1));
     let (was_quest_only, was_unreserved) = (row.quest_only, row.reserved_for == 0);
     loot.id().delete(row.id);
-    // Per-member cloning (work-item 187 slice 0): the FIRST take of a still-shared quest_only row
-    // splits it — every OTHER grouped member who still needs the item gets their own independently
-    // reserved clone at a fresh slot, so the item doesn't vanish for them the instant this player
-    // takes theirs. A solo player (no group) or an already-reserved clone (a later take) is a no-op —
-    // see `clone_quest_loot_for_group`.
+    // The first take of a shared quest-only row grants the other still-needing recipients their own
+    // reserved clone. Creature corpses use their resolved eligibility set. GameObjects keep the
+    // existing current-group calculation.
     if was_quest_only && was_unreserved {
-        crate::loot::clone_quest_loot_for_group(ctx, player_guid, corpse_guid, item_entry, count);
+        if source_is_corpse {
+            crate::loot::clone_quest_loot_for_eligible(
+                ctx,
+                player_guid,
+                corpse_guid,
+                item_entry,
+                count,
+            );
+        } else {
+            crate::loot::clone_quest_loot_for_group(
+                ctx,
+                player_guid,
+                corpse_guid,
+                item_entry,
+                count,
+            );
+        }
     }
     // The flag follows the rule (rows remain OR money > 0) — taking the LAST item of a no-money
     // corpse must drop the loot cursor. Gameobject sources carry no dynamic flag; skip them.

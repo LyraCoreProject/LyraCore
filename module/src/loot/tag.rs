@@ -15,7 +15,8 @@ use super::game_corpse_loot_eligible;
 
 #[cfg(feature = "debug_reducers")]
 use crate::{
-    game_corpse_loot, game_creature_template, game_group, game_group_member, game_melee_attack,
+    game_corpse_loot, game_creature_template, game_group, game_group_member, game_item_template,
+    game_melee_attack, game_player_skill,
 };
 
 /// The Character whose controlled unit first generated positive threat on this creature.
@@ -238,6 +239,35 @@ pub(crate) fn corpse_eligible_recipients(ctx: &ReducerContext, corpse_guid: u64)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// Stable classifier for a Loot Tag Gate Refusal. The detail keeps both durable identities for
+/// logs and the Gateway's protocol mapping.
+pub(crate) const LOOT_TAG_REFUSAL_CLASS: &str = "loot_tag_ineligible";
+
+pub(crate) fn loot_tag_refusal(actor_guid: u64, corpse_guid: u64) -> String {
+    format!("{LOOT_TAG_REFUSAL_CLASS}: actor_guid={actor_guid} corpse_guid={corpse_guid}")
+}
+
+pub(crate) fn corpse_eligible_for_access(recipients: &[u64], actor_guid: u64) -> bool {
+    recipients.binary_search(&actor_guid).is_ok()
+}
+
+/// Require an Actor to appear in the corpse's resolved eligibility set. An empty set is
+/// authoritative, so an unentitled corpse is not solo loot. Call this only after resolving a
+/// creature corpse; GameObject loot has no Loot Tag and keeps its existing rules.
+pub(crate) fn corpse_access_gate(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    corpse_guid: u64,
+) -> Result<(), String> {
+    let eligible = corpse_eligible_recipients(ctx, corpse_guid);
+    if corpse_eligible_for_access(&eligible, actor_guid) {
+        return Ok(());
+    }
+
+    spacetimedb::log::info!("loot tag refusal: actor_guid={actor_guid} corpse_guid={corpse_guid}");
+    Err(loot_tag_refusal(actor_guid, corpse_guid))
 }
 
 /// Clear a creature's live Loot Tag at combat end or despawn. Corpse and other dynamic flags stay
@@ -508,7 +538,160 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         );
     }
 
+    verify_corpse_loot_gates(ctx, &origin, base_x)?;
+
     Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+fn verify_corpse_loot_gates(
+    ctx: &ReducerContext,
+    origin: &crate::CreatureTemplate,
+    x: f32,
+) -> Result<(), String> {
+    const ITEM_ENTRY: u32 = crate::professions::LEATHER_ENTRY;
+    if ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(ITEM_ENTRY)
+        .is_none()
+    {
+        let mut template = ctx
+            .db
+            .game_item_template()
+            .iter()
+            .next()
+            .ok_or_else(|| "Loot Tag fixture item template is missing".to_string())?;
+        template.entry = ITEM_ENTRY;
+        ctx.db.game_item_template().insert(template);
+    }
+
+    let empty = fixture_creature_guid(11);
+    insert_fixture_corpse(ctx, origin, empty, x, 0);
+    expect_loot_tag_refusal(
+        corpse_access_gate(ctx, LOOT_TAG_FIXTURE_PLAYER_A, empty),
+        empty,
+    )?;
+
+    let party_corpse = fixture_creature_guid(12);
+    insert_fixture_corpse(ctx, origin, party_corpse, x, 9);
+    ctx.db.game_corpse_loot().insert(super::CorpseLoot {
+        id: 0,
+        corpse_guid: party_corpse,
+        slot: 0,
+        item_entry: ITEM_ENTRY,
+        count: 1,
+        quest_only: false,
+        reserved_for: 0,
+        designated_looter_guid: 0,
+        master_only: false,
+        withheld: false,
+    });
+    record_corpse_eligibility(
+        ctx,
+        party_corpse,
+        &[LOOT_TAG_FIXTURE_PLAYER_A, LOOT_TAG_FIXTURE_PLAYER_B],
+    );
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_A, party_corpse)?;
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_B, party_corpse)?;
+    for refusal in [
+        crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_E, party_corpse),
+        crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_PLAYER_E, party_corpse, 0),
+        crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_PLAYER_E, party_corpse),
+        crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_E, party_corpse),
+    ] {
+        expect_loot_tag_refusal(refusal, party_corpse)?;
+    }
+    if ctx
+        .db
+        .game_corpse_loot()
+        .by_corpse()
+        .filter(&party_corpse)
+        .next()
+        .is_none()
+        || ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(party_corpse)
+            .is_none_or(|corpse| corpse.money != 9 || corpse.skinned)
+    {
+        return Err("a Loot Tag Refusal changed the party corpse".to_string());
+    }
+
+    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_PLAYER_B, party_corpse, 0)?;
+    crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_PLAYER_B, party_corpse)?;
+    insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_PLAYER_B);
+    crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_B, party_corpse)?;
+
+    let solo_corpse = fixture_creature_guid(13);
+    insert_fixture_corpse(ctx, origin, solo_corpse, x, 17);
+    ctx.db.game_corpse_loot().insert(super::CorpseLoot {
+        id: 0,
+        corpse_guid: solo_corpse,
+        slot: 0,
+        item_entry: ITEM_ENTRY,
+        count: 1,
+        quest_only: false,
+        reserved_for: 0,
+        designated_looter_guid: 0,
+        master_only: false,
+        withheld: false,
+    });
+    record_corpse_eligibility(ctx, solo_corpse, &[LOOT_TAG_FIXTURE_PLAYER_A]);
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_A, solo_corpse)?;
+    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_PLAYER_A, solo_corpse, 0)?;
+    crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_PLAYER_A, solo_corpse)?;
+    insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_PLAYER_A);
+    crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_A, solo_corpse)?;
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+fn insert_fixture_corpse(
+    ctx: &ReducerContext,
+    template: &crate::CreatureTemplate,
+    guid: u64,
+    x: f32,
+    money: u32,
+) {
+    insert_fixture_entity(ctx, template, guid, x, false, 0);
+    let entities = ctx.db.game_world_entity();
+    let mut corpse = entities
+        .guid()
+        .find(guid)
+        .expect("fixture corpse was inserted");
+    corpse.dead = true;
+    corpse.health = 0;
+    corpse.money = money;
+    entities.guid().update(corpse);
+}
+
+#[cfg(feature = "debug_reducers")]
+fn insert_fixture_skinning(ctx: &ReducerContext, character_guid: u64) {
+    ctx.db.game_player_skill().insert(crate::PlayerSkill {
+        id: 0,
+        character_guid,
+        owner_identity: spacetimedb::Identity::ZERO,
+        skill_line: crate::skill::skill_line::SKINNING,
+        current: 1,
+        max_rank: 75,
+    });
+}
+
+#[cfg(feature = "debug_reducers")]
+fn expect_loot_tag_refusal(result: Result<(), String>, corpse_guid: u64) -> Result<(), String> {
+    match result {
+        Err(reason)
+            if reason.starts_with(LOOT_TAG_REFUSAL_CLASS)
+                && reason.contains(&corpse_guid.to_string()) =>
+        {
+            Ok(())
+        }
+        Ok(()) => Err("foreign Actor passed the Loot Tag Gate".to_string()),
+        Err(reason) => Err(format!("unexpected Loot Tag Refusal: {reason}")),
+    }
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -629,6 +812,22 @@ mod tests {
         assert_eq!(
             (member.id, member.creature_guid, member.character_guid),
             (30, 10, 20)
+        );
+    }
+
+    #[test]
+    fn corpse_access_requires_a_resolved_eligibility_row() {
+        assert!(!corpse_eligible_for_access(&[], 7));
+        assert!(corpse_eligible_for_access(&[7], 7));
+        assert!(!corpse_eligible_for_access(&[7], 8));
+        assert!(corpse_eligible_for_access(&[2, 7, 11], 7));
+    }
+
+    #[test]
+    fn loot_tag_refusal_has_one_stable_class_and_both_guids() {
+        assert_eq!(
+            loot_tag_refusal(41, 99),
+            "loot_tag_ineligible: actor_guid=41 corpse_guid=99"
         );
     }
 }
