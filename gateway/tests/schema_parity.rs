@@ -409,6 +409,18 @@ parity_test!(parity_game_group, "game_group", lyracore_module::Group, bindings::
 parity_test!(parity_game_group_member, "game_group_member", lyracore_module::GroupMember, bindings::group_member_type::GroupMember, {
     id, group_id, character_guid, owner_identity,
 });
+parity_test!(parity_game_creature_quest_tap, "game_creature_quest_tap", lyracore_module::CreatureQuestTap, bindings::creature_quest_tap_type::CreatureQuestTap, {
+    creature_guid, character_guid,
+});
+parity_test!(parity_game_creature_quest_tap_member, "game_creature_quest_tap_member", lyracore_module::CreatureQuestTapMember, bindings::creature_quest_tap_member_type::CreatureQuestTapMember, {
+    id, creature_guid, character_guid,
+});
+parity_test!(parity_game_creature_loot_tag_group, "game_creature_loot_tag_group", lyracore_module::CreatureLootTagGroup, bindings::creature_loot_tag_group_type::CreatureLootTagGroup, {
+    creature_guid, group_id,
+});
+parity_test!(parity_game_corpse_loot_eligible, "game_corpse_loot_eligible", lyracore_module::CorpseLootEligible, bindings::corpse_loot_eligible_type::CorpseLootEligible, {
+    id, corpse_guid, eligible_guid,
+});
 parity_test!(parity_game_group_event, "game_group_event", lyracore_module::GroupEvent, bindings::group_event_type::GroupEvent, {
     id, recipient_identity, kind, other_guid, other_name, created_at, payload, recipient_guid,
 });
@@ -831,6 +843,10 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_region_assignment",
     "game_group",
     "game_group_member",
+    "game_creature_quest_tap",
+    "game_creature_quest_tap_member",
+    "game_creature_loot_tag_group",
+    "game_corpse_loot_eligible",
     "game_group_event",
     "game_trade_event",
     "game_duel_event",
