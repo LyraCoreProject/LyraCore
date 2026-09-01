@@ -54,6 +54,8 @@ use lyracore_shared::loot_roll::event_kind as roll_event_kind; // apply_loot_mon
 
 mod rolls;
 pub use rolls::*;
+pub(crate) mod tag;
+pub use tag::*;
 
 // The profession reducers (skinning/fishing/enchanting) live in the sibling top-level
 // `crate::professions` module (issue #384) — re-exported here so every existing

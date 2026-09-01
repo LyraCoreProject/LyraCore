@@ -63,9 +63,8 @@ use lyracore_shared::loot_roll::{event_kind as roll_event_kind, vote_kind};
 
 use super::CorpseLoot;
 
-/// A member of a kill's loot-eligible set, snapshotted at KILL TIME from `kill_reward_recipients`
-/// (work-item 187 design: "Eligibility set = `kill_reward_recipients` at corpse creation,
-/// SNAPSHOTTED into vote rows at roll start"). One row per `(corpse_guid, recipient)`. Private, no
+/// A member of a kill's loot-eligible set, resolved from the Loot Tag at death. One row per
+/// `(corpse_guid, recipient)`. Private, no
 /// RLS — only the module reads it (roll-vote snapshotting, `loot_master_give`'s recipient gate).
 /// `eligible_guid` (not `character_guid`) deliberately dodges the crate's `character_owned` sweep-
 /// marker tripwire (`tripwires.rs`): these rows are transient, corpse-lifetime data reaped alongside
@@ -230,46 +229,21 @@ pub(crate) fn pick_roll_winner(rolls: &[u8]) -> Option<usize> {
 }
 
 /// KILL-TIME group-loot stamping (module doc above explains the timing choice): called once from
-/// `combat::kill_creature` right after `roll_creature_loot`, for a GROUPED kill only (an ungrouped/
-/// solo `killer_guid` — `group_of` returns `None`) leaves every row exactly as `roll_creature_loot`
-/// produced it: the pre-187 FFA baseline, byte-identical). `recipients` is the SAME
-/// `kill_reward_recipients` slice the XP/quest-credit split already computed — reused, never
-/// recomputed, so eligibility can't drift between the XP split and the loot roll.
+/// `combat::kill_creature` right after `roll_creature_loot`, for a grouped Loot Tag only. The
+/// corpse-eligibility rows are the one recipient set for designation, master loot, and rolls.
 ///
 /// Work-item 187 trap ("solo player with method GROUP set: threshold rows must NOT roll"): a solo
 /// `recipients` (`len() < 2`, e.g. every other member out of XP range or dead) skips ALL group-loot
 /// handling too — vanilla's "party size 1 -> direct loot" applies to loot exactly like it does to
 /// the XP split, so the same recipient-count gate covers both.
-pub(crate) fn apply_group_loot_rules(
-    ctx: &ReducerContext,
-    corpse_guid: u64,
-    killer_guid: u64,
-    recipients: &[u64],
-) {
-    let Some(m) = crate::group::group_of(ctx, killer_guid) else {
-        return;
-    };
+pub(crate) fn apply_group_loot_rules(ctx: &ReducerContext, corpse_guid: u64, group_id: u64) {
+    let recipients = super::tag::corpse_eligible_recipients(ctx, corpse_guid);
     if recipients.len() < 2 {
         return;
     }
-    let Some(mut group) = ctx.db.game_group().group_id().find(m.group_id) else {
+    let Some(mut group) = ctx.db.game_group().group_id().find(group_id) else {
         return;
     };
-
-    // Snapshot eligibility BEFORE the FFA early-return (221 review catch): vanilla splits CORPSE
-    // COIN across the group under EVERY loot method (FFA only affects items), and
-    // `apply_loot_money` reads this snapshot as its recipient set — snapshotting only for non-FFA
-    // methods would silently turn an FFA party's money loot into a solo whole-amount grab. The
-    // rows also feed roll-vote membership + `loot_master_give`'s recipient gate for the methods
-    // that use them; an FFA kill just never reads them for items.
-    let eligible = ctx.db.game_corpse_loot_eligible();
-    for &guid in recipients {
-        eligible.insert(CorpseLootEligible {
-            id: 0,
-            corpse_guid,
-            eligible_guid: guid,
-        });
-    }
 
     if group.loot_method == crate::group::loot_method::FFA {
         return;
@@ -277,10 +251,7 @@ pub(crate) fn apply_group_loot_rules(
 
     // One STABLE member ordering (sorted by character_guid — deterministic regardless of join
     // order) so the rr_cursor index means the same thing kill after kill.
-    let mut members: Vec<u64> = crate::group::members_of(ctx, m.group_id)
-        .into_iter()
-        .map(|gm| gm.character_guid)
-        .collect();
+    let mut members = recipients.clone();
     members.sort_unstable();
     let online: Vec<bool> = members
         .iter()
@@ -292,11 +263,16 @@ pub(crate) fn apply_group_loot_rules(
         rr_cursor_dirty = true;
         members[idx]
     });
-    let master_guid = if group.master_looter_guid != 0 {
+    let preferred_master = if group.master_looter_guid != 0 {
         group.master_looter_guid
     } else {
         group.leader_guid
     };
+    let master_guid = recipients
+        .contains(&preferred_master)
+        .then_some(preferred_master)
+        .or_else(|| recipients.first().copied())
+        .expect("two eligible recipients were checked above");
 
     let templates = ctx.db.game_item_template();
     let rows: Vec<CorpseLoot> = ctx
@@ -331,7 +307,7 @@ pub(crate) fn apply_group_loot_rules(
                 ctx.db.game_corpse_loot().id().update(row);
             }
             GroupLootDecision::Roll => {
-                start_roll(ctx, corpse_guid, row.slot, row.item_entry, recipients, now);
+                start_roll(ctx, corpse_guid, row.slot, row.item_entry, &recipients, now);
                 row.withheld = true;
                 ctx.db.game_corpse_loot().id().update(row);
             }
@@ -346,7 +322,7 @@ pub(crate) fn apply_group_loot_rules(
             master_guid,
             roll_event_kind::MASTER_LIST,
             0,
-            lyracore_shared::loot_roll::encode_master_list(corpse_guid, recipients),
+            lyracore_shared::loot_roll::encode_master_list(corpse_guid, &recipients),
         );
     }
 }

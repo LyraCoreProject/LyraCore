@@ -167,6 +167,11 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
         if is_engaged(ctx, g) {
             continue;
         }
+        // A dead creature's synchronous OnDeath hooks still resolve its Loot Tag. Its death
+        // chokepoint clears the tag after dispatch; every live combat-end path clears it here.
+        if !entities.guid().find(g).is_some_and(|entity| entity.dead) {
+            crate::loot::tag::clear(ctx, g);
+        }
         // The fight is over for this unit however it ended — evade, the player dying, a logout, a
         // map change. This is the ONLY place that sees all four, so the EventAI engagement resets
         // here rather than in the cycle's combat-drop pass, which sees only a decayed flag.

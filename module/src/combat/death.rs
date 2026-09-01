@@ -506,14 +506,11 @@ use super::*;
 
 /// Kill a CREATURE — the SHARED creature-death path. The melee kill, `debug_set_health(0)`, AND lethal
 /// spell/DoT damage all funnel through here so they produce an IDENTICAL corpse (no drift between the
-/// paths). Steps, in order: award XP to an optional
-/// player `killer` (before the level is cleared); roll the template's money loot + the data-driven
-/// item loot onto the corpse and mark it `LOOTABLE`; set `health = 0` + `dead` (the sole on-wire
-/// corpse signal — NEVER `UNIT_DYNFLAG_DEAD`, which is feign-death); drop the engagement (`disengage`);
-/// delete the corpse's stale patrol legs (so a late-subscribing client doesn't walk the corpse); and
-/// arm the corpse-decay timer on the spawn row. Returns `true` if it killed a live creature; `false`
-/// (no-op) for a missing guid, a player, or an already-dead unit. `killer = None` = no XP credit
-/// (a DoT with no attacker, a debug kill). [entity]
+/// paths). Steps, in order: resolve the Loot Tag and grant its recipients' rewards; roll tagged
+/// money and item loot; set `health = 0` + `dead` (the sole on-wire corpse signal, never
+/// `UNIT_DYNFLAG_DEAD`, which is feign-death); drop the engagement; stop corpse movement; and arm
+/// corpse decay. The killing source remains separate from reward ownership. Returns `true` if it
+/// killed a live creature and `false` for a missing guid, a player, or an already-dead unit. [entity]
 pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Option<u64>) -> bool {
     kill_creature_with_attribution(ctx, target_guid, CreatureDeathAttribution::credited(killer))
 }
@@ -524,7 +521,7 @@ fn kill_creature_with_attribution(
     attribution: CreatureDeathAttribution,
 ) -> bool {
     let killer = attribution.source_guid;
-    let reward_killer = attribution.reward_guid;
+    let reward_source = attribution.reward_guid;
     let entities = ctx.db.game_world_entity();
     let Some(mut target) = entities.guid().find(target_guid) else {
         return false;
@@ -553,6 +550,7 @@ fn kill_creature_with_attribution(
             },
         );
         crate::creatures::finish_death_dispatch(ctx, target_guid, killer);
+        crate::loot::tag::clear(ctx, target_guid);
         return true;
     }
     // Snapshot the victim's identity for the notify-hooks fired at the end of this fn — the corpse row
@@ -561,27 +559,22 @@ fn kill_creature_with_attribution(
     let victim_level = target.level;
     let victim_instance = target.instance_id; // for on_creature_death (work-item 228)
     let current_target_guid = target.target_guid;
-    // A player killer gains XP (and may ding) — awarded before the corpse's level is gone.
-    // Quests: the same killing blow advances the killer's kill objectives for this creature entry
-    // (no-op for a non-player killer or one with no matching quest). Done before the corpse is gone so
-    // the entry is still readable; on_creature_killed reads its own quest tables, not the target.
-    // `kill_recipients` is hoisted OUT of the `if let` block below (work-item 187) so the group-loot
-    // stamping call further down can reuse the SAME recipient set the XP/quest-credit split used —
-    // eligibility must never drift between the two.
-    // XP + quest-credit + Drain-Soul-shard rewards for the killer (and its group) — extracted so the
-    // death sequence below reads as a table of contents; see `award_killer_rewards` (issue #382).
-    let kill_recipients = reward_killer
-        .map(|killer_guid| award_killer_rewards(ctx, &target, target_guid, killer_guid))
-        .unwrap_or_default();
-    // Money + item loot onto the corpse, group-loot stamping, and the LOOTABLE flag — see
-    // `roll_corpse_loot` (issue #382).
-    roll_corpse_loot(
+    // The Loot Tag, not the killing blow, owns rewards and corpse eligibility. Resolve it while the
+    // creature is still live. Death dispatch defers its combat-end clear until every hook runs.
+    let entitlement = crate::loot::tag::death_entitlement(
         ctx,
-        &mut target,
         target_guid,
-        reward_killer,
-        &kill_recipients,
+        target.x,
+        target.y,
+        target.map_id,
+        target.instance_id,
     );
+    let kill_recipients = entitlement
+        .as_ref()
+        .map(|entitlement| entitlement.recipients.as_slice())
+        .unwrap_or_default();
+    award_tag_rewards(ctx, &target, target_guid, kill_recipients, reward_source);
+    roll_corpse_loot(ctx, &mut target, target_guid, entitlement.as_ref());
     target.health = 0;
     target.dead = true;
     // #519: a creature killed mid-leg (flee/patrol/chase) still carries an in-flight
@@ -679,9 +672,9 @@ fn kill_creature_with_attribution(
             }
         }
     }
-    // Notify-hooks fire last so handlers observe the fully committed death: on_death for the victim
-    // (every creature-death path funnels through this function), and on_kill when the death has a
-    // known source. Reward ownership remains independent of this source identity.
+    // Notify-hooks fire last so handlers observe the fully committed death. Victim and encounter
+    // callbacks retain the real killing source. The reward-oriented kill hook runs once for each
+    // entitled recipient.
     crate::hooks::fire_on_death(
         ctx,
         &crate::hooks::DeathPayload {
@@ -704,7 +697,7 @@ fn kill_creature_with_attribution(
             threat_snapshot,
         },
     );
-    if let Some(killer_guid) = killer {
+    for &killer_guid in kill_recipients {
         crate::hooks::fire_on_kill(
             ctx,
             &crate::hooks::KillPayload {
@@ -716,47 +709,28 @@ fn kill_creature_with_attribution(
         );
     }
     crate::creatures::finish_death_dispatch(ctx, target_guid, killer);
+    // EventAI OnDeath quest actions resolve the same Loot Tag as death rewards. Clear it only after
+    // every synchronous death callback has observed it; ordinary live disengage still clears now.
+    crate::loot::tag::clear(ctx, target_guid);
     true
 }
 
-/// XP + quest-credit + Drain-Soul-shard rewards for `target`'s kill, shared across every in-range
-/// group member. Extracted out of `kill_creature`'s inline body (issue #382) so the death sequence
-/// reads as a table of contents. Returns the kill-recipient set so `roll_corpse_loot`'s group-loot
-/// stamping reuses the SAME eligibility split (work-item 187 — must never drift between the two).
-fn award_killer_rewards(
+/// Grant kill rewards to the entitled Loot Tag recipients. `reward_source` retains the controlled
+/// Character behind the killing source for source-specific rewards such as Drain Soul, but it can
+/// receive one only when it is also in the entitled recipient set.
+fn award_tag_rewards(
     ctx: &ReducerContext,
     target: &WorldEntity,
     target_guid: u64,
-    killer_guid: u64,
-) -> Vec<u64> {
+    recipients: &[u64],
+    reward_source: Option<u64>,
+) {
     // Elite/rare-elite/boss creatures pay 2× kill XP (vanilla) — the rank + creature_type live on
     // the template (one lookup, reused below for the soul-shard XP/critter gate).
     let template = ctx.db.game_creature_template().entry().find(target.entry);
     let rank = template.as_ref().map(|t| t.rank).unwrap_or(0);
-    // Snapshot the killer's level BEFORE award_xp: a kill that dings the killer mutates and
-    // persists their level in-place (xp::grant_xp's ding loop), so re-reading it after would pick
-    // up the POST-ding level for the shard's grey-clamp check below — misclassifying a kill that
-    // just yielded XP at the PRE-ding level as grey at the new, higher level.
-    let killer_level = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(killer_guid)
-        .map(|k| k.level)
-        .unwrap_or(0);
-    // GROUP kill rewards: a grouped killer shares the kill with every in-range living member — each
-    // gets 1/n of its OWN level-based XP and full quest kill-credit. An ungrouped killer is a
-    // 1-element recipient set, so its reward is unaffected by the group split.
-    let recipients = crate::group::kill_reward_recipients(
-        ctx,
-        killer_guid,
-        target.x,
-        target.y,
-        target.map_id,
-        target.instance_id,
-    );
     let share_count = recipients.len() as u32;
-    for recipient in &recipients {
+    for recipient in recipients {
         crate::xp::award_xp(
             ctx,
             *recipient,
@@ -768,7 +742,7 @@ fn award_killer_rewards(
         crate::creatures::award_hunter_pet_kill_progression(ctx, *recipient, target.level, rank);
         crate::quest::on_creature_killed(ctx, *recipient, target.entry);
     }
-    // Soul shard generation: if `killer_guid` is channeling Drain Soul (1120) on this dying
+    // Soul shard generation: if the entitled killing source is channeling Drain Soul (1120) on this dying
     // creature — an aura targeting it, cast BY the killer, naming that spell — the killing blow
     // mints 1x Soul Shard into the killer's backpack. Real vanilla grants
     // this off Drain Soul's own `ChannelDeathItem` script effect on a lethal tick; we hook it here
@@ -783,19 +757,25 @@ fn award_killer_rewards(
         .as_ref()
         .map(|t| t.creature_type == crate::spell::CRITTER_TYPE)
         .unwrap_or(false);
-    let yields_xp = crate::xp::xp_for_kill(target.level, killer_level) > 0;
-    if !is_critter && yields_xp {
+    if let Some(reward_guid) = reward_source.filter(|guid| recipients.contains(guid)) {
+        let reward_level = ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(reward_guid)
+            .map(|character| character.level)
+            .unwrap_or(0);
+        let yields_xp = crate::xp::xp_for_kill(target.level, reward_level) > 0;
         let draining_soul = ctx
             .db
             .game_aura()
             .by_target()
             .filter(&target_guid)
-            .any(|a| a.spell_id == DRAIN_SOUL_SPELL_ID && a.caster_guid == killer_guid);
-        if draining_soul {
-            let _ = crate::items::grant_item(ctx, killer_guid, SOUL_SHARD_ENTRY, 1);
+            .any(|a| a.spell_id == DRAIN_SOUL_SPELL_ID && a.caster_guid == reward_guid);
+        if !is_critter && yields_xp && draining_soul {
+            let _ = crate::items::grant_item(ctx, reward_guid, SOUL_SHARD_ENTRY, 1);
         }
     }
-    recipients
 }
 
 /// Roll a dead creature's money + item loot onto its corpse, apply the GROUP loot method's
@@ -808,25 +788,8 @@ fn roll_corpse_loot(
     ctx: &ReducerContext,
     target: &mut WorldEntity,
     target_guid: u64,
-    killer: Option<u64>,
-    kill_recipients: &[u64],
+    entitlement: Option<&crate::loot::tag::DeathEntitlement>,
 ) {
-    // Money loot from the template plus data-driven item loot. Lootable if either dropped.
-    // ELITE/RARE/BOSS: the rolled copper is scaled by the template's rank (`scale_money_for_rank`) —
-    // an elite/rare/boss is worth more. Rank 0 (every current creature) → ×1.0, so a normal kill's
-    // purse is unaffected by the rank scaling.
-    let loot = ctx
-        .db
-        .game_creature_template()
-        .entry()
-        .find(target.entry)
-        .map(|t| {
-            crate::loot::scale_money_for_rank(roll_money(ctx, t.money_min, t.money_max), t.rank)
-        })
-        .unwrap_or(0);
-    if loot > 0 {
-        target.money = loot;
-    }
     // STALE-SNAPSHOT PURGE (267, found live; widened by 358): corpse guids can be REUSED —
     // `debug_spawn_at_feet` allocates max+1 per entry, and a harness SQL teardown deletes the entity
     // WITHOUT running the decay reaper — so a fresh kill on a reused guid inherited a long-dead
@@ -840,18 +803,39 @@ fn roll_corpse_loot(
     // through, BEFORE the fresh loot roll / group snapshot below. No-op for a guid with no residue
     // (the common path).
     crate::loot::purge_corpse_residue(ctx, target_guid);
-    // Quest-only rows now roll UNCONDITIONALLY (work-item 187 slice 0 fixed 210's recorded
-    // divergence — loot.rs module doc decision #1): a debug/environmental kill (`killer = None`) rolls
-    // them exactly the same as a player kill; visibility/takability are decided per-viewer/per-taker
-    // downstream instead, so `roll_creature_loot` no longer needs the killer at all.
+    let Some(entitlement) = entitlement else {
+        target.money = 0;
+        target.dynamic_flags &= !lyracore_shared::constants::unit_dynamic_flags::LOOTABLE;
+        return;
+    };
+    crate::loot::tag::record_corpse_eligibility(ctx, target_guid, &entitlement.recipients);
+    // Money loot from the template plus data-driven item loot. A tagged creature may roll a corpse
+    // even when every snapshot member fails the death-site eligibility checks.
+    let loot = ctx
+        .db
+        .game_creature_template()
+        .entry()
+        .find(target.entry)
+        .map(|template| {
+            crate::loot::scale_money_for_rank(
+                roll_money(ctx, template.money_min, template.money_max),
+                template.rank,
+            )
+        })
+        .unwrap_or(0);
+    if loot > 0 {
+        target.money = loot;
+    }
+    // A valid Loot Tag rolls quest-only rows with ordinary corpse loot. Visibility and takability
+    // remain per-viewer decisions downstream, so `roll_creature_loot` needs no killing source.
     let dropped = crate::loot::roll_creature_loot(ctx, target.entry, target_guid);
     // Group loot methods (work-item 187 slices 1-4): a GROUPED kill's above-threshold rows may
     // spawn a need/greed roll, below-threshold/round-robin rows get a designated looter stamped, and
     // above-threshold-under-MASTER rows get restricted to the master — all decided HERE at kill
     // time (see loot.rs's module doc for why not lazily "at loot-open"). A no-op for an ungrouped
     // kill or an FFA-method group (`apply_group_loot_rules`'s own early-outs).
-    if let Some(killer_guid) = killer {
-        crate::loot::apply_group_loot_rules(ctx, target_guid, killer_guid, kill_recipients);
+    if let Some(group_id) = entitlement.group_id {
+        crate::loot::apply_group_loot_rules(ctx, target_guid, group_id);
     }
     if loot > 0 || dropped {
         target.dynamic_flags |= lyracore_shared::constants::unit_dynamic_flags::LOOTABLE;
@@ -1087,8 +1071,8 @@ pub(crate) fn fold_incoming_damage(
 ///  2. **The lethal fork** — a target reduced to 0 goes through the SHARED `kill_player` /
 ///     `kill_creature` chokepoints (corpse, loot, XP, disengage, hooks) and this returns
 ///     `killed: true`. The one exception is a SPELL hit on a PLAYER, which floors at 1 hp instead.
-///     Kill credit: the attacker if it is a player, else its OWNER for a pet's weapon kill, else
-///     nobody.
+///     Death attribution names the attacking unit. Loot Tag ownership separately resolves the
+///     entitled Character recipients, including a pet's owner.
 ///  3. **The survivor path** — a defense skill-up for a player that took a weapon hit and lived, the
 ///     health write (floored at 1 by `damaged_value`, which is a no-op here for a weapon hit since a
 ///     survivor by definition had `health > dmg`), rage for TAKING the hit, then the single entity
@@ -1140,7 +1124,7 @@ pub(crate) fn apply_hit(
         return miss;
     }
     let attacker_is_player = attacker.as_ref().map(|a| a.is_player()).unwrap_or(false);
-    let attacker_owner = attacker.as_ref().map(|a| a.owner_guid).unwrap_or(0);
+    let reward_source = crate::loot::tag::controlling_character(ctx, attacker_guid);
     let target_is_player = target.is_player();
     if damage.lethal_prevented && dmg == 0 {
         // Pinned at one health and still under attack. No damage lands, so nothing damage-derived
@@ -1151,7 +1135,7 @@ pub(crate) fn apply_hit(
         return miss;
     }
     if !target_is_player {
-        crate::quest::record_creature_tap(ctx, target_guid, attacker_guid);
+        crate::loot::tag::record_first_threat(ctx, target_guid, attacker_guid);
     }
 
     // 1. Attacker-side gains, before the fork (rage lands on the killing blow too).
@@ -1204,16 +1188,14 @@ pub(crate) fn apply_hit(
         if target_is_player {
             kill_player(ctx, target_guid, attacker_guid);
         } else {
-            kill_creature(
+            kill_creature_with_attribution(
                 ctx,
                 target_guid,
-                if attacker_is_player {
-                    Some(attacker_guid)
-                } else if weapon && attacker_owner != 0 {
-                    // A PET's killing blow credits its OWNER, so a Warlock levels + loots off its Imp.
-                    Some(attacker_owner)
-                } else {
-                    None // a wild creature's kill, or a caster that left the world, credits nobody
+                CreatureDeathAttribution {
+                    // Death callbacks keep the actual unit that landed the blow. A missing caster
+                    // remains unattributed rather than naming an entity that has left the world.
+                    source_guid: attacker.as_ref().map(|_| attacker_guid),
+                    reward_guid: reward_source,
                 },
             );
         }
@@ -1227,7 +1209,7 @@ pub(crate) fn apply_hit(
     }
     // 3. The survivor path.
     // Capture the threat predicate before `target` is moved by the write below.
-    let accrues_threat = attacker_is_player && !target_is_player;
+    let accrues_threat = !target_is_player && reward_source.is_some();
     if weapon && target_is_player {
         // Defense skill-up: a PLAYER that takes a damaging weapon hit and SURVIVES trains Defense one
         // step toward cap. Read-only on `target`; a no-op at cap (the normal case).
@@ -1332,8 +1314,8 @@ mod lethality_tests {
             "fn kill_creature_with_attribution(",
         );
         assert!(death.contains("let killer = attribution.source_guid"));
-        assert!(death.contains("let reward_killer = attribution.reward_guid"));
-        assert!(death.contains("let kill_recipients = reward_killer"));
+        assert!(death.contains("let reward_source = attribution.reward_guid"));
+        assert!(death.contains("crate::loot::tag::death_entitlement("));
         assert!(death.contains("killer_guid: killer.unwrap_or(0)"));
     }
 
@@ -1409,6 +1391,25 @@ mod lethality_tests {
         );
     }
 
+    #[test]
+    fn creature_death_keeps_the_loot_tag_through_eventai_dispatch() {
+        let body = crate::test_scan::code_of(
+            include_str!("death.rs"),
+            "fn kill_creature_with_attribution(",
+        );
+        assert_in_order(
+            &body,
+            [
+                "crate::loot::tag::death_entitlement(",
+                "crate::creatures::begin_death_dispatch",
+                "disengage(ctx, target_guid)",
+                "crate::hooks::fire_on_creature_death(",
+                "crate::creatures::finish_death_dispatch",
+                "crate::loot::tag::clear(ctx, target_guid)",
+            ],
+        );
+    }
+
     fn assert_in_order<const N: usize>(body: &str, needles: [&str; N]) {
         let mut cursor = 0;
         for needle in needles {
@@ -1440,8 +1441,7 @@ mod corpse_residue_tripwire {
         let kill_creature_body = code_of(src, "fn kill_creature_with_attribution(");
         assert!(
             kill_creature_body.contains("roll_corpse_loot(")
-                && kill_creature_body.contains("reward_killer,")
-                && kill_creature_body.contains("&kill_recipients,"),
+                && kill_creature_body.contains("entitlement.as_ref()"),
             "`kill_creature` no longer routes the kill through `roll_corpse_loot` — the purge-before-\
              fresh-roll ordering below is dead code if this call is gone. Body was:\n{kill_creature_body}"
         );

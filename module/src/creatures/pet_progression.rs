@@ -339,12 +339,10 @@ mod tests {
 
     #[test]
     fn kill_credit_recipients_are_the_only_pet_award_seam() {
-        let body = crate::test_scan::code_of(
-            include_str!("../combat/death.rs"),
-            "fn award_killer_rewards(",
-        );
+        let body =
+            crate::test_scan::code_of(include_str!("../combat/death.rs"), "fn award_tag_rewards(");
         let recipient_loop = body
-            .find("for recipient in &recipients")
+            .find("for recipient in recipients")
             .expect("kill rewards still iterate authoritative recipients");
         let pet_award = body
             .find("award_hunter_pet_kill_progression(ctx, *recipient")

@@ -403,29 +403,6 @@ pub struct CharacterQuestEventCredit {
     pub quest_entry: u32,
 }
 
-/// The Character that first damaged a live creature, with the party roster at that instant.
-/// EventAI's `KILLED_MONSTER` action reads this durable snapshot before it considers its fallback.
-#[table(accessor = game_creature_quest_tap)]
-pub struct CreatureQuestTap {
-    #[primary_key]
-    pub creature_guid: u64,
-    pub character_guid: u64,
-}
-
-/// One member of [`CreatureQuestTap`]'s original party. Eligibility is evaluated at credit time,
-/// but party membership is deliberately not re-resolved after the tap.
-#[table(
-    accessor = game_creature_quest_tap_member,
-    index(accessor = by_creature, btree(columns = [creature_guid]))
-)]
-pub struct CreatureQuestTapMember {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub creature_guid: u64,
-    pub character_guid: u64,
-}
-
 // Character-owned sweeps: the quest log is deleted on character delete, re-owned (identity
 // re-stamp) on a relog under a changed gateway identity.
 crate::character_owned!(delete, fn sweep_delete_game_character_quest(ctx, character_guid) {
@@ -1518,7 +1495,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         EVENTAI_CREDIT_FIXTURE_EVENT_QUEST,
     ];
 
-    clear_creature_tap(ctx, EVENTAI_CREDIT_FIXTURE_SOURCE);
+    crate::loot::tag::clear(ctx, EVENTAI_CREDIT_FIXTURE_SOURCE);
     let logs = ctx.db.game_character_quest();
     for character_guid in fixture_characters {
         for quest in logs
@@ -1772,7 +1749,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         recipient_policy: QuestCreditRecipientPolicy::TapGroup,
     });
 
-    record_creature_tap(
+    crate::loot::tag::record_first_threat(
         ctx,
         EVENTAI_CREDIT_FIXTURE_SOURCE,
         EVENTAI_CREDIT_FIXTURE_PLAYER,
@@ -1796,7 +1773,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
             ctx,
             EVENTAI_CREDIT_FIXTURE_MEMBER,
             EVENTAI_CREDIT_FIXTURE_KILL_QUEST,
-        )? != 1
+        )? != 0
         || eventai_credit_fixture_count(
             ctx,
             EVENTAI_CREDIT_FIXTURE_DISTANT_MEMBER,
@@ -1818,12 +1795,12 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
             ctx,
             EVENTAI_CREDIT_FIXTURE_MEMBER,
             EVENTAI_CREDIT_FIXTURE_KILL_QUEST,
-        )? != 1
+        )? != 0
     {
         return Err("duplicate EventAI kill credit changed quest progress".to_string());
     }
 
-    clear_creature_tap(ctx, EVENTAI_CREDIT_FIXTURE_SOURCE);
+    crate::loot::tag::clear(ctx, EVENTAI_CREDIT_FIXTURE_SOURCE);
     let fallback_context = EventAiQuestCreditContext {
         selected_character: None,
         ..tap_context
@@ -1843,7 +1820,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         return Err("beneficiary fallback did not preserve missing objectives".to_string());
     }
 
-    record_creature_tap(
+    crate::loot::tag::record_first_threat(
         ctx,
         EVENTAI_CREDIT_FIXTURE_SOURCE,
         EVENTAI_CREDIT_FIXTURE_PLAYER,
@@ -1921,7 +1898,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         return Err("duplicate quest event credit was not idempotent".to_string());
     }
 
-    clear_creature_tap(ctx, EVENTAI_CREDIT_FIXTURE_SOURCE);
+    crate::loot::tag::clear(ctx, EVENTAI_CREDIT_FIXTURE_SOURCE);
     Ok(())
 }
 
@@ -1987,74 +1964,6 @@ fn objective_matches_spell(
         .filter(&quest_entry)
         .find(|objective| objective.obj_index == obj_index)
         .map_or(spell_id == 0, |objective| objective.spell_id == spell_id)
-}
-
-/// Snapshot the first eligible Character and party to damage this creature. The snapshot stays
-/// attached to the creature until its canonical teardown, so EventAI death actions cannot drift to
-/// a later killer or a later party roster.
-pub(crate) fn record_creature_tap(ctx: &ReducerContext, creature_guid: u64, attacker_guid: u64) {
-    let taps = ctx.db.game_creature_quest_tap();
-    if taps.creature_guid().find(creature_guid).is_some() {
-        return;
-    }
-    let entities = ctx.db.game_world_entity();
-    let Some(creature) = entities.guid().find(creature_guid) else {
-        return;
-    };
-    if creature.is_player() || creature.owner_guid != 0 {
-        return;
-    }
-    let Some(attacker) = entities.guid().find(attacker_guid) else {
-        return;
-    };
-    let character_guid = if attacker.is_player() && !attacker.dead {
-        Some(attacker.guid)
-    } else {
-        let owner = entities.guid().find(attacker.owner_guid);
-        owner
-            .filter(|owner| owner.is_player() && !owner.dead)
-            .map(|owner| owner.guid)
-    };
-    let Some(character_guid) = character_guid else {
-        return;
-    };
-    let mut members: BTreeSet<u64> = crate::group::group_of(ctx, character_guid)
-        .map(|group| {
-            crate::group::members_of(ctx, group.group_id)
-                .into_iter()
-                .map(|member| member.character_guid)
-                .collect()
-        })
-        .unwrap_or_default();
-    members.insert(character_guid);
-    taps.insert(CreatureQuestTap {
-        creature_guid,
-        character_guid,
-    });
-    let tap_members = ctx.db.game_creature_quest_tap_member();
-    for character_guid in members {
-        tap_members.insert(CreatureQuestTapMember {
-            id: 0,
-            creature_guid,
-            character_guid,
-        });
-    }
-}
-
-/// Remove a creature's tap snapshot when that creature leaves the world.
-pub(crate) fn clear_creature_tap(ctx: &ReducerContext, creature_guid: u64) {
-    ctx.db
-        .game_creature_quest_tap()
-        .creature_guid()
-        .delete(creature_guid);
-    let members = ctx.db.game_creature_quest_tap_member();
-    for member in members
-        .by_creature()
-        .filter(&creature_guid)
-        .collect::<Vec<_>>()
-    {
-        members.id().delete(member.id);
-    }
 }
 
 /// Apply one EventAI quest-credit request through quest authority. Missing runtime recipient facts
@@ -2164,37 +2073,16 @@ fn tap_credit_recipients(
     ctx: &ReducerContext,
     credit_context: &EventAiQuestCreditContext,
 ) -> Result<Vec<u64>, ()> {
-    let taps = ctx.db.game_creature_quest_tap();
-    if taps
-        .creature_guid()
-        .find(credit_context.source_creature_guid)
-        .is_some()
-    {
-        let members: BTreeSet<u64> = ctx
-            .db
-            .game_creature_quest_tap_member()
-            .by_creature()
-            .filter(&credit_context.source_creature_guid)
-            .filter_map(|member| {
-                let character = ctx
-                    .db
-                    .game_world_entity()
-                    .guid()
-                    .find(member.character_guid)?;
-                let dx = character.x - credit_context.source_x;
-                let dy = character.y - credit_context.source_y;
-                (character.is_player()
-                    && crate::group::eligible_for_kill_reward(
-                        character.dead,
-                        character.map_id == credit_context.source_map_id,
-                        character.instance_id == credit_context.source_instance_id,
-                        dx * dx + dy * dy,
-                    ))
-                .then_some(member.character_guid)
-            })
-            .collect();
-        return (!members.is_empty())
-            .then_some(members.into_iter().collect())
+    if let Some(entitlement) = crate::loot::tag::death_entitlement(
+        ctx,
+        credit_context.source_creature_guid,
+        credit_context.source_x,
+        credit_context.source_y,
+        credit_context.source_map_id,
+        credit_context.source_instance_id,
+    ) {
+        return (!entitlement.recipients.is_empty())
+            .then_some(entitlement.recipients)
             .ok_or(());
     }
 
