@@ -111,7 +111,7 @@ pub(crate) fn entry_is_beast(ctx: &ReducerContext, entry: u32) -> bool {
 /// `can_gather` gate. Grants leather, climbs the Skinning line +1, and marks the corpse skinned so it
 /// can't be re-skinned. Shared by the debug lever (`debug_skin_nearest`) and a future `CMSG`-routed
 /// skin over the open corpse. The skinner must be Loot Tag eligible, and all corpse money and item rows
-/// must already be gone. Returns the reject reason on any Gate failure, or `Ok` after the grant.
+/// must already be gone. Returns the Refusal reason on any Gate failure, or `Ok` after the grant.
 ///
 /// ROLLBACK: the leather grant (`grant_item`) is `?`-propagated — a full bag returns `Err` BEFORE the
 /// `skinned` marker is set, so the reducer tx rolls back and the corpse stays skinnable (no leather is

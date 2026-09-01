@@ -5,10 +5,10 @@ Model: mid. Estimated size: ~180k tokens.
 
 ## Problem
 
-Corpse item-taking, money-taking, skinning, and opening currently validate liveness, range, and
-loot-row reservation, but not Loot Tag eligibility. Empty eligibility can fall back to the actor as
-if a corpse were solo loot. The Gateway also has no durable request for opening a corpse, so it can
-show a window before the Module authorizes it.
+Corpse item-taking, money-taking, skinning, and opening already apply liveness, range, and
+loot-row reservation Gates, but not Loot Tag eligibility. Empty eligibility can fall back to the
+actor as if a corpse were solo loot. The Gateway also has no durable request for opening a corpse,
+so it can show a window before the Module authorizes it.
 
 ## Delivery
 

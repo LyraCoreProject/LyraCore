@@ -62,10 +62,11 @@ fn coordinator_request_status(result: Result<()>) -> Result<LootWindowRequestSta
 }
 
 fn is_loot_tag_refusal(error: &anyhow::Error) -> bool {
-    crate::stdb::is_reducer_refusal(error)
-        && error
-            .chain()
-            .any(|cause| cause.to_string().contains("loot_tag_ineligible:"))
+    crate::stdb::reducer_refusal_reason(error).is_some_and(is_loot_tag_refusal_reason)
+}
+
+fn is_loot_tag_refusal_reason(reason: &str) -> bool {
+    reason.starts_with("loot_tag_ineligible:")
 }
 
 impl LootWindowStore for crate::stdb::Coordinator {
@@ -281,7 +282,7 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
                 }
                 LootWindowRequestStatus::Refused(error) => {
                     log::debug!(
-                        "world: open_creature_loot rejected (account {}): {error}",
+                        "world: open_creature_loot Refusal (account {}): {error}",
                         player.account_id
                     );
                     return Ok(LootWindowOutcome::Handled {
@@ -340,7 +341,7 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
                     ),
                     LootWindowRequestStatus::Refused(error) => {
                         log::debug!(
-                            "world: loot_money rejected (account {}): {error}",
+                            "world: loot_money Refusal (account {}): {error}",
                             player.account_id
                         );
                         (current_state, Vec::new())
@@ -384,7 +385,7 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
                 ),
                 LootWindowRequestStatus::Refused(error) => {
                     log::debug!(
-                        "world: take_loot rejected (account {}): {error}",
+                        "world: take_loot Refusal (account {}): {error}",
                         player.account_id
                     );
                     (current_state, Vec::new())
@@ -808,6 +809,17 @@ mod tests {
         ));
         assert_eq!(response.gold.as_int(), 0);
         assert!(response.items.is_empty());
+    }
+
+    #[test]
+    fn loot_tag_refusal_class_requires_the_module_reason_prefix() {
+        assert!(is_loot_tag_refusal_reason(
+            "loot_tag_ineligible: actor_guid=7 corpse_guid=11"
+        ));
+        assert!(!is_loot_tag_refusal_reason(
+            "other refusal mentions loot_tag_ineligible: later"
+        ));
+        assert!(!is_loot_tag_refusal_reason("loot_tag_ineligible"));
     }
 
     #[test]

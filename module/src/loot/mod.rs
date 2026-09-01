@@ -770,7 +770,7 @@ pub(crate) fn open_creature_corpse(
         .find(actor_guid)
         .ok_or_else(|| "looter not in world".to_string())?;
     if actor.dead {
-        return Err("dead players cannot loot".to_string());
+        return Err("dead Characters cannot loot".to_string());
     }
     let corpse = ctx
         .db
@@ -822,9 +822,6 @@ pub(crate) fn apply_loot_money(
     if !corpse.dead {
         return Err("target is not a corpse".to_string());
     }
-    if corpse.money == 0 {
-        return Err("nothing to loot".to_string());
-    }
     // Map + instance gated (190 slice 2): a creature corpse is a `game_world_entity` row, so its
     // `instance_id` came free with slice 1 — a looter can never reach across an instance wall.
     if corpse.map_id != looter.map_id {
@@ -843,6 +840,9 @@ pub(crate) fn apply_loot_money(
     }
 
     corpse_access_gate(ctx, looter_guid, target_guid)?;
+    if corpse.money == 0 {
+        return Err("nothing to loot".to_string());
+    }
 
     let amount = corpse.money;
     corpse.money = 0;

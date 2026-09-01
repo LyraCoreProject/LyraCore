@@ -643,6 +643,22 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
             group_event_appeared(v, &coord, row)
         });
     }
+    {
+        let insert_coord = coord.clone();
+        wire_insert(
+            db.game_group_member(),
+            "game_group_member.insert",
+            &view,
+            move |v, row| group_member_mirror_changed(v, &insert_coord, row),
+        );
+        let delete_coord = coord.clone();
+        wire_delete(
+            db.game_group_member(),
+            "game_group_member.delete",
+            &view,
+            move |v, row| group_member_mirror_changed(v, &delete_coord, row),
+        );
+    }
     wire_insert_live(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
         trade_event_appeared(v, row)
     });
@@ -1770,26 +1786,27 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
         return;
     }
     let (row, coord) = (row.clone(), coord.clone());
-    let refresh_loot_tag_flags = group_event_changes_loot_tag_flags(row.kind);
     let self_guid = viewer.self_guid;
     let tx = viewer.tx.clone();
     enqueue(&tx, move || {
-        let mut out = super::subscriptions::group_event_outbound(&coord, self_guid, &row);
-        if refresh_loot_tag_flags {
-            out.extend(super::subscriptions::loot_tag_flags_after_roster_change(
-                &coord, &viewer,
-            ));
-        }
-        out
+        super::subscriptions::group_event_outbound(&coord, self_guid, &row)
     });
 }
 
-fn group_event_changes_loot_tag_flags(kind: u8) -> bool {
-    matches!(
-        kind,
-        lyracore_shared::group::event_kind::LIST
-            | lyracore_shared::group::event_kind::DESTROYED
-    )
+/// A shard mirror delta is the point at which viewer-relative Loot Tag flags can be projected from
+/// current membership without racing the realm event that requested the mirror write.
+fn group_member_mirror_changed(view: &WorldView, coord: &Coordinator, row: &GroupMember) {
+    let Some(session) = view.session_of_owner(row.character_guid) else {
+        return;
+    };
+    let Some(viewer) = view.viewer(session) else {
+        return;
+    };
+    let coord = coord.clone();
+    let tx = viewer.tx.clone();
+    enqueue(&tx, move || {
+        super::subscriptions::loot_tag_flags_after_membership_change(&coord, &viewer)
+    });
 }
 
 /// An aura appeared → per viewer: array sync + self-only packets + the stealth HIDE transition
@@ -2006,10 +2023,9 @@ fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: 
 mod family_audience_tests {
     use super::{
         addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
-        group_event_changes_loot_tag_flags, is_initial_apply, item_owner_job, levelup_appeared,
-        reputation_appeared, teleport_appeared, system_message_appeared, weather_changed,
-        xp_appeared, zone_crossed, BoundIdentity,
-        ExplorationReplay, MotionPending, OwnerGuid, Viewer, WorldView,
+        is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared,
+        system_message_appeared, teleport_appeared, weather_changed, xp_appeared, zone_crossed,
+        BoundIdentity, ExplorationReplay, MotionPending, OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
@@ -2030,13 +2046,16 @@ mod family_audience_tests {
     }
 
     #[test]
-    fn roster_events_refresh_viewer_relative_loot_tag_flags() {
-        use lyracore_shared::group::event_kind;
+    fn membership_mirror_drives_viewer_relative_loot_tag_flags() {
+        let source = include_str!("world_view.rs");
+        let arm = crate::test_scan::code_of(source, "pub(crate) fn arm_shard");
+        let arm: String = arm.split_whitespace().collect();
+        assert!(arm.contains("wire_insert(db.game_group_member()"));
+        assert!(arm.contains("wire_delete(db.game_group_member()"));
+        assert_eq!(arm.matches("group_member_mirror_changed(").count(), 2);
 
-        assert!(group_event_changes_loot_tag_flags(event_kind::LIST));
-        assert!(group_event_changes_loot_tag_flags(event_kind::DESTROYED));
-        assert!(!group_event_changes_loot_tag_flags(event_kind::INVITE));
-        assert!(!group_event_changes_loot_tag_flags(event_kind::PARTY_CHAT));
+        let group_event = crate::test_scan::code_of(source, "fn group_event_appeared");
+        assert!(!group_event.contains("loot_tag_flags_after_membership_change"));
     }
 
     fn viewer(session: u64, self_guid: u64) -> Arc<Viewer> {

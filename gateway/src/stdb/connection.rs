@@ -226,11 +226,17 @@ impl std::error::Error for ReducerCallError {
 
 /// True only for an error returned deliberately by module gameplay rules.
 pub(crate) fn is_reducer_refusal(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        matches!(
-            cause.downcast_ref::<ReducerCallError>(),
-            Some(ReducerCallError::Rejected { .. })
-        )
+    reducer_refusal_reason(error).is_some()
+}
+
+/// The Module's unwrapped refusal reason, preserving its stable gameplay prefix.
+pub(crate) fn reducer_refusal_reason(error: &anyhow::Error) -> Option<&str> {
+    error.chain().find_map(|cause| {
+        let ReducerCallError::Rejected { reason, .. } = cause.downcast_ref::<ReducerCallError>()?
+        else {
+            return None;
+        };
+        Some(reason.as_str())
     })
 }
 
@@ -1413,7 +1419,10 @@ mod live_replacement_tests {
 
 #[cfg(test)]
 mod recv_reducer_tests {
-    use super::{is_reducer_refusal, recv_reducer, ReducerCompletion, ReducerCompletionFailure};
+    use super::{
+        is_reducer_refusal, recv_reducer, reducer_refusal_reason, ReducerCompletion,
+        ReducerCompletionFailure,
+    };
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1441,6 +1450,7 @@ mod recv_reducer_tests {
             "buy_item reducer failed: not enough copper"
         );
         assert!(is_reducer_refusal(&err));
+        assert_eq!(reducer_refusal_reason(&err), Some("not enough copper"));
     }
 
     #[test]

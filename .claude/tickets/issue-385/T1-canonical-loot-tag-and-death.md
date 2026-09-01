@@ -65,6 +65,19 @@ death callbacks that need the actual killer.
 12. Existing table row shapes are unchanged unless the handoff supplies the required proof for one
     additive table.
 
+## Handoff
+
+`game_creature_loot_tag_group` is additive because the pinned tap rows store the tagger and roster,
+but not the party identity. After a two-member party disbands, both current membership rows are
+gone, so the pinned rows alone cannot distinguish a leaver from a solo tag. The new row captures
+the tag-time party id by creature without changing either pinned row shape; no row means a solo
+tag. Leaving also removes that Character's snapshot member row, so rejoining the same party cannot
+restore rights from the earlier tag.
+
+The required full Gateway binding regeneration also picked up the existing PackageConfig schema
+and reducers. PR #374 left them Gateway-unsubscribed and documented that a future full regeneration
+would include those bindings harmlessly. Issue #385 adds no PackageConfig table or subscription.
+
 ## Tests
 
 Add focused Module tests beside the existing creature-death and EventAI attribution tests. Drive

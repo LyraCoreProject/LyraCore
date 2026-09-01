@@ -313,12 +313,15 @@ fn viewer_relative_dynamic_flags(
     use lyracore_shared::constants::unit_dynamic_flags::{LOOTABLE, TAPPED_BY_PLAYER};
 
     if entity.dead {
-        return rows
+        return if rows
             .corpse_eligible
             .iter()
             .any(|row| row.corpse_guid == entity.guid && row.eligible_guid == viewer_guid)
-            .then_some(entity.dynamic_flags)
-            .unwrap_or(entity.dynamic_flags & !LOOTABLE);
+        {
+            entity.dynamic_flags
+        } else {
+            entity.dynamic_flags & !LOOTABLE
+        };
     }
 
     let Some(tap) = rows.tap.filter(|tap| tap.creature_guid == entity.guid) else {
@@ -915,10 +918,10 @@ pub(crate) fn relay_entity_update(
     out
 }
 
-/// Re-send the projected flags for visible live Loot Tags after a roster notification. Group
-/// membership changes do not rewrite a creature's `WorldEntity`, so its normal VALUES relay has
-/// nothing to carry. The existing group-event callback already reaches each affected viewer.
-pub(crate) fn loot_tag_flags_after_roster_change(
+/// Re-send the projected flags for visible live Loot Tags after the shard membership mirror
+/// changes. Membership does not rewrite a creature's `WorldEntity`, so its normal VALUES relay has
+/// nothing to carry.
+pub(crate) fn loot_tag_flags_after_membership_change(
     coord: &Coordinator,
     viewer: &Viewer,
 ) -> Vec<Outbound> {
@@ -926,14 +929,10 @@ pub(crate) fn loot_tag_flags_after_roster_change(
 
     let shown = viewer.created.lock().unwrap().clone();
     let guard = coord.0.coord();
-    guard
-        .conn
-        .db
-        .game_world_entity()
+    shown
         .iter()
-        .filter(|entity| {
-            shown.contains(&entity.guid) && !entity.dead && entity.dynamic_flags & TAPPED != 0
-        })
+        .filter_map(|guid| guard.conn.db.game_world_entity().guid().find(guid))
+        .filter(|entity| !entity.dead && entity.dynamic_flags & TAPPED != 0)
         .map(|entity| {
             Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
                 codec::build_dynamic_flags_values(

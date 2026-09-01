@@ -749,6 +749,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64) {
         return;
     };
     let group_id = m.group_id;
+    crate::loot::tag::revoke_group_member(ctx, group_id, character_guid);
     ctx.db.game_group_member().id().delete(m.id);
     push_event(
         ctx,
@@ -933,6 +934,9 @@ pub fn sync_group_mirror(
         .collect();
     let (stale_row_ids, arriving) = mirror_plan(&current, &members);
     for id in stale_row_ids {
+        if let Some((_, guid)) = current.iter().find(|(row_id, _)| *row_id == id) {
+            crate::loot::tag::revoke_group_member(ctx, group_id, *guid);
+        }
         member_tbl.id().delete(id);
     }
     if members.is_empty() {
@@ -944,6 +948,7 @@ pub fn sync_group_mirror(
     // where they left it — is stale by construction and goes first.
     for guid in &arriving {
         for m in member_tbl.by_character().filter(guid).collect::<Vec<_>>() {
+            crate::loot::tag::revoke_group_member(ctx, m.group_id, *guid);
             member_tbl.id().delete(m.id);
         }
     }

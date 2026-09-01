@@ -204,6 +204,29 @@ fn membership_is_current(
     }
 }
 
+/// Remove a former party member from every live Loot Tag owned by that party. Rejoining the same
+/// party later must not restore rights from an earlier tag-time snapshot.
+pub(crate) fn revoke_group_member(ctx: &ReducerContext, group_id: u64, character_guid: u64) {
+    let tagged_creatures: Vec<u64> = ctx
+        .db
+        .game_creature_loot_tag_group()
+        .iter()
+        .filter(|tag| tag.group_id == group_id)
+        .map(|tag| tag.creature_guid)
+        .collect();
+    let members = ctx.db.game_creature_quest_tap_member();
+    for creature_guid in tagged_creatures {
+        for member in members
+            .by_creature()
+            .filter(&creature_guid)
+            .filter(|member| member.character_guid == character_guid)
+            .collect::<Vec<_>>()
+        {
+            members.id().delete(member.id);
+        }
+    }
+}
+
 /// Replace a corpse's eligibility rows with the resolved Loot Tag recipients. The input is
 /// deduplicated so every eligible Character receives exactly one row, including a solo tagger.
 pub(crate) fn record_corpse_eligibility(
@@ -306,17 +329,17 @@ const LOOT_TAG_FIXTURE_ENTRY: u32 = 51_000;
 #[cfg(feature = "debug_reducers")]
 const LOOT_TAG_FIXTURE_GROUP: u64 = 5_093_850;
 #[cfg(feature = "debug_reducers")]
-const LOOT_TAG_FIXTURE_PLAYER_A: u64 = 5_093_851;
+const LOOT_TAG_FIXTURE_CHARACTER_A: u64 = 5_093_851;
 #[cfg(feature = "debug_reducers")]
-const LOOT_TAG_FIXTURE_PLAYER_B: u64 = 5_093_852;
+const LOOT_TAG_FIXTURE_CHARACTER_B: u64 = 5_093_852;
 #[cfg(feature = "debug_reducers")]
-const LOOT_TAG_FIXTURE_PLAYER_C: u64 = 5_093_853;
+const LOOT_TAG_FIXTURE_CHARACTER_C: u64 = 5_093_853;
 #[cfg(feature = "debug_reducers")]
-const LOOT_TAG_FIXTURE_PLAYER_D: u64 = 5_093_854;
+const LOOT_TAG_FIXTURE_CHARACTER_D: u64 = 5_093_854;
 #[cfg(feature = "debug_reducers")]
-const LOOT_TAG_FIXTURE_PLAYER_E: u64 = 5_093_855;
+const LOOT_TAG_FIXTURE_CHARACTER_E: u64 = 5_093_855;
 #[cfg(feature = "debug_reducers")]
-const LOOT_TAG_FIXTURE_PLAYER_F: u64 = 5_093_856;
+const LOOT_TAG_FIXTURE_CHARACTER_F: u64 = 5_093_856;
 
 /// Exercise Loot Tag creation, lifetime, recipient resolution, and tag-owned death against live
 /// Module rows in one isolated standalone transaction.
@@ -331,35 +354,35 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         .ok_or_else(|| "Loot Tag fixture creature template is missing".to_string())?;
     let base_x = -8_900.0;
     for (guid, x) in [
-        (LOOT_TAG_FIXTURE_PLAYER_A, base_x),
-        (LOOT_TAG_FIXTURE_PLAYER_B, base_x + 1.0),
-        (LOOT_TAG_FIXTURE_PLAYER_C, base_x + 2.0),
-        (LOOT_TAG_FIXTURE_PLAYER_D, base_x + 3.0),
-        (LOOT_TAG_FIXTURE_PLAYER_E, base_x + 4.0),
-        (LOOT_TAG_FIXTURE_PLAYER_F, base_x + 5.0),
+        (LOOT_TAG_FIXTURE_CHARACTER_A, base_x),
+        (LOOT_TAG_FIXTURE_CHARACTER_B, base_x + 1.0),
+        (LOOT_TAG_FIXTURE_CHARACTER_C, base_x + 2.0),
+        (LOOT_TAG_FIXTURE_CHARACTER_D, base_x + 3.0),
+        (LOOT_TAG_FIXTURE_CHARACTER_E, base_x + 4.0),
+        (LOOT_TAG_FIXTURE_CHARACTER_F, base_x + 5.0),
     ] {
         insert_fixture_entity(ctx, &origin, guid, x, true, 0);
     }
     let first_tag = fixture_creature_guid(1);
     insert_fixture_entity(ctx, &origin, first_tag, base_x, false, 0);
-    crate::threat::add_threat(ctx, first_tag, LOOT_TAG_FIXTURE_PLAYER_A, 10);
-    crate::threat::add_threat(ctx, first_tag, LOOT_TAG_FIXTURE_PLAYER_B, 100);
-    expect_tagger(ctx, first_tag, LOOT_TAG_FIXTURE_PLAYER_A)?;
+    crate::threat::add_threat(ctx, first_tag, LOOT_TAG_FIXTURE_CHARACTER_A, 10);
+    crate::threat::add_threat(ctx, first_tag, LOOT_TAG_FIXTURE_CHARACTER_B, 100);
+    expect_tagger(ctx, first_tag, LOOT_TAG_FIXTURE_CHARACTER_A)?;
 
     let aggression = fixture_creature_guid(2);
     insert_fixture_entity(ctx, &origin, aggression, base_x, false, 0);
-    crate::combat::arm_creature_engagement(ctx, aggression, LOOT_TAG_FIXTURE_PLAYER_A, false);
+    crate::combat::arm_creature_engagement(ctx, aggression, LOOT_TAG_FIXTURE_CHARACTER_A, false);
     if tagger(ctx, aggression).is_some() {
         return Err("creature aggression created a Loot Tag".to_string());
     }
     crate::combat::disengage(ctx, aggression);
 
     let pet = fixture_creature_guid(3);
-    insert_fixture_entity(ctx, &origin, pet, base_x, false, LOOT_TAG_FIXTURE_PLAYER_B);
+    insert_fixture_entity(ctx, &origin, pet, base_x, false, LOOT_TAG_FIXTURE_CHARACTER_B);
     let pet_target = fixture_creature_guid(4);
     insert_fixture_entity(ctx, &origin, pet_target, base_x, false, 0);
     crate::threat::add_threat(ctx, pet_target, pet, 10);
-    expect_tagger(ctx, pet_target, LOOT_TAG_FIXTURE_PLAYER_B)?;
+    expect_tagger(ctx, pet_target, LOOT_TAG_FIXTURE_CHARACTER_B)?;
 
     let tagless = fixture_creature_guid(5);
     insert_fixture_entity(ctx, &origin, tagless, base_x, false, 0);
@@ -384,8 +407,8 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         master_only: false,
         withheld: false,
     });
-    let tagless_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_PLAYER_B)?;
-    if !crate::combat::kill_creature(ctx, tagless, Some(LOOT_TAG_FIXTURE_PLAYER_B)) {
+    let tagless_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_B)?;
+    if !crate::combat::kill_creature(ctx, tagless, Some(LOOT_TAG_FIXTURE_CHARACTER_B)) {
         return Err("tag-less fixture creature did not die".to_string());
     }
     let tagless_corpse = ctx
@@ -397,7 +420,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     if tagless_corpse.money != 0
         || tagless_corpse.dynamic_flags & lyracore_shared::constants::unit_dynamic_flags::LOOTABLE
             != 0
-        || entity_xp(ctx, LOOT_TAG_FIXTURE_PLAYER_B)? != tagless_xp
+        || entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_B)? != tagless_xp
         || !corpse_eligible_recipients(ctx, tagless).is_empty()
         || ctx
             .db
@@ -412,7 +435,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
 
     let group = ctx.db.game_group().insert(crate::Group {
         group_id: LOOT_TAG_FIXTURE_GROUP,
-        leader_guid: LOOT_TAG_FIXTURE_PLAYER_A,
+        leader_guid: LOOT_TAG_FIXTURE_CHARACTER_A,
         loot_method: crate::group::loot_method::GROUP,
         loot_threshold: 2,
         rr_cursor: 0,
@@ -420,9 +443,9 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     });
     let members = ctx.db.game_group_member();
     for character_guid in [
-        LOOT_TAG_FIXTURE_PLAYER_A,
-        LOOT_TAG_FIXTURE_PLAYER_C,
-        LOOT_TAG_FIXTURE_PLAYER_D,
+        LOOT_TAG_FIXTURE_CHARACTER_A,
+        LOOT_TAG_FIXTURE_CHARACTER_C,
+        LOOT_TAG_FIXTURE_CHARACTER_D,
     ] {
         members.insert(crate::GroupMember {
             id: 0,
@@ -433,36 +456,42 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     }
     let grouped = fixture_creature_guid(6);
     insert_fixture_entity(ctx, &origin, grouped, base_x, false, 0);
-    crate::threat::add_threat(ctx, grouped, LOOT_TAG_FIXTURE_PLAYER_A, 10);
+    crate::threat::add_threat(ctx, grouped, LOOT_TAG_FIXTURE_CHARACTER_A, 10);
     members.insert(crate::GroupMember {
         id: 0,
         group_id: group.group_id,
-        character_guid: LOOT_TAG_FIXTURE_PLAYER_E,
+        character_guid: LOOT_TAG_FIXTURE_CHARACTER_E,
         owner_identity: spacetimedb::Identity::ZERO,
     });
-    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_PLAYER_C);
-    move_fixture_entity(ctx, LOOT_TAG_FIXTURE_PLAYER_D, base_x + 100.0)?;
-    let tagger_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_PLAYER_A)?;
-    let foreign_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_PLAYER_B)?;
-    if !crate::combat::kill_creature(ctx, grouped, Some(LOOT_TAG_FIXTURE_PLAYER_B)) {
+    crate::group::remove_member(ctx, LOOT_TAG_FIXTURE_CHARACTER_C);
+    members.insert(crate::GroupMember {
+        id: 0,
+        group_id: group.group_id,
+        character_guid: LOOT_TAG_FIXTURE_CHARACTER_C,
+        owner_identity: spacetimedb::Identity::ZERO,
+    });
+    move_fixture_entity(ctx, LOOT_TAG_FIXTURE_CHARACTER_D, base_x + 100.0)?;
+    let tagger_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_A)?;
+    let foreign_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_B)?;
+    if !crate::combat::kill_creature(ctx, grouped, Some(LOOT_TAG_FIXTURE_CHARACTER_B)) {
         return Err("grouped fixture creature did not die".to_string());
     }
-    if corpse_eligible_recipients(ctx, grouped) != vec![LOOT_TAG_FIXTURE_PLAYER_A]
-        || entity_xp(ctx, LOOT_TAG_FIXTURE_PLAYER_A)? <= tagger_xp
-        || entity_xp(ctx, LOOT_TAG_FIXTURE_PLAYER_B)? != foreign_xp
+    if corpse_eligible_recipients(ctx, grouped) != vec![LOOT_TAG_FIXTURE_CHARACTER_A]
+        || entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_A)? <= tagger_xp
+        || entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_B)? != foreign_xp
     {
         return Err(
-            "tag-owned death rewarded a leaver, later joiner, distant member, or foreign killer"
+            "tag-owned death rewarded a leaver who rejoined, later joiner, distant member, or foreign killer"
                 .to_string(),
         );
     }
 
     let retained = fixture_creature_guid(7);
     insert_fixture_entity(ctx, &origin, retained, base_x, false, 0);
-    crate::threat::add_threat(ctx, retained, LOOT_TAG_FIXTURE_PLAYER_F, 10);
-    crate::combat::arm_creature_engagement(ctx, retained, LOOT_TAG_FIXTURE_PLAYER_F, false);
+    crate::threat::add_threat(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F, 10);
+    crate::combat::arm_creature_engagement(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F, false);
     ctx.db.game_melee_attack().insert(crate::MeleeAttack {
-        attacker_guid: LOOT_TAG_FIXTURE_PLAYER_B,
+        attacker_guid: LOOT_TAG_FIXTURE_CHARACTER_B,
         target_guid: retained,
         last_swing_ms: 0,
         ranged_spell_id: 0,
@@ -472,8 +501,8 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         leash_x: 0.0,
         leash_y: 0.0,
     });
-    crate::combat::kill_player(ctx, LOOT_TAG_FIXTURE_PLAYER_F, LOOT_TAG_FIXTURE_PLAYER_B);
-    expect_tagger(ctx, retained, LOOT_TAG_FIXTURE_PLAYER_F)?;
+    crate::combat::kill_player(ctx, LOOT_TAG_FIXTURE_CHARACTER_F, LOOT_TAG_FIXTURE_CHARACTER_B);
+    expect_tagger(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F)?;
     crate::combat::disengage(ctx, retained);
     if tagger(ctx, retained).is_some()
         || ctx
@@ -493,26 +522,26 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
 
     let healed_target = fixture_creature_guid(8);
     insert_fixture_entity(ctx, &origin, healed_target, base_x, false, 0);
-    crate::combat::arm_creature_engagement(ctx, healed_target, LOOT_TAG_FIXTURE_PLAYER_A, false);
+    crate::combat::arm_creature_engagement(ctx, healed_target, LOOT_TAG_FIXTURE_CHARACTER_A, false);
     crate::threat::add_heal_threat(
         ctx,
-        LOOT_TAG_FIXTURE_PLAYER_B,
-        LOOT_TAG_FIXTURE_PLAYER_A,
+        LOOT_TAG_FIXTURE_CHARACTER_B,
+        LOOT_TAG_FIXTURE_CHARACTER_A,
         20,
     );
-    expect_tagger(ctx, healed_target, LOOT_TAG_FIXTURE_PLAYER_B)?;
+    expect_tagger(ctx, healed_target, LOOT_TAG_FIXTURE_CHARACTER_B)?;
 
     let taunted = fixture_creature_guid(9);
     insert_fixture_entity(ctx, &origin, taunted, base_x, false, 0);
-    crate::threat::taunt(ctx, taunted, LOOT_TAG_FIXTURE_PLAYER_A);
-    expect_tagger(ctx, taunted, LOOT_TAG_FIXTURE_PLAYER_A)?;
+    crate::threat::taunt(ctx, taunted, LOOT_TAG_FIXTURE_CHARACTER_A);
+    expect_tagger(ctx, taunted, LOOT_TAG_FIXTURE_CHARACTER_A)?;
 
     let lethal = fixture_creature_guid(10);
     insert_fixture_entity(ctx, &origin, lethal, base_x, false, 0);
     let damage = crate::combat::final_damage(ctx, lethal, u32::MAX);
     let outcome = crate::combat::apply_hit(
         ctx,
-        LOOT_TAG_FIXTURE_PLAYER_B,
+        LOOT_TAG_FIXTURE_CHARACTER_B,
         lethal,
         damage,
         crate::combat::Hit::weapon(crate::combat::HitSource::MainHand, false),
@@ -529,7 +558,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
                     != 0
             });
     if !outcome.killed
-        || corpse_eligible_recipients(ctx, lethal) != vec![LOOT_TAG_FIXTURE_PLAYER_B]
+        || corpse_eligible_recipients(ctx, lethal) != vec![LOOT_TAG_FIXTURE_CHARACTER_B]
         || tagger(ctx, lethal).is_some()
         || lethal_corpse_has_tag_flags
     {
@@ -570,7 +599,11 @@ fn verify_corpse_loot_gates(
     let empty = fixture_creature_guid(11);
     insert_fixture_corpse(ctx, origin, empty, x, 0);
     expect_loot_tag_refusal(
-        corpse_access_gate(ctx, LOOT_TAG_FIXTURE_PLAYER_A, empty),
+        corpse_access_gate(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, empty),
+        empty,
+    )?;
+    expect_loot_tag_refusal(
+        crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, empty),
         empty,
     )?;
 
@@ -591,15 +624,15 @@ fn verify_corpse_loot_gates(
     record_corpse_eligibility(
         ctx,
         party_corpse,
-        &[LOOT_TAG_FIXTURE_PLAYER_A, LOOT_TAG_FIXTURE_PLAYER_B],
+        &[LOOT_TAG_FIXTURE_CHARACTER_A, LOOT_TAG_FIXTURE_CHARACTER_B],
     );
-    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_A, party_corpse)?;
-    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_B, party_corpse)?;
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, party_corpse)?;
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)?;
     for refusal in [
-        crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_E, party_corpse),
-        crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_PLAYER_E, party_corpse, 0),
-        crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_PLAYER_E, party_corpse),
-        crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_E, party_corpse),
+        crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
+        crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse, 0),
+        crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
+        crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
     ] {
         expect_loot_tag_refusal(refusal, party_corpse)?;
     }
@@ -620,10 +653,10 @@ fn verify_corpse_loot_gates(
         return Err("a Loot Tag Refusal changed the party corpse".to_string());
     }
 
-    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_PLAYER_B, party_corpse, 0)?;
-    crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_PLAYER_B, party_corpse)?;
-    insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_PLAYER_B);
-    crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_B, party_corpse)?;
+    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse, 0)?;
+    crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)?;
+    insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_CHARACTER_B);
+    crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)?;
 
     let solo_corpse = fixture_creature_guid(13);
     insert_fixture_corpse(ctx, origin, solo_corpse, x, 17);
@@ -639,12 +672,12 @@ fn verify_corpse_loot_gates(
         master_only: false,
         withheld: false,
     });
-    record_corpse_eligibility(ctx, solo_corpse, &[LOOT_TAG_FIXTURE_PLAYER_A]);
-    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_A, solo_corpse)?;
-    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_PLAYER_A, solo_corpse, 0)?;
-    crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_PLAYER_A, solo_corpse)?;
-    insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_PLAYER_A);
-    crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_PLAYER_A, solo_corpse)?;
+    record_corpse_eligibility(ctx, solo_corpse, &[LOOT_TAG_FIXTURE_CHARACTER_A]);
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;
+    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse, 0)?;
+    crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;
+    insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_CHARACTER_A);
+    crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;
     Ok(())
 }
 
@@ -705,7 +738,7 @@ fn insert_fixture_entity(
     template: &crate::CreatureTemplate,
     guid: u64,
     x: f32,
-    player: bool,
+    is_character: bool,
     owner_guid: u64,
 ) {
     let spawn = crate::CreatureSpawn {
@@ -724,7 +757,7 @@ fn insert_fixture_entity(
     };
     let mut entity = crate::creatures::build_creature_entity(&spawn, template, 0, 0);
     entity.owner_guid = owner_guid;
-    if player {
+    if is_character {
         entity.type_mask = lyracore_shared::constants::type_mask::PLAYER;
         entity.entry = 0;
         entity.account_id = guid;
