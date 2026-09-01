@@ -263,6 +263,101 @@ pub(super) fn trainer_spell_claim(id: u64, operation: &str, fields: &str) -> Str
     )
 }
 
+pub(super) const REAL_GOSSIP_MENU: u32 = 6; // Kobold Vermin — a real imported creature template entry.
+
+pub(super) fn gossip_menu_claim(entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_gossip_menu","key":{{"entry":{entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) const PACKAGE_NPC_TEXT: u32 = 12_000_001;
+pub(super) const REAL_NPC_TEXT: u32 = 1;
+
+pub(super) const WHOLE_NPC_TEXT_ROW: &str =
+    r#"{ "text": { "type": "string", "value": "The wilds do not forgive." } }"#;
+
+pub(super) fn npc_text_claim(text_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_npc_text","key":{{"text_id":{text_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) const PACKAGE_NPC_TEXT_SLOT: u64 = 12_000_002;
+pub(super) const REAL_NPC_TEXT_SLOT: u64 = 1;
+
+pub(super) const WHOLE_NPC_TEXT_SLOT_ROW: &str = r#"{
+    "text_id": { "type": "u32", "value": 1 },
+    "slot_index": { "type": "u8", "value": 0 },
+    "text_male": { "type": "string", "value": "The wilds do not forgive." },
+    "text_female": { "type": "string", "value": "The wilds do not forgive." },
+    "probability": { "type": "f32", "value": 1.0 }
+}"#;
+
+pub(super) fn npc_text_slot_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_npc_text_slot","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) const PACKAGE_GOSSIP_OPTION: u32 = 12_000_003;
+pub(super) const REAL_GOSSIP_OPTION: u32 = 1;
+
+pub(super) const WHOLE_GOSSIP_OPTION_ROW: &str = r#"{
+    "entry": { "type": "u32", "value": 6 },
+    "option_index": { "type": "u32", "value": 0 },
+    "icon": { "type": "u32", "value": 0 },
+    "text": { "type": "string", "value": "Train me." },
+    "action": { "type": "u32", "value": 5 },
+    "action_menu_id": { "type": "u32", "value": 0 },
+    "cond_type": { "type": "u32", "value": 0 },
+    "cond_value1": { "type": "u32", "value": 0 },
+    "cond_value2": { "type": "u32", "value": 0 }
+}"#;
+
+pub(super) fn gossip_option_claim(row_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_gossip_option","key":{{"row_id":{row_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) const PACKAGE_GOSSIP_MENU_PROFILE: u32 = 12_000_004;
+pub(super) const REAL_GOSSIP_MENU_PROFILE: u32 = 1;
+
+pub(super) const WHOLE_GOSSIP_MENU_PROFILE_ROW: &str =
+    r#"{ "text_id": { "type": "u32", "value": 1 } }"#;
+
+pub(super) fn gossip_menu_profile_claim(menu_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_gossip_menu_profile","key":{{"menu_id":{menu_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) const PACKAGE_GOSSIP_MENU_PROFILE_OPTION: u32 = 12_000_005;
+pub(super) const REAL_GOSSIP_MENU_PROFILE_OPTION: u32 = 1;
+
+pub(super) const WHOLE_GOSSIP_MENU_PROFILE_OPTION_ROW: &str = r#"{
+    "menu_id": { "type": "u32", "value": 1 },
+    "option_index": { "type": "u32", "value": 0 },
+    "icon": { "type": "u32", "value": 0 },
+    "text": { "type": "string", "value": "Train me." },
+    "action": { "type": "u32", "value": 5 },
+    "action_menu_id": { "type": "u32", "value": 0 },
+    "cond_type": { "type": "u32", "value": 0 },
+    "cond_value1": { "type": "u32", "value": 0 },
+    "cond_value2": { "type": "u32", "value": 0 }
+}"#;
+
+pub(super) fn gossip_menu_profile_option_claim(
+    row_id: u32,
+    operation: &str,
+    fields: &str,
+) -> String {
+    format!(
+        r#"{{"table":"game_gossip_menu_profile_option","key":{{"row_id":{row_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
 /// A value of the column's declared type, so a test can claim any column without spelling out what
 /// it holds.
 pub(super) fn some_value(column: Column) -> FieldValue {

@@ -62,14 +62,14 @@
 //! and the unit an apply runs for. [`Table`] is one closed enum with its variants grouped by
 //! family, and [`Table::family`] names the owner, so an applier called for one family can tell that
 //! a claim belongs to the import it is running. This build's catalogue is the spell, item, quest,
-//! loot, cast and trainer families. `game_creature_quest`/`game_gameobject_quest` (quest givers)
-//! and `game_creature_loot`/`game_npc_vendor` (creature-scoped loot and vendor stock) are out of
-//! it. See [`Table::columns`] and [`LOOT_FAMILY`] for why.
+//! loot, cast, trainer and gossip families. `game_creature_quest`/`game_gameobject_quest` (quest
+//! givers) and `game_creature_loot`/`game_npc_vendor` (creature-scoped loot and vendor stock) are
+//! out of it. See [`Table::columns`] and [`LOOT_FAMILY`] for why.
 //!
-//! Most tables permit insert and partial update. `game_creature_cast` is update-only: its primary
-//! key names a creature template, an entity out of this catalogue's scope, so no Package may
-//! invent one. [`DeltaError::InsertNotSupported`] refuses every insert on it at parse time,
-//! regardless of identifier.
+//! Most tables permit insert and partial update. `game_creature_cast` and `game_gossip_menu` are
+//! update-only: each one's primary key names a creature template, an entity out of this
+//! catalogue's scope, so no Package may invent one. [`DeltaError::InsertNotSupported`] refuses
+//! every insert on either at parse time, regardless of identifier.
 //!
 //! # Identifier policy
 //!
@@ -79,10 +79,12 @@
 //! [`PACKAGE_QUEST_ID_FLOOR`]..=[`PACKAGE_QUEST_ID_CEIL`]; for loot rows,
 //! [`PACKAGE_LOOT_ID_FLOOR`]..=[`PACKAGE_LOOT_ID_CEIL`]; for `game_creature_spell` rows,
 //! [`PACKAGE_CAST_ID_FLOOR`]..=[`PACKAGE_CAST_ID_CEIL`]; for `game_trainer_spell` rows,
-//! [`PACKAGE_TRAINER_ID_FLOOR`]..=[`PACKAGE_TRAINER_ID_CEIL`]. An update may name any row. Tuning
-//! real data is the point — except a fixture-reserved one, which no Package may touch under any
-//! operation, and except `game_creature_cast`, which permits no insert at all. See [`ids`] for the
-//! bands, the formula a family's band follows, and why they sit where they do.
+//! [`PACKAGE_TRAINER_ID_FLOOR`]..=[`PACKAGE_TRAINER_ID_CEIL`]; for the five inventable gossip
+//! tables, [`PACKAGE_GOSSIP_ID_FLOOR`]..=[`PACKAGE_GOSSIP_ID_CEIL`]. An update may name any row.
+//! Tuning real data is the point — except a fixture-reserved one, which no Package may touch under
+//! any operation, and except `game_creature_cast`/`game_gossip_menu`, which permit no insert at
+//! all. See [`ids`] for the bands, the formula a family's band follows, and why they sit where
+//! they do.
 //!
 //! # The other artifact
 //!
@@ -114,20 +116,21 @@ pub use delta::{
 };
 pub use error::DeltaError;
 pub use ids::{
-    is_fixture_reserved_cast_id, is_fixture_reserved_item_id, is_fixture_reserved_loot_id,
-    is_fixture_reserved_quest_id, is_fixture_reserved_spell_id, is_fixture_reserved_trainer_id,
-    is_package_cast_id, is_package_item_id, is_package_loot_id, is_package_quest_id,
-    is_package_script_id, is_package_spell_id, is_package_trainer_id, packed_quest_objective_id,
-    packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_spell_effect_id,
-    MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
-    PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR,
-    PACKAGE_LOOT_ID_CEIL, PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR,
-    PACKAGE_SCRIPT_ID_CEIL, PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
-    PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
+    is_fixture_reserved_cast_id, is_fixture_reserved_gossip_id, is_fixture_reserved_item_id,
+    is_fixture_reserved_loot_id, is_fixture_reserved_quest_id, is_fixture_reserved_spell_id,
+    is_fixture_reserved_trainer_id, is_package_cast_id, is_package_gossip_id, is_package_item_id,
+    is_package_loot_id, is_package_quest_id, is_package_script_id, is_package_spell_id,
+    is_package_trainer_id, packed_quest_objective_id, packed_quest_reward_choice_id,
+    packed_quest_reward_item_id, packed_spell_effect_id, MAX_QUEST_OBJECTIVE_INDEX,
+    MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX, PACKAGE_CAST_ID_CEIL,
+    PACKAGE_CAST_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL, PACKAGE_GOSSIP_ID_FLOOR, PACKAGE_ITEM_ID_CEIL,
+    PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL, PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL,
+    PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL, PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL,
+    PACKAGE_SPELL_ID_FLOOR, PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
 };
 pub use schema::{
-    Column, FieldType, FieldValue, Table, CAST_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY,
-    SPELL_FAMILY, TRAINER_FAMILY,
+    Column, FieldType, FieldValue, Table, CAST_FAMILY, GOSSIP_FAMILY, ITEM_FAMILY, LOOT_FAMILY,
+    QUEST_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
 };
 pub use script::{
     artifact_kind, trace_scripts, ArtifactKind, EventBinding, Script, ScriptArtifact,

@@ -39,6 +39,10 @@ pub const CAST_FAMILY: &str = "casts";
 /// `trainers` `--family` block stamps.
 pub const TRAINER_FAMILY: &str = "trainers";
 
+/// The Import Family that owns the six gossip tables (an NPC's menu, greeting text and clickable
+/// options). The same name the `--dump` importer's `gossip` `--family` block stamps.
+pub const GOSSIP_FAMILY: &str = "gossip";
+
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
 /// needs no translation step.
 ///
@@ -88,6 +92,21 @@ pub enum Table {
     // ---- trainers ----
     /// `game_trainer_spell` — one spell a trainer teaches.
     TrainerSpell,
+    // ---- gossip ----
+    /// `game_gossip_menu` — maps a creature template entry to the `game_npc_text` row it shows.
+    /// Update-only: the key is the creature template entry, which no Package may invent. See
+    /// [`crate::DeltaError::InsertNotSupported`].
+    GossipMenu,
+    /// `game_npc_text` — an NPC greeting's first (male, back-compat) text slot.
+    NpcText,
+    /// `game_npc_text_slot` — one of an NPC greeting's up to 8 weighted text slots.
+    NpcTextSlot,
+    /// `game_gossip_option` — one clickable line in a creature's gossip window.
+    GossipOption,
+    /// `game_gossip_menu_profile` — a runtime-selectable gossip menu, retained by menu id.
+    GossipMenuProfile,
+    /// `game_gossip_menu_profile_option` — one option belonging to a runtime-selectable menu.
+    GossipMenuProfileOption,
 }
 
 impl Table {
@@ -110,6 +129,12 @@ impl Table {
         Self::CreatureCast,
         Self::CreatureSpell,
         Self::TrainerSpell,
+        Self::GossipMenu,
+        Self::NpcText,
+        Self::NpcTextSlot,
+        Self::GossipOption,
+        Self::GossipMenuProfile,
+        Self::GossipMenuProfileOption,
     ];
 
     /// The durable table name, and the value the artifact's `table` member carries.
@@ -132,6 +157,12 @@ impl Table {
             Self::CreatureCast => "game_creature_cast",
             Self::CreatureSpell => "game_creature_spell",
             Self::TrainerSpell => "game_trainer_spell",
+            Self::GossipMenu => "game_gossip_menu",
+            Self::NpcText => "game_npc_text",
+            Self::NpcTextSlot => "game_npc_text_slot",
+            Self::GossipOption => "game_gossip_option",
+            Self::GossipMenuProfile => "game_gossip_menu_profile",
+            Self::GossipMenuProfileOption => "game_gossip_menu_profile_option",
         }
     }
 
@@ -157,6 +188,12 @@ impl Table {
             | Self::FishingLoot => LOOT_FAMILY,
             Self::CreatureCast | Self::CreatureSpell => CAST_FAMILY,
             Self::TrainerSpell => TRAINER_FAMILY,
+            Self::GossipMenu
+            | Self::NpcText
+            | Self::NpcTextSlot
+            | Self::GossipOption
+            | Self::GossipMenuProfile
+            | Self::GossipMenuProfileOption => GOSSIP_FAMILY,
         }
     }
 
@@ -180,6 +217,12 @@ impl Table {
             "game_creature_cast" => Some(Self::CreatureCast),
             "game_creature_spell" => Some(Self::CreatureSpell),
             "game_trainer_spell" => Some(Self::TrainerSpell),
+            "game_gossip_menu" => Some(Self::GossipMenu),
+            "game_npc_text" => Some(Self::NpcText),
+            "game_npc_text_slot" => Some(Self::NpcTextSlot),
+            "game_gossip_option" => Some(Self::GossipOption),
+            "game_gossip_menu_profile" => Some(Self::GossipMenuProfile),
+            "game_gossip_menu_profile_option" => Some(Self::GossipMenuProfileOption),
             _ => None,
         }
     }
@@ -222,6 +265,12 @@ impl Table {
             Self::CreatureCast => CREATURE_CAST_COLUMNS,
             Self::CreatureSpell => CREATURE_SPELL_COLUMNS,
             Self::TrainerSpell => TRAINER_SPELL_COLUMNS,
+            Self::GossipMenu => GOSSIP_MENU_COLUMNS,
+            Self::NpcText => NPC_TEXT_COLUMNS,
+            Self::NpcTextSlot => NPC_TEXT_SLOT_COLUMNS,
+            Self::GossipOption => GOSSIP_OPTION_COLUMNS,
+            Self::GossipMenuProfile => GOSSIP_MENU_PROFILE_COLUMNS,
+            Self::GossipMenuProfileOption => GOSSIP_MENU_PROFILE_OPTION_COLUMNS,
         }
     }
 
@@ -524,6 +573,72 @@ const TRAINER_SPELL_COLUMNS: &[Column] = &[
     column("required_level", FieldType::U8),
     column("learn_skill_line", FieldType::U32),
     column("learn_skill_cap", FieldType::U32),
+];
+
+// ---- gossip ----
+
+/// `game_gossip_menu` minus its `entry` primary key (the creature template entry — the importer
+/// collapsed the cmangos menu-id indirection, see `module/src/creatures/spawn.rs`'s `GossipMenu`
+/// doc comment).
+///
+/// Update-only ([`crate::DeltaError::InsertNotSupported`]), but the one column it does carry is a
+/// real claim: pointing an existing NPC at a `game_npc_text` row a Package inserted.
+const GOSSIP_MENU_COLUMNS: &[Column] = &[column("text_id", FieldType::U32)];
+
+/// `game_npc_text` minus its `text_id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `NpcText` struct.
+const NPC_TEXT_COLUMNS: &[Column] = &[column("text", FieldType::Str)];
+
+/// `game_npc_text_slot` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `NpcTextSlot` struct.
+const NPC_TEXT_SLOT_COLUMNS: &[Column] = &[
+    column("text_id", FieldType::U32),
+    column("slot_index", FieldType::U8),
+    column("text_male", FieldType::Str),
+    column("text_female", FieldType::Str),
+    column("probability", FieldType::F32),
+];
+
+/// `game_gossip_option` minus its `row_id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `GossipOption` struct.
+/// `action_menu_id` is stored but never checked against `game_gossip_menu_profile` at claim time —
+/// see `module/src/package_import/gossip.rs`'s `check_references` doc comment for why.
+const GOSSIP_OPTION_COLUMNS: &[Column] = &[
+    column("entry", FieldType::U32),
+    column("option_index", FieldType::U32),
+    column("icon", FieldType::U32),
+    column("text", FieldType::Str),
+    column("action", FieldType::U32),
+    column("action_menu_id", FieldType::U32),
+    column("cond_type", FieldType::U32),
+    column("cond_value1", FieldType::U32),
+    column("cond_value2", FieldType::U32),
+];
+
+/// `game_gossip_menu_profile` minus its `menu_id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `GossipMenuProfile` struct. Unlike
+/// `game_gossip_menu.entry`, `menu_id` belongs to the gossip family alone, so a Package may invent
+/// one.
+const GOSSIP_MENU_PROFILE_COLUMNS: &[Column] = &[column("text_id", FieldType::U32)];
+
+/// `game_gossip_menu_profile_option` minus its `row_id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `GossipMenuProfileOption` struct: the
+/// same nine columns as [`GOSSIP_OPTION_COLUMNS`], with `menu_id` in place of `entry`.
+const GOSSIP_MENU_PROFILE_OPTION_COLUMNS: &[Column] = &[
+    column("menu_id", FieldType::U32),
+    column("option_index", FieldType::U32),
+    column("icon", FieldType::U32),
+    column("text", FieldType::Str),
+    column("action", FieldType::U32),
+    column("action_menu_id", FieldType::U32),
+    column("cond_type", FieldType::U32),
+    column("cond_value1", FieldType::U32),
+    column("cond_value2", FieldType::U32),
 ];
 
 /// The type tag a claimed value carries.

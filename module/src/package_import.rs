@@ -46,6 +46,7 @@
 mod casts;
 #[cfg(test)]
 mod fixtures;
+mod gossip;
 mod items;
 mod loot;
 mod quest;
@@ -56,8 +57,8 @@ mod trainers;
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
-    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, CAST_FAMILY, ITEM_FAMILY,
-    LOOT_FAMILY, QUEST_FAMILY, SCRIPT_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
+    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, CAST_FAMILY, GOSSIP_FAMILY,
+    ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SCRIPT_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
 };
 
 use crate::helpers::require_operator;
@@ -105,6 +106,8 @@ enum ClaimFamily {
     Cast,
     /// `game_trainer_spell`.
     Trainer,
+    /// The six gossip tables (an NPC's menu, greeting text and clickable options).
+    Gossip,
 }
 
 impl Family {
@@ -116,6 +119,7 @@ impl Family {
         Self::Claims(ClaimFamily::Loot),
         Self::Claims(ClaimFamily::Cast),
         Self::Claims(ClaimFamily::Trainer),
+        Self::Claims(ClaimFamily::Gossip),
         Self::Script,
     ];
 
@@ -157,6 +161,7 @@ impl ClaimFamily {
             Self::Loot => LOOT_FAMILY,
             Self::Cast => CAST_FAMILY,
             Self::Trainer => TRAINER_FAMILY,
+            Self::Gossip => GOSSIP_FAMILY,
         }
     }
 
@@ -169,6 +174,7 @@ impl ClaimFamily {
             Self::Loot => loot::update_target(ctx, row),
             Self::Cast => casts::update_target(ctx, row),
             Self::Trainer => trainers::update_target(ctx, row),
+            Self::Gossip => gossip::update_target(ctx, row),
         }
     }
 
@@ -182,6 +188,7 @@ impl ClaimFamily {
             Self::Loot => loot::clear_package_range(ctx),
             Self::Cast => casts::clear_package_range(ctx),
             Self::Trainer => trainers::clear_package_range(ctx),
+            Self::Gossip => gossip::clear_package_range(ctx),
         }
     }
 
@@ -194,6 +201,7 @@ impl ClaimFamily {
             Self::Loot => loot::write_row(ctx, row),
             Self::Cast => casts::write_row(ctx, row),
             Self::Trainer => trainers::write_row(ctx, row),
+            Self::Gossip => gossip::write_row(ctx, row),
         }
     }
 
@@ -205,6 +213,7 @@ impl ClaimFamily {
             Self::Loot => loot::check_references(ctx, rows),
             Self::Cast => casts::check_references(ctx, rows),
             Self::Trainer => trainers::check_references(ctx, rows),
+            Self::Gossip => gossip::check_references(ctx, rows),
         }
     }
 }
@@ -630,11 +639,12 @@ fn stamp_provenance(ctx: &ReducerContext, family: Family, packages: &[PlannedPac
 #[cfg(test)]
 mod tests {
     use super::fixtures::{
-        artifact, creature_spell_claim, effect_claim, item_claim, pickpocket_loot_claim, plan,
-        quest_claim, spell_claim, trainer_spell_claim, HASH_A, PACKAGE_CREATURE_SPELL,
-        PACKAGE_ITEM, PACKAGE_LOOT, PACKAGE_QUEST, PACKAGE_SPELL, PACKAGE_TRAINER_SPELL,
-        REAL_SPELL, WHOLE_CREATURE_SPELL_ROW, WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW,
-        WHOLE_PICKPOCKET_LOOT_ROW, WHOLE_QUEST_ROW, WHOLE_SPELL_ROW, WHOLE_TRAINER_SPELL_ROW,
+        artifact, creature_spell_claim, effect_claim, item_claim, npc_text_claim,
+        pickpocket_loot_claim, plan, quest_claim, spell_claim, trainer_spell_claim, HASH_A,
+        PACKAGE_CREATURE_SPELL, PACKAGE_ITEM, PACKAGE_LOOT, PACKAGE_NPC_TEXT, PACKAGE_QUEST,
+        PACKAGE_SPELL, PACKAGE_TRAINER_SPELL, REAL_SPELL, WHOLE_CREATURE_SPELL_ROW,
+        WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW, WHOLE_NPC_TEXT_ROW, WHOLE_PICKPOCKET_LOOT_ROW,
+        WHOLE_QUEST_ROW, WHOLE_SPELL_ROW, WHOLE_TRAINER_SPELL_ROW,
     };
     use super::{check_claims_belong_to, ApplyPlan, ClaimFamily, Family, ARTIFACT_SEPARATOR};
     use lyracore_package_delta::PackageDelta;
@@ -798,15 +808,19 @@ mod tests {
 
     #[test]
     fn an_import_family_with_no_artifact_schema_is_refused_by_name() {
-        let refusal = Family::parse("gossip").expect_err("an unsupported family is refused");
+        // "vendors" names a creature-scoped table (`game_npc_vendor`) this crate's catalogue
+        // deliberately excludes (see `lyracore_package_delta::lib`'s doc comment) and never grows a
+        // schema, unlike "gossip" which this build now applies.
+        let refusal = Family::parse("vendors").expect_err("an unsupported family is refused");
 
-        assert!(refusal.contains("`gossip`"), "{refusal}");
+        assert!(refusal.contains("`vendors`"), "{refusal}");
         assert!(refusal.contains("`spell`"), "{refusal}");
         assert!(refusal.contains("`items`"), "{refusal}");
         assert!(refusal.contains("`quests`"), "{refusal}");
         assert!(refusal.contains("`loot`"), "{refusal}");
         assert!(refusal.contains("`casts`"), "{refusal}");
         assert!(refusal.contains("`trainers`"), "{refusal}");
+        assert!(refusal.contains("`gossip`"), "{refusal}");
         assert!(refusal.contains("`script`"), "{refusal}");
     }
 
@@ -832,6 +846,10 @@ mod tests {
         assert_eq!(
             Family::parse("trainers"),
             Ok(Family::Claims(ClaimFamily::Trainer))
+        );
+        assert_eq!(
+            Family::parse("gossip"),
+            Ok(Family::Claims(ClaimFamily::Gossip))
         );
         assert_eq!(Family::parse("script"), Ok(Family::Script));
         for family in Family::ALL {
@@ -950,5 +968,22 @@ mod tests {
             Ok(())
         );
         assert!(check_claims_belong_to(ClaimFamily::Cast, &plan.rows).is_err());
+    }
+
+    /// A gossip plan is checked against the gossip family, not a sibling family it happens to sit
+    /// beside in this build's catalogue.
+    #[test]
+    fn a_gossip_plan_claims_only_gossip_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &npc_text_claim(PACKAGE_NPC_TEXT, "insert", WHOLE_NPC_TEXT_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Gossip, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Trainer, &plan.rows).is_err());
     }
 }

@@ -550,6 +550,17 @@ the curated trainer overrides the importer hands out fixed identifiers for at 5,
 (`CURATED_TRAINER_ID_BASE`), which is a reserved band this range clears, not a Package range.
 _Avoid_: custom id range, synthetic trainer range
 
+**Package Gossip Range**:
+The gossip family's Package Identifier Range: 12,000,000 to 12,999,999. One whole decade above the
+Package Trainer Range. Checked against each of five tables' own identifier (`game_npc_text.text_id`,
+`game_npc_text_slot.id`, `game_gossip_option.row_id`, `game_gossip_menu_profile.menu_id`,
+`game_gossip_menu_profile_option.row_id`), the loot shape. `game_gossip_menu` carries no range of
+its own — its primary key is the creature template entry, which no Package may invent, so every
+insert on it is refused outright rather than banded. Distinct from the gossip ETL's own mint-above
+floors (menu entry at 1,000,000, option/text/slot at 50,000), a separate, older convention for
+Packages that mint gossip through the ETL rather than a Package Delta.
+_Avoid_: custom id range, synthetic gossip range
+
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation, in any Import
 Family. Two kinds: the project-wide 5,090,000 to 5,099,999 band, and a family's own fixture cluster —

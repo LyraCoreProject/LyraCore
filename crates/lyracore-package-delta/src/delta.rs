@@ -12,12 +12,13 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_cast_id, is_fixture_reserved_item_id, is_fixture_reserved_loot_id,
-    is_fixture_reserved_quest_id, is_fixture_reserved_spell_id, is_fixture_reserved_trainer_id,
-    is_package_cast_id, is_package_item_id, is_package_loot_id, is_package_quest_id,
-    is_package_spell_id, is_package_trainer_id, packed_quest_objective_id,
-    packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_spell_effect_id,
-    MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
+    is_fixture_reserved_cast_id, is_fixture_reserved_gossip_id, is_fixture_reserved_item_id,
+    is_fixture_reserved_loot_id, is_fixture_reserved_quest_id, is_fixture_reserved_spell_id,
+    is_fixture_reserved_trainer_id, is_package_cast_id, is_package_gossip_id, is_package_item_id,
+    is_package_loot_id, is_package_quest_id, is_package_spell_id, is_package_trainer_id,
+    packed_quest_objective_id, packed_quest_reward_choice_id, packed_quest_reward_item_id,
+    packed_spell_effect_id, MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX,
+    MAX_SPELL_EFFECT_INDEX,
 };
 use crate::schema::{FieldType, FieldValue, Table};
 
@@ -252,6 +253,38 @@ pub enum PrimaryKey {
         /// The row.
         id: u64,
     },
+    // ---- gossip ----
+    /// A `game_gossip_menu` row. Update-only: the key names a creature template, which no Package
+    /// may invent.
+    GossipMenu {
+        /// The creature template entry, not the cmangos `gossip_menu.entry`.
+        entry: u32,
+    },
+    /// A `game_npc_text` row.
+    NpcText {
+        /// The row.
+        text_id: u32,
+    },
+    /// A `game_npc_text_slot` row.
+    NpcTextSlot {
+        /// The row.
+        id: u64,
+    },
+    /// A `game_gossip_option` row.
+    GossipOption {
+        /// The row.
+        row_id: u32,
+    },
+    /// A `game_gossip_menu_profile` row.
+    GossipMenuProfile {
+        /// The runtime-selectable menu.
+        menu_id: u32,
+    },
+    /// A `game_gossip_menu_profile_option` row.
+    GossipMenuProfileOption {
+        /// The row.
+        row_id: u32,
+    },
 }
 
 impl PrimaryKey {
@@ -450,6 +483,74 @@ impl PrimaryKey {
         Ok(Self::TrainerSpell { id })
     }
 
+    /// Names a `game_gossip_menu` row: a creature template's gossip greeting text.
+    ///
+    /// No fixture or band check: the table is update-only (every insert on it is refused
+    /// regardless of identifier — see [`DeltaError::InsertNotSupported`]), and its key names a
+    /// creature template, which is out of this crate's scope to police.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for creature entry 0.
+    pub fn gossip_menu(entry: u32) -> Result<Self, DeltaError> {
+        if entry == 0 {
+            return Err(DeltaError::MalformedKey {
+                table: Table::GossipMenu,
+                detail: "`entry` 0 is not a creature".to_owned(),
+            });
+        }
+        Ok(Self::GossipMenu { entry })
+    }
+
+    /// Names an NPC greeting-text row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for text id 0, and [`DeltaError::GossipIdFixtureReserved`] for
+    /// a seeded fixture row.
+    pub fn npc_text(text_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::NpcText, "text_id", u64::from(text_id))?;
+        Ok(Self::NpcText { text_id })
+    }
+
+    /// Names one weighted greeting-text slot.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for id 0, and [`DeltaError::GossipIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn npc_text_slot(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::NpcTextSlot, "id", id)?;
+        Ok(Self::NpcTextSlot { id })
+    }
+
+    /// Names a gossip-menu clickable option row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for row id 0, and [`DeltaError::GossipIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn gossip_option(row_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::GossipOption, "row_id", u64::from(row_id))?;
+        Ok(Self::GossipOption { row_id })
+    }
+
+    /// Names a runtime-selectable gossip menu row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for menu id 0, and [`DeltaError::GossipIdFixtureReserved`] for
+    /// a seeded fixture row.
+    pub fn gossip_menu_profile(menu_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::GossipMenuProfile, "menu_id", u64::from(menu_id))?;
+        Ok(Self::GossipMenuProfile { menu_id })
+    }
+
+    /// Names one option of a runtime-selectable gossip menu.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for row id 0, and [`DeltaError::GossipIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn gossip_menu_profile_option(row_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::GossipMenuProfileOption, "row_id", u64::from(row_id))?;
+        Ok(Self::GossipMenuProfileOption { row_id })
+    }
+
     /// The table this row lives in.
     #[must_use]
     pub const fn table(self) -> Table {
@@ -470,6 +571,12 @@ impl PrimaryKey {
             Self::CreatureCast { .. } => Table::CreatureCast,
             Self::CreatureSpell { .. } => Table::CreatureSpell,
             Self::TrainerSpell { .. } => Table::TrainerSpell,
+            Self::GossipMenu { .. } => Table::GossipMenu,
+            Self::NpcText { .. } => Table::NpcText,
+            Self::NpcTextSlot { .. } => Table::NpcTextSlot,
+            Self::GossipOption { .. } => Table::GossipOption,
+            Self::GossipMenuProfile { .. } => Table::GossipMenuProfile,
+            Self::GossipMenuProfileOption { .. } => Table::GossipMenuProfileOption,
         }
     }
 
@@ -528,7 +635,9 @@ impl PrimaryKey {
                 spell_id,
                 effect_index,
             } => packed_spell_effect_id(spell_id, effect_index),
-            Self::Item { entry } | Self::Quest { entry } => entry as u64,
+            Self::Item { entry } | Self::Quest { entry } | Self::GossipMenu { entry } => {
+                entry as u64
+            }
             Self::QuestText { quest_entry } => quest_entry as u64,
             Self::QuestObjective {
                 quest_entry,
@@ -551,8 +660,14 @@ impl PrimaryKey {
             | Self::SkinningLoot { id }
             | Self::FishingLoot { id }
             | Self::CreatureSpell { id }
-            | Self::TrainerSpell { id } => id,
+            | Self::TrainerSpell { id }
+            | Self::NpcTextSlot { id } => id,
             Self::CreatureCast { creature_entry } => creature_entry as u64,
+            Self::NpcText { text_id } => text_id as u64,
+            Self::GossipOption { row_id } | Self::GossipMenuProfileOption { row_id } => {
+                row_id as u64
+            }
+            Self::GossipMenuProfile { menu_id } => menu_id as u64,
         }
     }
 }
@@ -565,7 +680,9 @@ impl fmt::Display for PrimaryKey {
                 spell_id,
                 effect_index,
             } => write!(f, "{{spell_id={spell_id}, effect_index={effect_index}}}"),
-            Self::Item { entry } | Self::Quest { entry } => write!(f, "{{entry={entry}}}"),
+            Self::Item { entry } | Self::Quest { entry } | Self::GossipMenu { entry } => {
+                write!(f, "{{entry={entry}}}")
+            }
             Self::QuestText { quest_entry } => write!(f, "{{quest_entry={quest_entry}}}"),
             Self::QuestObjective {
                 quest_entry,
@@ -591,10 +708,16 @@ impl fmt::Display for PrimaryKey {
             | Self::SkinningLoot { id }
             | Self::FishingLoot { id }
             | Self::CreatureSpell { id }
-            | Self::TrainerSpell { id } => write!(f, "{{id={id}}}"),
+            | Self::TrainerSpell { id }
+            | Self::NpcTextSlot { id } => write!(f, "{{id={id}}}"),
             Self::CreatureCast { creature_entry } => {
                 write!(f, "{{creature_entry={creature_entry}}}")
             }
+            Self::NpcText { text_id } => write!(f, "{{text_id={text_id}}}"),
+            Self::GossipOption { row_id } | Self::GossipMenuProfileOption { row_id } => {
+                write!(f, "{{row_id={row_id}}}")
+            }
+            Self::GossipMenuProfile { menu_id } => write!(f, "{{menu_id={menu_id}}}"),
         }
     }
 }
@@ -665,6 +788,46 @@ fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
                 Ok(())
             } else {
                 Err(DeltaError::TrainerIdNotClientSafe { id })
+            }
+        }
+        // The gossip family's own "never inventable" arm: `game_gossip_menu`'s key names a
+        // creature template, which no Package may invent, so every insert is refused regardless of
+        // identifier — the same shape as `PrimaryKey::CreatureCast` above.
+        PrimaryKey::GossipMenu { .. } => Err(DeltaError::InsertNotSupported {
+            table: Table::GossipMenu,
+        }),
+        PrimaryKey::NpcText { text_id } => {
+            if is_package_gossip_id(u64::from(text_id)) {
+                Ok(())
+            } else {
+                Err(DeltaError::GossipIdNotClientSafe {
+                    id: u64::from(text_id),
+                })
+            }
+        }
+        PrimaryKey::NpcTextSlot { id } => {
+            if is_package_gossip_id(id) {
+                Ok(())
+            } else {
+                Err(DeltaError::GossipIdNotClientSafe { id })
+            }
+        }
+        PrimaryKey::GossipOption { row_id } | PrimaryKey::GossipMenuProfileOption { row_id } => {
+            if is_package_gossip_id(u64::from(row_id)) {
+                Ok(())
+            } else {
+                Err(DeltaError::GossipIdNotClientSafe {
+                    id: u64::from(row_id),
+                })
+            }
+        }
+        PrimaryKey::GossipMenuProfile { menu_id } => {
+            if is_package_gossip_id(u64::from(menu_id)) {
+                Ok(())
+            } else {
+                Err(DeltaError::GossipIdNotClientSafe {
+                    id: u64::from(menu_id),
+                })
             }
         }
     }
@@ -740,6 +903,23 @@ fn check_claimable_trainer_id(id: u64) -> Result<(), DeltaError> {
     }
     if is_fixture_reserved_trainer_id(id) {
         return Err(DeltaError::TrainerIdFixtureReserved { id });
+    }
+    Ok(())
+}
+
+/// A gossip identifier is refused the same way under every operation, on every one of the five
+/// inventable gossip tables, when it is 0 or fixture-owned. `field` names the table's own key
+/// member (`text_id`, `id`, `row_id` or `menu_id`), since unlike the loot/cast/trainer families
+/// this one does not use the same key name everywhere.
+fn check_claimable_gossip_id(table: Table, field: &str, id: u64) -> Result<(), DeltaError> {
+    if id == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: format!("`{field}` 0 is not a row"),
+        });
+    }
+    if is_fixture_reserved_gossip_id(id) {
+        return Err(DeltaError::GossipIdFixtureReserved { id });
     }
     Ok(())
 }
@@ -876,7 +1056,7 @@ fn is_key_column(table: Table, name: &str) -> bool {
     match table {
         Table::Spell => name == "spell_id",
         Table::SpellEffect => matches!(name, "id" | "spell_id" | "effect_index"),
-        Table::Item | Table::Quest => name == "entry",
+        Table::Item | Table::Quest | Table::GossipMenu => name == "entry",
         Table::QuestText => name == "quest_entry",
         Table::QuestObjective | Table::QuestCastObjective => {
             matches!(name, "id" | "quest_entry" | "obj_index")
@@ -888,8 +1068,12 @@ fn is_key_column(table: Table, name: &str) -> bool {
         | Table::SkinningLoot
         | Table::FishingLoot
         | Table::CreatureSpell
-        | Table::TrainerSpell => name == "id",
+        | Table::TrainerSpell
+        | Table::NpcTextSlot => name == "id",
         Table::CreatureCast => name == "creature_entry",
+        Table::NpcText => name == "text_id",
+        Table::GossipOption | Table::GossipMenuProfileOption => name == "row_id",
+        Table::GossipMenuProfile => name == "menu_id",
     }
 }
 
@@ -1056,13 +1240,20 @@ impl PackageDelta {
                     | Table::GameobjectLoot
                     | Table::SkinningLoot
                     | Table::FishingLoot
-                    // `Table::CreatureCast` never reaches this arm at runtime — `check_inventable`
-                    // refuses every insert on it before a `Claim` can exist — but the match stays
-                    // exhaustive at the type level, the same way the loot tables sit beside tables
-                    // whose own policy is stricter than "any identifier in the band".
+                    // `Table::CreatureCast`/`Table::GossipMenu` never reach this arm at runtime —
+                    // `check_inventable` refuses every insert on either before a `Claim` can exist
+                    // — but the match stays exhaustive at the type level, the same way the loot
+                    // tables sit beside tables whose own policy is stricter than "any identifier in
+                    // the band".
                     | Table::CreatureCast
                     | Table::CreatureSpell
-                    | Table::TrainerSpell,
+                    | Table::TrainerSpell
+                    | Table::GossipMenu
+                    | Table::NpcText
+                    | Table::NpcTextSlot
+                    | Table::GossipOption
+                    | Table::GossipMenuProfile
+                    | Table::GossipMenuProfileOption,
                 ) => counts.inserted_rows += 1,
             }
         }
@@ -1129,7 +1320,7 @@ fn expected_key_members(table: Table) -> &'static [&'static str] {
     match table {
         Table::Spell => &["spell_id"],
         Table::SpellEffect => &["effect_index", "spell_id"],
-        Table::Item | Table::Quest => &["entry"],
+        Table::Item | Table::Quest | Table::GossipMenu => &["entry"],
         Table::QuestText => &["quest_entry"],
         Table::QuestObjective | Table::QuestCastObjective => &["obj_index", "quest_entry"],
         Table::QuestRewardItem => &["item_entry", "quest_entry"],
@@ -1139,8 +1330,12 @@ fn expected_key_members(table: Table) -> &'static [&'static str] {
         | Table::SkinningLoot
         | Table::FishingLoot
         | Table::CreatureSpell
-        | Table::TrainerSpell => &["id"],
+        | Table::TrainerSpell
+        | Table::NpcTextSlot => &["id"],
         Table::CreatureCast => &["creature_entry"],
+        Table::NpcText => &["text_id"],
+        Table::GossipOption | Table::GossipMenuProfileOption => &["row_id"],
+        Table::GossipMenuProfile => &["menu_id"],
     }
 }
 
@@ -1244,6 +1439,30 @@ fn build_key(key: &Map<String, Value>, table: Table) -> Result<PrimaryKey, Delta
         Table::TrainerSpell => {
             let id = key_number(key, table, "id", u64::MAX)?;
             PrimaryKey::trainer_spell(id)
+        }
+        Table::GossipMenu => {
+            let entry = key_number(key, table, "entry", u64::from(u32::MAX))? as u32;
+            PrimaryKey::gossip_menu(entry)
+        }
+        Table::NpcText => {
+            let text_id = key_number(key, table, "text_id", u64::from(u32::MAX))? as u32;
+            PrimaryKey::npc_text(text_id)
+        }
+        Table::NpcTextSlot => {
+            let id = key_number(key, table, "id", u64::MAX)?;
+            PrimaryKey::npc_text_slot(id)
+        }
+        Table::GossipOption => {
+            let row_id = key_number(key, table, "row_id", u64::from(u32::MAX))? as u32;
+            PrimaryKey::gossip_option(row_id)
+        }
+        Table::GossipMenuProfile => {
+            let menu_id = key_number(key, table, "menu_id", u64::from(u32::MAX))? as u32;
+            PrimaryKey::gossip_menu_profile(menu_id)
+        }
+        Table::GossipMenuProfileOption => {
+            let row_id = key_number(key, table, "row_id", u64::from(u32::MAX))? as u32;
+            PrimaryKey::gossip_menu_profile_option(row_id)
         }
     }
 }
