@@ -3412,14 +3412,31 @@ impl Coordinator {
             .db
             .game_bot_invite_intent()
             .on_insert(move |_ctx, row| {
-                if let Err(e) =
-                    crate::world::party::run_bot_invite(&store, row.inviter_guid, row.target_guid)
-                {
-                    log::debug!(
-                        "playerbots: serendipity intent {} ({} -> {}) did not execute: {e:#}",
-                        row.id,
-                        row.inviter_guid,
-                        row.target_guid
+                let store = store.clone();
+                let (intent_id, inviter_guid, target_guid) =
+                    (row.id, row.inviter_guid, row.target_guid);
+                // The claim targets this same Shard. Run it off the SDK callback thread so a
+                // one-pipe Gateway can receive the reducer completion instead of blocking its own
+                // connection pump.
+                let spawned = std::thread::Builder::new()
+                    .name("bot-invite-intent".into())
+                    .spawn(move || {
+                        if let Err(e) = crate::world::party::run_bot_invite_intent(
+                            &store,
+                            intent_id,
+                            inviter_guid,
+                            target_guid,
+                        ) {
+                            log::debug!(
+                                "playerbots: serendipity intent {intent_id} ({inviter_guid} -> \
+                                 {target_guid}) did not execute: {e:#}"
+                            );
+                        }
+                    });
+                if let Err(error) = spawned {
+                    log::error!(
+                        "playerbots: could not start consumer for serendipity intent {intent_id} \
+                         ({inviter_guid} -> {target_guid}): {error}"
                     );
                 }
             });

@@ -367,9 +367,17 @@ mod bot_invite_relay_wiring_tripwire {
     fn the_on_insert_callback_actually_executes_the_intent() {
         let src = include_str!("stdb/subscriptions.rs");
         let body = code_of(src, "fn arm_bot_invite_relay(&self) {");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            body.contains("crate::world::party::run_bot_invite(&store, row.inviter_guid, row.target_guid)"),
-            "`arm_bot_invite_relay`'s `on_insert` callback no longer calls `run_bot_invite` — a bot's \
+            normalized.contains(
+                "let (intent_id, inviter_guid, target_guid) = (row.id, row.inviter_guid, \
+                 row.target_guid);"
+            ) && normalized.contains(
+                "crate::world::party::run_bot_invite_intent( &store, intent_id, inviter_guid, \
+                 target_guid, )"
+            ),
+            "`arm_bot_invite_relay`'s `on_insert` callback no longer calls \
+             `run_bot_invite_intent` with the subscribed row. A bot's \
              invite decision arrives at the gateway and is silently dropped. Body was:\n{body}"
         );
     }

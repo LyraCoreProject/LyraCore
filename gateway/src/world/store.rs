@@ -188,6 +188,10 @@ pub trait WorldStore:
         Vec::new()
     }
 
+    /// Atomically claim one World Shard bot invite intent. `false` means another Gateway or a
+    /// reaper already deleted it, so this consumer must stop before calling `realm_group_op`.
+    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<bool>;
+
     /// `realm_group_op` — run one party op against the database this handle names. Called on
     /// the realm-core handle; the op byte and argument slots are `lyracore_shared::group::realm_op`.
     fn realm_group_op(

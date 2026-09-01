@@ -51,6 +51,7 @@ pub mod character_talent_type;
 pub mod character_taxi_node_type;
 pub mod character_type;
 pub mod chat_event_type;
+pub mod claim_bot_invite_intent_reducer;
 pub mod claim_guid_range_reducer;
 pub mod claim_operator_reducer;
 pub mod class_level_stats_type;
@@ -1011,6 +1012,7 @@ pub use character_talent_type::CharacterTalent;
 pub use character_taxi_node_type::CharacterTaxiNode;
 pub use character_type::Character;
 pub use chat_event_type::ChatEvent;
+pub use claim_bot_invite_intent_reducer::claim_bot_invite_intent;
 pub use claim_guid_range_reducer::claim_guid_range;
 pub use claim_operator_reducer::claim_operator;
 pub use class_level_stats_type::ClassLevelStats;
@@ -1959,6 +1961,9 @@ pub enum Reducer {
         dest_z: f32,
         dest_o: f32,
         cross_database: bool,
+    },
+    ClaimBotInviteIntent {
+        intent_id: u64,
     },
     ClaimGuidRange {
         shard_name: String,
@@ -3511,6 +3516,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ApplyPackageDeltas { .. } => "apply_package_deltas",
             Reducer::ArmAllPools => "arm_all_pools",
             Reducer::BeginTransfer { .. } => "begin_transfer",
+            Reducer::ClaimBotInviteIntent { .. } => "claim_bot_invite_intent",
             Reducer::ClaimGuidRange { .. } => "claim_guid_range",
             Reducer::ClaimOperator => "claim_operator",
             Reducer::ClearPromotedLootRoll { .. } => "clear_promoted_loot_roll",
@@ -3950,6 +3956,11 @@ Reducer::BeginTransfer{
                 dest_z: dest_z.clone(),
                 dest_o: dest_o.clone(),
                 cross_database: cross_database.clone(),
+}),
+            Reducer::ClaimBotInviteIntent{
+                intent_id,
+}             => __sats::bsatn::to_vec(&claim_bot_invite_intent_reducer::ClaimBotInviteIntentArgs {
+                intent_id: intent_id.clone(),
 }),
             Reducer::ClaimGuidRange{
                 shard_name,

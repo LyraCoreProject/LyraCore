@@ -980,6 +980,10 @@ impl WorldStore for Coordinator {
             .collect()
     }
 
+    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<bool> {
+        self.claim_bot_invite_intent(intent_id)
+    }
+
     fn realm_group_op(
         &self,
         op: u8,

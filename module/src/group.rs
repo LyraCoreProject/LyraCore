@@ -255,6 +255,20 @@ pub(crate) fn emit_bot_invite_intent(ctx: &ReducerContext, inviter_guid: u64, ta
     });
 }
 
+/// Atomically remove one bot invite intent before a Gateway executes it.
+///
+/// Every Gateway subscribes to the same World Shard row. SpacetimeDB serializes reducer
+/// transactions, so the direct primary-key delete admits one caller and refuses every later
+/// callback, including callbacks installed after a watchdog reconnect.
+#[reducer]
+pub fn claim_bot_invite_intent(ctx: &ReducerContext, intent_id: u64) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if !ctx.db.game_bot_invite_intent().id().delete(intent_id) {
+        return Err(lyracore_shared::group::err::BOT_INVITE_INTENT_ALREADY_CLAIMED.to_string());
+    }
+    Ok(())
+}
+
 // Event kinds, roster grammar, and classified error strings are the SHARED wire contract:
 // lyracore_shared::group is the one definition both crates import — a renumber,
 // reword, or delimiter change is a cross-crate compile-visible edit, never a runtime drift.
@@ -1177,28 +1191,26 @@ mod tests {
 
     // event_recipient_identity's pinned test moved to helpers.rs with the function itself (issue #371).
 
-    // ---- The realm-core reducers' two unreachable decisions (issue #22, review of PR #49) ----
-    //
-    // A reducer body needs a live `ReducerContext`, so neither of the two below can be EXECUTED by a
-    // test in this crate — which is exactly why they are scanned. Verified by mutation: deleting
-    // `realm_group_op`'s `require_operator` line, and swapping its ACCEPT/DECLINE dispatch arms,
-    // each left all 510 module tests and all 408 gateway tests green.
+    // A reducer body needs a live `ReducerContext`, so the authorization and dispatch decisions
+    // below use narrow Architecture Tests.
 
     /// The `//`-stripped body of `signature`'s function — assert on CODE, never on the prose beside
     /// it. Shared with every other file's copy of this scan as [`crate::test_scan::code_of`]
     /// (issue #64 — this used to be six near-identical, drifted-apart copies).
     use crate::test_scan::code_of;
 
-    /// **The operator gate is the entire authorization of the realm plane.**
+    /// **The operator gate is the entire authorization of Gateway-driven party work.**
     ///
-    /// `realm_group_op` takes the acting character's guid as an ARGUMENT rather than deriving it
-    /// from `ctx.sender()` — realm-core has no live entity to derive one from — so the gate is the
-    /// only thing between an arbitrary connection and inviting, accepting, kicking and re-looting as
-    /// ANY character in the realm. `sync_group_mirror` is the same shape one level down: it
-    /// rewrites a shard's whole party roster from its arguments.
+    /// The claim can consume any invite intent, `realm_group_op` can act as any Character, and
+    /// `sync_group_mirror` can replace a whole party roster. Only the Operator may supply those
+    /// arguments.
     #[test]
-    fn both_realm_plane_reducers_are_operator_gated() {
-        for f in ["pub fn realm_group_op(", "pub fn sync_group_mirror("] {
+    fn gateway_party_reducers_are_operator_gated() {
+        for f in [
+            "pub fn claim_bot_invite_intent(",
+            "pub fn realm_group_op(",
+            "pub fn sync_group_mirror(",
+        ] {
             let body = code_of(include_str!("group.rs"), f);
             // The FIRST STATEMENT, not merely present (review of PR #56). A bare `contains` was
             // satisfied by a gate that never runs: wrapping the line in `if false { … }` — the
@@ -1208,13 +1220,25 @@ mod tests {
             let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(
                 normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-                "`{f}` no longer OPENS with the operator gate. It takes the acting character's guid \
-                 (or a whole roster) as an ARGUMENT, so without the gate any identity that can reach \
-                 the node acts as anybody in the realm — and a gate that is present but neutralized \
-                 (wrapped in `if false`, `let _ =`, or preceded by an early return) is no gate. \
+                "`{f}` no longer OPENS with the operator gate. Its arguments authorize party work, \
+                 so a gate that is present but neutralized (wrapped in `if false`, `let _ =`, or \
+                 preceded by an early return) is no gate. \
                  Body was:\n{body}"
             );
         }
+    }
+
+    /// The primary-key delete is the arbitration. A read followed by a second Durable Request
+    /// would let two Gateways win against the same row.
+    #[test]
+    fn the_bot_invite_claim_is_one_atomic_delete() {
+        let body = code_of(include_str!("group.rs"), "pub fn claim_bot_invite_intent(");
+        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized.contains("game_bot_invite_intent().id().delete(intent_id)"),
+            "the claim no longer deletes the intent by primary key in its reducer transaction. \
+             Body was:\n{body}"
+        );
     }
 
     /// The op byte is a wire value the gateway sends and this reducer dispatches on, and
