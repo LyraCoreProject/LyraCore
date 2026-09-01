@@ -90,11 +90,11 @@ pub mod realm_op {
     pub const LOOT_METHOD: u8 = 5;
 }
 
-/// The group reducers' `Err` strings the gateway maps to `PartyResult` variants — EXACT matches on
-/// both sides, so a reword is a compile-visible edit here instead of a silent classifier miss.
-/// (Errors not listed intentionally classify as the gateway's bad-player-name default.)
+/// The group reducers' stable `Err` strings. Most map to `PartyResult` variants. The intent claim
+/// result instead tells a losing Gateway callback to stop. Exact matches keep both crates in sync.
 pub mod err {
     pub const ALREADY_IN_GROUP: &str = "already in a group";
+    pub const BOT_INVITE_INTENT_ALREADY_CLAIMED: &str = "bot invite intent already claimed";
     pub const GROUP_FULL: &str = "group is full";
     pub const NOT_LEADER: &str = "not the leader";
     pub const NOT_IN_GROUP: &str = "not in a group";

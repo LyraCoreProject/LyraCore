@@ -392,6 +392,19 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     Ok(())
 }
 
+/// Claim one subscribed intent on its World Shard, then execute it only for the winning Gateway.
+pub(crate) fn run_bot_invite_intent<St: WorldStore>(
+    store: &St,
+    intent_id: u64,
+    inviter_guid: u64,
+    target_guid: u64,
+) -> Result<()> {
+    if !store.claim_bot_invite_intent(intent_id)? {
+        return Ok(());
+    }
+    run_bot_invite(store, inviter_guid, target_guid)
+}
+
 /// Run a SERVER-DRIVEN invite with no client behind it — a playerbot's serendipity pick, closing
 /// the gap the group slice opened: the module used to write this shard's LOCAL
 /// `game_group`/`game_group_member` rows directly, which the next `sync_group_mirror` push wiped

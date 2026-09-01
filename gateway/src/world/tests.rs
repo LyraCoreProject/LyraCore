@@ -481,6 +481,9 @@ struct InMemoryStore {
     /// the topology can be wired up AFTER every handle exists — production reads the shared
     /// `ShardSet`, which has the same shape and the same "includes this handle" membership.
     peers: std::sync::Mutex<Vec<std::sync::Arc<InMemoryStore>>>,
+    /// Unclaimed bot invite intent ids on this World Shard. Two concurrent consumers share this
+    /// collection, matching the Module table both Gateways call into.
+    bot_invite_intents: std::sync::Mutex<Vec<u64>>,
     /// The AUTHORITATIVE party state, when this handle is the realm-core one. Shared with
     /// nobody — a realm handle owns exactly one of these, and every shard reads its own `mirror`.
     party: std::sync::Arc<std::sync::Mutex<FakeParty>>,
@@ -2277,6 +2280,15 @@ impl WorldStore for InMemoryStore {
             .iter()
             .map(|p| p.clone() as std::sync::Arc<dyn WorldStore>)
             .collect()
+    }
+
+    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<bool> {
+        let mut intents = self.bot_invite_intents.lock().unwrap();
+        let Some(index) = intents.iter().position(|id| *id == intent_id) else {
+            return Ok(false);
+        };
+        intents.swap_remove(index);
+        Ok(true)
     }
 
     /// The module's `realm_group_op`, modelled: the rules the ROUTING depends on, applied to the

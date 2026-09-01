@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::bindings::*;
-use super::connection::{call_reducer, recv_reducer_on, Coordinator};
+use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
 
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -45,6 +45,26 @@ fn taxi_reply_matches(
 }
 
 impl Coordinator {
+    /// Delete one subscribed bot invite intent on this World Shard. A missing row is the expected
+    /// result for every losing Gateway callback, while transport and other Module failures remain
+    /// caller-visible.
+    pub fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<bool> {
+        match call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "claim_bot_invite_intent",
+            claim_bot_invite_intent_then(intent_id)
+        ) {
+            Ok(()) => Ok(true),
+            Err(error)
+                if reducer_refusal_reason(&error)
+                    == Some(lyracore_shared::group::err::BOT_INVITE_INTENT_ALREADY_CLAIMED) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     fn await_taxi_reply(
         &self,
         character_guid: u64,

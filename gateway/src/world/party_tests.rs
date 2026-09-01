@@ -1107,6 +1107,50 @@ fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
     }
 }
 
+/// Two Gateways observe the same subscribed row. The World Shard claim is the only arbitration
+/// point, so exactly one consumer may reach Realm-core even when both callbacks run concurrently.
+#[test]
+fn two_relay_consumers_execute_one_bot_invite() {
+    use lyracore_shared::group::realm_op;
+
+    const INTENT_ID: u64 = 41;
+
+    let (realm, world, _instances, _calls) = party_topology();
+    world.bot_invite_intents.lock().unwrap().push(INTENT_ID);
+
+    let start = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let consumers: Vec<_> = (0..2)
+        .map(|_| {
+            let world = world.clone();
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                party::run_bot_invite_intent(world.as_ref(), INTENT_ID, BOT, FAR_BOT)
+            })
+        })
+        .collect();
+    start.wait();
+    for consumer in consumers {
+        consumer.join().unwrap().unwrap();
+    }
+
+    let party = realm.party.lock().unwrap();
+    assert_eq!(
+        party
+            .ops
+            .iter()
+            .filter(|(op, ..)| *op == realm_op::INVITE)
+            .count(),
+        1,
+        "one intent must produce one durable INVITE"
+    );
+    let group_id = party
+        .group_of(BOT)
+        .expect("the winning consumer formed a party");
+    assert_eq!(party.roster(group_id).unwrap().members, vec![BOT, FAR_BOT]);
+    assert!(world.bot_invite_intents.lock().unwrap().is_empty());
+}
+
 /// **The regression test the issue asks for.** A bot party must survive the next
 /// `sync_group_mirror` push that touches its group id — the failure mode was that realm-core had
 /// never heard of the group, so the mirror read that as "this party does not exist" and tombstoned
