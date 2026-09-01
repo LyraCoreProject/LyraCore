@@ -1770,11 +1770,26 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
         return;
     }
     let (row, coord) = (row.clone(), coord.clone());
+    let refresh_loot_tag_flags = group_event_changes_loot_tag_flags(row.kind);
     let self_guid = viewer.self_guid;
     let tx = viewer.tx.clone();
     enqueue(&tx, move || {
-        super::subscriptions::group_event_outbound(&coord, self_guid, &row)
+        let mut out = super::subscriptions::group_event_outbound(&coord, self_guid, &row);
+        if refresh_loot_tag_flags {
+            out.extend(super::subscriptions::loot_tag_flags_after_roster_change(
+                &coord, &viewer,
+            ));
+        }
+        out
     });
+}
+
+fn group_event_changes_loot_tag_flags(kind: u8) -> bool {
+    matches!(
+        kind,
+        lyracore_shared::group::event_kind::LIST
+            | lyracore_shared::group::event_kind::DESTROYED
+    )
 }
 
 /// An aura appeared → per viewer: array sync + self-only packets + the stealth HIDE transition
@@ -1991,8 +2006,9 @@ fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: 
 mod family_audience_tests {
     use super::{
         addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
-        is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared, teleport_appeared,
-        system_message_appeared, weather_changed, xp_appeared, zone_crossed, BoundIdentity,
+        group_event_changes_loot_tag_flags, is_initial_apply, item_owner_job, levelup_appeared,
+        reputation_appeared, teleport_appeared, system_message_appeared, weather_changed,
+        xp_appeared, zone_crossed, BoundIdentity,
         ExplorationReplay, MotionPending, OwnerGuid, Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
@@ -2011,6 +2027,16 @@ mod family_audience_tests {
 
     fn identity(byte: u8) -> spacetimedb_sdk::Identity {
         spacetimedb_sdk::Identity::from_byte_array([byte; 32])
+    }
+
+    #[test]
+    fn roster_events_refresh_viewer_relative_loot_tag_flags() {
+        use lyracore_shared::group::event_kind;
+
+        assert!(group_event_changes_loot_tag_flags(event_kind::LIST));
+        assert!(group_event_changes_loot_tag_flags(event_kind::DESTROYED));
+        assert!(!group_event_changes_loot_tag_flags(event_kind::INVITE));
+        assert!(!group_event_changes_loot_tag_flags(event_kind::PARTY_CHAT));
     }
 
     fn viewer(session: u64, self_guid: u64) -> Arc<Viewer> {
