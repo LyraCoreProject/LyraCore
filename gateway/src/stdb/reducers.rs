@@ -1748,6 +1748,24 @@ impl Coordinator {
         )
     }
 
+    /// Authorize opening a creature corpse before the Gateway reads its loot rows.
+    pub fn open_creature_loot(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        corpse_guid: u64,
+    ) -> Result<()> {
+        if actor_guid == 0 {
+            return Err(anyhow!("open_creature_loot: actor_guid unresolved"));
+        }
+        let coord = self.0.call_pipe();
+        call_reducer!(
+            coord.conn.reducers,
+            "gw_open_creature_loot",
+            gw_open_creature_loot_then(actor_guid, corpse_guid)
+        )
+    }
+
     /// Take one item from the open corpse into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`, slice 4) over
     /// the coordinator connection so the module attributes the loot to the caller. The module moves the
     /// item into a free slot + deletes the corpse-loot row (the inventory relay then shows it in the bag).

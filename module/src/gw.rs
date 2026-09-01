@@ -322,6 +322,19 @@ pub fn gw_take_loot(
     crate::actor::take_loot(ctx, actor_guid, corpse_guid, loot_slot)
 }
 
+/// [`crate::actor::open_creature_loot`] behind the gateway gate. A successful call authorizes
+/// the Gateway's following corpse-loot read; it creates no durable loot-window state.
+#[reducer]
+pub fn gw_open_creature_loot(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    corpse_guid: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    actor(ctx, actor_guid)?;
+    crate::actor::open_creature_loot(ctx, actor_guid, corpse_guid)
+}
+
 /// [`crate::actor::ranged_attack`] behind the gateway gate — Auto Shot / wand engage.
 #[reducer]
 pub fn gw_ranged_attack(

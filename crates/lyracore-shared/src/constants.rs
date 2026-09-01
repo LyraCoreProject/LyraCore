@@ -33,6 +33,11 @@ pub mod unit_dynamic_flags {
     /// `UNIT_DYNFLAG_LOOTABLE` (0x1). Set on a corpse that has loot for the viewer → the client
     /// shows the loot cursor. A real corpse with no loot carries no dynamic flag at all.
     pub const LOOTABLE: u32 = 0x0001;
+    /// `UNIT_DYNFLAG_TAPPED` (0x4). Stored on a live creature once it has a Loot Tag.
+    pub const TAPPED: u32 = 0x0004;
+    /// `UNIT_DYNFLAG_TAPPED_BY_PLAYER` (0x8). Added by the gateway only for a viewer entitled by
+    /// the Loot Tag. Never store this viewer-relative bit on `game_world_entity`.
+    pub const TAPPED_BY_PLAYER: u32 = 0x0008;
     /// `UNIT_DYNFLAG_DEAD` (0x20). **NOT a corpse marker.** In vanilla this is *feign death*: the
     /// client renders the unit lying down but treats it as ALIVE and still attackable (used for
     /// fake-dead ambush mobs and a feigning hunter). A genuinely dead creature is signalled to the
@@ -417,6 +422,12 @@ mod tests {
     fn creature_type_mask_is_0x9() {
         // OBJECT | UNIT, no PLAYER bit — the codec branches on the PLAYER bit to pick Unit vs Player.
         assert_eq!(type_mask::CREATURE, 0x9);
+    }
+
+    #[test]
+    fn vanilla_loot_tag_flags_use_build_5875_values() {
+        assert_eq!(unit_dynamic_flags::TAPPED, 0x0004);
+        assert_eq!(unit_dynamic_flags::TAPPED_BY_PLAYER, 0x0008);
     }
 
     #[test]

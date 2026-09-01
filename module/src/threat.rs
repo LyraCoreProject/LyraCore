@@ -178,6 +178,7 @@ pub fn add_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: u64, am
     if amount == 0 {
         return; // threat fully reduced → no-op (never insert a zero row)
     }
+    crate::loot::tag::record_first_threat(ctx, creature_guid, source_guid);
     let threats = ctx.db.game_threat();
     if let Some(mut row) = threats
         .by_creature()

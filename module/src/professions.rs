@@ -110,7 +110,8 @@ pub(crate) fn entry_is_beast(ctx: &ReducerContext, entry: u32) -> bool {
 /// TRAINED Skinning at a trainer AND have skill >= corpse_level * 10 (vanilla floor), mirroring the
 /// `can_gather` gate. Grants leather, climbs the Skinning line +1, and marks the corpse skinned so it
 /// can't be re-skinned. Shared by the debug lever (`debug_skin_nearest`) and a future `CMSG`-routed
-/// skin over the open corpse. Returns the reject reason on any gate failure, or `Ok` after the grant.
+/// skin over the open corpse. The skinner must be Loot Tag eligible, and all corpse money and item rows
+/// must already be gone. Returns the Refusal reason on any Gate failure, or `Ok` after the grant.
 ///
 /// ROLLBACK: the leather grant (`grant_item`) is `?`-propagated — a full bag returns `Err` BEFORE the
 /// `skinned` marker is set, so the reducer tx rolls back and the corpse stays skinnable (no leather is
@@ -129,6 +130,7 @@ pub(crate) fn skin_corpse(
         .guid()
         .find(corpse_guid)
         .ok_or_else(|| "no such corpse".to_string())?;
+    crate::loot::corpse_access_gate(ctx, looter_guid, corpse_guid)?;
 
     // All gates (the pure decision shared with the unit test): looter alive, a dead non-player BEAST
     // corpse, same map, in range, not already skinned, trained Skinning + skill >= level*10.
@@ -157,6 +159,9 @@ pub(crate) fn skin_corpse(
         learned_skinning,
         corpse.level,
     )?;
+    if !crate::loot::corpse_is_looted(ctx, corpse_guid, corpse.money) {
+        return Err("corpse still has loot".to_string());
+    }
 
     // Grant leather — DATA-DRIVEN (work-item 210): the corpse's creature template names a
     // `skin_loot_id` (cmangos `skinning_loot_template`, level-banded across many creatures sharing a

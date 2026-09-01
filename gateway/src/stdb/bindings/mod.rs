@@ -87,6 +87,7 @@ pub mod creature_gossip_menu_override_type;
 pub mod creature_health_condition_type;
 pub mod creature_instruction_type;
 pub mod creature_lethal_damage_floor_type;
+pub mod creature_loot_tag_group_type;
 pub mod creature_loot_type;
 pub mod creature_move_event_type;
 pub mod creature_move_schedule_type;
@@ -205,6 +206,7 @@ pub mod debug_run_runtime_script_reducer;
 pub mod debug_score_movement_reducer;
 pub mod debug_seed_creature_ai_fixtures_reducer;
 pub mod debug_seed_mail_reducer;
+pub mod debug_seed_package_config_reducer;
 pub mod debug_seed_scenario_fixtures_reducer;
 pub mod debug_sell_item_reducer;
 pub mod debug_set_health_reducer;
@@ -253,6 +255,7 @@ pub mod debug_verify_eventai_quest_credit_fixture_reducer;
 pub mod debug_verify_eventai_revision_fixture_reducer;
 pub mod debug_verify_eventai_spell_guardian_cleanup_reducer;
 pub mod debug_verify_lethal_damage_floor_fixture_reducer;
+pub mod debug_verify_loot_tag_fixture_reducer;
 pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_reducer;
@@ -369,6 +372,7 @@ pub mod game_creature_family_table;
 pub mod game_creature_gossip_menu_override_table;
 pub mod game_creature_lethal_damage_floor_table;
 pub mod game_creature_loot_table;
+pub mod game_creature_loot_tag_group_table;
 pub mod game_creature_move_event_table;
 pub mod game_creature_move_schedule_table;
 pub mod game_creature_presentation_table;
@@ -467,6 +471,7 @@ pub mod game_object_trap_type;
 pub mod game_object_type;
 pub mod game_object_unlocked_type;
 pub mod game_operator_table;
+pub mod game_package_config_table;
 pub mod game_package_import_table;
 pub mod game_pending_cast_table;
 pub mod game_pending_spell_impact_table;
@@ -641,6 +646,7 @@ pub mod gw_move_item_reducer;
 pub mod gw_move_type;
 pub mod gw_movement_batch_reducer;
 pub mod gw_movement_update_reducer;
+pub mod gw_open_creature_loot_reducer;
 pub mod gw_open_taxi_reducer;
 pub mod gw_party_chat_reducer;
 pub mod gw_pet_command_reducer;
@@ -735,6 +741,7 @@ pub mod npc_vendor_type;
 pub mod on_disconnect_reducer;
 pub mod operator_type;
 pub mod out_of_combat_sight_condition_type;
+pub mod package_config_type;
 pub mod package_import_type;
 pub mod patrol_intent_type;
 pub mod patrol_pause_type;
@@ -871,6 +878,7 @@ pub mod set_character_shard_reducer;
 pub mod set_gm_level_reducer;
 pub mod set_lethal_damage_floor_instruction_type;
 pub mod set_motion_tick_ms_reducer;
+pub mod set_package_config_reducer;
 pub mod set_phase_instruction_type;
 pub mod set_react_state_instruction_type;
 pub mod set_realm_address_reducer;
@@ -1039,6 +1047,7 @@ pub use creature_gossip_menu_override_type::CreatureGossipMenuOverride;
 pub use creature_health_condition_type::CreatureHealthCondition;
 pub use creature_instruction_type::CreatureInstruction;
 pub use creature_lethal_damage_floor_type::CreatureLethalDamageFloor;
+pub use creature_loot_tag_group_type::CreatureLootTagGroup;
 pub use creature_loot_type::CreatureLoot;
 pub use creature_move_event_type::CreatureMoveEvent;
 pub use creature_move_schedule_type::CreatureMoveSchedule;
@@ -1157,6 +1166,7 @@ pub use debug_run_runtime_script_reducer::debug_run_runtime_script;
 pub use debug_score_movement_reducer::debug_score_movement;
 pub use debug_seed_creature_ai_fixtures_reducer::debug_seed_creature_ai_fixtures;
 pub use debug_seed_mail_reducer::debug_seed_mail;
+pub use debug_seed_package_config_reducer::debug_seed_package_config;
 pub use debug_seed_scenario_fixtures_reducer::debug_seed_scenario_fixtures;
 pub use debug_sell_item_reducer::debug_sell_item;
 pub use debug_set_health_reducer::debug_set_health;
@@ -1205,6 +1215,7 @@ pub use debug_verify_eventai_quest_credit_fixture_reducer::debug_verify_eventai_
 pub use debug_verify_eventai_revision_fixture_reducer::debug_verify_eventai_revision_fixture;
 pub use debug_verify_eventai_spell_guardian_cleanup_reducer::debug_verify_eventai_spell_guardian_cleanup;
 pub use debug_verify_lethal_damage_floor_fixture_reducer::debug_verify_lethal_damage_floor_fixture;
+pub use debug_verify_loot_tag_fixture_reducer::debug_verify_loot_tag_fixture;
 pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_reducer::debug_vmap_ray;
@@ -1321,6 +1332,7 @@ pub use game_creature_family_table::*;
 pub use game_creature_gossip_menu_override_table::*;
 pub use game_creature_lethal_damage_floor_table::*;
 pub use game_creature_loot_table::*;
+pub use game_creature_loot_tag_group_table::*;
 pub use game_creature_move_event_table::*;
 pub use game_creature_move_schedule_table::*;
 pub use game_creature_presentation_table::*;
@@ -1419,6 +1431,7 @@ pub use game_object_trap_type::GameObjectTrap;
 pub use game_object_type::GameObject;
 pub use game_object_unlocked_type::GameObjectUnlocked;
 pub use game_operator_table::*;
+pub use game_package_config_table::*;
 pub use game_package_import_table::*;
 pub use game_pending_cast_table::*;
 pub use game_pending_spell_impact_table::*;
@@ -1593,6 +1606,7 @@ pub use gw_move_item_reducer::gw_move_item;
 pub use gw_move_type::GwMove;
 pub use gw_movement_batch_reducer::gw_movement_batch;
 pub use gw_movement_update_reducer::gw_movement_update;
+pub use gw_open_creature_loot_reducer::gw_open_creature_loot;
 pub use gw_open_taxi_reducer::gw_open_taxi;
 pub use gw_party_chat_reducer::gw_party_chat;
 pub use gw_pet_command_reducer::gw_pet_command;
@@ -1687,6 +1701,7 @@ pub use npc_vendor_type::NpcVendor;
 pub use on_disconnect_reducer::on_disconnect;
 pub use operator_type::Operator;
 pub use out_of_combat_sight_condition_type::OutOfCombatSightCondition;
+pub use package_config_type::PackageConfig;
 pub use package_import_type::PackageImport;
 pub use patrol_intent_type::PatrolIntent;
 pub use patrol_pause_type::PatrolPause;
@@ -1823,6 +1838,7 @@ pub use set_character_shard_reducer::set_character_shard;
 pub use set_gm_level_reducer::set_gm_level;
 pub use set_lethal_damage_floor_instruction_type::SetLethalDamageFloorInstruction;
 pub use set_motion_tick_ms_reducer::set_motion_tick_ms;
+pub use set_package_config_reducer::set_package_config;
 pub use set_phase_instruction_type::SetPhaseInstruction;
 pub use set_react_state_instruction_type::SetReactStateInstruction;
 pub use set_realm_address_reducer::set_realm_address;
@@ -2405,6 +2421,11 @@ pub enum Reducer {
         body: String,
         money: u32,
     },
+    DebugSeedPackageConfig {
+        package_name: String,
+        key: String,
+        value: String,
+    },
     DebugSeedScenarioFixtures,
     DebugSellItem {
         character_guid: u64,
@@ -2592,6 +2613,7 @@ pub enum Reducer {
         expected_notification: bool,
         expected_absorb: i32,
     },
+    DebugVerifyLootTagFixture,
     DebugVerifyRangedLethalDamageFloorFixture {
         attacker_guid: u64,
         creature_guid: u64,
@@ -2957,6 +2979,10 @@ pub enum Reducer {
         z: f32,
         o: f32,
         move_time_ms: u32,
+    },
+    GwOpenCreatureLoot {
+        actor_guid: u64,
+        corpse_guid: u64,
     },
     GwOpenTaxi {
         character_guid: u64,
@@ -3400,6 +3426,12 @@ pub enum Reducer {
     SetMotionTickMs {
         tick_ms: u64,
     },
+    SetPackageConfig {
+        package_name: String,
+        key: String,
+        value: String,
+        allow_new: bool,
+    },
     SetRealmAddress {
         address: String,
     },
@@ -3596,6 +3628,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugScoreMovement { .. } => "debug_score_movement",
             Reducer::DebugSeedCreatureAiFixtures => "debug_seed_creature_ai_fixtures",
             Reducer::DebugSeedMail { .. } => "debug_seed_mail",
+            Reducer::DebugSeedPackageConfig { .. } => "debug_seed_package_config",
             Reducer::DebugSeedScenarioFixtures => "debug_seed_scenario_fixtures",
             Reducer::DebugSellItem { .. } => "debug_sell_item",
             Reducer::DebugSetHealth { .. } => "debug_set_health",
@@ -3664,6 +3697,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugVerifyLethalDamageFloorFixture { .. } => {
                 "debug_verify_lethal_damage_floor_fixture"
             }
+            Reducer::DebugVerifyLootTagFixture => "debug_verify_loot_tag_fixture",
             Reducer::DebugVerifyRangedLethalDamageFloorFixture { .. } => {
                 "debug_verify_ranged_lethal_damage_floor_fixture"
             }
@@ -3745,6 +3779,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwMoveItem { .. } => "gw_move_item",
             Reducer::GwMovementBatch { .. } => "gw_movement_batch",
             Reducer::GwMovementUpdate { .. } => "gw_movement_update",
+            Reducer::GwOpenCreatureLoot { .. } => "gw_open_creature_loot",
             Reducer::GwOpenTaxi { .. } => "gw_open_taxi",
             Reducer::GwPartyChat { .. } => "gw_party_chat",
             Reducer::GwPetCommand { .. } => "gw_pet_command",
@@ -3847,6 +3882,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::SetCharacterShard { .. } => "set_character_shard",
             Reducer::SetGmLevel { .. } => "set_gm_level",
             Reducer::SetMotionTickMs { .. } => "set_motion_tick_ms",
+            Reducer::SetPackageConfig { .. } => "set_package_config",
             Reducer::SetRealmAddress { .. } => "set_realm_address",
             Reducer::SetRegionAssignment { .. } => "set_region_assignment",
             Reducer::SettleLootRoll { .. } => "settle_loot_roll",
@@ -4742,6 +4778,15 @@ Reducer::DebugSeedMail{
                 body: body.clone(),
                 money: money.clone(),
 }),
+            Reducer::DebugSeedPackageConfig{
+                package_name,
+                key,
+                value,
+}             => __sats::bsatn::to_vec(&debug_seed_package_config_reducer::DebugSeedPackageConfigArgs {
+                package_name: package_name.clone(),
+                key: key.clone(),
+                value: value.clone(),
+}),
             Reducer::DebugSeedScenarioFixtures => __sats::bsatn::to_vec(&debug_seed_scenario_fixtures_reducer::DebugSeedScenarioFixturesArgs {
                 }),
 Reducer::DebugSellItem{
@@ -5076,7 +5121,9 @@ Reducer::DebugVerifyLethalDamageFloorFixture{
                 expected_notification: expected_notification.clone(),
                 expected_absorb: expected_absorb.clone(),
 }),
-            Reducer::DebugVerifyRangedLethalDamageFloorFixture{
+            Reducer::DebugVerifyLootTagFixture => __sats::bsatn::to_vec(&debug_verify_loot_tag_fixture_reducer::DebugVerifyLootTagFixtureArgs {
+                }),
+Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 attacker_guid,
                 creature_guid,
                 expected_health,
@@ -5729,6 +5776,13 @@ Reducer::GwIgnoreTrade{
                 z: z.clone(),
                 o: o.clone(),
                 move_time_ms: move_time_ms.clone(),
+}),
+            Reducer::GwOpenCreatureLoot{
+                actor_guid,
+                corpse_guid,
+}             => __sats::bsatn::to_vec(&gw_open_creature_loot_reducer::GwOpenCreatureLootArgs {
+                actor_guid: actor_guid.clone(),
+                corpse_guid: corpse_guid.clone(),
 }),
             Reducer::GwOpenTaxi{
                 character_guid,
@@ -6518,6 +6572,17 @@ Reducer::ResumeRelayArrival{
 }             => __sats::bsatn::to_vec(&set_motion_tick_ms_reducer::SetMotionTickMsArgs {
                 tick_ms: tick_ms.clone(),
 }),
+            Reducer::SetPackageConfig{
+                package_name,
+                key,
+                value,
+                allow_new,
+}             => __sats::bsatn::to_vec(&set_package_config_reducer::SetPackageConfigArgs {
+                package_name: package_name.clone(),
+                key: key.clone(),
+                value: value.clone(),
+                allow_new: allow_new.clone(),
+}),
             Reducer::SetRealmAddress{
                 address,
 }             => __sats::bsatn::to_vec(&set_realm_address_reducer::SetRealmAddressArgs {
@@ -6709,6 +6774,7 @@ pub struct DbUpdate {
     game_creature_gossip_menu_override: __sdk::TableUpdate<CreatureGossipMenuOverride>,
     game_creature_lethal_damage_floor: __sdk::TableUpdate<CreatureLethalDamageFloor>,
     game_creature_loot: __sdk::TableUpdate<CreatureLoot>,
+    game_creature_loot_tag_group: __sdk::TableUpdate<CreatureLootTagGroup>,
     game_creature_move_event: __sdk::TableUpdate<CreatureMoveEvent>,
     game_creature_move_schedule: __sdk::TableUpdate<CreatureMoveSchedule>,
     game_creature_presentation: __sdk::TableUpdate<CreaturePresentation>,
@@ -6794,6 +6860,7 @@ pub struct DbUpdate {
     game_npc_text_slot: __sdk::TableUpdate<NpcTextSlot>,
     game_npc_vendor: __sdk::TableUpdate<NpcVendor>,
     game_operator: __sdk::TableUpdate<Operator>,
+    game_package_config: __sdk::TableUpdate<PackageConfig>,
     game_package_import: __sdk::TableUpdate<PackageImport>,
     game_pending_cast: __sdk::TableUpdate<PendingCast>,
     game_pending_spell_impact: __sdk::TableUpdate<PendingSpellImpact>,
@@ -7132,6 +7199,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_creature_loot" => db_update
                     .game_creature_loot
                     .append(game_creature_loot_table::parse_table_update(table_update)?),
+                "game_creature_loot_tag_group" => db_update.game_creature_loot_tag_group.append(
+                    game_creature_loot_tag_group_table::parse_table_update(table_update)?,
+                ),
                 "game_creature_move_event" => db_update.game_creature_move_event.append(
                     game_creature_move_event_table::parse_table_update(table_update)?,
                 ),
@@ -7399,6 +7469,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_operator" => db_update
                     .game_operator
                     .append(game_operator_table::parse_table_update(table_update)?),
+                "game_package_config" => db_update
+                    .game_package_config
+                    .append(game_package_config_table::parse_table_update(table_update)?),
                 "game_package_import" => db_update
                     .game_package_import
                     .append(game_package_import_table::parse_table_update(table_update)?),
@@ -8021,6 +8094,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_creature_loot = cache
             .apply_diff_to_table::<CreatureLoot>("game_creature_loot", &self.game_creature_loot)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_creature_loot_tag_group = cache
+            .apply_diff_to_table::<CreatureLootTagGroup>(
+                "game_creature_loot_tag_group",
+                &self.game_creature_loot_tag_group,
+            )
+            .with_updates_by_pk(|row| &row.creature_guid);
         diff.game_creature_move_event = cache
             .apply_diff_to_table::<CreatureMoveEvent>(
                 "game_creature_move_event",
@@ -8383,6 +8462,9 @@ impl __sdk::DbUpdate for DbUpdate {
             .with_updates_by_pk(|row| &row.id);
         diff.game_operator = cache
             .apply_diff_to_table::<Operator>("game_operator", &self.game_operator)
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_package_config = cache
+            .apply_diff_to_table::<PackageConfig>("game_package_config", &self.game_package_config)
             .with_updates_by_pk(|row| &row.id);
         diff.game_package_import = cache
             .apply_diff_to_table::<PackageImport>("game_package_import", &self.game_package_import)
@@ -8946,6 +9028,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_loot" => db_update
                     .game_creature_loot
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_creature_loot_tag_group" => db_update
+                    .game_creature_loot_tag_group
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_creature_move_event" => db_update
                     .game_creature_move_event
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -9200,6 +9285,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_operator" => db_update
                     .game_operator
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_package_config" => db_update
+                    .game_package_config
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_package_import" => db_update
                     .game_package_import
@@ -9670,6 +9758,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_creature_loot" => db_update
                     .game_creature_loot
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_creature_loot_tag_group" => db_update
+                    .game_creature_loot_tag_group
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_creature_move_event" => db_update
                     .game_creature_move_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -9924,6 +10015,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_operator" => db_update
                     .game_operator
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_package_config" => db_update
+                    .game_package_config
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_package_import" => db_update
                     .game_package_import
@@ -10262,6 +10356,7 @@ pub struct AppliedDiff<'r> {
     game_creature_gossip_menu_override: __sdk::TableAppliedDiff<'r, CreatureGossipMenuOverride>,
     game_creature_lethal_damage_floor: __sdk::TableAppliedDiff<'r, CreatureLethalDamageFloor>,
     game_creature_loot: __sdk::TableAppliedDiff<'r, CreatureLoot>,
+    game_creature_loot_tag_group: __sdk::TableAppliedDiff<'r, CreatureLootTagGroup>,
     game_creature_move_event: __sdk::TableAppliedDiff<'r, CreatureMoveEvent>,
     game_creature_move_schedule: __sdk::TableAppliedDiff<'r, CreatureMoveSchedule>,
     game_creature_presentation: __sdk::TableAppliedDiff<'r, CreaturePresentation>,
@@ -10348,6 +10443,7 @@ pub struct AppliedDiff<'r> {
     game_npc_text_slot: __sdk::TableAppliedDiff<'r, NpcTextSlot>,
     game_npc_vendor: __sdk::TableAppliedDiff<'r, NpcVendor>,
     game_operator: __sdk::TableAppliedDiff<'r, Operator>,
+    game_package_config: __sdk::TableAppliedDiff<'r, PackageConfig>,
     game_package_import: __sdk::TableAppliedDiff<'r, PackageImport>,
     game_pending_cast: __sdk::TableAppliedDiff<'r, PendingCast>,
     game_pending_spell_impact: __sdk::TableAppliedDiff<'r, PendingSpellImpact>,
@@ -10765,6 +10861,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_creature_loot,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<CreatureLootTagGroup>(
+            "game_creature_loot_tag_group",
+            &self.game_creature_loot_tag_group,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<CreatureMoveEvent>(
             "game_creature_move_event",
             &self.game_creature_move_event,
@@ -11168,6 +11269,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<Operator>(
             "game_operator",
             &self.game_operator,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<PackageConfig>(
+            "game_package_config",
+            &self.game_package_config,
             event,
         );
         callbacks.invoke_table_row_callbacks::<PackageImport>(
@@ -12298,6 +12404,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_creature_gossip_menu_override_table::register_table(client_cache);
         game_creature_lethal_damage_floor_table::register_table(client_cache);
         game_creature_loot_table::register_table(client_cache);
+        game_creature_loot_tag_group_table::register_table(client_cache);
         game_creature_move_event_table::register_table(client_cache);
         game_creature_move_schedule_table::register_table(client_cache);
         game_creature_presentation_table::register_table(client_cache);
@@ -12383,6 +12490,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_npc_text_slot_table::register_table(client_cache);
         game_npc_vendor_table::register_table(client_cache);
         game_operator_table::register_table(client_cache);
+        game_package_config_table::register_table(client_cache);
         game_package_import_table::register_table(client_cache);
         game_pending_cast_table::register_table(client_cache);
         game_pending_spell_impact_table::register_table(client_cache);
@@ -12537,6 +12645,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_creature_gossip_menu_override",
         "game_creature_lethal_damage_floor",
         "game_creature_loot",
+        "game_creature_loot_tag_group",
         "game_creature_move_event",
         "game_creature_move_schedule",
         "game_creature_presentation",
@@ -12622,6 +12731,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_npc_text_slot",
         "game_npc_vendor",
         "game_operator",
+        "game_package_config",
         "game_package_import",
         "game_pending_cast",
         "game_pending_spell_impact",

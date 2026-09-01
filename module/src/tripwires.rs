@@ -47,11 +47,16 @@ pub(crate) mod character_owned_tripwire {
     ///   casts are exempt" carve-out) — dies with the live session, not the durable character.
     /// - `game_auction`: realm-owned market value. Character deletion refuses while a seller owns
     ///   an active Auction, because sweeping the row would destroy its item and deposit.
+    /// - `game_creature_quest_tap` and `game_creature_quest_tap_member`: creature-lifetime Loot Tag
+    ///   state. Combat end and despawn clear it; a Character leaving a party loses rights through
+    ///   current-membership resolution without deleting the creature's tag-time ceiling.
     const EXEMPT_ACCESSORS: &[&str] = &[
         "game_world_entity",
         "game_corpse",
         "game_combo_point",
         "game_auction",
+        "game_creature_quest_tap",
+        "game_creature_quest_tap_member",
     ];
 
     /// Every `.rs` file that compiles into this crate: core `src/` plus each drop-in

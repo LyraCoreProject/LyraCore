@@ -3110,6 +3110,15 @@ impl LootWindowStore for InMemoryStore {
         Ok(LootWindowRequestStatus::Applied)
     }
 
+    fn open_creature_loot(
+        &self,
+        _account_id: u64,
+        _actor_guid: u64,
+        _corpse_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
+        Ok(LootWindowRequestStatus::Applied)
+    }
+
     fn skin_corpse(
         &self,
         _account_id: u64,

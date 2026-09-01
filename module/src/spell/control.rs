@@ -736,15 +736,15 @@ mod tests {
         }
         let creature = crate::test_scan::code_of(src, "fn kill_creature_with_attribution(");
         let rewards = creature
-            .find("award_killer_rewards(ctx, &target, target_guid, killer_guid)")
-            .expect("kill_creature still awards the killer before the corpse work");
+            .find("award_tag_rewards(")
+            .expect("kill_creature still awards the Loot Tag before the corpse work");
         let shed = creature
             .find("crate::spell::remove_auras_on_death(ctx, target_guid)")
             .expect("checked above");
         assert!(
             rewards < shed,
-            "the death shed must run AFTER `award_killer_rewards`, which reads the dying creature's \
-             Drain Soul channel aura to mint the killer's soul shard. Body was:\n{creature}"
+            "the death shed must run AFTER `award_tag_rewards`, which reads the dying creature's \
+             Drain Soul channel aura to mint an entitled source's soul shard. Body was:\n{creature}"
         );
     }
 

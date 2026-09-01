@@ -226,11 +226,17 @@ impl std::error::Error for ReducerCallError {
 
 /// True only for an error returned deliberately by module gameplay rules.
 pub(crate) fn is_reducer_refusal(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        matches!(
-            cause.downcast_ref::<ReducerCallError>(),
-            Some(ReducerCallError::Rejected { .. })
-        )
+    reducer_refusal_reason(error).is_some()
+}
+
+/// The Module's unwrapped refusal reason, preserving its stable gameplay prefix.
+pub(crate) fn reducer_refusal_reason(error: &anyhow::Error) -> Option<&str> {
+    error.chain().find_map(|cause| {
+        let ReducerCallError::Rejected { reason, .. } = cause.downcast_ref::<ReducerCallError>()?
+        else {
+            return None;
+        };
+        Some(reason.as_str())
     })
 }
 
@@ -561,6 +567,14 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_session",
         "SELECT * FROM game_character",
         "SELECT * FROM game_world_entity",
+        // Loot Tag rendering is viewer-relative. These rows let the Gateway project the stored
+        // dynamic flags on its shared CREATE and VALUES paths. `game_group_member` stays here as
+        // well: a captured party member who leaves loses the viewer-relative tap bit immediately.
+        "SELECT * FROM game_creature_quest_tap",
+        "SELECT * FROM game_creature_quest_tap_member",
+        "SELECT * FROM game_creature_loot_tag_group",
+        "SELECT * FROM game_corpse_loot_eligible",
+        "SELECT * FROM game_group_member",
         "SELECT * FROM game_auction",
         "SELECT * FROM game_auction_bid_decision",
         "SELECT * FROM game_auction_bid_hold",
@@ -848,10 +862,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // is authoritative.
         //
         // `game_group_event` is the relay. The owner-token coordinator reads every player's rows;
-        // shared dispatch selects the recipient by guid. The event table lives in the base list so
-        // this also works on a single-database gateway; the two party-state tables stay sharded-only.
+        // shared dispatch selects the recipient by guid. The event and member tables live in the
+        // base list. The group row itself stays sharded-only.
         queries.push("SELECT * FROM game_group");
-        queries.push("SELECT * FROM game_group_member");
         // Loot rolls — a DIFFERENT reason than every table above: nothing here is a CLIENT
         // relay (`game_group_event` still carries every wire-visible roll transition, unchanged). The
         // gateway's own loot-roll relay (`world::loot::relay_tick`) needs these two PRIVATE tables to
@@ -1269,13 +1282,12 @@ mod coordinator_query_tests {
     /// restart (`coordinator_queries`' doc comment) — so an unconfigured gateway must ask for none.
     const MULTI_DB_TABLES: &[&str] = &[
         "SELECT * FROM game_character_shard",
-        // The party-STATE tables. `game_group_event` and `game_whisper_event`
+        // The party STATE table. `game_group_event`, `game_group_member`, and `game_whisper_event`
         // moved OUT of this list to the base set when the shared dispatch landed — both predate sharding, so the
         // restart hazard this list exists for cannot bite them, and the shared dispatch needs
         // them on every coordinator (a cache-only subscription with the flag off: the realm
         // relay registers only on multi-database gateways, so there is no double delivery).
         "SELECT * FROM game_group",
-        "SELECT * FROM game_group_member",
         // The loot-roll pair: both PRIVATE, no per-player subscriber to duplicate — the restart hazard alone is why
         // they belong on this list (a module published before they exist refuses the subscription).
         "SELECT * FROM game_loot_roll",
@@ -1298,6 +1310,23 @@ mod coordinator_query_tests {
                 !single.contains(table),
                 "{table} is subscribed on a single-database gateway — a module published before \
                  that table exists will refuse the subscription and the gateway will not start"
+            );
+        }
+    }
+
+    #[test]
+    fn loot_tag_projection_rows_are_in_every_base_subscription() {
+        let queries = coordinator_queries(false);
+        for table in [
+            "SELECT * FROM game_creature_quest_tap",
+            "SELECT * FROM game_creature_quest_tap_member",
+            "SELECT * FROM game_creature_loot_tag_group",
+            "SELECT * FROM game_corpse_loot_eligible",
+            "SELECT * FROM game_group_member",
+        ] {
+            assert!(
+                queries.contains(&table),
+                "missing Loot Tag projection row: {table}"
             );
         }
     }
@@ -1390,7 +1419,10 @@ mod live_replacement_tests {
 
 #[cfg(test)]
 mod recv_reducer_tests {
-    use super::{is_reducer_refusal, recv_reducer, ReducerCompletion, ReducerCompletionFailure};
+    use super::{
+        is_reducer_refusal, recv_reducer, reducer_refusal_reason, ReducerCompletion,
+        ReducerCompletionFailure,
+    };
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1418,6 +1450,7 @@ mod recv_reducer_tests {
             "buy_item reducer failed: not enough copper"
         );
         assert!(is_reducer_refusal(&err));
+        assert_eq!(reducer_refusal_reason(&err), Some("not enough copper"));
     }
 
     #[test]

@@ -183,6 +183,11 @@ _Avoid_: enchant slot
 
 ### Loot
 
+**Loot Tag**:
+The first positive player-controlled threat on a live creature. It fixes the eligible party at that
+instant and owns kill rewards and corpse eligibility until the creature leaves combat. The existing
+`game_creature_quest_tap` and `game_creature_quest_tap_member` names are retained schema artifacts.
+
 **Loot Window**:
 A Character's open loot on one Loot Source.
 

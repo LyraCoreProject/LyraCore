@@ -266,7 +266,11 @@ pub(crate) fn stealth_action(is_insert: bool, post_change_count: usize) -> Steal
 /// equipped gear RLS-bypassed via the coordinator (slots 0..=18, model-visible) for a PLAYER. Shared by
 /// the AOI-entry on_insert relay and the stealth REVEAL path so a re-shown stealther renders identically
 /// (gear and all). Returns `None` only on an encode error (logged by the caller).
-fn build_peer_create(coord: &Coordinator, row: &WorldEntity) -> Option<ServerOpcodeMessage> {
+fn build_peer_create(
+    coord: &Coordinator,
+    viewer_guid: u64,
+    row: &WorldEntity,
+) -> Option<ServerOpcodeMessage> {
     let inv: Vec<(u8, u64, u32)> =
         if row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 {
             coord
@@ -279,15 +283,103 @@ fn build_peer_create(coord: &Coordinator, row: &WorldEntity) -> Option<ServerOpc
         } else {
             Vec::new()
         };
+    let mut view = entity_view(row.clone(), 0);
+    view.dynamic_flags = projected_dynamic_flags(&coord.0.coord().conn.db, viewer_guid, row);
     // Peers pass no skill rows: the SkillInfo block is a self-descriptor (the client renders
     // only its OWN skill pane); a peer CREATE ignores it.
-    match codec::build_create_object(&entity_view(row.clone(), 0), CreateKind::Peer, &inv, &[]) {
+    match codec::build_create_object(&view, CreateKind::Peer, &inv, &[]) {
         Ok(m) => Some(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m))),
         Err(e) => {
             log::warn!("peer create encode failed for guid {}: {e}", row.guid);
             None
         }
     }
+}
+
+struct LootTagProjectionRows<'a> {
+    tap: Option<&'a CreatureQuestTap>,
+    tag_group: Option<&'a CreatureLootTagGroup>,
+    tag_members: &'a [CreatureQuestTapMember],
+    current_members: &'a [GroupMember],
+    corpse_eligible: &'a [CorpseLootEligible],
+}
+
+/// Render the stored entity flags for one viewer without changing the durable row.
+fn viewer_relative_dynamic_flags(
+    viewer_guid: u64,
+    entity: &WorldEntity,
+    rows: LootTagProjectionRows<'_>,
+) -> u32 {
+    use lyracore_shared::constants::unit_dynamic_flags::{LOOTABLE, TAPPED_BY_PLAYER};
+
+    if entity.dead {
+        return if rows
+            .corpse_eligible
+            .iter()
+            .any(|row| row.corpse_guid == entity.guid && row.eligible_guid == viewer_guid)
+        {
+            entity.dynamic_flags
+        } else {
+            entity.dynamic_flags & !LOOTABLE
+        };
+    }
+
+    let Some(tap) = rows.tap.filter(|tap| tap.creature_guid == entity.guid) else {
+        return entity.dynamic_flags;
+    };
+    let entitled = match rows.tag_group.filter(|group| group.creature_guid == entity.guid) {
+        Some(group) => {
+            rows.tag_members.iter().any(|member| {
+                member.creature_guid == entity.guid && member.character_guid == viewer_guid
+            }) && rows.current_members.iter().any(|member| {
+                member.character_guid == viewer_guid && member.group_id == group.group_id
+            })
+        }
+        None => viewer_guid == tap.character_guid,
+    };
+    if entitled {
+        entity.dynamic_flags | TAPPED_BY_PLAYER
+    } else {
+        entity.dynamic_flags & !TAPPED_BY_PLAYER
+    }
+}
+
+fn projected_dynamic_flags(
+    db: &RemoteTables,
+    viewer_guid: u64,
+    entity: &WorldEntity,
+) -> u32 {
+    let tap = db.game_creature_quest_tap().creature_guid().find(&entity.guid);
+    let tag_group = db
+        .game_creature_loot_tag_group()
+        .creature_guid()
+        .find(&entity.guid);
+    let tag_members: Vec<_> = db
+        .game_creature_quest_tap_member()
+        .iter()
+        .filter(|member| member.creature_guid == entity.guid)
+        .collect();
+    let current_members: Vec<_> = db
+        .game_group_member()
+        .iter()
+        .filter(|member| member.character_guid == viewer_guid)
+        .collect();
+    let corpse_eligible: Vec<_> = db
+        .game_corpse_loot_eligible()
+        .iter()
+        .filter(|eligible| eligible.corpse_guid == entity.guid)
+        .collect();
+    viewer_relative_dynamic_flags(
+        viewer_guid,
+        entity,
+        LootTagProjectionRows {
+            tap: tap.as_ref(),
+            tag_group: tag_group.as_ref(),
+            tag_members: &tag_members,
+            current_members: &current_members,
+            corpse_eligible: &corpse_eligible,
+        },
+    )
 }
 
 /// May an instance-tagged CORPSE/GAMEOBJECT row be CREATE-relayed to this
@@ -680,7 +772,7 @@ pub(crate) fn offer_peer_create_for(
     if !viewer.created.lock().unwrap().insert(row.guid) {
         return Vec::new();
     }
-    let Some(m) = build_peer_create(coord, row) else {
+    let Some(m) = build_peer_create(coord, viewer.self_guid, row) else {
         viewer.created.lock().unwrap().remove(&row.guid);
         return Vec::new();
     };
@@ -781,7 +873,11 @@ pub(crate) fn relay_entity_update(
             return offer_peer_create_for(coord, viewer, new);
         }
     }
-    let mut out: Vec<Outbound> = entity_update_to_outbound(old, new)
+    let dynamic_flags = {
+        let guard = coord.0.coord();
+        projected_dynamic_flags(&guard.conn.db, viewer.self_guid, new)
+    };
+    let mut out: Vec<Outbound> = entity_update_to_outbound_with_dynamic_flags(old, new, dynamic_flags)
         .into_iter()
         .map(Outbound::One)
         .collect();
@@ -820,6 +916,32 @@ pub(crate) fn relay_entity_update(
         }
     }
     out
+}
+
+/// Re-send the projected flags for visible live Loot Tags after the shard membership mirror
+/// changes. Membership does not rewrite a creature's `WorldEntity`, so its normal VALUES relay has
+/// nothing to carry.
+pub(crate) fn loot_tag_flags_after_membership_change(
+    coord: &Coordinator,
+    viewer: &Viewer,
+) -> Vec<Outbound> {
+    use lyracore_shared::constants::unit_dynamic_flags::TAPPED;
+
+    let shown = viewer.created.lock().unwrap().clone();
+    let guard = coord.0.coord();
+    shown
+        .iter()
+        .filter_map(|guid| guard.conn.db.game_world_entity().guid().find(guid))
+        .filter(|entity| !entity.dead && entity.dynamic_flags & TAPPED != 0)
+        .map(|entity| {
+            Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_dynamic_flags_values(
+                    entity.guid,
+                    projected_dynamic_flags(&guard.conn.db, viewer.self_guid, &entity),
+                ),
+            )))
+        })
+        .collect()
 }
 
 /// A peer left this viewer's view (its row was deleted, or it walked out of the box). DESTROY once,
@@ -1467,7 +1589,7 @@ pub(crate) fn stealth_visibility(
                 .guid()
                 .find(&changed.target_guid)
             {
-                Some(row) => match build_peer_create(coord, &row) {
+                Some(row) => match build_peer_create(coord, self_guid, &row) {
                     Some(m) => vec![Outbound::One(m)],
                     None => {
                         // Encode failure: roll the dedup entry back like `offer_peer_create`
@@ -2512,9 +2634,18 @@ pub(crate) fn ghost_transition(old_flags: u32, new_flags: u32, ghost_mask: u32) 
 /// vitals + xp together) instead of the separate health/xp packets, so the panel + bars flip in lockstep.
 /// Player-only fields (xp / coinage / ghost / power) are gated on the PLAYER bit; health and dynamic-flags
 /// apply to any unit (creatures' health bars + loot sparkle). Order is preserved from the original relay.
+#[cfg(test)]
 pub(crate) fn entity_update_to_outbound(
     old: &WorldEntity,
     new: &WorldEntity,
+) -> Vec<ServerOpcodeMessage> {
+    entity_update_to_outbound_with_dynamic_flags(old, new, new.dynamic_flags)
+}
+
+fn entity_update_to_outbound_with_dynamic_flags(
+    old: &WorldEntity,
+    new: &WorldEntity,
+    dynamic_flags: u32,
 ) -> Vec<ServerOpcodeMessage> {
     let mut out = Vec::new();
     let is_player = new.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0;
@@ -2541,7 +2672,7 @@ pub(crate) fn entity_update_to_outbound(
         // rolled money (slice 3); the loot reducer clears it. NOTE: UNIT_DYNFLAG_DEAD (0x20) is NEVER set
         // (it is feign-death in vanilla — see combat + lyracore-shared constants).
         if old.dynamic_flags != new.dynamic_flags {
-            let m = codec::build_dynamic_flags_values(new.guid, new.dynamic_flags);
+            let m = codec::build_dynamic_flags_values(new.guid, dynamic_flags);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
         // Target relay (UNIT_FIELD_TARGET): observers see who this unit selected — the target ring /
@@ -4033,6 +4164,172 @@ mod tests {
         }
     }
 
+    fn creature_entity() -> WorldEntity {
+        let mut entity = player_entity();
+        entity.guid = 99;
+        entity.type_mask = lyracore_shared::constants::type_mask::CREATURE;
+        entity.dynamic_flags = lyracore_shared::constants::unit_dynamic_flags::TAPPED;
+        entity
+    }
+
+    fn tap(character_guid: u64) -> CreatureQuestTap {
+        CreatureQuestTap {
+            creature_guid: 99,
+            character_guid,
+        }
+    }
+
+    fn tag_member(character_guid: u64) -> CreatureQuestTapMember {
+        CreatureQuestTapMember {
+            id: character_guid,
+            creature_guid: 99,
+            character_guid,
+        }
+    }
+
+    fn current_member(character_guid: u64, group_id: u64) -> GroupMember {
+        GroupMember {
+            id: character_guid,
+            group_id,
+            character_guid,
+            owner_identity: spacetimedb_sdk::Identity::from_byte_array([0; 32]),
+        }
+    }
+
+    fn project_flags(
+        viewer_guid: u64,
+        entity: &WorldEntity,
+        tap: Option<&CreatureQuestTap>,
+        tag_group: Option<&CreatureLootTagGroup>,
+        tag_members: &[CreatureQuestTapMember],
+        current_members: &[GroupMember],
+        corpse_eligible: &[CorpseLootEligible],
+    ) -> u32 {
+        viewer_relative_dynamic_flags(
+            viewer_guid,
+            entity,
+            LootTagProjectionRows {
+                tap,
+                tag_group,
+                tag_members,
+                current_members,
+                corpse_eligible,
+            },
+        )
+    }
+
+    #[test]
+    fn solo_tagger_sees_tapped_by_player() {
+        let entity = creature_entity();
+        let tap = tap(7);
+        assert_eq!(
+            project_flags(7, &entity, Some(&tap), None, &[], &[], &[]),
+            entity.dynamic_flags | lyracore_shared::constants::unit_dynamic_flags::TAPPED_BY_PLAYER
+        );
+    }
+
+    #[test]
+    fn snapshot_group_member_sees_tapped_by_player() {
+        let entity = creature_entity();
+        let tap = tap(7);
+        let group = CreatureLootTagGroup {
+            creature_guid: entity.guid,
+            group_id: 42,
+        };
+        let members = [tag_member(7), tag_member(8)];
+        let current = [current_member(8, 42)];
+        assert_eq!(
+            project_flags(8, &entity, Some(&tap), Some(&group), &members, &current, &[]),
+            entity.dynamic_flags | lyracore_shared::constants::unit_dynamic_flags::TAPPED_BY_PLAYER
+        );
+    }
+
+    #[test]
+    fn stranger_sees_only_stored_tapped_flag() {
+        let entity = creature_entity();
+        let tap = tap(7);
+        assert_eq!(
+            project_flags(8, &entity, Some(&tap), None, &[], &[], &[]),
+            entity.dynamic_flags
+        );
+    }
+
+    #[test]
+    fn later_group_joiner_sees_only_stored_tapped_flag() {
+        let entity = creature_entity();
+        let tap = tap(7);
+        let group = CreatureLootTagGroup {
+            creature_guid: entity.guid,
+            group_id: 42,
+        };
+        let members = [tag_member(7)];
+        let current = [current_member(8, 42)];
+        assert_eq!(
+            project_flags(8, &entity, Some(&tap), Some(&group), &members, &current, &[]),
+            entity.dynamic_flags
+        );
+    }
+
+    #[test]
+    fn group_leaver_loses_tapped_by_player() {
+        let entity = creature_entity();
+        let tap = tap(7);
+        let group = CreatureLootTagGroup {
+            creature_guid: entity.guid,
+            group_id: 42,
+        };
+        let members = [tag_member(7), tag_member(8)];
+        let current = [current_member(8, 99)];
+        assert_eq!(
+            project_flags(8, &entity, Some(&tap), Some(&group), &members, &current, &[]),
+            entity.dynamic_flags
+        );
+    }
+
+    #[test]
+    fn eligible_corpse_retains_lootable() {
+        let mut entity = creature_entity();
+        entity.dead = true;
+        entity.dynamic_flags = lyracore_shared::constants::unit_dynamic_flags::LOOTABLE;
+        let eligible = [CorpseLootEligible {
+            id: 1,
+            corpse_guid: entity.guid,
+            eligible_guid: 7,
+        }];
+        assert_eq!(
+            project_flags(7, &entity, None, None, &[], &[], &eligible),
+            entity.dynamic_flags
+        );
+    }
+
+    #[test]
+    fn foreign_viewer_does_not_see_corpse_lootable() {
+        let mut entity = creature_entity();
+        entity.dead = true;
+        entity.dynamic_flags = lyracore_shared::constants::unit_dynamic_flags::LOOTABLE;
+        let eligible = [CorpseLootEligible {
+            id: 1,
+            corpse_guid: entity.guid,
+            eligible_guid: 7,
+        }];
+        assert_eq!(project_flags(8, &entity, None, None, &[], &[], &eligible), 0);
+    }
+
+    #[test]
+    fn empty_corpse_eligibility_does_not_show_lootable() {
+        let mut entity = creature_entity();
+        entity.dead = true;
+        entity.dynamic_flags = lyracore_shared::constants::unit_dynamic_flags::LOOTABLE;
+        assert_eq!(project_flags(7, &entity, None, None, &[], &[], &[]), 0);
+    }
+
+    #[test]
+    fn untagged_entity_flags_are_unchanged() {
+        let mut entity = creature_entity();
+        entity.dynamic_flags = 0x42;
+        assert_eq!(project_flags(7, &entity, None, None, &[], &[], &[]), 0x42);
+    }
+
     #[test]
     fn no_change_emits_nothing() {
         let e = player_entity();
@@ -4099,6 +4396,22 @@ mod tests {
                     new.guid, power_b, 30
                 ))),
             ]
+        );
+    }
+
+    #[test]
+    fn dynamic_flag_values_uses_the_viewer_projection() {
+        let mut old = creature_entity();
+        old.dynamic_flags = 0;
+        let mut new = old.clone();
+        new.dynamic_flags = lyracore_shared::constants::unit_dynamic_flags::TAPPED;
+        let projected = new.dynamic_flags
+            | lyracore_shared::constants::unit_dynamic_flags::TAPPED_BY_PLAYER;
+        assert_eq!(
+            entity_update_to_outbound_with_dynamic_flags(&old, &new, projected),
+            vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_dynamic_flags_values(new.guid, projected)
+            ))]
         );
     }
 

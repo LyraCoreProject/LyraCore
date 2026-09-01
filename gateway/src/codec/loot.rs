@@ -3,6 +3,9 @@
 
 use super::*;
 use lyracore_shared::loot_roll::vote_kind;
+use wow_world_messages::vanilla::{
+    LootMethodError, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE,
+};
 
 /// `SMSG_LOOT_RESPONSE` opcode (vanilla 5875). Pinned against gtker in the byte-match test below.
 const SMSG_LOOT_RESPONSE_OPCODE: u16 = 0x0160;
@@ -39,6 +42,18 @@ pub fn build_loot_response_raw(guid: u64, money: u32, items: &[LootItemView]) ->
         body.push(0u8); // slot_type = TypeAllowLoot (as_int 0)
     }
     (SMSG_LOOT_RESPONSE_OPCODE, body)
+}
+
+/// Build the vanilla response for a character who cannot loot this creature corpse.
+pub fn build_loot_didnt_kill_response(guid: u64) -> SMSG_LOOT_RESPONSE {
+    SMSG_LOOT_RESPONSE {
+        guid: Guid::new(guid),
+        loot_method: SMSG_LOOT_RESPONSE_LootMethod::ErrorX {
+            loot_error: LootMethodError::DidntKill,
+        },
+        gold: Gold::new(0),
+        items: Vec::new(),
+    }
 }
 
 /// Build `SMSG_LOOT_REMOVED` — clears one looted slot from the open loot window after its item is
