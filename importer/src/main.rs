@@ -1345,6 +1345,12 @@ where
     if a.pack_out.is_some() && a.apply {
         bail!("--pack-out writes its output directory directly and takes no --apply (--apply guards the operator's own client, which --pack-out never touches)");
     }
+    // The two packers write different trees under different rules: one into the operator's own
+    // client, one into a distributable directory. Dispatch can only run one, so asking for both
+    // is a mistake worth naming instead of silently dropping one.
+    if a.pack_out.is_some() && a.pack_client.is_some() {
+        bail!("--pack-client and --pack-out are separate outputs and cannot run together: --pack-client writes into the operator's own client, --pack-out writes a distributable directory. Run one, then the other");
+    }
     // `--go-models` resolves gameobject_template rows (the cmangos dump) against client-owned M2
     // geometry — meaningless without a template source.
     if a.go_models.is_some() && a.dump.is_none() {
@@ -6841,6 +6847,24 @@ mod tests {
             .expect("--apply beside --pack-out is refused");
         assert!(
             format!("{error:#}").contains("takes no --apply"),
+            "{error:#}"
+        );
+    }
+
+    /// Dispatch runs one packer. Taking both flags would run `--pack-client` and drop the
+    /// distributable directory the caller also asked for, so the pair is refused by name.
+    #[test]
+    fn the_two_client_packers_refuse_to_run_together() {
+        let error = parse_args_from([
+            "--pack-client",
+            "/games/WoW/Data",
+            "--pack-out",
+            "target/client-artifact",
+        ])
+        .err()
+        .expect("--pack-client beside --pack-out is refused");
+        assert!(
+            format!("{error:#}").contains("cannot run together"),
             "{error:#}"
         );
     }

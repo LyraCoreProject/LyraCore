@@ -12,12 +12,16 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 
-/// One edit a Package's `ui-transforms.json` asked for. `path` is normalised to backslashes
-/// (`Interface\FrameXML\...`) and is compared case-insensitively by callers that group edits
-/// across packages; this module never lowercases it, so messages keep the author's own casing.
+/// One edit a `ui-transforms.json` asked for. `source` is the caller's own label for the
+/// contribution root (`package loot`, or `client-patch`) and every refusal message opens with it,
+/// so this module never adds a word of its own in front.
+///
+/// `path` is normalised to backslashes (`Interface\FrameXML\...`) and is compared
+/// case-insensitively by callers that group edits across Packages; this module never lowercases
+/// it, so messages keep the author's own casing.
 #[derive(Debug)]
 pub(crate) struct Edit {
-    pub(crate) package: String,
+    pub(crate) source: String,
     pub(crate) path: String,
     pub(crate) anchor: Anchor,
     pub(crate) insert: String,
@@ -49,40 +53,38 @@ impl Anchor {
     }
 }
 
-/// Parses one Package's `ui-transforms.json`. `package` names the owning Package for every
-/// refusal message; the JSON itself carries no package name.
+/// Parses one contribution root's `ui-transforms.json`. `source` is the caller's label for that
+/// root and opens every refusal message; the JSON itself names no owner.
 ///
 /// Refuses: a document that isn't a JSON array; an entry that isn't a JSON object; an entry
 /// missing `path` or `insert`; an entry with zero or several of `before`/`after`/`replace`; an
 /// anchor that isn't a string or is empty; a `path` outside `Interface\FrameXML\` and
 /// `Interface\GlueXML\` (either slash direction, case-insensitive); a `path` whose extension
 /// isn't `.lua`, `.xml`, or `.toc`.
-pub(crate) fn parse(package: &str, json: &str) -> Result<Vec<Edit>> {
+pub(crate) fn parse(source: &str, json: &str) -> Result<Vec<Edit>> {
     let value: serde_json::Value = serde_json::from_str(json)
-        .with_context(|| format!("package {package}: ui-transforms.json is not valid JSON"))?;
+        .with_context(|| format!("{source}: ui-transforms.json is not valid JSON"))?;
     let entries = value
         .as_array()
-        .ok_or_else(|| anyhow!("package {package}: ui-transforms.json must be a JSON array"))?;
+        .ok_or_else(|| anyhow!("{source}: ui-transforms.json must be a JSON array"))?;
 
     let mut edits = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         let obj = entry.as_object().ok_or_else(|| {
-            anyhow!("package {package}: ui-transforms.json entry {index} is not a JSON object")
+            anyhow!("{source}: ui-transforms.json entry {index} is not a JSON object")
         })?;
 
         let raw_path = obj
             .get("path")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                anyhow!("package {package}: ui-transforms.json entry {index} has no \"path\"")
-            })?;
+            .ok_or_else(|| anyhow!("{source}: ui-transforms.json entry {index} has no \"path\""))?;
         let path = raw_path.replace('/', "\\");
-        validate_path(package, &path)?;
+        validate_path(source, &path)?;
 
         let insert = obj
             .get("insert")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| anyhow!("package {package}: {path}: has no \"insert\""))?
+            .ok_or_else(|| anyhow!("{source}: {path}: has no \"insert\""))?
             .to_string();
 
         let anchor_keys: Vec<(&str, &serde_json::Value)> = ["before", "after", "replace"]
@@ -91,16 +93,14 @@ pub(crate) fn parse(package: &str, json: &str) -> Result<Vec<Edit>> {
             .collect();
         if anchor_keys.len() != 1 {
             let found = anchor_keys.len();
-            bail!(
-                "package {package}: {path}: must set exactly one of before/after/replace, found {found}"
-            );
+            bail!("{source}: {path}: must set exactly one of before/after/replace, found {found}");
         }
         let (kind, raw_anchor) = anchor_keys[0];
-        let text = raw_anchor.as_str().ok_or_else(|| {
-            anyhow!("package {package}: {path}: \"{kind}\" anchor must be a string")
-        })?;
+        let text = raw_anchor
+            .as_str()
+            .ok_or_else(|| anyhow!("{source}: {path}: \"{kind}\" anchor must be a string"))?;
         if text.is_empty() {
-            bail!("package {package}: {path}: \"{kind}\" anchor is empty");
+            bail!("{source}: {path}: \"{kind}\" anchor is empty");
         }
         let anchor = match kind {
             "before" => Anchor::Before(text.to_string()),
@@ -110,7 +110,7 @@ pub(crate) fn parse(package: &str, json: &str) -> Result<Vec<Edit>> {
         };
 
         edits.push(Edit {
-            package: package.to_string(),
+            source: source.to_string(),
             path,
             anchor,
             insert,
@@ -119,15 +119,13 @@ pub(crate) fn parse(package: &str, json: &str) -> Result<Vec<Edit>> {
     Ok(edits)
 }
 
-fn validate_path(package: &str, path: &str) -> Result<()> {
+fn validate_path(source: &str, path: &str) -> Result<()> {
     let lower = path.to_ascii_lowercase();
     if !lower.starts_with(r"interface\framexml\") && !lower.starts_with(r"interface\gluexml\") {
-        bail!(
-            "package {package}: {path} is outside Interface\\FrameXML\\ and Interface\\GlueXML\\"
-        );
+        bail!("{source}: {path} is outside Interface\\FrameXML\\ and Interface\\GlueXML\\");
     }
     if !(lower.ends_with(".lua") || lower.ends_with(".xml") || lower.ends_with(".toc")) {
-        bail!("package {package}: {path} must end in .lua, .xml or .toc");
+        bail!("{source}: {path} must end in .lua, .xml or .toc");
     }
     Ok(())
 }
@@ -137,7 +135,7 @@ fn validate_path(package: &str, path: &str) -> Result<()> {
 ///
 /// Each anchor must occur exactly once in `baseline`: zero occurrences refuses as "anchor not
 /// found", more than one as "ambiguous anchor". Two edits whose anchor byte ranges intersect
-/// refuse as an overlap naming both packages; identical anchors always intersect. Spans are
+/// refuse as an overlap naming both sources; identical anchors always intersect. Spans are
 /// resolved against `baseline` before any edit is applied, then applied in ascending order, so
 /// the result does not depend on `edits`' input order. `Before` inserts before the anchor,
 /// `After` after it, `Replace` substitutes it.
@@ -153,14 +151,12 @@ pub(crate) fn compose(path: &str, baseline: &str, edits: &[&Edit]) -> Result<Str
         let anchor = edit.anchor.text();
         let count = baseline.matches(anchor).count();
         if count == 0 {
-            let package = &edit.package;
-            bail!("package {package}: {path}: anchor not found: {anchor:?}");
+            let source = &edit.source;
+            bail!("{source}: {path}: anchor not found: {anchor:?}");
         }
         if count > 1 {
-            let package = &edit.package;
-            bail!(
-                "package {package}: {path}: ambiguous anchor (matches {count} times): {anchor:?}"
-            );
+            let source = &edit.source;
+            bail!("{source}: {path}: ambiguous anchor (matches {count} times): {anchor:?}");
         }
         let start = baseline
             .find(anchor)
@@ -176,10 +172,10 @@ pub(crate) fn compose(path: &str, baseline: &str, edits: &[&Edit]) -> Result<Str
         for j in (i + 1)..located.len() {
             let (a, b) = (&located[i], &located[j]);
             if a.start < b.end && b.start < a.end {
-                let (pkg_a, pkg_b) = (&a.edit.package, &b.edit.package);
+                let (source_a, source_b) = (&a.edit.source, &b.edit.source);
                 let (anchor_a, anchor_b) = (a.edit.anchor.text(), b.edit.anchor.text());
                 bail!(
-                    "packages {pkg_a} and {pkg_b}: {path}: overlapping edits at anchors {anchor_a:?} and {anchor_b:?}"
+                    "{source_a} and {source_b}: {path}: overlapping edits at anchors {anchor_a:?} and {anchor_b:?}"
                 );
             }
         }
@@ -246,7 +242,7 @@ pub(crate) fn transforms_hash(edits: &[&Edit]) -> String {
         .map(|e| {
             format!(
                 "{}{FIELD_SEP}{}{FIELD_SEP}{}{FIELD_SEP}{}",
-                e.package,
+                e.source,
                 e.anchor.tag(),
                 e.anchor.text(),
                 e.insert
@@ -289,7 +285,7 @@ mod tests {
         assert_eq!(edits[0].insert, "\tPkgLoot_OnLoad();\n");
         assert!(matches!(edits[1].anchor, Anchor::Before(_)));
         assert!(matches!(edits[2].anchor, Anchor::Replace(_)));
-        assert!(edits.iter().all(|e| e.package == "loot"));
+        assert!(edits.iter().all(|e| e.source == "loot"));
     }
 
     #[test]
@@ -376,13 +372,13 @@ mod tests {
     fn compose_two_disjoint_edits_are_order_independent() {
         let baseline = "function A() end\nfunction B() end\n";
         let a = Edit {
-            package: "pkg-a".into(),
+            source: "pkg-a".into(),
             path: "p".into(),
             anchor: Anchor::After("function A() end".into()),
             insert: "-- a\n".into(),
         };
         let b = Edit {
-            package: "pkg-b".into(),
+            source: "pkg-b".into(),
             path: "p".into(),
             anchor: Anchor::Before("function B() end".into()),
             insert: "-- b\n".into(),
@@ -398,7 +394,7 @@ mod tests {
     fn compose_replace_substitutes_only_the_anchor() {
         let baseline = "AccountLogin.xml\nOtherFile.xml\n";
         let edit = Edit {
-            package: "glue".into(),
+            source: "glue".into(),
             path: "p".into(),
             anchor: Anchor::Replace("AccountLogin.xml".into()),
             insert: "AccountLogin.xml\nPkgGlue.lua\n".into(),
@@ -410,7 +406,7 @@ mod tests {
     #[test]
     fn compose_refuses_a_missing_anchor_naming_package_and_path() {
         let edit = Edit {
-            package: "pkg-a".into(),
+            source: "pkg-a".into(),
             path: "Interface\\FrameXML\\LootFrame.lua".into(),
             anchor: Anchor::After("no such text".into()),
             insert: "x".into(),
@@ -427,7 +423,7 @@ mod tests {
     #[test]
     fn compose_refuses_an_ambiguous_anchor_naming_package_and_path() {
         let edit = Edit {
-            package: "pkg-a".into(),
+            source: "pkg-a".into(),
             path: "p".into(),
             anchor: Anchor::After("dup".into()),
             insert: "x".into(),
@@ -441,13 +437,13 @@ mod tests {
     #[test]
     fn compose_refuses_overlapping_edits_naming_both_packages() {
         let a = Edit {
-            package: "pkg-a".into(),
+            source: "pkg-a".into(),
             path: "p".into(),
             anchor: Anchor::After("function A".into()),
             insert: "x".into(),
         };
         let b = Edit {
-            package: "pkg-b".into(),
+            source: "pkg-b".into(),
             path: "p".into(),
             anchor: Anchor::Before("A() end".into()),
             insert: "y".into(),
@@ -463,13 +459,13 @@ mod tests {
     #[test]
     fn compose_refuses_identical_anchors_as_an_overlap() {
         let a = Edit {
-            package: "pkg-a".into(),
+            source: "pkg-a".into(),
             path: "p".into(),
             anchor: Anchor::After("same".into()),
             insert: "x".into(),
         };
         let b = Edit {
-            package: "pkg-b".into(),
+            source: "pkg-b".into(),
             path: "p".into(),
             anchor: Anchor::After("same".into()),
             insert: "y".into(),
@@ -499,13 +495,13 @@ mod tests {
     #[test]
     fn transforms_hash_is_independent_of_input_order() {
         let a = Edit {
-            package: "pkg-a".into(),
+            source: "pkg-a".into(),
             path: "p".into(),
             anchor: Anchor::After("x".into()),
             insert: "1".into(),
         };
         let b = Edit {
-            package: "pkg-b".into(),
+            source: "pkg-b".into(),
             path: "p".into(),
             anchor: Anchor::Before("y".into()),
             insert: "2".into(),
@@ -516,7 +512,7 @@ mod tests {
     #[test]
     fn transforms_hash_changes_when_an_edit_changes() {
         let a = Edit {
-            package: "pkg-a".into(),
+            source: "pkg-a".into(),
             path: "p".into(),
             anchor: Anchor::After("x".into()),
             insert: "1".into(),
@@ -530,7 +526,7 @@ mod tests {
 
     fn clone_edit(e: &Edit) -> Edit {
         Edit {
-            package: e.package.clone(),
+            source: e.source.clone(),
             path: e.path.clone(),
             anchor: match &e.anchor {
                 Anchor::Before(s) => Anchor::Before(s.clone()),

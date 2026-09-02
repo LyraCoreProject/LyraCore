@@ -224,15 +224,15 @@ fn group_by_path(edits: &[Edit]) -> Vec<(&str, Vec<&Edit>)> {
     grouped.into_values().collect()
 }
 
-/// The Packages behind one group, in source order and without repeats, for a refusal message.
-fn transforming_packages(edits: &[&Edit]) -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
+/// The sources behind one group, in source order and without repeats, for a refusal message.
+fn transforming_sources(edits: &[&Edit]) -> Vec<String> {
+    let mut labels: Vec<String> = Vec::new();
     for edit in edits {
-        if !names.contains(&edit.package) {
-            names.push(edit.package.clone());
+        if !labels.contains(&edit.source) {
+            labels.push(edit.source.clone());
         }
     }
-    names
+    labels
 }
 
 /// Put the record header in front of the composed file, or, when an XML document opens with an XML
@@ -271,7 +271,7 @@ fn refuse_override_of_a_transformed_path(
             "{} is shipped as a whole-file override by {} AND edited by a UI Transform from {} — a file can be replaced or patched, not both; drop the override or the transform",
             override_file.archive_path,
             override_file.source,
-            transforming_packages(edits).join(", "),
+            transforming_sources(edits).join(", "),
         );
     }
     Ok(())
@@ -319,7 +319,7 @@ fn compose_ui_transforms(data: &Path, groups: &[(&str, Vec<&Edit>)]) -> Result<V
         packed.push(PackFile {
             archive_path: (*path).to_string(),
             data: with_record_header(&header, &composed).into_bytes(),
-            source: format!("ui-transform ({})", transforming_packages(edits).join(", ")),
+            source: format!("ui-transform ({})", transforming_sources(edits).join(", ")),
             origin: Origin::BaselineDerived {
                 from: format!("{archive}:{path}"),
             },
@@ -537,7 +537,7 @@ fn refuse_baseline_derived(files: &[PackFile], transforms: &[Edit]) -> Result<()
     if !transforms.is_empty() {
         let mut declared: Vec<String> = transforms
             .iter()
-            .map(|e| format!("{} edits {}", e.package, e.path))
+            .map(|e| format!("{} edits {}", e.source, e.path))
             .collect();
         declared.sort();
         declared.dedup();
