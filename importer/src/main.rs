@@ -41,6 +41,9 @@
 //!   --pack-client <client Data/ dir>  builds the client patch MPQ + installs addons into the
 //!                                   OPERATOR's OWN client (pack_client.rs); standalone, writes
 //!                                   to the client dir, not a `game_*` table
+//!   --pack-out <dir>                writes the same package-authored client content into <dir>
+//!                                   for distribution. Reads no client, refuses baseline-derived
+//!                                   files, takes no --apply (pack_client.rs)
 //! e.g.  importer --dump .import/classic-db-full.sql --apply
 //!       importer --dbc ../wowclient/Data
 //!       importer --dbc ../wowclient/Data --talents --apply
@@ -58,6 +61,7 @@ mod spell;
 mod spell_snapshot;
 mod talent;
 mod terrain;
+mod ui_transform;
 mod vmap;
 mod world_import_scope;
 
@@ -987,6 +991,7 @@ pub(crate) struct Args {
     pub(crate) vmap_prepare_coverage: Option<u64>, // generation id: derive path-grid coverage from an already-staged generation (see vmap.rs::run_coverage)
     pub(crate) go_models: Option<String>, // client Data/ dir: DOOR/BUTTON display -> M2 bounding-mesh extract+import (see go_model.rs); needs --dump too
     pack_client: Option<String>, // client Data/ dir for the --pack-client packager (see pack_client.rs)
+    pack_out: Option<String>, // output dir for the --pack-out packager: package-authored client content only (see pack_client.rs)
     print_extents: bool, // with --dump: print the operator's own spawn bbox for --map and exit (work-item 206)
     spells: bool, // with --dbc: import Spell.dbc → game_spell/game_spell_effect (see spell.rs)
     talents: bool, // with --dbc: import TalentTab.dbc + Talent.dbc → game_talent_tab/game_talent (see talent.rs)
@@ -1051,6 +1056,7 @@ where
         dump: None,
         dbc: None,
         pack_client: None,
+        pack_out: None,
         dump_collision: None,
         nav: None,
         vmap: None,
@@ -1119,6 +1125,7 @@ where
                         .context("--pack-client needs the client Data/ dir")?,
                 )
             }
+            "--pack-out" => a.pack_out = Some(it.next().context("--pack-out needs an output dir")?),
             // Derive the operator's OWN spawn bounding box for --map from their dump instead of trusting a
             // remembered rectangle (work-item 206: the Westfall widening needed a way to compute --box from
             // real data, not from memory). Prints min/max X/Y/Z + spawn count and returns — writes nothing.
@@ -1322,6 +1329,7 @@ where
     if a.dump.is_none()
         && a.dbc.is_none()
         && a.pack_client.is_none()
+        && a.pack_out.is_none()
         && a.terrain.is_none()
         && a.dump_collision.is_none()
         && a.nav.is_none()
@@ -1330,7 +1338,18 @@ where
         && a.vmap_prepare_coverage.is_none()
         && a.go_models.is_none()
     {
-        bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, or --pack-client <client Data/ dir>");
+        bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, --pack-client <client Data/ dir>, or --pack-out <dir>");
+    }
+    // `--pack-out` writes a distributable directory, never a client, so there is no client state
+    // for `--apply` to guard.
+    if a.pack_out.is_some() && a.apply {
+        bail!("--pack-out writes its output directory directly and takes no --apply (--apply guards the operator's own client, which --pack-out never touches)");
+    }
+    // The two packers write different trees under different rules: one into the operator's own
+    // client, one into a distributable directory. Dispatch can only run one, so asking for both
+    // is a mistake worth naming instead of silently dropping one.
+    if a.pack_out.is_some() && a.pack_client.is_some() {
+        bail!("--pack-client and --pack-out are separate outputs and cannot run together: --pack-client writes into the operator's own client, --pack-out writes a distributable directory. Run one, then the other");
     }
     // `--go-models` resolves gameobject_template rows (the cmangos dump) against client-owned M2
     // geometry — meaningless without a template source.
@@ -5117,6 +5136,12 @@ fn main() -> Result<()> {
         return pack_client::run(&dir, &args);
     }
 
+    // `--pack-out` → write the package-authored client content into a plain directory. Reads no
+    // client at all.
+    if let Some(dir) = args.pack_out.clone() {
+        return pack_client::run_pack_out(&dir);
+    }
+
     // `--terrain` → the ADT heightmap stream (standalone, like --pack-client; see terrain.rs).
     if args.terrain.is_some() {
         return terrain::run(&args);
@@ -6803,6 +6828,47 @@ mod tests {
         assert!(format!("{error:#}").contains("--dbc"), "{error:#}");
     }
 
+    /// `--pack-out` is an input in its own right: it writes a distributable directory out of the
+    /// repo's own client content, so it needs no dump and no client data path.
+    #[test]
+    fn the_client_pack_output_dir_is_an_input_on_its_own() {
+        let args = parse_args_from(["--pack-out", "target/client-artifact"])
+            .expect("--pack-out parses on its own");
+        assert_eq!(args.pack_out.as_deref(), Some("target/client-artifact"));
+        assert_eq!(args.pack_client, None);
+    }
+
+    /// `--apply` guards writes to the operator's own client. `--pack-out` never touches one, so
+    /// accepting the flag would promise a dry run that does not exist.
+    #[test]
+    fn the_client_pack_output_dir_refuses_apply() {
+        let error = parse_args_from(["--pack-out", "target/client-artifact", "--apply"])
+            .err()
+            .expect("--apply beside --pack-out is refused");
+        assert!(
+            format!("{error:#}").contains("takes no --apply"),
+            "{error:#}"
+        );
+    }
+
+    /// Dispatch runs one packer. Taking both flags would run `--pack-client` and drop the
+    /// distributable directory the caller also asked for, so the pair is refused by name.
+    #[test]
+    fn the_two_client_packers_refuse_to_run_together() {
+        let error = parse_args_from([
+            "--pack-client",
+            "/games/WoW/Data",
+            "--pack-out",
+            "target/client-artifact",
+        ])
+        .err()
+        .expect("--pack-client beside --pack-out is refused");
+        assert!(
+            format!("{error:#}").contains("cannot run together"),
+            "{error:#}"
+        );
+    }
+
     #[test]
     fn an_enabled_packages_root_without_a_package_delta_family_is_refused() {
         // `--family creatures` excludes every family in `PACKAGE_DELTA_DUMP_FAMILIES`, and there
@@ -7414,6 +7480,7 @@ mod tests {
             packages: None,
             spell_snapshot: None,
             pack_client: None,
+            pack_out: None,
             dump_collision: None,
             nav: None,
             vmap: None,
