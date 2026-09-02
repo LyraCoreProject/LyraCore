@@ -1,7 +1,7 @@
 //! Parses a Package's `ui-transforms.json` and composes its edits against a baseline FrameXML or
-//! GlueXML file. Pure string logic: no file system, no MPQ, no client. The packer (`pack_client.rs`,
-//! T3b) reads the baseline bytes from the operator's own client, groups edits by normalised path,
-//! and calls [`compose`]; this module owns none of that I/O.
+//! GlueXML file. Pure string logic: no file system, no MPQ, no client. `pack_client.rs` reads the
+//! baseline bytes from the operator's own client, groups edits by normalised path, and calls
+//! [`compose`]; this module owns none of that I/O.
 //!
 //! Invariants `compose` enforces for one path:
 //!   - single anchor: each edit's anchor text occurs exactly once in the baseline;
@@ -9,10 +9,6 @@
 //!   - order independence: spans are computed against the original baseline before any edit is
 //!     applied, then applied in ascending span order, so the composed output does not depend on
 //!     the order `edits` arrives in (e.g. package enable order).
-//!
-//! Not yet called outside this file's own tests: `pack_client.rs` wires `parse`, `compose`, and
-//! `record_header` into the packer once the baseline read lands.
-#![allow(dead_code)]
 
 use anyhow::{anyhow, bail, Context, Result};
 
