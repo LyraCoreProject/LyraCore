@@ -21,6 +21,14 @@
 //!    stops neither the next script nor the core work after this call, so nothing here has error
 //!    handling of its own to get wrong.
 //!
+//! # Asking, as well as firing
+//!
+//! [`ask`] is the same dispatch with the Script Answer kept: a Package fires a Package Event of its
+//! own and reads back the first number a bound script returned, in the same order [`fire`] runs
+//! them. Every later script still runs and still stages what it stages. No answer — nothing bound,
+//! nothing returning a number, or every script failing — leaves the caller on its own fallback,
+//! which is what makes a Runtime Script an override rather than a dependency.
+//!
 //! # What an event costs when nothing is bound
 //!
 //! The common case is a Shard with no Package scripts at all, and `on_damage_taken` fires on every
@@ -39,7 +47,7 @@
 use spacetimedb::{log, table, ReducerContext};
 
 use crate::runtime_script::{
-    run_event, with_host, CoreEffects, EntityView, RuntimeScript, ScriptEvent,
+    ask_event, with_host, CoreEffects, EntityView, RuntimeScript, ScriptEvent,
 };
 
 /// One Runtime Script a Package ships, reconciled onto this Shard.
@@ -71,7 +79,8 @@ pub struct Script {
     /// Lua beside it. It is also exactly the Runtime Script Host's compiler-cache key, so two rows
     /// with one `content_hash` compile once.
     pub content_hash: String,
-    /// The event this script runs for: one name from `GAME_HOOK_EVENT_NAMES`.
+    /// The event this script runs for: one name from `GAME_HOOK_EVENT_NAMES`, or a Package Event
+    /// the shipping Package fires itself.
     pub event: String,
     /// Lower runs first among the scripts bound to one event; `script_id` breaks a tie.
     pub priority: i32,
@@ -88,11 +97,37 @@ pub struct Script {
 /// reaches the script as an absent `event.actor`/`event.target` rather than as a failure.
 ///
 /// Called only from the generated `fire_*` dispatchers, which is what keeps the event label here
-/// identical to the one a Package binds to.
+/// identical to the one a Package binds to. A core hook event has no caller waiting on a Script
+/// Answer, so any answer the scripts gave is dropped.
 pub(crate) fn fire(ctx: &ReducerContext, event: &str, actor_guid: u64, target_guid: u64) {
+    dispatch(ctx, event, actor_guid, target_guid);
+}
+
+/// Run every enabled Runtime Script bound to `event`, and read back the Script Answer.
+///
+/// The answer is the first number a script returned, in the same dispatch order [`fire`] uses. The
+/// scripts after it still run. `None` says no script answered — nothing bound, every bound script
+/// returned something that is not a number, every one of them failed, or the Host was already busy
+/// — and every one of those means the caller keeps its own fallback.
+///
+/// Its only caller is a Package: a Package Event is the one event a Package both fires and answers.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn ask(
+    ctx: &ReducerContext,
+    event: &str,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Option<f64> {
+    dispatch(ctx, event, actor_guid, target_guid)
+}
+
+/// The lookup, the ordering and the one Host call both [`fire`] and [`ask`] are. One body rather
+/// than two, so the two verbs can never drift on the order they run scripts in or on what a failure
+/// does; they differ only in whether the Script Answer has a caller waiting for it.
+fn dispatch(ctx: &ReducerContext, event: &str, actor_guid: u64, target_guid: u64) -> Option<f64> {
     let bound = dispatch_order(ctx.db.game_script().by_event().filter(event).collect());
     if bound.is_empty() {
-        return;
+        return None;
     }
 
     // Read after the lookup: an unbound event must not pay for two entity reads. Read BEFORE the
@@ -110,8 +145,8 @@ pub(crate) fn fire(ctx: &ReducerContext, event: &str, actor_guid: u64, target_gu
         })
         .collect();
 
-    let Some(diagnostics) =
-        with_host(|host| run_event(host, &mut CoreEffects { ctx }, &script_event, &scripts))
+    let Some((diagnostics, answer)) =
+        with_host(|host| ask_event(host, &mut CoreEffects { ctx }, &script_event, &scripts))
     else {
         log::warn!(
             "`{event}`: the Runtime Script Host is already running a script, so this event's \
@@ -119,11 +154,12 @@ pub(crate) fn fire(ctx: &ReducerContext, event: &str, actor_guid: u64, target_gu
              it staged.",
             scripts.len()
         );
-        return;
+        return None;
     };
     for diagnostic in diagnostics {
         log::warn!("{diagnostic}");
     }
+    answer
 }
 
 /// Every enabled script, in dispatch order: priority ascending, then `script_id` ascending.

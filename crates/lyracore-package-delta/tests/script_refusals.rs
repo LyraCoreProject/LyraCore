@@ -192,6 +192,46 @@ fn an_event_outside_the_hook_catalogue_is_refused_and_names_the_ones_that_exist(
     assert!(refusal.contains("`on_go_used`"), "{refusal}");
 }
 
+/// A Package Event belongs to the Package that fires it. Binding another Package's event would let
+/// one Package read a decision it has no part in, and would break the moment that Package renamed
+/// the event — so the prefix must be the artifact's own identity.
+#[test]
+fn a_package_event_belonging_to_another_package_is_refused() {
+    let refusal = refusal(&one(
+        100_001,
+        "bolt.a",
+        "example.other.pick_target",
+        "grant_xp(event.actor, 1)",
+    ));
+
+    assert!(
+        refusal.contains("unknown event `example.other.pick_target`"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("`example.bolt.<name>`"), "{refusal}");
+}
+
+/// The `<name>` half is narrower than a script name: no dots, so the Package prefix stays the only
+/// one, and nothing but lowercase letters, digits and `_` after the first letter.
+#[test]
+fn a_package_event_with_a_misshapen_name_is_refused() {
+    for bad in [
+        "example.bolt.",
+        "example.bolt.Pick",
+        "example.bolt.2nd",
+        "example.bolt.pick-target",
+        "example.bolt.pick.target",
+        "example.bolt",
+    ] {
+        let refusal = refusal(&one(100_001, "bolt.a", bad, "grant_xp(event.actor, 1)"));
+
+        assert!(
+            refusal.contains(&format!("unknown event `{bad}`")),
+            "`{bad}` must be refused as a Package Event: {refusal}"
+        );
+    }
+}
+
 #[test]
 fn a_script_with_no_source_is_refused() {
     let refusal = refusal(&one(100_001, "bolt.a", "on_login", ""));

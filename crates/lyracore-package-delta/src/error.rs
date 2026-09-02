@@ -260,10 +260,13 @@ pub enum ScriptRefusal {
         /// The rejected value.
         found: String,
     },
-    /// The `event` member names an event outside the Module's hook catalogue.
+    /// The `event` member names neither a Module hook event nor a Package Event of the artifact's
+    /// own Package.
     UnknownEvent {
         /// The rejected name.
         found: String,
+        /// The artifact's own Package, which is the only Package whose events it may bind.
+        package: String,
     },
     /// A Runtime Script ships no Lua at all. An empty script is a Datascript that emitted nothing,
     /// not a script that does nothing.
@@ -297,9 +300,11 @@ impl fmt::Display for ScriptRefusal {
                 "`{found}` is not a Runtime Script name: expected 1 to 64 characters of \
                  a-z, 0-9, `-`, `_` or `.`"
             ),
-            Self::UnknownEvent { found } => write!(
+            Self::UnknownEvent { found, package } => write!(
                 f,
-                "unknown event `{found}`; a Runtime Script binds to one of {}",
+                "unknown event `{found}`; a Runtime Script binds to one of {}, or to a Package \
+                 Event of its own Package spelled `{package}.<name>`, where `<name>` is a \
+                 lowercase letter followed by lowercase letters, digits or `_`",
                 known_events()
             ),
             Self::EmptySource { name } => write!(
