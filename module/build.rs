@@ -55,6 +55,11 @@
 //! time naming the missing `pub use` — instead of failing later as an opaque rustc error inside
 //! `$OUT_DIR`.
 //!
+//! The same pass also lints each package file against the Package API surface
+//! (`PACKAGE_API_ROOTS`, documented at `docs/package-api.md`): a `crate::` path outside it fails the
+//! build naming the Package, the file, the line and the path, unless the line carries
+//! `// package-api: exempt <reason>`. Core `src/` is never linted.
+//!
 //! EVALUATED AND REJECTED: replacing the marker scan with an explicit per-package `register()`
 //! convention. The registries are const fn-pointer arrays (no allocator-dependent init order in
 //! wasm), and `character_owned!` markers are deliberately scattered NEXT TO their tables across
@@ -236,6 +241,47 @@ const HOOK_EVENTS: &[HookEvent] = &[
     ),
 ];
 
+/// The Package API surface, as the module roots a Package may name. `docs/package-api.md` is the
+/// contract; this list is what enforces it. Root granularity: everything under a listed root is on
+/// the surface, and a root that is absent is core's own business. Adding one here means adding it
+/// to the document in the same change.
+const PACKAGE_API_ROOTS: &[&str] = &[
+    "actor",
+    "chat",
+    "combat",
+    "creatures",
+    "encounter",
+    "faction",
+    "gameobject",
+    "group",
+    "helpers",
+    "hooks",
+    "items",
+    "loot",
+    "nav",
+    "package_config",
+    "quest",
+    "script_binding",
+    "spell",
+    "stats",
+    "terrain",
+    "transfer",
+    "world",
+    "xp",
+];
+
+/// Crate-root names on the surface that are neither a module nor a type: the two marker macros the
+/// `game_` prefix below does not already cover, and the generated character-owned table manifest.
+const PACKAGE_API_ROOT_ITEMS: &[&str] = &[
+    "CHARACTER_OWNED_TABLES",
+    "character_owned",
+    "encounter_package",
+];
+
+/// The comment that clears one out-of-surface path, written on the line that names it. It must
+/// carry a reason, so an exemption is always readable where it is used and greppable across a tree.
+const PACKAGE_API_EXEMPT: &str = "// package-api: exempt";
+
 fn main() {
     let manifest_dir =
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo");
@@ -299,6 +345,7 @@ fn main() {
             collect_rs_files(&pkg_src, &mut pkg_files);
             pkg_files.sort();
             for file in &pkg_files {
+                lint_package_api(&name, file);
                 scan_file(file, &pkg_src, true, &prefix, &mut registries);
             }
             pkg_mods.push((ident, mod_rs));
@@ -1091,6 +1138,144 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
     );
 }
 
+/// Whether `root` — the first segment after `crate::` — is on the Package API surface.
+///
+/// Three families beyond the listed roots: `game_*` covers the table accessor traits and the
+/// `game_hook!`/`game_tick_pass!` markers, `pkg_*` covers a Package's own generated root (and its
+/// siblings'), and an UpperCamelCase name is a row or payload type re-exported at the crate root.
+fn on_package_api(root: &str) -> bool {
+    let upper_camel = root.starts_with(|c: char| c.is_ascii_uppercase())
+        && root.chars().any(|c| c.is_ascii_lowercase());
+    PACKAGE_API_ROOTS.contains(&root)
+        || PACKAGE_API_ROOT_ITEMS.contains(&root)
+        || root.starts_with("game_")
+        || root.starts_with("pkg_")
+        || upper_camel
+}
+
+/// The leading identifier of `s`, empty when `s` does not start with one.
+fn leading_ident(s: &str) -> &str {
+    let end = s
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(s.len());
+    &s[..end]
+}
+
+/// The first segment of every path a `crate::` occurrence introduces, as (offset into `rest`,
+/// segment). One for a plain path; one per entry for a braced group (`crate::{a, b::c}`), whose
+/// entries are read at brace depth 1 so a nested group cannot hide one.
+fn crate_path_roots(rest: &str) -> Vec<(usize, &str)> {
+    if !rest.starts_with('{') {
+        let ident = leading_ident(rest);
+        return if ident.is_empty() {
+            Vec::new()
+        } else {
+            vec![(0, ident)]
+        };
+    }
+    let mut roots = Vec::new();
+    let mut depth = 0usize;
+    let mut at_entry = false;
+    for (offset, c) in rest.char_indices() {
+        match c {
+            '{' => {
+                depth += 1;
+                at_entry = depth == 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            ',' if depth == 1 => at_entry = true,
+            c if c.is_whitespace() => {}
+            _ => {
+                if at_entry {
+                    at_entry = false;
+                    let ident = leading_ident(&rest[offset..]);
+                    if !ident.is_empty() {
+                        roots.push((offset, ident));
+                    }
+                }
+            }
+        }
+    }
+    roots
+}
+
+/// Every `crate::` path in `source` whose root is outside the Package API surface, as (1-based
+/// line, path as written).
+///
+/// The scan runs on the comment- and string-stripped copy, so a path quoted in a doc example or a
+/// string literal is inert. The exemption comment is then read back off the RAW line, because that
+/// is where an author writes it and stripping would have removed it.
+fn out_of_surface_paths(source: &str) -> Vec<(usize, String)> {
+    let stripped = strip_comments_and_strings(source);
+    let raw_lines: Vec<&str> = source.lines().collect();
+    let mut found = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(rel_idx) = stripped[search_from..].find("crate::") {
+        let idx = search_from + rel_idx;
+        let rest_at = idx + "crate::".len();
+        search_from = rest_at;
+        // `crate` must be a whole token: `lyracore_crate::foo` names someone else's crate.
+        if stripped[..idx]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let rest = &stripped[rest_at..];
+        for (offset, root) in crate_path_roots(rest) {
+            if on_package_api(root) {
+                continue;
+            }
+            let line = stripped[..rest_at + offset].matches('\n').count() + 1;
+            let exempt = raw_lines.get(line - 1).is_some_and(|raw| {
+                raw.split_once(PACKAGE_API_EXEMPT)
+                    .is_some_and(|(_, reason)| !reason.trim().is_empty())
+            });
+            if exempt {
+                continue;
+            }
+            // The path as written, so the message points at the real use rather than at its root.
+            let written = if offset == 0 {
+                let end = rest
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+                    .unwrap_or(rest.len());
+                rest[..end].trim_end_matches(':')
+            } else {
+                root
+            };
+            found.push((line, format!("crate::{written}")));
+        }
+    }
+    found
+}
+
+/// What the build says when a Package names a core path outside the surface.
+fn out_of_surface_message(package: &str, file: &Path, line: usize, path: &str) -> String {
+    format!(
+        "build.rs: Package `{package}` names `{path}` at {}:{line}, which is outside the Package \
+         API surface (docs/package-api.md, version 1). Use a path under a documented root, or, if \
+         the Package genuinely needs this one, write `{PACKAGE_API_EXEMPT} <reason>` on that line \
+         and raise the gap with the maintainers.",
+        file.display()
+    )
+}
+
+/// Fail the build for the first out-of-surface path in one Package file. Core `src/` is never
+/// linted: the surface is a promise core makes to Packages, not to itself.
+fn lint_package_api(package: &str, file: &Path) {
+    let source = fs::read_to_string(file)
+        .unwrap_or_else(|e| panic!("build.rs: cannot read {}: {e}", file.display()));
+    if let Some((line, path)) = out_of_surface_paths(&source).first() {
+        panic!("{}", out_of_surface_message(package, file, *line, path));
+    }
+}
+
 /// Find every occurrence of `marker` in `content` and hand its head (text after the marker, left-
 /// trimmed) plus 1-based line number to `on_hit`.
 fn scan_marker(content: &str, _file: &Path, marker: &str, mut on_hit: impl FnMut(&str, usize)) {
@@ -1102,5 +1287,83 @@ fn scan_marker(content: &str, _file: &Path, marker: &str, mut on_hit: impl FnMut
         let line = content[..idx].matches('\n').count() + 1;
         on_hit(head, line);
         search_from = head_start;
+    }
+}
+
+#[cfg(test)]
+mod package_api_lint_tests {
+    use super::*;
+
+    fn reported(source: &str) -> Vec<String> {
+        out_of_surface_paths(source)
+            .into_iter()
+            .map(|(line, path)| format!("{line}:{path}"))
+            .collect()
+    }
+
+    #[test]
+    fn a_documented_root_and_its_depth_are_on_the_surface() {
+        let source = "use crate::helpers::live_entity;\nfn f(e: &crate::WorldEntity) {\n    crate::creatures::tick::emit_creature_leg(e);\n    crate::game_hook!(a);\n}\n";
+        assert!(reported(source).is_empty(), "{:?}", reported(source));
+    }
+
+    #[test]
+    fn an_undocumented_root_is_reported_with_its_line_and_path() {
+        let source = "fn f() {\n    let _ = 1;\n    crate::auth::create_character();\n}\n";
+        assert_eq!(reported(source), vec!["3:crate::auth::create_character"]);
+    }
+
+    #[test]
+    fn the_failure_names_the_package_the_file_the_line_and_the_path() {
+        let message = out_of_surface_message(
+            "playerbots",
+            Path::new("packages/playerbots/src/mod.rs"),
+            618,
+            "crate::auth::create_character",
+        );
+        assert!(message.contains("playerbots"), "{message}");
+        assert!(
+            message.contains("packages/playerbots/src/mod.rs:618"),
+            "{message}"
+        );
+        assert!(
+            message.contains("crate::auth::create_character"),
+            "{message}"
+        );
+        assert!(message.contains("docs/package-api.md"), "{message}");
+    }
+
+    #[test]
+    fn an_exemption_clears_its_own_line_and_no_other() {
+        let source = "fn f() {\n    crate::auth::create_character(); // package-api: exempt bots fabricate their own characters\n    crate::auth::Account::default();\n}\n";
+        assert_eq!(reported(source), vec!["3:crate::auth::Account::default"]);
+    }
+
+    #[test]
+    fn an_exemption_without_a_reason_does_not_clear() {
+        let source = "crate::auth::Account; // package-api: exempt\n";
+        assert_eq!(reported(source), vec!["1:crate::auth::Account"]);
+    }
+
+    #[test]
+    fn a_braced_import_is_read_entry_by_entry() {
+        let source = "use crate::{\n    game_world_entity,\n    auth::Account,\n    quest::{objective_kind, quest_role},\n    test_scan,\n};\n";
+        assert_eq!(
+            reported(source),
+            vec!["3:crate::auth", "5:crate::test_scan"]
+        );
+    }
+
+    #[test]
+    fn a_path_in_a_comment_or_a_string_is_inert() {
+        let source =
+            "// crate::auth::create_character is core's own\nlet s = \"crate::test_scan\";\n";
+        assert!(reported(source).is_empty(), "{:?}", reported(source));
+    }
+
+    #[test]
+    fn another_crates_path_is_not_this_crates_path() {
+        let source = "use lyracore_crate::auth::Account;\n";
+        assert!(reported(source).is_empty(), "{:?}", reported(source));
     }
 }
