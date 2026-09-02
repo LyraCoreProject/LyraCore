@@ -15,9 +15,10 @@ use core::fmt;
 use crate::ids::{
     FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR, FIXTURE_SPELL_ID_CEIL,
     FIXTURE_SPELL_ID_FLOOR, MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX,
-    MAX_SPELL_EFFECT_INDEX, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL,
-    PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL,
-    PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+    MAX_SPELL_EFFECT_INDEX, PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR, PACKAGE_ITEM_ID_CEIL,
+    PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL, PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL,
+    PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL, PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL,
+    PACKAGE_SPELL_ID_FLOOR, PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
 };
 use crate::schema::{FieldType, Table};
 use crate::script::HOOK_EVENT_NAMES;
@@ -147,6 +148,33 @@ pub enum DeltaError {
     LootIdFixtureReserved {
         /// The rejected identifier.
         id: u64,
+    },
+    /// An inserted `game_creature_spell` row sits outside the range a Package may invent.
+    CastIdNotClientSafe {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// The claim targets a seeded fixture row.
+    CastIdFixtureReserved {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// An inserted `game_trainer_spell` row sits outside the range a Package may invent.
+    TrainerIdNotClientSafe {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// The claim targets a seeded fixture row.
+    TrainerIdFixtureReserved {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// An `insert` named a table that permits no inserts at all: its primary key names an entity
+    /// another Import Family owns, which no Package may invent. `game_creature_cast`
+    /// ([`Table::CreatureCast`]) is the worked example.
+    InsertNotSupported {
+        /// The table that refused the insert.
+        table: Table,
     },
     /// A claim names a column the table does not have.
     UnknownField {
@@ -306,7 +334,11 @@ impl fmt::Display for DeltaError {
             | Self::QuestObjectiveIndexOutOfRange { .. }
             | Self::QuestRewardChoiceIndexOutOfRange { .. }
             | Self::LootIdNotClientSafe { .. }
-            | Self::LootIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
+            | Self::LootIdFixtureReserved { .. }
+            | Self::CastIdNotClientSafe { .. }
+            | Self::CastIdFixtureReserved { .. }
+            | Self::TrainerIdNotClientSafe { .. }
+            | Self::TrainerIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
             // The script family groups its own refusals behind one variant, so it delegates as a
             // whole rather than adding six arms here.
             Self::Script(refusal) => refusal.fmt(f),
@@ -379,6 +411,28 @@ fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::R
             "loot row {id} is fixture-reserved \
              ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
         ),
+        DeltaError::CastIdNotClientSafe { id } => write!(
+            f,
+            "cast row {id} is outside the Package cast range \
+             {PACKAGE_CAST_ID_FLOOR}..={PACKAGE_CAST_ID_CEIL}; an inserted cast row must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::CastIdFixtureReserved { id } => write!(
+            f,
+            "cast row {id} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::TrainerIdNotClientSafe { id } => write!(
+            f,
+            "trainer row {id} is outside the Package trainer range \
+             {PACKAGE_TRAINER_ID_FLOOR}..={PACKAGE_TRAINER_ID_CEIL}; an inserted trainer row must \
+             use an identifier no client and no import can already own"
+        ),
+        DeltaError::TrainerIdFixtureReserved { id } => write!(
+            f,
+            "trainer row {id} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
         other => unreachable!("{other:?} is not an identifier-policy refusal"),
     }
 }
@@ -426,6 +480,11 @@ fn fmt_general(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         }
         DeltaError::DeleteNotSupported => f.write_str(
             "row deletion is not supported; override the row to inert with an `update` instead",
+        ),
+        DeltaError::InsertNotSupported { table } => write!(
+            f,
+            "`{table}` rows cannot be inserted: the primary key names an entity another Import \
+             Family owns, which no Package may invent; an existing row may still be updated"
         ),
         DeltaError::MalformedKey { table, detail } => {
             write!(f, "malformed `{table}` key: {detail}")

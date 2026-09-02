@@ -293,3 +293,63 @@ pub fn pickpocket_loot_claim(id: u64, operation: &str, fields: &str) -> String {
         r#"{{"table":"game_pickpocket_loot","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
     )
 }
+
+/// A caster creature's template entry, safe to update on `game_creature_cast`. This table is
+/// update-only, so there is no "safe to insert" identifier at all.
+pub const REAL_CREATURE_CAST: u32 = 6;
+
+/// One `game_creature_cast` claim.
+#[must_use]
+pub fn creature_cast_claim(creature_entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_cast","key":{{"creature_entry":{creature_entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// A `game_creature_spell` row inside the Package cast range, safe to insert.
+pub const PACKAGE_CREATURE_SPELL: u64 = 10_000_001;
+
+/// A real imported `game_creature_spell` row id, safe to update and never safe to insert.
+pub const REAL_CREATURE_SPELL: u64 = 1;
+
+/// Every claimable `game_creature_spell` column, so an `insert` carries the whole row.
+pub const WHOLE_CREATURE_SPELL_ROW: &str = r#"{
+    "creature_entry": { "type": "u32", "value": 6 },
+    "spell_id": { "type": "u32", "value": 133 },
+    "priority": { "type": "u8", "value": 10 },
+    "condition": { "type": "u8", "value": 0 },
+    "condition_value": { "type": "u8", "value": 0 }
+}"#;
+
+/// One `game_creature_spell` claim.
+#[must_use]
+pub fn creature_spell_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_spell","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// A `game_trainer_spell` row inside the Package trainer range, safe to insert.
+pub const PACKAGE_TRAINER_SPELL: u64 = 11_000_001;
+
+/// A real imported `game_trainer_spell` row id, safe to update and never safe to insert.
+pub const REAL_TRAINER_SPELL: u64 = 1;
+
+/// Every claimable `game_trainer_spell` column, so an `insert` carries the whole row. A class
+/// offering (`learn_skill_line` 0): `spell_id` names a real `game_spell` row.
+pub const WHOLE_TRAINER_SPELL_ROW: &str = r#"{
+    "trainer_entry": { "type": "u32", "value": 100 },
+    "spell_id": { "type": "u32", "value": 133 },
+    "cost": { "type": "u32", "value": 500 },
+    "required_level": { "type": "u8", "value": 10 },
+    "learn_skill_line": { "type": "u32", "value": 0 },
+    "learn_skill_cap": { "type": "u32", "value": 75 }
+}"#;
+
+/// One `game_trainer_spell` claim.
+#[must_use]
+pub fn trainer_spell_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_trainer_spell","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}

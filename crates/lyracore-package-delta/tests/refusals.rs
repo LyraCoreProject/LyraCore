@@ -3,8 +3,8 @@
 mod common;
 
 use common::{
-    artifact, effect_claim, one_spell_update, spell_claim, HASH_A, PACKAGE_SPELL, REAL_SPELL,
-    WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
+    artifact, creature_cast_claim, effect_claim, one_spell_update, spell_claim, HASH_A,
+    PACKAGE_SPELL, REAL_CREATURE_CAST, REAL_SPELL, WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
 };
 use lyracore_package_delta::{DeltaError, FieldType, PackageDelta, Table};
 
@@ -207,6 +207,28 @@ fn row_deletion_is_refused() {
     let json = artifact("example.pkg", &spell_claim(REAL_SPELL, "delete", "{}"));
 
     assert_eq!(refuse(&json), DeltaError::DeleteNotSupported);
+}
+
+/// `game_creature_cast`'s key names a creature template, which no Package may invent — the worked
+/// example of an update-only table. See `cast_identifiers.rs` for the fuller identifier-band
+/// coverage this refusal sits beside.
+#[test]
+fn an_insert_on_an_update_only_table_is_refused_by_name() {
+    let json = artifact(
+        "example.pkg",
+        &creature_cast_claim(
+            REAL_CREATURE_CAST,
+            "insert",
+            r#"{"spell_id":{"type":"u32","value":200}}"#,
+        ),
+    );
+
+    assert_eq!(
+        refuse(&json),
+        DeltaError::InsertNotSupported {
+            table: Table::CreatureCast
+        }
+    );
 }
 
 #[test]

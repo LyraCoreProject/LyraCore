@@ -221,6 +221,48 @@ pub(super) fn pickpocket_loot_claim(id: u64, operation: &str, fields: &str) -> S
     )
 }
 
+pub(super) const PACKAGE_CREATURE_SPELL: u64 = 10_000_001;
+pub(super) const REAL_CREATURE_CAST: u32 = 6; // Kobold Vermin — a real imported creature template with a cast row.
+pub(super) const REAL_CREATURE_SPELL: u64 = 1;
+
+pub(super) const WHOLE_CREATURE_SPELL_ROW: &str = r#"{
+    "creature_entry": { "type": "u32", "value": 6 },
+    "spell_id": { "type": "u32", "value": 133 },
+    "priority": { "type": "u8", "value": 10 },
+    "condition": { "type": "u8", "value": 0 },
+    "condition_value": { "type": "u8", "value": 0 }
+}"#;
+
+pub(super) fn creature_cast_claim(creature_entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_cast","key":{{"creature_entry":{creature_entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn creature_spell_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_spell","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) const PACKAGE_TRAINER_SPELL: u64 = 11_000_001;
+pub(super) const REAL_TRAINER_SPELL: u64 = 1;
+
+pub(super) const WHOLE_TRAINER_SPELL_ROW: &str = r#"{
+    "trainer_entry": { "type": "u32", "value": 100 },
+    "spell_id": { "type": "u32", "value": 133 },
+    "cost": { "type": "u32", "value": 500 },
+    "required_level": { "type": "u8", "value": 10 },
+    "learn_skill_line": { "type": "u32", "value": 0 },
+    "learn_skill_cap": { "type": "u32", "value": 75 }
+}"#;
+
+pub(super) fn trainer_spell_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_trainer_spell","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
 /// A value of the column's declared type, so a test can claim any column without spelling out what
 /// it holds.
 pub(super) fn some_value(column: Column) -> FieldValue {

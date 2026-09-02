@@ -3661,7 +3661,7 @@ pub(crate) fn family_active(args: &Args, name: &str) -> bool {
 /// `Table::family` catalogue), the families `--packages` is valid alongside, beside `--spells`.
 /// Extended in the same change that gives a new family its schema; `run_package_stage` and the
 /// `--packages` validation below both read this rather than restating the list.
-const PACKAGE_DELTA_DUMP_FAMILIES: &[&str] = &["items", "loot", "quests"];
+const PACKAGE_DELTA_DUMP_FAMILIES: &[&str] = &["items", "loot", "quests", "casts", "trainers"];
 
 /// One family's Package Delta stage: reapplies every enabled Package's claims on `family`'s tables
 /// once its base rows are back. This is the `--dump` block's counterpart to `spell::run_spells`'s stage.
