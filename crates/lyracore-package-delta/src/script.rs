@@ -43,9 +43,9 @@
 //! # What it refuses
 //!
 //! Unknown versions and members, a script outside the Package script range, a name that is not a
-//! name, an event outside the Module's hook catalogue, an empty source, and one Package shipping
-//! two scripts at one identifier or under one name. All at [`ScriptArtifact::parse`], before an
-//! applier sees the artifact.
+//! name, an event that is neither the Module's nor this Package's, an empty source, and one Package
+//! shipping two scripts at one identifier or under one name. All at [`ScriptArtifact::parse`],
+//! before an applier sees the artifact.
 //!
 //! There is no `operation` member and no delete. A Package ships the set of scripts it has; an
 //! apply reconciles the shard to exactly that set, so removing a script from a Datascript removes
@@ -196,43 +196,66 @@ impl fmt::Display for ScriptName {
     }
 }
 
-/// The event a Runtime Script is bound to: one name from [`HOOK_EVENT_NAMES`].
+/// The event a Runtime Script is bound to: one name from [`HOOK_EVENT_NAMES`], or a Package Event
+/// the shipping Package fires itself.
 ///
-/// A closed list rather than a free string, checked at the parse. The Module fires a fixed set of
-/// events, so a script bound to a name outside it would be a script that silently never runs —
-/// the single hardest failure for a package author to diagnose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EventBinding(&'static str);
+/// A core event is a closed list rather than a free string, checked at the parse. The Module fires
+/// a fixed set of them, so a script bound to a name outside it would be a script that silently
+/// never runs — the single hardest failure for a package author to diagnose.
+///
+/// A **Package Event** is spelled `<package>.<name>`, where `<package>` is the artifact's own
+/// Package identity and `<name>` is a lowercase letter followed by lowercase letters, digits or
+/// `_`. The prefix is what
+/// keeps the same guarantee for an open name: a Package may only bind events it fires itself, so
+/// two Packages cannot reach each other's decisions and a typo cannot land on a name some other
+/// Package happens to own.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EventBinding(String);
 
 impl EventBinding {
-    /// Resolves an `event` member against the catalogue.
+    /// Resolves an `event` member against the catalogue, then against `package`'s own events.
     ///
     /// # Errors
-    /// [`DeltaError::UnknownEvent`], which names every event this build fires.
-    pub fn parse(name: &str) -> Result<Self, DeltaError> {
-        HOOK_EVENT_NAMES
-            .iter()
-            .copied()
-            .find(|event| *event == name)
-            .map(Self)
-            .ok_or_else(|| {
-                DeltaError::Script(ScriptRefusal::UnknownEvent {
-                    found: name.to_owned(),
-                })
-            })
+    /// [`DeltaError::Script`] with [`ScriptRefusal::UnknownEvent`], which names every event this
+    /// build fires and the shape of a Package Event the artifact's own Package may bind.
+    pub fn parse(name: &str, package: &PackageId) -> Result<Self, DeltaError> {
+        let known = HOOK_EVENT_NAMES.contains(&name)
+            || name
+                .strip_prefix(package.as_str())
+                .and_then(|rest| rest.strip_prefix('.'))
+                .is_some_and(is_package_event_name);
+        if known {
+            Ok(Self(name.to_owned()))
+        } else {
+            Err(DeltaError::Script(ScriptRefusal::UnknownEvent {
+                found: name.to_owned(),
+                package: package.as_str().to_owned(),
+            }))
+        }
     }
 
     /// The event name, as the artifact writes it and the Module's dispatch spells it.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        self.0
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
 impl fmt::Display for EventBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0)
+        f.write_str(&self.0)
     }
+}
+
+/// The `<name>` half of a Package Event: a lowercase letter, then lowercase letters, digits or `_`.
+///
+/// Narrower than a [`ScriptName`] on purpose. No `.`, so the Package prefix stays the only dot and
+/// the split between "whose event" and "which event" can never be ambiguous; no `-`, so the name
+/// reads the same in Lua, in a Rust identifier and in `spacetime sql`.
+fn is_package_event_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// One whole Runtime Script, exactly as it will sit in `game_script`.
@@ -303,8 +326,8 @@ impl Script {
 
     /// The event this script runs for.
     #[must_use]
-    pub const fn event(&self) -> EventBinding {
-        self.event
+    pub const fn event(&self) -> &EventBinding {
+        &self.event
     }
 
     /// Where this script sits among the scripts bound to its event: lower runs first, and
@@ -443,7 +466,7 @@ impl ScriptArtifact {
         let scripts = scripts
             .iter()
             .enumerate()
-            .map(|(index, script)| parse_script(script, index))
+            .map(|(index, script)| parse_script(script, index, &package))
             .collect::<Result<Vec<_>, _>>()?;
 
         Self::new(package, source_hash, scripts)
@@ -507,7 +530,7 @@ impl ScriptArtifact {
     }
 }
 
-fn parse_script(value: &Value, index: usize) -> Result<Script, DeltaError> {
+fn parse_script(value: &Value, index: usize, package: &PackageId) -> Result<Script, DeltaError> {
     let path = format!("scripts[{index}]");
     let script = object(value, &path)?;
     expect_members(
@@ -536,10 +559,10 @@ fn parse_script(value: &Value, index: usize) -> Result<Script, DeltaError> {
         member(script, &path, "name")?,
         &format!("{path}.name"),
     )?)?;
-    let event = EventBinding::parse(string(
-        member(script, &path, "event")?,
-        &format!("{path}.event"),
-    )?)?;
+    let event = EventBinding::parse(
+        string(member(script, &path, "event")?, &format!("{path}.event"))?,
+        package,
+    )?;
 
     let priority = member(script, &path, "priority")?;
     let priority = priority

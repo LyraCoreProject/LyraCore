@@ -94,6 +94,54 @@ fn every_event_in_the_catalogue_is_bindable() {
     }
 }
 
+/// A Package Event is how a Package asks its own scripts a question the hook catalogue has no name
+/// for. The artifact's own Package identity is the prefix, so the parser accepts it as written.
+#[test]
+fn a_package_binds_a_package_event_of_its_own() {
+    let parsed = ScriptArtifact::parse(&artifact(
+        "example.bolt",
+        &[script(
+            100_001,
+            "bolt.chooser",
+            "example.bolt.pick_target",
+            0,
+            true,
+        )],
+    ))
+    .expect("artifact parses");
+
+    assert_eq!(
+        parsed.scripts()[0].event().as_str(),
+        "example.bolt.pick_target"
+    );
+}
+
+/// The Package Event travels through the canonical bytes unchanged: it is the label the Module's
+/// dispatch matches on, so a rewrite of it would unbind every script that uses it.
+#[test]
+fn a_package_event_survives_the_canonical_round_trip() {
+    let parsed = ScriptArtifact::parse(&artifact(
+        "example.bolt",
+        &[script(
+            100_001,
+            "bolt.chooser",
+            "example.bolt.answer",
+            0,
+            true,
+        )],
+    ))
+    .expect("artifact parses");
+
+    let round_tripped =
+        ScriptArtifact::parse(&parsed.to_canonical_json()).expect("canonical bytes parse");
+
+    assert_eq!(round_tripped, parsed);
+    assert_eq!(
+        round_tripped.scripts()[0].event().as_str(),
+        "example.bolt.answer"
+    );
+}
+
 // ===========================================================================================
 //  Canonical bytes
 // ===========================================================================================

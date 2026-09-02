@@ -36,7 +36,13 @@
 //! heal(entity, amount)    -- stage a heal, crediting heal-threat to event.actor
 //! send_chat(player, text) -- stage a System Message to one online player
 //! grant_xp(player, amount)-- stage an experience grant
+//!
+//! return 42               -- the Script Answer: a number the asking caller reads back
 //! ```
+//!
+//! A chunk that returns a number answers the caller that asked; returning nothing, or anything that
+//! is not a number, answers nothing. Only [`ask_event`] reads an answer — [`run_event`] discards it,
+//! because a core hook event has no caller waiting on one.
 //!
 //! An Entity Handle is opaque: a script cannot read a guid out of it and cannot mint one, so the
 //! only entities a Runtime Script can act on are the ones the Host resolved for that Invocation.
@@ -323,6 +329,20 @@ impl StagedEffects {
     }
 }
 
+/// What one SUCCESSFUL Invocation produced: everything it staged, and the number it returned.
+///
+/// A failed Invocation produces a [`ScriptDiagnostic`] instead, so there is no "commit a failed
+/// run" state and no answer from a script that did not finish.
+#[derive(Debug)]
+pub(crate) struct Invocation {
+    /// The gameplay operations the script asked for, in staging order.
+    pub effects: StagedEffects,
+    /// The **Script Answer**: the number the chunk returned, when it returned one.
+    // ponytail: a number is every answer a caller has needed so far. Widen to a small enum when one
+    // needs a string or a table back.
+    pub answer: Option<f64>,
+}
+
 /// The seam staged effects commit through: the real database in the Module, a Fake in tests.
 pub(crate) trait EffectSink {
     fn grant_xp(&mut self, character_guid: u64, amount: u32);
@@ -438,13 +458,14 @@ impl RuntimeScriptHost {
 
     /// Run `script` for `event` in a fresh environment under a fuel budget.
     ///
-    /// On success, returns everything the script staged — nothing has touched the world yet. On
-    /// any failure, returns a bounded diagnostic and the staged effects are dropped unread.
+    /// On success, returns everything the script staged and the Script Answer it returned — nothing
+    /// has touched the world yet. On any failure, returns a bounded diagnostic and both the staged
+    /// effects and the answer are dropped unread.
     pub(crate) fn invoke(
         &mut self,
         script: RuntimeScript<'_>,
         event: &ScriptEvent,
-    ) -> Result<StagedEffects, ScriptDiagnostic> {
+    ) -> Result<Invocation, ScriptDiagnostic> {
         let chunk = self.compiled(script, &event.name)?;
 
         let staged: Rc<RefCell<Vec<StagedEffect>>> = Rc::new(RefCell::new(Vec::new()));
@@ -499,25 +520,31 @@ impl RuntimeScriptHost {
         }
 
         let outcome = self.lua.enter(|ctx| {
-            match ctx.fetch(&executor).take_result::<()>(ctx) {
-                Ok(Ok(())) => Ok(()),
+            match ctx.fetch(&executor).take_result::<Value>(ctx) {
+                Ok(Ok(returned)) => Ok(script_answer(returned)),
                 Ok(Err(error)) => Err(error.to_string()),
                 // Unreachable: the loop only leaves through `finished`, which means Result mode.
                 Err(mode) => Err(mode.to_string()),
             }
         });
-        if let Err(message) = outcome {
-            return Err(ScriptDiagnostic::new(
-                script.name,
-                &event.name,
-                FailureKind::Runtime,
-                message,
-            ));
-        }
+        let answer = match outcome {
+            Ok(answer) => answer,
+            Err(message) => {
+                return Err(ScriptDiagnostic::new(
+                    script.name,
+                    &event.name,
+                    FailureKind::Runtime,
+                    message,
+                ))
+            }
+        };
 
         // The script is gone; nothing else holds the staging buffer.
         let effects = staged.borrow().clone();
-        Ok(StagedEffects(effects))
+        Ok(Invocation {
+            effects: StagedEffects(effects),
+            answer,
+        })
     }
 
     fn compiled(
@@ -546,6 +573,19 @@ impl RuntimeScriptHost {
                 error.to_string(),
             )),
         }
+    }
+}
+
+/// The Script Answer in what a chunk returned: a Lua number, and nothing else.
+///
+/// A string that reads as a number is not an answer. Lua would coerce it happily, but a script that
+/// meant to answer returns a number, so the near miss reads as "no answer" rather than as a silent
+/// conversion the author never asked for.
+fn script_answer(returned: Value<'_>) -> Option<f64> {
+    match returned {
+        Value::Integer(number) => Some(number as f64),
+        Value::Number(number) => Some(number),
+        _ => None,
     }
 }
 
@@ -862,20 +902,42 @@ pub(crate) fn with_host<R>(f: impl FnOnce(&mut RuntimeScriptHost) -> R) -> Optio
 /// This is the failure boundary. A script that fails to compile, raises, or runs out of fuel
 /// contributes a diagnostic and nothing else: no effect of its own lands, and the scripts after it
 /// still run. The returned diagnostics are the caller's to log.
+///
+/// A core hook event has no caller waiting on a Script Answer, so any answer is discarded here.
 pub(crate) fn run_event<S: EffectSink>(
     host: &mut RuntimeScriptHost,
     sink: &mut S,
     event: &ScriptEvent,
     scripts: &[RuntimeScript<'_>],
 ) -> Vec<ScriptDiagnostic> {
+    ask_event(host, sink, event, scripts).0
+}
+
+/// [`run_event`], plus the Script Answer the scripts gave.
+///
+/// The answer is the FIRST number returned, in the order the scripts were handed over — the caller
+/// decided that order, so the answer is decided by it too. The scripts after the answering one
+/// still run: they may stage effects of their own, and a Package that wanted them not to orders
+/// them ahead of it. A script that fails contributes no answer and does not stop the next one, so a
+/// broken script leaves its caller on whatever fallback "no answer" means there.
+pub(crate) fn ask_event<S: EffectSink>(
+    host: &mut RuntimeScriptHost,
+    sink: &mut S,
+    event: &ScriptEvent,
+    scripts: &[RuntimeScript<'_>],
+) -> (Vec<ScriptDiagnostic>, Option<f64>) {
     let mut diagnostics = Vec::new();
+    let mut answer = None;
     for script in scripts {
         match host.invoke(*script, event) {
-            Ok(effects) => effects.commit(sink),
+            Ok(invocation) => {
+                answer = answer.or(invocation.answer);
+                invocation.effects.commit(sink);
+            }
             Err(diagnostic) => diagnostics.push(diagnostic),
         }
     }
-    diagnostics
+    (diagnostics, answer)
 }
 
 /// Run exactly one Runtime Script chosen by identity, for a caller that already knows which script
@@ -1113,9 +1175,9 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         event: &ScriptEvent,
         source: &str,
     ) -> Result<Vec<Committed>, ScriptDiagnostic> {
-        let staged = host.invoke(script("probe", source), event)?;
+        let invocation = host.invoke(script("probe", source), event)?;
         let mut sink = FakeEffects::default();
-        staged.commit(&mut sink);
+        invocation.effects.commit(&mut sink);
         Ok(sink.committed)
     }
 
@@ -1141,9 +1203,9 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         let event = engagement();
         let award = script("award", "grant_xp(event.actor, 40)");
         for _ in 0..3 {
-            let staged = host.invoke(award, &event).expect("valid Lua runs");
+            let invocation = host.invoke(award, &event).expect("valid Lua runs");
             let mut sink = FakeEffects::default();
-            staged.commit(&mut sink);
+            invocation.effects.commit(&mut sink);
             assert_eq!(sink.committed, [xp(PLAYER_GUID, 40)]);
         }
         assert_eq!(
@@ -1685,6 +1747,126 @@ if #roster > 0 then grant_xp(event.actor, 25) end
                 ("spin", FailureKind::Fuel),
             ]
         );
+    }
+
+    // ---- the Script Answer ----
+
+    /// The rule a Package Event rests on: the FIRST number wins, later scripts still run, and a
+    /// failure contributes no answer and stops nothing.
+    #[test]
+    fn the_first_script_to_return_a_number_answers_and_the_rest_still_run() {
+        let mut host = RuntimeScriptHost::new();
+        let mut sink = FakeEffects::default();
+
+        let (diagnostics, answer) = ask_event(
+            &mut host,
+            &mut sink,
+            &engagement(),
+            &[
+                script("silent", "grant_xp(event.actor, 1)"),
+                script("answering", "grant_xp(event.actor, 2)\nreturn 42"),
+                script("later", "grant_xp(event.actor, 3)\nreturn 7"),
+                script("broken", "this is not lua ==="),
+            ],
+        );
+
+        assert_eq!(answer, Some(42.0));
+        assert_eq!(
+            granted_amounts(&sink.committed),
+            [1, 2, 3],
+            "a script after the answering one still runs and still stages what it staged"
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|d| (d.script.as_str(), d.kind))
+                .collect::<Vec<_>>(),
+            [("broken", FailureKind::Syntax)]
+        );
+    }
+
+    /// A script that fails contributes no answer, whatever it returned before it failed, and the
+    /// next script may still answer.
+    #[test]
+    fn a_failing_script_answers_nothing_and_the_next_one_still_can() {
+        let mut host = RuntimeScriptHost::new();
+        let mut sink = FakeEffects::default();
+
+        let (diagnostics, answer) = ask_event(
+            &mut host,
+            &mut sink,
+            &engagement(),
+            &[
+                script("raiser", "error(\"nope\")\nreturn 1"),
+                script("answering", "return 42"),
+            ],
+        );
+
+        assert_eq!(answer, Some(42.0));
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    /// Nothing but a number is an answer. A string, a boolean, a table and a bare `return` all mean
+    /// the same thing to a caller: this script did not decide, so keep the fallback.
+    #[test]
+    fn a_return_that_is_not_a_number_answers_nothing() {
+        let mut host = RuntimeScriptHost::new();
+        for source in [
+            "return \"42\"",
+            "return true",
+            "return {}",
+            "return nil",
+            "return",
+            "local unused = 1",
+        ] {
+            let mut sink = FakeEffects::default();
+
+            let (diagnostics, answer) = ask_event(
+                &mut host,
+                &mut sink,
+                &engagement(),
+                &[script("probe", source)],
+            );
+
+            assert!(diagnostics.is_empty(), "`{source}` must run cleanly");
+            assert_eq!(answer, None, "`{source}` must answer nothing");
+        }
+    }
+
+    /// A float answers as itself, and a Lua integer answers as the same number — a caller reads one
+    /// kind of answer, never two.
+    #[test]
+    fn an_integer_and_a_float_both_answer_as_one_number() {
+        let mut host = RuntimeScriptHost::new();
+        for (source, expected) in [
+            ("return 3", 3.0),
+            ("return 0.25", 0.25),
+            ("return -7", -7.0),
+        ] {
+            let mut sink = FakeEffects::default();
+
+            let (_, answer) = ask_event(
+                &mut host,
+                &mut sink,
+                &engagement(),
+                &[script("probe", source)],
+            );
+
+            assert_eq!(answer, Some(expected), "`{source}`");
+        }
+    }
+
+    /// Nothing bound is the common case for a Package Event nobody scripted: no answer, and the
+    /// caller keeps its fallback.
+    #[test]
+    fn an_event_with_no_scripts_answers_nothing() {
+        let mut host = RuntimeScriptHost::new();
+        let mut sink = FakeEffects::default();
+
+        let (diagnostics, answer) = ask_event(&mut host, &mut sink, &engagement(), &[]);
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(answer, None);
     }
 
     /// A defect in the pinned interpreter, recorded so it cannot change unnoticed: piccolo 0.3.3 passes

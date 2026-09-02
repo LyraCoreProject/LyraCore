@@ -276,10 +276,24 @@ the melee approach. Set by the script, dropped with the Engagement.
 ### Runtime Scripts
 
 **Runtime Script**:
-Lua the Module runs on a core gameplay event, supplied from outside the core rather than compiled
-into it. Named so a diagnostic can identify it. It reaches a Shard only through a Package's Script
-Artifact; there is no upload path.
+Lua the Module runs on a core gameplay event or a Package Event, supplied from outside the core
+rather than compiled into it. Named so a diagnostic can identify it. It reaches a Shard only through
+a Package's Script Artifact; there is no upload path.
 _Avoid_: plugin, mod, addon, user script
+
+**Package Event**:
+An event a Package fires itself, spelled `<package>.<name>`. It runs the same dispatch a core hook
+event runs, so a Package exposes one of its own decisions to a Runtime Script without a new core
+seam. A Package may only bind events it fires, which the artifact parser enforces against the
+artifact's own Package identity.
+_Avoid_: custom event, user event, signal
+
+**Script Answer**:
+The number a Runtime Script returns, read back by the Package that asked. The first number returned
+in dispatch order is the answer; later scripts still run and still stage what they stage. No answer
+— nothing bound, nothing returning a number, or every script failing — leaves the caller on its own
+fallback, which is what makes a Runtime Script an override rather than a dependency.
+_Avoid_: return value, script result, callback
 
 **Runtime Script Host**:
 The Module's embedded Lua interpreter and the boundary around it: one compiler cache, a fresh
@@ -512,9 +526,10 @@ told apart by a top-level kind.
 _Avoid_: script bundle, script manifest, script delta
 
 **Event Binding**:
-The event a Runtime Script runs for, named from the Module's hook catalogue and refused at author
-time if it is not in it. Several scripts may bind to one event: lower priority runs first and the
-script identifier breaks a tie, so every Shard runs one plan in one order.
+The event a Runtime Script runs for: a name from the Module's hook catalogue, or a Package Event of
+the shipping Package. Anything else is refused at author time. Several scripts may bind to one
+event: lower priority runs first and the script identifier breaks a tie, so every Shard runs one
+plan in one order.
 _Avoid_: hook registration, subscription, listener
 
 **Package Item Range**:

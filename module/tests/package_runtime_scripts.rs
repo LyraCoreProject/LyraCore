@@ -295,6 +295,71 @@ fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
     assert_eq!(provenance(&standalone), [("example.bolt".to_string(), 1)]);
 }
 
+/// A Package Event is an event the Package fires itself, so the Shard has to store the binding
+/// exactly as written — and refuse a Package reaching for an event another Package owns.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_package_binds_its_own_event_and_never_another_packages() {
+    let standalone = Standalone::start("package-runtime-scripts-package-event");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+
+    apply(
+        &standalone,
+        &[artifact(
+            "example",
+            HASH_A,
+            &[script(
+                100_001,
+                "example.chooser",
+                "example.answer",
+                0,
+                true,
+                "return 42",
+            )],
+        )],
+    );
+
+    let rows = scripts_on_shard(&standalone);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        rows[0].3, "example.answer",
+        "the Package Event is the dispatch label, so it is stored as written: {rows:?}"
+    );
+    let before = scripts_on_shard(&standalone);
+
+    // `example.bolt` reaching for `example`'s event. Refused at the parse, before any write.
+    let refused = standalone.call(
+        "apply_package_deltas",
+        &[
+            &arg("script"),
+            &arg(&artifact(
+                "example.bolt",
+                HASH_B,
+                &[script(
+                    100_002,
+                    "bolt.thief",
+                    "example.answer",
+                    0,
+                    true,
+                    "return 1",
+                )],
+            )),
+        ],
+    );
+    assert!(
+        !refused.status.success(),
+        "a Package may only bind its own events"
+    );
+
+    assert_eq!(
+        scripts_on_shard(&standalone),
+        before,
+        "a refused plan writes nothing"
+    );
+    assert_eq!(provenance(&standalone), [("example".to_string(), 1)]);
+}
+
 /// The point of the whole feature: a script a Package shipped runs at a real core chokepoint, and
 /// one that fails does not stop the next one.
 #[test]
