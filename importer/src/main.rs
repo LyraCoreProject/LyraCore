@@ -61,6 +61,7 @@ mod spell;
 mod spell_snapshot;
 mod talent;
 mod terrain;
+mod ui_transform;
 mod vmap;
 mod world_import_scope;
 
