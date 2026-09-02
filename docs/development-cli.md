@@ -101,7 +101,7 @@ lyracore update
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
 | `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
 | `packages remove` | delete a disabled Package, after a confirmation and a check for local changes |
-| `packages replay` | reapply every enabled Package's claims onto the named databases, or the whole recorded fixture topology by default |
+| `packages replay` | reapply every enabled Package's claims and Runtime Scripts onto the named databases, or the whole recorded fixture topology by default |
 | `packages update` | advance a Git-backed Package, or every one of them, to the repository's current commit |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
@@ -476,11 +476,10 @@ Datascripts are **trusted author-time code**, run from this checkout by the pers
 They are not sandboxed and are not described as sandboxed. `packages build` above is what turns one
 into a Package Delta; `packages replay`, below, is what applies it to a Shard.
 
-## `packages replay` — reapply Package Deltas across the Realm
+## `packages replay` — reapply a Package's artifacts across the Realm
 
-A Package Delta is not a one-shot edit. A base import replaces a whole Import Family, so a
-Package's claims replay as the last stage of that family's import. The spell catalogue lives on
-every World Shard and Instance Pool that owns a copy, so the claims have to reach all of them.
+A Package's artifacts are not a one-shot edit. Its catalogues live on every World Shard and
+Instance Pool that owns a copy, so every edit has to reach all of them.
 
     lyracore packages replay [DATABASE ...] [--check] [--yes] [--force-all] [--client-data PATH]
 
@@ -488,25 +487,46 @@ With no names it targets every database of the recorded fixture topology. Named 
 exactly as given. It takes database NAMES only; anything flag-shaped is refused before a process
 starts, and it never infers a production Shard list.
 
-The run has three stages:
+### The two Import Families it carries
+
+**spell.** The artifact is a Package Delta: claims on columns of rows a base import owns. A base
+import replaces the whole family, so the claims replay as the last stage of that family's import.
+The Shard therefore reimports `Spell.dbc` first, through the importer, and the claims go on top.
+
+**script.** The artifact is a Script Artifact: whole `game_script` rows. No DBC and no dump holds a
+Runtime Script, so this family has no base import and nothing to reload first. The whole enabled
+plan goes straight to `apply_package_deltas` in one transaction, and applying it IS the
+reconciliation: the Shard ends up holding exactly the scripts the enabled Packages ship and nothing
+else.
+
+### The run
 
 1. Preflight. Every enabled Package's artifact is read and digested once, and every target's
-   provenance is read. An unreadable artifact, a Package named twice, a Claim Conflict, or an
-   unreachable Shard fails the run before the first write.
-2. Apply. One importer per Shard, in order. Each Shard reimports Spell.dbc, then replays the claims.
-3. Stop at the first failure, naming the Shards that completed, the one that failed, and the ones
-   never touched, then printing the command to resume.
+   provenance is read, per family. An unreadable artifact, a Package named twice, a Claim Conflict,
+   a Runtime Script collision, or an unreachable Shard fails the run before the first write.
+2. Apply, Shard by Shard in order. Each Shard takes the spell family through the importer, then the
+   script family through the reducer.
+3. Stop at the first failure, naming the Shard, the family it failed in, the Shards that completed
+   and the ones never touched, then printing the command to resume.
 
-Resume is the default. Each Shard records what it applied in `game_package_import`. A Shard is
-reported complete and skipped when every enabled Package is recorded with the digest this checkout
-produces, no Package is recorded that is no longer enabled, and every row sits on the Shard's
-current base import stamp. Re-running after a failure therefore costs nothing on the Shards that
-finished. `--force-all` replays anyway.
+Resume is the default, and it is decided per family. A Shard is reported complete for a family and
+skipped when every enabled Package is recorded in `game_package_import` with the digest this
+checkout produces, and no Package is recorded that is no longer enabled. The spell family
+additionally requires every row to sit on the Shard's current base import stamp; the script family
+has no base import to sit on. Re-running after a failure therefore costs nothing on what finished,
+and a Shard already holding this checkout's Package Deltas is still replayed for its Runtime
+Scripts. `--force-all` replays anyway.
 
-`--check` runs the whole plan and writes nothing, and asks nothing.
+`--check` prints both plans and writes nothing, and asks nothing.
 
-Disabling a Package is a replay, not a deletion: its folder leaves `packages/`, so its artifact
-leaves the payload, and the reducer clears the Package spell range as it applies.
+Disabling a Package is a replay, not a deletion. Its folder leaves `packages/`, so its artifacts
+leave both payloads: the reducer clears the Package Spell Range as it applies the spell family, and
+the empty script plan is still sent, which is what takes the Package's Runtime Scripts off every
+Shard. Both are destructive and the confirmation names them.
+
+The other claim families a Package may claim in (items, quests, loot, casts and trainers) are NOT
+replayed here. Their base import is the world dump rather than a DBC, which is a much larger and
+more destructive reload than this verb owns. Reapply those with the importer's own dump modes.
 
 ## `packages check` — is every Package Delta still current?
 
