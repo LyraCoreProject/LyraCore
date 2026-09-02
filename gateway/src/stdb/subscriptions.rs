@@ -3413,8 +3413,8 @@ impl Coordinator {
             .game_bot_invite_intent()
             .on_insert(move |_ctx, row| {
                 let store = store.clone();
-                let (intent_id, inviter_guid, target_guid) =
-                    (row.id, row.inviter_guid, row.target_guid);
+                let (intent_id, op, inviter_guid, target_guid) =
+                    (row.id, row.op, row.inviter_guid, row.target_guid);
                 // The claim targets this same Shard. Run it off the SDK callback thread so a
                 // one-pipe Gateway can receive the reducer completion instead of blocking its own
                 // connection pump.
@@ -3424,18 +3424,19 @@ impl Coordinator {
                         if let Err(e) = crate::world::party::run_bot_invite_intent(
                             &store,
                             intent_id,
+                            op,
                             inviter_guid,
                             target_guid,
                         ) {
                             log::debug!(
-                                "playerbots: serendipity intent {intent_id} ({inviter_guid} -> \
+                                "playerbots: group intent {intent_id} op {op} ({inviter_guid} -> \
                                  {target_guid}) did not execute: {e:#}"
                             );
                         }
                     });
                 if let Err(error) = spawned {
                     log::error!(
-                        "playerbots: could not start consumer for serendipity intent {intent_id} \
+                        "playerbots: could not start consumer for group intent {intent_id} op {op} \
                          ({inviter_guid} -> {target_guid}): {error}"
                     );
                 }

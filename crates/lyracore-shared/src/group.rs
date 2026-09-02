@@ -90,6 +90,21 @@ pub mod realm_op {
     pub const LOOT_METHOD: u8 = 5;
 }
 
+/// The group op one `game_bot_invite_intent` row asks the Gateway to run.
+///
+/// A Package writes that row for a Character with no Session, so there is no client behind it and no
+/// `ctx.sender()` to resolve; the Gateway turns the byte into the matching [`realm_op`] against the
+/// party authority. Two values rather than a reuse of [`realm_op`]: those six are what a CLIENT may
+/// ask for, and a Package may only ask for these two. [`INVITE`] is `0` because the column was
+/// END-appended to a table that had only ever carried invites, so a pre-existing row reads correctly
+/// under the migration's own default.
+pub mod bot_op {
+    /// `inviter_guid` invites `target_guid` into a party.
+    pub const INVITE: u8 = 0;
+    /// `inviter_guid` leaves its party. `target_guid` is unused.
+    pub const LEAVE: u8 = 1;
+}
+
 /// The group reducers' stable `Err` strings. Most map to `PartyResult` variants. The intent claim
 /// result instead tells a losing Gateway callback to stop. Exact matches keep both crates in sync.
 pub mod err {
@@ -251,6 +266,16 @@ mod tests {
     }
 
     // ---- Realm-core party ops (issue #22, group slice) ----
+
+    /// The intent op byte is a MIGRATION value as well as a wire one: `op` was END-appended to
+    /// `game_bot_invite_intent` with a `0` default, so every row written before the column existed
+    /// reads as an INVITE. Renumbering would turn those rows into leaves.
+    #[test]
+    fn bot_group_intent_op_codes_are_stable_and_distinct() {
+        assert_eq!(bot_op::INVITE, 0, "the END-appended column defaults to 0");
+        assert_eq!(bot_op::LEAVE, 1);
+        assert_ne!(bot_op::INVITE, bot_op::LEAVE);
+    }
 
     /// The op byte is a WIRE value: the gateway sends it, the module dispatches on it, and the two
     /// are deployed separately. A renumber that only one side learns about silently runs the wrong

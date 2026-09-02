@@ -370,11 +370,11 @@ mod bot_invite_relay_wiring_tripwire {
         let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
             normalized.contains(
-                "let (intent_id, inviter_guid, target_guid) = (row.id, row.inviter_guid, \
-                 row.target_guid);"
+                "let (intent_id, op, inviter_guid, target_guid) = (row.id, row.op, \
+                 row.inviter_guid, row.target_guid);"
             ) && normalized.contains(
-                "crate::world::party::run_bot_invite_intent( &store, intent_id, inviter_guid, \
-                 target_guid, )"
+                "crate::world::party::run_bot_invite_intent( &store, intent_id, op, \
+                 inviter_guid, target_guid, )"
             ),
             "`arm_bot_invite_relay`'s `on_insert` callback no longer calls \
              `run_bot_invite_intent` with the subscribed row. A bot's \

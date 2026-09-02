@@ -1111,7 +1111,7 @@ fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
 /// point, so exactly one consumer may reach Realm-core even when both callbacks run concurrently.
 #[test]
 fn two_relay_consumers_execute_one_bot_invite() {
-    use lyracore_shared::group::realm_op;
+    use lyracore_shared::group::{bot_op, realm_op};
 
     const INTENT_ID: u64 = 41;
 
@@ -1125,7 +1125,13 @@ fn two_relay_consumers_execute_one_bot_invite() {
             let start = start.clone();
             std::thread::spawn(move || {
                 start.wait();
-                party::run_bot_invite_intent(world.as_ref(), INTENT_ID, BOT, FAR_BOT)
+                party::run_bot_invite_intent(
+                    world.as_ref(),
+                    INTENT_ID,
+                    bot_op::INVITE,
+                    BOT,
+                    FAR_BOT,
+                )
             })
         })
         .collect();
@@ -1149,6 +1155,81 @@ fn two_relay_consumers_execute_one_bot_invite() {
         .expect("the winning consumer formed a party");
     assert_eq!(party.roster(group_id).unwrap().members, vec![BOT, FAR_BOT]);
     assert!(world.bot_invite_intents.lock().unwrap().is_empty());
+}
+
+/// **AC: one intent table, two party ops.** The row's `op` byte is the whole dispatch, so an INVITE
+/// and a LEAVE written to the same table must reach two different ops on the party authority. A
+/// dispatch that ignored the byte would silently re-invite a bot that asked to leave.
+#[test]
+fn the_intent_op_byte_picks_the_party_op_that_runs() {
+    use lyracore_shared::group::{bot_op, realm_op};
+
+    const INVITE_INTENT: u64 = 71;
+    const LEAVE_INTENT: u64 = 72;
+
+    let (realm, world, _instances, _calls) = party_topology();
+    world
+        .bot_invite_intents
+        .lock()
+        .unwrap()
+        .extend([INVITE_INTENT, LEAVE_INTENT]);
+
+    party::run_bot_invite_intent(world.as_ref(), INVITE_INTENT, bot_op::INVITE, BOT, FAR_BOT)
+        .expect("op 0 forms the party");
+    let group_id = realm
+        .party
+        .lock()
+        .unwrap()
+        .group_of(BOT)
+        .expect("the invite intent formed a party");
+
+    party::run_bot_invite_intent(world.as_ref(), LEAVE_INTENT, bot_op::LEAVE, BOT, 0)
+        .expect("op 1 leaves the party");
+
+    let party_state = realm.party.lock().unwrap();
+    assert_eq!(
+        party_state.ops.clone(),
+        vec![
+            (realm_op::INVITE, BOT, FAR_BOT, 0, 0),
+            (realm_op::ACCEPT, FAR_BOT, 0, 0, 0),
+            (realm_op::LEAVE, BOT, 0, 0, 0),
+        ],
+        "the invite runs INVITE (plus the session-less answer) and the leave runs LEAVE, each \
+         attributed to the bot itself"
+    );
+    assert_eq!(
+        party_state.group_of(BOT),
+        None,
+        "the leaving bot is out of the party it led"
+    );
+    assert_eq!(
+        party_state.roster(group_id),
+        None,
+        "a party of one disbands, which is what puts both bots back in the pool the invite scan \
+         draws from"
+    );
+}
+
+/// A module newer than this gateway can write an op byte this build has never heard of. Running it
+/// as an invite would form a party nobody asked for, so it is refused by name — and the claim has
+/// already consumed the row, so it is refused once rather than every second.
+#[test]
+fn an_unknown_intent_op_is_refused_rather_than_run_as_an_invite() {
+    const INTENT_ID: u64 = 73;
+
+    let (realm, world, _instances, _calls) = party_topology();
+    world.bot_invite_intents.lock().unwrap().push(INTENT_ID);
+
+    let err = party::run_bot_invite_intent(world.as_ref(), INTENT_ID, 200, BOT, FAR_BOT)
+        .expect_err("an unknown op must not fall through to an invite");
+    assert!(
+        err.to_string().contains("200"),
+        "the refusal must name the byte it could not run: {err:#}"
+    );
+    assert!(
+        realm.party.lock().unwrap().ops.is_empty(),
+        "nothing may reach the party authority"
+    );
 }
 
 /// **The regression test the issue asks for.** A bot party must survive the next
