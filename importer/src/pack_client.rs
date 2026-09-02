@@ -22,6 +22,10 @@
 //! Load order on this client: base archives < `patch.MPQ` < `patch-2.MPQ` < `patch-3.MPQ` (higher wins),
 //! so our overlay shadows the base. Patch files must be UNENCRYPTED. After a DBC change the `WDB/` cache
 //! must be cleared or the client serves stale name/tooltip/icon data.
+//!
+//! `--pack-out <dir>` is the second output: the same collected sources written into a plain
+//! directory, for distribution. It never opens a client, so it refuses every baseline-derived file
+//! by its [`Origin`] and names where those bytes came from.
 
 use std::fs;
 use std::io::Cursor;
@@ -46,12 +50,25 @@ const SRC: &str = "client-patch";
 /// what to overwrite, and nothing here deletes on its account.
 const SOURCE_MARKER: &str = ".lyracore-source";
 
+/// Where a packed file's bytes came from. `source` is the human label; this is the provenance the
+/// licensing firewall reads. Only package-authored bytes may leave this machine.
+#[derive(Debug, PartialEq, Eq)]
+enum Origin {
+    /// Bytes an author committed under `client-patch/` or `packages/<name>/client/`.
+    PackageAuthored,
+    /// Bytes computed from the operator's own client: a DBC overlay or a UI Transform output.
+    /// `from` names the baseline input, for the refusal message.
+    BaselineDerived { from: String },
+}
+
 /// One file destined for the patch MPQ: the internal archive path (backslash-separated) + its
-/// bytes + which source contributed it (for dry-run provenance and collision messages).
+/// bytes + which source contributed it (for dry-run provenance and collision messages) + the
+/// provenance that decides whether it may be distributed.
 struct PackFile {
     archive_path: String,
     data: Vec<u8>,
     source: String,
+    origin: Origin,
 }
 
 /// One addon directory to install: its name (the `Interface/AddOns/<name>` target) + where it
@@ -87,6 +104,8 @@ fn client_sources(
 /// collisions (MPQ paths compared case-insensitively — the archive is; addon names likewise —
 /// the target filesystem may be) and on firewall violations (a committed `.dbc`/`.mpq` is never
 /// ours to ship raw; DBC overlays go through the in-memory stage).
+///
+/// Every file this yields is [`Origin::PackageAuthored`]; the roots hold committed bytes only.
 fn collect_client_content(
     sources: &[(String, std::path::PathBuf)],
 ) -> Result<(Vec<PackFile>, Vec<AddonDir>)> {
@@ -148,6 +167,13 @@ fn collect_client_content(
     Ok((files, addons))
 }
 
+/// Collect the repo's client contributions once, for either output. The roots are the same; only
+/// what happens afterwards differs.
+fn collect(repo_src: &Path, packages_root: &Path) -> Result<(Vec<PackFile>, Vec<AddonDir>)> {
+    let sources = client_sources(repo_src, packages_root)?;
+    collect_client_content(&sources)
+}
+
 /// `--pack-client <client Data/ dir>` mode. Without `--apply` it's a dry run (prints what it would do).
 pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let data = Path::new(data_dir);
@@ -158,13 +184,11 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         );
     }
     let client_root = data.parent().context("client Data/ has no parent dir")?;
-    let src = Path::new(SRC);
 
     // 1) Raw assets (ours), from EVERY source: client-patch/mpq/ plus each packages/<name>/client/mpq/
     //    → the MPQ at its relative path. This is the generic Tier-1 path — BLP icons, sounds, fonts,
     //    FrameXML overrides, loading screens, etc. Collisions and firewall violations bail here.
-    let sources = client_sources(src, Path::new("packages"))?;
-    let (mut files, addon_dirs) = collect_client_content(&sources)?;
+    let (mut files, addon_dirs) = collect(Path::new(SRC), Path::new("packages"))?;
 
     // 2) DBC overlays: read the operator's base DBC IN MEMORY, apply our additions, re-serialize into
     //    the MPQ (never a committed .dbc). [SPIKE] MVP payload: AreaTable round-trip UNCHANGED — a
@@ -182,6 +206,9 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         archive_path: "DBFilesClient\\AreaTable.dbc".into(),
         data: buf,
         source: "dbc-overlay".into(),
+        origin: Origin::BaselineDerived {
+            from: format!("DBFilesClient\\AreaTable.dbc in {}", data.display()),
+        },
     });
 
     // 3) Addons (ours), already collected per source: → <client>/Interface/AddOns/<Name>/.
@@ -224,16 +251,8 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         return Ok(());
     }
 
-    // Build the patch MPQ (vanilla V1, zlib, UNENCRYPTED — the client rejects encrypted patch files).
     let out = data.join(PATCH_MPQ);
-    let mut b = ArchiveBuilder::new()
-        .version(FormatVersion::V1)
-        .default_compression(flags::ZLIB);
-    for f in &files {
-        b = b.add_file_data_with_options(f.data.clone(), &f.archive_path, flags::ZLIB, false, 0);
-    }
-    b.build(&out)
-        .with_context(|| format!("build {}", out.display()))?;
+    build_patch_mpq(&files, &out)?;
     eprintln!(
         "pack-client: built {} ({} file(s))",
         out.display(),
@@ -256,8 +275,77 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     }
 
     clear_wdb(client_root)?;
-    verify(&out)?;
+    verify_area_table(&out)?;
     eprintln!("pack-client: done + verified. Restart the client (DBC/MPQ changes) or /reload (addons) to apply.");
+    Ok(())
+}
+
+/// `--pack-out <dir>` mode: the client half of the Client Artifact, for distribution. It collects
+/// the same sources as `--pack-client` and opens no client, so a baseline-derived file has no way
+/// in and is refused by name. Writes `<dir>/Data/patch-3.MPQ` and `<dir>/Interface/AddOns/<Name>/`,
+/// and nothing else. Ownership of `<dir>` (replacement, the manifest, the zip) is the CLI's.
+pub fn run_pack_out(out_dir: &str) -> Result<()> {
+    pack_out(Path::new(out_dir), Path::new(SRC), Path::new("packages"))
+}
+
+fn pack_out(out_dir: &Path, repo_src: &Path, packages_root: &Path) -> Result<()> {
+    let (files, addon_dirs) = collect(repo_src, packages_root)?;
+    write_pack_out(out_dir, &files, &addon_dirs)
+}
+
+fn write_pack_out(out_dir: &Path, files: &[PackFile], addon_dirs: &[AddonDir]) -> Result<()> {
+    refuse_baseline_derived(files)?;
+
+    // Every refusal is behind us, so nothing below can leave a half-written artifact.
+    fs::create_dir_all(out_dir).with_context(|| format!("create {}", out_dir.display()))?;
+
+    if files.is_empty() {
+        eprintln!("pack-out: no mpq/ content in any source, so no {PATCH_MPQ} is written");
+    } else {
+        let data_dir = out_dir.join("Data");
+        fs::create_dir_all(&data_dir).with_context(|| format!("create {}", data_dir.display()))?;
+        let out = data_dir.join(PATCH_MPQ);
+        build_patch_mpq(files, &out)?;
+        verify_readback(&out, &files[0])?;
+        eprintln!(
+            "pack-out: built {} ({} file(s))",
+            out.display(),
+            files.len()
+        );
+    }
+
+    let addons_dst = out_dir.join("Interface").join("AddOns");
+    for a in addon_dirs {
+        let to = addons_dst.join(&a.name);
+        copy_dir(&a.path, &to)
+            .with_context(|| format!("pack addon {} (from {})", a.name, a.source))?;
+        eprintln!(
+            "pack-out: packed addon {} → {} (from {})",
+            a.name,
+            to.display(),
+            a.source
+        );
+    }
+    eprintln!(
+        "pack-out: done. {} holds package-authored content only.",
+        out_dir.display()
+    );
+    Ok(())
+}
+
+/// The licensing firewall for a distributable artifact: baseline-derived bytes stay on the
+/// operator's machine, where `--pack-client` puts them. Refuses before the first write and names
+/// the file and the baseline input it came from. T3b adds the UI Transform check beside this one.
+fn refuse_baseline_derived(files: &[PackFile]) -> Result<()> {
+    for f in files {
+        if let Origin::BaselineDerived { from } = &f.origin {
+            bail!(
+                "{}: {} is derived from the operator's own client ({from}). A distributable artifact carries package-authored content only, so this file reaches a client through `client sync` alone",
+                f.source,
+                f.archive_path,
+            );
+        }
+    }
     Ok(())
 }
 
@@ -284,6 +372,7 @@ fn collect_raw(root: &Path, dir: &Path, out: &mut Vec<PackFile>) -> Result<()> {
                 archive_path: rel,
                 data: fs::read(&path)?,
                 source: String::new(),
+                origin: Origin::PackageAuthored,
             });
         }
     }
@@ -372,10 +461,40 @@ fn clear_wdb(client_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Build the patch MPQ (vanilla V1, zlib, UNENCRYPTED — the client rejects encrypted patch files).
+fn build_patch_mpq(files: &[PackFile], out: &Path) -> Result<()> {
+    let mut b = ArchiveBuilder::new()
+        .version(FormatVersion::V1)
+        .default_compression(flags::ZLIB);
+    for f in files {
+        b = b.add_file_data_with_options(f.data.clone(), &f.archive_path, flags::ZLIB, false, 0);
+    }
+    b.build(out)
+        .with_context(|| format!("build {}", out.display()))
+}
+
+/// Self-verify for `--pack-out`: re-open the built MPQ and confirm one packed file comes back
+/// byte for byte. There is no DBC in a package-authored archive, so this is the round-trip proof.
+fn verify_readback(mpq: &Path, file: &PackFile) -> Result<()> {
+    let mut chain = PatchChain::new();
+    chain.add_archive(mpq, 0).context("reopen built MPQ")?;
+    let bytes = chain
+        .read_file(&file.archive_path)
+        .with_context(|| format!("read {} back from the built MPQ", file.archive_path))?;
+    if bytes != file.data {
+        bail!(
+            "{} read back from {} with different bytes (MPQ round-trip failed)",
+            file.archive_path,
+            mpq.display()
+        );
+    }
+    Ok(())
+}
+
 /// Self-verify: re-open the built patch MPQ and confirm a packed DBC reads back + re-parses (proves the
 /// wow-mpq write + wow_dbc round-trip without needing the client). The live-client load is the operator's
 /// final check.
-fn verify(mpq: &Path) -> Result<()> {
+fn verify_area_table(mpq: &Path) -> Result<()> {
     let mut chain = PatchChain::new();
     chain
         .add_archive(mpq, 0)
@@ -416,6 +535,16 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// The sorted directory entry names under `dir`, for "and nothing else" assertions.
+    fn entry_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
     }
 
     #[test]
@@ -576,5 +705,145 @@ mod tests {
         let t = Scratch::new("stale-fresh");
         let dst = t.0.join("Interface/AddOns");
         assert!(stale_addons(&dst, &[]).unwrap().is_empty());
+    }
+
+    /// The Client Artifact's client half: every `mpq/` file in one archive, every addon directory
+    /// beside it, and nothing the operator's own client would need (no marker, no WDB).
+    #[test]
+    fn pack_out_writes_every_collected_file_and_addon_and_nothing_else() {
+        let t = Scratch::new("pack-out-full");
+        t.write(
+            "packages/alpha/client/mpq/Interface/Icons/Alpha.blp",
+            b"blp",
+        );
+        t.write("packages/alpha/client/addons/Alpha/Alpha.toc", b"toc");
+        t.write(
+            "packages/zeta/client/mpq/Interface/FrameXML/Zeta.lua",
+            b"lua",
+        );
+        t.write("packages/zeta/client/addons/Zeta/Zeta.lua", b"z");
+        let out = t.0.join("artifact");
+
+        pack_out(&out, &t.0.join("client-patch"), &t.0.join("packages")).unwrap();
+
+        let mut chain = PatchChain::new();
+        chain
+            .add_archive(out.join("Data").join(PATCH_MPQ), 0)
+            .unwrap();
+        assert_eq!(
+            chain.read_file("Interface\\Icons\\Alpha.blp").unwrap(),
+            b"blp"
+        );
+        assert_eq!(
+            chain.read_file("Interface\\FrameXML\\Zeta.lua").unwrap(),
+            b"lua"
+        );
+
+        let addons = out.join("Interface").join("AddOns");
+        assert_eq!(
+            fs::read_to_string(addons.join("Alpha/Alpha.toc")).unwrap(),
+            "toc"
+        );
+        assert_eq!(
+            fs::read_to_string(addons.join("Zeta/Zeta.lua")).unwrap(),
+            "z"
+        );
+        assert!(
+            !addons.join("Alpha").join(SOURCE_MARKER).exists(),
+            "the source marker belongs to the operator's own client, not a distributable artifact"
+        );
+        assert_eq!(entry_names(&out), ["Data", "Interface"]);
+        assert_eq!(entry_names(&out.join("Data")), [PATCH_MPQ]);
+    }
+
+    /// A repo whose packages ship addons only has nothing to put in an archive. wow-mpq will build
+    /// an empty one, but an artifact holding a patch MPQ with no content of ours would be a lie.
+    #[test]
+    fn pack_out_without_mpq_content_writes_the_addons_and_no_archive() {
+        let t = Scratch::new("pack-out-addons-only");
+        t.write("packages/alpha/client/addons/Alpha/Alpha.toc", b"toc");
+        let out = t.0.join("artifact");
+
+        pack_out(&out, &t.0.join("client-patch"), &t.0.join("packages")).unwrap();
+
+        assert_eq!(entry_names(&out), ["Interface"]);
+        assert!(out.join("Interface/AddOns/Alpha/Alpha.toc").exists());
+    }
+
+    /// The licensing firewall: a file computed out of the operator's client never reaches a
+    /// distributable artifact, and the refusal names the file and the baseline it came from.
+    #[test]
+    fn pack_out_refuses_a_baseline_derived_file_before_writing_anything() {
+        let t = Scratch::new("pack-out-provenance");
+        let out = t.0.join("artifact");
+        let files = vec![
+            PackFile {
+                archive_path: "Interface\\Icons\\Alpha.blp".into(),
+                data: b"blp".to_vec(),
+                source: "package alpha".into(),
+                origin: Origin::PackageAuthored,
+            },
+            PackFile {
+                archive_path: "DBFilesClient\\AreaTable.dbc".into(),
+                data: b"dbc".to_vec(),
+                source: "dbc-overlay".into(),
+                origin: Origin::BaselineDerived {
+                    from: "DBFilesClient\\AreaTable.dbc in /wowclient/Data".into(),
+                },
+            },
+        ];
+
+        let Err(e) = write_pack_out(&out, &files, &[]) else {
+            panic!("expected a provenance refusal")
+        };
+        let err = e.to_string();
+        assert!(err.contains("DBFilesClient\\AreaTable.dbc"), "{err}");
+        assert!(err.contains("/wowclient/Data"), "{err}");
+        assert!(
+            !out.exists(),
+            "a refusal must leave the output dir untouched"
+        );
+    }
+
+    /// `--pack-out` reads the repo, never a client. It runs where no client `Data/` dir exists.
+    #[test]
+    fn pack_out_needs_no_client_data_directory() {
+        let t = Scratch::new("pack-out-no-client");
+        t.write(
+            "packages/alpha/client/mpq/Interface/Icons/Alpha.blp",
+            b"blp",
+        );
+        let out = t.0.join("artifact");
+
+        pack_out(&out, &t.0.join("client-patch"), &t.0.join("packages")).unwrap();
+
+        assert!(out.join("Data").join(PATCH_MPQ).exists());
+        assert!(!t.0.join("Data").exists());
+    }
+
+    /// Both outputs collect the same sources, so a collision fails the artifact the same way it
+    /// fails a client sync, and before anything is written.
+    #[test]
+    fn pack_out_refuses_a_cross_source_collision() {
+        let t = Scratch::new("pack-out-collide");
+        t.write(
+            "packages/alpha/client/mpq/Interface/FrameXML/LootFrame.lua",
+            b"a",
+        );
+        t.write(
+            "packages/zeta/client/mpq/Interface/FrameXML/lootframe.lua",
+            b"b",
+        );
+        let out = t.0.join("artifact");
+
+        let Err(e) = pack_out(&out, &t.0.join("client-patch"), &t.0.join("packages")) else {
+            panic!("expected collision error")
+        };
+        let err = e.to_string();
+        assert!(err.contains("collision"), "{err}");
+        assert!(
+            !out.exists(),
+            "a refusal must leave the output dir untouched"
+        );
     }
 }
