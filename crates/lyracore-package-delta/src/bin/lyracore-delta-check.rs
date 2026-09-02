@@ -12,14 +12,22 @@
 //!
 //! Trace ALL of a realm's enabled artifacts in one invocation. Conflicts exist BETWEEN Packages, so
 //! checking one file at a time can only ever prove that one file parses.
+//!
+//! `lyracore-delta-check --print-events` is a second, unrelated mode: it prints the Event Binding
+//! catalogue and exits, reading no file and tracing nothing. See [`print_events`].
 
 use std::path::Path;
 use std::process::ExitCode;
 
-use lyracore_package_delta::{trace, ClaimTrace, Operation, PackageDelta};
+use lyracore_package_delta::{trace, ClaimTrace, Operation, PackageDelta, HOOK_EVENT_NAMES};
 
 fn main() -> ExitCode {
-    let paths: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--print-events") {
+        return print_events(&args);
+    }
+
+    let paths = args;
     if paths.is_empty() || paths.iter().any(|a| a == "-h" || a == "--help") {
         eprintln!(
             "usage: lyracore-delta-check <artifact.json>...\n\n\
@@ -27,7 +35,8 @@ fn main() -> ExitCode {
              Exits non-zero on a refused artifact or a Claim Conflict. Reads no client data and \
              no database.\n\n\
              Name every enabled Package's artifacts in ONE run: a Claim Conflict is between \
-             Packages, so one file alone cannot show one."
+             Packages, so one file alone cannot show one.\n\n\
+             lyracore-delta-check --print-events prints the Event Binding catalogue instead."
         );
         return ExitCode::FAILURE;
     }
@@ -60,6 +69,30 @@ fn main() -> ExitCode {
         );
         ExitCode::FAILURE
     }
+}
+
+/// Prints [`HOOK_EVENT_NAMES`], one event per line, in catalogue order, and exits.
+///
+/// `--print-events` must be the only argument: this mode reads no artifact, no other file and the
+/// clock never enters it, so the output is byte-stable across machines and runs. A future Package's
+/// TypeScript authoring surface is generated from this output, so it stays the one place outside the
+/// Module's own build that knows the Event Binding catalogue — `HOOK_EVENT_NAMES` here is already a
+/// second copy of `module/build.rs`'s `HOOK_EVENTS`; this prints that copy rather than hand-writing
+/// a third.
+fn print_events(args: &[String]) -> ExitCode {
+    if args.len() != 1 {
+        eprintln!(
+            "usage: lyracore-delta-check --print-events\n\n\
+             Prints the catalogue of events a Runtime Script may bind to, one per line, in \
+             catalogue order, and exits. Takes no other argument."
+        );
+        return ExitCode::FAILURE;
+    }
+
+    for event in HOOK_EVENT_NAMES {
+        println!("{event}");
+    }
+    ExitCode::SUCCESS
 }
 
 /// A refusal names the FILE, so an author with several Packages open knows which one to fix.
