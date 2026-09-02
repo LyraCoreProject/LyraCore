@@ -23,19 +23,28 @@
 //! so our overlay shadows the base. Patch files must be UNENCRYPTED. After a DBC change the `WDB/` cache
 //! must be cleared or the client serves stale name/tooltip/icon data.
 //!
+//! UI TRANSFORMS: a source may also ship a `ui-transforms.json` beside its `mpq/` and `addons/`
+//! trees. Each entry anchors an insertion into one stock FrameXML or GlueXML file. The packer reads
+//! that file's baseline out of the operator's own UI archives, composes every Package's edits for
+//! it, and packs the result — so two Packages can extend one stock file without either owning it.
+//! A composed file is [`Origin::BaselineDerived`]: it is the client's own bytes with our edits in
+//! it, and it never leaves this machine.
+//!
 //! `--pack-out <dir>` is the second output: the same collected sources written into a plain
 //! directory, for distribution. It never opens a client, so it refuses every baseline-derived file
 //! by its [`Origin`] and names where those bytes came from.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use wow_dbc::vanilla_tables::area_table::AreaTable;
 use wow_dbc::DbcTable;
 use wow_mpq::{compression::flags, ArchiveBuilder, FormatVersion, PatchChain};
 
+use crate::ui_transform::{self, Edit};
 use crate::Args;
 
 /// First free numeric patch slot on this client (base < patch < patch-2 < patch-3); higher wins.
@@ -49,6 +58,10 @@ const SRC: &str = "client-patch";
 /// written. It exists solely to power [`stale_addons`]'s warning; nothing here reads it to decide
 /// what to overwrite, and nothing here deletes on its account.
 const SOURCE_MARKER: &str = ".lyracore-source";
+
+/// A source's UI Transform declaration, read from the contribution root itself (beside `mpq/` and
+/// `addons/`) rather than from inside either, so it is never mistaken for content to pack.
+const UI_TRANSFORMS: &str = "ui-transforms.json";
 
 /// Where a packed file's bytes came from. `source` is the human label; this is the provenance the
 /// licensing firewall reads. Only package-authored bytes may leave this machine.
@@ -167,16 +180,165 @@ fn collect_client_content(
     Ok((files, addons))
 }
 
-/// Collect the repo's client contributions once, for either output. The roots are the same; only
+/// Parse every source's [`UI_TRANSFORMS`] declaration. Most sources have none; that is normal, and
+/// a source with one still contributes its `mpq/` and `addons/` trees as usual. The source label
+/// (`client-patch` or `package <name>`) names the owner in every refusal the engine raises.
+fn collect_ui_transforms(sources: &[(String, PathBuf)]) -> Result<Vec<Edit>> {
+    let mut edits = Vec::new();
+    for (label, root) in sources {
+        let declaration = root.join(UI_TRANSFORMS);
+        if !declaration.is_file() {
+            continue;
+        }
+        let json = fs::read_to_string(&declaration)
+            .with_context(|| format!("read {}", declaration.display()))?;
+        edits.extend(ui_transform::parse(label, &json)?);
+    }
+    Ok(edits)
+}
+
+/// Everything the repo contributes, collected once for either output. The roots are the same; only
 /// what happens afterwards differs.
-fn collect(repo_src: &Path, packages_root: &Path) -> Result<(Vec<PackFile>, Vec<AddonDir>)> {
+fn collect(
+    repo_src: &Path,
+    packages_root: &Path,
+) -> Result<(Vec<PackFile>, Vec<AddonDir>, Vec<Edit>)> {
     let sources = client_sources(repo_src, packages_root)?;
-    collect_client_content(&sources)
+    let (files, addons) = collect_client_content(&sources)?;
+    let transforms = collect_ui_transforms(&sources)?;
+    Ok((files, addons, transforms))
+}
+
+/// Group edits by the file they change, matching paths case-insensitively because the archive
+/// does. The key orders the groups, so the composed output does not depend on which Package the
+/// walk reached first; the displayed path keeps its first author's casing.
+fn group_by_path(edits: &[Edit]) -> Vec<(&str, Vec<&Edit>)> {
+    let mut grouped: BTreeMap<String, (&str, Vec<&Edit>)> = BTreeMap::new();
+    for edit in edits {
+        grouped
+            .entry(edit.path.to_ascii_lowercase())
+            .or_insert_with(|| (edit.path.as_str(), Vec::new()))
+            .1
+            .push(edit);
+    }
+    grouped.into_values().collect()
+}
+
+/// The Packages behind one group, in source order and without repeats, for a refusal message.
+fn transforming_packages(edits: &[&Edit]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for edit in edits {
+        if !names.contains(&edit.package) {
+            names.push(edit.package.clone());
+        }
+    }
+    names
+}
+
+/// Put the record header in front of the composed file, or, when an XML document opens with an XML
+/// declaration, straight after it. A declaration has to be the first thing in the document, so a
+/// comment above it would make the client reject the file.
+fn with_record_header(header: &str, composed: &str) -> String {
+    if composed.starts_with("<?xml") {
+        if let Some(end) = composed.find("?>") {
+            let (declaration, rest) = composed.split_at(end + 2);
+            let rest = rest
+                .strip_prefix("\r\n")
+                .or_else(|| rest.strip_prefix('\n'))
+                .unwrap_or(rest);
+            return format!("{declaration}\n{header}{rest}");
+        }
+    }
+    format!("{header}{composed}")
+}
+
+/// An `mpq/` file replaces a stock file whole; a UI Transform edits the stock file in place. Both
+/// at one path is a contradiction with no winner worth guessing at, so it fails the pack the same
+/// way a cross-source collision does.
+fn refuse_override_of_a_transformed_path(
+    files: &[PackFile],
+    groups: &[(&str, Vec<&Edit>)],
+) -> Result<()> {
+    for (path, edits) in groups {
+        let lower = path.to_ascii_lowercase();
+        let Some(override_file) = files
+            .iter()
+            .find(|f| f.archive_path.to_ascii_lowercase() == lower)
+        else {
+            continue;
+        };
+        bail!(
+            "{} is shipped as a whole-file override by {} AND edited by a UI Transform from {} — a file can be replaced or patched, not both; drop the override or the transform",
+            override_file.archive_path,
+            override_file.source,
+            transforming_packages(edits).join(", "),
+        );
+    }
+    Ok(())
+}
+
+/// Compose every transformed path against the operator's own client and return the results as
+/// packed files, ready to join the collision checks like any other path.
+///
+/// The bytes that come back are the client's own baseline with the Packages' edits applied, so
+/// each one is [`Origin::BaselineDerived`] and names the archive it was read out of. A
+/// [`ui_transform::record_header`] line goes in front, carrying the baseline hash and the
+/// transforms hash: the same client and the same declarations rebuild byte-identical output.
+fn compose_ui_transforms(data: &Path, groups: &[(&str, Vec<&Edit>)]) -> Result<Vec<PackFile>> {
+    if groups.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut chain = crate::dbc::open_ui_baseline_chain(data)?;
+    let searched: Vec<String> = crate::dbc::ui_baseline_archives(data)
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+
+    let mut packed = Vec::with_capacity(groups.len());
+    for (path, edits) in groups {
+        let archive = chain
+            .find_file_archive(path)
+            .map(|a| a.display().to_string())
+            .unwrap_or_else(|| searched.join(", "));
+        let bytes = chain.read_file(path).with_context(|| {
+            format!(
+                "{path} is not in this client's UI archives ({}) — check the path against the stock UI",
+                searched.join(", ")
+            )
+        })?;
+        let baseline_hash = blake3::hash(&bytes).to_hex().to_string();
+        let baseline = String::from_utf8(bytes)
+            .with_context(|| format!("{path} in {archive} is not UTF-8 text"))?;
+
+        let composed = ui_transform::compose(path, &baseline, edits)?;
+        let header = ui_transform::record_header(
+            path,
+            &baseline_hash,
+            &ui_transform::transforms_hash(edits),
+        );
+        packed.push(PackFile {
+            archive_path: (*path).to_string(),
+            data: with_record_header(&header, &composed).into_bytes(),
+            source: format!("ui-transform ({})", transforming_packages(edits).join(", ")),
+            origin: Origin::BaselineDerived {
+                from: format!("{archive}:{path}"),
+            },
+        });
+    }
+    Ok(packed)
 }
 
 /// `--pack-client <client Data/ dir>` mode. Without `--apply` it's a dry run (prints what it would do).
 pub fn run(data_dir: &str, args: &Args) -> Result<()> {
-    let data = Path::new(data_dir);
+    pack_client(
+        Path::new(data_dir),
+        args.apply,
+        Path::new(SRC),
+        Path::new("packages"),
+    )
+}
+
+fn pack_client(data: &Path, apply: bool, repo_src: &Path, packages_root: &Path) -> Result<()> {
     if !data.join("dbc.MPQ").exists() && !data.join("patch.MPQ").exists() {
         bail!(
             "{} doesn't look like a client Data/ dir (no dbc.MPQ/patch.MPQ)",
@@ -188,7 +350,12 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     // 1) Raw assets (ours), from EVERY source: client-patch/mpq/ plus each packages/<name>/client/mpq/
     //    → the MPQ at its relative path. This is the generic Tier-1 path — BLP icons, sounds, fonts,
     //    FrameXML overrides, loading screens, etc. Collisions and firewall violations bail here.
-    let (mut files, addon_dirs) = collect(Path::new(SRC), Path::new("packages"))?;
+    let (mut files, addon_dirs, transforms) = collect(repo_src, packages_root)?;
+
+    // 1b) UI Transforms, declared by the same sources. The repo-only refusals (a bad declaration,
+    //     an override contradicting a transform) land here, before the client is opened at all.
+    let groups = group_by_path(&transforms);
+    refuse_override_of_a_transformed_path(&files, &groups)?;
 
     // 2) DBC overlays: read the operator's base DBC IN MEMORY, apply our additions, re-serialize into
     //    the MPQ (never a committed .dbc). [SPIKE] MVP payload: AreaTable round-trip UNCHANGED — a
@@ -211,6 +378,10 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         },
     });
 
+    // 2b) UI Transforms: compose each edited stock file against this client's UI archives. The
+    //     AreaTable read above already refused a wrong client version, so no second check is needed.
+    files.extend(compose_ui_transforms(data, &groups)?);
+
     // 3) Addons (ours), already collected per source: → <client>/Interface/AddOns/<Name>/.
     let addons_dst = client_root.join("Interface").join("AddOns");
 
@@ -221,7 +392,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         eprintln!("pack-client: WARNING — {warning}");
     }
 
-    if !args.apply {
+    if !apply {
         println!("-- DRY RUN (--pack-client). Re-run with --apply to write to your client.");
         println!(
             "would build {} with {} file(s):",
@@ -229,11 +400,18 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
             files.len()
         );
         for f in &files {
+            // The origin is on the listing because it decides where the file may go: a
+            // baseline-derived one reaches this client and no artifact.
+            let derived = match &f.origin {
+                Origin::PackageAuthored => String::new(),
+                Origin::BaselineDerived { from } => format!(", derived from {from}"),
+            };
             println!(
-                "    {}  ({} bytes, from {})",
+                "    {}  ({} bytes, from {}{})",
                 f.archive_path,
                 f.data.len(),
-                f.source
+                f.source,
+                derived
             );
         }
         println!(
@@ -289,12 +467,17 @@ pub fn run_pack_out(out_dir: &str) -> Result<()> {
 }
 
 fn pack_out(out_dir: &Path, repo_src: &Path, packages_root: &Path) -> Result<()> {
-    let (files, addon_dirs) = collect(repo_src, packages_root)?;
-    write_pack_out(out_dir, &files, &addon_dirs)
+    let (files, addon_dirs, transforms) = collect(repo_src, packages_root)?;
+    write_pack_out(out_dir, &files, &addon_dirs, &transforms)
 }
 
-fn write_pack_out(out_dir: &Path, files: &[PackFile], addon_dirs: &[AddonDir]) -> Result<()> {
-    refuse_baseline_derived(files)?;
+fn write_pack_out(
+    out_dir: &Path,
+    files: &[PackFile],
+    addon_dirs: &[AddonDir],
+    transforms: &[Edit],
+) -> Result<()> {
+    refuse_baseline_derived(files, transforms)?;
 
     // Every refusal is behind us, so nothing below can leave a half-written artifact.
     fs::create_dir_all(out_dir).with_context(|| format!("create {}", out_dir.display()))?;
@@ -335,8 +518,12 @@ fn write_pack_out(out_dir: &Path, files: &[PackFile], addon_dirs: &[AddonDir]) -
 
 /// The licensing firewall for a distributable artifact: baseline-derived bytes stay on the
 /// operator's machine, where `--pack-client` puts them. Refuses before the first write and names
-/// the file and the baseline input it came from. T3b adds the UI Transform check beside this one.
-fn refuse_baseline_derived(files: &[PackFile]) -> Result<()> {
+/// the file and the baseline input it came from.
+///
+/// A UI Transform is refused from its declaration rather than from its output, because `--pack-out`
+/// opens no client and so never composes one. Declaring an edit is enough: whatever it produces is
+/// the client's own baseline with that edit in it.
+fn refuse_baseline_derived(files: &[PackFile], transforms: &[Edit]) -> Result<()> {
     for f in files {
         if let Origin::BaselineDerived { from } = &f.origin {
             bail!(
@@ -345,6 +532,19 @@ fn refuse_baseline_derived(files: &[PackFile]) -> Result<()> {
                 f.archive_path,
             );
         }
+    }
+
+    if !transforms.is_empty() {
+        let mut declared: Vec<String> = transforms
+            .iter()
+            .map(|e| format!("{} edits {}", e.package, e.path))
+            .collect();
+        declared.sort();
+        declared.dedup();
+        bail!(
+            "UI Transform declared: {}. A composed UI file is the operator's own client baseline with those edits applied, so a distributable artifact cannot carry it; it reaches a client through `client sync` alone",
+            declared.join("; "),
+        );
     }
     Ok(())
 }
@@ -793,7 +993,7 @@ mod tests {
             },
         ];
 
-        let Err(e) = write_pack_out(&out, &files, &[]) else {
+        let Err(e) = write_pack_out(&out, &files, &[], &[]) else {
             panic!("expected a provenance refusal")
         };
         let err = e.to_string();
@@ -845,5 +1045,349 @@ mod tests {
             !out.exists(),
             "a refusal must leave the output dir untouched"
         );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    //  UI Transforms
+    // ---------------------------------------------------------------------------------------
+
+    const LOOT_FRAME_LUA: &str =
+        "function LootFrame_OnLoad()\n\tthis:RegisterEvent(\"LOOT_OPENED\");\nend\n";
+    const FRAMEXML_TOC: &str = "## Interface: 11200\nLootFrame.xml\nMainMenuBar.xml\n";
+
+    fn build_scratch_mpq(out: &Path, files: &[(&str, &[u8])]) {
+        fs::create_dir_all(out.parent().unwrap()).unwrap();
+        let mut b = ArchiveBuilder::new()
+            .version(FormatVersion::V1)
+            .default_compression(flags::ZLIB);
+        for (path, data) in files {
+            b = b.add_file_data_with_options(data.to_vec(), path, flags::ZLIB, false, 0);
+        }
+        b.build(out).unwrap();
+    }
+
+    /// A scratch client `Data/` dir: an empty `AreaTable.dbc` in `dbc.MPQ` (the version check reads
+    /// it) and the given stock UI files in `interface.MPQ`. Never a real client.
+    fn scratch_client(t: &Scratch, ui: &[(&str, &[u8])]) -> PathBuf {
+        let data = t.0.join("client/Data");
+        let mut dbc = Vec::new();
+        AreaTable { rows: Vec::new() }.write(&mut dbc).unwrap();
+        build_scratch_mpq(
+            &data.join("dbc.MPQ"),
+            &[("DBFilesClient\\AreaTable.dbc", &dbc)],
+        );
+        build_scratch_mpq(&data.join("interface.MPQ"), ui);
+        data
+    }
+
+    /// One file's text out of a built patch MPQ.
+    fn packed_text(mpq: &Path, archive_path: &str) -> String {
+        let mut chain = PatchChain::new();
+        chain.add_archive(mpq, 0).unwrap();
+        String::from_utf8(chain.read_file(archive_path).unwrap()).unwrap()
+    }
+
+    /// The whole point: a Package extends a stock FrameXML file it does not own, and the composed
+    /// result carries the header, the insertion and the baseline it was composed from.
+    #[test]
+    fn a_transform_composes_the_stock_file_into_the_patch_mpq() {
+        let t = Scratch::new("ui-compose");
+        let data = scratch_client(
+            &t,
+            &[(
+                "Interface\\FrameXML\\LootFrame.lua",
+                LOOT_FRAME_LUA.as_bytes(),
+            )],
+        );
+        t.write(
+            "packages/loot/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/LootFrame.lua",
+                  "after": "function LootFrame_OnLoad()",
+                  "insert": "\n\tPkgLoot_OnLoad();" }]"#,
+        );
+
+        pack_client(
+            &data,
+            true,
+            &t.0.join("client-patch"),
+            &t.0.join("packages"),
+        )
+        .unwrap();
+
+        let composed = packed_text(&data.join(PATCH_MPQ), "Interface\\FrameXML\\LootFrame.lua");
+        assert!(
+            composed.starts_with("-- Generated by LyraCore from the operator's client. baseline="),
+            "{composed}"
+        );
+        assert!(composed.contains("\tPkgLoot_OnLoad();"), "{composed}");
+        assert!(
+            composed.contains("this:RegisterEvent(\"LOOT_OPENED\");"),
+            "the baseline must survive the edit: {composed}"
+        );
+        assert_eq!(
+            entry_names(&t.0.join("packages/loot/client")),
+            ["ui-transforms.json"],
+            "the baseline is read from the client and never written back into the repo"
+        );
+    }
+
+    /// The namespaced-file pattern: the Package ships `PkgLoot.lua` under its own `mpq/` and adds
+    /// the TOC line that loads it with a transform. Nothing else is needed to extend the stock UI.
+    #[test]
+    fn a_package_owned_file_and_the_toc_line_that_loads_it_both_land() {
+        let t = Scratch::new("ui-namespaced");
+        let data = scratch_client(
+            &t,
+            &[("Interface\\FrameXML\\FrameXML.toc", FRAMEXML_TOC.as_bytes())],
+        );
+        t.write(
+            "packages/loot/client/mpq/Interface/FrameXML/PkgLoot.lua",
+            b"function PkgLoot_OnLoad() end\n",
+        );
+        t.write(
+            "packages/loot/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/FrameXML.toc",
+                  "before": "LootFrame.xml",
+                  "insert": "PkgLoot.lua\n" }]"#,
+        );
+
+        pack_client(
+            &data,
+            true,
+            &t.0.join("client-patch"),
+            &t.0.join("packages"),
+        )
+        .unwrap();
+
+        let mpq = data.join(PATCH_MPQ);
+        assert_eq!(
+            packed_text(&mpq, "Interface\\FrameXML\\PkgLoot.lua"),
+            "function PkgLoot_OnLoad() end\n"
+        );
+        let toc = packed_text(&mpq, "Interface\\FrameXML\\FrameXML.toc");
+        assert!(toc.starts_with("# Generated by LyraCore"), "{toc}");
+        assert!(toc.contains("PkgLoot.lua\nLootFrame.xml\n"), "{toc}");
+    }
+
+    /// Two Packages extend one stock file at different anchors. Neither owns the file, and the
+    /// composed output holds both edits in the baseline's own order.
+    #[test]
+    fn two_packages_edit_one_file_at_disjoint_anchors() {
+        let t = Scratch::new("ui-two-packages");
+        let data = scratch_client(
+            &t,
+            &[("Interface\\FrameXML\\FrameXML.toc", FRAMEXML_TOC.as_bytes())],
+        );
+        t.write(
+            "packages/alpha/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/FrameXML.toc",
+                  "before": "LootFrame.xml",
+                  "insert": "Alpha.lua\n" }]"#,
+        );
+        t.write(
+            "packages/zeta/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/FrameXML.toc",
+                  "after": "MainMenuBar.xml",
+                  "insert": "\nZeta.lua" }]"#,
+        );
+
+        pack_client(
+            &data,
+            true,
+            &t.0.join("client-patch"),
+            &t.0.join("packages"),
+        )
+        .unwrap();
+
+        let toc = packed_text(&data.join(PATCH_MPQ), "Interface\\FrameXML\\FrameXML.toc");
+        let body = toc.split_once('\n').expect("a record header line").1;
+        assert_eq!(
+            body,
+            "## Interface: 11200\nAlpha.lua\nLootFrame.xml\nMainMenuBar.xml\nZeta.lua\n"
+        );
+    }
+
+    /// An XML declaration has to stay the first thing in the document, so the header goes under it
+    /// rather than above it. Every other file takes the header first.
+    #[test]
+    fn the_record_header_never_displaces_an_xml_declaration() {
+        assert_eq!(
+            with_record_header("<!-- h -->\n", "<?xml version=\"1.0\"?>\n<Ui/>\n"),
+            "<?xml version=\"1.0\"?>\n<!-- h -->\n<Ui/>\n"
+        );
+        assert_eq!(
+            with_record_header("<!-- h -->\n", "<Ui/>\n"),
+            "<!-- h -->\n<Ui/>\n"
+        );
+    }
+
+    /// Two Packages claiming byte ranges that intersect have no correct merge, so the pack fails
+    /// naming both of them, and the client keeps the patch it already had.
+    #[test]
+    fn overlapping_transforms_refuse_and_write_nothing() {
+        let t = Scratch::new("ui-overlap");
+        let data = scratch_client(
+            &t,
+            &[(
+                "Interface\\FrameXML\\LootFrame.lua",
+                LOOT_FRAME_LUA.as_bytes(),
+            )],
+        );
+        t.write(
+            "packages/alpha/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/LootFrame.lua",
+                  "after": "function LootFrame", "insert": "a" }]"#,
+        );
+        t.write(
+            "packages/zeta/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/LootFrame.lua",
+                  "before": "LootFrame_OnLoad()", "insert": "z" }]"#,
+        );
+
+        let Err(e) = pack_client(
+            &data,
+            true,
+            &t.0.join("client-patch"),
+            &t.0.join("packages"),
+        ) else {
+            panic!("expected an overlap refusal")
+        };
+        let err = e.to_string();
+        assert!(
+            err.contains("package alpha") && err.contains("package zeta"),
+            "{err}"
+        );
+        assert!(err.contains("LootFrame.lua"), "{err}");
+        assert!(err.contains("overlap"), "{err}");
+        assert!(!data.join(PATCH_MPQ).exists(), "a refusal writes nothing");
+    }
+
+    /// An anchor the baseline holds twice could attach in two places, so the pack refuses rather
+    /// than pick one.
+    #[test]
+    fn an_ambiguous_anchor_refuses_and_writes_nothing() {
+        let t = Scratch::new("ui-ambiguous");
+        let data = scratch_client(
+            &t,
+            &[("Interface\\FrameXML\\FrameXML.toc", FRAMEXML_TOC.as_bytes())],
+        );
+        t.write(
+            "packages/loot/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/FrameXML.toc",
+                  "after": ".xml", "insert": "x" }]"#,
+        );
+
+        let Err(e) = pack_client(
+            &data,
+            true,
+            &t.0.join("client-patch"),
+            &t.0.join("packages"),
+        ) else {
+            panic!("expected an ambiguous-anchor refusal")
+        };
+        let err = e.to_string();
+        assert!(err.contains("package loot"), "{err}");
+        assert!(err.contains("FrameXML.toc"), "{err}");
+        assert!(err.contains("ambiguous"), "{err}");
+        assert!(!data.join(PATCH_MPQ).exists(), "a refusal writes nothing");
+    }
+
+    /// One source replaces a stock file whole while another patches it in place. The override would
+    /// swallow the transform, so the pack refuses and names both sources and the path.
+    #[test]
+    fn an_override_of_a_transformed_path_refuses_and_writes_nothing() {
+        let t = Scratch::new("ui-override");
+        let data = scratch_client(
+            &t,
+            &[(
+                "Interface\\FrameXML\\LootFrame.lua",
+                LOOT_FRAME_LUA.as_bytes(),
+            )],
+        );
+        t.write(
+            "packages/alpha/client/mpq/Interface/FrameXML/LootFrame.lua",
+            b"-- alpha owns the whole file\n",
+        );
+        t.write(
+            "packages/zeta/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/lootframe.lua",
+                  "after": "function LootFrame_OnLoad()", "insert": "z" }]"#,
+        );
+
+        let Err(e) = pack_client(
+            &data,
+            true,
+            &t.0.join("client-patch"),
+            &t.0.join("packages"),
+        ) else {
+            panic!("expected an override-versus-transform refusal")
+        };
+        let err = e.to_string();
+        assert!(
+            err.contains("package alpha") && err.contains("package zeta"),
+            "{err}"
+        );
+        assert!(err.contains("LootFrame.lua"), "{err}");
+        assert!(!data.join(PATCH_MPQ).exists(), "a refusal writes nothing");
+    }
+
+    /// The licensing firewall for a transform: `--pack-out` never opens a client, so it refuses the
+    /// declaration itself and names every Package and path behind it.
+    #[test]
+    fn pack_out_refuses_a_declared_transform_without_any_client() {
+        let t = Scratch::new("ui-pack-out");
+        t.write(
+            "packages/loot/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/LootFrame.lua",
+                  "after": "function LootFrame_OnLoad()", "insert": "x" }]"#,
+        );
+        let out = t.0.join("artifact");
+
+        let Err(e) = pack_out(&out, &t.0.join("client-patch"), &t.0.join("packages")) else {
+            panic!("expected a provenance refusal")
+        };
+        let err = e.to_string();
+        assert!(err.contains("package loot"), "{err}");
+        assert!(err.contains("Interface\\FrameXML\\LootFrame.lua"), "{err}");
+        assert!(err.contains("client sync"), "{err}");
+        assert!(
+            !out.exists(),
+            "a refusal must leave the output dir untouched"
+        );
+        assert!(
+            !t.0.join("client").exists(),
+            "--pack-out must not need a client Data/ dir anywhere"
+        );
+    }
+
+    /// The DBC read is the one client-version check. A client whose `AreaTable.dbc` is not the
+    /// build-5875 schema fails there, before a single baseline byte is read.
+    #[test]
+    fn a_wrong_client_version_refuses_before_any_baseline_read() {
+        let t = Scratch::new("ui-wrong-version");
+        let data = t.0.join("client/Data");
+        build_scratch_mpq(
+            &data.join("dbc.MPQ"),
+            &[("DBFilesClient\\AreaTable.dbc", b"not a 5875 DBC")],
+        );
+        // No interface.MPQ: reaching the baseline read would fail with a different message.
+        t.write(
+            "packages/loot/client/ui-transforms.json",
+            br#"[{ "path": "Interface/FrameXML/LootFrame.lua",
+                  "after": "function LootFrame_OnLoad()", "insert": "x" }]"#,
+        );
+
+        let Err(e) = pack_client(
+            &data,
+            true,
+            &t.0.join("client-patch"),
+            &t.0.join("packages"),
+        ) else {
+            panic!("expected a client-version refusal")
+        };
+        let err = e.to_string();
+        assert!(err.contains("AreaTable.dbc"), "{err}");
+        assert!(err.contains("wrong client version"), "{err}");
+        assert!(!data.join(PATCH_MPQ).exists(), "a refusal writes nothing");
     }
 }

@@ -21,8 +21,9 @@
 //! wrong-version / heavily-patched client surfaces as a clear parse error here (the version guard).
 
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use wow_dbc::vanilla_tables::area_table::AreaTable as DbcAreaTable;
@@ -71,6 +72,72 @@ pub(crate) fn open_chain(data_dir: &Path) -> Result<PatchChain> {
             "no client MPQ archives in {} (expected dbc.MPQ — point --dbc at the client's Data/ dir)",
             data_dir.display()
         );
+    }
+    Ok(chain)
+}
+
+/// The archives that hold the stock FrameXML and GlueXML sources, in client load order (later
+/// entries override earlier ones). Only archives that exist are listed, so the result doubles as
+/// the "where we looked" list in a not-found message.
+///
+/// On a 1.12.1 client `interface.MPQ` carries the `Interface\` tree and the locale archive under
+/// `Data/<locale>/` carries the localised `.lua`, `.xml` and `.toc` sources; the numbered patches
+/// re-ship both, and a locale patch outranks the matching generic one.
+///
+/// `patch-3.MPQ` is deliberately absent, in both its generic and its locale spelling. It is the
+/// client packer's OWN previous output, so reading it as a baseline would compose a UI Transform
+/// onto an already-transformed file and drift further on every run.
+pub(crate) fn ui_baseline_archives(data_dir: &Path) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = vec![data_dir.join("interface.MPQ")];
+    if let Some(locale) = client_locale(data_dir) {
+        let dir = data_dir.join(&locale);
+        candidates.push(dir.join(format!("locale-{locale}.MPQ")));
+        candidates.push(data_dir.join("patch.MPQ"));
+        candidates.push(data_dir.join("patch-2.MPQ"));
+        candidates.push(dir.join(format!("patch-{locale}.MPQ")));
+        candidates.push(dir.join(format!("patch-2-{locale}.MPQ")));
+    } else {
+        candidates.push(data_dir.join("patch.MPQ"));
+        candidates.push(data_dir.join("patch-2.MPQ"));
+    }
+    candidates.retain(|p| p.exists());
+    candidates
+}
+
+/// The client's locale, read off the one `Data/<locale>/locale-<locale>.MPQ` that exists. A client
+/// carries exactly one; if an operator kept several, the alphabetically first wins so two runs on
+/// the same install never compose against different baselines.
+fn client_locale(data_dir: &Path) -> Option<String> {
+    let mut found: Vec<String> = fs::read_dir(data_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            data_dir
+                .join(name)
+                .join(format!("locale-{name}.MPQ"))
+                .is_file()
+        })
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+/// Open [`ui_baseline_archives`] as a read-only chain, for composing UI Transforms against the
+/// operator's own client. READ-ONLY, and never a write target.
+pub(crate) fn open_ui_baseline_chain(data_dir: &Path) -> Result<PatchChain> {
+    let archives = ui_baseline_archives(data_dir);
+    if archives.is_empty() {
+        bail!(
+            "no client UI archives in {} (expected interface.MPQ or a locale archive under Data/<locale>/)",
+            data_dir.display()
+        );
+    }
+    let mut chain = PatchChain::new();
+    for (prio, path) in archives.iter().enumerate() {
+        chain
+            .add_archive(path, prio as i32)
+            .with_context(|| format!("open MPQ {}", path.display()))?;
     }
     Ok(chain)
 }
@@ -1291,6 +1358,63 @@ mod tests {
     use wow_dbc::vanilla_tables::zone_music::ZoneMusicKey;
     use wow_dbc::LocalizedString;
     use wow_world_base::vanilla::AreaFlags;
+
+    /// A scratch `Data/` tree of empty placeholder archives. [`ui_baseline_archives`] only tests
+    /// for existence, so no archive here needs real MPQ bytes.
+    fn placeholder_data_dir(tag: &str, names: &[&str]) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("dbc-ui-baseline-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        for name in names {
+            let path = dir.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn ui_baseline_chain_never_reads_the_packers_own_patch_3() {
+        let dir = placeholder_data_dir(
+            "no-patch-3",
+            &[
+                "dbc.MPQ",
+                "interface.MPQ",
+                "patch.MPQ",
+                "patch-2.MPQ",
+                "patch-3.MPQ",
+                "enUS/locale-enUS.MPQ",
+                "enUS/patch-enUS.MPQ",
+                "enUS/patch-3-enUS.MPQ",
+            ],
+        );
+        let listed: Vec<String> = ui_baseline_archives(&dir)
+            .iter()
+            .map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().into_owned())
+            .collect();
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            listed,
+            [
+                "interface.MPQ",
+                "enUS/locale-enUS.MPQ",
+                "patch.MPQ",
+                "patch-2.MPQ",
+                "enUS/patch-enUS.MPQ",
+            ],
+            "load order, and patch-3 in either spelling is our own output"
+        );
+    }
+
+    #[test]
+    fn ui_baseline_chain_skips_archives_a_client_does_not_have() {
+        let dir = placeholder_data_dir("sparse", &["dbc.MPQ", "interface.MPQ"]);
+        let listed = ui_baseline_archives(&dir);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert!(listed[0].ends_with("interface.MPQ"), "{listed:?}");
+    }
 
     fn auction_house_row(
         id: u32,
