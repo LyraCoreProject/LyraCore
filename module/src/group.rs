@@ -23,7 +23,8 @@
 //! `ctx.sender()` to resolve — it is a decision the module's own goal tick makes. It cannot write
 //! group rows for the same reason a player's cross-shard invite cannot: only the gateway can reach
 //! realm-core. [`BotInviteIntent`] is the module's half of that split — a DECISION, not a write —
-//! picked up by `gateway/src/world/party.rs`'s `run_bot_invite`.
+//! picked up by `gateway/src/world/party.rs`'s `run_bot_invite`. The same row carries a bot's
+//! decision to LEAVE its party, which meets the identical authority wall.
 //!
 //! Vanilla-parity notes for this slice: party cap 5; kill XP splits EVENLY among in-range living
 //! members (each member's grey-clamp applies to their OWN level, so a too-high member naturally
@@ -221,6 +222,10 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_group_invite());
 /// CMSG_GROUP_INVITE would, so a bot party is created through the authority a `sync_group_mirror`
 /// push never contradicts.
 ///
+/// The row carries a LEAVE as well as an INVITE now (see [`op`](Self::op)) — a bot leaving a party
+/// hits the same authority wall the invite did. The table keeps its name because renaming one is a
+/// migration and this is not.
+///
 /// Private — no client ever needs to see this, only the gateway's owner-token coordinator connection
 /// (the `game_account`/`game_session` pattern). Short-lived: reaped by
 /// the shared 1s event TTL (`gc.rs`), which is generous — the gateway's subscription callback fires
@@ -233,6 +238,14 @@ pub struct BotInviteIntent {
     pub inviter_guid: u64,
     pub target_guid: u64,
     pub created_at: Timestamp,
+    /// Which group op the gateway should run: [`lyracore_shared::group::bot_op`]. END-appended with
+    /// a `0` default, so every row written before this column existed reads as the INVITE it was.
+    ///
+    /// A leave needs the same relay for the same reason an invite does — membership is
+    /// authoritative on realm-core and the module cannot reach it — so it rides this row rather
+    /// than a second table with an identical shape and an identical reaper.
+    #[default(0u8)]
+    pub op: u8,
 }
 
 /// Record a bot's serendipity invite DECISION for the gateway to execute (issue #54). No gating here
@@ -247,11 +260,30 @@ pub struct BotInviteIntent {
 /// dead code.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_bot_invite_intent(ctx: &ReducerContext, inviter_guid: u64, target_guid: u64) {
+    emit_bot_group_intent(ctx, bot_op::INVITE, inviter_guid, target_guid);
+}
+
+/// Record a session-less Character's decision to LEAVE its party, for the gateway to execute.
+///
+/// The same split, and the same reason: a bot that ran `leave_group_for` itself would write this
+/// shard's local member rows, and the next `sync_group_mirror` push would put the party back.
+///
+/// Nothing here checks that the Character is in a party. `leave_group_for` refuses a non-member, so
+/// a decision that has already been executed costs one refused op rather than a wrong one.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn emit_bot_leave_intent(ctx: &ReducerContext, leaver_guid: u64) {
+    emit_bot_group_intent(ctx, bot_op::LEAVE, leaver_guid, 0);
+}
+
+/// The one writer of [`BotInviteIntent`]. `target_guid` is unused by a LEAVE.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+fn emit_bot_group_intent(ctx: &ReducerContext, op: u8, actor_guid: u64, target_guid: u64) {
     ctx.db.game_bot_invite_intent().insert(BotInviteIntent {
         id: 0,
-        inviter_guid,
+        inviter_guid: actor_guid,
         target_guid,
         created_at: ctx.timestamp,
+        op,
     });
 }
 
@@ -272,7 +304,7 @@ pub fn claim_bot_invite_intent(ctx: &ReducerContext, intent_id: u64) -> Result<(
 // Event kinds, roster grammar, and classified error strings are the SHARED wire contract:
 // lyracore_shared::group is the one definition both crates import — a renumber,
 // reword, or delimiter change is a cross-crate compile-visible edit, never a runtime drift.
-use lyracore_shared::group::{err as group_err, event_kind as group_event_kind};
+use lyracore_shared::group::{bot_op, err as group_err, event_kind as group_event_kind};
 
 /// A per-recipient group notification (the `game_whisper_event` pattern): public + RLS-scoped so
 /// only the recipient's connection sees it; reaped by the shared event GC. `other_name` is

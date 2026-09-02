@@ -438,7 +438,7 @@ parity_test!(parity_game_duel_event, "game_duel_event", lyracore_module::DuelEve
 // `world::party::run_bot_invite` relay (`stdb/subscriptions.rs`) — not a client-facing table, but
 // the gateway decodes it off the wire the same as everything else here.
 parity_test!(parity_game_bot_invite_intent, "game_bot_invite_intent", lyracore_module::BotInviteIntent, bindings::bot_invite_intent_type::BotInviteIntent, {
-    id, inviter_guid, target_guid, created_at,
+    id, inviter_guid, target_guid, created_at, op,
 });
 // A session-less character's Shard crossing, picked up by the coordinator's
 // `world::transfer::run_bot_transfer` relay — the transfer twin of the row above.

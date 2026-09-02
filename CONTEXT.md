@@ -154,6 +154,14 @@ transaction; the Gateway drives the same escrowed Transfer a World Session would
 shared event TTL, so it is a request, never a record.
 _Avoid_: transfer request, move order
 
+**Group Intent**:
+A row a Package writes to ask the Gateway to run one party operation for a Character that has no
+Session: invite that Character, or leave the party it leads. Party membership is authoritative on
+realm-core, which a Package can never reach, so the Package decides and the Gateway executes against
+the correct authority. Reaped on the shared event TTL, so it is a request, never a record. Held in
+`game_bot_invite_intent`, which kept its name through the change that gave it a second operation.
+_Avoid_: invite intent, group request, party order
+
 **Home Shard**:
 The shard that currently holds a Character's row.
 

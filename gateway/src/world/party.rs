@@ -42,7 +42,7 @@ use anyhow::Result;
 
 use super::{send, Outbound, SessionTx, WorldStore};
 use crate::codec;
-use lyracore_shared::group::realm_op;
+use lyracore_shared::group::{bot_op, realm_op};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
 /// One party, as the database that holds it sees it. Read from realm-core it is the authority; read
@@ -393,16 +393,25 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
 }
 
 /// Claim one subscribed intent on its World Shard, then execute it only for the winning Gateway.
+///
+/// `op` says which party op the row asks for ([`bot_op`]). A byte this gateway does not know is a
+/// module newer than the gateway, which is a deployment fault rather than a party outcome — it is
+/// refused by name instead of falling through to an invite.
 pub(crate) fn run_bot_invite_intent<St: WorldStore>(
     store: &St,
     intent_id: u64,
+    op: u8,
     inviter_guid: u64,
     target_guid: u64,
 ) -> Result<()> {
     if !store.claim_bot_invite_intent(intent_id)? {
         return Ok(());
     }
-    run_bot_invite(store, inviter_guid, target_guid)
+    match op {
+        bot_op::INVITE => run_bot_invite(store, inviter_guid, target_guid),
+        bot_op::LEAVE => run_bot_leave(store, inviter_guid),
+        unknown => anyhow::bail!("unknown bot group intent op {unknown}"),
+    }
 }
 
 /// Run a SERVER-DRIVEN invite with no client behind it — a playerbot's serendipity pick, closing
@@ -445,6 +454,36 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
     realm.realm_group_op(realm_op::INVITE, inviter_guid, target_guid, 0, 0)?;
     answer_for_session_less(store, realm, target_guid);
     sync_mirrors(store, realm, inviter_guid, before);
+    Ok(())
+}
+
+/// Run a SERVER-DRIVEN leave with no client behind it — a bot leader whose party has run out of
+/// shared work parts ways with it.
+///
+/// The same authority wall as [`run_bot_invite`], for the same reason: membership is authoritative
+/// on realm-core, and a module-side `leave_group_for` would write this shard's own member rows for
+/// the next `sync_group_mirror` push to put straight back.
+///
+/// No existence or online gate. Those two answer "may this target be invited"; a leave names only
+/// the actor, and `leave_group_for` refuses a Character that is in no party — which is also what a
+/// decision the previous tick already got executed looks like.
+///
+/// The pending-roll flush is [`run`]'s, verbatim, and belongs here for the reason it gives: a LEAVE
+/// can shrink a group below two members and reach realm-core's disband branch, which force-resolves
+/// live loot rolls that the periodic relay may not have promoted yet.
+pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Result<()> {
+    let owned_realm;
+    let realm: &dyn WorldStore = match store.realm_store() {
+        Some(r) => {
+            owned_realm = r;
+            owned_realm.as_ref()
+        }
+        None => store,
+    };
+    let before = realm.group_roster(leaver_guid)?.map(|r| r.group_id);
+    crate::world::loot::flush_pending_promotions(store, realm);
+    realm.realm_group_op(realm_op::LEAVE, leaver_guid, 0, 0, 0)?;
+    sync_mirrors(store, realm, leaver_guid, before);
     Ok(())
 }
 

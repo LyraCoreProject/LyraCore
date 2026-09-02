@@ -11,6 +11,7 @@ pub struct BotInviteIntent {
     pub inviter_guid: u64,
     pub target_guid: u64,
     pub created_at: __sdk::Timestamp,
+    pub op: u8,
 }
 
 impl __sdk::InModule for BotInviteIntent {
@@ -25,6 +26,7 @@ pub struct BotInviteIntentCols {
     pub inviter_guid: __sdk::__query_builder::Col<BotInviteIntent, u64>,
     pub target_guid: __sdk::__query_builder::Col<BotInviteIntent, u64>,
     pub created_at: __sdk::__query_builder::Col<BotInviteIntent, __sdk::Timestamp>,
+    pub op: __sdk::__query_builder::Col<BotInviteIntent, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for BotInviteIntent {
@@ -35,6 +37,7 @@ impl __sdk::__query_builder::HasCols for BotInviteIntent {
             inviter_guid: __sdk::__query_builder::Col::new(table_name, "inviter_guid"),
             target_guid: __sdk::__query_builder::Col::new(table_name, "target_guid"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
+            op: __sdk::__query_builder::Col::new(table_name, "op"),
         }
     }
 }
