@@ -423,3 +423,60 @@ pub const fn is_package_trainer_id(id: u64) -> bool {
 pub const fn is_fixture_reserved_trainer_id(id: u64) -> bool {
     id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
 }
+
+// ===============================================================================================
+//  gossip
+// ===============================================================================================
+
+/// Lowest identifier a Package may INSERT into any of the five inventable gossip tables
+/// (`game_npc_text`, `game_npc_text_slot`, `game_gossip_option`, `game_gossip_menu_profile`,
+/// `game_gossip_menu_profile_option`).
+///
+/// The seventh application of the band formula, one decade above the Package trainer range: `12`
+/// names a Package gossip row. Past 9,999,999 the millions column takes two digits, the same cost
+/// the Package cast and trainer ranges already pay.
+///
+/// The band is checked against each of the five tables' OWN primary key, the loot shape: `entry` on
+/// `game_gossip_menu` is the only owning identifier in this family (a creature template entry), and
+/// `game_gossip_menu` carries no band at all — its key names a creature template, which no Package
+/// may invent ([`crate::DeltaError::InsertNotSupported`]). The other five keys are independent
+/// `SpacetimeDB` tables with independent primary-key spaces, so one band across all of them cannot
+/// collide.
+///
+/// The widths differ across the family: `game_npc_text_slot.id` is `u64`; the other four inventable
+/// keys (`game_npc_text.text_id`, `game_gossip_option.row_id`, `game_gossip_menu_profile.menu_id`,
+/// `game_gossip_menu_profile_option.row_id`) are `u32`. This constant stays `u32`, the narrower and
+/// more common width, and [`is_package_gossip_id`] takes `u64` and converts it up at the boundary —
+/// mirroring how [`is_fixture_reserved_loot_id`] casts the `u32` [`FIXTURE_RESERVED_ID_FLOOR`] up to
+/// meet a `u64` identifier.
+///
+/// The gossip ETL's own mint-above floors (`importer/src/main.rs`: `game_gossip_menu.entry` at or
+/// above 1,000,000; `game_gossip_option.row_id` / `game_npc_text.text_id` /
+/// `game_npc_text_slot.id` at or above 50,000) are a SEPARATE, older reserved-range convention for
+/// Packages that mint gossip through the ETL rather than a Package Delta. Both floors sit well
+/// below 12,000,000, so this band sits inside them and the base import's DELETEs never reach it;
+/// [`RESERVED_ID_FLOOR`]/[`RESERVED_ID_CEIL`] do not grow to cover them, for the same reason the
+/// cast and trainer ranges' doc comments give for their own distinct curated bands.
+pub const PACKAGE_GOSSIP_ID_FLOOR: u32 = 12_000_000;
+
+/// Highest identifier a Package may INSERT into any of the five inventable gossip tables.
+pub const PACKAGE_GOSSIP_ID_CEIL: u32 = 12_999_999;
+
+const _: () = assert!(PACKAGE_GOSSIP_ID_FLOOR <= PACKAGE_GOSSIP_ID_CEIL);
+const _: () = assert!(RESERVED_ID_CEIL < PACKAGE_GOSSIP_ID_FLOOR);
+
+/// True when a Package may INSERT a row at this identifier, into any of the five inventable gossip
+/// tables. Takes `u64` because `game_npc_text_slot.id` is `u64`; a `u32`-keyed table's caller
+/// converts its value up before calling.
+#[must_use]
+pub const fn is_package_gossip_id(id: u64) -> bool {
+    id >= PACKAGE_GOSSIP_ID_FLOOR as u64 && id <= PACKAGE_GOSSIP_ID_CEIL as u64
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. The gossip family has no fixture cluster of its own, so the project-wide band is the
+/// whole check, the same shape as [`is_fixture_reserved_loot_id`].
+#[must_use]
+pub const fn is_fixture_reserved_gossip_id(id: u64) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
+}

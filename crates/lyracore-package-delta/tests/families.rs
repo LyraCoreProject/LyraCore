@@ -4,7 +4,8 @@
 //! may touch. These cases hold the catalogue, the parser and the family map together.
 
 use lyracore_package_delta::{
-    Table, CAST_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
+    Table, CAST_FAMILY, GOSSIP_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SPELL_FAMILY,
+    TRAINER_FAMILY,
 };
 
 /// `Table::ALL`, `Table::as_str` and `Table::parse` are three hand-maintained lists of one
@@ -30,6 +31,12 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
             Table::CreatureCast => "game_creature_cast",
             Table::CreatureSpell => "game_creature_spell",
             Table::TrainerSpell => "game_trainer_spell",
+            Table::GossipMenu => "game_gossip_menu",
+            Table::NpcText => "game_npc_text",
+            Table::NpcTextSlot => "game_npc_text_slot",
+            Table::GossipOption => "game_gossip_option",
+            Table::GossipMenuProfile => "game_gossip_menu_profile",
+            Table::GossipMenuProfileOption => "game_gossip_menu_profile_option",
         };
 
         assert_eq!(table.as_str(), name);
@@ -38,7 +45,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
 
     assert_eq!(
         Table::ALL.len(),
-        16,
+        22,
         "a table reached the enum without reaching `Table::ALL`"
     );
 }
@@ -96,6 +103,21 @@ fn the_cast_tables_belong_to_the_casts_import_family() {
 fn the_trainer_table_belongs_to_the_trainers_import_family() {
     assert_eq!(Table::TrainerSpell.family(), TRAINER_FAMILY);
     assert_eq!(TRAINER_FAMILY, "trainers");
+}
+
+#[test]
+fn the_gossip_tables_belong_to_the_gossip_import_family() {
+    for table in [
+        Table::GossipMenu,
+        Table::NpcText,
+        Table::NpcTextSlot,
+        Table::GossipOption,
+        Table::GossipMenuProfile,
+        Table::GossipMenuProfileOption,
+    ] {
+        assert_eq!(table.family(), GOSSIP_FAMILY, "{table}");
+    }
+    assert_eq!(GOSSIP_FAMILY, "gossip");
 }
 
 /// A family name travels as a reducer argument and as `game_import_meta.family`, where the importer

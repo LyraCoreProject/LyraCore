@@ -15,10 +15,11 @@ use core::fmt;
 use crate::ids::{
     FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR, FIXTURE_SPELL_ID_CEIL,
     FIXTURE_SPELL_ID_FLOOR, MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX,
-    MAX_SPELL_EFFECT_INDEX, PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR, PACKAGE_ITEM_ID_CEIL,
-    PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL, PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL,
-    PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL, PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL,
-    PACKAGE_SPELL_ID_FLOOR, PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
+    MAX_SPELL_EFFECT_INDEX, PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL,
+    PACKAGE_GOSSIP_ID_FLOOR, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL,
+    PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL,
+    PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+    PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
 };
 use crate::schema::{FieldType, Table};
 use crate::script::HOOK_EVENT_NAMES;
@@ -166,6 +167,16 @@ pub enum DeltaError {
     },
     /// The claim targets a seeded fixture row.
     TrainerIdFixtureReserved {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// An inserted gossip row sits outside the range a Package may invent.
+    GossipIdNotClientSafe {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// The claim targets a seeded fixture row.
+    GossipIdFixtureReserved {
         /// The rejected identifier.
         id: u64,
     },
@@ -338,7 +349,9 @@ impl fmt::Display for DeltaError {
             | Self::CastIdNotClientSafe { .. }
             | Self::CastIdFixtureReserved { .. }
             | Self::TrainerIdNotClientSafe { .. }
-            | Self::TrainerIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
+            | Self::TrainerIdFixtureReserved { .. }
+            | Self::GossipIdNotClientSafe { .. }
+            | Self::GossipIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
             // The script family groups its own refusals behind one variant, so it delegates as a
             // whole rather than adding six arms here.
             Self::Script(refusal) => refusal.fmt(f),
@@ -431,6 +444,17 @@ fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::R
         DeltaError::TrainerIdFixtureReserved { id } => write!(
             f,
             "trainer row {id} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::GossipIdNotClientSafe { id } => write!(
+            f,
+            "gossip row {id} is outside the Package gossip range \
+             {PACKAGE_GOSSIP_ID_FLOOR}..={PACKAGE_GOSSIP_ID_CEIL}; an inserted gossip row must use \
+             an identifier no client and no import can already own"
+        ),
+        DeltaError::GossipIdFixtureReserved { id } => write!(
+            f,
+            "gossip row {id} is fixture-reserved \
              ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
         ),
         other => unreachable!("{other:?} is not an identifier-policy refusal"),

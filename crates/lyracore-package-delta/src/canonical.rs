@@ -77,7 +77,9 @@ fn write_key(out: &mut String, key: PrimaryKey) {
             out.push_str(&effect_index.to_string());
             out.push('}');
         }
-        PrimaryKey::Item { entry } | PrimaryKey::Quest { entry } => {
+        PrimaryKey::Item { entry }
+        | PrimaryKey::Quest { entry }
+        | PrimaryKey::GossipMenu { entry } => {
             out.push_str("{\"entry\":");
             out.push_str(&entry.to_string());
             out.push('}');
@@ -126,7 +128,8 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         | PrimaryKey::SkinningLoot { id }
         | PrimaryKey::FishingLoot { id }
         | PrimaryKey::CreatureSpell { id }
-        | PrimaryKey::TrainerSpell { id } => {
+        | PrimaryKey::TrainerSpell { id }
+        | PrimaryKey::NpcTextSlot { id } => {
             out.push_str("{\"id\":");
             out.push_str(&id.to_string());
             out.push('}');
@@ -134,6 +137,21 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         PrimaryKey::CreatureCast { creature_entry } => {
             out.push_str("{\"creature_entry\":");
             out.push_str(&creature_entry.to_string());
+            out.push('}');
+        }
+        PrimaryKey::NpcText { text_id } => {
+            out.push_str("{\"text_id\":");
+            out.push_str(&text_id.to_string());
+            out.push('}');
+        }
+        PrimaryKey::GossipOption { row_id } | PrimaryKey::GossipMenuProfileOption { row_id } => {
+            out.push_str("{\"row_id\":");
+            out.push_str(&row_id.to_string());
+            out.push('}');
+        }
+        PrimaryKey::GossipMenuProfile { menu_id } => {
+            out.push_str("{\"menu_id\":");
+            out.push_str(&menu_id.to_string());
             out.push('}');
         }
     }
