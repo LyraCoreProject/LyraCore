@@ -58,6 +58,7 @@ lyracore import [--accept] [--client-data PATH]
 lyracore config
 lyracore config set client-data PATH
 lyracore client sync
+lyracore client pack --out DIR [--zip]
 lyracore packages add FOLDER|GIT-URL|NAME [--yes]
 lyracore packages build
 lyracore packages check
@@ -90,6 +91,7 @@ lyracore update
 | `import` | replace the seed fixture with the real world — consent notice, then the ETL on every database the fixture populates |
 | `config` | show, or set, the client-data path `import` and `doctor` remember |
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
+| `client pack` | build the Client Artifact a player installs: package-authored content only, into a directory of your choosing |
 | `packages add` | install a Package from a folder on this machine, from a Git URL, or by bare name from the Official Package Collection, after a trust review and a confirmation |
 | `packages build` | regenerate the Module schema typings, typecheck every Datascript against them, then emit and validate each enabled Package's Datascript-generated Package Delta |
 | `packages check` | verify every enabled Package's generated artifact against its recorded Build Identity, regenerating the Module typings fresh |
@@ -531,6 +533,53 @@ nothing to compare against.
 
 A checkout with no Packages at all, or none carrying a generated artifact, is a clean no-op.
 
+## UI Transforms — a Package's edit inside a stock UI file
+
+A Package's `client/mpq/` tree replaces a stock file whole. When two Packages need the same file,
+that does not work: one of them has to own it. A UI Transform is the other way in. It is an
+anchored edit, declared in `packages/<name>/client/ui-transforms.json`, and several Packages may
+edit one file as long as their anchors do not overlap. `client-patch/ui-transforms.json` works the
+same way for a checkout-wide edit.
+
+```json
+[
+  { "path": "Interface/FrameXML/LootFrame.lua",
+    "after": "function LootFrame_OnLoad()",
+    "insert": "\tPkgLoot_OnLoad();\n" },
+  { "path": "Interface/FrameXML/FrameXML.toc",
+    "before": "LootFrame.xml",
+    "insert": "PkgLoot.lua\nPkgLoot.xml\n" },
+  { "path": "Interface/GlueXML/GlueXML.toc",
+    "replace": "AccountLogin.xml",
+    "insert": "AccountLogin.xml\nPkgGlue.lua\n" }
+]
+```
+
+Each entry names one `path`, one anchor, and the `insert` text. `path` accepts either slash
+direction, must sit under `Interface/FrameXML/` or `Interface/GlueXML/`, and must end in `.lua`,
+`.xml` or `.toc`. The anchor is exactly one of `before`, `after` or `replace`. Its text must occur
+exactly once in the Baseline: zero occurrences refuses as "anchor not found", several as an
+ambiguous anchor, and both name the Package, the file and the anchor text.
+
+`client sync` resolves every anchor against the untouched Baseline before it applies anything, then
+applies the edits in the order their anchors appear in the file. The composed result therefore does
+not depend on which Package the walk reached first. Two edits whose anchor ranges intersect have no
+correct merge and refuse, naming both Packages. A path one Package overrides whole from its `mpq/`
+tree while another edits it by transform refuses the same way: a file is replaced or patched, never
+both.
+
+The Baseline comes out of your own client's UI archives, read in load order: `interface.MPQ`,
+`<locale>/locale-<locale>.MPQ`, `patch.MPQ`, `patch-2.MPQ`, `<locale>/patch-<locale>.MPQ`,
+`<locale>/patch-2-<locale>.MPQ`. Archives your client does not have are skipped, and the not-found
+message lists every one searched. `patch-3.MPQ` is never read: it is the packer's own previous
+output, so composing against it would apply each edit again on every run. The composed file carries
+a header comment naming the Baseline hash and the transform hash, so the same client and the same
+declarations rebuild byte-identical output.
+
+That output is your client's own bytes with the edits in them, which makes it baseline-derived. It
+reaches your client through `client sync` alone. `client pack` refuses a checkout that declares any
+UI Transform at all, and names the Package and the file it declared.
+
 ## `client sync` — push client content to your own client
 
 ```bash
@@ -553,8 +602,53 @@ ship an addon is disabled or removed, `client sync` warns (best-effort) that the
 earlier is still sitting in your `Interface/AddOns/` and names the Package — removing it is your
 call, by hand. An addon `client sync` never installed (yours, or a third party's) is never flagged.
 
-Client distribution — packaging any of this for someone who is not the operator running the
-command — is out of scope here and tracked separately (#303).
+This is also where a declared UI Transform is composed and packed, against the Baseline in your own
+UI archives.
+
+Packaging any of this for someone other than the Operator running the command is `client pack`'s
+job, below. It packs strictly less, because a baseline-derived file never leaves this machine.
+
+## `client pack` — build the artifact a player installs
+
+```bash
+./lyracore client pack --out ./client-pack
+./lyracore client pack --out ./client-pack --zip
+```
+
+`client sync` fills your own client. `client pack` builds the Client Artifact instead: a directory
+tree a player copies over a stock 1.12.1 install.
+
+```text
+<DIR>/
+  lyracore-client-pack.json     the manifest, written last
+  Data/patch-3.MPQ              only when a source ships at least one mpq/ file
+  Interface/AddOns/<Name>/
+```
+
+Under it sits `lyracore-importer --pack-out <DIR>` (core repo, `importer/src/pack_client.rs`),
+which collects the same sources `client sync` collects and opens no client at all.
+
+The licensing firewall holds by provenance. Only package-authored bytes, the ones an author
+committed under `client-patch/` or `packages/<name>/client/`, may enter the artifact. A DBC overlay
+and a UI Transform output are both computed from the Operator's own client, so `--pack-out` refuses
+each by name and writes nothing. That is why an artifact's `Data/patch-3.MPQ` carries no DBC while
+the one `client sync` installs does.
+
+`--out` resolves against the checkout root when it is relative. It is refused inside the configured
+client-data path and inside `packages/`. A directory that already holds files and no
+`lyracore-client-pack.json` is refused as well, because this command did not create it. A directory
+that does hold that manifest is a prior artifact, and it is cleared before the repack.
+
+The manifest is written last, so its presence means the artifact is complete. It records `format`
+(`1`), `packed_at` (UTC, RFC 3339), `core_revision` (`git rev-parse HEAD`, or `unknown` when that
+fails), one `packages` entry per enabled Package (`name`, `source_kind`, `source`, `revision` from
+its Provenance Stamp, and a `content_identity` computed fresh at pack time), and `contents`, every
+packed file's relative path, sorted.
+
+`--zip` also writes `<DIR>.zip`, by running the system `zip` binary with `<DIR>` as its working
+directory. Neither repo carries a zip library, so a machine without the binary gets that named as
+the reason, and keeps the directory that was already built. A `<DIR>.zip` this command did not
+write is refused rather than overwritten.
 
 ## `preflight` — the offline deploy gate
 

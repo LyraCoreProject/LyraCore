@@ -356,7 +356,7 @@ _Avoid_: weather event, weather state table
 ### Packages
 
 **Package**:
-A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons and client overrides to the client packer. Either half alone is a valid Package.
+A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons, whole-file client overrides and UI Transforms to the client packer. Either half alone is a valid Package.
 Its data changes ship as Package Deltas rather than as edits to the base data.
 _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 
@@ -561,6 +561,31 @@ Family. Two kinds: the project-wide 5,090,000 to 5,099,999 band, and a family's 
 for spells, 50,000 to 50,999. Items have no fixture cluster of their own; their seeded fixtures ride
 real client entries or the project-wide band, so it is the whole check.
 _Avoid_: test id, reserved id (unqualified)
+
+### Client content
+
+**UI Transform**:
+An anchored edit one Package makes to a stock FrameXML or GlueXML file, declared in
+`packages/<name>/client/ui-transforms.json`. Each entry names a path, one anchor (`before`, `after`
+or `replace`) that must occur exactly once in the Baseline, and the text to insert. Several Packages
+may edit one file as long as their anchors do not overlap. `lyracore client sync` composes the
+result against the Operator's own client; a whole-file override of the same path refuses the pack.
+_Avoid_: patch, override, hook, FrameXML edit
+
+**Baseline**:
+The stock bytes of one client file, read out of the Operator's own UI archives and never out of
+`patch-3.MPQ`, the packer's own previous output. A UI Transform's output is the Baseline with edits
+applied, which makes it baseline-derived: it reaches the Operator's client through `client sync` and
+never enters the Client Artifact.
+_Avoid_: original, stock file, source file, vanilla file
+
+**Client Artifact**:
+The directory tree `lyracore client pack` builds for a player to copy over a stock client:
+`Data/patch-3.MPQ`, `Interface/AddOns/<Name>/`, and a `lyracore-client-pack.json` manifest written
+last, with an optional zip beside it. It carries package-authored bytes only. A baseline-derived
+file is refused by name before the first byte is written, which is how the licensing firewall holds
+without anyone inspecting the output.
+_Avoid_: client patch, distribution, release bundle, player package
 
 ### Working method
 

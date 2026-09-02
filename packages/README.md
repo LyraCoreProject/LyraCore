@@ -12,6 +12,15 @@ generates, which the importer reapplies after every base import. `fire_nova/` is
 its Datascript lives at `datascripts/src/fire_nova/spells.ts`, because only artifacts belong inside
 a Package folder. Any one half — `src/`, `client/` or `data/` — is a valid Package on its own.
 
+A Package that must change a stock FrameXML or GlueXML file declares the edit in
+`client/ui-transforms.json` instead of shipping a whole replacement under `client/mpq/`. Each entry
+names a path under `Interface/FrameXML/` or `Interface/GlueXML/`, one anchor (`before`, `after` or
+`replace`) that must occur exactly once in the file, and the text to insert. Two Packages may edit
+one file while their anchors stay apart. `lyracore client sync` composes the edits against your own
+client's stock bytes, which makes the result baseline-derived: it reaches your client only, and
+`lyracore client pack` refuses to put it in a distributable artifact. See
+`docs/development-cli.md` for the anchors, the conflict rules and the load order.
+
 `lyracore packages disable <name>` moves a folder out of here into `.lyracore/packages-disabled/`,
 where the build cannot see it, and `lyracore packages enable <name>` moves it back. The location is
 the enabled state, so this listing stays the whole truth about what compiles.
