@@ -1735,6 +1735,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
     // taking every session on the realm with it. A transient accept errno now costs ONE connection.
     // See `crate::accept` for which errnos are fatal and why the list is shaped that way.
     let mut backoff = AcceptBackoff::new();
+    let mut capacity_was_full = false;
     loop {
         let (sock, peer) = match listener.accept().await {
             Ok(pair) => {
@@ -1767,6 +1768,17 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                 }
             },
         };
+        let Some(task_permit) = cfg.blocking_task_capacity.try_admit() else {
+            if !capacity_was_full {
+                log::warn!(
+                    "world blocking-task capacity is full; rejecting new connections before they \
+                     enter the blocking-task queue"
+                );
+                capacity_was_full = true;
+            }
+            continue;
+        };
+        capacity_was_full = false;
         let coord = coordinator.clone();
         let queue = login_queue.clone();
         // wow_world_messages uses blocking std::io codecs, so run the per-connection state
@@ -1787,6 +1799,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
             }
         };
         tokio::task::spawn_blocking(move || {
+            let _task_permit = task_permit;
             // `Coordinator` implements `WorldStore` directly (see `stdb::world_store`) — no wrapper.
             // `queue` gates admission INSIDE the handshake — a queued connection just blocks
             // this one `spawn_blocking` thread, never the accept loop above.

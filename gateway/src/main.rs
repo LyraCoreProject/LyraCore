@@ -45,8 +45,8 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 /// 3. **The runtime built by hand rather than by `#[tokio::main]`**, purely so
 ///    `max_blocking_threads` is a configured, logged number instead of tokio's silently inherited
 ///    512. Every other builder setting matches what `#[tokio::main]` does
-///    (`new_multi_thread().enable_all()`), so an unset `LYRACORE_MAX_BLOCKING_THREADS` is the
-///    previous behaviour byte for byte.
+///    (`new_multi_thread().enable_all()`). The same configured number sizes the listeners' shared,
+///    non-waiting blocking-task capacity.
 ///
 /// The `dhat` profiler guard is declared before the runtime so it drops *after* it — a profiler that
 /// stops recording while the runtime is still tearing down would under-report the shutdown path.
@@ -60,14 +60,15 @@ fn main() -> Result<()> {
     // gateway dies at ~200 sessions with EMFILE while 512x of headroom sits unclaimed.
     fd_limit::raise_nofile_soft_to_hard();
 
-    // THE ceiling on concurrent players — every world session parks one blocking thread for
-    // its whole life, and the logon tier draws handshakes from the same pool. Logged because a full
-    // pool does not refuse, it queues: the symptom is silence, not an error.
+    // THE ceiling on concurrent players: every World Session parks one blocking thread for its
+    // whole life, and logon handshakes draw from the same pool. The listeners use the same number
+    // for a shared non-waiting capacity, so they reject excess connections before submission.
     let max_blocking_threads = config::max_blocking_threads();
     log::info!(
         "tokio blocking pool: max_blocking_threads={max_blocking_threads} \
          (LYRACORE_MAX_BLOCKING_THREADS; default {}). One world session holds one thread for its \
-         entire life, shared with in-flight logon handshakes — this is the seat ceiling.",
+         entire life, shared with in-flight logon handshakes. Excess connection tasks are rejected \
+         before the blocking-task queue.",
         config::DEFAULT_MAX_BLOCKING_THREADS
     );
 
@@ -127,7 +128,7 @@ async fn run() -> Result<()> {
     // use.
     coordinator.spawn_gateway_heartbeat();
 
-    // Run both listeners concurrently. Each accepted socket gets its own task.
+    // Run both listeners concurrently. Each admitted socket gets its own blocking task.
     let logon = tokio::spawn(logon::run(cfg.clone(), coordinator.clone()));
     let world = tokio::spawn(world::run(cfg.clone(), coordinator.clone()));
 

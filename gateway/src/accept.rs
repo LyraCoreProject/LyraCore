@@ -1,6 +1,7 @@
-//! Accept-loop error policy — the one place that decides whether an `accept(2)` failure ends a
-//! listener or costs one connection. Root-caused on the mass-session login storm that killed the
-//! gateway outright (see below).
+//! Accept-loop resource policy. This is the one place that decides whether an `accept(2)` failure
+//! ends a listener or costs one connection, and it provides the shared non-waiting capacity that
+//! keeps accepted sockets out of Tokio's unbounded blocking-task queue. Root-caused on the
+//! mass-session login storm that killed the gateway outright (see below).
 //!
 //! # The bug this exists to prevent
 //!
@@ -59,7 +60,48 @@
 //! the backoff caps what being wrong costs.
 
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+/// Non-waiting capacity shared by both listeners before they submit blocking session tasks.
+///
+/// A permit stays with the task for its whole lifetime. This keeps submitted plus running session
+/// tasks at or below the blocking-pool ceiling instead of moving excess accepted sockets into
+/// Tokio's unbounded blocking-task queue.
+#[derive(Debug, Clone)]
+pub(crate) struct BlockingTaskCapacity {
+    permits: Arc<Semaphore>,
+}
+
+impl BlockingTaskCapacity {
+    pub(crate) fn new(limit: usize) -> Self {
+        assert!(limit > 0, "blocking-task capacity must be nonzero");
+        Self {
+            permits: Arc::new(Semaphore::new(limit)),
+        }
+    }
+
+    /// Take a task seat immediately. `None` refuses this connection; it never waits in a queue.
+    pub(crate) fn try_admit(&self) -> Option<BlockingTaskPermit> {
+        self.permits
+            .clone()
+            .try_acquire_owned()
+            .ok()
+            .map(|permit| BlockingTaskPermit { _permit: permit })
+    }
+
+    #[cfg(test)]
+    fn available(&self) -> usize {
+        self.permits.available_permits()
+    }
+}
+
+/// One submitted or running blocking session task. Dropping it returns the task seat, including
+/// during unwinding.
+pub(crate) struct BlockingTaskPermit {
+    _permit: OwnedSemaphorePermit,
+}
 
 /// What the accept loop should do about an `accept(2)` (or per-socket setup) failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,5 +328,100 @@ mod tests {
         };
         assert_eq!(b.record_failure(), Duration::from_millis(BACKOFF_CAP_MS));
         assert_eq!(b.consecutive(), u32::MAX);
+    }
+
+    #[test]
+    fn excess_connections_are_refused_without_waiting_for_a_permit() {
+        let capacity = BlockingTaskCapacity::new(2);
+        let clone = capacity.clone();
+        let _first = capacity.try_admit().expect("the first task has a seat");
+        let _second = clone.try_admit().expect("the second task has a seat");
+
+        assert!(
+            capacity.try_admit().is_none(),
+            "an excess connection must not enter a wait queue"
+        );
+        assert_eq!(capacity.available(), 0);
+
+        drop(_first);
+        let _replacement = capacity
+            .try_admit()
+            .expect("a task that exits before submission returns its seat");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn blocking_task_capacity_returns_after_errors_and_panics() {
+        let capacity = BlockingTaskCapacity::new(1);
+
+        let permit = capacity.try_admit().expect("the failing task has a seat");
+        let failed = tokio::task::spawn_blocking(move || {
+            let _task_permit = permit;
+            Err::<(), ()>(())
+        })
+        .await
+        .expect("the failing task returns normally");
+        assert!(failed.is_err());
+        assert_eq!(capacity.available(), 1, "an error must return its seat");
+
+        let permit = capacity.try_admit().expect("the panicking task has a seat");
+        let panicked = tokio::task::spawn_blocking(move || {
+            let _task_permit = permit;
+            panic!("test panic");
+        })
+        .await;
+        assert!(panicked.unwrap_err().is_panic());
+        assert_eq!(capacity.available(), 1, "an unwind must return its seat");
+    }
+
+    #[test]
+    fn both_listeners_admit_before_they_spawn_a_blocking_task() {
+        for (listener, source, signature) in [
+            (
+                "logon",
+                include_str!("logon/mod.rs"),
+                "pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {",
+            ),
+            (
+                "world",
+                include_str!("world/mod.rs"),
+                "pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {",
+            ),
+        ] {
+            let body = crate::test_scan::code_of(source, signature);
+            let admit = body
+                .find("cfg.blocking_task_capacity.try_admit()")
+                .unwrap_or_else(|| panic!("{listener} does not check blocking-task capacity"));
+            let spawn = body
+                .find("tokio::task::spawn_blocking")
+                .unwrap_or_else(|| panic!("{listener} does not spawn its blocking task"));
+            assert!(
+                admit < spawn,
+                "{listener} queues the task before it checks capacity"
+            );
+            assert!(
+                body[spawn..].contains("let _task_permit = task_permit;"),
+                "{listener} does not hold its permit for the blocking task's whole lifetime"
+            );
+        }
+    }
+
+    #[test]
+    fn blocking_task_capacity_uses_the_runtime_pool_ceiling() {
+        let main_body =
+            crate::test_scan::code_of(include_str!("main.rs"), "fn main() -> Result<()> {");
+        assert!(
+            main_body.contains("let max_blocking_threads = config::max_blocking_threads();")
+                && main_body.contains(".max_blocking_threads(max_blocking_threads)"),
+            "the runtime blocking pool no longer uses the configured ceiling"
+        );
+
+        let config_body =
+            crate::test_scan::code_of(include_str!("config.rs"), "pub fn from_env() -> Self {");
+        assert!(
+            config_body.contains(
+                "blocking_task_capacity: BlockingTaskCapacity::new(max_blocking_threads())"
+            ),
+            "the listener capacity no longer uses the runtime blocking-pool setting"
+        );
     }
 }

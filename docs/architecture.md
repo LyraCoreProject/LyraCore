@@ -182,15 +182,19 @@ and `MALLOC_ARENA_MAX` (glibc, not the binary — worth ~4× RSS per connection)
 
 ### `LYRACORE_MAX_BLOCKING_THREADS`, and the two limits above it (#451)
 
-Both listeners hand every accepted socket to `spawn_blocking` — the `wow_login_messages` /
-`wow_world_messages` codecs are blocking `std::io` — and a **world session holds its blocking thread
-for the session's entire life**. So the blocking-pool cap *is* the seat count, shared between live
-world sessions and in-flight logon handshakes. It was tokio's inherited default of 512 until #451,
+Both listeners hand admitted sockets to `spawn_blocking` because the `wow_login_messages` and
+`wow_world_messages` codecs use blocking `std::io`. A **World Session holds its blocking thread for
+the session's entire life**. So the blocking-pool cap is the seat count shared between live World
+Sessions and in-flight logon handshakes. It was Tokio's inherited default of 512 until #451,
 configured by nothing and reported by nothing.
 
-That mattered because a full pool does not refuse: `spawn_blocking` **queues**, so the socket is
-accepted at TCP level and then never handshaked — indistinguishable from "the server is full" and
-invisible in the log. Measured 2026-08-07 on an 8-core/15 GB container, 600 clients offered:
+That mattered because a full pool does not refuse: `spawn_blocking` **queues**. Before #410, a
+socket could be accepted and then wait without a bound for a blocking thread, retaining its file
+descriptor and sitting ahead of later logins. Both listeners now share a non-waiting capacity with
+the same size as the pool. A connection that cannot take a permit is closed before its task is
+submitted, and each task holds its permit through normal return or unwinding. This bounds submitted
+plus running connection tasks at the configured pool size. Measured 2026-08-07 on an 8-core/15 GB
+container, 600 clients offered:
 
 | `max_blocking_threads` | seated | failed |
 |---|---|---|

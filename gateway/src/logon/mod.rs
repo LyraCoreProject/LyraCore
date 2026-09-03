@@ -310,6 +310,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
     // A transient accept errno must cost ONE connection, not the realm. See `crate::accept`
     // for the policy and for the errno that actually killed the gateway on 2026-08-07.
     let mut backoff = AcceptBackoff::new();
+    let mut capacity_was_full = false;
     loop {
         let (sock, peer) = match listener.accept().await {
             Ok(pair) => {
@@ -339,6 +340,17 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                 }
             },
         };
+        let Some(task_permit) = cfg.blocking_task_capacity.try_admit() else {
+            if !capacity_was_full {
+                log::warn!(
+                    "logon blocking-task capacity is full; rejecting new connections before they \
+                     enter the blocking-task queue"
+                );
+                capacity_was_full = true;
+            }
+            continue;
+        };
+        capacity_was_full = false;
         let coord = coordinator.clone();
         // wow_login_messages uses blocking std::io codecs, so run the per-connection state
         // machine on a blocking task with the socket in blocking mode.
@@ -358,6 +370,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
             }
         };
         tokio::task::spawn_blocking(move || {
+            let _task_permit = task_permit;
             let store = CoordinatorStore::new(coord);
             let mut s = std_sock;
             if let Err(e) = handle_logon_with_deadline(&mut s, &store, &deadline) {
