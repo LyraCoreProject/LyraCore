@@ -431,6 +431,11 @@ exactly as it did before those steps existed:
    Written only after step 6 succeeds, so a sidecar never describes an artifact this build itself
    would have refused.
 
+A Package Delta this command emits is never committed: it is regenerated author-side on every
+build and installed from source, the same way `datascripts/generated/` itself is git-ignored. A
+Script Artifact is the one exception, since it is package-authored Lua with no client-derived
+data, so a Package may commit it under `data/.generated/` to ship its Runtime Scripts.
+
 Generating **first** is what gives the gate teeth. Rename a column in the Module, run
 `packages build`, and a Datascript still using the old name fails with the file and line to fix —
 at author time, rather than at apply time.
@@ -532,6 +537,11 @@ any other input. A missing sidecar is treated as stale; it predates identity tra
 nothing to compare against.
 
 A checkout with no Packages at all, or none carrying a generated artifact, is a clean no-op.
+
+`packages check` runs against a Package Delta sitting uncommitted in your own checkout: only a
+Script Artifact is ever committed, so that is where the drift responsibility lives too — an
+author regenerates and re-checks locally, and the Official Package Collection's CI refuses a
+Package Delta it finds committed rather than checking it.
 
 ## UI Transforms — a Package's edit inside a stock UI file
 

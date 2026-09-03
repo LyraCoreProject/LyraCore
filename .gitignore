@@ -55,8 +55,14 @@ __pycache__/
 /datascripts/node_modules/
 
 # Packages installed on a host (`lyracore packages add`) are local to that checkout. Unknown
-# Package directories stay out of Git status. New files and generated artifacts in the committed
-# first-party Packages remain visible.
+# Package directories stay out of Git status. Source files in the committed first-party Packages
+# remain visible; a first-party Package that ever ships a Script Artifact gets its own negation
+# under data/.generated/ then. None does today.
 /packages/*
 !/packages/example/
 !/packages/fire_nova/
+
+# A generated Package Delta and its Build Identity sidecar, even inside an allowlisted first-party
+# Package above: `packages build` reproduces both from source on every run, and a Package Delta is
+# never committed — the same rule `datascripts/generated/` follows above.
+/packages/*/data/.generated/
