@@ -5773,13 +5773,20 @@ mod tests {
     /// mutation-hardening [`scanned_source`] applies to the whole file (strip a `//` line comment
     /// FIRST, so a scan can't be satisfied by a comment quoting the pattern; collapse whitespace
     /// SECOND, so a rustfmt line-split can't fail a scan that pins a whole statement).
+    ///
+    /// The last step drops what a broken-out call leaves behind — the space after `(`, the trailing
+    /// comma before `)` — so a needle reads as one written call whichever way rustfmt wrapped it.
     fn decommented(text: &str) -> String {
         let stripped: String = text
             .lines()
             .map(|l| l.split("//").next().unwrap_or(""))
             .collect::<Vec<_>>()
             .join("\n");
-        stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+        let one_line = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+        one_line
+            .replace("( ", "(")
+            .replace(", )", ")")
+            .replace(" )", ")")
     }
 
     /// The call-site tripwire for the shared-view `Viewer`'s construction.
