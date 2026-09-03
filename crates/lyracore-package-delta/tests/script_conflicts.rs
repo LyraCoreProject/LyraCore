@@ -124,6 +124,21 @@ fn two_packages_shipping_one_name_is_a_conflict_naming_both() {
     assert!(matches!(trace.conflicts()[0], ScriptConflict::Name { .. }));
 }
 
+#[test]
+fn one_package_cannot_supply_two_artifacts_even_when_the_scripts_do_not_collide() {
+    let trace = trace_scripts(&[
+        artifact("example.alpha", &[(100_001, "alpha.greet", "on_login")]),
+        artifact("example.alpha", &[(100_002, "alpha.leave", "on_logout")]),
+    ]);
+
+    assert!(!trace.is_clear());
+    assert_eq!(trace.scripts().len(), 1);
+    assert!(matches!(
+        trace.conflicts(),
+        [ScriptConflict::Package { package }] if package.as_str() == "example.alpha"
+    ));
+}
+
 /// The operator fixing a broken Package Inventory wants the whole list in one pass, not one
 /// refusal per re-run.
 #[test]

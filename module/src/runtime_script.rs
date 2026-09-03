@@ -461,6 +461,12 @@ impl RuntimeScriptHost {
     /// On success, returns everything the script staged and the Script Answer it returned — nothing
     /// has touched the world yet. On any failure, returns a bounded diagnostic and both the staged
     /// effects and the answer are dropped unread.
+    ///
+    /// Piccolo exposes the caller's generated-Lua line while a Host callback is running, which is
+    /// why `error`, `assert`, and Host Verb diagnostics carry one. Native VM failures reach this
+    /// boundary only after Piccolo has unwound those frames, and an unfinished fuel step exposes no
+    /// frame. Their diagnostics therefore retain the Runtime Script, Event Binding, failure kind,
+    /// and interpreter message, but cannot reliably name a line with Piccolo 0.3.3.
     pub(crate) fn invoke(
         &mut self,
         script: RuntimeScript<'_>,
@@ -1327,6 +1333,30 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         assert_eq!(failure.event, "on_levelup");
         assert_eq!(failure.kind, FailureKind::Syntax);
         assert!(!failure.message.is_empty());
+    }
+
+    #[test]
+    fn native_vm_and_fuel_diagnostics_keep_the_stable_invocation_context() {
+        let mut host = RuntimeScriptHost::new();
+        for (name, source, kind) in [
+            (
+                "native-fault",
+                "local missing = nil\nreturn missing.value",
+                FailureKind::Runtime,
+            ),
+            ("spin", "while true do end", FailureKind::Fuel),
+        ] {
+            let failure = host
+                .invoke(script(name, source), &unattended("on_damage_taken"))
+                .expect_err("the Runtime Script must fail");
+            assert_eq!(failure.script, name);
+            assert_eq!(failure.event, "on_damage_taken");
+            assert_eq!(failure.kind, kind);
+            assert!(!failure.message.is_empty());
+            let report = failure.to_string();
+            assert!(report.contains(name), "{report}");
+            assert!(report.contains("on_damage_taken"), "{report}");
+        }
     }
 
     #[test]

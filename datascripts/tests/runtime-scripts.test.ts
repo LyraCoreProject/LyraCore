@@ -34,12 +34,16 @@ interface Built {
 ///
 /// A scratch root rather than `packages/`: the artifact is what is under test, and a build that
 /// wrote into the checkout would make one test's output another test's input.
-async function build(files: Record<string, string>, events?: string[]): Promise<Built> {
+async function build(
+  files: Record<string, string>,
+  events?: string[],
+  packageName = PACKAGE,
+): Promise<Built> {
   const root = mkdtempSync(join(tmpdir(), "lyracore-runtime-scripts-"));
   const previousRoot = process.env.LYRACORE_PACKAGES_ROOT;
   const previousEvents = process.env.LYRACORE_HOOK_EVENTS;
   try {
-    const scripts = join(root, PACKAGE, "scripts");
+    const scripts = join(root, packageName, "scripts");
     mkdirSync(scripts, { recursive: true });
     for (const [name, source] of Object.entries(files)) {
       const path = join(scripts, name);
@@ -50,7 +54,7 @@ async function build(files: Record<string, string>, events?: string[]): Promise<
     if (events === undefined) delete process.env.LYRACORE_HOOK_EVENTS;
     else process.env.LYRACORE_HOOK_EVENTS = events.join("\n");
 
-    const artifact = readFileSync(await buildPackageScripts(PACKAGE), "utf8");
+    const artifact = readFileSync(await buildPackageScripts(packageName), "utf8");
     return { artifact, scripts: JSON.parse(artifact).scripts };
   } finally {
     if (previousRoot === undefined) delete process.env.LYRACORE_PACKAGES_ROOT;
@@ -77,13 +81,36 @@ test("the committed fuel workload Lua is what the pinned toolchain emits today",
   expect(built.scripts[0]?.source).toBe(committed);
 });
 
-test("the checked-in Package Runtime Script typechecks through the pinned build", async () => {
-  const source = readFileSync(
-    join(import.meta.dir, "..", "..", "packages", "fire_nova", "scripts", "ember_echo.ts"),
-    "utf8",
-  );
+test("every checked-in Package Runtime Script passes through the pinned compiler", async () => {
+  const packagesRoot = join(import.meta.dir, "..", "..", "packages");
+  const packageScripts = readdirSync(packagesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap((entry) => {
+      const scriptsDir = join(packagesRoot, entry.name, "scripts");
+      let sources;
+      try {
+        sources = readdirSync(scriptsDir, { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      }
+      const files = Object.fromEntries(
+        sources
+          .filter(
+            (source) =>
+              source.isFile() && (source.name.endsWith(".ts") || source.name.endsWith(".lua")),
+          )
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((source) => [source.name, readFileSync(join(scriptsDir, source.name), "utf8")]),
+      );
+      return Object.keys(files).length === 0 ? [] : [{ package: entry.name, files }];
+    });
 
-  await build({ "ember_echo.ts": source }, ["on_cast_resolved"]);
+  expect(packageScripts.length).toBeGreaterThan(0);
+  for (const checkedIn of packageScripts) {
+    await build(checkedIn.files, undefined, checkedIn.package);
+  }
 });
 
 // ---- determinism ----
@@ -174,6 +201,23 @@ test("the entry point takes no parameters and returns only a number or nothing",
   expect(
     build({
       "string.ts": `${directives()}function script(): string { return "wrong"; }\n`,
+    }),
+  ).rejects.toThrow(/typescript-to-lua refused/);
+  expect(
+    build({
+      "optional.ts": `${directives()}function script(value?: number): void {}\n`,
+    }),
+  ).rejects.toThrow(/typescript-to-lua refused/);
+  expect(
+    build({
+      "rest.ts": `${directives()}function script(...values: number[]): void {}\n`,
+    }),
+  ).rejects.toThrow(/typescript-to-lua refused/);
+  expect(
+    build({
+      "overload.ts":
+        `${directives()}function script(): number;\n` +
+        `function script(value?: number): number | string { return value ?? "wrong"; }\n`,
     }),
   ).rejects.toThrow(/typescript-to-lua refused/);
 });

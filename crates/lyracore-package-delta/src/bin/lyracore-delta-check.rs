@@ -11,7 +11,8 @@
 //!
 //! Exit status is the whole answer: 0 when every artifact parses and the Packages agree, 1 when an
 //! artifact is refused, two Packages claim the same column of one row, or two Packages claim one
-//! Runtime Script identity. The output names the file and the exact claim or script in every case,
+//! Package twice, or two Packages claim one Runtime Script identity. The output names the file and
+//! the exact conflict in every case,
 //! because the reader is the author who has to fix one line of a Datascript or one script file.
 //!
 //! Trace ALL of a realm's enabled artifacts in one invocation. Conflicts exist BETWEEN Packages, so
@@ -40,8 +41,8 @@ fn main() -> ExitCode {
             "usage: lyracore-delta-check <artifact.json>...\n\n\
              Parses each generated Package artifact — a Package Delta or a Script Artifact — \
              traces each kind together, and prints the plan.\n\
-             Exits non-zero on a refused artifact, a Claim Conflict or a Runtime Script \
-             collision. Reads no client data and no database.\n\n\
+             Exits non-zero on a refused artifact, a Claim Conflict or a Script Artifact \
+             conflict. Reads no client data and no database.\n\n\
              Name every enabled Package's artifacts in ONE run: a conflict is between \
              Packages, so one file alone cannot show one.\n\n\
              lyracore-delta-check --print-events prints the Event Binding catalogue instead."
@@ -101,7 +102,7 @@ fn main() -> ExitCode {
     }
     if !script_trace.is_clear() {
         eprintln!(
-            "{} Runtime Script collision(s) between the named Packages — a human chooses.",
+            "{} Script Artifact conflict(s) between the named Packages; a human chooses.",
             script_trace.conflicts().len()
         );
     }
@@ -221,7 +222,7 @@ fn report(
         ));
     }
     for conflict in script_trace.conflicts() {
-        out.push_str(&format!("  COLLISION {conflict}\n"));
+        out.push_str(&format!("  CONFLICT {conflict}\n"));
     }
     out.push_str("======================\n\n");
     out

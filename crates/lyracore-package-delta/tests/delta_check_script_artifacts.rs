@@ -125,7 +125,29 @@ fn two_packages_shipping_one_script_id_fail_the_run() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("collision"), "{stderr}");
+    assert!(stderr.contains("conflict"), "{stderr}");
+}
+
+#[test]
+fn two_artifacts_for_one_package_fail_even_when_the_scripts_do_not_collide() {
+    let dir = temp_dir("duplicate-package");
+    let first = write(
+        &dir,
+        "first.script.json",
+        &script_artifact("example.same", 100_001, "same.greet", "on_login"),
+    );
+    let second = write(
+        &dir,
+        "second.script.json",
+        &script_artifact("example.same", 100_002, "same.leave", "on_logout"),
+    );
+
+    let output = run(&[&first, &second]);
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("example.same"), "{stdout}");
+    assert!(stdout.contains("more than one Script Artifact"), "{stdout}");
 }
 
 /// A kind this build does not read still meets the Package Delta parser, which names it rather than

@@ -120,8 +120,8 @@ impl ScriptPlan {
     /// Reads a payload into a plan, refusing anything that must not reach the table.
     ///
     /// The refusals, in order: an artifact that does not parse, two artifacts naming the same
-    /// Package, and any collision between Packages. A collision reports EVERY disagreement, not
-    /// just the first — the operator fixing them wants the whole list in one pass.
+    /// Package, and any collision between Packages. The shared tracer reports EVERY disagreement,
+    /// not just the first, because the operator fixing them wants the whole list in one pass.
     fn read(packed: &str) -> Result<Self, String> {
         let mut artifacts: Vec<ScriptArtifact> = Vec::new();
         for (index, artifact) in packed
@@ -131,12 +131,6 @@ impl ScriptPlan {
         {
             let parsed = ScriptArtifact::parse(artifact)
                 .map_err(|e| format!("Script Artifact {index} in this plan is invalid: {e}"))?;
-            if let Some(seen) = artifacts.iter().find(|a| a.package() == parsed.package()) {
-                return Err(format!(
-                    "package `{}` appears twice in this plan",
-                    seen.package()
-                ));
-            }
             artifacts.push(parsed);
         }
 
@@ -311,7 +305,10 @@ mod tests {
 
         let refusal = plan(&[once.clone(), once]).expect_err("plan is refused");
 
-        assert!(refusal.contains("appears twice"), "{refusal}");
+        assert!(
+            refusal.contains("more than one Script Artifact"),
+            "{refusal}"
+        );
     }
 
     #[test]

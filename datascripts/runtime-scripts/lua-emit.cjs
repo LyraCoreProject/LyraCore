@@ -104,25 +104,28 @@ function requireEntryPoint(program) {
   const checker = program.getTypeChecker();
   for (const file of program.getSourceFiles()) {
     if (file.isDeclarationFile) continue;
-    const declaration = file.statements.find(
+    const declarations = file.statements.filter(
       (statement) =>
         ts.isFunctionDeclaration(statement) && statement.name && statement.name.text === ENTRY,
     );
-    if (!declaration) {
+    const implementations = declarations.filter((declaration) => declaration.body !== undefined);
+    if (implementations.length !== 1) {
       diagnostics.push({
         file,
-        start: 0,
-        length: 0,
+        start: declarations[0]?.getStart(file) ?? 0,
+        length: declarations[0]?.getWidth(file) ?? 0,
         category: ts.DiagnosticCategory.Error,
         code: 0,
         messageText:
-          `a Runtime Script declares its entry point as \`function ${ENTRY}(): number | void\`. ` +
+          `a Runtime Script declares exactly one concrete entry point as ` +
+          `\`function ${ENTRY}(): number | void\`. ` +
           `The emitted Lua ends with \`return ${ENTRY}()\`, because TypeScript has no top-level ` +
           "return and a Script Answer is the chunk's return value.",
       });
       continue;
     }
 
+    const declaration = implementations[0];
     const signature = checker.getSignatureFromDeclaration(declaration);
     const returnType = signature && checker.getReturnTypeOfSignature(signature);
     if (declaration.parameters.length === 0 && returnType && acceptsScriptAnswer(returnType)) {
