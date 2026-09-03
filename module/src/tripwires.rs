@@ -1296,7 +1296,7 @@ pub(crate) mod grid_cell_tripwire {
 #[cfg(test)]
 pub(crate) mod issue_reference_tripwire {
     /// `(path under `module/src`, tracker references still tolerated there)`.
-    const RATCHET: &[(&str, usize)] = &[("spell/cast/targeting.rs", 6)];
+    const RATCHET: &[(&str, usize)] = &[];
 
     /// Returns one line number for each tracker reference in a comment. A reference is a hash sign
     /// opening a 2..=4 digit token; a build, opcode, patch or revision number is not one.

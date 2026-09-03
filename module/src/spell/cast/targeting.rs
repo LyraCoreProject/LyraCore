@@ -637,7 +637,7 @@ pub(crate) fn aura_apply(
     if aura_moves_vitals(e.kind, e.p0) {
         recompute_vitals(ctx, target_guid);
     }
-    // #517: re-derive the character-sheet numbers the SAME way — gated on `aura_moves_sheet` (a wider
+    // Re-derive the character-sheet numbers the SAME way — gated on `aura_moves_sheet` (a wider
     // gate than vitals: STR/AGI/SPI stat auras and Battle-Shout-style AP auras move the sheet but not a
     // pool). AFTER the vitals recompute so a STA/INT aura's `recompute_sheet` sees the already-updated
     // `e.spirit` field.
@@ -1654,7 +1654,7 @@ fn blink_dest(x: f32, y: f32, orientation: f32, yd: f32) -> (f32, f32) {
     (x + orientation.cos() * yd, y + orientation.sin() * yd)
 }
 
-/// Blink lands this far short of the collision ray's first-hit point (issue #523) — a small
+/// Blink lands this far short of the collision ray's first-hit point — a small
 /// clearance so the mage's own collision radius doesn't clip back into the geometry it just
 /// stopped at (the wall/column/cart PLANE, not "the last whole nav cell before it" — that was the
 /// grid-clamp's coarser guarantee).
@@ -1665,7 +1665,7 @@ const BLINK_CLEARANCE_YD: f32 = 1.0;
 /// `dist_yd` is the effect's DBC radius (data-driven, 20yd for Blink) — `resolve_cast_at` already
 /// rejected the cast if it was 0, so no fallback here (a silent default would hide mis-seeded data).
 ///
-/// Collision (#523, decision #10 §10): when exact vmap data is consuming
+/// Collision: when exact vmap data is consuming
 /// (`vmap::vmap_enabled`), clamp on the COLLISION ray's first-hit point (WMO + M2 doodads —
 /// `vmap::collision_ray`, not the WMO-only LoS ray `has_los` uses) minus `BLINK_CLEARANCE_YD`, so
 /// Blink lands right at the obstacle's true plane instead of the nearest whole nav cell before it
