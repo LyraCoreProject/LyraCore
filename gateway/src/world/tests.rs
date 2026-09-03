@@ -1,7 +1,7 @@
 use super::handlers::{
     AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, DuelActionStore,
-    ItemActionStore, LootWindowRequestStatus, LootWindowStore, MeleeActionStore, QuestActionStore,
-    TaxiActionStore, VendorActionStore, WeatherStore,
+    ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
+    QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
 use crate::read_deadline::{DeadlineClock, PreAuthDeadline};
@@ -3209,8 +3209,10 @@ impl LootWindowStore for InMemoryStore {
         _actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        if let Some(error) = &self.trade_error {
-            return Ok(LootWindowRequestStatus::Refused(anyhow!(error.clone())));
+        if self.trade_error.is_some() {
+            return Ok(LootWindowRequestStatus::Refused(
+                LootWindowRefusal::Unanswered,
+            ));
         }
         self.skinned.lock().unwrap().push(target_guid);
         Ok(LootWindowRequestStatus::Applied)

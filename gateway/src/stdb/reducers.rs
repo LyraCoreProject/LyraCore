@@ -11,9 +11,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::bindings::*;
 use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
-use crate::world::ItemActionResult;
+use crate::world::{ItemActionResult, LootWindowRefusal, LootWindowRequestStatus};
 use lyracore_shared::auction::AuctionRefusal;
 use lyracore_shared::item::ItemRefusal;
+use lyracore_shared::loot::LootRefusal;
 use lyracore_shared::trainer::TrainerRefusal;
 
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -1047,16 +1048,21 @@ impl Coordinator {
     /// Use a gameobject (`CMSG_GAMEOBJ_USE`) — a chest rolls its loot into the corpse-loot table keyed
     /// on the GO guid, a quest-use object grants quest credit. The module gates range + type.
     /// Rides the coordinator connection as `gw_use_gameobject`.
-    pub fn use_gameobject(&self, _account_id: u64, actor_guid: u64, go_guid: u64) -> Result<()> {
+    pub fn use_gameobject(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        go_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
         if actor_guid == 0 {
             return Err(anyhow!("use_gameobject: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_use_gameobject",
             gw_use_gameobject_then(actor_guid, go_guid)
-        )
+        ))
     }
 
     /// Enter an area trigger (`CMSG_AREATRIGGER`) — credit any active explore quest tied to `trigger_id`.
@@ -1820,16 +1826,21 @@ impl Coordinator {
 
     /// Take the money from a corpse (`CMSG_LOOT_MONEY`, slice 3) over the coordinator connection so
     /// the module attributes the loot to the caller (as `gw_loot_money`).
-    pub fn loot_money(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn loot_money(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
         if actor_guid == 0 {
             return Err(anyhow!("loot_money: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_money",
             gw_loot_money_then(actor_guid, target_guid)
-        )
+        ))
     }
 
     /// Authorize opening a creature corpse before the Gateway reads its loot rows.
@@ -1838,16 +1849,16 @@ impl Coordinator {
         _account_id: u64,
         actor_guid: u64,
         corpse_guid: u64,
-    ) -> Result<()> {
+    ) -> Result<LootWindowRequestStatus> {
         if actor_guid == 0 {
             return Err(anyhow!("open_creature_loot: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_open_creature_loot",
             gw_open_creature_loot_then(actor_guid, corpse_guid)
-        )
+        ))
     }
 
     /// Take one item from the open corpse into the backpack (`CMSG_AUTOSTORE_LOOT_ITEM`, slice 4) over
@@ -1860,28 +1871,33 @@ impl Coordinator {
         actor_guid: u64,
         corpse_guid: u64,
         loot_slot: u8,
-    ) -> Result<()> {
+    ) -> Result<LootWindowRequestStatus> {
         if actor_guid == 0 {
             return Err(anyhow!("take_loot: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_take_loot",
             gw_take_loot_then(actor_guid, corpse_guid, loot_slot)
-        )
+        ))
     }
 
-    pub fn skin_corpse(&self, _account_id: u64, actor_guid: u64, corpse_guid: u64) -> Result<()> {
+    pub fn skin_corpse(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        corpse_guid: u64,
+    ) -> Result<LootWindowRequestStatus> {
         if actor_guid == 0 {
             return Err(anyhow!("skin_corpse: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_skin",
             gw_skin_then(actor_guid, corpse_guid)
-        )
+        ))
     }
 
     /// `CMSG_LOOT_ROLL` — record the caller's need/greed/pass vote on a
@@ -3116,6 +3132,25 @@ fn next_auction_operation_id() -> Result<u64> {
     }
 }
 
+/// A loot Durable Request the Module rejected is a Refusal outcome; a timeout, transport, or SDK
+/// failure stays an error with an unknown durable result and ends the session. Module cores outside
+/// the loot family still refuse with untagged prose, so an untagged Rejection is unanswered.
+fn loot_request_status(result: Result<()>) -> Result<LootWindowRequestStatus> {
+    match result {
+        Ok(()) => Ok(LootWindowRequestStatus::Applied),
+        Err(error) => match reducer_refusal_reason(&error) {
+            Some(reason) => {
+                log::debug!("stdb: loot Durable Request refused: {error:#}");
+                Ok(LootWindowRequestStatus::Refused(
+                    LootRefusal::parse_tag(reason)
+                        .map_or(LootWindowRefusal::Unanswered, Into::into),
+                ))
+            }
+            None => Err(error),
+        },
+    }
+}
+
 /// The Module's typed auction Refusal. Only a reducer the Module rejected carries a tag; a timeout,
 /// transport, or SDK failure stays an error with an unknown outcome.
 fn auction_refusal(error: &anyhow::Error) -> Option<AuctionRefusal> {
@@ -3240,6 +3275,64 @@ mod item_reducer_tests {
         for error in not_refusals {
             let text = format!("{error:#}");
             assert!(item_action(Err(error)).is_err(), "{text}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod loot_reducer_tests {
+    use super::*;
+    use crate::stdb::connection::ReducerCallError;
+
+    fn refusal_of(result: Result<()>) -> LootWindowRefusal {
+        match loot_request_status(result) {
+            Ok(LootWindowRequestStatus::Refused(refusal)) => refusal,
+            Ok(LootWindowRequestStatus::Applied) => panic!("a Refusal was applied"),
+            Err(error) => panic!("a Refusal ended the session: {error:#}"),
+        }
+    }
+
+    fn rejected(reason: &str) -> Result<()> {
+        Err(anyhow::Error::from(ReducerCallError::Rejected {
+            operation: "gw_take_loot".to_string(),
+            reason: reason.to_string(),
+        })
+        .context("loot window"))
+    }
+
+    #[test]
+    fn every_module_refusal_tag_becomes_one_client_answer() {
+        for refusal in LootRefusal::ALL {
+            assert_eq!(
+                refusal_of(rejected(refusal.as_tag())),
+                LootWindowRefusal::from(refusal),
+                "{refusal:?}"
+            );
+        }
+        // A Module core outside the loot family still refuses with prose.
+        assert_eq!(
+            refusal_of(rejected("inventory is full")),
+            LootWindowRefusal::Unanswered
+        );
+    }
+
+    #[test]
+    fn a_timeout_is_not_answered_as_a_refusal() {
+        let not_refusals = [
+            anyhow::Error::from(ReducerCallError::fatal(
+                "gw_take_loot reducer timed out after 10s".to_string(),
+            )),
+            anyhow::Error::from(ReducerCallError::fatal(
+                "gw_loot_money reducer failed: transport disconnected".to_string(),
+            )),
+            anyhow!(
+                "wrapped text that mentions {}",
+                LootRefusal::LootTagIneligible.as_tag()
+            ),
+        ];
+        for error in not_refusals {
+            let text = format!("{error:#}");
+            assert!(loot_request_status(Err(error)).is_err(), "{text}");
         }
     }
 }

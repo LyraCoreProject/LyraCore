@@ -50,6 +50,7 @@ use crate::game_group_member; // clone_quest_loot_for_group's GameObject roster 
 use crate::game_world_entity;
 use crate::quest::objective_kind;
 use crate::{game_character_quest, game_quest_objective}; // killer_needs_item (fishing's zone resolve now lives in terrain::zone_id_at)
+use lyracore_shared::loot::LootRefusal;
 use lyracore_shared::loot_roll::event_kind as roll_event_kind; // apply_loot_money's MONEY_SHARE push
 
 mod rolls;
@@ -756,6 +757,14 @@ pub(crate) fn corpse_is_looted(ctx: &ReducerContext, corpse_guid: u64, money: u3
             .is_none()
 }
 
+/// The reducer edge for every loot Refusal. Only the tag crosses the tier boundary, so the Gateway
+/// never reads Module prose; the operator detail stays in the Module log.
+pub(crate) fn refused(refusal: LootRefusal, detail: &str) -> String {
+    let tag = refusal.as_tag();
+    spacetimedb::log::info!("loot refused {tag}: {detail}");
+    tag.to_string()
+}
+
 /// Open a creature corpse for the read that follows. This reducer core only authorizes the read;
 /// it does not create durable loot-window state.
 pub(crate) fn open_creature_corpse(
@@ -768,25 +777,34 @@ pub(crate) fn open_creature_corpse(
         .game_world_entity()
         .guid()
         .find(actor_guid)
-        .ok_or_else(|| "looter not in world".to_string())?;
+        .ok_or_else(|| refused(LootRefusal::LooterUnavailable, "looter not in world"))?;
     if actor.dead {
-        return Err("dead Characters cannot loot".to_string());
+        return Err(refused(
+            LootRefusal::LooterUnavailable,
+            "dead Characters cannot loot",
+        ));
     }
     let corpse = ctx
         .db
         .game_world_entity()
         .guid()
         .find(corpse_guid)
-        .ok_or_else(|| "no such corpse".to_string())?;
+        .ok_or_else(|| refused(LootRefusal::NoLootSource, "no such corpse"))?;
     if corpse.is_player() || !corpse.dead {
-        return Err("target is not a creature corpse".to_string());
+        return Err(refused(
+            LootRefusal::NoLootSource,
+            "Loot Source is not a creature corpse",
+        ));
     }
     if corpse.map_id != actor.map_id || corpse.instance_id != actor.instance_id {
-        return Err("corpse is out of reach".to_string());
+        return Err(refused(
+            LootRefusal::OutOfRange,
+            "Loot Source is on another map or instance",
+        ));
     }
     let (dx, dy, dz) = (corpse.x - actor.x, corpse.y - actor.y, corpse.z - actor.z);
     if dx * dx + dy * dy + dz * dz > LOOT_RANGE_SQ {
-        return Err("corpse is out of reach".to_string());
+        return Err(refused(LootRefusal::OutOfRange, "corpse is out of reach"));
     }
     corpse_access_gate(ctx, actor_guid, corpse_guid)
 }
@@ -802,33 +820,42 @@ pub(crate) fn apply_loot_money(
     let mut looter = entities
         .guid()
         .find(looter_guid)
-        .ok_or_else(|| "looter not in world".to_string())?;
+        .ok_or_else(|| refused(LootRefusal::LooterUnavailable, "looter not in world"))?;
     // A dead looter (killed with a loot window still open) can't loot — gate on the same `dead` flag
     // every other action checks, so death stays server-authoritative.
     if looter.dead {
-        return Err("dead players cannot loot".to_string());
+        return Err(refused(
+            LootRefusal::LooterUnavailable,
+            "dead players cannot loot",
+        ));
     }
     let mut corpse = entities
         .guid()
         .find(target_guid)
-        .ok_or_else(|| "no such corpse".to_string())?;
+        .ok_or_else(|| refused(LootRefusal::NoLootSource, "no such corpse"))?;
 
     // Only CREATURE corpses are lootable. A dead/ghost PLAYER is also `dead` with a non-zero purse
     // (loaded from character.money), so without this guard a second player in range could drain the
     // victim's coinage (PvP purse theft). Money loot is creature-only until real player-loot rules.
     if corpse.is_player() {
-        return Err("cannot loot a player".to_string());
+        return Err(refused(LootRefusal::NoLootSource, "cannot loot a player"));
     }
     if !corpse.dead {
-        return Err("target is not a corpse".to_string());
+        return Err(refused(
+            LootRefusal::NoLootSource,
+            "Loot Source is not a corpse",
+        ));
     }
     // Map + instance gated (190 slice 2): a creature corpse is a `game_world_entity` row, so its
     // `instance_id` came free with slice 1 — a looter can never reach across an instance wall.
     if corpse.map_id != looter.map_id {
-        return Err("corpse on another map".to_string());
+        return Err(refused(LootRefusal::OutOfRange, "corpse on another map"));
     }
     if corpse.instance_id != looter.instance_id {
-        return Err("corpse in another instance".to_string());
+        return Err(refused(
+            LootRefusal::OutOfRange,
+            "corpse in another instance",
+        ));
     }
     let (dx, dy, dz) = (
         corpse.x - looter.x,
@@ -836,12 +863,12 @@ pub(crate) fn apply_loot_money(
         corpse.z - looter.z,
     );
     if dx * dx + dy * dy + dz * dz > LOOT_RANGE_SQ {
-        return Err("corpse out of range".to_string());
+        return Err(refused(LootRefusal::OutOfRange, "corpse out of range"));
     }
 
     corpse_access_gate(ctx, looter_guid, target_guid)?;
     if corpse.money == 0 {
-        return Err("nothing to loot".to_string());
+        return Err(refused(LootRefusal::NothingToLoot, "corpse purse is empty"));
     }
 
     let amount = corpse.money;

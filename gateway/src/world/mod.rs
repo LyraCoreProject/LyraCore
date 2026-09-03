@@ -62,8 +62,8 @@ use handlers::{
 };
 pub(crate) use handlers::{
     zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery, CreateAuctionOutcome,
-    CreateAuctionRequest, ItemActionResult, PlaceBidOutcome, PlaceBidRequest, TrainerBuyOutcome,
-    WeatherStore,
+    CreateAuctionRequest, ItemActionResult, LootWindowRefusal, LootWindowRequestStatus,
+    PlaceBidOutcome, PlaceBidRequest, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;

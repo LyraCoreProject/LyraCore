@@ -45,11 +45,9 @@ pub(crate) use duel::{dispatch_duel_action, DuelActionOutcome, DuelActionPlayer,
 pub(crate) use item::{
     dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionResult, ItemActionStore,
 };
-#[cfg(test)]
-pub(crate) use loot::LootWindowRequestStatus;
 pub(crate) use loot::{
-    dispatch_loot_window, handle_loot, LootWindowOutcome, LootWindowPlayer, LootWindowStore,
-    OpenLootState,
+    dispatch_loot_window, handle_loot, LootWindowOutcome, LootWindowPlayer, LootWindowRefusal,
+    LootWindowRequestStatus, LootWindowStore, OpenLootState,
 };
 pub(crate) use mail::handle_mail;
 pub(crate) use melee::{

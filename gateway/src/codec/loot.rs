@@ -44,13 +44,11 @@ pub fn build_loot_response_raw(guid: u64, money: u32, items: &[LootItemView]) ->
     (SMSG_LOOT_RESPONSE_OPCODE, body)
 }
 
-/// Build the vanilla response for a character who cannot loot this creature corpse.
-pub fn build_loot_didnt_kill_response(guid: u64) -> SMSG_LOOT_RESPONSE {
+/// Build the vanilla response that answers a loot Refusal on the named Loot Source.
+pub fn build_loot_error_response(guid: u64, loot_error: LootMethodError) -> SMSG_LOOT_RESPONSE {
     SMSG_LOOT_RESPONSE {
         guid: Guid::new(guid),
-        loot_method: SMSG_LOOT_RESPONSE_LootMethod::ErrorX {
-            loot_error: LootMethodError::DidntKill,
-        },
+        loot_method: SMSG_LOOT_RESPONSE_LootMethod::ErrorX { loot_error },
         gold: Gold::new(0),
         items: Vec::new(),
     }
