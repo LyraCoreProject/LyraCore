@@ -6,6 +6,7 @@ use lyracore_shared::auction::bid_outcome::{
     ACCEPTED as BID_ACCEPTED, BID_INCREMENT, BID_OWN, DATABASE as BID_DATABASE,
     HIGHER_BID as BID_HIGHER, ITEM_NOT_FOUND as BID_ITEM_NOT_FOUND, PENDING as BID_PENDING,
 };
+use lyracore_shared::auction::AuctionRefusal;
 
 #[cfg(feature = "debug_reducers")]
 use crate::mail::game_mail;
@@ -240,14 +241,14 @@ fn imported_house_policy(ctx: &ReducerContext, house: u32) -> Result<AuctionHous
         .id()
         .find(house)
         .ok_or_else(|| {
-            tagged(
-                ListingRefusal::InvalidTerms,
+            refused(
+                AuctionRefusal::InvalidTerms,
                 "auction house is not imported",
             )
         })?;
     if row.id == 0 || !valid_rate(row.deposit_rate) || !valid_rate(row.consignment_rate) {
-        return Err(tagged(
-            ListingRefusal::InvalidTerms,
+        return Err(refused(
+            AuctionRefusal::InvalidTerms,
             "imported auction house policy is invalid",
         ));
     }
@@ -318,13 +319,6 @@ struct ListingTerms {
     start_bid: u32,
     buyout: u32,
     duration_minutes: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ListingRefusal {
-    ItemNotFound,
-    NotEnoughMoney,
-    InvalidTerms,
 }
 
 const FIRST_BACKPACK_SLOT: u8 = 23;
@@ -615,12 +609,6 @@ fn realm_bid_decision(row: &AuctionBidDecision) -> Option<BidDecision> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BidRefusal {
-    NotEnoughMoney,
-    Database,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HeldBid {
     request: BidRequest,
     decision: Option<BidDecision>,
@@ -630,33 +618,36 @@ struct HeldBid {
 trait BidSource {
     fn money(&self, bidder_guid: u64) -> Option<u32>;
     fn hold(&self, operation_id: u64) -> Option<HeldBid>;
-    fn create_hold(&mut self, request: BidRequest) -> Result<(), BidRefusal>;
-    fn finish_hold(&mut self, request: BidRequest, decision: BidDecision)
-        -> Result<(), BidRefusal>;
-    fn confirm_refund(&mut self, request: BidRequest) -> Result<(), BidRefusal>;
+    fn create_hold(&mut self, request: BidRequest) -> Result<(), AuctionRefusal>;
+    fn finish_hold(
+        &mut self,
+        request: BidRequest,
+        decision: BidDecision,
+    ) -> Result<(), AuctionRefusal>;
+    fn confirm_refund(&mut self, request: BidRequest) -> Result<(), AuctionRefusal>;
 }
 
-fn fence_bid<S: BidSource>(source: &mut S, request: BidRequest) -> Result<(), BidRefusal> {
+fn fence_bid<S: BidSource>(source: &mut S, request: BidRequest) -> Result<(), AuctionRefusal> {
     if request.operation_id == 0
         || request.bidder_guid == 0
         || request.auction_id == 0
         || request.house == 0
         || request.offer == 0
     {
-        return Err(BidRefusal::Database);
+        return Err(AuctionRefusal::Database);
     }
     if let Some(hold) = source.hold(request.operation_id) {
         return if hold.request == request {
             Ok(())
         } else {
-            Err(BidRefusal::Database)
+            Err(AuctionRefusal::Database)
         };
     }
     if source
         .money(request.bidder_guid)
         .is_none_or(|money| money < request.offer)
     {
-        return Err(BidRefusal::NotEnoughMoney);
+        return Err(AuctionRefusal::NotEnoughMoney);
     }
     source.create_hold(request)?;
     Ok(())
@@ -666,18 +657,18 @@ fn finish_bid<S: BidSource>(
     source: &mut S,
     request: BidRequest,
     decision: BidDecision,
-) -> Result<BidDecision, BidRefusal> {
+) -> Result<BidDecision, AuctionRefusal> {
     let hold = source
         .hold(request.operation_id)
-        .ok_or(BidRefusal::Database)?;
+        .ok_or(AuctionRefusal::Database)?;
     if hold.request != request {
-        return Err(BidRefusal::Database);
+        return Err(AuctionRefusal::Database);
     }
     if let Some(existing) = hold.decision {
         return if existing == decision {
             Ok(existing)
         } else {
-            Err(BidRefusal::Database)
+            Err(AuctionRefusal::Database)
         };
     }
     source.finish_hold(request, decision)?;
@@ -780,35 +771,35 @@ trait BidMarket {
         request: BidRequest,
         auction: Option<BidAuction>,
         decision: BidDecision,
-    ) -> Result<(), BidRefusal>;
+    ) -> Result<(), AuctionRefusal>;
 }
 
 trait BidRefundSink {
     fn refund_decision(&self, operation_id: u64) -> Option<(BidRequest, BidDecision, u32)>;
-    fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), BidRefusal>;
+    fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), AuctionRefusal>;
 }
 
 fn relay_bid_refund<S: BidRefundSink>(
     sink: &mut S,
     request: BidRequest,
     amount: u32,
-) -> Result<(), BidRefusal> {
+) -> Result<(), AuctionRefusal> {
     if amount == 0 {
         return Ok(());
     }
     let (existing_request, decision, recorded) = sink
         .refund_decision(request.operation_id)
-        .ok_or(BidRefusal::Database)?;
+        .ok_or(AuctionRefusal::Database)?;
     if existing_request != request
         || refundable_bid_value(decision, request.offer).is_none_or(|limit| amount > limit)
     {
-        return Err(BidRefusal::Database);
+        return Err(AuctionRefusal::Database);
     }
     if recorded != 0 {
         return if recorded == amount {
             Ok(())
         } else {
-            Err(BidRefusal::Database)
+            Err(AuctionRefusal::Database)
         };
     }
     sink.commit_refund(request, amount)
@@ -818,24 +809,24 @@ fn confirm_bid_refund<S: BidSource>(
     source: &mut S,
     request: BidRequest,
     amount: u32,
-) -> Result<(), BidRefusal> {
+) -> Result<(), AuctionRefusal> {
     if amount == 0 {
-        return Err(BidRefusal::Database);
+        return Err(AuctionRefusal::Database);
     }
     let hold = source
         .hold(request.operation_id)
-        .ok_or(BidRefusal::Database)?;
-    let decision = hold.decision.ok_or(BidRefusal::Database)?;
+        .ok_or(AuctionRefusal::Database)?;
+    let decision = hold.decision.ok_or(AuctionRefusal::Database)?;
     if hold.request != request
         || refundable_bid_value(decision, request.offer).is_none_or(|limit| amount > limit)
     {
-        return Err(BidRefusal::Database);
+        return Err(AuctionRefusal::Database);
     }
     if hold.deferred_refund == 0 {
         return Ok(());
     }
     if hold.deferred_refund != amount {
-        return Err(BidRefusal::Database);
+        return Err(AuctionRefusal::Database);
     }
     source.confirm_refund(request)
 }
@@ -843,12 +834,12 @@ fn confirm_bid_refund<S: BidSource>(
 fn resolve_bid<S: BidMarket>(
     market: &mut S,
     request: BidRequest,
-) -> Result<BidDecision, BidRefusal> {
+) -> Result<BidDecision, AuctionRefusal> {
     if let Some((existing_request, decision)) = market.decision(request.operation_id) {
         return if existing_request == request {
             Ok(decision)
         } else {
-            Err(BidRefusal::Database)
+            Err(AuctionRefusal::Database)
         };
     }
     let auction = market.auction(request.auction_id);
@@ -861,7 +852,7 @@ fn drive_bid<S: BidSource, M: BidMarket>(
     source: &mut S,
     market: &mut M,
     request: BidRequest,
-) -> Result<BidDecision, BidRefusal> {
+) -> Result<BidDecision, AuctionRefusal> {
     fence_bid(source, request)?;
     if let Some(decision) = source
         .hold(request.operation_id)
@@ -897,14 +888,14 @@ fn operation_match<S: LocalListingSink>(sink: &S, request: ListingRequest) -> Op
 fn prepare_from_source<S: ListingSource>(
     sink: &S,
     request: ListingRequest,
-) -> Result<PreparedListing, ListingRefusal> {
+) -> Result<PreparedListing, AuctionRefusal> {
     if request.operation_id == 0 || request.house.id == 0 {
-        return Err(ListingRefusal::InvalidTerms);
+        return Err(AuctionRefusal::InvalidTerms);
     }
     let item = sink.item(request.item_guid);
     let seller_money = sink
         .seller_money(request.seller_guid)
-        .ok_or(ListingRefusal::ItemNotFound)?;
+        .ok_or(AuctionRefusal::ItemNotFound)?;
     let deposit = prepare_listing(
         item.as_ref(),
         request.seller_guid,
@@ -916,7 +907,7 @@ fn prepare_from_source<S: ListingSource>(
     let expires_micros = i64::from(request.terms.duration_minutes)
         .checked_mul(MICROS_PER_MINUTE)
         .and_then(|duration| created_micros.checked_add(duration))
-        .ok_or(ListingRefusal::InvalidTerms)?;
+        .ok_or(AuctionRefusal::InvalidTerms)?;
     Ok(PreparedListing {
         request,
         snapshot: item.expect("validated listing item is present").snapshot,
@@ -929,10 +920,10 @@ fn prepare_from_source<S: ListingSource>(
 fn create_local_listing<S: LocalListingSink>(
     sink: &mut S,
     request: ListingRequest,
-) -> Result<u32, ListingRefusal> {
+) -> Result<u32, AuctionRefusal> {
     match operation_match(sink, request) {
         OperationMatch::Replay(auction_id) => return Ok(auction_id),
-        OperationMatch::Conflict => return Err(ListingRefusal::InvalidTerms),
+        OperationMatch::Conflict => return Err(AuctionRefusal::InvalidTerms),
         OperationMatch::Fresh => {}
     }
     let listing = prepare_from_source(sink, request)?;
@@ -948,7 +939,7 @@ trait HoldSink: ListingSource {
 }
 
 trait ListingRefundSink {
-    fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, ListingRefusal>;
+    fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, AuctionRefusal>;
     fn commit_refund(&mut self, refund: ListingRefund);
 }
 
@@ -957,19 +948,19 @@ trait MarketSink {
     fn commit_market(&mut self, listing: PreparedListing) -> u32;
 }
 
-fn fence_listing<S: HoldSink>(sink: &mut S, request: ListingRequest) -> Result<(), ListingRefusal> {
+fn fence_listing<S: HoldSink>(sink: &mut S, request: ListingRequest) -> Result<(), AuctionRefusal> {
     if let Some(receipt) = sink.receipt(request.operation_id) {
         return if receipt.auction_id != 0 && receipt.listing.request == request {
             Ok(())
         } else {
-            Err(ListingRefusal::InvalidTerms)
+            Err(AuctionRefusal::InvalidTerms)
         };
     }
     if let Some(hold) = sink.hold(request.operation_id) {
         return if hold.listing.request == request {
             Ok(())
         } else {
-            Err(ListingRefusal::InvalidTerms)
+            Err(AuctionRefusal::InvalidTerms)
         };
     }
     let listing = prepare_from_source(sink, request)?;
@@ -980,16 +971,16 @@ fn fence_listing<S: HoldSink>(sink: &mut S, request: ListingRequest) -> Result<(
 fn commit_held_listing<S: MarketSink>(
     sink: &mut S,
     listing: PreparedListing,
-) -> Result<u32, ListingRefusal> {
+) -> Result<u32, AuctionRefusal> {
     if let Some(receipt) = sink.receipt(listing.request.operation_id) {
         return if receipt.listing == listing {
             if receipt.auction_id == 0 {
-                Err(ListingRefusal::InvalidTerms)
+                Err(AuctionRefusal::InvalidTerms)
             } else {
                 Ok(receipt.auction_id)
             }
         } else {
-            Err(ListingRefusal::InvalidTerms)
+            Err(AuctionRefusal::InvalidTerms)
         };
     }
     Ok(sink.commit_market(listing))
@@ -998,33 +989,33 @@ fn commit_held_listing<S: MarketSink>(
 fn confirm_listing<S: HoldSink>(
     sink: &mut S,
     receipt: ListingReceipt,
-) -> Result<(), ListingRefusal> {
+) -> Result<(), AuctionRefusal> {
     if receipt.auction_id == 0 {
-        return Err(ListingRefusal::InvalidTerms);
+        return Err(AuctionRefusal::InvalidTerms);
     }
     if let Some(existing) = sink.receipt(receipt.listing.request.operation_id) {
         return if existing == receipt {
             Ok(())
         } else {
-            Err(ListingRefusal::InvalidTerms)
+            Err(AuctionRefusal::InvalidTerms)
         };
     }
     let hold = sink
         .hold(receipt.listing.request.operation_id)
-        .ok_or(ListingRefusal::InvalidTerms)?;
+        .ok_or(AuctionRefusal::InvalidTerms)?;
     if hold.listing != receipt.listing {
-        return Err(ListingRefusal::InvalidTerms);
+        return Err(AuctionRefusal::InvalidTerms);
     }
     sink.confirm_hold(receipt);
     Ok(())
 }
 
-fn settle_listing<S: HoldSink>(sink: &mut S, operation_id: u64) -> Result<(), ListingRefusal> {
+fn settle_listing<S: HoldSink>(sink: &mut S, operation_id: u64) -> Result<(), AuctionRefusal> {
     let receipt = sink
         .receipt(operation_id)
-        .ok_or(ListingRefusal::InvalidTerms)?;
+        .ok_or(AuctionRefusal::InvalidTerms)?;
     if receipt.auction_id == 0 {
-        return Err(ListingRefusal::InvalidTerms);
+        return Err(AuctionRefusal::InvalidTerms);
     }
     match sink.hold(operation_id) {
         None => Ok(()),
@@ -1032,7 +1023,7 @@ fn settle_listing<S: HoldSink>(sink: &mut S, operation_id: u64) -> Result<(), Li
             sink.delete_hold(operation_id);
             Ok(())
         }
-        Some(_) => Err(ListingRefusal::InvalidTerms),
+        Some(_) => Err(AuctionRefusal::InvalidTerms),
     }
 }
 
@@ -1058,10 +1049,10 @@ fn listing_refund(listing: &PreparedListing) -> ListingRefund {
 fn refund_listing<S: ListingRefundSink>(
     sink: &mut S,
     refund: ListingRefund,
-) -> Result<(), ListingRefusal> {
+) -> Result<(), AuctionRefusal> {
     match sink.refund(refund.listing.request.operation_id)? {
         Some(existing) if existing == refund => Ok(()),
-        Some(_) => Err(ListingRefusal::InvalidTerms),
+        Some(_) => Err(AuctionRefusal::InvalidTerms),
         None => {
             sink.commit_refund(refund);
             Ok(())
@@ -1075,15 +1066,15 @@ fn release_listing<S: HoldSink>(
     sink: &mut S,
     operation_id: u64,
     seller_guid: u64,
-) -> Result<(), ListingRefusal> {
+) -> Result<(), AuctionRefusal> {
     if sink.receipt(operation_id).is_some() {
-        return Err(ListingRefusal::InvalidTerms);
+        return Err(AuctionRefusal::InvalidTerms);
     }
     let Some(hold) = sink.hold(operation_id) else {
         return Ok(());
     };
     if hold.listing.request.seller_guid != seller_guid {
-        return Err(ListingRefusal::InvalidTerms);
+        return Err(AuctionRefusal::InvalidTerms);
     }
     sink.delete_hold(operation_id);
     Ok(())
@@ -1145,13 +1136,11 @@ fn expire_active<S: ExpirySink>(sink: &mut S, auction_id: u32) -> Result<(), Str
     Ok(())
 }
 
-fn tagged(refusal: ListingRefusal, detail: &str) -> String {
-    let tag = match refusal {
-        ListingRefusal::ItemNotFound => lyracore_shared::auction::result::ITEM_NOT_FOUND,
-        ListingRefusal::NotEnoughMoney => lyracore_shared::auction::result::NOT_ENOUGH_MONEY,
-        ListingRefusal::InvalidTerms => lyracore_shared::auction::result::DATABASE,
-    };
-    format!("[{tag}] {detail}")
+/// Reducer edge: only the tag crosses to the gateway; the detail stays in module logs.
+fn refused(refusal: AuctionRefusal, detail: &str) -> String {
+    let tag = refusal.as_tag();
+    spacetimedb::log::info!("auction refused {tag}: {detail}");
+    tag.to_string()
 }
 
 fn listing_from_hold(row: AuctionHold) -> PreparedListing {
@@ -1404,7 +1393,7 @@ struct CtxListingRefund<'a> {
 }
 
 impl ListingRefundSink for CtxListingRefund<'_> {
-    fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, ListingRefusal> {
+    fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, AuctionRefusal> {
         let row = self
             .ctx
             .db
@@ -1416,7 +1405,7 @@ impl ListingRefundSink for CtxListingRefund<'_> {
             Some(row) if row.auction_id == 0 => {
                 Ok(Some(listing_refund(&listing_from_receipt(row).listing)))
             }
-            Some(_) => Err(ListingRefusal::InvalidTerms),
+            Some(_) => Err(AuctionRefusal::InvalidTerms),
         }
     }
 
@@ -1477,13 +1466,13 @@ impl BidSource for CtxBidSource<'_> {
             })
     }
 
-    fn create_hold(&mut self, request: BidRequest) -> Result<(), BidRefusal> {
+    fn create_hold(&mut self, request: BidRequest) -> Result<(), AuctionRefusal> {
         let mut bidder = crate::helpers::acting_entity_by_guid(self.ctx, request.bidder_guid)
-            .ok_or(BidRefusal::NotEnoughMoney)?;
+            .ok_or(AuctionRefusal::NotEnoughMoney)?;
         bidder.money = bidder
             .money
             .checked_sub(request.offer)
-            .ok_or(BidRefusal::NotEnoughMoney)?;
+            .ok_or(AuctionRefusal::NotEnoughMoney)?;
         self.ctx.db.game_world_entity().guid().update(bidder);
         self.ctx.db.game_auction_bid_hold().insert(AuctionBidHold {
             operation_id: request.operation_id,
@@ -1506,11 +1495,12 @@ impl BidSource for CtxBidSource<'_> {
         &mut self,
         request: BidRequest,
         decision: BidDecision,
-    ) -> Result<(), BidRefusal> {
-        let refund = refundable_bid_value(decision, request.offer).ok_or(BidRefusal::Database)?;
+    ) -> Result<(), AuctionRefusal> {
+        let refund =
+            refundable_bid_value(decision, request.offer).ok_or(AuctionRefusal::Database)?;
         let deferred_refund = if refund != 0 {
             let mut bidder = crate::helpers::acting_entity_by_guid(self.ctx, request.bidder_guid)
-                .ok_or(BidRefusal::Database)?;
+                .ok_or(AuctionRefusal::Database)?;
             let (money, deferred_refund) = split_bid_refund(bidder.money, refund);
             bidder.money = money;
             self.ctx.db.game_world_entity().guid().update(bidder);
@@ -1540,20 +1530,20 @@ impl BidSource for CtxBidSource<'_> {
         Ok(())
     }
 
-    fn confirm_refund(&mut self, request: BidRequest) -> Result<(), BidRefusal> {
+    fn confirm_refund(&mut self, request: BidRequest) -> Result<(), AuctionRefusal> {
         let mut row = self
             .ctx
             .db
             .game_auction_bid_hold()
             .operation_id()
             .find(request.operation_id)
-            .ok_or(BidRefusal::Database)?;
+            .ok_or(AuctionRefusal::Database)?;
         if row.bidder_guid != request.bidder_guid
             || row.auction_id != request.auction_id
             || row.house != request.house
             || row.offer != request.offer
         {
-            return Err(BidRefusal::Database);
+            return Err(AuctionRefusal::Database);
         }
         row.deferred_refund = 0;
         self.ctx
@@ -1627,21 +1617,21 @@ impl BidMarket for CtxBidMarket<'_> {
         request: BidRequest,
         auction: Option<BidAuction>,
         decision: BidDecision,
-    ) -> Result<(), BidRefusal> {
+    ) -> Result<(), AuctionRefusal> {
         if let BidDecision::Accepted(accepted) = decision {
-            let expected = auction.ok_or(BidRefusal::Database)?;
+            let expected = auction.ok_or(AuctionRefusal::Database)?;
             let mut row = self
                 .ctx
                 .db
                 .game_auction()
                 .id()
                 .find(request.auction_id)
-                .ok_or(BidRefusal::Database)?;
+                .ok_or(AuctionRefusal::Database)?;
             if row.revision != expected.revision
                 || row.highest_bidder_guid != expected.highest_bidder_guid
                 || row.highest_bid != expected.highest_bid
             {
-                return Err(BidRefusal::Database);
+                return Err(AuctionRefusal::Database);
             }
             let refund_mail =
                 displaced_bid_refund_mail(accepted.displaced_bidder_guid, accepted.displaced_bid);
@@ -1649,7 +1639,7 @@ impl BidMarket for CtxBidMarket<'_> {
                 AuctionBidEffect::SettleBuyout => {
                     let sale_mail =
                         buyout_settlement_mail(expected, request.bidder_guid, accepted.price)
-                            .ok_or(BidRefusal::Database)?;
+                            .ok_or(AuctionRefusal::Database)?;
                     self.ctx
                         .db
                         .game_auction_expiry()
@@ -1716,21 +1706,21 @@ impl BidRefundSink for CtxBidMarket<'_> {
         ))
     }
 
-    fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), BidRefusal> {
+    fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), AuctionRefusal> {
         let mut row = self
             .ctx
             .db
             .game_auction_bid_decision()
             .operation_id()
             .find(request.operation_id)
-            .ok_or(BidRefusal::Database)?;
+            .ok_or(AuctionRefusal::Database)?;
         if row.bidder_guid != request.bidder_guid
             || row.auction_id != request.auction_id
             || row.house != request.house
             || row.offer != request.offer
             || row.deferred_refund != 0
         {
-            return Err(BidRefusal::Database);
+            return Err(AuctionRefusal::Database);
         }
         crate::mail::insert_mail(
             self.ctx,
@@ -1768,14 +1758,6 @@ fn bid_request(
     }
 }
 
-fn tagged_bid(refusal: BidRefusal, detail: &str) -> String {
-    let tag = match refusal {
-        BidRefusal::NotEnoughMoney => lyracore_shared::auction::result::NOT_ENOUGH_MONEY,
-        BidRefusal::Database => lyracore_shared::auction::result::DATABASE,
-    };
-    format!("[{tag}] {detail}")
-}
-
 fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> Result<(), String> {
     if listing.request.operation_id == 0
         || listing.request.house.id == 0
@@ -1787,25 +1769,28 @@ fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> R
         || (listing.request.terms.buyout != 0
             && listing.request.terms.buyout < listing.request.terms.start_bid)
     {
-        return Err(tagged(ListingRefusal::InvalidTerms, "invalid held listing"));
+        return Err(refused(
+            AuctionRefusal::InvalidTerms,
+            "invalid held listing",
+        ));
     }
     let template = ctx
         .db
         .game_item_template()
         .entry()
         .find(listing.snapshot.entry)
-        .ok_or_else(|| tagged(ListingRefusal::InvalidTerms, "item template missing"))?;
+        .ok_or_else(|| refused(AuctionRefusal::InvalidTerms, "item template missing"))?;
     let expected_deposit = listing_deposit(
         template.sell_price,
         listing.snapshot.stack_count,
         listing.request.terms.duration_minutes,
         listing.request.house.deposit_rate,
     )
-    .ok_or_else(|| tagged(ListingRefusal::InvalidTerms, "invalid listing arithmetic"))?;
+    .ok_or_else(|| refused(AuctionRefusal::InvalidTerms, "invalid listing arithmetic"))?;
     let expected_expiry = i64::from(listing.request.terms.duration_minutes)
         .checked_mul(MICROS_PER_MINUTE)
         .and_then(|duration| listing.created_micros.checked_add(duration))
-        .ok_or_else(|| tagged(ListingRefusal::InvalidTerms, "auction expiry overflow"))?;
+        .ok_or_else(|| refused(AuctionRefusal::InvalidTerms, "auction expiry overflow"))?;
     if listing.deposit != expected_deposit
         || !listing_proceeds_are_representable(
             listing.request.terms,
@@ -1814,8 +1799,8 @@ fn validate_market_listing(ctx: &ReducerContext, listing: &PreparedListing) -> R
         )
         || listing.expires_micros != expected_expiry
     {
-        return Err(tagged(
-            ListingRefusal::InvalidTerms,
+        return Err(refused(
+            AuctionRefusal::InvalidTerms,
             "held listing payload changed",
         ));
     }
@@ -1920,16 +1905,16 @@ pub fn gw_auction_list_local(
     let house = match existing_house {
         Some(policy) if policy.id == requested_house => policy,
         Some(_) => {
-            return Err(tagged(
-                ListingRefusal::InvalidTerms,
+            return Err(refused(
+                AuctionRefusal::InvalidTerms,
                 "listing operation id conflict",
             ));
         }
         None => imported_house_policy(ctx, requested_house)?,
     };
     if !replay && auction_house_for_interaction(ctx, seller_guid, auctioneer_guid) != Some(house) {
-        return Err(tagged(
-            ListingRefusal::InvalidTerms,
+        return Err(refused(
+            AuctionRefusal::InvalidTerms,
             "auctioneer refused interaction",
         ));
     }
@@ -1948,7 +1933,7 @@ pub fn gw_auction_list_local(
         ),
     )
     .map(|_| ())
-    .map_err(|refusal| tagged(refusal, "listing rejected"))
+    .map_err(|refusal| refused(refusal, "listing rejected"))
 }
 
 /// Sharded listing phase 1: atomically move the source value into a caller-identified Hold.
@@ -1986,16 +1971,16 @@ pub fn gw_auction_hold_listing(
     let house = match existing_house {
         Some(policy) if policy.id == requested_house => policy,
         Some(_) => {
-            return Err(tagged(
-                ListingRefusal::InvalidTerms,
+            return Err(refused(
+                AuctionRefusal::InvalidTerms,
                 "listing operation id conflict",
             ));
         }
         None => imported_house_policy(ctx, requested_house)?,
     };
     if !replay && auction_house_for_interaction(ctx, seller_guid, auctioneer_guid) != Some(house) {
-        return Err(tagged(
-            ListingRefusal::InvalidTerms,
+        return Err(refused(
+            AuctionRefusal::InvalidTerms,
             "auctioneer refused interaction",
         ));
     }
@@ -2013,7 +1998,7 @@ pub fn gw_auction_hold_listing(
             duration_minutes,
         ),
     )
-    .map_err(|refusal| tagged(refusal, "listing Hold rejected"))
+    .map_err(|refusal| refused(refusal, "listing Hold rejected"))
 }
 
 /// Sharded listing phase 2: create the realm Auction and idempotency receipt from a held payload.
@@ -2069,7 +2054,7 @@ pub fn realm_auction_commit_listing(
     }
     commit_held_listing(&mut market, listing)
         .map(|_| ())
-        .map_err(|refusal| tagged(refusal, "listing operation id conflict"))
+        .map_err(|refusal| refused(refusal, "listing operation id conflict"))
 }
 
 /// Sharded listing phase 3: copy the matching realm receipt onto the source shard.
@@ -2087,7 +2072,7 @@ pub fn realm_auction_confirm_listing(
             <CtxSource<'_> as HoldSink>::receipt(&CtxSource { ctx }, operation_id)
                 .map(|receipt| receipt.listing)
         })
-        .ok_or_else(|| tagged(ListingRefusal::InvalidTerms, "listing Hold missing"))?;
+        .ok_or_else(|| refused(AuctionRefusal::InvalidTerms, "listing Hold missing"))?;
     confirm_listing(
         &mut CtxSource { ctx },
         ListingReceipt {
@@ -2095,7 +2080,7 @@ pub fn realm_auction_confirm_listing(
             auction_id,
         },
     )
-    .map_err(|refusal| tagged(refusal, "listing receipt conflict"))
+    .map_err(|refusal| refused(refusal, "listing receipt conflict"))
 }
 
 /// Sharded listing phase 4: delete the Hold only after the source has matching receipt evidence.
@@ -2103,7 +2088,7 @@ pub fn realm_auction_confirm_listing(
 pub fn realm_auction_settle_listing(ctx: &ReducerContext, operation_id: u64) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     settle_listing(&mut CtxSource { ctx }, operation_id)
-        .map_err(|refusal| tagged(refusal, "listing Hold is not confirmed"))
+        .map_err(|refusal| refused(refusal, "listing Hold is not confirmed"))
 }
 
 /// Sharded listing abort phase 3: Realm-core commits the seller's exact return Mail and durable
@@ -2153,7 +2138,7 @@ pub fn realm_auction_refund_listing(
             expires_micros,
         })),
     )
-    .map_err(|refusal| tagged(refusal, "listing refund conflict"))
+    .map_err(|refusal| refused(refusal, "listing refund conflict"))
 }
 
 /// Sharded listing abort: after realm-core refuses phase 2, mail the held item and deposit back
@@ -2167,7 +2152,7 @@ pub fn gw_auction_release_listing_hold(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     release_listing(&mut CtxSource { ctx }, operation_id, seller_guid)
-        .map_err(|refusal| tagged(refusal, "listing Hold is confirmed"))
+        .map_err(|refusal| refused(refusal, "listing Hold is confirmed"))
 }
 
 /// Single-database bid: full-offer Hold, realm decision, Auction update or buyout settlement,
@@ -2193,8 +2178,8 @@ pub fn gw_auction_bid_local(
         && auction_house_for_interaction(ctx, bidder_guid, auctioneer_guid)
             .is_none_or(|policy| policy.id != house)
     {
-        return Err(tagged_bid(
-            BidRefusal::Database,
+        return Err(refused(
+            AuctionRefusal::Database,
             "auctioneer refused interaction",
         ));
     }
@@ -2204,16 +2189,16 @@ pub fn gw_auction_bid_local(
         &mut CtxBidMarket { ctx },
         request,
     )
-    .map_err(|refusal| tagged_bid(refusal, "local bid rejected"))?;
+    .map_err(|refusal| refused(refusal, "local bid rejected"))?;
     let deferred_refund = CtxBidSource { ctx }
         .hold(operation_id)
-        .ok_or_else(|| tagged_bid(BidRefusal::Database, "local bid Hold missing"))?
+        .ok_or_else(|| refused(AuctionRefusal::Database, "local bid Hold missing"))?
         .deferred_refund;
     if deferred_refund != 0 {
         relay_bid_refund(&mut CtxBidMarket { ctx }, request, deferred_refund)
-            .map_err(|refusal| tagged_bid(refusal, "local bid refund conflict"))?;
+            .map_err(|refusal| refused(refusal, "local bid refund conflict"))?;
         confirm_bid_refund(&mut CtxBidSource { ctx }, request, deferred_refund)
-            .map_err(|refusal| tagged_bid(refusal, "local bid refund confirmation conflict"))?;
+            .map_err(|refusal| refused(refusal, "local bid refund confirmation conflict"))?;
     }
     Ok(())
 }
@@ -2240,8 +2225,8 @@ pub fn gw_auction_hold_bid(
         && auction_house_for_interaction(ctx, bidder_guid, auctioneer_guid)
             .is_none_or(|policy| policy.id != house)
     {
-        return Err(tagged_bid(
-            BidRefusal::Database,
+        return Err(refused(
+            AuctionRefusal::Database,
             "auctioneer refused interaction",
         ));
     }
@@ -2249,7 +2234,7 @@ pub fn gw_auction_hold_bid(
         &mut CtxBidSource { ctx },
         bid_request(operation_id, bidder_guid, auction_id, house, offer),
     )
-    .map_err(|refusal| tagged_bid(refusal, "bid Hold rejected"))
+    .map_err(|refusal| refused(refusal, "bid Hold rejected"))
 }
 
 /// Sharded bid phase 2: serialize against the realm Auction and persist one terminal decision.
@@ -2268,7 +2253,7 @@ pub fn realm_auction_decide_bid(
         bid_request(operation_id, bidder_guid, auction_id, house, offer),
     )
     .map(|_| ())
-    .map_err(|refusal| tagged_bid(refusal, "bid decision conflict"))
+    .map_err(|refusal| refused(refusal, "bid decision conflict"))
 }
 
 /// Sharded bid phase 3: consume the normalized accepted price or restore refused value exactly once.
@@ -2300,14 +2285,14 @@ pub fn gw_auction_finish_bid(
         },
         offer,
     )
-    .ok_or_else(|| tagged_bid(BidRefusal::Database, "bid decision is pending"))?;
+    .ok_or_else(|| refused(AuctionRefusal::Database, "bid decision is pending"))?;
     finish_bid(
         &mut CtxBidSource { ctx },
         bid_request(operation_id, bidder_guid, auction_id, house, offer),
         decision,
     )
     .map(|_| ())
-    .map_err(|refusal| tagged_bid(refusal, "bid outcome conflict"))
+    .map_err(|refusal| refused(refusal, "bid outcome conflict"))
 }
 
 /// Sharded bid phase 4: place an unrepresentable purse refund in realm-core mail exactly once.
@@ -2327,7 +2312,7 @@ pub fn realm_auction_refund_bid(
         bid_request(operation_id, bidder_guid, auction_id, house, offer),
         deferred_refund,
     )
-    .map_err(|refusal| tagged_bid(refusal, "bid refund conflict"))
+    .map_err(|refusal| refused(refusal, "bid refund conflict"))
 }
 
 /// Sharded bid phase 5: record on the source that realm-core durably accepted the refund mail.
@@ -2347,7 +2332,7 @@ pub fn gw_auction_confirm_bid_refund(
         bid_request(operation_id, bidder_guid, auction_id, house, offer),
         deferred_refund,
     )
-    .map_err(|refusal| tagged_bid(refusal, "bid refund confirmation conflict"))
+    .map_err(|refusal| refused(refusal, "bid refund confirmation conflict"))
 }
 
 /// Scheduler-only one-shot expiry. Replays see no active Auction and therefore create no mail.
@@ -2753,9 +2738,9 @@ fn prepare_listing(
     seller_money: u32,
     terms: ListingTerms,
     house: AuctionHousePolicy,
-) -> Result<u32, ListingRefusal> {
+) -> Result<u32, AuctionRefusal> {
     let Some(item) = item else {
-        return Err(ListingRefusal::ItemNotFound);
+        return Err(AuctionRefusal::ItemNotFound);
     };
     if item.owner_guid != seller_guid
         || item.slot < FIRST_BACKPACK_SLOT
@@ -2764,10 +2749,10 @@ fn prepare_listing(
         || item.snapshot.stack_count == 0
         || item.snapshot.soulbound
     {
-        return Err(ListingRefusal::ItemNotFound);
+        return Err(AuctionRefusal::ItemNotFound);
     }
     if terms.start_bid == 0 || (terms.buyout != 0 && terms.buyout < terms.start_bid) {
-        return Err(ListingRefusal::InvalidTerms);
+        return Err(AuctionRefusal::InvalidTerms);
     }
     let deposit = listing_deposit(
         item.sell_price,
@@ -2775,12 +2760,12 @@ fn prepare_listing(
         terms.duration_minutes,
         house.deposit_rate,
     )
-    .ok_or(ListingRefusal::InvalidTerms)?;
+    .ok_or(AuctionRefusal::InvalidTerms)?;
     if !listing_proceeds_are_representable(terms, deposit, house.consignment_rate) {
-        return Err(ListingRefusal::InvalidTerms);
+        return Err(AuctionRefusal::InvalidTerms);
     }
     if seller_money < deposit {
-        return Err(ListingRefusal::NotEnoughMoney);
+        return Err(AuctionRefusal::NotEnoughMoney);
     }
     Ok(deposit)
 }
@@ -2899,7 +2884,7 @@ mod tests {
         for slot in [15, 19, 39, 63, 119, 192] {
             assert_eq!(
                 prepare_listing(Some(&item(slot)), 7, 10, terms(), policy()),
-                Err(ListingRefusal::ItemNotFound),
+                Err(AuctionRefusal::ItemNotFound),
                 "slot {slot} must not be auctionable"
             );
         }
@@ -2908,30 +2893,30 @@ mod tests {
         foreign.owner_guid = 8;
         assert_eq!(
             prepare_listing(Some(&foreign), 7, 10, terms(), policy()),
-            Err(ListingRefusal::ItemNotFound)
+            Err(AuctionRefusal::ItemNotFound)
         );
 
         let mut soulbound = item(23);
         soulbound.snapshot.soulbound = true;
         assert_eq!(
             prepare_listing(Some(&soulbound), 7, 10, terms(), policy()),
-            Err(ListingRefusal::ItemNotFound)
+            Err(AuctionRefusal::ItemNotFound)
         );
 
         let mut not_mailable = item(120);
         not_mailable.mailable = false;
         assert_eq!(
             prepare_listing(Some(&not_mailable), 7, 10, terms(), policy()),
-            Err(ListingRefusal::ItemNotFound)
+            Err(AuctionRefusal::ItemNotFound)
         );
 
         assert_eq!(
             prepare_listing(None, 7, 10, terms(), policy()),
-            Err(ListingRefusal::ItemNotFound)
+            Err(AuctionRefusal::ItemNotFound)
         );
         assert_eq!(
             prepare_listing(Some(&item(23)), 7, 9, terms(), policy()),
-            Err(ListingRefusal::NotEnoughMoney)
+            Err(AuctionRefusal::NotEnoughMoney)
         );
 
         for invalid in [
@@ -2951,7 +2936,7 @@ mod tests {
         ] {
             assert_eq!(
                 prepare_listing(Some(&item(23)), 7, 10, invalid, policy()),
-                Err(ListingRefusal::InvalidTerms)
+                Err(AuctionRefusal::InvalidTerms)
             );
         }
     }
@@ -3136,7 +3121,7 @@ mod tests {
     }
 
     impl ListingRefundSink for FakeRefundCore {
-        fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, ListingRefusal> {
+        fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, AuctionRefusal> {
             Ok(self
                 .refund
                 .as_ref()
@@ -3209,7 +3194,7 @@ mod tests {
 
             assert_eq!(
                 create_local_listing(&mut local, request),
-                Err(ListingRefusal::InvalidTerms)
+                Err(AuctionRefusal::InvalidTerms)
             );
             assert_eq!(local.money, before.money);
             assert_eq!(local.item, before.item);
@@ -3222,7 +3207,7 @@ mod tests {
 
             assert_eq!(
                 fence_listing(&mut source, request),
-                Err(ListingRefusal::InvalidTerms)
+                Err(AuctionRefusal::InvalidTerms)
             );
             assert_eq!(source.money, before.money);
             assert_eq!(source.item, before.item);
@@ -3243,7 +3228,7 @@ mod tests {
         source: &mut FakeSource,
         market: &mut FakeMarket,
         request: ListingRequest,
-    ) -> Result<u32, ListingRefusal> {
+    ) -> Result<u32, AuctionRefusal> {
         fence_listing(source, request)?;
         if let Some(receipt) = source.receipt(request.operation_id) {
             settle_listing(source, request.operation_id)?;
@@ -3378,14 +3363,14 @@ mod tests {
         changed.terms.buyout += 1;
         assert_eq!(
             fence_listing(&mut source, changed),
-            Err(ListingRefusal::InvalidTerms)
+            Err(AuctionRefusal::InvalidTerms)
         );
 
         let mut changed_payload = source.hold(original.operation_id).unwrap().listing;
         changed_payload.snapshot.durability += 1;
         assert_eq!(
             commit_held_listing(&mut market, changed_payload),
-            Err(ListingRefusal::InvalidTerms)
+            Err(AuctionRefusal::InvalidTerms)
         );
         assert_eq!(source.money, Some(40));
         assert_eq!(market.auction_count, 1);
@@ -3411,13 +3396,13 @@ mod tests {
         changed_refund.listing.snapshot.durability += 1;
         assert_eq!(
             refund_listing(&mut realm, changed_refund),
-            Err(ListingRefusal::InvalidTerms),
+            Err(AuctionRefusal::InvalidTerms),
             "the durable refund receipt refuses conflicting operation-id reuse"
         );
         assert_eq!(realm.mails.len(), 1);
         assert_eq!(
             release_listing(&mut source, request.operation_id, request.seller_guid + 1),
-            Err(ListingRefusal::InvalidTerms),
+            Err(AuctionRefusal::InvalidTerms),
             "a wrong seller never releases another character's Hold"
         );
         assert!(source.hold.is_some());
@@ -3452,7 +3437,7 @@ mod tests {
 
         assert_eq!(
             commit_held_listing(&mut realm, listing.clone()),
-            Err(ListingRefusal::InvalidTerms),
+            Err(AuctionRefusal::InvalidTerms),
             "a Realm-core refund receipt is not an Auction"
         );
         let mut local = local();
@@ -3468,7 +3453,7 @@ mod tests {
         });
         assert_eq!(
             fence_listing(&mut source, listing.request),
-            Err(ListingRefusal::InvalidTerms),
+            Err(AuctionRefusal::InvalidTerms),
             "a misrouted sentinel must fail closed on the source"
         );
         assert_eq!(
@@ -3479,12 +3464,12 @@ mod tests {
                     auction_id: 0,
                 },
             ),
-            Err(ListingRefusal::InvalidTerms),
+            Err(AuctionRefusal::InvalidTerms),
             "the sentinel must never cross back to the source"
         );
         assert_eq!(
             settle_listing(&mut source, request.operation_id),
-            Err(ListingRefusal::InvalidTerms),
+            Err(AuctionRefusal::InvalidTerms),
             "source cleanup may not treat a sentinel as receipt evidence"
         );
         assert!(source.hold.is_some());
@@ -3510,7 +3495,7 @@ mod tests {
 
         assert_eq!(
             release_listing(&mut source, request.operation_id, request.seller_guid),
-            Err(ListingRefusal::InvalidTerms)
+            Err(AuctionRefusal::InvalidTerms)
         );
         assert!(source.hold.is_some());
         assert_eq!(drive_sharded(&mut source, &mut market, request), Ok(41));
@@ -3872,7 +3857,7 @@ mod tests {
                 .filter(|hold| hold.request.operation_id == operation_id)
         }
 
-        fn create_hold(&mut self, request: BidRequest) -> Result<(), BidRefusal> {
+        fn create_hold(&mut self, request: BidRequest) -> Result<(), AuctionRefusal> {
             self.money -= request.offer;
             self.hold = Some(HeldBid {
                 request,
@@ -3886,9 +3871,9 @@ mod tests {
             &mut self,
             request: BidRequest,
             decision: BidDecision,
-        ) -> Result<(), BidRefusal> {
+        ) -> Result<(), AuctionRefusal> {
             let refund =
-                refundable_bid_value(decision, request.offer).ok_or(BidRefusal::Database)?;
+                refundable_bid_value(decision, request.offer).ok_or(AuctionRefusal::Database)?;
             if refund != 0 {
                 let (money, deferred_refund) = split_bid_refund(self.money, refund);
                 self.money = money;
@@ -3902,7 +3887,7 @@ mod tests {
             Ok(())
         }
 
-        fn confirm_refund(&mut self, request: BidRequest) -> Result<(), BidRefusal> {
+        fn confirm_refund(&mut self, request: BidRequest) -> Result<(), AuctionRefusal> {
             self.deferred_refund = 0;
             self.hold = self.hold.map(|mut hold| {
                 assert_eq!(hold.request, request);
@@ -4002,7 +3987,7 @@ mod tests {
                 },
                 accepted
             ),
-            Err(BidRefusal::Database),
+            Err(AuctionRefusal::Database),
             "changed-payload identifier reuse fails closed"
         );
 
@@ -4025,14 +4010,17 @@ mod tests {
             },
         ] {
             let mut source = FakeBidSource::new(200);
-            assert_eq!(fence_bid(&mut source, malformed), Err(BidRefusal::Database));
+            assert_eq!(
+                fence_bid(&mut source, malformed),
+                Err(AuctionRefusal::Database)
+            );
             assert_eq!(source.money, 200);
             assert!(source.hold.is_none());
         }
         let mut poor = FakeBidSource::new(106);
         assert_eq!(
             fence_bid(&mut poor, request),
-            Err(BidRefusal::NotEnoughMoney)
+            Err(AuctionRefusal::NotEnoughMoney)
         );
         assert_eq!(poor.money, 106);
         assert!(poor.hold.is_none());
@@ -4078,7 +4066,7 @@ mod tests {
             request: BidRequest,
             auction: Option<BidAuction>,
             decision: BidDecision,
-        ) -> Result<(), BidRefusal> {
+        ) -> Result<(), AuctionRefusal> {
             if let BidDecision::Accepted(accepted) = decision {
                 let mut auction = auction.expect("only an active Auction can accept a bid");
                 self.mail.extend(displaced_bid_refund_mail(
@@ -4160,7 +4148,11 @@ mod tests {
             ))
         }
 
-        fn commit_refund(&mut self, request: BidRequest, amount: u32) -> Result<(), BidRefusal> {
+        fn commit_refund(
+            &mut self,
+            request: BidRequest,
+            amount: u32,
+        ) -> Result<(), AuctionRefusal> {
             self.recorded = amount;
             self.mails.push((request.bidder_guid, amount));
             Ok(())
@@ -4195,11 +4187,11 @@ mod tests {
                 },
                 7
             ),
-            Err(BidRefusal::Database)
+            Err(AuctionRefusal::Database)
         );
         assert_eq!(
             relay_bid_refund(&mut sink, request, 8),
-            Err(BidRefusal::Database)
+            Err(AuctionRefusal::Database)
         );
 
         sink.recorded = 0;
@@ -4209,7 +4201,7 @@ mod tests {
         assert_eq!(sink.mails, vec![(8, 7), (8, 7)]);
         assert_eq!(
             relay_bid_refund(&mut sink, request, 8),
-            Err(BidRefusal::Database)
+            Err(AuctionRefusal::Database)
         );
     }
 
@@ -4258,7 +4250,7 @@ mod tests {
                     ..request
                 }
             ),
-            Err(BidRefusal::Database)
+            Err(AuctionRefusal::Database)
         );
         assert_eq!(
             market.mail,

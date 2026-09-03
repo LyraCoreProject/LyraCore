@@ -1,6 +1,7 @@
 //! Auction-house protocol family.
 
 use super::super::*;
+use lyracore_shared::auction::AuctionRefusal;
 use spacetimedb_sdk::Table;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -52,6 +53,17 @@ pub(crate) enum CreateAuctionOutcome {
     Database,
 }
 
+// The vanilla client has no code for invalid terms; it reads as the generic database failure.
+impl From<AuctionRefusal> for CreateAuctionOutcome {
+    fn from(refusal: AuctionRefusal) -> Self {
+        match refusal {
+            AuctionRefusal::ItemNotFound => Self::ItemNotFound,
+            AuctionRefusal::NotEnoughMoney => Self::NotEnoughMoney,
+            AuctionRefusal::InvalidTerms | AuctionRefusal::Database => Self::Database,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PlaceBidRequest {
     pub(crate) actor_guid: u64,
@@ -76,6 +88,16 @@ pub(crate) enum PlaceBidOutcome {
     BidIncrement,
     BidOwn,
     Database,
+}
+
+impl From<AuctionRefusal> for PlaceBidOutcome {
+    fn from(refusal: AuctionRefusal) -> Self {
+        match refusal {
+            AuctionRefusal::ItemNotFound => Self::ItemNotFound,
+            AuctionRefusal::NotEnoughMoney => Self::NotEnoughMoney,
+            AuctionRefusal::InvalidTerms | AuctionRefusal::Database => Self::Database,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -317,20 +339,8 @@ fn validated_auction_player_guid<St: AuctionActionStore + ?Sized>(
     let Some(player_guid) = player.self_guid else {
         return Ok(None);
     };
-    let entities = match store.auction_entities(player_guid, auctioneer_guid) {
-        Ok(entities) => entities,
-        Err(error)
-            if classify_auction_action_error(&error)
-                == AuctionActionErrorClass::GameplayRefusal =>
-        {
-            log::debug!(
-                "world: auctioneer {auctioneer_guid} interaction unavailable for player \
-                 {player_guid}: {error}"
-            );
-            None
-        }
-        Err(error) => return Err(error),
-    };
+    // A missing entity or house is `None`; a failed Durable Read is a failure, not a Refusal.
+    let entities = store.auction_entities(player_guid, auctioneer_guid)?;
     Ok(entities
         .filter(|interaction| interaction_allowed(*interaction))
         .map(|interaction| (player_guid, interaction.house)))
@@ -400,24 +410,6 @@ fn bid_result(auction_id: u32, outcome: PlaceBidOutcome) -> AuctionActionOutcome
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuctionActionErrorClass {
-    GameplayRefusal,
-    Fatal,
-}
-
-fn classify_auction_action_error(error: &anyhow::Error) -> AuctionActionErrorClass {
-    if error.chain().any(|cause| {
-        let text = cause.to_string();
-        text.contains("reducer transport disconnected")
-            || (text.contains("realm-core database") && text.contains("is not connected"))
-    }) {
-        AuctionActionErrorClass::Fatal
-    } else {
-        AuctionActionErrorClass::GameplayRefusal
-    }
-}
-
 pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
     store: &St,
     player: AuctionActionPlayer,
@@ -467,22 +459,15 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             else {
                 return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
             };
-            let outcome = match store.place_bid(PlaceBidRequest {
+            // A Refusal arrives as an outcome. An error is a failure with an unknown durable
+            // result, so it ends the session instead of posing as a gameplay answer.
+            let outcome = store.place_bid(PlaceBidRequest {
                 actor_guid: player_guid,
                 auctioneer_guid,
                 auction_id,
                 offer: message.price.as_int(),
                 house_id: house.id,
-            }) {
-                Ok(outcome) => outcome,
-                Err(error)
-                    if classify_auction_action_error(&error)
-                        == AuctionActionErrorClass::GameplayRefusal =>
-                {
-                    PlaceBidOutcome::Database
-                }
-                Err(error) => return Err(error),
-            };
+            })?;
             return Ok(bid_result(auction_id, outcome));
         }
         ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
@@ -492,7 +477,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
             else {
                 return Ok(create_result(CreateAuctionOutcome::Database));
             };
-            let outcome = match store.create_auction(CreateAuctionRequest {
+            let outcome = store.create_auction(CreateAuctionRequest {
                 actor_guid: player_guid,
                 auctioneer_guid,
                 item_guid: message.item.guid(),
@@ -500,16 +485,7 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
                 buyout: message.buyout,
                 duration_minutes: message.auction_duration_in_minutes,
                 house_id: house.id,
-            }) {
-                Ok(outcome) => outcome,
-                Err(error)
-                    if classify_auction_action_error(&error)
-                        == AuctionActionErrorClass::GameplayRefusal =>
-                {
-                    CreateAuctionOutcome::Database
-                }
-                Err(error) => return Err(error),
-            };
+            })?;
             return Ok(create_result(outcome));
         }
         other => return Ok(AuctionActionOutcome::PassThrough(other)),
@@ -968,6 +944,13 @@ mod tests {
         }
     }
 
+    fn session_error(result: Result<Vec<Outbound>>, what: &str) -> anyhow::Error {
+        match result {
+            Ok(_) => panic!("{what} must end the session"),
+            Err(error) => error,
+        }
+    }
+
     fn bid_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
         match dispatch_auction_action(
             store,
@@ -1249,6 +1232,67 @@ mod tests {
     }
 
     #[test]
+    fn every_module_refusal_has_one_client_result_code() {
+        use SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult as Bid;
+        use SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo as Sell;
+        let expected = |refusal| match refusal {
+            AuctionRefusal::ItemNotFound => (Sell::ErrItemNotFound, Bid::ErrItemNotFound),
+            AuctionRefusal::NotEnoughMoney => (Sell::ErrNotEnoughMoney, Bid::ErrNotEnoughMoney),
+            AuctionRefusal::InvalidTerms | AuctionRefusal::Database => {
+                (Sell::ErrDatabase, Bid::ErrDatabase)
+            }
+        };
+        for refusal in AuctionRefusal::ALL {
+            let (sell_code, bid_code) = expected(refusal);
+
+            let store = store_with(Some(valid_interaction()));
+            *store.create_result.lock().unwrap() = Ok(refusal.into());
+            let outbound = sell_outbound(&store).unwrap();
+            assert!(
+                matches!(
+                    outbound.as_slice(),
+                    [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                        if message.action
+                            == SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::Started {
+                                result2: sell_code,
+                            }
+                ),
+                "{refusal:?}"
+            );
+
+            let store = store_with(Some(valid_interaction()));
+            *store.bid_result.lock().unwrap() = Ok(refusal.into());
+            let outbound = bid_outbound(&store).unwrap();
+            assert!(
+                matches!(
+                    outbound.as_slice(),
+                    [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(message))]
+                        if message.action
+                            == SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::BidPlaced {
+                                result: bid_code,
+                            }
+                ),
+                "{refusal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reducer_timeout_is_not_answered_as_a_refusal() {
+        let store = store_with(Some(valid_interaction()));
+        *store.create_result.lock().unwrap() =
+            Err("gw_auction_hold_listing reducer timed out after 10s".to_string());
+        let error = session_error(sell_outbound(&store), "an unknown listing outcome");
+        assert!(error.to_string().contains("timed out"));
+
+        let store = store_with(Some(valid_interaction()));
+        *store.bid_result.lock().unwrap() =
+            Err("gw_auction_hold_bid reducer timed out after 10s".to_string());
+        let error = session_error(bid_outbound(&store), "an unknown bid outcome");
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
     fn sell_transport_failure_is_fatal() {
         let store = store_with(Some(valid_interaction()));
         *store.create_result.lock().unwrap() =
@@ -1409,17 +1453,13 @@ mod tests {
     }
 
     #[test]
-    fn gameplay_read_failures_are_refusals_but_a_dead_transport_is_fatal() {
-        assert!(hello_outbound(&store_error("auction state unavailable"))
-            .unwrap()
-            .is_empty());
-
-        let error = match hello_outbound(&store_error(
+    fn a_failed_interaction_read_is_fatal() {
+        for message in [
+            "auction state unavailable",
             "auction interaction reducer transport disconnected: channel closed",
-        )) {
-            Ok(_) => panic!("a dead reducer transport must end the session"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("transport disconnected"));
+        ] {
+            let error = session_error(hello_outbound(&store_error(message)), "a failed read");
+            assert_eq!(error.to_string(), message);
+        }
     }
 }
