@@ -711,3 +711,44 @@ pub const fn packed_gameobject_spawn_guid(spawn_id: u32) -> u64 {
     const HIGHGUID_GAMEOBJECT: u64 = 0xF110;
     (HIGHGUID_GAMEOBJECT << 48) | spawn_id as u64
 }
+
+// ===============================================================================================
+//  creature-ai
+// ===============================================================================================
+
+/// Lowest identifier a Package may INSERT in the creature-ai family.
+///
+/// The twelfth application of the band formula in this module's header, one decade above the
+/// Package gameobject range: `17` names a Package `EventAI` row. One band covers the family's three
+/// insertable tables — `game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
+/// `game_quest_event_requirement.id`, three independent identifier spaces, the loot shape.
+///
+/// Stated at `u64` width because the third of those columns is a `u64` and the first two are
+/// `u32`s that widen into it. The ceiling still fits a `u32` with three decimal orders to spare,
+/// which the assert below holds.
+pub const PACKAGE_CREATURE_AI_ID_FLOOR: u64 = 17_000_000;
+
+/// Highest identifier a Package may INSERT in the creature-ai family.
+pub const PACKAGE_CREATURE_AI_ID_CEIL: u64 = 17_999_999;
+
+const _: () = assert!(PACKAGE_CREATURE_AI_ID_FLOOR <= PACKAGE_CREATURE_AI_ID_CEIL);
+const _: () = assert!((RESERVED_ID_CEIL as u64) < PACKAGE_CREATURE_AI_ID_FLOOR);
+const _: () = assert!((PACKAGE_GAMEOBJECT_ID_CEIL as u64) < PACKAGE_CREATURE_AI_ID_FLOOR);
+/// Two of the three keys are `u32` columns, so a band that ran past `u32::MAX` could not be
+/// claimed in them at all.
+const _: () = assert!(PACKAGE_CREATURE_AI_ID_CEIL <= u32::MAX as u64);
+
+/// True when a Package may INSERT a broadcast text, a summon placement or a quest event
+/// requirement at this identifier.
+#[must_use]
+pub const fn is_package_creature_ai_id(id: u64) -> bool {
+    id >= PACKAGE_CREATURE_AI_ID_FLOOR && id <= PACKAGE_CREATURE_AI_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. The creature-ai family has no fixture cluster of its own, so the project-wide band
+/// is the whole check.
+#[must_use]
+pub const fn is_fixture_reserved_creature_ai_id(id: u64) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
+}

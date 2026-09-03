@@ -1364,21 +1364,6 @@ where
     if !a.only.is_empty() && !a.spells {
         bail!("--only is only valid with --spells (the additive Spell.dbc allowlist)");
     }
-    // `--packages` needs an import family with a Package Delta stage to reapply: `--spells` (the
-    // `--dbc` spell importer) or an active `--dump` family in `PACKAGE_DELTA_DUMP_FAMILIES`. A run
-    // that reaches neither has nothing for the stage to reapply onto.
-    if a.packages.is_some()
-        && !a.spells
-        && !PACKAGE_DELTA_DUMP_FAMILIES
-            .iter()
-            .any(|family| family_active(&a, family))
-    {
-        bail!(
-            "--packages is only valid with --spells or an active {} family (the import \
-             families with a Package Delta stage)",
-            PACKAGE_DELTA_DUMP_FAMILIES.join("/")
-        );
-    }
     // The Base Snapshot is derived from Spell.dbc, so it needs the client dir and nothing else. It
     // is a terminal mode rather than an extra output of `--spells`: an author asking for a snapshot
     // is not asking to load anything, and `--apply` beside it would read as "and import too".
@@ -3647,6 +3632,8 @@ pub(crate) fn run_sql_statements(args: &Args, stmts: &[String], label: &str) -> 
 /// own clear+reload" shape as "globals" — kept as its OWN family rather than folded into "globals"
 /// because nothing else reads its output (compute-gateable too, unlike "globals"' entangled siblings —
 /// see `build_dump_plan`'s gate).
+/// Every family here also has a Package Delta stage of its own, so `main` runs the stage over this
+/// same list rather than a second one that could drift from it.
 pub(crate) const FAMILIES: &[&str] = &[
     "creatures",
     "items",
@@ -3675,23 +3662,6 @@ pub(crate) fn family_active(args: &Args, name: &str) -> bool {
         Some(f) => f == name,
     }
 }
-
-/// Every `--dump` Import Family with a Package Delta stage of its own (`lyracore-package-delta`'s
-/// `Table::family` catalogue), the families `--packages` is valid alongside, beside `--spells`.
-/// Extended in the same change that gives a new family its schema; `run_package_stage` and the
-/// `--packages` validation below both read this rather than restating the list.
-const PACKAGE_DELTA_DUMP_FAMILIES: &[&str] = &[
-    "items",
-    "loot",
-    "quests",
-    "casts",
-    "trainers",
-    "gossip",
-    "globals",
-    "spellmeta",
-    "creatures",
-    "gameobjects",
-];
 
 /// One family's Package Delta stage: reapplies every enabled Package's claims on `family`'s tables
 /// once its base rows are back. This is the `--dump` block's counterpart to `spell::run_spells`'s stage.
@@ -5294,7 +5264,7 @@ fn main() -> Result<()> {
             "-- load spawns via reducer: batch 0 = import_creature_spawns (clears+loads), the rest = import_creature_spawns_append (load only).\n  e.g. spacetime call -s {} {} import_creature_spawns '<batch>'\n  (sample row: {})",
             args.server, args.db, plan.spawn_batches.first().and_then(|b| b.split(';').next()).unwrap_or("")
         );
-        for family in PACKAGE_DELTA_DUMP_FAMILIES {
+        for family in FAMILIES {
             run_package_stage(&args, family)?;
         }
         return Ok(());
@@ -5387,7 +5357,7 @@ fn main() -> Result<()> {
     // The Package Delta stage, last, one family at a time: each family's base rows are back and
     // stamped, so every enabled Package's claims go on top of them (mirrors
     // `spell::run_spells`'s placement).
-    for family in PACKAGE_DELTA_DUMP_FAMILIES {
+    for family in FAMILIES {
         run_package_stage(&args, family)?;
     }
     Ok(())
@@ -6880,36 +6850,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_enabled_packages_root_without_a_package_delta_family_is_refused() {
-        // `--family creature-ai` excludes every family in `PACKAGE_DELTA_DUMP_FAMILIES`, and there
-        // is no `--spells` here either, so this run reaches no family with a Package Delta stage
-        // to reapply.
-        let error = parse_args_from([
-            "--dump",
-            "/definitely/not/read.sql",
-            "--family",
-            "creature-ai",
-            "--packages",
-            "packages",
-        ])
-        .err()
-        .expect("--packages needs an import family with a Package Delta stage");
-        assert!(format!("{error:#}").contains("--packages is only valid with --spells"));
-    }
-
+    /// Every `--dump` family has a Package Delta stage of its own, so `--packages` is valid beside
+    /// any of them and beside a full run.
     #[test]
     fn an_enabled_packages_root_with_a_package_delta_family_active_parses() {
-        // A full run (no `--family`) activates every family among the rest, so `--packages` is
-        // valid without naming one of `PACKAGE_DELTA_DUMP_FAMILIES` explicitly, and so is naming
-        // any one of them.
         let mut argvs: Vec<Vec<&str>> = vec![vec![
             "--dump",
             "/definitely/not/read.sql",
             "--packages",
             "packages",
         ]];
-        for family in PACKAGE_DELTA_DUMP_FAMILIES {
+        for family in FAMILIES {
             argvs.push(vec![
                 "--dump",
                 "/definitely/not/read.sql",

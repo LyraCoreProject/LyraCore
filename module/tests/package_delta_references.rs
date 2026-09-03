@@ -650,3 +650,141 @@ fn gameobject_claims_refuse_a_missing_template_and_place_an_invented_one() {
         ))
         .is_empty());
 }
+
+// ---- the creature-ai family ----
+
+/// Blackfathom Deeps' Kelris. His EventAI notifies an Encounter Binding, so an encounter Package
+/// owns his fight.
+const KELRIS: u32 = 4_832;
+/// A broadcast text Kelris speaks, and one nothing encounter-owned names.
+const KELRIS_TEXT: u32 = 900;
+const ORDINARY_TEXT: u32 = 901;
+const PACKAGE_QUEST_EVENT_REQUIREMENT: u64 = 17_000_001;
+const MISSING_QUEST: u32 = 4_000_000;
+
+/// Two imported broadcast texts, in the shape the `creature-ai` base import loads them.
+fn seed_broadcast_texts(standalone: &Standalone) {
+    for (id, line) in [
+        (KELRIS_TEXT, "Ah, sweet innocence."),
+        (ORDINARY_TEXT, "Halt."),
+    ] {
+        standalone.assert_sql(&format!(
+            "INSERT INTO game_creature_ai_broadcast_text \
+             (id, male_text, female_text, chat_type, language_id, emote_delay_1_ms, emote_id_1, \
+             emote_delay_2_ms, emote_id_2, emote_delay_3_ms, emote_id_3) \
+             VALUES ({id}, '{line}', '{line}', 1, 0, 0, 0, 0, 0, 0, 0)"
+        ));
+    }
+}
+
+/// Kelris's loaded definition: one rule that speaks [`KELRIS_TEXT`] and notifies the encounter.
+/// That notification IS the Encounter Binding, so the text it speaks is encounter-owned.
+fn kelris_definition() -> String {
+    let subject = format!("entry:{KELRIS}");
+    let rules = format!(
+        "10,aggro,100,4294967295,once,all,ordinary,any-posture,\
+         speak:yell:self:{KELRIS_TEXT}+notify-encounter:blackfathom-deeps-kelris:begin"
+    );
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"lyracore-eventai-definition-v1");
+    hasher.update(format!("{subject}@{rules}").as_bytes());
+    let revision = u64::from_le_bytes(
+        hasher.finalize().as_bytes()[..8]
+            .try_into()
+            .expect("a BLAKE3 digest has at least eight bytes"),
+    );
+    format!("{subject}@{revision}@{rules}")
+}
+
+fn quest_event_requirement_insert(quest_entry: u32) -> String {
+    artifact(
+        "example.quest.event",
+        &format!(
+            r#"{{"table":"game_quest_event_requirement","key":{{"id":{PACKAGE_QUEST_EVENT_REQUIREMENT}}},"operation":"insert","fields":{{"quest_entry":{{"type":"u32","value":{quest_entry}}}}}}}"#
+        ),
+    )
+}
+
+fn broadcast_text_update(id: u32) -> String {
+    artifact(
+        "example.voice",
+        &format!(
+            r#"{{"table":"game_creature_ai_broadcast_text","key":{{"id":{id}}},"operation":"update","fields":{{"male_text":{{"type":"string","value":"You will burn."}}}}}}"#
+        ),
+    )
+}
+
+/// The creature-ai family has two preflight jobs the whole plan answers. A quest event requirement
+/// names a quest another family owns, and a catalogue row may already belong to an encounter whose
+/// Package owns that creature's fight. The last apply also proves the base-family replay: a Package
+/// that leaves the enabled set takes its invented rows with it.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
+    let standalone = Standalone::start("package-delta-creature-ai-references");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+    seed_broadcast_texts(&standalone);
+
+    let refused = apply(
+        &standalone,
+        "creature-ai",
+        &quest_event_requirement_insert(MISSING_QUEST),
+    );
+    assert!(!refused.status.success());
+    assert!(
+        refusal_text(&refused).contains("quest_entry"),
+        "{}",
+        refusal_text(&refused)
+    );
+
+    let accepted = apply(
+        &standalone,
+        "creature-ai",
+        &quest_event_requirement_insert(FIXTURE_QUEST),
+    );
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let requirement = standalone.query_rows(&format!(
+        "SELECT * FROM game_quest_event_requirement WHERE id = {PACKAGE_QUEST_EVENT_REQUIREMENT}"
+    ));
+    assert_eq!(requirement[0]["quest_entry"], FIXTURE_QUEST.to_string());
+
+    standalone.assert_call(
+        "import_creature_ai_definitions",
+        &[&arg(&kelris_definition())],
+    );
+
+    let refused = apply(
+        &standalone,
+        "creature-ai",
+        &broadcast_text_update(KELRIS_TEXT),
+    );
+    assert!(!refused.status.success());
+    assert!(
+        refusal_text(&refused).contains("BlackfathomDeepsKelris"),
+        "{}",
+        refusal_text(&refused)
+    );
+
+    // A line no encounter-owned definition speaks is the ordinary case, and tuning it is the point.
+    let accepted = apply(
+        &standalone,
+        "creature-ai",
+        &broadcast_text_update(ORDINARY_TEXT),
+    );
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let text = standalone.query_rows(&format!(
+        "SELECT * FROM game_creature_ai_broadcast_text WHERE id = {ORDINARY_TEXT}"
+    ));
+    // `spacetime sql` quotes a string column, so the expected value carries the quotes.
+    assert_eq!(text[0]["male_text"], "\"You will burn.\"");
+
+    // That plan carries no quest event requirement, so the Package that invented one is gone from
+    // the enabled set and its row went with it.
+    assert!(standalone
+        .query_rows(&format!(
+            "SELECT * FROM game_quest_event_requirement WHERE id = {PACKAGE_QUEST_EVENT_REQUIREMENT}"
+        ))
+        .is_empty());
+}

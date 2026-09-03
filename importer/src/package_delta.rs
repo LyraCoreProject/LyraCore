@@ -382,6 +382,13 @@ mod tests {
         )
     }
 
+    /// One Package tuning an imported EventAI line and inventing a summon placement beside it.
+    fn creature_ai_artifact() -> String {
+        format!(
+            r#"{{"version":1,"package":"example.voice","source_hash":"{HASH_A}","claims":[{{"table":"game_creature_ai_broadcast_text","key":{{"id":900}},"operation":"update","fields":{{"male_text":{{"type":"string","value":"You will burn."}}}}}},{{"table":"game_creature_ai_summon","key":{{"id":17000001}},"operation":"insert","fields":{{"x":{{"type":"f32","value":1.5}},"y":{{"type":"f32","value":2.5}},"z":{{"type":"f32","value":3.5}},"orientation":{{"type":"f32","value":0.0}},"lifetime_ms":{{"type":"u32","value":30000}}}}}}]}}"#
+        )
+    }
+
     fn mixed_family_artifact(package: &str) -> String {
         format!(
             r#"{{"version":1,"package":"{package}","source_hash":"{HASH_A}","claims":[{{"table":"game_spell","key":{{"spell_id":{REAL_SPELL}}},"operation":"update","fields":{{"cooldown_ms":{{"type":"u32","value":1500}}}}}},{{"table":"game_item_template","key":{{"entry":25}},"operation":"update","fields":{{"name":{{"type":"string","value":"Worn Shortsword"}}}}}}]}}"#
@@ -571,6 +578,40 @@ mod tests {
 
         assert_eq!(routed_away, 0);
         assert_eq!(kept.len(), 1, "a template is not spatial");
+    }
+
+    /// The EventAI catalogue names no map, so its whole family is global: an `instances` Shard and
+    /// an open-world Shard both load every claim. The base import writes these tables the same way,
+    /// with global SQL and no map predicate.
+    #[test]
+    fn every_creature_ai_claim_reaches_every_shard() {
+        let t = Scratch::new("routing-creature-ai");
+        t.write(
+            "voice/data/.generated/creature-ai.json",
+            &creature_ai_artifact(),
+        );
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+        let creature_ai = artifacts_for_family(found, "creature-ai").expect("the creature-ai plan");
+        assert_eq!(creature_ai[0].delta.claims().len(), 2);
+
+        for profile in [
+            WorldImportProfile::Instances,
+            WorldImportProfile::AllianceEastern,
+        ] {
+            let scope = WorldImportScope::canonical(profile).expect("a canonical profile");
+            let (kept, routed_away) = routed_to_this_shard(
+                &scope,
+                artifacts_for_family(
+                    read_enabled(&t.0).expect("discovery succeeds"),
+                    "creature-ai",
+                )
+                .expect("the creature-ai plan"),
+            )
+            .expect("routing succeeds");
+
+            assert_eq!(routed_away, 0, "{profile:?}");
+            assert_eq!(kept[0].delta.claims().len(), 2, "{profile:?}");
+        }
     }
 
     /// A Package whose every claim routed away drops out of the plan, the way it does when it

@@ -464,6 +464,64 @@ pub(super) fn gameobject_spawn_claim(
     )
 }
 
+// ---- creature-ai ----
+
+/// A broadcast text inside the Package EventAI range, safe to insert. One band covers the text,
+/// the summon placement and the quest event requirement.
+pub(super) const PACKAGE_BROADCAST_TEXT: u32 = 17_000_001;
+
+/// A summon placement inside the Package EventAI range.
+pub(super) const PACKAGE_SUMMON: u32 = 17_000_002;
+
+/// A quest event requirement inside the Package EventAI range.
+pub(super) const PACKAGE_QUEST_EVENT_REQUIREMENT: u64 = 17_000_003;
+
+/// A real imported broadcast text identifier.
+pub(super) const REAL_BROADCAST_TEXT: u32 = 900;
+
+pub(super) const WHOLE_BROADCAST_TEXT_ROW: &str = r#"{
+    "male_text": { "type": "string", "value": "The forge remembers." },
+    "female_text": { "type": "string", "value": "The forge remembers." },
+    "chat_type": { "type": "u8", "value": 1 },
+    "language_id": { "type": "u8", "value": 0 },
+    "emote_delay_1_ms": { "type": "u32", "value": 0 },
+    "emote_id_1": { "type": "u32", "value": 5 },
+    "emote_delay_2_ms": { "type": "u32", "value": 0 },
+    "emote_id_2": { "type": "u32", "value": 0 },
+    "emote_delay_3_ms": { "type": "u32", "value": 0 },
+    "emote_id_3": { "type": "u32", "value": 0 }
+}"#;
+
+pub(super) const WHOLE_SUMMON_ROW: &str = r#"{
+    "x": { "type": "f32", "value": -8949.95 },
+    "y": { "type": "f32", "value": -132.493 },
+    "z": { "type": "f32", "value": 83.5312 },
+    "orientation": { "type": "f32", "value": 0.0 },
+    "lifetime_ms": { "type": "u32", "value": 30000 }
+}"#;
+
+pub(super) const WHOLE_QUEST_EVENT_REQUIREMENT_ROW: &str = r#"{
+    "quest_entry": { "type": "u32", "value": 8000001 }
+}"#;
+
+pub(super) fn broadcast_text_claim(id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_ai_broadcast_text","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn summon_claim(id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_ai_summon","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn quest_event_requirement_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_quest_event_requirement","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
 /// A value of the column's declared type, so a test can claim any column without spelling out what
 /// it holds.
 pub(super) fn some_value(column: Column) -> FieldValue {

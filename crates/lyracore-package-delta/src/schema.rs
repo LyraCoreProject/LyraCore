@@ -88,6 +88,28 @@ pub const CREATURE_FAMILY: &str = "creatures";
 /// something arms the pool. Worth a maintainer's second look if authored pools are wanted.
 pub const GAMEOBJECT_FAMILY: &str = "gameobjects";
 
+/// The Import Family that owns the `EventAI` catalogue: the lines a speak action says, the placements
+/// a summon action spawns at, and the quests that need their source event before ordinary
+/// objectives can complete them. The same name the `--dump` importer's `creature-ai` `--family`
+/// block stamps.
+///
+/// The family's scripted definitions are deliberately NOT in this catalogue.
+/// `game_creature_ai_definition` carries a creature's whole rule set as a nested
+/// `Vec<EventAiRule>`, which no scalar column shape can state; the only claim left would be one
+/// opaque blob, and a Package Delta claims typed rows, never a script blob. Its base import is a
+/// whole-family reducer replace rather than row SQL, so there is no row for a claim to merge into
+/// either. `game_creature_ai_relay_definition` is out for both of those reasons.
+///
+/// `game_creature_ai_event` is out for a plainer one. It is the retained flat migration schema: no
+/// import writes it and no runtime reads it (`module/src/creatures/eventai/tables.rs`), so a claim
+/// there would apply cleanly and change nothing a player could see. `game_creature_ai_state` and
+/// `game_creature_ai_rule_state` are live state a running Shard writes, not import data.
+/// `game_creature_ai_spell_metadata` is loaded by the `--dbc` spell pass, not by this family's
+/// block, so a claim on it would be reverted by an import this family cannot follow.
+///
+/// Reaching a creature's rules from a Package is a named gap, not a table this build can claim.
+pub const CREATURE_AI_FAMILY: &str = "creature-ai";
+
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
 /// needs no translation step.
 ///
@@ -213,6 +235,20 @@ pub enum Table {
     /// and the spawn identifier, and the durable guid is derived from the second. SPATIAL, like
     /// [`Table::CreatureSpawn`].
     GameobjectSpawn,
+    // ---- creature-ai ----
+    /// `game_creature_ai_broadcast_text` — one line an `EventAI` speak action says, with the emotes
+    /// it plays alongside. Insert and partial update on its own `id`, inside the Package `EventAI`
+    /// band. A global catalogue: the table names no map, so a claim here reaches every Shard.
+    CreatureAiBroadcastText,
+    /// `game_creature_ai_summon` — where an `EventAI` summon action places its creature. Insert and
+    /// partial update on its own `id`. Global, like the text above: the row is a named placement
+    /// the summoning creature resolves, not a row that belongs to a map.
+    CreatureAiSummon,
+    /// `game_quest_event_requirement` — a quest that needs its `EventAI` source event before
+    /// ordinary objectives can complete it. Insert and partial update on its own `id`. It names a
+    /// quest but the `creature-ai` block loads it, so it belongs to this family: an apply that ran
+    /// under `quests` would be reverted by the block that owns it.
+    QuestEventRequirement,
 }
 
 impl Table {
@@ -256,6 +292,9 @@ impl Table {
         Self::GameobjectTemplate,
         Self::GameobjectTrap,
         Self::GameobjectSpawn,
+        Self::CreatureAiBroadcastText,
+        Self::CreatureAiSummon,
+        Self::QuestEventRequirement,
     ];
 
     /// The durable table name, and the value the artifact's `table` member carries.
@@ -299,6 +338,9 @@ impl Table {
             Self::GameobjectTemplate => "game_gameobject_template",
             Self::GameobjectTrap => "game_gameobject_trap",
             Self::GameobjectSpawn => "game_gameobject",
+            Self::CreatureAiBroadcastText => "game_creature_ai_broadcast_text",
+            Self::CreatureAiSummon => "game_creature_ai_summon",
+            Self::QuestEventRequirement => "game_quest_event_requirement",
         }
     }
 
@@ -342,6 +384,9 @@ impl Table {
             Self::GameobjectTemplate | Self::GameobjectTrap | Self::GameobjectSpawn => {
                 GAMEOBJECT_FAMILY
             }
+            Self::CreatureAiBroadcastText
+            | Self::CreatureAiSummon
+            | Self::QuestEventRequirement => CREATURE_AI_FAMILY,
         }
     }
 
@@ -386,6 +431,9 @@ impl Table {
             "game_gameobject_template" => Some(Self::GameobjectTemplate),
             "game_gameobject_trap" => Some(Self::GameobjectTrap),
             "game_gameobject" => Some(Self::GameobjectSpawn),
+            "game_creature_ai_broadcast_text" => Some(Self::CreatureAiBroadcastText),
+            "game_creature_ai_summon" => Some(Self::CreatureAiSummon),
+            "game_quest_event_requirement" => Some(Self::QuestEventRequirement),
             _ => None,
         }
     }
@@ -449,6 +497,9 @@ impl Table {
             Self::GameobjectTemplate => GAMEOBJECT_TEMPLATE_COLUMNS,
             Self::GameobjectTrap => GAMEOBJECT_TRAP_COLUMNS,
             Self::GameobjectSpawn => GAMEOBJECT_SPAWN_COLUMNS,
+            Self::CreatureAiBroadcastText => CREATURE_AI_BROADCAST_TEXT_COLUMNS,
+            Self::CreatureAiSummon => CREATURE_AI_SUMMON_COLUMNS,
+            Self::QuestEventRequirement => QUEST_EVENT_REQUIREMENT_COLUMNS,
         }
     }
 
@@ -1028,6 +1079,46 @@ const GAMEOBJECT_SPAWN_COLUMNS: &[Column] = &[
     column("rotation_2", FieldType::F32),
     column("rotation_3", FieldType::F32),
 ];
+
+// ---- creature-ai ----
+
+/// `game_creature_ai_broadcast_text` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/eventai/tables.rs`'s `CreatureAiBroadcastText`
+/// struct, the same convention `ITEM_COLUMNS` follows. The three emote pairs are client emote
+/// identifiers and the delays that stagger them, so a claim tunes presentation and nothing else.
+const CREATURE_AI_BROADCAST_TEXT_COLUMNS: &[Column] = &[
+    column("male_text", FieldType::Str),
+    column("female_text", FieldType::Str),
+    column("chat_type", FieldType::U8),
+    column("language_id", FieldType::U8),
+    column("emote_delay_1_ms", FieldType::U32),
+    column("emote_id_1", FieldType::U32),
+    column("emote_delay_2_ms", FieldType::U32),
+    column("emote_id_2", FieldType::U32),
+    column("emote_delay_3_ms", FieldType::U32),
+    column("emote_id_3", FieldType::U32),
+];
+
+/// `game_creature_ai_summon` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/eventai/tables.rs`'s `CreatureAiSummon` struct.
+/// The position is absolute world space with no map beside it: the summoning creature's own map is
+/// where the summon lands, which is why this table is global rather than spatial.
+const CREATURE_AI_SUMMON_COLUMNS: &[Column] = &[
+    column("x", FieldType::F32),
+    column("y", FieldType::F32),
+    column("z", FieldType::F32),
+    column("orientation", FieldType::F32),
+    column("lifetime_ms", FieldType::U32),
+];
+
+/// `game_quest_event_requirement` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `QuestEventRequirement` struct. One claimable
+/// column, and it is a reference: `module/src/package_import/creature_ai.rs` refuses a claim whose
+/// quest will not be there after the plan lands.
+const QUEST_EVENT_REQUIREMENT_COLUMNS: &[Column] = &[column("quest_entry", FieldType::U32)];
 
 /// The type tag a claimed value carries.
 ///

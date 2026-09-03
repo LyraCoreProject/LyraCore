@@ -40,7 +40,10 @@ dependency path as emitted, normalized, excluded, dropped, or unapproved. An una
 Refusal for apply and remains visible in dry run.
 
 **Encounter Binding**:
-The map-scoped link from an imported EventAI action to the package that owns the encounter.
+The map-scoped link from an imported EventAI action to the package that owns the encounter. It also
+decides who may tune that creature's catalogue: a Claim on a broadcast text or a summon placement an
+encounter-bound definition depends on is refused, and the refusal names both the claim and the
+binding.
 
 **Encounter Signal**:
 A named Begin, Fail, Complete, or encounter-specific notification delivered through an Encounter
@@ -245,7 +248,8 @@ _Avoid_: proc cast, internal cast, free cast
 
 **Creature-AI Family**:
 The import family that loads the EventAI catalogue: event rows, broadcast texts, and summon
-locations.
+locations. Its Package Delta stage is global: no table in it names a map, so a Claim reaches every
+Shard, exactly as the family's own base import writes it.
 
 **Engagement**:
 One creature's fight, from the aggro that starts it until the creature is freed, however that
@@ -622,6 +626,16 @@ identifier space on purpose — a trap row describes the template of the same en
 is exactly as Package-owned as its template. The two gameobject pool tables are not claimable: no
 base import writes either, so a claim on one would have no family reload to replay after.
 _Avoid_: custom id range, synthetic gameobject range
+
+**Package EventAI Range**:
+The Creature-AI Family's Package Identifier Range: 17,000,000 to 17,999,999. One whole decade above
+the Package Gameobject Range. Covers three tables that share nothing else:
+`game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
+`game_quest_event_requirement.id`. The family's scripted definitions are not claimable at all: a
+definition carries a creature's whole rule set as a nested payload, which no claimed column can
+state, and a Claim is typed rows rather than a script blob. Reaching a creature's rules from a
+Package remains a named gap.
+_Avoid_: custom id range, synthetic eventai range
 
 **Spatial Claim**:
 A Claim on a row that sits on one map: a creature spawn or a gameobject spawn. Its primary key names

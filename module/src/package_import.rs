@@ -44,6 +44,7 @@
 //! is also why a Claim can never delete a row.
 
 mod casts;
+mod creature_ai;
 mod creatures;
 #[cfg(test)]
 mod fixtures;
@@ -62,8 +63,9 @@ use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
     trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, CAST_FAMILY,
-    CREATURE_FAMILY, GAMEOBJECT_FAMILY, GLOBALS_FAMILY, GOSSIP_FAMILY, ITEM_FAMILY, LOOT_FAMILY,
-    QUEST_FAMILY, SCRIPT_FAMILY, SPELLMETA_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
+    CREATURE_AI_FAMILY, CREATURE_FAMILY, GAMEOBJECT_FAMILY, GLOBALS_FAMILY, GOSSIP_FAMILY,
+    ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SCRIPT_FAMILY, SPELLMETA_FAMILY, SPELL_FAMILY,
+    TRAINER_FAMILY,
 };
 
 use crate::helpers::require_operator;
@@ -125,6 +127,10 @@ enum ClaimFamily {
     /// `game_gameobject_template`, `game_gameobject_trap` and `game_gameobject`. Spatial in the
     /// same way as [`ClaimFamily::Creatures`].
     Gameobjects,
+    /// The EventAI catalogue: `game_creature_ai_broadcast_text`, `game_creature_ai_summon` and
+    /// `game_quest_event_requirement`. Global, and deliberately no scripted definitions — see
+    /// [`creature_ai`].
+    CreatureAi,
 }
 
 impl Family {
@@ -141,6 +147,7 @@ impl Family {
         Self::Claims(ClaimFamily::Spellmeta),
         Self::Claims(ClaimFamily::Creatures),
         Self::Claims(ClaimFamily::Gameobjects),
+        Self::Claims(ClaimFamily::CreatureAi),
         Self::Script,
     ];
 
@@ -187,6 +194,7 @@ impl ClaimFamily {
             Self::Spellmeta => SPELLMETA_FAMILY,
             Self::Creatures => CREATURE_FAMILY,
             Self::Gameobjects => GAMEOBJECT_FAMILY,
+            Self::CreatureAi => CREATURE_AI_FAMILY,
         }
     }
 
@@ -204,6 +212,7 @@ impl ClaimFamily {
             Self::Spellmeta => spellmeta::update_target(ctx, row),
             Self::Creatures => creatures::update_target(ctx, row),
             Self::Gameobjects => gameobjects::update_target(ctx, row),
+            Self::CreatureAi => creature_ai::update_target(ctx, row),
         }
     }
 
@@ -222,6 +231,7 @@ impl ClaimFamily {
             Self::Spellmeta => spellmeta::clear_package_range(ctx),
             Self::Creatures => creatures::clear_package_range(ctx),
             Self::Gameobjects => gameobjects::clear_package_range(ctx),
+            Self::CreatureAi => creature_ai::clear_package_range(ctx),
         }
     }
 
@@ -239,6 +249,7 @@ impl ClaimFamily {
             Self::Spellmeta => spellmeta::write_row(ctx, row),
             Self::Creatures => creatures::write_row(ctx, row),
             Self::Gameobjects => gameobjects::write_row(ctx, row),
+            Self::CreatureAi => creature_ai::write_row(ctx, row),
         }
     }
 
@@ -255,6 +266,7 @@ impl ClaimFamily {
             Self::Spellmeta => spellmeta::check_references(ctx, rows),
             Self::Creatures => creatures::check_references(ctx, rows),
             Self::Gameobjects => gameobjects::check_references(ctx, rows),
+            Self::CreatureAi => creature_ai::check_references(ctx, rows),
         }
     }
 }
@@ -850,10 +862,12 @@ mod tests {
 
     #[test]
     fn an_import_family_with_no_artifact_schema_is_refused_by_name() {
-        // `creature-ai` is a dump family the importer loads and this crate gives no claim schema.
-        let refusal = Family::parse("creature-ai").expect_err("an unsupported family is refused");
+        // `terrain` is an importer mode with no Import Family behind it, and so no claim schema.
+        // Every `--dump` family this build loads now has one, so a real family no longer reaches
+        // this refusal.
+        let refusal = Family::parse("terrain").expect_err("an unsupported family is refused");
 
-        assert!(refusal.contains("`creature-ai`"), "{refusal}");
+        assert!(refusal.contains("`terrain`"), "{refusal}");
         assert!(refusal.contains("`spell`"), "{refusal}");
         assert!(refusal.contains("`items`"), "{refusal}");
         assert!(refusal.contains("`quests`"), "{refusal}");
@@ -865,6 +879,7 @@ mod tests {
         assert!(refusal.contains("`spellmeta`"), "{refusal}");
         assert!(refusal.contains("`creatures`"), "{refusal}");
         assert!(refusal.contains("`gameobjects`"), "{refusal}");
+        assert!(refusal.contains("`creature-ai`"), "{refusal}");
         assert!(refusal.contains("`script`"), "{refusal}");
     }
 

@@ -682,3 +682,61 @@ pub fn gameobject_spawn_claim(map_id: u32, spawn_id: u32, operation: &str, field
         r#"{{"table":"game_gameobject","key":{{"map_id":{map_id},"spawn_id":{spawn_id}}},"operation":"{operation}","fields":{fields}}}"#
     )
 }
+
+/// A broadcast text, summon placement or quest event requirement inside the Package EventAI range.
+pub const PACKAGE_CREATURE_AI: u32 = 17_000_001;
+
+/// A real imported broadcast text identifier.
+pub const REAL_BROADCAST_TEXT: u32 = 900;
+
+/// Every claimable `game_creature_ai_broadcast_text` column, so an `insert` carries the whole row.
+pub const WHOLE_BROADCAST_TEXT_ROW: &str = r#"{
+    "male_text": { "type": "string", "value": "The forge remembers." },
+    "female_text": { "type": "string", "value": "The forge remembers." },
+    "chat_type": { "type": "u8", "value": 1 },
+    "language_id": { "type": "u8", "value": 0 },
+    "emote_delay_1_ms": { "type": "u32", "value": 0 },
+    "emote_id_1": { "type": "u32", "value": 5 },
+    "emote_delay_2_ms": { "type": "u32", "value": 0 },
+    "emote_id_2": { "type": "u32", "value": 0 },
+    "emote_delay_3_ms": { "type": "u32", "value": 0 },
+    "emote_id_3": { "type": "u32", "value": 0 }
+}"#;
+
+/// Every claimable `game_creature_ai_summon` column, so an `insert` carries the whole row.
+pub const WHOLE_SUMMON_ROW: &str = r#"{
+    "x": { "type": "f32", "value": -8949.95 },
+    "y": { "type": "f32", "value": -132.493 },
+    "z": { "type": "f32", "value": 83.5312 },
+    "orientation": { "type": "f32", "value": 0.0 },
+    "lifetime_ms": { "type": "u32", "value": 30000 }
+}"#;
+
+/// Every claimable `game_quest_event_requirement` column, so an `insert` carries the whole row.
+pub const WHOLE_QUEST_EVENT_REQUIREMENT_ROW: &str = r#"{
+    "quest_entry": { "type": "u32", "value": 8000001 }
+}"#;
+
+/// One `game_creature_ai_broadcast_text` claim.
+#[must_use]
+pub fn broadcast_text_claim(id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_ai_broadcast_text","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_creature_ai_summon` claim.
+#[must_use]
+pub fn summon_claim(id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_ai_summon","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_quest_event_requirement` claim.
+#[must_use]
+pub fn quest_event_requirement_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_quest_event_requirement","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}

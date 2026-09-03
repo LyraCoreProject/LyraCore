@@ -12,11 +12,12 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_cast_id, is_fixture_reserved_creature_id,
-    is_fixture_reserved_creature_spawn_id, is_fixture_reserved_gameobject_id,
-    is_fixture_reserved_globals_id, is_fixture_reserved_gossip_id, is_fixture_reserved_item_id,
-    is_fixture_reserved_loot_id, is_fixture_reserved_quest_id, is_fixture_reserved_spell_id,
-    is_fixture_reserved_spellmeta_id, is_fixture_reserved_trainer_id, is_package_cast_id,
+    is_fixture_reserved_cast_id, is_fixture_reserved_creature_ai_id,
+    is_fixture_reserved_creature_id, is_fixture_reserved_creature_spawn_id,
+    is_fixture_reserved_gameobject_id, is_fixture_reserved_globals_id,
+    is_fixture_reserved_gossip_id, is_fixture_reserved_item_id, is_fixture_reserved_loot_id,
+    is_fixture_reserved_quest_id, is_fixture_reserved_spell_id, is_fixture_reserved_spellmeta_id,
+    is_fixture_reserved_trainer_id, is_package_cast_id, is_package_creature_ai_id,
     is_package_creature_id, is_package_gameobject_id, is_package_globals_id, is_package_gossip_id,
     is_package_item_id, is_package_loot_id, is_package_quest_id, is_package_spell_id,
     is_package_spellmeta_id, is_package_trainer_id, packed_class_level_id,
@@ -390,6 +391,22 @@ pub enum PrimaryKey {
         map_id: u32,
         /// Which placed gameobject — the cmangos `gameobject.guid`. The whole derived guid.
         spawn_id: u32,
+    },
+    // ---- creature-ai ----
+    /// A `game_creature_ai_broadcast_text` row.
+    CreatureAiBroadcastText {
+        /// The broadcast text.
+        id: u32,
+    },
+    /// A `game_creature_ai_summon` row.
+    CreatureAiSummon {
+        /// The summon placement.
+        id: u32,
+    },
+    /// A `game_quest_event_requirement` row.
+    QuestEventRequirement {
+        /// The row.
+        id: u64,
     },
 }
 
@@ -843,6 +860,34 @@ impl PrimaryKey {
         Ok(Self::GameobjectSpawn { map_id, spawn_id })
     }
 
+    /// Names one `EventAI` broadcast text.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for id 0, and [`DeltaError::CreatureAiIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn creature_ai_broadcast_text(id: u32) -> Result<Self, DeltaError> {
+        check_claimable_creature_ai_id(Table::CreatureAiBroadcastText, u64::from(id))?;
+        Ok(Self::CreatureAiBroadcastText { id })
+    }
+
+    /// Names one `EventAI` summon placement.
+    ///
+    /// # Errors
+    /// Same as [`PrimaryKey::creature_ai_broadcast_text`].
+    pub fn creature_ai_summon(id: u32) -> Result<Self, DeltaError> {
+        check_claimable_creature_ai_id(Table::CreatureAiSummon, u64::from(id))?;
+        Ok(Self::CreatureAiSummon { id })
+    }
+
+    /// Names one quest that needs its `EventAI` source event.
+    ///
+    /// # Errors
+    /// Same as [`PrimaryKey::creature_ai_broadcast_text`].
+    pub fn quest_event_requirement(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_creature_ai_id(Table::QuestEventRequirement, id)?;
+        Ok(Self::QuestEventRequirement { id })
+    }
+
     /// The table this row lives in.
     #[must_use]
     pub const fn table(self) -> Table {
@@ -884,6 +929,9 @@ impl PrimaryKey {
             Self::GameobjectTemplate { .. } => Table::GameobjectTemplate,
             Self::GameobjectTrap { .. } => Table::GameobjectTrap,
             Self::GameobjectSpawn { .. } => Table::GameobjectSpawn,
+            Self::CreatureAiBroadcastText { .. } => Table::CreatureAiBroadcastText,
+            Self::CreatureAiSummon { .. } => Table::CreatureAiSummon,
+            Self::QuestEventRequirement { .. } => Table::QuestEventRequirement,
         }
     }
 
@@ -937,7 +985,10 @@ impl PrimaryKey {
             | Self::SpellProcEvent { .. }
             | Self::CreatureTemplate { .. }
             | Self::GameobjectTemplate { .. }
-            | Self::GameobjectTrap { .. } => None,
+            | Self::GameobjectTrap { .. }
+            | Self::CreatureAiBroadcastText { .. }
+            | Self::CreatureAiSummon { .. }
+            | Self::QuestEventRequirement { .. } => None,
         }
     }
 
@@ -1026,7 +1077,8 @@ impl PrimaryKey {
             | Self::TrainerSpell { id }
             | Self::NpcTextSlot { id }
             | Self::CreateinfoSpell { id }
-            | Self::SpellLearn { id } => id,
+            | Self::SpellLearn { id }
+            | Self::QuestEventRequirement { id } => id,
             Self::CreatureCast { creature_entry } => creature_entry as u64,
             Self::GossipMenuProfile { menu_id } => menu_id as u64,
             Self::GossipMenuProfileOption { row_id } | Self::GossipOption { row_id } => {
@@ -1047,6 +1099,7 @@ impl PrimaryKey {
                 entry, spawn_id, ..
             } => packed_creature_spawn_guid(entry, spawn_id),
             Self::GameobjectSpawn { spawn_id, .. } => packed_gameobject_spawn_guid(spawn_id),
+            Self::CreatureAiBroadcastText { id } | Self::CreatureAiSummon { id } => id as u64,
         }
     }
 }
@@ -1090,7 +1143,8 @@ impl fmt::Display for PrimaryKey {
             | Self::TrainerSpell { id }
             | Self::NpcTextSlot { id }
             | Self::CreateinfoSpell { id }
-            | Self::SpellLearn { id } => write!(f, "{{id={id}}}"),
+            | Self::SpellLearn { id }
+            | Self::QuestEventRequirement { id } => write!(f, "{{id={id}}}"),
             Self::CreatureCast { creature_entry } => {
                 write!(f, "{{creature_entry={creature_entry}}}")
             }
@@ -1123,6 +1177,9 @@ impl fmt::Display for PrimaryKey {
             } => write!(f, "{{map_id={map_id}, entry={entry}, spawn_id={spawn_id}}}"),
             Self::GameobjectSpawn { map_id, spawn_id } => {
                 write!(f, "{{map_id={map_id}, spawn_id={spawn_id}}}")
+            }
+            Self::CreatureAiBroadcastText { id } | Self::CreatureAiSummon { id } => {
+                write!(f, "{{id={id}}}")
             }
         }
     }
@@ -1237,6 +1294,11 @@ fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
             is_package_gameobject_id(id),
             DeltaError::GameobjectIdNotClientSafe { id },
         ),
+        // One band over three independent identifier spaces, the loot shape.
+        PrimaryKey::CreatureAiBroadcastText { id } | PrimaryKey::CreatureAiSummon { id } => {
+            creature_ai_band(u64::from(id))
+        }
+        PrimaryKey::QuestEventRequirement { id } => creature_ai_band(id),
     }
 }
 
@@ -1462,6 +1524,29 @@ fn check_claimable_gameobject_id(table: Table, member: &str, id: u32) -> Result<
     Ok(())
 }
 
+/// One band covers all three insertable creature-ai tables, so they share one check.
+fn creature_ai_band(id: u64) -> Result<(), DeltaError> {
+    check_band(
+        is_package_creature_ai_id(id),
+        DeltaError::CreatureAiIdNotClientSafe { id },
+    )
+}
+
+/// A creature-ai identifier is refused the same way under every operation when it is 0 or
+/// fixture-owned.
+fn check_claimable_creature_ai_id(table: Table, id: u64) -> Result<(), DeltaError> {
+    if id == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: "`id` 0 is not a row".to_owned(),
+        });
+    }
+    if is_fixture_reserved_creature_ai_id(id) {
+        return Err(DeltaError::CreatureAiIdFixtureReserved { id });
+    }
+    Ok(())
+}
+
 /// An item identifier is refused the same way under every operation when it is 0 or fixture-owned.
 fn check_claimable_item_id(entry: u32) -> Result<(), DeltaError> {
     if entry == 0 {
@@ -1614,7 +1699,10 @@ fn is_key_column(table: Table, name: &str) -> bool {
         | Table::TrainerSpell
         | Table::NpcTextSlot
         | Table::CreateinfoSpell
-        | Table::SpellLearn => name == "id",
+        | Table::SpellLearn
+        | Table::CreatureAiBroadcastText
+        | Table::CreatureAiSummon
+        | Table::QuestEventRequirement => name == "id",
         Table::CreatureCast => name == "creature_entry",
         Table::GossipMenuProfile => name == "menu_id",
         Table::GossipMenuProfileOption
@@ -1817,6 +1905,9 @@ impl PackageDelta {
                     | Table::GameobjectTemplate
                     | Table::GameobjectTrap
                     | Table::GameobjectSpawn
+                    | Table::CreatureAiBroadcastText
+                    | Table::CreatureAiSummon
+                    | Table::QuestEventRequirement
                     // Update-only, like `Table::CreatureCast` above: refused before a `Claim` can
                     // exist, listed only to keep the match exhaustive at the type level.
                     | Table::GossipMenu
@@ -1908,7 +1999,10 @@ fn expected_key_members(table: Table) -> &'static [&'static str] {
         | Table::TrainerSpell
         | Table::NpcTextSlot
         | Table::CreateinfoSpell
-        | Table::SpellLearn => &["id"],
+        | Table::SpellLearn
+        | Table::CreatureAiBroadcastText
+        | Table::CreatureAiSummon
+        | Table::QuestEventRequirement => &["id"],
         Table::CreatureCast => &["creature_entry"],
         Table::GossipMenuProfile => &["menu_id"],
         Table::GossipMenuProfileOption
@@ -2030,6 +2124,13 @@ fn build_key(key: &Map<String, Value>, table: Table) -> Result<PrimaryKey, Delta
             key_u32(key, table, "map_id")?,
             key_u32(key, table, "spawn_id")?,
         ),
+        Table::CreatureAiBroadcastText => {
+            PrimaryKey::creature_ai_broadcast_text(key_u32(key, table, "id")?)
+        }
+        Table::CreatureAiSummon => PrimaryKey::creature_ai_summon(key_u32(key, table, "id")?),
+        Table::QuestEventRequirement => {
+            PrimaryKey::quest_event_requirement(key_u64(key, table, "id")?)
+        }
     }
 }
 

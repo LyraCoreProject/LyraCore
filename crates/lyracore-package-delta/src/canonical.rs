@@ -132,7 +132,11 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         | PrimaryKey::TrainerSpell { id }
         | PrimaryKey::NpcTextSlot { id }
         | PrimaryKey::CreateinfoSpell { id }
-        | PrimaryKey::SpellLearn { id } => write_members(out, &[("id", id)]),
+        | PrimaryKey::SpellLearn { id }
+        | PrimaryKey::QuestEventRequirement { id } => write_members(out, &[("id", id)]),
+        PrimaryKey::CreatureAiBroadcastText { id } | PrimaryKey::CreatureAiSummon { id } => {
+            write_members(out, &[("id", id.into())]);
+        }
         PrimaryKey::CreatureCast { creature_entry } => {
             write_members(out, &[("creature_entry", creature_entry.into())]);
         }
