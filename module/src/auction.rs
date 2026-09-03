@@ -1421,7 +1421,7 @@ impl ListingRefundSink for CtxListingRefund<'_> {
     }
 
     fn commit_refund(&mut self, refund: ListingRefund) {
-        insert_auction_mail(self.ctx, refund.mail.clone());
+        insert_auction_mail(self.ctx, refund.mail);
         self.ctx
             .db
             .game_auction_operation_receipt()
