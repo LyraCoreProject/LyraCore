@@ -7,9 +7,17 @@
 // otherwise the Module would be measuring Lua the toolchain no longer emits.
 
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { buildPackageScripts } from "../runtime-scripts/build-scripts.ts";
 
@@ -34,7 +42,9 @@ async function build(files: Record<string, string>, events?: string[]): Promise<
     const scripts = join(root, PACKAGE, "scripts");
     mkdirSync(scripts, { recursive: true });
     for (const [name, source] of Object.entries(files)) {
-      writeFileSync(join(scripts, name), source);
+      const path = join(scripts, name);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, source);
     }
     process.env.LYRACORE_PACKAGES_ROOT = root;
     if (events === undefined) delete process.env.LYRACORE_HOOK_EVENTS;
@@ -67,12 +77,38 @@ test("the committed fuel workload Lua is what the pinned toolchain emits today",
   expect(built.scripts[0]?.source).toBe(committed);
 });
 
+test("the checked-in Package Runtime Script typechecks through the pinned build", async () => {
+  const source = readFileSync(
+    join(import.meta.dir, "..", "..", "packages", "fire_nova", "scripts", "ember_echo.ts"),
+    "utf8",
+  );
+
+  await build({ "ember_echo.ts": source }, ["on_cast_resolved"]);
+});
+
 // ---- determinism ----
 
 test("two builds of one source tree write the same bytes", async () => {
   const files = { "greet.ts": `${directives()}function script(): number { return 7; }\n` };
 
   expect((await build(files)).artifact).toBe((await build(files)).artifact);
+});
+
+test("the source digest covers only immediate regular TypeScript and Lua files", async () => {
+  const built = await build({
+    "alpha.ts": `${directives(EVENT, 100_201)}function script(): void {}\n`,
+    "zeta.lua": "-- @event on_login\n-- @id 100202\nreturn 2\n",
+    "README.md": "ignored\n",
+    "nested/hidden.ts": `${directives(EVENT, 100_203)}function script(): void {}\n`,
+  });
+
+  expect(JSON.parse(built.artifact).source_hash).toBe(
+    "8395ead00aad341a7daa23658447385da94dabf6932b406cbfbdb5e2fd664002",
+  );
+  expect(built.scripts.map((script) => script.name)).toEqual([
+    `${PACKAGE}.alpha`,
+    `${PACKAGE}.zeta`,
+  ]);
 });
 
 test("the scripts are ordered by identifier, whatever order the files sort in", async () => {
@@ -128,6 +164,20 @@ test("a script declaring no entry point is refused", async () => {
   );
 });
 
+test("the entry point takes no parameters and returns only a number or nothing", async () => {
+  expect(
+    build({
+      "parameter.ts":
+        `${directives()}function script(required: number): number { return required; }\n`,
+    }),
+  ).rejects.toThrow(/typescript-to-lua refused/);
+  expect(
+    build({
+      "string.ts": `${directives()}function script(): string { return "wrong"; }\n`,
+    }),
+  ).rejects.toThrow(/typescript-to-lua refused/);
+});
+
 test("a missing @event or @id is refused by name", async () => {
   expect(
     build({ "no-id.ts": "// @event on_login\nfunction script(): void {}\n" }),
@@ -168,4 +218,63 @@ test("an unknown event is refused and a Package Event of the own Package is not"
 
 test("a Package folder with no script sources is refused rather than writing an empty artifact", async () => {
   expect(build({})).rejects.toThrow(/no `\.ts` or `\.lua`/);
+});
+
+test("a failed artifact write leaves the prior artifact unchanged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lyracore-runtime-scripts-write-"));
+  const previousRoot = process.env.LYRACORE_PACKAGES_ROOT;
+  const packageDir = join(root, PACKAGE);
+  const scripts = join(packageDir, "scripts");
+  const generated = join(packageDir, "data", ".generated");
+  const artifact = join(generated, `${PACKAGE}.script.json`);
+  try {
+    mkdirSync(scripts, { recursive: true });
+    mkdirSync(generated, { recursive: true });
+    writeFileSync(
+      join(scripts, "greet.lua"),
+      "-- @event on_login\n-- @id 100200\nreturn 1\n",
+    );
+    writeFileSync(artifact, "prior artifact\n");
+    chmodSync(generated, 0o555);
+    process.env.LYRACORE_PACKAGES_ROOT = root;
+
+    await expect(buildPackageScripts(PACKAGE)).rejects.toThrow();
+
+    chmodSync(generated, 0o755);
+    expect(readFileSync(artifact, "utf8")).toBe("prior artifact\n");
+    expect(readdirSync(generated)).toEqual([`${PACKAGE}.script.json`]);
+  } finally {
+    chmodSync(generated, 0o755);
+    if (previousRoot === undefined) delete process.env.LYRACORE_PACKAGES_ROOT;
+    else process.env.LYRACORE_PACKAGES_ROOT = previousRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed atomic rename removes its sibling temporary directory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lyracore-runtime-scripts-rename-"));
+  const previousRoot = process.env.LYRACORE_PACKAGES_ROOT;
+  const packageDir = join(root, PACKAGE);
+  const scripts = join(packageDir, "scripts");
+  const generated = join(packageDir, "data", ".generated");
+  const artifact = join(generated, `${PACKAGE}.script.json`);
+  try {
+    mkdirSync(scripts, { recursive: true });
+    mkdirSync(artifact, { recursive: true });
+    writeFileSync(
+      join(scripts, "greet.lua"),
+      "-- @event on_login\n-- @id 100200\nreturn 1\n",
+    );
+    writeFileSync(join(artifact, "prior"), "unchanged\n");
+    process.env.LYRACORE_PACKAGES_ROOT = root;
+
+    await expect(buildPackageScripts(PACKAGE)).rejects.toThrow();
+
+    expect(readFileSync(join(artifact, "prior"), "utf8")).toBe("unchanged\n");
+    expect(readdirSync(generated)).toEqual([`${PACKAGE}.script.json`]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.LYRACORE_PACKAGES_ROOT;
+    else process.env.LYRACORE_PACKAGES_ROOT = previousRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -1,0 +1,24 @@
+name: Runtime Scripts
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: datascripts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.7
+      - run: bun install --frozen-lockfile
+      - name: Typecheck and verify Runtime Script output
+        run: bun test tests/runtime-scripts.test.ts

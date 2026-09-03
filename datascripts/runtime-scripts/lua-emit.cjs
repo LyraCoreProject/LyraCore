@@ -92,26 +92,51 @@ class PiccoloPrinter extends tstl.LuaPrinter {
   }
 }
 
-/// Every non-declaration source file must declare a top-level `function script()`.
+function acceptsScriptAnswer(type) {
+  if (type.isUnion()) return type.types.every(acceptsScriptAnswer);
+  return (type.flags & (ts.TypeFlags.NumberLike | ts.TypeFlags.Void | ts.TypeFlags.Undefined | ts.TypeFlags.Never)) !== 0;
+}
+
+/// Every non-declaration source file must declare `function script(): number | void` with no
+/// parameters. The Host invokes it without arguments and reads only a numeric Script Answer.
 function requireEntryPoint(program) {
   const diagnostics = [];
+  const checker = program.getTypeChecker();
   for (const file of program.getSourceFiles()) {
     if (file.isDeclarationFile) continue;
-    const declared = file.statements.some(
+    const declaration = file.statements.find(
       (statement) =>
         ts.isFunctionDeclaration(statement) && statement.name && statement.name.text === ENTRY,
     );
-    if (declared) continue;
+    if (!declaration) {
+      diagnostics.push({
+        file,
+        start: 0,
+        length: 0,
+        category: ts.DiagnosticCategory.Error,
+        code: 0,
+        messageText:
+          `a Runtime Script declares its entry point as \`function ${ENTRY}(): number | void\`. ` +
+          `The emitted Lua ends with \`return ${ENTRY}()\`, because TypeScript has no top-level ` +
+          "return and a Script Answer is the chunk's return value.",
+      });
+      continue;
+    }
+
+    const signature = checker.getSignatureFromDeclaration(declaration);
+    const returnType = signature && checker.getReturnTypeOfSignature(signature);
+    if (declaration.parameters.length === 0 && returnType && acceptsScriptAnswer(returnType)) {
+      continue;
+    }
     diagnostics.push({
       file,
-      start: 0,
-      length: 0,
+      start: declaration.getStart(file),
+      length: declaration.getWidth(file),
       category: ts.DiagnosticCategory.Error,
       code: 0,
       messageText:
-        `a Runtime Script declares its entry point as \`function ${ENTRY}(): number | void\`. ` +
-        `The emitted Lua ends with \`return ${ENTRY}()\`, because TypeScript has no top-level ` +
-        "return and a Script Answer is the chunk's return value.",
+        `\`${ENTRY}\` must take no parameters and return only a number or nothing. ` +
+        "The Runtime Script Host calls it without arguments and accepts only a numeric Script Answer.",
     });
   }
   return diagnostics;

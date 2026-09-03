@@ -43,9 +43,9 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 /// Where a Package keeps its Runtime Script sources, relative to the Package folder.
 const SCRIPTS_DIR = "scripts";
@@ -205,8 +205,8 @@ async function compile(scriptsDir: string, source: string, outDir: string): Prom
 
 // ---- the artifact ----
 
-/// The digest of the sources this artifact was generated from: every file under `scripts/`, by
-/// sorted relative name, length-prefixed so no two trees can collide.
+/// The digest of the sources this artifact was generated from: each immediate regular `.ts` or
+/// `.lua` file under `scripts/`, by sorted name, length-prefixed so no two inventories can collide.
 ///
 /// The toolchain is deliberately NOT in it. `source_hash` answers "which revision of this Package's
 /// sources is on the Shard"; whether the compiler moved is the Build Identity sidecar's question.
@@ -253,8 +253,35 @@ function renderArtifact(packageName: string, hash: string, scripts: RuntimeScrip
 
 /// Every script source a Package ships, in file-name order.
 function scriptSources(scriptsDir: string): string[] {
-  const listing = existsSync(scriptsDir) ? readdirSync(scriptsDir) : [];
-  return listing.filter((name) => name.endsWith(".ts") || name.endsWith(".lua")).sort();
+  const listing = existsSync(scriptsDir) ? readdirSync(scriptsDir, { withFileTypes: true }) : [];
+  return listing
+    .filter((entry) => entry.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".lua")))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/// Flush `artifact` to a sibling temporary file, then replace `path` in one rename.
+///
+/// The old artifact stays whole if creating, writing, flushing, closing, or renaming the temporary
+/// file fails. The temporary directory is on the destination filesystem, so the final rename is
+/// atomic rather than a copy followed by deletion.
+async function writeArtifact(path: string, artifact: string): Promise<void> {
+  const parent = dirname(path);
+  await mkdir(parent, { recursive: true });
+  const temporaryDir = await mkdtemp(join(parent, ".script-artifact-"));
+  try {
+    const temporaryPath = join(temporaryDir, basename(path));
+    const file = await open(temporaryPath, "wx");
+    try {
+      await file.writeFile(artifact, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await rename(temporaryPath, path);
+  } finally {
+    rmSync(temporaryDir, { recursive: true, force: true });
+  }
 }
 
 /// Build one Package's Script Artifact and write it. Returns the path written.
@@ -321,8 +348,7 @@ export async function buildPackageScripts(packageName: string): Promise<string> 
 
     const artifact = renderArtifact(packageName, await sourceHash(scriptsDir, files), scripts);
     const path = join(packageDir, GENERATED_DIR, `${packageName}.script.json`);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, artifact);
+    await writeArtifact(path, artifact);
     return path;
   } finally {
     rmSync(outDir, { recursive: true, force: true });
