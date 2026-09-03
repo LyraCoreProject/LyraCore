@@ -281,6 +281,10 @@ house and economic policy through its imported faction. `game_auction` is the pu
 its item columns are the complete item-instance snapshot while no inventory row exists, and its
 house and rate columns preserve the listing-time policy. Private `game_auction_hold` is the source-shard value fence;
 private `game_auction_operation_receipt` makes listing retries idempotent after that Hold is deleted.
+When realm-core refuses a held listing, it records a payload-matching `auction_id == 0` receipt and
+mails the held item and deposit back to the seller in one transaction. Only then does
+`gw_auction_release_listing_hold` delete the source Hold; a Hold with an active receipt is never
+released.
 Private `game_auction_bid_hold` fences a bidder's complete offer and retains the terminal source
 outcome, normalized accepted price, and any purse-overflow refund awaiting relay; private
 `game_auction_bid_decision` is realm-core's serialized, replay-safe decision and exact-once
