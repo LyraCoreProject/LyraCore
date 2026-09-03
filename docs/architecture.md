@@ -205,6 +205,12 @@ container, 600 clients offered:
 about 58 sessions on that host. (The next ceiling this section used to name — per-player
 connection setup — is gone with the per-player connections themselves, #483.)
 
+Each admitted socket also starts one absolute pre-auth I/O deadline at accept: 10 seconds for
+logon and 15 seconds for world. Blocking reads and writes receive only the remaining time. An
+async watchdog closes the socket at the same instant even when its task has not started. Successful
+proof cancels the watchdog and clears both socket timeouts. World does this before the login queue,
+so an authenticated queue wait does not spend the pre-auth budget.
+
 Two related startup behaviours have no environment variable, because there is no case for turning
 them off:
 

@@ -24,6 +24,8 @@ struct AdvancingStream {
     output: Vec<u8>,
     clock: ManualClock,
     per_read: Duration,
+    per_write: Duration,
+    write_timeout_calls: Rc<Cell<usize>>,
 }
 
 impl Read for AdvancingStream {
@@ -38,6 +40,7 @@ impl Read for AdvancingStream {
 impl Write for AdvancingStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.output.extend_from_slice(buf);
+        self.clock.0.set(self.clock.0.get() + self.per_write);
         Ok(buf.len())
     }
 
@@ -46,8 +49,14 @@ impl Write for AdvancingStream {
     }
 }
 
-impl ReadDeadline for AdvancingStream {
+impl IoDeadline for AdvancingStream {
     fn set_read_timeout(&self, _timeout: Option<Duration>) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn set_write_timeout(&self, _timeout: Option<Duration>) -> std::io::Result<()> {
+        self.write_timeout_calls
+            .set(self.write_timeout_calls.get() + 1);
         Ok(())
     }
 }
@@ -3382,16 +3391,16 @@ fn an_auth_session_with_an_absurd_addon_size_still_completes_the_handshake() {
 /// A peer that reads the challenge and never answers must give its blocking thread back at the
 /// total pre-auth deadline.
 #[test]
-fn a_silent_world_connection_is_closed_at_the_pre_auth_read_deadline() {
+fn a_silent_world_connection_is_closed_at_the_pre_auth_deadline() {
     let store = tester_store(42);
     let (mut client, server_end) = world_session_socket_pair();
-    let deadline = PreAuthDeadline::after(Duration::from_millis(200));
+    let mut deadline = PreAuthDeadline::after(Duration::from_millis(200));
     let server = std::thread::spawn(move || {
         run_world_session_with_queue_and_deadline(
             server_end,
             &store,
             &LoginQueue::unlimited(),
-            &deadline,
+            &mut deadline,
         )
     });
 
@@ -3401,7 +3410,7 @@ fn a_silent_world_connection_is_closed_at_the_pre_auth_read_deadline() {
         .unwrap()
         .expect_err("a silent peer must be cut at the deadline");
     assert!(
-        err.to_string().contains("pre-auth read deadline"),
+        err.to_string().contains("total pre-auth deadline"),
         "{err:#}"
     );
     let mut byte = [0u8];
@@ -3413,7 +3422,7 @@ fn a_silent_world_connection_is_closed_at_the_pre_auth_read_deadline() {
 }
 
 #[test]
-fn slow_auth_session_bytes_cannot_extend_the_pre_auth_read_deadline() {
+fn slow_auth_session_bytes_cannot_extend_the_pre_auth_deadline() {
     let store = tester_store(42);
     let mut input = Vec::new();
     auth_session("TESTER", 1, [0; 20])
@@ -3421,19 +3430,21 @@ fn slow_auth_session_bytes_cannot_extend_the_pre_auth_read_deadline() {
         .unwrap();
     let start = Instant::now();
     let clock = ManualClock(Rc::new(Cell::new(start)));
-    let deadline = PreAuthDeadline::with_clock(start + Duration::from_millis(8), clock.clone());
+    let mut deadline = PreAuthDeadline::with_clock(start + Duration::from_millis(8), clock.clone());
     let mut stream = AdvancingStream {
         input: Cursor::new(input),
         output: Vec::new(),
         clock,
         per_read: Duration::from_millis(1),
+        per_write: Duration::ZERO,
+        write_timeout_calls: Rc::new(Cell::new(0)),
     };
 
     let result = world_handshake_with_queue_and_deadline(
         &mut stream,
         &store,
         &LoginQueue::unlimited(),
-        &deadline,
+        &mut deadline,
     );
     let error = match result {
         Err(error) => error,
@@ -3441,7 +3452,7 @@ fn slow_auth_session_bytes_cannot_extend_the_pre_auth_read_deadline() {
     };
 
     assert!(
-        error.to_string().contains("pre-auth read deadline"),
+        error.to_string().contains("total pre-auth deadline"),
         "{error:#}"
     );
     assert!(
@@ -3450,20 +3461,62 @@ fn slow_auth_session_bytes_cannot_extend_the_pre_auth_read_deadline() {
     );
 }
 
-/// The deadline covers the handshake only. An authenticated client may idle past it and still be
-/// served.
 #[test]
-fn the_read_deadline_ends_with_auth_ok() {
+fn world_challenge_write_uses_the_absolute_pre_auth_deadline() {
+    let store = tester_store(42);
+    let start = Instant::now();
+    let clock = ManualClock(Rc::new(Cell::new(start)));
+    let write_timeout_calls = Rc::new(Cell::new(0));
+    let mut deadline =
+        PreAuthDeadline::with_clock(start + Duration::from_millis(10), clock.clone());
+    let mut stream = AdvancingStream {
+        input: Cursor::new(Vec::new()),
+        output: Vec::new(),
+        clock,
+        per_read: Duration::ZERO,
+        per_write: Duration::from_millis(20),
+        write_timeout_calls: write_timeout_calls.clone(),
+    };
+
+    let result = world_handshake_with_queue_and_deadline(
+        &mut stream,
+        &store,
+        &LoginQueue::unlimited(),
+        &mut deadline,
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("the world challenge must not write past the total deadline"),
+    };
+
+    assert_eq!(
+        write_timeout_calls.get(),
+        1,
+        "the world challenge must write through the pre-auth I/O wrapper"
+    );
+    assert!(
+        error.to_string().contains("pre-auth I/O deadline"),
+        "{error:#}"
+    );
+    assert!(
+        !stream.output.is_empty(),
+        "the fake advances time after accepting the world challenge bytes"
+    );
+}
+
+/// Once client proof succeeds, authenticated World Session traffic has no pre-auth deadline.
+#[test]
+fn post_auth_world_traffic_has_no_pre_auth_deadline() {
     let store = std::sync::Arc::new(tester_store(42));
     let (mut client, server_end) = world_session_socket_pair();
-    let deadline = PreAuthDeadline::after(Duration::from_millis(200));
+    let mut deadline = PreAuthDeadline::after(Duration::from_millis(200));
     let server_store = store.clone();
     let server = std::thread::spawn(move || {
         run_world_session_with_queue_and_deadline(
             server_end,
             server_store.as_ref(),
             &LoginQueue::unlimited(),
-            &deadline,
+            &mut deadline,
         )
     });
 

@@ -92,7 +92,7 @@ impl BlockingTaskCapacity {
     }
 
     #[cfg(test)]
-    fn available(&self) -> usize {
+    pub(crate) fn available(&self) -> usize {
         self.permits.available_permits()
     }
 }
