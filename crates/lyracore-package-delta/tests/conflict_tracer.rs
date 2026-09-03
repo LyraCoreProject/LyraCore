@@ -3,10 +3,14 @@
 mod common;
 
 use common::{
-    artifact, effect_claim, item_claim, spell_claim, PACKAGE_ITEM, PACKAGE_SPELL, REAL_SPELL,
+    artifact, effect_claim, graveyard_zone_claim, item_claim, npc_text_claim, spell_chain_claim,
+    spell_claim, PACKAGE_ITEM, PACKAGE_SPELL, REAL_GRAVEYARD_ZONE, REAL_NPC_TEXT, REAL_SPELL,
     WHOLE_ITEM_ROW, WHOLE_SPELL_ROW,
 };
-use lyracore_package_delta::{trace, ClaimConflict, Operation, PackageDelta, Table};
+use lyracore_package_delta::{
+    trace, ClaimConflict, Operation, PackageDelta, Table, GLOBALS_FAMILY, GOSSIP_FAMILY,
+    SPELLMETA_FAMILY,
+};
 
 fn delta(package: &str, claims: &str) -> PackageDelta {
     PackageDelta::parse(&artifact(package, claims)).expect("artifact parses")
@@ -366,4 +370,103 @@ fn two_packages_tuning_one_loot_column_conflict() {
     let report = traced.conflicts()[0].to_string();
     assert!(report.contains("game_pickpocket_loot"), "{report}");
     assert!(report.contains("chance_bp"), "{report}");
+}
+
+#[test]
+fn two_packages_tuning_one_gossip_column_conflict_with_actionable_context() {
+    let claim = |value| {
+        npc_text_claim(
+            REAL_NPC_TEXT,
+            "update",
+            &format!(r#"{{"text":{{"type":"string","value":"{value}"}}}}"#),
+        )
+    };
+    let first = delta("example.first", &claim("Mind the forge."));
+    let second = delta("example.second", &claim("Mind the flame."));
+
+    let traced = trace(&[first, second]);
+
+    assert_eq!(traced.conflicts().len(), 1);
+    let report = traced.conflicts()[0].to_string();
+    for expected in [
+        &format!("family `{GOSSIP_FAMILY}`"),
+        "table `game_npc_text`",
+        "text_id=1",
+        "example.first",
+        "example.second",
+        "column `text`",
+        "Mind the forge.",
+        "Mind the flame.",
+    ] {
+        assert!(
+            report.contains(expected),
+            "`{expected}` absent from: {report}"
+        );
+    }
+}
+
+#[test]
+fn two_packages_tuning_one_globals_column_conflict_with_actionable_context() {
+    let claim = |value| {
+        graveyard_zone_claim(
+            REAL_GRAVEYARD_ZONE,
+            "update",
+            &format!(r#"{{"zone_id":{{"type":"u32","value":{value}}}}}"#),
+        )
+    };
+    let first = delta("example.first", &claim(40));
+    let second = delta("example.second", &claim(51));
+
+    let traced = trace(&[first, second]);
+
+    assert_eq!(traced.conflicts().len(), 1);
+    let report = traced.conflicts()[0].to_string();
+    for expected in [
+        &format!("family `{GLOBALS_FAMILY}`"),
+        "table `game_graveyard_zone`",
+        "row_id=1",
+        "example.first",
+        "example.second",
+        "column `zone_id`",
+        "40",
+        "51",
+    ] {
+        assert!(
+            report.contains(expected),
+            "`{expected}` absent from: {report}"
+        );
+    }
+}
+
+#[test]
+fn two_packages_tuning_one_spellmeta_column_conflict_with_actionable_context() {
+    let claim = |value| {
+        spell_chain_claim(
+            REAL_SPELL,
+            "update",
+            &format!(r#"{{"rank":{{"type":"u8","value":{value}}}}}"#),
+        )
+    };
+    let first = delta("example.first", &claim(1));
+    let second = delta("example.second", &claim(2));
+
+    let traced = trace(&[first, second]);
+
+    assert_eq!(traced.conflicts().len(), 1);
+    let report = traced.conflicts()[0].to_string();
+    for expected in [
+        &format!("family `{SPELLMETA_FAMILY}`"),
+        "table `game_spell_chain`",
+        "spell_id=133",
+        "example.first",
+        "example.second",
+        "column `rank`",
+        "1",
+        "2",
+    ] {
+        assert!(
+            report.contains(expected),
+            "`{expected}` absent from: {report}"
+        );
+    }
 }
