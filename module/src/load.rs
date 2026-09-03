@@ -133,7 +133,10 @@ pub(crate) fn realm_wide_sessions(samples: impl Iterator<Item = (u64, u64, u32)>
             })
             .or_insert((id, sessions));
     }
-    latest_per_gateway.values().map(|(_, sessions)| *sessions).sum()
+    latest_per_gateway
+        .values()
+        .map(|(_, sessions)| *sessions)
+        .sum()
 }
 
 /// The occupancy sanity gate, decided purely so both reducer and test share the exact rule. See

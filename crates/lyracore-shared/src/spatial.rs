@@ -402,7 +402,9 @@ mod tests {
         let side = (2 * BOX_HALF_SPAN + 1) as usize;
         assert_eq!(got.len(), side * side);
         assert_eq!(
-            got.iter().copied().collect::<std::collections::HashSet<_>>()
+            got.iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
                 .len(),
             got.len(),
             "a duplicate id inside one box would double-deliver a cell"

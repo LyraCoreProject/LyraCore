@@ -4,9 +4,7 @@
 //! the gateway turns into `SMSG_LEVELUP_INFO`. The XP-bar number syncs at create-object (login);
 //! the popup + the heal carry the live feedback (see docs/roadmap).
 
-use spacetimedb::{
-    log, table, Identity, ReducerContext, Table, Timestamp,
-};
+use spacetimedb::{log, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_character;
 use crate::game_config;

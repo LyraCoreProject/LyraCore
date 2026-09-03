@@ -733,7 +733,6 @@ pub fn synthetic_owner_identity(account_id: u64) -> [u8; 32] {
     id
 }
 
-
 /// A crash-diagnosis probe for the SMSG_COMPRESSED_MOVES corruption at crowd scale:
 /// `LYRACORE_WRITER_TRACE=1` turns on a per-session black-box ring inside `spawn_writer` — the
 /// last 32 (opcode, declared size, rolling checksum) triples for the exact bytes handed to the

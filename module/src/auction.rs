@@ -3473,7 +3473,10 @@ mod tests {
             "source cleanup may not treat a sentinel as receipt evidence"
         );
         assert!(source.hold.is_some());
-        assert_eq!(source.receipt.as_ref().map(|receipt| receipt.auction_id), Some(0));
+        assert_eq!(
+            source.receipt.as_ref().map(|receipt| receipt.auction_id),
+            Some(0)
+        );
     }
 
     #[test]

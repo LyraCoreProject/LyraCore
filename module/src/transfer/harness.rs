@@ -475,7 +475,10 @@ fn active_taxi_refuses_transfer_before_any_source_mutation() {
 
     assert_eq!(error, "PLAYER_IN_TAXI_FLIGHT");
     assert_eq!(*src.live.borrow(), before_live);
-    assert_eq!(src.chars.borrow().keys().copied().collect::<HashSet<_>>(), before_chars);
+    assert_eq!(
+        src.chars.borrow().keys().copied().collect::<HashSet<_>>(),
+        before_chars
+    );
     assert_eq!(src.froze.get(), 0);
     assert!(src.out_rows.borrow().is_empty());
     assert!(!src.reaper_armed.get());

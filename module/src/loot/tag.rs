@@ -373,7 +373,14 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     crate::combat::disengage(ctx, aggression);
 
     let pet = fixture_creature_guid(3);
-    insert_fixture_entity(ctx, &origin, pet, base_x, false, LOOT_TAG_FIXTURE_CHARACTER_B);
+    insert_fixture_entity(
+        ctx,
+        &origin,
+        pet,
+        base_x,
+        false,
+        LOOT_TAG_FIXTURE_CHARACTER_B,
+    );
     let pet_target = fixture_creature_guid(4);
     insert_fixture_entity(ctx, &origin, pet_target, base_x, false, 0);
     crate::threat::add_threat(ctx, pet_target, pet, 10);
@@ -496,7 +503,11 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         leash_x: 0.0,
         leash_y: 0.0,
     });
-    crate::combat::kill_player(ctx, LOOT_TAG_FIXTURE_CHARACTER_F, LOOT_TAG_FIXTURE_CHARACTER_B);
+    crate::combat::kill_player(
+        ctx,
+        LOOT_TAG_FIXTURE_CHARACTER_F,
+        LOOT_TAG_FIXTURE_CHARACTER_B,
+    );
     expect_tagger(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F)?;
     crate::combat::disengage(ctx, retained);
     if tagger(ctx, retained).is_some()

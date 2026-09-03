@@ -249,9 +249,9 @@ mod action_bar;
 mod actor;
 mod auction;
 mod auth;
+mod breath;
 mod breath_relay;
 mod bridge;
-mod breath;
 mod character;
 mod chat;
 mod combat;
@@ -269,8 +269,8 @@ mod exploration;
 mod debug;
 // Encounter kernel (work-item 228): instance-scoped encounter state, HP-threshold/death/GO-use
 // hooks, and the shared choreography primitives Packages consume (`packages/dungeons/` owns it).
-mod encounter;
 mod duel;
+mod encounter;
 mod faction;
 mod gameobject;
 mod gc;
@@ -382,15 +382,13 @@ pub use debug::*;
 pub use duel::*;
 pub use encounter::*;
 pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test (282)
-pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (4c)
-pub use spell::stacking::SpellGroupRule; // Keeps this generated table in schema-parity coverage.
 pub use faction::*;
 pub use gameobject::*;
-pub use gw::*;
 pub use gc::*;
 pub use gm::*;
 pub use graveyard::*;
 pub use group::*;
+pub use gw::*;
 pub use instance::*;
 pub use items::*;
 pub use load::*;
@@ -402,8 +400,10 @@ pub use quest::*;
 pub use realm_core::*;
 pub use region::*;
 pub use reputation::*;
+pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (4c)
 pub use skill::*;
 pub use skilldata::*;
+pub use spell::stacking::SpellGroupRule; // Keeps this generated table in schema-parity coverage.
 pub use spell::*;
 pub use stats::*;
 pub use talent::*;

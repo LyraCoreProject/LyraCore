@@ -24,8 +24,8 @@ mod reads;
 mod reducers;
 pub(crate) mod subscriptions;
 mod views;
-mod world_store; // impl WorldStore for Coordinator (replaces the former WorldCoordinatorStore newtype)
 pub(crate) mod world_index;
+mod world_store; // impl WorldStore for Coordinator (replaces the former WorldCoordinatorStore newtype)
 pub(crate) mod world_view; // shared per-shard spatial, broadcast, private, and owner dispatch
 
 pub use connection::Coordinator;

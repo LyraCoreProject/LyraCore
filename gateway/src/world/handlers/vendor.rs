@@ -30,13 +30,23 @@ pub(crate) trait VendorActionStore: Send + Sync {
     fn vendor_repair(&self, account_id: u64, self_guid: u64, npc_guid: u64, slot: u8)
         -> Result<()>;
 
-    fn vendor_sell(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8)
-        -> Result<()>;
+    fn vendor_sell(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()>;
 
     /// Re-purchase the ring entry at 0-based `slot` from `vendor_guid`. The gateway maps the wire
     /// `BuybackSlot` enum via [`BUYBACK_WIRE_SLOT_BASE`] before calling.
-    fn vendor_buyback(&self, account_id: u64, self_guid: u64, vendor_guid: u64, slot: u8)
-        -> Result<()>;
+    fn vendor_buyback(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        vendor_guid: u64,
+        slot: u8,
+    ) -> Result<()>;
 }
 
 impl VendorActionStore for crate::stdb::Coordinator {
@@ -57,7 +67,12 @@ impl VendorActionStore for crate::stdb::Coordinator {
         count: u32,
     ) -> Result<()> {
         crate::stdb::Coordinator::buy_item(
-            self, account_id, self_guid, vendor_guid, item_entry, count,
+            self,
+            account_id,
+            self_guid,
+            vendor_guid,
+            item_entry,
+            count,
         )
     }
 
@@ -214,13 +229,20 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
                 c.amount as u32,
             ) {
                 Ok(()) => Vec::new(),
-                Err(e) if classify_vendor_action_error(&e) == VendorActionErrorClass::GameplayRefusal => {
+                Err(e)
+                    if classify_vendor_action_error(&e)
+                        == VendorActionErrorClass::GameplayRefusal =>
+                {
                     log::debug!(
                         "world: vendor_buy failed (account {}): {e}",
                         player.account_id
                     );
                     vec![Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(
-                        Box::new(codec::build_buy_failed(vendor_guid, item_entry, &e.to_string())),
+                        Box::new(codec::build_buy_failed(
+                            vendor_guid,
+                            item_entry,
+                            &e.to_string(),
+                        )),
                     ))]
                 }
                 Err(e) => return Err(e),
@@ -286,7 +308,10 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
                 Ok(()) => Ok(VendorActionOutcome::Handled {
                     outbound: build_buyback_view(store, self_guid),
                 }),
-                Err(e) if classify_vendor_action_error(&e) == VendorActionErrorClass::GameplayRefusal => {
+                Err(e)
+                    if classify_vendor_action_error(&e)
+                        == VendorActionErrorClass::GameplayRefusal =>
+                {
                     log::debug!(
                         "world: sell_item ignored (account {}): {e}",
                         player.account_id
@@ -319,7 +344,10 @@ pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
                         None => Vec::new(),
                     },
                 }),
-                Err(e) if classify_vendor_action_error(&e) == VendorActionErrorClass::GameplayRefusal => {
+                Err(e)
+                    if classify_vendor_action_error(&e)
+                        == VendorActionErrorClass::GameplayRefusal =>
+                {
                     log::debug!(
                         "world: buyback_item ignored (account {}): {e}",
                         player.account_id
@@ -456,10 +484,13 @@ mod tests {
             item_entry: u32,
             count: u32,
         ) -> Result<()> {
-            self.buy_requests
-                .lock()
-                .unwrap()
-                .push((account_id, self_guid, vendor_guid, item_entry, count));
+            self.buy_requests.lock().unwrap().push((
+                account_id,
+                self_guid,
+                vendor_guid,
+                item_entry,
+                count,
+            ));
             match &self.buy_error {
                 Some(error) => Err(anyhow::anyhow!("{error}")),
                 None => Ok(()),

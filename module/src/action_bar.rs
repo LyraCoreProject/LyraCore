@@ -11,9 +11,7 @@
 //! login, byte-identical to today. Import lands → creation copies the real rows → the gateway prefers
 //! them. [entity]
 
-use spacetimedb::{
-    table, Identity, ReducerContext, Table,
-};
+use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::spell::spellbook::createinfo_row_matches; // shared (race,class) wildcard-match helper
 

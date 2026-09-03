@@ -956,7 +956,10 @@ mod tests {
         assert!(matches!(package_handler_for(binding, &[]), Ok(None)));
 
         let claimed = [(binding, handler as EncounterPackageHandler)];
-        assert!(matches!(package_handler_for(binding, &claimed), Ok(Some(_))));
+        assert!(matches!(
+            package_handler_for(binding, &claimed),
+            Ok(Some(_))
+        ));
 
         let duplicate = [(binding, handler as EncounterPackageHandler); 2];
         let duplicate = package_handler_for(binding, &duplicate)
