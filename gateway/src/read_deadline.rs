@@ -9,6 +9,7 @@
 
 use std::io::{Read, Write};
 use std::net::Shutdown;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
@@ -56,17 +57,26 @@ impl PreAuthDeadline<SystemClock> {
     /// Shut the socket down at this deadline even if its blocking task has not started yet.
     pub(crate) fn arm(&mut self, stream: &std::net::TcpStream) -> std::io::Result<()> {
         let stream = stream.try_clone()?;
+        let socket = Arc::new(Mutex::new(Some(stream)));
+        let watchdog_socket = Arc::clone(&socket);
         let expires_at = tokio::time::Instant::from_std(self.expires_at);
         let (cancel, canceled) = oneshot::channel();
         tokio::spawn(async move {
             tokio::select! {
                 _ = tokio::time::sleep_until(expires_at) => {
-                    let _ = stream.shutdown(Shutdown::Both);
+                    let stream = watchdog_socket
+                        .lock()
+                        .ok()
+                        .and_then(|mut socket| socket.take());
+                    if let Some(stream) = stream {
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
                 }
                 _ = canceled => {}
             }
         });
         self.watchdog = Some(PreAuthWatchdog {
+            socket,
             cancel: Some(cancel),
         });
         Ok(())
@@ -95,6 +105,11 @@ impl<C: DeadlineClock> PreAuthDeadline<C> {
 
     /// End the pre-auth policy without leaving either socket timeout on the long-lived session.
     pub(crate) fn finish<S: IoDeadline>(&mut self, stream: &S) -> std::io::Result<()> {
+        if let Some(watchdog) = self.watchdog.as_mut() {
+            watchdog.disarm_before(self.expires_at, &self.clock)?;
+        } else {
+            self.remaining()?;
+        }
         let read = stream.set_read_timeout(None);
         let write = stream.set_write_timeout(None);
         self.watchdog.take();
@@ -156,14 +171,45 @@ impl<C: DeadlineClock> PreAuthDeadline<C> {
 }
 
 struct PreAuthWatchdog {
+    socket: Arc<Mutex<Option<std::net::TcpStream>>>,
     cancel: Option<oneshot::Sender<()>>,
+}
+
+impl PreAuthWatchdog {
+    /// Claim the socket before the deadline or leave it for the expiry task. The mutex makes proof
+    /// completion and the timer choose exactly one owner at the boundary.
+    fn disarm_before<C: DeadlineClock>(
+        &mut self,
+        expires_at: Instant,
+        clock: &C,
+    ) -> std::io::Result<()> {
+        let mut socket = self
+            .socket
+            .lock()
+            .map_err(|_| std::io::Error::other("pre-auth watchdog state is poisoned"))?;
+        expires_at
+            .checked_duration_since(clock.now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(deadline_elapsed)?;
+        socket.take();
+        drop(socket);
+        self.cancel();
+        Ok(())
+    }
+
+    fn cancel(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+    }
 }
 
 impl Drop for PreAuthWatchdog {
     fn drop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
+        if let Ok(mut socket) = self.socket.lock() {
+            socket.take();
         }
+        self.cancel();
     }
 }
 
@@ -374,6 +420,28 @@ mod tests {
 
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert_eq!(sink.written, [1, 2, 3]);
+    }
+
+    #[test]
+    fn proof_completion_cannot_cancel_an_expired_deadline() {
+        let start = Instant::now();
+        let clock = ManualClock {
+            now: Rc::new(Cell::new(start)),
+        };
+        let mut deadline =
+            PreAuthDeadline::with_clock(start + Duration::from_millis(10), clock.clone());
+        let stream = DripReader {
+            bytes: Vec::new().into_iter(),
+            clock: clock.clone(),
+            per_byte: Duration::ZERO,
+        };
+        clock.now.set(start + Duration::from_millis(11));
+
+        let error = deadline
+            .finish(&stream)
+            .expect_err("proof completion after expiry must not admit the connection");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     }
 
     #[tokio::test]
