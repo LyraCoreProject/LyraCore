@@ -143,6 +143,7 @@ pub(crate) fn should_seed_default(row_exists: bool) -> bool {
 /// when no row exists yet — see [`should_seed_default`] for the decision this carries out. `pub(crate)`
 /// — a Package's own defaults are seeded from inside the module build, not through a reducer an
 /// external caller could hit.
+#[cfg_attr(not(has_packages), allow(dead_code))] // package-only caller — see `build.rs`
 pub(crate) fn ensure_package_config_default(
     ctx: &ReducerContext,
     package: &str,

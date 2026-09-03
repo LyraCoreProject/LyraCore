@@ -106,7 +106,7 @@ pub(crate) fn on_comment_line(content: &str, byte_idx: usize) -> bool {
 /// must not treat assertion needles as live table reads.
 pub(crate) fn in_string_literal(content: &str, byte_idx: usize) -> bool {
     let line_start = content[..byte_idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let bytes = content[line_start..byte_idx].as_bytes();
+    let bytes = &content.as_bytes()[line_start..byte_idx];
     let mut in_string = false;
     let mut i = 0;
     while i < bytes.len() {

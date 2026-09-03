@@ -436,11 +436,14 @@ mod tests {
         CMSG_REPAIR_ITEM, CMSG_SELL_ITEM,
     };
 
+    /// (account_id, player_guid, vendor_guid, item_entry, count) as the handler passed them on.
+    type BuyRequest = (u64, u64, u64, u32, u32);
+
     #[derive(Default)]
     struct InMemoryVendorActions {
         stock_requests: Mutex<Vec<u64>>,
         gate_requests: Mutex<Vec<(u64, u64)>>,
-        buy_requests: Mutex<Vec<(u64, u64, u64, u32, u32)>>,
+        buy_requests: Mutex<Vec<BuyRequest>>,
         repair_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
         sell_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
         stock: Vec<codec::VendorItemView>,

@@ -974,12 +974,12 @@ fn nearest_area_picks_the_closest_threat_holder_not_the_top_threat() {
     assert_eq!(scenario.casts(), vec![(CREATURE, 232, 0)]);
     assert_eq!(
         scenario.eventai_spell_starts.borrow().as_slice(),
-        &[((
+        &[(
             SpellStartMode::Direct,
             SpellCastTarget::CasterArea,
             false,
             SpellCasterAdmission::Living,
-        ))]
+        )]
     );
 }
 
@@ -1007,12 +1007,12 @@ fn no_explicit_target_checks_the_caster_without_inventing_a_unit_target() {
     assert_eq!(ready.casts(), vec![(CREATURE, 521, 0)]);
     assert_eq!(
         ready.eventai_spell_starts.borrow().as_slice(),
-        &[((
+        &[(
             SpellStartMode::Direct,
             SpellCastTarget::None,
             false,
             SpellCasterAdmission::Living,
-        ))]
+        )]
     );
 }
 
@@ -1050,12 +1050,12 @@ fn caster_area_requires_an_eligible_candidate_but_keeps_the_area_target() {
     assert_eq!(ready.casts(), vec![(CREATURE, 522, 0)]);
     assert_eq!(
         ready.eventai_spell_starts.borrow().as_slice(),
-        &[((
+        &[(
             SpellStartMode::Direct,
             SpellCastTarget::CasterArea,
             false,
             SpellCasterAdmission::Living,
-        ))]
+        )]
     );
 }
 
@@ -1301,12 +1301,12 @@ fn triggered_cast_starts_during_a_pending_direct_cast() {
     assert_eq!(scenario.casts(), vec![(CREATURE, 300, TARGET)]);
     assert_eq!(
         scenario.eventai_spell_starts.borrow().as_slice(),
-        &[((
+        &[(
             SpellStartMode::Triggered,
             SpellCastTarget::Unit(TARGET),
             false,
             SpellCasterAdmission::Living,
-        ))]
+        )]
     );
 }
 

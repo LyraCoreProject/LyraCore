@@ -121,6 +121,7 @@ impl Standalone {
             .expect("private Owner Token is missing")
     }
 
+    #[allow(dead_code)] // Only the integration tests that publish a module use this.
     pub fn publish_module(&mut self) {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let module_dir = workspace.join("module");
@@ -163,6 +164,7 @@ impl Standalone {
         command.output().expect("failed to call reducer")
     }
 
+    #[allow(dead_code)] // Only the integration tests that call reducers use this.
     pub fn assert_call(&self, reducer: &str, args: &[&str]) {
         self.assert_ok(&self.call(reducer, args));
     }

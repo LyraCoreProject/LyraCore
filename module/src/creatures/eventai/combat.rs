@@ -63,6 +63,7 @@ fn contexts_for_actors<W: EventAiWorld>(world: &W, actors: Vec<CycleActor>) -> V
 }
 
 /// Checks the rule's event condition and may name the actor selected by that condition.
+#[allow(clippy::too_many_lines)] // One arm per EventAI event kind.
 pub(crate) fn condition<W: EventAiWorld>(
     world: &W,
     context: &EventContext,
@@ -520,10 +521,11 @@ pub(super) fn cast<W: EventAiWorld>(
             return ActionResult::Refused;
         }
     }
-    if world.eventai_is_casting(caster.guid) {
-        if !cast.interrupt_previous && cast.start_mode == SpellStartMode::Direct {
-            return ActionResult::Refused;
-        }
+    if world.eventai_is_casting(caster.guid)
+        && !cast.interrupt_previous
+        && cast.start_mode == SpellStartMode::Direct
+    {
+        return ActionResult::Refused;
     }
     if world.eventai_start_spell(
         &caster,

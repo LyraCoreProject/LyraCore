@@ -282,6 +282,7 @@ const PACKAGE_API_ROOT_ITEMS: &[&str] = &[
 /// carry a reason, so an exemption is always readable where it is used and greppable across a tree.
 const PACKAGE_API_EXEMPT: &str = "// package-api: exempt";
 
+#[allow(clippy::too_many_lines)] // One scan-and-emit step per generated registry.
 fn main() {
     let manifest_dir =
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo");

@@ -340,6 +340,7 @@ const LOOT_TAG_FIXTURE_CHARACTER_F: u64 = 5_093_856;
 /// Module rows in one isolated standalone transaction.
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
+#[allow(clippy::too_many_lines)] // One durable step per staged fixture row.
 pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String> {
     let origin = ctx
         .db

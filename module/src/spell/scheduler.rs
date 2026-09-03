@@ -327,6 +327,7 @@ pub(crate) fn is_due_for_expiry(eff_kind: u8, expires_at: Timestamp, now: Timest
 /// Scheduler-only. Time indexes select due rows across the Shard; each effect operates on its
 /// own target, so instance count does not change an aura's cadence.
 #[reducer]
+#[allow(clippy::too_many_lines)] // One pass per aura family the tick settles.
 pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;

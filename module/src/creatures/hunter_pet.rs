@@ -384,9 +384,12 @@ mod tests {
         assert_eq!(eligible().validate(), Ok(()));
     }
 
+    /// One gate broken in an otherwise valid tame.
+    type BreakGate = Box<dyn Fn(&mut TameEligibility)>;
+
     #[test]
     fn every_tame_gate_rejects_independently() {
-        let cases: Vec<Box<dyn Fn(&mut TameEligibility)>> = vec![
+        let cases: Vec<BreakGate> = vec![
             Box::new(|v| v.caster_class = 9),
             Box::new(|v| v.caster_is_player = false),
             Box::new(|v| v.caster_owned = false),

@@ -208,6 +208,7 @@ fn same_stage_request(
 
 /// Start a generation. Repeating the exact request resumes it; a conflicting request is refused.
 #[reducer]
+#[allow(clippy::too_many_arguments)] // A reducer's arguments are its call signature.
 pub fn stage_vmap_generation(
     ctx: &ReducerContext,
     generation_id: u64,
@@ -1019,12 +1020,15 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
+    /// (base_z, walk, obs) for one coverage cell.
+    type CoverageCell = (f32, Vec<u8>, Vec<u8>);
+
     #[derive(Default)]
     struct LifecycleHarness {
         generations: BTreeMap<u64, (u32, u8, u32, u32)>,
         chunks: BTreeMap<(u64, u64, u32), Vec<u8>>,
         /// (generation_id, cell_key) -> (base_z, walk, obs) — mirrors `VmapNavCoverage`.
-        coverage: BTreeMap<(u64, u64), (f32, Vec<u8>, Vec<u8>)>,
+        coverage: BTreeMap<(u64, u64), CoverageCell>,
         /// generation_id -> (cell_count, digest, complete) — mirrors `VmapNavCoverageManifest`.
         coverage_manifests: BTreeMap<u64, (u32, [u8; 32], bool)>,
     }
@@ -1116,7 +1120,7 @@ mod tests {
         /// Mirrors `finalize_vmap_nav_coverage`: cell count + digest over the sorted current rows.
         fn finalize_coverage(&mut self, id: u64) -> Result<(), String> {
             self.coverage_preparable(id)?;
-            let mut cells: Vec<(u64, &(f32, Vec<u8>, Vec<u8>))> = self
+            let mut cells: Vec<(u64, &CoverageCell)> = self
                 .coverage
                 .iter()
                 .filter(|((generation_id, _), _)| *generation_id == id)

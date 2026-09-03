@@ -13,6 +13,9 @@
 //!   - `subscriptions`: `PlayerSubscriptions`, viewer setup, and shared packet builders.
 //!   - `views`: row→view converters + the thin `RealmRow`/`AccountRow` mirrors.
 
+// The SpacetimeDB codegen writes one function per table subscription; several run past any
+// reasonable length ceiling and no edit here survives a regeneration.
+#[allow(clippy::too_many_lines)]
 pub mod bindings;
 
 mod account_sessions; // per-account session-epoch + live-socket registry, split out of `connection`

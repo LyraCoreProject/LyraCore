@@ -128,9 +128,6 @@ mod framing_tests;
 #[path = "alpha_test_tools_tests.rs"]
 mod alpha_test_tools_tests;
 
-/// The per-account connection release regressions. A sibling of the modules above for the
-/// same reason — it reaches `InMemoryStore` without widening anything.
-
 /// Multi-shard routing — reducer calls and subscriptions never target a shard other than the
 /// player's home shard. A sibling of the modules above for the same reason. `ShardCallLog` is
 /// `pub(super)` here and re-exported below because this file's own pre-shard-routing tests (and

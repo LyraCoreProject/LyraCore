@@ -1341,6 +1341,7 @@ pub(crate) fn seed_fixture_catalogue(ctx: &ReducerContext) {
 /// unconditionally (contrast `FIXTURE_BLADE`/`FIXTURE_JERKY` above, which stay reachable from `init`
 /// in every build and so carry no such attribute).
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+#[allow(clippy::too_many_lines)] // A seed data table written as code.
 pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
     use crate::quest::quest_role;
 
