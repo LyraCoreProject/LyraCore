@@ -138,9 +138,23 @@ A root that is absent is core's own business. `auth`, `debug`, `runtime_script`,
 
 ## The lint
 
-`module/build.rs` reads every file under `packages/*/src/` and fails the build on the first
-`crate::` path whose root is outside the list above, naming the Package, the file, the line and the
-path. Core `src/` is never linted: the surface is a promise core makes to Packages, not to itself.
+`module/build.rs` reads every file under `packages/*/src/` and fails the build on the first path that
+reaches a crate root outside the list above. The failure names the Package, file, line and path. Core
+`src/` is never linted because the Package API is a promise core makes to Packages, not to itself.
+
+The scanner recognizes `crate::`, `$crate::`, and a `super::` chain that leaves the Package module.
+It also follows an unqualified crate-root alias declared in the same file. It recognizes
+`use crate as name`. Grouped `self as name` uses and `extern crate self as name` also work.
+
+The scanner uses the file path and inline modules to distinguish a crate-root escape from a
+Package's own sibling or submodule. A crate-root glob such as `use crate::*` also fails because it
+imports roots that the Package API does not name.
+
+This remains a lexical compatibility check, not Rust name resolution. It does not expand macros or
+follow an alias or re-export declared in another file. A Package should use the normal file module
+layout rather than `#[path]` when it uses relative imports, because the scanner derives module depth
+from that layout. Rust still compiles every Package after this check; these limits do not turn the
+Package API into a sandbox.
 
 Comments and string literals are stripped before the scan, so a path quoted in a doc example is
 inert.

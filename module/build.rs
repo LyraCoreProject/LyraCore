@@ -56,9 +56,9 @@
 //! `$OUT_DIR`.
 //!
 //! The same pass also lints each package file against the Package API surface
-//! (`PACKAGE_API_ROOTS`, documented at `docs/package-api.md`): a `crate::` path outside it fails the
-//! build naming the Package, the file, the line and the path, unless the line carries
-//! `// package-api: exempt <reason>`. Core `src/` is never linted.
+//! (`PACKAGE_API_ROOTS`, documented at `docs/package-api.md`): a path that reaches the crate root
+//! outside it fails the build naming the Package, the file, the line and the path, unless the line
+//! carries `// package-api: exempt <reason>`. Core `src/` is never linted.
 //!
 //! EVALUATED AND REJECTED: replacing the marker scan with an explicit per-package `register()`
 //! convention. The registries are const fn-pointer arrays (no allocator-dependent init order in
@@ -345,7 +345,7 @@ fn main() {
             collect_rs_files(&pkg_src, &mut pkg_files);
             pkg_files.sort();
             for file in &pkg_files {
-                lint_package_api(&name, file);
+                lint_package_api(&name, &pkg_src, file);
                 scan_file(file, &pkg_src, true, &prefix, &mut registries);
             }
             pkg_mods.push((ident, mod_rs));
@@ -1138,7 +1138,7 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
     );
 }
 
-/// Whether `root` — the first segment after `crate::` — is on the Package API surface.
+/// Whether `root`, the first segment of a crate-root path, is on the Package API surface.
 ///
 /// Three families beyond the listed roots: `game_*` covers the table accessor traits and the
 /// `game_hook!`/`game_tick_pass!` markers, `pkg_*` covers a Package's own generated root (and its
@@ -1153,106 +1153,458 @@ fn on_package_api(root: &str) -> bool {
         || upper_camel
 }
 
-/// The leading identifier of `s`, empty when `s` does not start with one.
-fn leading_ident(s: &str) -> &str {
-    let end = s
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .unwrap_or(s.len());
-    &s[..end]
+#[derive(Clone, Copy)]
+struct SourceToken<'a> {
+    text: &'a str,
+    start: usize,
 }
 
-/// The first segment of every path a `crate::` occurrence introduces, as (offset into `rest`,
-/// segment). One for a plain path; one per entry for a braced group (`crate::{a, b::c}`), whose
-/// entries are read at brace depth 1 so a nested group cannot hide one.
-fn crate_path_roots(rest: &str) -> Vec<(usize, &str)> {
-    if !rest.starts_with('{') {
-        let ident = leading_ident(rest);
-        return if ident.is_empty() {
-            Vec::new()
-        } else {
-            vec![(0, ident)]
-        };
-    }
-    let mut roots = Vec::new();
-    let mut depth = 0usize;
-    let mut at_entry = false;
-    for (offset, c) in rest.char_indices() {
-        match c {
-            '{' => {
-                depth += 1;
-                at_entry = depth == 1;
+/// The Rust tokens this lint needs, with byte positions for diagnostics. This is deliberately much
+/// smaller than a parser: identifiers, `::`, and punctuation stay distinct; whitespace vanishes.
+fn source_tokens(source: &str) -> Vec<SourceToken<'_>> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut at = 0usize;
+    while at < bytes.len() {
+        if bytes[at].is_ascii_whitespace() {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        if bytes[at].is_ascii_alphabetic() || bytes[at] == b'_' {
+            at += 1;
+            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                at += 1;
             }
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    break;
+        } else if bytes[at] == b':' && bytes.get(at + 1) == Some(&b':') {
+            at += 2;
+        } else {
+            at += source[at..]
+                .chars()
+                .next()
+                .expect("at is before the end of source")
+                .len_utf8();
+        }
+        tokens.push(SourceToken {
+            text: &source[start..at],
+            start,
+        });
+    }
+    tokens
+}
+
+fn is_ident(token: SourceToken<'_>) -> bool {
+    token
+        .text
+        .as_bytes()
+        .first()
+        .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
+}
+
+/// Every matched brace pair in the stripped source, as byte positions of the braces.
+fn brace_pairs(tokens: &[SourceToken<'_>]) -> Vec<(usize, usize)> {
+    let mut open = Vec::new();
+    let mut pairs = Vec::new();
+    for token in tokens {
+        match token.text {
+            "{" => open.push(token.start),
+            "}" => {
+                if let Some(start) = open.pop() {
+                    pairs.push((start, token.start));
                 }
             }
-            ',' if depth == 1 => at_entry = true,
-            c if c.is_whitespace() => {}
-            _ => {
-                if at_entry {
-                    at_entry = false;
-                    let ident = leading_ident(&rest[offset..]);
-                    if !ident.is_empty() {
-                        roots.push((offset, ident));
+            _ => {}
+        }
+    }
+    pairs.sort_unstable();
+    pairs
+}
+
+/// Inline `mod name { .. }` bodies. File position supplies the rest of a Package module's depth.
+fn inline_modules(tokens: &[SourceToken<'_>], pairs: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut modules = Vec::new();
+    for window in tokens.windows(3) {
+        if window[0].text != "mod" || !is_ident(window[1]) || window[2].text != "{" {
+            continue;
+        }
+        if let Some(pair) = pairs.iter().find(|(open, _)| *open == window[2].start) {
+            modules.push(*pair);
+        }
+    }
+    modules.sort_unstable();
+    modules
+}
+
+fn inline_module_stack(modules: &[(usize, usize)], at: usize) -> Vec<usize> {
+    modules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (open, close))| (*open < at && at < *close).then_some(index))
+        .collect()
+}
+
+fn module_depth(file_depth: usize, modules: &[(usize, usize)], at: usize) -> usize {
+    file_depth + inline_module_stack(modules, at).len()
+}
+
+/// `mod.rs` is its directory module; any other file adds its stem as one module segment.
+fn package_file_module_depth(package_src: &Path, file: &Path) -> usize {
+    let relative = file.strip_prefix(package_src).unwrap_or_else(|_| {
+        panic!(
+            "build.rs: {} is not under Package source {}",
+            file.display(),
+            package_src.display()
+        )
+    });
+    let components = relative.components().count();
+    if relative.file_name().is_some_and(|name| name == "mod.rs") {
+        components.saturating_sub(1)
+    } else {
+        components
+    }
+}
+
+#[derive(Clone)]
+struct CrateAlias {
+    name: String,
+    scope: (usize, usize),
+    module_stack: Vec<usize>,
+}
+
+fn enclosing_scope(pairs: &[(usize, usize)], at: usize, source_len: usize) -> (usize, usize) {
+    pairs
+        .iter()
+        .filter(|(open, close)| *open < at && at < *close)
+        .max_by_key(|(open, _)| *open)
+        .map_or((0, source_len), |(open, close)| (open + 1, *close))
+}
+
+/// Aliases of the root represented by one use-tree root. The direct form is `crate as core`; the
+/// grouped form is `crate::{self as core}`.
+fn aliases_after_use_root<'a>(
+    tokens: &[SourceToken<'a>],
+    root: usize,
+    statement_end: usize,
+) -> Vec<&'a str> {
+    if root + 2 < statement_end
+        && tokens[root + 1].text == "as"
+        && is_ident(tokens[root + 2])
+        && tokens[root + 2].text != "_"
+    {
+        return vec![tokens[root + 2].text];
+    }
+    if root + 2 >= statement_end || tokens[root + 1].text != "::" || tokens[root + 2].text != "{" {
+        return Vec::new();
+    }
+
+    let mut aliases = Vec::new();
+    let mut depth = 0usize;
+    let mut at_entry = true;
+    let mut index = root + 3;
+    while index < statement_end {
+        match tokens[index].text {
+            "{" => depth += 1,
+            "}" if depth == 0 => break,
+            "}" => depth -= 1,
+            "," if depth == 0 => at_entry = true,
+            "self" if depth == 0 && at_entry => {
+                if index + 2 < statement_end
+                    && tokens[index + 1].text == "as"
+                    && is_ident(tokens[index + 2])
+                    && tokens[index + 2].text != "_"
+                {
+                    aliases.push(tokens[index + 2].text);
+                }
+                at_entry = false;
+            }
+            _ if depth == 0 && at_entry => at_entry = false,
+            _ => {}
+        }
+        index += 1;
+    }
+    aliases
+}
+
+/// File-local names introduced for the crate root. Their brace scope and inline-module position
+/// keep an alias in one function or module from changing an unrelated `name::path` elsewhere.
+fn crate_aliases(
+    tokens: &[SourceToken<'_>],
+    pairs: &[(usize, usize)],
+    modules: &[(usize, usize)],
+    source_len: usize,
+) -> Vec<CrateAlias> {
+    let mut aliases = Vec::new();
+    for (use_index, token) in tokens.iter().enumerate() {
+        if token.text != "use" {
+            continue;
+        }
+        let statement_end = tokens[use_index + 1..]
+            .iter()
+            .position(|token| token.text == ";")
+            .map_or(tokens.len(), |offset| use_index + 1 + offset);
+        let scope = enclosing_scope(pairs, token.start, source_len);
+        let stack = inline_module_stack(modules, token.start);
+        let mut index = use_index + 1;
+        while index < statement_end {
+            if tokens[index].text == "crate" {
+                for name in aliases_after_use_root(tokens, index, statement_end) {
+                    let alias = CrateAlias {
+                        name: name.to_string(),
+                        scope,
+                        module_stack: stack.clone(),
+                    };
+                    if !aliases.iter().any(|known: &CrateAlias| {
+                        known.name == alias.name
+                            && known.scope == alias.scope
+                            && known.module_stack == alias.module_stack
+                    }) {
+                        aliases.push(alias);
                     }
                 }
             }
+            index += 1;
         }
+    }
+
+    // `extern crate self as core` is the older spelling of the same file-local crate alias.
+    for window in tokens.windows(5) {
+        if window[0].text == "extern"
+            && window[1].text == "crate"
+            && window[2].text == "self"
+            && window[3].text == "as"
+            && is_ident(window[4])
+            && window[4].text != "_"
+        {
+            aliases.push(CrateAlias {
+                name: window[4].text.to_string(),
+                scope: enclosing_scope(pairs, window[0].start, source_len),
+                module_stack: inline_module_stack(modules, window[0].start),
+            });
+        }
+    }
+    aliases
+}
+
+/// The root and diagnostic spelling of every path introduced after one `::`. A braced group emits
+/// one result per entry at its first depth; a glob is one forbidden root of `*`.
+fn roots_after_separator(
+    tokens: &[SourceToken<'_>],
+    separator: usize,
+    prefix: &str,
+) -> Vec<(usize, String, String)> {
+    let Some(first) = tokens.get(separator + 1) else {
+        return Vec::new();
+    };
+    if first.text != "{" {
+        if !is_ident(*first) && first.text != "*" {
+            return Vec::new();
+        }
+        let mut root_index = separator + 1;
+        let mut root = first.text;
+        let mut written = format!("{prefix}::{root}");
+        if root == "self"
+            && tokens
+                .get(root_index + 1)
+                .is_some_and(|token| token.text == "::")
+            && tokens
+                .get(root_index + 2)
+                .is_some_and(|token| is_ident(*token))
+        {
+            root_index += 2;
+            root = tokens[root_index].text;
+            written.push_str("::");
+            written.push_str(root);
+        }
+        let mut end = root_index;
+        while tokens.get(end + 1).is_some_and(|token| token.text == "::")
+            && tokens.get(end + 2).is_some_and(|token| is_ident(*token))
+        {
+            end += 2;
+            written.push_str("::");
+            written.push_str(tokens[end].text);
+        }
+        return vec![(root_index, root.to_string(), written)];
+    }
+
+    let mut roots = Vec::new();
+    let mut depth = 0usize;
+    let mut at_entry = true;
+    let mut index = separator + 2;
+    while index < tokens.len() {
+        match tokens[index].text {
+            "{" => depth += 1,
+            "}" if depth == 0 => break,
+            "}" => depth -= 1,
+            "," if depth == 0 => at_entry = true,
+            _ if depth == 0 && at_entry => {
+                at_entry = false;
+                if tokens[index].text == "self" {
+                    if tokens
+                        .get(index + 1)
+                        .is_some_and(|token| token.text == "::")
+                        && tokens.get(index + 2).is_some_and(|token| is_ident(*token))
+                    {
+                        let root = tokens[index + 2].text.to_string();
+                        roots.push((index + 2, root.clone(), format!("{prefix}::self::{root}")));
+                    }
+                } else if is_ident(tokens[index]) || tokens[index].text == "*" {
+                    roots.push((
+                        index,
+                        tokens[index].text.to_string(),
+                        format!("{prefix}::{}", tokens[index].text),
+                    ));
+                }
+            }
+            _ => {}
+        }
+        index += 1;
     }
     roots
 }
 
-/// Every `crate::` path in `source` whose root is outside the Package API surface, as (1-based
-/// line, path as written).
-///
-/// The scan runs on the comment- and string-stripped copy, so a path quoted in a doc example or a
-/// string literal is inert. The exemption comment is then read back off the RAW line, because that
-/// is where an author writes it and stripping would have removed it.
-fn out_of_surface_paths(source: &str) -> Vec<(usize, String)> {
-    let stripped = strip_comments_and_strings(source);
-    let raw_lines: Vec<&str> = source.lines().collect();
-    let mut found = Vec::new();
-    let mut search_from = 0usize;
-    while let Some(rel_idx) = stripped[search_from..].find("crate::") {
-        let idx = search_from + rel_idx;
-        let rest_at = idx + "crate::".len();
-        search_from = rest_at;
-        // `crate` must be a whole token: `lyracore_crate::foo` names someone else's crate.
-        if stripped[..idx]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+fn record_rooted_paths(
+    tokens: &[SourceToken<'_>],
+    separator: usize,
+    prefix: &str,
+    stripped: &str,
+    raw_lines: &[&str],
+    found: &mut Vec<(usize, usize, String)>,
+) {
+    for (root_index, root, written) in roots_after_separator(tokens, separator, prefix) {
+        if root == "self" || on_package_api(&root) {
             continue;
         }
-        let rest = &stripped[rest_at..];
-        for (offset, root) in crate_path_roots(rest) {
-            if on_package_api(root) {
-                continue;
-            }
-            let line = stripped[..rest_at + offset].matches('\n').count() + 1;
-            let exempt = raw_lines.get(line - 1).is_some_and(|raw| {
-                raw.split_once(PACKAGE_API_EXEMPT)
-                    .is_some_and(|(_, reason)| !reason.trim().is_empty())
-            });
-            if exempt {
-                continue;
-            }
-            // The path as written, so the message points at the real use rather than at its root.
-            let written = if offset == 0 {
-                let end = rest
-                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
-                    .unwrap_or(rest.len());
-                rest[..end].trim_end_matches(':')
-            } else {
-                root
-            };
-            found.push((line, format!("crate::{written}")));
+        let offset = tokens[root_index].start;
+        let line = stripped[..offset].matches('\n').count() + 1;
+        let exempt = raw_lines.get(line - 1).is_some_and(|raw| {
+            raw.split_once(PACKAGE_API_EXEMPT)
+                .is_some_and(|(_, reason)| !reason.trim().is_empty())
+        });
+        if !exempt {
+            found.push((offset, line, written));
         }
     }
+}
+
+/// Every Package path in `source` that reaches a crate root outside the Package API surface, as
+/// (1-based line, path as written). `file_depth` is zero for `src/mod.rs`, one for `src/foo.rs` or
+/// `src/foo/mod.rs`, and so on. Inline modules add to it at the occurrence.
+///
+/// The scan runs on the comment- and string-stripped copy. It recognizes `crate`, `$crate`, enough
+/// leading `super` segments to leave the Package, and crate-root aliases declared in the same file.
+/// The exemption is read from the raw root line, where stripping removed the comment.
+fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)> {
+    let stripped = strip_comments_and_strings(source);
+    let raw_lines: Vec<&str> = source.lines().collect();
+    let tokens = source_tokens(&stripped);
+    let pairs = brace_pairs(&tokens);
+    let modules = inline_modules(&tokens, &pairs);
+    let aliases = crate_aliases(&tokens, &pairs, &modules, stripped.len());
+    let mut found = Vec::new();
+
+    let mut index = 0usize;
+    while index < tokens.len() {
+        if tokens[index].text == "$"
+            && tokens
+                .get(index + 1)
+                .is_some_and(|token| token.text == "crate")
+            && tokens
+                .get(index + 2)
+                .is_some_and(|token| token.text == "::")
+        {
+            record_rooted_paths(
+                &tokens,
+                index + 2,
+                "$crate",
+                &stripped,
+                &raw_lines,
+                &mut found,
+            );
+            index += 3;
+            continue;
+        }
+        if tokens[index].text == "crate"
+            && (index == 0 || tokens[index - 1].text != "$")
+            && tokens
+                .get(index + 1)
+                .is_some_and(|token| token.text == "::")
+        {
+            record_rooted_paths(
+                &tokens,
+                index + 1,
+                "crate",
+                &stripped,
+                &raw_lines,
+                &mut found,
+            );
+        } else if tokens[index].text == "super" && (index == 0 || tokens[index - 1].text != "::") {
+            let mut levels = 1usize;
+            let mut root_end = index;
+            while tokens
+                .get(root_end + 1)
+                .is_some_and(|token| token.text == "::")
+                && tokens
+                    .get(root_end + 2)
+                    .is_some_and(|token| token.text == "super")
+            {
+                levels += 1;
+                root_end += 2;
+            }
+            if levels == module_depth(file_depth, &modules, tokens[index].start) + 1
+                && tokens
+                    .get(root_end + 1)
+                    .is_some_and(|token| token.text == "::")
+            {
+                let prefix = std::iter::repeat_n("super", levels)
+                    .collect::<Vec<_>>()
+                    .join("::");
+                record_rooted_paths(
+                    &tokens,
+                    root_end + 1,
+                    &prefix,
+                    &stripped,
+                    &raw_lines,
+                    &mut found,
+                );
+            }
+            index = root_end;
+        }
+        index += 1;
+    }
+
+    for (index, token) in tokens.iter().enumerate() {
+        // An alias must start this path. A preceding `::` means it is a segment of a path the
+        // direct scanners above already resolved, not the file-local alias binding.
+        if index > 0 && tokens[index - 1].text == "::" {
+            continue;
+        }
+        if tokens.get(index + 1).is_none_or(|token| token.text != "::") {
+            continue;
+        }
+        let stack = inline_module_stack(&modules, token.start);
+        for alias in aliases.iter().filter(|alias| {
+            alias.name == token.text
+                && alias.scope.0 <= token.start
+                && token.start < alias.scope.1
+                && alias.module_stack == stack
+        }) {
+            record_rooted_paths(
+                &tokens,
+                index + 1,
+                &alias.name,
+                &stripped,
+                &raw_lines,
+                &mut found,
+            );
+        }
+    }
+
+    found.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.2.cmp(&right.2)));
+    found.dedup_by(|left, right| left.0 == right.0 && left.2 == right.2);
     found
+        .into_iter()
+        .map(|(_, line, path)| (line, path))
+        .collect()
 }
 
 /// What the build says when a Package names a core path outside the surface.
@@ -1268,10 +1620,11 @@ fn out_of_surface_message(package: &str, file: &Path, line: usize, path: &str) -
 
 /// Fail the build for the first out-of-surface path in one Package file. Core `src/` is never
 /// linted: the surface is a promise core makes to Packages, not to itself.
-fn lint_package_api(package: &str, file: &Path) {
+fn lint_package_api(package: &str, package_src: &Path, file: &Path) {
     let source = fs::read_to_string(file)
         .unwrap_or_else(|e| panic!("build.rs: cannot read {}: {e}", file.display()));
-    if let Some((line, path)) = out_of_surface_paths(&source).first() {
+    let file_depth = package_file_module_depth(package_src, file);
+    if let Some((line, path)) = out_of_surface_paths(&source, file_depth).first() {
         panic!("{}", out_of_surface_message(package, file, *line, path));
     }
 }
@@ -1295,7 +1648,11 @@ mod package_api_lint_tests {
     use super::*;
 
     fn reported(source: &str) -> Vec<String> {
-        out_of_surface_paths(source)
+        reported_at_depth(source, 0)
+    }
+
+    fn reported_at_depth(source: &str, file_depth: usize) -> Vec<String> {
+        out_of_surface_paths(source, file_depth)
             .into_iter()
             .map(|(line, path)| format!("{line}:{path}"))
             .collect()
@@ -1365,5 +1722,86 @@ mod package_api_lint_tests {
     fn another_crates_path_is_not_this_crates_path() {
         let source = "use lyracore_crate::auth::Account;\n";
         assert!(reported(source).is_empty(), "{:?}", reported(source));
+    }
+
+    #[test]
+    fn a_relative_path_that_leaves_the_package_root_is_reported() {
+        let source = "use super::auth::Account;\n";
+        assert_eq!(reported(source), vec!["1:super::auth::Account"]);
+    }
+
+    #[test]
+    fn only_enough_super_segments_to_leave_the_package_are_linted() {
+        let source = "mod tests {\n    use super::super::package_sibling;\n    use super::super::super::auth::Account;\n}\n";
+        assert_eq!(
+            reported_at_depth(source, 1),
+            vec!["3:super::super::super::auth::Account"]
+        );
+    }
+
+    #[test]
+    fn package_relative_siblings_and_submodules_stay_inside_the_package() {
+        let source =
+            "use super::sibling;\nmod tests {\n    use super::super::package_root_item;\n}\n";
+        assert!(
+            reported_at_depth(source, 1).is_empty(),
+            "{:?}",
+            reported_at_depth(source, 1)
+        );
+    }
+
+    #[test]
+    fn a_crate_alias_cannot_hide_an_undocumented_root() {
+        let source =
+            "use crate as core;\nuse core::helpers::live_entity;\nuse core::auth::Account;\n";
+        assert_eq!(reported(source), vec!["3:core::auth::Account"]);
+    }
+
+    #[test]
+    fn a_block_local_alias_does_not_reclassify_a_package_submodule_elsewhere() {
+        let source = "mod local { pub mod auth {} }\nfn alias_scope() { use crate as local; use local::helpers; }\nfn package_scope() { use local::auth; }\n";
+        assert!(reported(source).is_empty(), "{:?}", reported(source));
+    }
+
+    #[test]
+    fn grouped_crate_aliases_and_alias_imports_are_linted() {
+        let source = "use crate::{self as core, helpers};\nuse core::{\n    hooks,\n    auth::Account,\n};\n";
+        assert_eq!(reported(source), vec!["4:core::auth"]);
+    }
+
+    #[test]
+    fn outer_group_and_self_forms_can_alias_the_crate_root() {
+        let source = "use {crate as first};\nuse crate::{self as second};\nuse first::auth;\nuse second::test_scan;\n";
+        assert_eq!(
+            reported(source),
+            vec!["3:first::auth", "4:second::test_scan"]
+        );
+    }
+
+    #[test]
+    fn the_older_extern_crate_self_alias_is_linted_too() {
+        let source = "extern crate self as core;\nuse core::auth;\n";
+        assert_eq!(reported(source), vec!["2:core::auth"]);
+    }
+
+    #[test]
+    fn crate_root_globs_are_outside_the_named_surface() {
+        let source = "use crate::*;\nuse super::*;\n";
+        assert_eq!(reported(source), vec!["1:crate::*", "2:super::*"]);
+    }
+
+    #[test]
+    fn dollar_crate_and_whitespace_around_separators_do_not_bypass_the_lint() {
+        let source = "macro_rules! hidden { () => { $crate::auth::Account } }\nuse crate /* gap */ :: test_scan;\n";
+        assert_eq!(
+            reported(source),
+            vec!["1:$crate::auth::Account", "2:crate::test_scan"]
+        );
+    }
+
+    #[test]
+    fn an_exemption_remains_line_local_for_relative_and_aliased_paths() {
+        let source = "use crate as core;\nuse super::auth; // package-api: exempt Package setup needs Accounts\nuse core::test_scan;\n";
+        assert_eq!(reported(source), vec!["3:core::test_scan"]);
     }
 }
