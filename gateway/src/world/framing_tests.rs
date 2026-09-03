@@ -210,6 +210,38 @@ fn an_unsupported_opcode_ends_the_session_rather_than_desyncing_the_keystream() 
     assert!(format!("{err:#}").contains("world read error"), "{err:#}");
 }
 
+/// A second `CMSG_AUTH_SESSION` once auth is over. The typed decoder would size a buffer from the
+/// addon field and unwrap the zlib, so the loop refuses the opcode before decoding. Session-fatal
+/// like every other frame the loop cannot take.
+#[test]
+fn an_auth_session_after_auth_is_refused_before_the_typed_decoder_sees_it() {
+    let (mut client, mut c_enc, _c_dec, server) = framing_session();
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0u8; 8]); // build, server_id
+    body.extend_from_slice(b"TESTER\0");
+    body.extend_from_slice(&[0u8; 24]); // client_seed, client_proof
+    body.extend_from_slice(&u32::MAX.to_le_bytes()); // 4 GiB addon claim over garbage
+    body.extend_from_slice(&[0xFF; 32]);
+    c_enc
+        .write_encrypted_client_header(
+            &mut client,
+            (body.len() + 4) as u16,
+            CMSG_AUTH_SESSION_OPCODE,
+        )
+        .unwrap();
+    client.write_all(&body).unwrap();
+    drop(client);
+
+    let err = server
+        .join()
+        .unwrap()
+        .expect_err("a post-auth CMSG_AUTH_SESSION must end the session");
+    assert!(
+        format!("{err:#}").contains("CMSG_AUTH_SESSION after auth"),
+        "{err:#}"
+    );
+}
+
 /// A KNOWN opcode carrying a body its parser cannot consume: `CMSG_CAST_SPELL` needs a spell id and
 /// a target block, and gets one stray byte.
 ///

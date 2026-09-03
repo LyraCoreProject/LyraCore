@@ -1,5 +1,7 @@
 //! Gateway configuration. All operational, none of it game state.
 
+use crate::accept::BlockingTaskCapacity;
+
 #[derive(Clone, Debug)]
 pub struct GatewayConfig {
     /// Bind address for the logon listener (SRP6 + realm list). Default 0.0.0.0:3724.
@@ -20,6 +22,9 @@ pub struct GatewayConfig {
     /// per-process label on the other per-process health signals (`MOTIONSTAT`/`AOISTAT`) later —
     /// not done here, out of this issue's scope.
     pub gateway_id: String,
+    /// Shared non-waiting gate for blocking logon and World Session tasks. Its size mirrors the
+    /// Tokio blocking-pool ceiling configured before this value is built.
+    pub(crate) blocking_task_capacity: BlockingTaskCapacity,
 }
 
 /// The hostname half of the default `gateway_id` — `HOSTNAME` if set (containers commonly export
@@ -50,6 +55,7 @@ impl GatewayConfig {
             module_name: get("LYRACORE_DATABASE", "lyracore"),
             coordinator_token: std::env::var("LYRACORE_COORDINATOR_TOKEN").ok(),
             gateway_id: get("LYRACORE_GATEWAY_ID", &default_gateway_id),
+            blocking_task_capacity: BlockingTaskCapacity::new(max_blocking_threads()),
         }
     }
 }
@@ -773,19 +779,19 @@ pub const DEFAULT_MAX_BLOCKING_THREADS: usize = 512;
 
 /// The ceiling on tokio's blocking pool, which is the real ceiling on concurrent players.
 ///
-/// Both accept loops hand every accepted socket to `spawn_blocking` (the wire codecs in
-/// `wow_login_messages` / `wow_world_messages` are blocking `std::io`), and a world session holds
-/// its blocking thread for the session's entire life. So `max_blocking_threads` *is* the seat count
-/// — shared between live world sessions and in-flight logon handshakes.
+/// Both accept loops hand admitted sockets to `spawn_blocking` (the wire codecs in
+/// `wow_login_messages` / `wow_world_messages` are blocking `std::io`), and a World Session holds
+/// its blocking thread for the session's entire life. So `max_blocking_threads` is both the pool
+/// ceiling and the size of the listeners' shared, non-waiting [`BlockingTaskCapacity`].
 ///
 /// It was previously tokio's inherited default of 512, configured by nothing and reported by
-/// nothing. That mattered because a full pool does not refuse: `spawn_blocking` **queues**, so the
-/// socket is accepted at TCP level and then never handshaked. From outside that is indistinguishable
-/// from "the server is full", which is how it read for months. Measured 2026-08-07 on an 8-core box:
-/// 600 clients offered seated **477** at 512 and **535** at 4096.
+/// nothing. Before the admission gate, a full pool did not refuse: `spawn_blocking` queued the
+/// socket without a bound. The shared capacity now rejects excess sockets before task submission.
+/// Measured 2026-08-07 on an 8-core box: 600 clients offered seated **477** at 512 and **535** at
+/// 4096.
 ///
-/// Default 512 = today's behaviour byte for byte. A malformed or zero value falls back to the
-/// default rather than guessing — the same posture as [`max_sessions`], except that zero cannot mean
+/// Default 512 preserves the former pool size. A malformed or zero value falls back to the default
+/// rather than guessing — the same posture as [`max_sessions`], except that zero cannot mean
 /// "unlimited" here: zero blocking threads is a gateway that accepts sockets and serves nobody.
 pub fn max_blocking_threads() -> usize {
     max_blocking_threads_from_env(

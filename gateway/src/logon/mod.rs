@@ -10,6 +10,9 @@
 //! (K) — both via `LogonStore`. Everything else is per-connection handshake scratch.
 
 use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
+use crate::read_deadline::{
+    is_io_deadline, DeadlineClock, IoDeadline, PreAuthDeadline, LOGON_AUTH_DEADLINE,
+};
 use crate::{config::GatewayConfig, stdb::Coordinator};
 use anyhow::{anyhow, Result};
 use std::io::{Read, Write};
@@ -91,9 +94,24 @@ pub trait LogonStore: Send + Sync {
 
 /// Drive one logon connection to completion (challenge -> proof -> realm list). Returns when
 /// the client disconnects. Pure protocol logic; no async, no direct IO beyond `stream`.
-pub fn handle_logon<S: Read + Write, St: LogonStore + ?Sized>(
+/// One total pre-auth I/O budget covers every read and write until the proof succeeds.
+#[cfg(test)]
+pub fn handle_logon<S: Read + Write + IoDeadline, St: LogonStore + ?Sized>(
     stream: &mut S,
     store: &St,
+) -> Result<()> {
+    let mut deadline = PreAuthDeadline::after(LOGON_AUTH_DEADLINE);
+    handle_logon_with_deadline(stream, store, &mut deadline)
+}
+
+fn handle_logon_with_deadline<
+    S: Read + Write + IoDeadline,
+    St: LogonStore + ?Sized,
+    C: DeadlineClock,
+>(
+    stream: &mut S,
+    store: &St,
+    deadline: &mut PreAuthDeadline<C>,
 ) -> Result<()> {
     // Per-connection scratch: the in-flight SRP proof + which account it is for (id AND the
     // normalized username — see `LogonStore::save_session`). `SrpProof` is consumed by
@@ -105,25 +123,35 @@ pub fn handle_logon<S: Read + Write, St: LogonStore + ?Sized>(
     let mut authenticated: Option<(u64, String)> = None;
 
     loop {
-        let msg = match ClientOpcodeMessage::read(&mut *stream) {
+        let read = if authenticated.is_some() {
+            ClientOpcodeMessage::read(&mut *stream)
+        } else {
+            ClientOpcodeMessage::read(&mut deadline.io(stream))
+        };
+        let msg = match read {
             Ok(m) => m,
             // Clean client disconnect.
             Err(ExpectedOpcodeError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 return Ok(());
+            }
+            Err(ExpectedOpcodeError::Io(e)) if is_io_deadline(&e) => {
+                return Err(anyhow!(
+                    "no logon packet before the total pre-auth deadline"
+                ));
             }
             Err(e) => return Err(anyhow!("logon read error: {e}")),
         };
 
         match msg {
             ClientOpcodeMessage::CMD_AUTH_LOGON_CHALLENGE(c) => {
-                pending = handle_challenge(stream, store, &c)?;
+                pending = handle_challenge(&mut deadline.io(stream), store, &c)?;
             }
             ClientOpcodeMessage::CMD_AUTH_LOGON_PROOF(p) => {
                 let Some((proof, account_id, username)) = pending.take() else {
                     return Err(anyhow!("CMD_AUTH_LOGON_PROOF before a challenge"));
                 };
                 authenticated = handle_proof(
-                    stream,
+                    &mut deadline.io(stream),
                     store,
                     proof,
                     account_id,
@@ -132,6 +160,10 @@ pub fn handle_logon<S: Read + Write, St: LogonStore + ?Sized>(
                     p.client_proof,
                 )?
                 .map(|id| (id, username));
+                if authenticated.is_some() {
+                    // Proven. The realm-list phase that follows has no pre-auth deadline.
+                    deadline.finish(stream)?;
+                }
             }
             ClientOpcodeMessage::CMD_REALM_LIST(_) => {
                 // Without a completed proof we don't know the account; advertise nothing.
@@ -151,7 +183,11 @@ pub fn handle_logon<S: Read + Write, St: LogonStore + ?Sized>(
                     authenticated.as_ref().map(|(id, _)| id),
                     bytes
                 );
-                stream.write_all(&bytes)?;
+                if authenticated.is_some() {
+                    stream.write_all(&bytes)?;
+                } else {
+                    deadline.io(stream).write_all(&bytes)?;
+                }
             }
             other => log::debug!("logon: ignoring opcode {other}"),
         }
@@ -280,6 +316,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
     // A transient accept errno must cost ONE connection, not the realm. See `crate::accept`
     // for the policy and for the errno that actually killed the gateway on 2026-08-07.
     let mut backoff = AcceptBackoff::new();
+    let mut capacity_was_full = false;
     loop {
         let (sock, peer) = match listener.accept().await {
             Ok(pair) => {
@@ -309,11 +346,25 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                 }
             },
         };
+        // The budget begins at accept, before this socket can wait for a blocking-pool thread.
+        let mut deadline = PreAuthDeadline::after(LOGON_AUTH_DEADLINE);
+        let Some(task_permit) = cfg.blocking_task_capacity.try_admit() else {
+            if !capacity_was_full {
+                log::warn!(
+                    "logon blocking-task capacity is full; rejecting new connections before they \
+                     enter the blocking-task queue"
+                );
+                capacity_was_full = true;
+            }
+            continue;
+        };
+        capacity_was_full = false;
         let coord = coordinator.clone();
         // wow_login_messages uses blocking std::io codecs, so run the per-connection state
         // machine on a blocking task with the socket in blocking mode.
         // These two are per-SOCKET (a dup and an fcntl on the fd we just accepted), so they fail
         // for the same reasons accept does — EMFILE above all. Drop the one connection.
+        // The session clears both socket timeouts and cancels the watchdog once the proof succeeds.
         let std_sock = match sock.into_std().and_then(|s| {
             s.set_nonblocking(false)?;
             Ok(s)
@@ -324,10 +375,15 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                 continue;
             }
         };
+        if let Err(e) = deadline.arm(&std_sock) {
+            log::warn!("logon connection {peer} could not arm its pre-auth watchdog: {e}");
+            continue;
+        }
         tokio::task::spawn_blocking(move || {
+            let _task_permit = task_permit;
             let store = CoordinatorStore::new(coord);
             let mut s = std_sock;
-            if let Err(e) = handle_logon(&mut s, &store) {
+            if let Err(e) = handle_logon_with_deadline(&mut s, &store, &mut deadline) {
                 log::warn!("logon session {peer} ended: {e:#}");
             }
         });
@@ -524,8 +580,63 @@ impl<D: crate::realm_core::RealmDb> LogonStore for CoordinatorStore<D> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::read_deadline::{DeadlineClock, PreAuthDeadline};
+    use std::cell::Cell;
+    use std::io::Cursor;
     use std::os::unix::net::UnixStream;
+    use std::rc::Rc;
     use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone)]
+    struct ManualClock(Rc<Cell<Instant>>);
+
+    impl DeadlineClock for ManualClock {
+        fn now(&self) -> Instant {
+            self.0.get()
+        }
+    }
+
+    struct AdvancingStream {
+        input: Cursor<Vec<u8>>,
+        output: Vec<u8>,
+        clock: ManualClock,
+        per_read: Duration,
+        per_write: Duration,
+        write_timeout_calls: Rc<Cell<usize>>,
+    }
+
+    impl Read for AdvancingStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.input.read(buf)?;
+            self.clock.0.set(self.clock.0.get() + self.per_read);
+            Ok(read)
+        }
+    }
+
+    impl Write for AdvancingStream {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.output.extend_from_slice(buf);
+            self.clock.0.set(self.clock.0.get() + self.per_write);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl IoDeadline for AdvancingStream {
+        fn set_read_timeout(&self, _timeout: Option<Duration>) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn set_write_timeout(&self, _timeout: Option<Duration>) -> std::io::Result<()> {
+            self.write_timeout_calls
+                .set(self.write_timeout_calls.get() + 1);
+            Ok(())
+        }
+    }
     use wow_login_messages::all::{Locale, Os, Platform, ProtocolVersion, Version};
     use wow_login_messages::version_3::opcodes::ServerOpcodeMessage;
     use wow_srp::client::SrpClientChallenge;
@@ -1639,6 +1750,170 @@ mod tests {
             "the replay must be rejected as having no pending SRP state; got: {err:#}"
         );
         drop(client);
+    }
+
+    /// Client side of challenge -> proof for a provisioned account; asserts the proof succeeds.
+    fn prove(client: &mut UnixStream, username: &str, password: &str) {
+        challenge_client(username).write(&mut *client).unwrap();
+        let (g, n, s_salt, server_pubkey) = match ServerOpcodeMessage::read(&mut *client).unwrap() {
+            ServerOpcodeMessage::CMD_AUTH_LOGON_CHALLENGE(
+                CMD_AUTH_LOGON_CHALLENGE_Server::Success {
+                    generator,
+                    large_safe_prime,
+                    salt,
+                    server_public_key,
+                    ..
+                },
+            ) => (generator, large_safe_prime, salt, server_public_key),
+            other => panic!("expected challenge success, got {other:?}"),
+        };
+        let n: [u8; 32] = n.try_into().unwrap();
+        let challenge = SrpClientChallenge::new(
+            ns(username),
+            ns(password),
+            g[0],
+            n,
+            PublicKey::from_le_bytes(server_pubkey).unwrap(),
+            s_salt,
+        );
+        wow_login_messages::version_3::CMD_AUTH_LOGON_PROOF_Client {
+            client_public_key: *challenge.client_public_key(),
+            client_proof: *challenge.client_proof(),
+            crc_hash: [0u8; 20],
+            telemetry_keys: vec![],
+            security_flag:
+                wow_login_messages::version_3::CMD_AUTH_LOGON_PROOF_Client_SecurityFlag::None,
+        }
+        .write(&mut *client)
+        .unwrap();
+        match ServerOpcodeMessage::read(&mut *client).unwrap() {
+            ServerOpcodeMessage::CMD_AUTH_LOGON_PROOF(CMD_AUTH_LOGON_PROOF_Server::Success {
+                ..
+            }) => {}
+            other => panic!("the proof must succeed, got {other:?}"),
+        }
+    }
+
+    /// A peer that connects and sends nothing must give its blocking thread back at the deadline.
+    #[test]
+    fn a_silent_connection_is_closed_at_the_pre_auth_deadline() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let (mut client, server_end) = UnixStream::pair().unwrap();
+        let mut deadline = PreAuthDeadline::after(Duration::from_millis(200));
+        let server = std::thread::spawn(move || {
+            let mut s = server_end;
+            handle_logon_with_deadline(&mut s, &store, &mut deadline)
+        });
+
+        let err = server
+            .join()
+            .unwrap()
+            .expect_err("a silent peer must be cut at the deadline");
+        assert!(
+            err.to_string().contains("total pre-auth deadline"),
+            "{err:#}"
+        );
+        let mut byte = [0u8];
+        assert_eq!(
+            client.read(&mut byte).unwrap(),
+            0,
+            "the socket must be closed"
+        );
+    }
+
+    #[test]
+    fn repeated_challenges_cannot_extend_the_pre_auth_deadline() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let mut input = Vec::new();
+        for _ in 0..64 {
+            challenge_client("TEST").write(&mut input).unwrap();
+        }
+        let start = Instant::now();
+        let clock = ManualClock(Rc::new(Cell::new(start)));
+        let mut deadline =
+            PreAuthDeadline::with_clock(start + Duration::from_millis(100), clock.clone());
+        let mut stream = AdvancingStream {
+            input: Cursor::new(input),
+            output: Vec::new(),
+            clock,
+            per_read: Duration::from_millis(1),
+            per_write: Duration::ZERO,
+            write_timeout_calls: Rc::new(Cell::new(0)),
+        };
+
+        let error = handle_logon_with_deadline(&mut stream, &store, &mut deadline)
+            .expect_err("complete challenge retries must share one total deadline");
+
+        assert!(
+            error.to_string().contains("pre-auth I/O deadline"),
+            "{error:#}"
+        );
+        assert!(
+            !stream.output.is_empty(),
+            "at least one complete challenge must make progress before the deadline"
+        );
+    }
+
+    #[test]
+    fn challenge_response_write_uses_the_absolute_pre_auth_deadline() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let mut input = Vec::new();
+        challenge_client("TEST").write(&mut input).unwrap();
+        let start = Instant::now();
+        let clock = ManualClock(Rc::new(Cell::new(start)));
+        let write_timeout_calls = Rc::new(Cell::new(0));
+        let mut deadline =
+            PreAuthDeadline::with_clock(start + Duration::from_millis(10), clock.clone());
+        let mut stream = AdvancingStream {
+            input: Cursor::new(input),
+            output: Vec::new(),
+            clock,
+            per_read: Duration::ZERO,
+            per_write: Duration::from_millis(20),
+            write_timeout_calls: write_timeout_calls.clone(),
+        };
+
+        let error = handle_logon_with_deadline(&mut stream, &store, &mut deadline)
+            .expect_err("the challenge reply must not write past the total deadline");
+
+        assert_eq!(
+            write_timeout_calls.get(),
+            1,
+            "handle_challenge must write through the pre-auth I/O wrapper"
+        );
+        assert!(
+            error.to_string().contains("pre-auth I/O deadline"),
+            "{error:#}"
+        );
+        assert!(
+            !stream.output.is_empty(),
+            "the fake advances time after accepting the challenge reply bytes"
+        );
+    }
+
+    /// The deadline covers the handshake only. Once the proof succeeds the client may wait at the
+    /// realm list past it and still get an answer.
+    #[test]
+    fn the_pre_auth_deadline_ends_once_the_proof_succeeds() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let (mut client, server_end) = UnixStream::pair().unwrap();
+        let mut deadline = PreAuthDeadline::after(Duration::from_millis(200));
+        let server = std::thread::spawn(move || {
+            let mut s = server_end;
+            handle_logon_with_deadline(&mut s, &store, &mut deadline)
+        });
+
+        prove(&mut client, "TEST", "PASSWORD");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        wow_login_messages::version_8::CMD_REALM_LIST_Client {}
+            .write(&mut client)
+            .unwrap();
+        match ServerOpcodeMessage::read(&mut client).unwrap() {
+            ServerOpcodeMessage::CMD_REALM_LIST(reply) => assert_eq!(reply.realms.len(), 1),
+            other => panic!("expected realm list, got {other:?}"),
+        }
+        drop(client);
+        server.join().unwrap().unwrap();
     }
 
     /// The complement: a SECOND challenge must replace the pending SRP state, not be ignored in

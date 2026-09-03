@@ -12,6 +12,10 @@
 //! from `game_session` and the same handshake re-runs.
 
 use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
+use crate::codec::auth_session::{read_auth_session, CMSG_AUTH_SESSION_OPCODE};
+use crate::read_deadline::{
+    is_io_deadline, DeadlineClock, IoDeadline, PreAuthDeadline, WORLD_AUTH_DEADLINE,
+};
 use crate::stdb::PlayerSubscriptions;
 use crate::{codec, config::GatewayConfig, stdb::Coordinator};
 use anyhow::{anyhow, Result};
@@ -23,7 +27,6 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use wow_srp::normalized_string::NormalizedString;
 use wow_srp::vanilla_header::{DecrypterHalf, EncrypterHalf, ProofSeed};
-use wow_world_messages::errors::ExpectedOpcodeError;
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
 use wow_world_messages::vanilla::{
     CMSG_MESSAGECHAT_ChatType, MovementInfo, PartyOperation, PartyResult,
@@ -206,7 +209,7 @@ impl SessionTx {
 /// reader. Implemented for the production `TcpStream` and (test-only) `UnixStream`; both share the
 /// underlying fd across clones, so the writer thread can own a clone while the reader keeps the
 /// original.
-pub trait DuplexStream: Read + Write + Send + Sized + 'static {
+pub trait DuplexStream: Read + Write + IoDeadline + Send + Sized + 'static {
     fn try_clone(&self) -> std::io::Result<Self>;
     fn shutdown_both(&self) -> std::io::Result<()>;
 }
@@ -499,10 +502,10 @@ const QUEUE_RESEND_INTERVAL: Duration = Duration::from_millis(50);
 /// admission gate itself. On success returns the established per-connection crypto + account id; on
 /// a clean auth failure sends the failure response and returns `Ok(None)`; on a clean disconnect
 /// also returns `Ok(None)`.
-/// Test-only: production goes through [`world_handshake_with_queue`] (the listener in [`run`] owns
-/// the process-wide [`LoginQueue`]), so an unqueued handshake exists purely for tests.
+/// Test-only: the listener in [`run`] supplies the process-wide [`LoginQueue`] and the deadline it
+/// started at accept, so an unqueued handshake exists purely for tests.
 #[cfg(test)]
-pub fn world_handshake<S: Read + Write, St: WorldStore + ?Sized>(
+pub fn world_handshake<S: Read + Write + IoDeadline, St: WorldStore + ?Sized>(
     stream: &mut S,
     store: &St,
 ) -> Result<Option<(WorldConn, EncrypterHalf)>> {
@@ -522,28 +525,45 @@ pub fn world_handshake<S: Read + Write, St: WorldStore + ?Sized>(
 ///
 /// A seat taken from `queue` is held for the lifetime of the returned session; the caller (normally
 /// [`run_world_session_with_queue`]) MUST call `queue.depart()` exactly once when that session ends.
-/// The one failure mode entirely inside this function — admitted, then the final `AUTH_OK` write
-/// itself fails (the client vanished in the instant between admission and delivery) — departs its
-/// own seat before propagating the error, so a caller that never sees `Ok(Some(..))` never owes a
-/// `depart()` call.
-pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
+/// The final `AUTH_OK` write is the only failure mode inside this function after admission; it
+/// departs its own seat before propagating the error. A caller that never sees `Ok(Some(..))` never
+/// owes a `depart()` call.
+#[cfg(test)]
+pub fn world_handshake_with_queue<S: Read + Write + IoDeadline, St: WorldStore + ?Sized>(
     stream: &mut S,
     store: &St,
     queue: &LoginQueue,
+) -> Result<Option<(WorldConn, EncrypterHalf)>> {
+    let mut deadline = PreAuthDeadline::after(WORLD_AUTH_DEADLINE);
+    world_handshake_with_queue_and_deadline(stream, store, queue, &mut deadline)
+}
+
+fn world_handshake_with_queue_and_deadline<
+    S: Read + Write + IoDeadline,
+    St: WorldStore + ?Sized,
+    C: DeadlineClock,
+>(
+    stream: &mut S,
+    store: &St,
+    queue: &LoginQueue,
+    deadline: &mut PreAuthDeadline<C>,
 ) -> Result<Option<(WorldConn, EncrypterHalf)>> {
     // 1. Plaintext SMSG_AUTH_CHALLENGE with a fresh, single-use server seed (gateway-local
     //    RNG — protocol state, not game state).
     let seed = ProofSeed::new();
     let server_seed = seed.seed();
-    SMSG_AUTH_CHALLENGE { server_seed }.write_unencrypted_server(&mut *stream)?;
+    SMSG_AUTH_CHALLENGE { server_seed }.write_unencrypted_server(&mut deadline.io(stream))?;
 
-    // 2. Read the plaintext CMSG_AUTH_SESSION (account, client_seed, client_proof, addons).
-    let session = match ClientOpcodeMessage::read_unencrypted(&mut *stream) {
-        Ok(ClientOpcodeMessage::CMSG_AUTH_SESSION(s)) => s,
-        Ok(other) => return Err(anyhow!("expected CMSG_AUTH_SESSION, got {other}")),
+    // 2. Read the plaintext CMSG_AUTH_SESSION (account, client_seed, client_proof). Hand-decoded:
+    //    the typed decoder sizes a buffer from a client field and unwraps the addon zlib.
+    let session = match read_auth_session(&mut deadline.io(stream)) {
+        Ok(claim) => claim,
         // Clean client disconnect before sending the session.
-        Err(ExpectedOpcodeError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Ok(None);
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) if is_io_deadline(&e) => {
+            return Err(anyhow!(
+                "no CMSG_AUTH_SESSION before the total pre-auth deadline"
+            ));
         }
         Err(e) => return Err(anyhow!("world auth read error: {e}")),
     };
@@ -557,7 +577,8 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
     else {
         // No session for this account: the client never authenticated (or it expired). No
         // cipher yet, so the rejection goes out plaintext.
-        SMSG_AUTH_RESPONSE::AuthUnknownAccount.write_unencrypted_server(&mut *stream)?;
+        SMSG_AUTH_RESPONSE::AuthUnknownAccount
+            .write_unencrypted_server(&mut deadline.io(stream))?;
         return Ok(None);
     };
 
@@ -573,11 +594,17 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
         Ok(c) => c,
         Err(_) => {
             // Bad digest. No cipher established, so the failure goes out plaintext.
-            SMSG_AUTH_RESPONSE::AuthFailed.write_unencrypted_server(&mut *stream)?;
+            SMSG_AUTH_RESPONSE::AuthFailed.write_unencrypted_server(&mut deadline.io(stream))?;
             return Ok(None);
         }
     };
     let (mut encrypt, decrypt) = crypto.split();
+
+    // The peer has proven it holds K. Queue waits and the World Session that follows are
+    // authenticated traffic, so neither keeps the pre-auth socket timeouts or watchdog.
+    deadline
+        .finish(stream)
+        .map_err(|e| anyhow!("clear world pre-auth I/O deadline: {e}"))?;
 
     // 4.5. Admission gate. `queue.request()` on an unlimited queue (the default —
     // `LYRACORE_MAX_SESSIONS` unset) returns `Admitted` immediately with no bookkeeping: a no-op for
@@ -927,8 +954,8 @@ fn spawn_writer<S: DuplexStream>(
 /// Drive one world connection, gated by the unlimited [`LoginQueue`] — see
 /// [`run_world_session_with_queue`] for the admission gate itself. Every existing call site
 /// (tests, and anything that doesn't care about it) stays byte-identical to the pre-queue behavior.
-/// Test-only, for the same reason as [`world_handshake`]: production drives
-/// [`run_world_session_with_queue`] with the listener's shared queue.
+/// Test-only, for the same reason as [`world_handshake`]: production supplies the listener's shared
+/// queue and the deadline started at accept.
 #[cfg(test)]
 pub fn run_world_session<S: DuplexStream, St: WorldStore + ?Sized>(
     stream: S,
@@ -961,12 +988,29 @@ impl Drop for AdmissionSeat<'_> {
 /// accepted socket, so a queued connection never holds up anyone else's accept or handshake). Once
 /// admitted (`Ok(Some(..))`), this connection holds a seat in `queue` for the rest of the function —
 /// released by its [`AdmissionSeat`] exactly once, no matter which branch got there.
+#[cfg(test)]
 pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
-    mut stream: S,
+    stream: S,
     store: &St,
     queue: &LoginQueue,
 ) -> Result<()> {
-    let Some((mut conn, encrypt)) = world_handshake_with_queue(&mut stream, store, queue)? else {
+    let mut deadline = PreAuthDeadline::after(WORLD_AUTH_DEADLINE);
+    run_world_session_with_queue_and_deadline(stream, store, queue, &mut deadline)
+}
+
+fn run_world_session_with_queue_and_deadline<
+    S: DuplexStream,
+    St: WorldStore + ?Sized,
+    C: DeadlineClock,
+>(
+    mut stream: S,
+    store: &St,
+    queue: &LoginQueue,
+    deadline: &mut PreAuthDeadline<C>,
+) -> Result<()> {
+    let Some((mut conn, encrypt)) =
+        world_handshake_with_queue_and_deadline(&mut stream, store, queue, deadline)?
+    else {
         return Ok(());
     };
     let seat = AdmissionSeat { queue };
@@ -1031,6 +1075,10 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
                     dispatch_raw_auction_browse(&tx, st, &mut conn, request)
                 })?;
                 continue;
+            }
+            if hdr.opcode == CMSG_AUTH_SESSION_OPCODE {
+                // Auth is over, and the typed decoder would size a buffer from the body.
+                return Err(anyhow!("world read error: CMSG_AUTH_SESSION after auth"));
             }
             let mut framed = Vec::with_capacity(6 + body.len());
             framed.extend_from_slice(&hdr.size.to_be_bytes());
@@ -1686,6 +1734,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
     // taking every session on the realm with it. A transient accept errno now costs ONE connection.
     // See `crate::accept` for which errnos are fatal and why the list is shaped that way.
     let mut backoff = AcceptBackoff::new();
+    let mut capacity_was_full = false;
     loop {
         let (sock, peer) = match listener.accept().await {
             Ok(pair) => {
@@ -1718,12 +1767,27 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                 }
             },
         };
+        // The budget begins at accept, before this socket can wait for a blocking-pool thread.
+        let mut deadline = PreAuthDeadline::after(WORLD_AUTH_DEADLINE);
+        let Some(task_permit) = cfg.blocking_task_capacity.try_admit() else {
+            if !capacity_was_full {
+                log::warn!(
+                    "world blocking-task capacity is full; rejecting new connections before they \
+                     enter the blocking-task queue"
+                );
+                capacity_was_full = true;
+            }
+            continue;
+        };
+        capacity_was_full = false;
         let coord = coordinator.clone();
         let queue = login_queue.clone();
         // wow_world_messages uses blocking std::io codecs, so run the per-connection state
         // machine on a blocking task with the socket in blocking mode (mirrors `logon`).
         // Per-SOCKET calls (a dup and an fcntl on the fd we just accepted), so they fail for the
         // same reasons accept does — EMFILE above all. Drop the one connection, keep the realm.
+        // The session clears both socket timeouts and cancels the watchdog after client proof,
+        // before any legitimate wait in the login queue.
         let std_sock = match sock.into_std().and_then(|s| {
             s.set_nonblocking(false)?;
             Ok(s)
@@ -1734,11 +1798,18 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                 continue;
             }
         };
+        if let Err(e) = deadline.arm(&std_sock) {
+            log::warn!("world connection {peer} could not arm its pre-auth watchdog: {e}");
+            continue;
+        }
         tokio::task::spawn_blocking(move || {
+            let _task_permit = task_permit;
             // `Coordinator` implements `WorldStore` directly (see `stdb::world_store`) — no wrapper.
             // `queue` gates admission INSIDE the handshake — a queued connection just blocks
             // this one `spawn_blocking` thread, never the accept loop above.
-            if let Err(e) = run_world_session_with_queue(std_sock, &coord, &queue) {
+            if let Err(e) =
+                run_world_session_with_queue_and_deadline(std_sock, &coord, &queue, &mut deadline)
+            {
                 log::warn!("world session {peer} ended: {e:#}");
             }
         });
