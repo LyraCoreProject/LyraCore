@@ -101,7 +101,7 @@ lyracore update
 | `packages list` | every installed Package: enabled or disabled, where it came from, and whether it has drifted |
 | `packages new` | scaffold a new Package offline, by copying and renaming the reference Package this checkout ships |
 | `packages remove` | delete a disabled Package, after a confirmation and a check for local changes |
-| `packages replay` | reapply every enabled Package's claims and Runtime Scripts onto the named databases, or the whole recorded fixture topology by default |
+| `packages replay` | reapply every enabled Package's claims and Runtime Scripts onto the named Shards, or the whole recorded fixture topology by default |
 | `packages update` | advance a Git-backed Package, or every one of them, to the repository's current commit |
 | `character gm` | flip GM commands on or off for a character, on whichever world shard has it |
 | `production status` | read-only checks for an explicitly named production topology and the latest gateway start |
@@ -483,8 +483,8 @@ Instance Pool that owns a copy, so every edit has to reach all of them.
 
     lyracore packages replay [DATABASE ...] [--check] [--yes] [--force-all] [--client-data PATH]
 
-With no names it targets every database of the recorded fixture topology. Named databases are used
-exactly as given. It takes database NAMES only; anything flag-shaped is refused before a process
+With no names it targets every Shard of the recorded fixture topology. Named Shards are used
+exactly as given. It takes Shard names only; anything flag-shaped is refused before a process
 starts, and it never infers a production Shard list.
 
 ### The two Import Families it carries
@@ -506,18 +506,21 @@ else.
    a Runtime Script collision, or an unreachable Shard fails the run before the first write.
 2. Apply, Shard by Shard in order. Each Shard takes the spell family through the importer, then the
    script family through the reducer.
-3. Stop at the first failure, naming the Shard, the family it failed in, the Shards that completed
-   and the ones never touched, then printing the command to resume.
+3. Stop at the first failure and name the Shard and family. The report lists completion per family,
+   including a spell apply that finished on the Shard before its script apply refused the plan. It
+   also lists untouched Shards and prints the command to resume.
 
 Resume is the default, and it is decided per family. A Shard is reported complete for a family and
 skipped when every enabled Package is recorded in `game_package_import` with the digest this
 checkout produces, and no Package is recorded that is no longer enabled. The spell family
 additionally requires every row to sit on the Shard's current base import stamp; the script family
-has no base import to sit on. Re-running after a failure therefore costs nothing on what finished,
-and a Shard already holding this checkout's Package Deltas is still replayed for its Runtime
-Scripts. `--force-all` replays anyway.
+has no base import to sit on. Re-running after a failure therefore costs nothing on completed
+families, and a Shard already holding this checkout's Package Deltas is still replayed for its
+Runtime Scripts. `--force-all` replays anyway.
 
-`--check` prints both plans and writes nothing, and asks nothing.
+`--check` prints both plans, writes nothing, and asks nothing. It runs the spell importer when the
+checkout has a Package Delta plan, or when a Shard needs an empty spell reconciliation. When only
+script-family work remains, a check needs no client Data directory.
 
 Disabling a Package is a replay, not a deletion. Its folder leaves `packages/`, so its artifacts
 leave both payloads: the reducer clears the Package Spell Range as it applies the spell family, and
