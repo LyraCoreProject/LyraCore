@@ -14,14 +14,15 @@ Closes #
 ## What you verified
 
 <!-- Paste real output, not intentions. Sum the `test result:` lines per crate — each command prints
-     several (unit target, integration target, doctests) and some are legitimately `0 tests`. -->
+     several (unit target, integration target, doctests) and some are legitimately `0 tests`.
+     The `Rust` workflow runs the first three on every PR; fmt and clippy are advisory there. -->
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo test -p lyracore-importer` · `-p lyracore-module --lib --features=debug_reducers` · `-p lyracore-gateway` · `-p lyracore-shared`
 - [ ] Module or schema changes: a plain `spacetime publish` against your local stack migrates cleanly (**never** `publish -c`)
 - [ ] `shellcheck --severity=warning` on any shell script you changed
-- [ ] Markdown links you added resolve (maintainer CI additionally runs repo-wide link and mirror-consistency checks)
+- [ ] Markdown links you added resolve
 
 Higher rungs, if the change reaches them — no rung substitutes for another
 (*unit-test green is not suite green is not played green is not measured green*):

@@ -1,0 +1,56 @@
+name: Rust
+
+# The Rust gates from docs/danger-zones.md, verbatim, plus the wasm compile that only the
+# deploy-time preflight covered before. Nothing here needs a SpacetimeDB node: the module tests that
+# do are integration tests, and `--lib` leaves them out.
+#
+# rustup reads rust-toolchain.toml and installs the pinned toolchain, rustfmt, clippy and the
+# wasm32-unknown-unknown target on the first cargo call, so nothing here repeats the version.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    # Non-blocking: 61 files on main already fail this. Reformatting them is a separate change.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check formatting
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    # Non-blocking: lyracore-module, -gateway and -importer are red on main today. lyracore-shared
+    # and -package-delta are clean, so this flips to blocking once the other three are fixed.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Run clippy
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # One job, not four: the crates share a target directory, and a failed step names its crate.
+      - run: cargo test -p lyracore-importer
+      - run: cargo test -p lyracore-module --lib --features=debug_reducers
+      - run: cargo test -p lyracore-gateway
+      - run: cargo test -p lyracore-shared
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # `lyracore publish` builds this feature set. A default-feature check would omit published reducers.
+      - run: cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
