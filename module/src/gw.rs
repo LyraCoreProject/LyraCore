@@ -397,7 +397,7 @@ pub fn gw_turn_in_quest(
 pub fn gw_use_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
     actor(ctx, actor_guid)?;
-    crate::actor::use_item(ctx, actor_guid, slot)
+    crate::actor::use_item(ctx, actor_guid, slot).map_err(crate::items::refused)
 }
 
 /// Resolve a spell whose explicit target is an owned inventory item. The effect kind selects the
@@ -454,7 +454,7 @@ pub fn gw_sell_item(
 pub fn gw_equip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
     actor(ctx, actor_guid)?;
-    crate::actor::equip_item(ctx, actor_guid, from_slot)
+    crate::actor::equip_item(ctx, actor_guid, from_slot).map_err(crate::items::refused)
 }
 
 /// [`crate::actor::use_gameobject`] behind the gateway gate.
@@ -953,6 +953,7 @@ pub fn gw_move_item(
     require_operator(ctx)?;
     actor(ctx, actor_guid)?;
     crate::items::apply_item_move(ctx, actor_guid, from_slot, to_slot)
+        .map_err(crate::items::refused)
 }
 
 /// [`crate::items::apply_unequip_item`] with the owner named by guid.
@@ -960,7 +961,7 @@ pub fn gw_move_item(
 pub fn gw_unequip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
     actor(ctx, actor_guid)?;
-    crate::items::apply_unequip_item(ctx, actor_guid, from_slot)
+    crate::items::apply_unequip_item(ctx, actor_guid, from_slot).map_err(crate::items::refused)
 }
 
 /// [`crate::items::apply_auto_bank_item`] with the owner named by guid — right-click to bank / right-

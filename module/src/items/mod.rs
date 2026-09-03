@@ -25,6 +25,20 @@ mod ops;
 mod rules;
 mod tables;
 
+use lyracore_shared::item::ItemRefusal;
+
+/// Refuse an item action. The human detail stays in the Module log and only the typed Refusal
+/// travels, so neither tier reads prose.
+pub(crate) fn refuse(refusal: ItemRefusal, detail: impl std::fmt::Display) -> ItemRefusal {
+    spacetimedb::log::info!("item refused {}: {detail}", refusal.as_tag());
+    refusal
+}
+
+/// Reducer edge: a reducer answers with a bare tag, which is the whole error text the Gateway reads.
+pub(crate) fn refused(refusal: ItemRefusal) -> String {
+    refusal.as_tag().to_string()
+}
+
 pub(crate) use economy::*; // the apply_* cores are pub(crate) (no pub items to re-export)
 pub(crate) use inventory::*; // ditto
 pub(crate) use ops::*; // ditto
