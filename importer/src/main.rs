@@ -3689,6 +3689,8 @@ const PACKAGE_DELTA_DUMP_FAMILIES: &[&str] = &[
     "gossip",
     "globals",
     "spellmeta",
+    "creatures",
+    "gameobjects",
 ];
 
 /// One family's Package Delta stage: reapplies every enabled Package's claims on `family`'s tables
@@ -6880,14 +6882,14 @@ mod tests {
 
     #[test]
     fn an_enabled_packages_root_without_a_package_delta_family_is_refused() {
-        // `--family creatures` excludes every family in `PACKAGE_DELTA_DUMP_FAMILIES`, and there
+        // `--family creature-ai` excludes every family in `PACKAGE_DELTA_DUMP_FAMILIES`, and there
         // is no `--spells` here either, so this run reaches no family with a Package Delta stage
         // to reapply.
         let error = parse_args_from([
             "--dump",
             "/definitely/not/read.sql",
             "--family",
-            "creatures",
+            "creature-ai",
             "--packages",
             "packages",
         ])

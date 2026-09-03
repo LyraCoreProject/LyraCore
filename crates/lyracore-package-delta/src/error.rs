@@ -13,9 +13,11 @@
 use core::fmt;
 
 use crate::ids::{
-    FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR, FIXTURE_SPELL_ID_CEIL,
-    FIXTURE_SPELL_ID_FLOOR, MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX,
-    MAX_SPELL_EFFECT_INDEX, MAX_STATS_LEVEL, PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR,
+    FIXTURE_CREATURE_ID_CEIL, FIXTURE_CREATURE_ID_FLOOR, FIXTURE_RESERVED_ID_CEIL,
+    FIXTURE_RESERVED_ID_FLOOR, FIXTURE_SPELL_ID_CEIL, FIXTURE_SPELL_ID_FLOOR,
+    MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
+    MAX_STATS_LEVEL, PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR, PACKAGE_CREATURE_ID_CEIL,
+    PACKAGE_CREATURE_ID_FLOOR, PACKAGE_GAMEOBJECT_ID_CEIL, PACKAGE_GAMEOBJECT_ID_FLOOR,
     PACKAGE_GLOBALS_ID_CEIL, PACKAGE_GLOBALS_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL,
     PACKAGE_GOSSIP_ID_FLOOR, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL,
     PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL,
@@ -201,6 +203,27 @@ pub enum DeltaError {
     SpellmetaIdFixtureReserved {
         /// The rejected identifier.
         id: u64,
+    },
+    /// An inserted creature template or creature spawn sits outside the range a Package may
+    /// invent.
+    CreatureIdNotClientSafe {
+        /// The rejected identifier.
+        id: u32,
+    },
+    /// The claim targets a seeded fixture row.
+    CreatureIdFixtureReserved {
+        /// The rejected identifier.
+        id: u32,
+    },
+    /// An inserted gameobject template, trap or spawn sits outside the range a Package may invent.
+    GameobjectIdNotClientSafe {
+        /// The rejected identifier.
+        id: u32,
+    },
+    /// The claim targets a seeded fixture row.
+    GameobjectIdFixtureReserved {
+        /// The rejected identifier.
+        id: u32,
     },
     /// The stat-curve key names a character level no vanilla realm reaches.
     StatsLevelOutOfRange {
@@ -388,6 +411,10 @@ impl fmt::Display for DeltaError {
             | Self::GlobalsIdFixtureReserved { .. }
             | Self::SpellmetaIdNotClientSafe { .. }
             | Self::SpellmetaIdFixtureReserved { .. }
+            | Self::CreatureIdNotClientSafe { .. }
+            | Self::CreatureIdFixtureReserved { .. }
+            | Self::GameobjectIdNotClientSafe { .. }
+            | Self::GameobjectIdFixtureReserved { .. }
             | Self::StatsLevelOutOfRange { .. } => fmt_identifier_policy(self, f),
             // The script family groups its own refusals behind one variant, so it delegates as a
             // whole rather than adding six arms here.
@@ -457,6 +484,18 @@ fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::R
              {PACKAGE_SPELLMETA_ID_FLOOR}..={PACKAGE_SPELLMETA_ID_CEIL}; an inserted spell \
              metadata row must use an identifier no client and no import can already own"
         ),
+        DeltaError::CreatureIdNotClientSafe { id } => write!(
+            f,
+            "creature row {id} is outside the Package creature range \
+             {PACKAGE_CREATURE_ID_FLOOR}..={PACKAGE_CREATURE_ID_CEIL}; an inserted creature \
+             template or spawn must use an identifier no client and no import can already own"
+        ),
+        DeltaError::GameobjectIdNotClientSafe { id } => write!(
+            f,
+            "gameobject row {id} is outside the Package gameobject range \
+             {PACKAGE_GAMEOBJECT_ID_FLOOR}..={PACKAGE_GAMEOBJECT_ID_CEIL}; an inserted gameobject \
+             template, trap or spawn must use an identifier no client and no import can already own"
+        ),
         other => fmt_reserved_or_out_of_range(other, f),
     }
 }
@@ -524,6 +563,18 @@ fn fmt_reserved_or_out_of_range(err: &DeltaError, f: &mut fmt::Formatter<'_>) ->
         DeltaError::SpellmetaIdFixtureReserved { id } => write!(
             f,
             "spell metadata row {id} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::CreatureIdFixtureReserved { id } => write!(
+            f,
+            "creature row {id} is fixture-reserved \
+             ({FIXTURE_CREATURE_ID_FLOOR}..={FIXTURE_CREATURE_ID_CEIL} for a template entry, \
+             {FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL} project-wide); no Package \
+             may claim it"
+        ),
+        DeltaError::GameobjectIdFixtureReserved { id } => write!(
+            f,
+            "gameobject row {id} is fixture-reserved \
              ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
         ),
         DeltaError::StatsLevelOutOfRange { level } => write!(

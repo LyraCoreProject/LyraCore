@@ -4,8 +4,8 @@
 //! may touch. These cases hold the catalogue, the parser and the family map together.
 
 use lyracore_package_delta::{
-    Table, CAST_FAMILY, GLOBALS_FAMILY, GOSSIP_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY,
-    SPELLMETA_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
+    Table, CAST_FAMILY, CREATURE_FAMILY, GAMEOBJECT_FAMILY, GLOBALS_FAMILY, GOSSIP_FAMILY,
+    ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SPELLMETA_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
 };
 
 /// `Table::ALL`, `Table::as_str` and `Table::parse` are three hand-maintained lists of one
@@ -47,6 +47,11 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
             Table::SpellChain => "game_spell_chain",
             Table::SpellLearn => "game_spell_learn",
             Table::SpellProcEvent => "game_spell_proc_event",
+            Table::CreatureTemplate => "game_creature_template",
+            Table::CreatureSpawn => "game_creature_spawn",
+            Table::GameobjectTemplate => "game_gameobject_template",
+            Table::GameobjectTrap => "game_gameobject_trap",
+            Table::GameobjectSpawn => "game_gameobject",
         };
 
         assert_eq!(table.as_str(), name);
@@ -55,7 +60,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
 
     assert_eq!(
         Table::ALL.len(),
-        32,
+        37,
         "a table reached the enum without reaching `Table::ALL`"
     );
 }
@@ -156,6 +161,34 @@ fn the_spell_metadata_tables_belong_to_the_spellmeta_import_family() {
     }
     assert_eq!(SPELLMETA_FAMILY, "spellmeta");
     assert_ne!(Table::SpellChain.family(), Table::Spell.family());
+}
+
+#[test]
+fn the_creature_tables_belong_to_the_creatures_import_family() {
+    for table in [Table::CreatureTemplate, Table::CreatureSpawn] {
+        assert_eq!(table.family(), CREATURE_FAMILY, "{table}");
+    }
+    assert_eq!(CREATURE_FAMILY, "creatures");
+}
+
+#[test]
+fn the_gameobject_tables_belong_to_the_gameobjects_import_family() {
+    for table in [
+        Table::GameobjectTemplate,
+        Table::GameobjectTrap,
+        Table::GameobjectSpawn,
+    ] {
+        assert_eq!(table.family(), GAMEOBJECT_FAMILY, "{table}");
+    }
+    assert_eq!(GAMEOBJECT_FAMILY, "gameobjects");
+}
+
+/// `game_gameobject_loot` names a gameobject but reloads under the loot family's own block, so an
+/// apply that ran it under `gameobjects` would be reverted by the block that owns it.
+#[test]
+fn the_gameobject_loot_table_stays_with_the_loot_family() {
+    assert_eq!(Table::GameobjectLoot.family(), LOOT_FAMILY);
+    assert_ne!(Table::GameobjectLoot.family(), GAMEOBJECT_FAMILY);
 }
 
 /// A family name travels as a reducer argument and as `game_import_meta.family`, where the importer

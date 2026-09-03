@@ -363,6 +363,107 @@ pub(super) fn spell_learn_claim(id: u64, operation: &str, fields: &str) -> Strin
     )
 }
 
+// ---- creatures ----
+
+/// A creature identifier inside the Package creature range, safe to insert. One band covers the
+/// template and the spawn.
+pub(super) const PACKAGE_CREATURE: u32 = 15_000_001;
+
+/// A real imported creature template, safe to update and never safe to insert.
+pub(super) const REAL_CREATURE: u32 = 6; // Kobold Vermin.
+
+/// A real imported spawn identifier.
+pub(super) const REAL_CREATURE_SPAWN: u32 = 4_242;
+
+/// The map a spatial fixture claim sits on: Eastern Kingdoms.
+pub(super) const REAL_MAP: u32 = 0;
+
+pub(super) const WHOLE_CREATURE_TEMPLATE_ROW: &str = r#"{
+    "name": { "type": "string", "value": "Kindled Sentinel" },
+    "subname": { "type": "string", "value": "Forge Guard" },
+    "display_id": { "type": "u32", "value": 1420 },
+    "level": { "type": "u32", "value": 12 },
+    "health": { "type": "u32", "value": 300 },
+    "faction_template": { "type": "u32", "value": 14 },
+    "npc_flags": { "type": "u32", "value": 0 },
+    "unit_flags": { "type": "u32", "value": 0 },
+    "creature_type": { "type": "u8", "value": 7 },
+    "creature_family": { "type": "u8", "value": 0 },
+    "type_flags": { "type": "u32", "value": 0 },
+    "rank": { "type": "u8", "value": 0 },
+    "scale": { "type": "f32", "value": 1.0 },
+    "base_attack_time_ms": { "type": "u32", "value": 2000 },
+    "money_min": { "type": "u32", "value": 10 },
+    "money_max": { "type": "u32", "value": 40 },
+    "max_level": { "type": "u32", "value": 13 },
+    "max_level_health": { "type": "u32", "value": 340 },
+    "aggro_range": { "type": "u32", "value": 15 },
+    "damage_min": { "type": "u32", "value": 6 },
+    "damage_max": { "type": "u32", "value": 9 },
+    "armor": { "type": "u32", "value": 120 },
+    "pickpocket_loot_id": { "type": "u32", "value": 0 },
+    "skin_loot_id": { "type": "u32", "value": 0 },
+    "trainer_type": { "type": "u8", "value": 0 },
+    "trainer_class": { "type": "u8", "value": 0 }
+}"#;
+
+pub(super) fn creature_template_claim(entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_template","key":{{"entry":{entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn creature_spawn_claim(
+    map_id: u32,
+    entry: u32,
+    spawn_id: u32,
+    operation: &str,
+    fields: &str,
+) -> String {
+    format!(
+        r#"{{"table":"game_creature_spawn","key":{{"map_id":{map_id},"entry":{entry},"spawn_id":{spawn_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+// ---- gameobjects ----
+
+/// A gameobject identifier inside the Package gameobject range, safe to insert. One band covers
+/// the template, the trap and the spawn.
+pub(super) const PACKAGE_GAMEOBJECT: u32 = 16_000_001;
+
+/// A real imported gameobject spawn identifier.
+pub(super) const REAL_GAMEOBJECT_SPAWN: u32 = 7_777;
+
+pub(super) const WHOLE_GAMEOBJECT_TEMPLATE_ROW: &str = r#"{
+    "type_id": { "type": "u8", "value": 3 },
+    "display_id": { "type": "u32", "value": 259 },
+    "name": { "type": "string", "value": "Kindled Cache" },
+    "data0": { "type": "u32", "value": 25 },
+    "data1": { "type": "u32", "value": 0 },
+    "gather_skill_line": { "type": "u32", "value": 0 },
+    "respawn_secs": { "type": "u32", "value": 180 },
+    "gather_gray": { "type": "u32", "value": 0 },
+    "lock_id": { "type": "u32", "value": 0 },
+    "size": { "type": "f32", "value": 1.0 }
+}"#;
+
+pub(super) fn gameobject_template_claim(entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_gameobject_template","key":{{"entry":{entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn gameobject_spawn_claim(
+    map_id: u32,
+    spawn_id: u32,
+    operation: &str,
+    fields: &str,
+) -> String {
+    format!(
+        r#"{{"table":"game_gameobject","key":{{"map_id":{map_id},"spawn_id":{spawn_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
 /// A value of the column's declared type, so a test can claim any column without spelling out what
 /// it holds.
 pub(super) fn some_value(column: Column) -> FieldValue {

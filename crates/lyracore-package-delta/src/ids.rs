@@ -578,3 +578,136 @@ pub const fn is_package_spellmeta_id(id: u64) -> bool {
 pub const fn is_fixture_reserved_spellmeta_id(id: u64) -> bool {
     id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
 }
+
+// ===============================================================================================
+//  creatures
+// ===============================================================================================
+
+/// Highest value the creature guid encoding leaves for a creature template entry and for a spawn
+/// identifier.
+///
+/// `game_creature_spawn.guid` packs both into 24-bit fields (`importer/src/main.rs`'s `world_guid`,
+/// restated by [`packed_creature_spawn_guid`]), so an entry or a spawn identifier above this would
+/// wrap and address another creature's row. Every creature band below is asserted against it.
+pub const MAX_CREATURE_GUID_COMPONENT: u32 = 0x00FF_FFFF;
+
+/// Lowest identifier a Package may INSERT in the creatures family.
+///
+/// The tenth application of the band formula in this module's header, one decade above the Package
+/// spell metadata range: `15` names a Package creature row. One band covers both of the family's
+/// insertable tables, the loot shape — `game_creature_template.entry` and a `game_creature_spawn`
+/// claim's `spawn_id`, which are independent identifier spaces.
+///
+/// The ceiling has a second constraint the earlier families did not: both components sit in 24-bit
+/// fields of the spawn guid, so the whole band must stay under
+/// [`MAX_CREATURE_GUID_COMPONENT`]. It does, with room to spare, which is also why the gameobject
+/// band above it is the last one this encoding can hold.
+pub const PACKAGE_CREATURE_ID_FLOOR: u32 = 15_000_000;
+
+/// Highest identifier a Package may INSERT in the creatures family.
+pub const PACKAGE_CREATURE_ID_CEIL: u32 = 15_999_999;
+
+/// Lowest creature template entry in the seeded fixture cluster (`module/src/seed/fixtures.rs`'s
+/// Test Wolf and its siblings). The Module asserts its own fixture creatures stay inside
+/// `51_000..52_000`, one decade above the fixture spell cluster.
+pub const FIXTURE_CREATURE_ID_FLOOR: u32 = 51_000;
+
+/// Highest creature template entry in the seeded fixture cluster.
+pub const FIXTURE_CREATURE_ID_CEIL: u32 = 51_999;
+
+const _: () = assert!(FIXTURE_CREATURE_ID_FLOOR <= FIXTURE_CREATURE_ID_CEIL);
+const _: () = assert!(FIXTURE_CREATURE_ID_CEIL < FIXTURE_RESERVED_ID_FLOOR);
+const _: () = assert!(PACKAGE_CREATURE_ID_FLOOR <= PACKAGE_CREATURE_ID_CEIL);
+const _: () = assert!(RESERVED_ID_CEIL < PACKAGE_CREATURE_ID_FLOOR);
+const _: () = assert!(PACKAGE_SPELLMETA_ID_CEIL < PACKAGE_CREATURE_ID_FLOOR as u64);
+/// Both halves of a creature spawn guid are 24 bits wide. A band that ran past them would let two
+/// Package spawns share one durable guid.
+const _: () = assert!(PACKAGE_CREATURE_ID_CEIL <= MAX_CREATURE_GUID_COMPONENT);
+
+/// True when a Package may INSERT a creature template or a creature spawn at this identifier.
+#[must_use]
+pub const fn is_package_creature_id(id: u32) -> bool {
+    id >= PACKAGE_CREATURE_ID_FLOOR && id <= PACKAGE_CREATURE_ID_CEIL
+}
+
+/// True when the creature TEMPLATE entry belongs to a seeded fixture. No Package may claim one,
+/// under any operation, for the reason [`is_fixture_reserved_spell_id`] gives: a fixture row is
+/// what the Module's own tests assert against.
+///
+/// Both bands, the spell shape. A spawn identifier takes
+/// [`is_fixture_reserved_creature_spawn_id`] instead — the `51xxx` cluster is a template-entry
+/// space, and real imported spawn identifiers run straight through it.
+#[must_use]
+pub const fn is_fixture_reserved_creature_id(id: u32) -> bool {
+    (id >= FIXTURE_CREATURE_ID_FLOOR && id <= FIXTURE_CREATURE_ID_CEIL)
+        || (id >= FIXTURE_RESERVED_ID_FLOOR && id <= FIXTURE_RESERVED_ID_CEIL)
+}
+
+/// True when the creature SPAWN identifier belongs to a seeded fixture: the project-wide band
+/// alone, because the fixture cluster above names template entries rather than spawns.
+#[must_use]
+pub const fn is_fixture_reserved_creature_spawn_id(id: u32) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR && id <= FIXTURE_RESERVED_ID_CEIL
+}
+
+/// Packed `game_creature_spawn` primary key: `(HIGHGUID_UNIT << 48) | (entry << 24) | spawn_id`.
+///
+/// Already canonical and load-bearing in the importer (`importer/src/main.rs`'s `world_guid`),
+/// which is why this restates the formula rather than inventing one, the way
+/// [`packed_class_level_id`] restates the Module's. A Package Delta never authors the guid; it
+/// names the creature template and the spawn identifier, and this derives the key. Both components
+/// are masked to their 24-bit fields, which is what [`MAX_CREATURE_GUID_COMPONENT`] guards the
+/// band against.
+#[must_use]
+pub const fn packed_creature_spawn_guid(entry: u32, spawn_id: u32) -> u64 {
+    const HIGHGUID_UNIT: u64 = 0xF130;
+    (HIGHGUID_UNIT << 48)
+        | (((entry & MAX_CREATURE_GUID_COMPONENT) as u64) << 24)
+        | (spawn_id & MAX_CREATURE_GUID_COMPONENT) as u64
+}
+
+// ===============================================================================================
+//  gameobjects
+// ===============================================================================================
+
+/// Lowest identifier a Package may INSERT in the gameobjects family.
+///
+/// The eleventh application of the band formula, one decade above the Package creature range: `16`
+/// names a Package gameobject row. One band covers the family's three insertable tables —
+/// `game_gameobject_template.entry`, `game_gameobject_trap.entry` and a `game_gameobject` claim's
+/// `spawn_id`. The first two share ONE identifier space on purpose: a trap row describes the
+/// template of the same entry, so a Package trap is exactly as Package-owned as its template.
+pub const PACKAGE_GAMEOBJECT_ID_FLOOR: u32 = 16_000_000;
+
+/// Highest identifier a Package may INSERT in the gameobjects family.
+pub const PACKAGE_GAMEOBJECT_ID_CEIL: u32 = 16_999_999;
+
+const _: () = assert!(PACKAGE_GAMEOBJECT_ID_FLOOR <= PACKAGE_GAMEOBJECT_ID_CEIL);
+const _: () = assert!(RESERVED_ID_CEIL < PACKAGE_GAMEOBJECT_ID_FLOOR);
+const _: () = assert!(PACKAGE_CREATURE_ID_CEIL < PACKAGE_GAMEOBJECT_ID_FLOOR);
+
+/// True when a Package may INSERT a gameobject template, trap or spawn at this identifier.
+#[must_use]
+pub const fn is_package_gameobject_id(id: u32) -> bool {
+    id >= PACKAGE_GAMEOBJECT_ID_FLOOR && id <= PACKAGE_GAMEOBJECT_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. The gameobjects family has no fixture cluster of its own, so the project-wide band
+/// is the whole check.
+#[must_use]
+pub const fn is_fixture_reserved_gameobject_id(id: u32) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR && id <= FIXTURE_RESERVED_ID_CEIL
+}
+
+/// Packed `game_gameobject` primary key: `(HIGHGUID_GAMEOBJECT << 48) | spawn_id`.
+///
+/// The importer's `go_guid` (`importer/src/main.rs`), restated for the same reason as
+/// [`packed_creature_spawn_guid`]. A gameobject guid carries no template entry, so the spawn
+/// identifier alone fills the low 48 bits — the whole Package gameobject band fits with four
+/// decimal orders to spare, and `module/src/gameobject.rs`'s pool tag at bit 47 stays clear of it.
+#[must_use]
+pub const fn packed_gameobject_spawn_guid(spawn_id: u32) -> u64 {
+    const HIGHGUID_GAMEOBJECT: u64 = 0xF110;
+    (HIGHGUID_GAMEOBJECT << 48) | spawn_id as u64
+}

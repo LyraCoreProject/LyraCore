@@ -12,15 +12,19 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_cast_id, is_fixture_reserved_globals_id, is_fixture_reserved_gossip_id,
-    is_fixture_reserved_item_id, is_fixture_reserved_loot_id, is_fixture_reserved_quest_id,
-    is_fixture_reserved_spell_id, is_fixture_reserved_spellmeta_id, is_fixture_reserved_trainer_id,
-    is_package_cast_id, is_package_globals_id, is_package_gossip_id, is_package_item_id,
-    is_package_loot_id, is_package_quest_id, is_package_spell_id, is_package_spellmeta_id,
-    is_package_trainer_id, packed_class_level_id, packed_quest_objective_id,
+    is_fixture_reserved_cast_id, is_fixture_reserved_creature_id,
+    is_fixture_reserved_creature_spawn_id, is_fixture_reserved_gameobject_id,
+    is_fixture_reserved_globals_id, is_fixture_reserved_gossip_id, is_fixture_reserved_item_id,
+    is_fixture_reserved_loot_id, is_fixture_reserved_quest_id, is_fixture_reserved_spell_id,
+    is_fixture_reserved_spellmeta_id, is_fixture_reserved_trainer_id, is_package_cast_id,
+    is_package_creature_id, is_package_gameobject_id, is_package_globals_id, is_package_gossip_id,
+    is_package_item_id, is_package_loot_id, is_package_quest_id, is_package_spell_id,
+    is_package_spellmeta_id, is_package_trainer_id, packed_class_level_id,
+    packed_creature_spawn_guid, packed_gameobject_spawn_guid, packed_quest_objective_id,
     packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_race_class_id,
-    packed_race_class_level_id, packed_spell_effect_id, MAX_QUEST_OBJECTIVE_INDEX,
-    MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX, MAX_STATS_LEVEL,
+    packed_race_class_level_id, packed_spell_effect_id, MAX_CREATURE_GUID_COMPONENT,
+    MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
+    MAX_STATS_LEVEL,
 };
 use crate::schema::{FieldType, FieldValue, Table};
 
@@ -349,6 +353,43 @@ pub enum PrimaryKey {
     SpellProcEvent {
         /// The spell whose proc overlay this is.
         spell_id: u32,
+    },
+    // ---- creatures ----
+    /// A `game_creature_template` row.
+    CreatureTemplate {
+        /// The creature template.
+        entry: u32,
+    },
+    /// A `game_creature_spawn` row. The durable guid is derived, never authored.
+    CreatureSpawn {
+        /// The map this spawn stands on. It is what routes the claim to a Shard, and it is part of
+        /// the claim's identity rather than a column, so no Package can move a placed creature onto
+        /// a map another Shard owns.
+        map_id: u32,
+        /// The creature template this spawn places. Half the derived guid.
+        entry: u32,
+        /// Which spawn of that template — the cmangos `creature.guid`. The other half.
+        spawn_id: u32,
+    },
+    // ---- gameobjects ----
+    /// A `game_gameobject_template` row.
+    GameobjectTemplate {
+        /// The gameobject template.
+        entry: u32,
+    },
+    /// A `game_gameobject_trap` row. The key IS a gameobject template entry, so it takes the
+    /// gameobjects band rather than one of its own.
+    GameobjectTrap {
+        /// The gameobject template this trap describes.
+        entry: u32,
+    },
+    /// A `game_gameobject` row. The durable guid is derived, never authored.
+    GameobjectSpawn {
+        /// The map this gameobject stands on. It routes the claim, like
+        /// [`PrimaryKey::CreatureSpawn`]'s.
+        map_id: u32,
+        /// Which placed gameobject — the cmangos `gameobject.guid`. The whole derived guid.
+        spawn_id: u32,
     },
 }
 
@@ -741,6 +782,67 @@ impl PrimaryKey {
         Ok(Self::SpellProcEvent { spell_id })
     }
 
+    /// Names a creature template row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for entry 0 or an entry the spawn guid's 24-bit field cannot
+    /// hold, and [`DeltaError::CreatureIdFixtureReserved`] for a seeded fixture creature.
+    pub fn creature_template(entry: u32) -> Result<Self, DeltaError> {
+        check_claimable_creature_entry(entry)?;
+        Ok(Self::CreatureTemplate { entry })
+    }
+
+    /// Names one placed creature. The durable guid follows from the template and the spawn
+    /// identifier; the map routes the claim and never reaches the guid.
+    ///
+    /// `entry` names the OTHER side of the relation (a `game_creature_template` row) and takes no
+    /// band or fixture check of its own — the `quest_reward_item` shape. It is still bounded,
+    /// because it rides inside the derived guid.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for entry or spawn identifier 0, or for either above the
+    /// guid's 24-bit field, and [`DeltaError::CreatureIdFixtureReserved`] for a seeded fixture
+    /// spawn identifier.
+    pub fn creature_spawn(map_id: u32, entry: u32, spawn_id: u32) -> Result<Self, DeltaError> {
+        check_guid_component(Table::CreatureSpawn, "entry", entry)?;
+        check_claimable_creature_spawn_id(spawn_id)?;
+        Ok(Self::CreatureSpawn {
+            map_id,
+            entry,
+            spawn_id,
+        })
+    }
+
+    /// Names a gameobject template row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for entry 0, and
+    /// [`DeltaError::GameobjectIdFixtureReserved`] for a seeded fixture gameobject.
+    pub fn gameobject_template(entry: u32) -> Result<Self, DeltaError> {
+        check_claimable_gameobject_id(Table::GameobjectTemplate, "entry", entry)?;
+        Ok(Self::GameobjectTemplate { entry })
+    }
+
+    /// Names one gameobject template's trap metadata.
+    ///
+    /// # Errors
+    /// Same as [`PrimaryKey::gameobject_template`].
+    pub fn gameobject_trap(entry: u32) -> Result<Self, DeltaError> {
+        check_claimable_gameobject_id(Table::GameobjectTrap, "entry", entry)?;
+        Ok(Self::GameobjectTrap { entry })
+    }
+
+    /// Names one placed gameobject. The durable guid follows from the spawn identifier; the map
+    /// routes the claim.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for spawn identifier 0, and
+    /// [`DeltaError::GameobjectIdFixtureReserved`] for a seeded fixture spawn identifier.
+    pub fn gameobject_spawn(map_id: u32, spawn_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gameobject_id(Table::GameobjectSpawn, "spawn_id", spawn_id)?;
+        Ok(Self::GameobjectSpawn { map_id, spawn_id })
+    }
+
     /// The table this row lives in.
     #[must_use]
     pub const fn table(self) -> Table {
@@ -777,6 +879,65 @@ impl PrimaryKey {
             Self::SpellChain { .. } => Table::SpellChain,
             Self::SpellLearn { .. } => Table::SpellLearn,
             Self::SpellProcEvent { .. } => Table::SpellProcEvent,
+            Self::CreatureTemplate { .. } => Table::CreatureTemplate,
+            Self::CreatureSpawn { .. } => Table::CreatureSpawn,
+            Self::GameobjectTemplate { .. } => Table::GameobjectTemplate,
+            Self::GameobjectTrap { .. } => Table::GameobjectTrap,
+            Self::GameobjectSpawn { .. } => Table::GameobjectSpawn,
+        }
+    }
+
+    /// The map this row sits on, or `None` when the row is a global catalogue entry every Shard
+    /// loads.
+    ///
+    /// This is the WHOLE routing rule for a Package claim, and it is deliberately one accessor: a
+    /// spatial claim reaches only the Shards whose World Import Scope owns this map, and the
+    /// importer's existing scope answers that question (`importer/src/package_delta.rs`). No table
+    /// gets a second way to say where it belongs.
+    ///
+    /// The match carries no wildcard, so a table that arrives without stating whether it is global
+    /// or spatial does not compile.
+    #[must_use]
+    pub const fn map_id(self) -> Option<u32> {
+        match self {
+            Self::CreatureSpawn { map_id, .. } | Self::GameobjectSpawn { map_id, .. } => {
+                Some(map_id)
+            }
+            Self::Spell { .. }
+            | Self::SpellEffect { .. }
+            | Self::Item { .. }
+            | Self::Quest { .. }
+            | Self::QuestText { .. }
+            | Self::QuestObjective { .. }
+            | Self::QuestCastObjective { .. }
+            | Self::QuestRewardItem { .. }
+            | Self::QuestRewardChoice { .. }
+            | Self::PickpocketLoot { .. }
+            | Self::GameobjectLoot { .. }
+            | Self::SkinningLoot { .. }
+            | Self::FishingLoot { .. }
+            | Self::CreatureCast { .. }
+            | Self::CreatureSpell { .. }
+            | Self::TrainerSpell { .. }
+            | Self::GossipMenu { .. }
+            | Self::GossipMenuProfile { .. }
+            | Self::GossipMenuProfileOption { .. }
+            | Self::GossipOption { .. }
+            | Self::NpcText { .. }
+            | Self::NpcTextSlot { .. }
+            | Self::ClassLevelStats { .. }
+            | Self::LevelStats { .. }
+            | Self::StartPosition { .. }
+            | Self::GraveyardZone { .. }
+            | Self::AreatriggerTeleport { .. }
+            | Self::CreateinfoSpell { .. }
+            | Self::CreateinfoAction { .. }
+            | Self::SpellChain { .. }
+            | Self::SpellLearn { .. }
+            | Self::SpellProcEvent { .. }
+            | Self::CreatureTemplate { .. }
+            | Self::GameobjectTemplate { .. }
+            | Self::GameobjectTrap { .. } => None,
         }
     }
 
@@ -879,6 +1040,13 @@ impl PrimaryKey {
             Self::StartPosition { race, class } => packed_race_class_id(race, class),
             Self::GraveyardZone { row_id } | Self::CreateinfoAction { row_id } => row_id,
             Self::AreatriggerTeleport { trigger_id } => trigger_id as u64,
+            Self::CreatureTemplate { entry }
+            | Self::GameobjectTemplate { entry }
+            | Self::GameobjectTrap { entry } => entry as u64,
+            Self::CreatureSpawn {
+                entry, spawn_id, ..
+            } => packed_creature_spawn_guid(entry, spawn_id),
+            Self::GameobjectSpawn { spawn_id, .. } => packed_gameobject_spawn_guid(spawn_id),
         }
     }
 }
@@ -944,6 +1112,17 @@ impl fmt::Display for PrimaryKey {
             Self::AreatriggerTeleport { trigger_id } => write!(f, "{{trigger_id={trigger_id}}}"),
             Self::SpellChain { spell_id } | Self::SpellProcEvent { spell_id } => {
                 write!(f, "{{spell_id={spell_id}}}")
+            }
+            Self::CreatureTemplate { entry }
+            | Self::GameobjectTemplate { entry }
+            | Self::GameobjectTrap { entry } => write!(f, "{{entry={entry}}}"),
+            Self::CreatureSpawn {
+                map_id,
+                entry,
+                spawn_id,
+            } => write!(f, "{{map_id={map_id}, entry={entry}, spawn_id={spawn_id}}}"),
+            Self::GameobjectSpawn { map_id, spawn_id } => {
+                write!(f, "{{map_id={map_id}, spawn_id={spawn_id}}}")
             }
         }
     }
@@ -1043,6 +1222,20 @@ fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
         PrimaryKey::SpellLearn { id } => check_band(
             is_package_spellmeta_id(id),
             DeltaError::SpellmetaIdNotClientSafe { id },
+        ),
+        // One band per family, checked against the identifier the family owns: a template's own
+        // `entry`, a spawn's own `spawn_id`. The map in a spawn key routes the claim and is never
+        // banded — every real map identifier is one a Package may place a row on.
+        PrimaryKey::CreatureTemplate { entry: id }
+        | PrimaryKey::CreatureSpawn { spawn_id: id, .. } => check_band(
+            is_package_creature_id(id),
+            DeltaError::CreatureIdNotClientSafe { id },
+        ),
+        PrimaryKey::GameobjectTemplate { entry: id }
+        | PrimaryKey::GameobjectTrap { entry: id }
+        | PrimaryKey::GameobjectSpawn { spawn_id: id, .. } => check_band(
+            is_package_gameobject_id(id),
+            DeltaError::GameobjectIdNotClientSafe { id },
         ),
     }
 }
@@ -1212,6 +1405,63 @@ fn check_race_and_class(table: Table, race: u8, class: u8) -> Result<(), DeltaEr
     Ok(())
 }
 
+/// A creature TEMPLATE entry is refused the same way under every operation when it is 0, wider
+/// than the spawn guid's field, or fixture-owned.
+fn check_claimable_creature_entry(entry: u32) -> Result<(), DeltaError> {
+    check_guid_component(Table::CreatureTemplate, "entry", entry)?;
+    if is_fixture_reserved_creature_id(entry) {
+        return Err(DeltaError::CreatureIdFixtureReserved { id: entry });
+    }
+    Ok(())
+}
+
+/// A creature SPAWN identifier takes the same checks against its own identifier space: the fixture
+/// creature cluster names template entries, and real imported spawn identifiers run through it.
+fn check_claimable_creature_spawn_id(spawn_id: u32) -> Result<(), DeltaError> {
+    check_guid_component(Table::CreatureSpawn, "spawn_id", spawn_id)?;
+    if is_fixture_reserved_creature_spawn_id(spawn_id) {
+        return Err(DeltaError::CreatureIdFixtureReserved { id: spawn_id });
+    }
+    Ok(())
+}
+
+/// Both halves of a creature spawn guid are 24 bits wide, so a wider value would wrap into another
+/// creature's row rather than address its own.
+fn check_guid_component(table: Table, member: &str, value: u32) -> Result<(), DeltaError> {
+    if value == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: format!("`{member}` 0 is not a row"),
+        });
+    }
+    if value > MAX_CREATURE_GUID_COMPONENT {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: format!(
+                "`{member}` {value} is wider than the creature guid's 24-bit field \
+                 (1..={MAX_CREATURE_GUID_COMPONENT})"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// A gameobject identifier is refused the same way under every operation when it is 0 or
+/// fixture-owned. A gameobject guid carries the spawn identifier at its full width, so there is no
+/// component bound here.
+fn check_claimable_gameobject_id(table: Table, member: &str, id: u32) -> Result<(), DeltaError> {
+    if id == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: format!("`{member}` 0 is not a row"),
+        });
+    }
+    if is_fixture_reserved_gameobject_id(id) {
+        return Err(DeltaError::GameobjectIdFixtureReserved { id });
+    }
+    Ok(())
+}
+
 /// An item identifier is refused the same way under every operation when it is 0 or fixture-owned.
 fn check_claimable_item_id(entry: u32) -> Result<(), DeltaError> {
     if entry == 0 {
@@ -1344,7 +1594,12 @@ fn is_key_column(table: Table, name: &str) -> bool {
     match table {
         Table::Spell | Table::SpellChain | Table::SpellProcEvent => name == "spell_id",
         Table::SpellEffect => matches!(name, "id" | "spell_id" | "effect_index"),
-        Table::Item | Table::Quest | Table::GossipMenu => name == "entry",
+        Table::Item
+        | Table::Quest
+        | Table::GossipMenu
+        | Table::CreatureTemplate
+        | Table::GameobjectTemplate
+        | Table::GameobjectTrap => name == "entry",
         Table::QuestText => name == "quest_entry",
         Table::QuestObjective | Table::QuestCastObjective => {
             matches!(name, "id" | "quest_entry" | "obj_index")
@@ -1371,6 +1626,8 @@ fn is_key_column(table: Table, name: &str) -> bool {
         Table::LevelStats => name == "race" || name == "class" || name == "level",
         Table::StartPosition => name == "race" || name == "class",
         Table::AreatriggerTeleport => name == "trigger_id",
+        Table::CreatureSpawn => matches!(name, "guid" | "map_id" | "entry" | "spawn_id"),
+        Table::GameobjectSpawn => matches!(name, "guid" | "map_id" | "spawn_id"),
     }
 }
 
@@ -1555,6 +1812,11 @@ impl PackageDelta {
                     | Table::SpellChain
                     | Table::SpellLearn
                     | Table::SpellProcEvent
+                    | Table::CreatureTemplate
+                    | Table::CreatureSpawn
+                    | Table::GameobjectTemplate
+                    | Table::GameobjectTrap
+                    | Table::GameobjectSpawn
                     // Update-only, like `Table::CreatureCast` above: refused before a `Claim` can
                     // exist, listed only to keep the match exhaustive at the type level.
                     | Table::GossipMenu
@@ -1628,7 +1890,12 @@ fn expected_key_members(table: Table) -> &'static [&'static str] {
     match table {
         Table::Spell | Table::SpellChain | Table::SpellProcEvent => &["spell_id"],
         Table::SpellEffect => &["effect_index", "spell_id"],
-        Table::Item | Table::Quest | Table::GossipMenu => &["entry"],
+        Table::Item
+        | Table::Quest
+        | Table::GossipMenu
+        | Table::CreatureTemplate
+        | Table::GameobjectTemplate
+        | Table::GameobjectTrap => &["entry"],
         Table::QuestText => &["quest_entry"],
         Table::QuestObjective | Table::QuestCastObjective => &["obj_index", "quest_entry"],
         Table::QuestRewardItem => &["item_entry", "quest_entry"],
@@ -1653,6 +1920,8 @@ fn expected_key_members(table: Table) -> &'static [&'static str] {
         Table::LevelStats => &["class", "level", "race"],
         Table::StartPosition => &["class", "race"],
         Table::AreatriggerTeleport => &["trigger_id"],
+        Table::CreatureSpawn => &["entry", "map_id", "spawn_id"],
+        Table::GameobjectSpawn => &["map_id", "spawn_id"],
     }
 }
 
@@ -1749,6 +2018,18 @@ fn build_key(key: &Map<String, Value>, table: Table) -> Result<PrimaryKey, Delta
         Table::SpellChain => PrimaryKey::spell_chain(key_u32(key, table, "spell_id")?),
         Table::SpellLearn => PrimaryKey::spell_learn(key_u64(key, table, "id")?),
         Table::SpellProcEvent => PrimaryKey::spell_proc_event(key_u32(key, table, "spell_id")?),
+        Table::CreatureTemplate => PrimaryKey::creature_template(key_u32(key, table, "entry")?),
+        Table::CreatureSpawn => PrimaryKey::creature_spawn(
+            key_u32(key, table, "map_id")?,
+            key_u32(key, table, "entry")?,
+            key_u32(key, table, "spawn_id")?,
+        ),
+        Table::GameobjectTemplate => PrimaryKey::gameobject_template(key_u32(key, table, "entry")?),
+        Table::GameobjectTrap => PrimaryKey::gameobject_trap(key_u32(key, table, "entry")?),
+        Table::GameobjectSpawn => PrimaryKey::gameobject_spawn(
+            key_u32(key, table, "map_id")?,
+            key_u32(key, table, "spawn_id")?,
+        ),
     }
 }
 

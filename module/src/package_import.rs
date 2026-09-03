@@ -44,8 +44,10 @@
 //! is also why a Claim can never delete a row.
 
 mod casts;
+mod creatures;
 #[cfg(test)]
 mod fixtures;
+mod gameobjects;
 mod globals;
 mod gossip;
 mod items;
@@ -60,8 +62,8 @@ use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
     trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, CAST_FAMILY,
-    GLOBALS_FAMILY, GOSSIP_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SCRIPT_FAMILY,
-    SPELLMETA_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
+    CREATURE_FAMILY, GAMEOBJECT_FAMILY, GLOBALS_FAMILY, GOSSIP_FAMILY, ITEM_FAMILY, LOOT_FAMILY,
+    QUEST_FAMILY, SCRIPT_FAMILY, SPELLMETA_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
 };
 
 use crate::helpers::require_operator;
@@ -116,6 +118,13 @@ enum ClaimFamily {
     Globals,
     /// `game_spell_chain`, `game_spell_learn` and `game_spell_proc_event`.
     Spellmeta,
+    /// `game_creature_template` and `game_creature_spawn`. The first family with a SPATIAL table:
+    /// the importer routes a spawn claim by the map in its key, so a Shard only ever sees the
+    /// spawns its World Import Scope owns.
+    Creatures,
+    /// `game_gameobject_template`, `game_gameobject_trap` and `game_gameobject`. Spatial in the
+    /// same way as [`ClaimFamily::Creatures`].
+    Gameobjects,
 }
 
 impl Family {
@@ -130,6 +139,8 @@ impl Family {
         Self::Claims(ClaimFamily::Gossip),
         Self::Claims(ClaimFamily::Globals),
         Self::Claims(ClaimFamily::Spellmeta),
+        Self::Claims(ClaimFamily::Creatures),
+        Self::Claims(ClaimFamily::Gameobjects),
         Self::Script,
     ];
 
@@ -174,6 +185,8 @@ impl ClaimFamily {
             Self::Gossip => GOSSIP_FAMILY,
             Self::Globals => GLOBALS_FAMILY,
             Self::Spellmeta => SPELLMETA_FAMILY,
+            Self::Creatures => CREATURE_FAMILY,
+            Self::Gameobjects => GAMEOBJECT_FAMILY,
         }
     }
 
@@ -189,6 +202,8 @@ impl ClaimFamily {
             Self::Gossip => gossip::update_target(ctx, row),
             Self::Globals => globals::update_target(ctx, row),
             Self::Spellmeta => spellmeta::update_target(ctx, row),
+            Self::Creatures => creatures::update_target(ctx, row),
+            Self::Gameobjects => gameobjects::update_target(ctx, row),
         }
     }
 
@@ -205,6 +220,8 @@ impl ClaimFamily {
             Self::Gossip => gossip::clear_package_range(ctx),
             Self::Globals => globals::clear_package_range(ctx),
             Self::Spellmeta => spellmeta::clear_package_range(ctx),
+            Self::Creatures => creatures::clear_package_range(ctx),
+            Self::Gameobjects => gameobjects::clear_package_range(ctx),
         }
     }
 
@@ -220,6 +237,8 @@ impl ClaimFamily {
             Self::Gossip => gossip::write_row(ctx, row),
             Self::Globals => globals::write_row(ctx, row),
             Self::Spellmeta => spellmeta::write_row(ctx, row),
+            Self::Creatures => creatures::write_row(ctx, row),
+            Self::Gameobjects => gameobjects::write_row(ctx, row),
         }
     }
 
@@ -234,6 +253,8 @@ impl ClaimFamily {
             Self::Gossip => gossip::check_references(ctx, rows),
             Self::Globals => globals::check_references(ctx, rows),
             Self::Spellmeta => spellmeta::check_references(ctx, rows),
+            Self::Creatures => creatures::check_references(ctx, rows),
+            Self::Gameobjects => gameobjects::check_references(ctx, rows),
         }
     }
 }
@@ -829,10 +850,10 @@ mod tests {
 
     #[test]
     fn an_import_family_with_no_artifact_schema_is_refused_by_name() {
-        // `creatures` is a dump family the importer loads and this crate gives no claim schema.
-        let refusal = Family::parse("creatures").expect_err("an unsupported family is refused");
+        // `creature-ai` is a dump family the importer loads and this crate gives no claim schema.
+        let refusal = Family::parse("creature-ai").expect_err("an unsupported family is refused");
 
-        assert!(refusal.contains("`creatures`"), "{refusal}");
+        assert!(refusal.contains("`creature-ai`"), "{refusal}");
         assert!(refusal.contains("`spell`"), "{refusal}");
         assert!(refusal.contains("`items`"), "{refusal}");
         assert!(refusal.contains("`quests`"), "{refusal}");
@@ -842,6 +863,8 @@ mod tests {
         assert!(refusal.contains("`gossip`"), "{refusal}");
         assert!(refusal.contains("`globals`"), "{refusal}");
         assert!(refusal.contains("`spellmeta`"), "{refusal}");
+        assert!(refusal.contains("`creatures`"), "{refusal}");
+        assert!(refusal.contains("`gameobjects`"), "{refusal}");
         assert!(refusal.contains("`script`"), "{refusal}");
     }
 

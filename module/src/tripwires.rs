@@ -296,6 +296,8 @@ mod partition_discipline_tripwire {
         // Importers — realm-wide by definition: they wipe and rebuild every partition at once.
         ("module/src/creatures/spawn.rs", 4, "`import_creature_spawns` drops every creature entity + spawn row before reloading the world; +1 for `debug_normalize_spawn_timers`, a one-shot operator migration that must visit this database's whole spawn table by definition; +1 for `debug_retire_region_creatures` (#194), which manages the partitioning itself — it scans spawn HOMES to hand a region's population to its owning shard"),
         ("module/src/gameobject.rs", 2, "`import_gameobjects` drops every gameobject row before reloading the world; plus one by-`template_entry` lookup (an entry-keyed find, not a spatial query — no index on that column)"),
+        ("module/src/package_import/creatures.rs", 1, "a Package Delta apply clears the whole Package creature range before it writes, so a Package that left the enabled set takes its spawns with it — realm-wide reconciliation, and the band has no index"),
+        ("module/src/package_import/gameobjects.rs", 1, "the same whole-band clear for the Package gameobject range"),
         // Deliberately cross-partition: these ARE the code that manages partitions.
         ("module/src/instance.rs", 8, "instance population spawn/teardown + the reaper's occupied-instance census — classifying every partition at once is the job"),
         ("module/src/encounter.rs", 2, "guid high-water marks over spawn/gameobject TEMPLATE rows when allocating a wave guid, not live-world reads"),
