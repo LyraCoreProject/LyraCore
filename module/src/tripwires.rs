@@ -1448,7 +1448,9 @@ pub(crate) mod issue_reference_tripwire {
             .rsplit(|character: char| !character.is_ascii_alphabetic())
             .next()
             .unwrap_or_default();
-        !matches!(word, "build" | "opcode" | "patch" | "rev" | "revision")
+        !["build", "opcode", "patch", "rev", "revision"]
+            .iter()
+            .any(|exception| word.eq_ignore_ascii_case(exception))
     }
 
     fn ratchet_mismatch(path: &str, found: usize, budget: usize) -> Option<String> {
@@ -1505,7 +1507,7 @@ pub(crate) mod issue_reference_tripwire {
     fn the_scan_covers_comments_without_reading_literals() {
         let h = '#';
         let source = format!(
-            "// full {h}119\nlet x = 0; // pre-{h}22\n/* outer {h}23 /* nested {h}24 */ tail {h}25 */\nfn f<'a /* issue {h}22 */>() {{}}\nlet normal = \"{h}26\";\nlet escaped = \"\\\\\"{h}27\";\nlet raw = r###\"{h}28\"###;\nlet byte_raw = br#\"{h}29\"#;\nlet character = '{h}';\n// build {h}5875 and opcode {h}117\n// build ({h}5875) and opcode [{h}117]\n"
+            "// full {h}119\nlet x = 0; // pre-{h}22\n/* outer {h}23 /* nested {h}24 */ tail {h}25 */\nfn f<'a /* issue {h}22 */>() {{}}\nlet normal = \"{h}26\";\nlet escaped = \"\\\\\"{h}27\";\nlet raw = r###\"{h}28\"###;\nlet byte_raw = br#\"{h}29\"#;\nlet character = '{h}';\n// build {h}5875 and opcode {h}117\n// build ({h}5875) and opcode [{h}117]\n// BUILD {h}5875, OpCoDe ({h}117), PATCH [{h}123], ReV {h}456, ReViSiOn {h}789\n"
         );
         assert_eq!(tracker_refs(&source), vec![1, 2, 3, 3, 3, 4]);
     }
@@ -1524,5 +1526,63 @@ pub(crate) mod issue_reference_tripwire {
             &["fixture.rs".to_owned()]
         ));
         assert!(ratchet_file_is_missing("fixture.rs", &[]));
+    }
+}
+
+/// ENFORCEMENT tripwire: five unconditional `dead_code` allowances document the remaining
+/// deliberate residues. A conditional `cfg_attr` allowance does not count here.
+#[cfg(test)]
+pub(crate) mod dead_code_allowance_tripwire {
+    const EXPECTED_UNCONDITIONAL_ALLOWANCES: usize = 5;
+
+    fn unconditional_dead_code_allows(content: &str) -> Vec<usize> {
+        let mut lines = Vec::new();
+        for (start, _) in content.match_indices("#[allow(") {
+            let line_start = content[..start].rfind('\n').map_or(0, |index| index + 1);
+            if !content[line_start..start].trim().is_empty() {
+                continue;
+            }
+            let Some(end) = content[start..].find(")]") else {
+                continue;
+            };
+            if content[start..start + end].contains("dead_code") {
+                lines.push(crate::test_scan::line_of(content, start));
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn module_has_exactly_five_unconditional_dead_code_allowances() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        super::character_owned_tripwire::collect_rs_files(&root, &mut files);
+        let mut found = Vec::new();
+        for file in files {
+            let rel = file
+                .strip_prefix(&root)
+                .expect("scanned under module/src")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let content = std::fs::read_to_string(&file).expect("readable module source");
+            found.extend(
+                unconditional_dead_code_allows(&content)
+                    .into_iter()
+                    .map(|line| format!("{rel}:{line}")),
+            );
+        }
+        assert_eq!(
+            found.len(),
+            EXPECTED_UNCONDITIONAL_ALLOWANCES,
+            "unconditional dead_code allowances changed:\n  {}",
+            found.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_scan_excludes_conditional_allowances() {
+        let source =
+            "#[allow(dead_code, reason = \"residue\")]\n#[cfg_attr(test, allow(dead_code))]\n";
+        assert_eq!(unconditional_dead_code_allows(source), vec![1]);
     }
 }
