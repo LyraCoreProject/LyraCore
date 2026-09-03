@@ -15,10 +15,13 @@ use core::fmt;
 use crate::ids::{
     FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR, FIXTURE_SPELL_ID_CEIL,
     FIXTURE_SPELL_ID_FLOOR, MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX,
-    MAX_SPELL_EFFECT_INDEX, PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR, PACKAGE_ITEM_ID_CEIL,
-    PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL, PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL,
-    PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL, PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELL_ID_CEIL,
-    PACKAGE_SPELL_ID_FLOOR, PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
+    MAX_SPELL_EFFECT_INDEX, MAX_STATS_LEVEL, PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR,
+    PACKAGE_GLOBALS_ID_CEIL, PACKAGE_GLOBALS_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL,
+    PACKAGE_GOSSIP_ID_FLOOR, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR, PACKAGE_LOOT_ID_CEIL,
+    PACKAGE_LOOT_ID_FLOOR, PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL,
+    PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SPELLMETA_ID_CEIL, PACKAGE_SPELLMETA_ID_FLOOR,
+    PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR, PACKAGE_TRAINER_ID_CEIL,
+    PACKAGE_TRAINER_ID_FLOOR,
 };
 use crate::schema::{FieldType, Table};
 use crate::script::HOOK_EVENT_NAMES;
@@ -168,6 +171,41 @@ pub enum DeltaError {
     TrainerIdFixtureReserved {
         /// The rejected identifier.
         id: u64,
+    },
+    /// An inserted gossip row sits outside the range a Package may invent.
+    GossipIdNotClientSafe {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// The claim targets a seeded fixture row.
+    GossipIdFixtureReserved {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// An inserted globals row sits outside the range a Package may invent.
+    GlobalsIdNotClientSafe {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// The claim targets a seeded fixture row.
+    GlobalsIdFixtureReserved {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// An inserted `game_spell_learn` row sits outside the range a Package may invent.
+    SpellmetaIdNotClientSafe {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// The claim targets a seeded fixture row.
+    SpellmetaIdFixtureReserved {
+        /// The rejected identifier.
+        id: u64,
+    },
+    /// The stat-curve key names a character level no vanilla realm reaches.
+    StatsLevelOutOfRange {
+        /// The rejected level.
+        level: u8,
     },
     /// An `insert` named a table that permits no inserts at all: its primary key names an entity
     /// another Import Family owns, which no Package may invent. `game_creature_cast`
@@ -343,7 +381,14 @@ impl fmt::Display for DeltaError {
             | Self::CastIdNotClientSafe { .. }
             | Self::CastIdFixtureReserved { .. }
             | Self::TrainerIdNotClientSafe { .. }
-            | Self::TrainerIdFixtureReserved { .. } => fmt_identifier_policy(self, f),
+            | Self::TrainerIdFixtureReserved { .. }
+            | Self::GossipIdNotClientSafe { .. }
+            | Self::GossipIdFixtureReserved { .. }
+            | Self::GlobalsIdNotClientSafe { .. }
+            | Self::GlobalsIdFixtureReserved { .. }
+            | Self::SpellmetaIdNotClientSafe { .. }
+            | Self::SpellmetaIdFixtureReserved { .. }
+            | Self::StatsLevelOutOfRange { .. } => fmt_identifier_policy(self, f),
             // The script family groups its own refusals behind one variant, so it delegates as a
             // whole rather than adding six arms here.
             Self::Script(refusal) => refusal.fmt(f),
@@ -353,7 +398,9 @@ impl fmt::Display for DeltaError {
 }
 
 /// The identifier-band refusals, split out of [`DeltaError`]'s `Display` so neither half of the
-/// message trips `clippy::too_many_lines` as a family's bands add their own variants.
+/// message trips `clippy::too_many_lines` as a family's bands add their own variants. Split again
+/// by kind for the same reason: "outside the band a Package may invent in" here, "reserved, or
+/// outside the table's real domain" in [`fmt_reserved_or_out_of_range`].
 fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match err {
         DeltaError::SpellIdNotClientSafe { spell_id } => write!(
@@ -362,6 +409,62 @@ fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::R
              {PACKAGE_SPELL_ID_FLOOR}..={PACKAGE_SPELL_ID_CEIL}; an inserted spell must use an \
              identifier no client and no import can already own"
         ),
+        DeltaError::ItemIdNotClientSafe { entry } => write!(
+            f,
+            "item {entry} is outside the Package item range \
+             {PACKAGE_ITEM_ID_FLOOR}..={PACKAGE_ITEM_ID_CEIL}; an inserted item must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::QuestIdNotClientSafe { entry } => write!(
+            f,
+            "quest {entry} is outside the Package quest range \
+             {PACKAGE_QUEST_ID_FLOOR}..={PACKAGE_QUEST_ID_CEIL}; an inserted quest must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::LootIdNotClientSafe { id } => write!(
+            f,
+            "loot row {id} is outside the Package loot range \
+             {PACKAGE_LOOT_ID_FLOOR}..={PACKAGE_LOOT_ID_CEIL}; an inserted loot row must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::CastIdNotClientSafe { id } => write!(
+            f,
+            "cast row {id} is outside the Package cast range \
+             {PACKAGE_CAST_ID_FLOOR}..={PACKAGE_CAST_ID_CEIL}; an inserted cast row must use an \
+             identifier no client and no import can already own"
+        ),
+        DeltaError::TrainerIdNotClientSafe { id } => write!(
+            f,
+            "trainer row {id} is outside the Package trainer range \
+             {PACKAGE_TRAINER_ID_FLOOR}..={PACKAGE_TRAINER_ID_CEIL}; an inserted trainer row must \
+             use an identifier no client and no import can already own"
+        ),
+        DeltaError::GossipIdNotClientSafe { id } => write!(
+            f,
+            "gossip row {id} is outside the Package gossip range \
+             {PACKAGE_GOSSIP_ID_FLOOR}..={PACKAGE_GOSSIP_ID_CEIL}; an inserted gossip row must use \
+             an identifier no client and no import can already own"
+        ),
+        DeltaError::GlobalsIdNotClientSafe { id } => write!(
+            f,
+            "globals row {id} is outside the Package globals range \
+             {PACKAGE_GLOBALS_ID_FLOOR}..={PACKAGE_GLOBALS_ID_CEIL}; an inserted globals row must \
+             use an identifier no client and no import can already own"
+        ),
+        DeltaError::SpellmetaIdNotClientSafe { id } => write!(
+            f,
+            "spell metadata row {id} is outside the Package spell metadata range \
+             {PACKAGE_SPELLMETA_ID_FLOOR}..={PACKAGE_SPELLMETA_ID_CEIL}; an inserted spell \
+             metadata row must use an identifier no client and no import can already own"
+        ),
+        other => fmt_reserved_or_out_of_range(other, f),
+    }
+}
+
+/// The other half of the identifier policy: an identifier the fixtures own, and an index outside
+/// the real domain of the table it names.
+fn fmt_reserved_or_out_of_range(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match err {
         DeltaError::SpellIdFixtureReserved { spell_id } => write!(
             f,
             "spell {spell_id} is fixture-reserved \
@@ -373,22 +476,10 @@ fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::R
             "effect index {effect_index} is out of range; a spell has effects \
              0..={MAX_SPELL_EFFECT_INDEX}"
         ),
-        DeltaError::ItemIdNotClientSafe { entry } => write!(
-            f,
-            "item {entry} is outside the Package item range \
-             {PACKAGE_ITEM_ID_FLOOR}..={PACKAGE_ITEM_ID_CEIL}; an inserted item must use an \
-             identifier no client and no import can already own"
-        ),
         DeltaError::ItemIdFixtureReserved { entry } => write!(
             f,
             "item {entry} is fixture-reserved \
              ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
-        ),
-        DeltaError::QuestIdNotClientSafe { entry } => write!(
-            f,
-            "quest {entry} is outside the Package quest range \
-             {PACKAGE_QUEST_ID_FLOOR}..={PACKAGE_QUEST_ID_CEIL}; an inserted quest must use an \
-             identifier no client and no import can already own"
         ),
         DeltaError::QuestIdFixtureReserved { entry } => write!(
             f,
@@ -405,38 +496,39 @@ fn fmt_identifier_policy(err: &DeltaError, f: &mut fmt::Formatter<'_>) -> fmt::R
             "reward choice index {choice_index} is out of range; a quest has reward choices \
              0..={MAX_QUEST_REWARD_CHOICE_INDEX}"
         ),
-        DeltaError::LootIdNotClientSafe { id } => write!(
-            f,
-            "loot row {id} is outside the Package loot range \
-             {PACKAGE_LOOT_ID_FLOOR}..={PACKAGE_LOOT_ID_CEIL}; an inserted loot row must use an \
-             identifier no client and no import can already own"
-        ),
         DeltaError::LootIdFixtureReserved { id } => write!(
             f,
             "loot row {id} is fixture-reserved \
              ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
-        ),
-        DeltaError::CastIdNotClientSafe { id } => write!(
-            f,
-            "cast row {id} is outside the Package cast range \
-             {PACKAGE_CAST_ID_FLOOR}..={PACKAGE_CAST_ID_CEIL}; an inserted cast row must use an \
-             identifier no client and no import can already own"
         ),
         DeltaError::CastIdFixtureReserved { id } => write!(
             f,
             "cast row {id} is fixture-reserved \
              ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
         ),
-        DeltaError::TrainerIdNotClientSafe { id } => write!(
-            f,
-            "trainer row {id} is outside the Package trainer range \
-             {PACKAGE_TRAINER_ID_FLOOR}..={PACKAGE_TRAINER_ID_CEIL}; an inserted trainer row must \
-             use an identifier no client and no import can already own"
-        ),
         DeltaError::TrainerIdFixtureReserved { id } => write!(
             f,
             "trainer row {id} is fixture-reserved \
              ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::GossipIdFixtureReserved { id } => write!(
+            f,
+            "gossip row {id} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::GlobalsIdFixtureReserved { id } => write!(
+            f,
+            "globals row {id} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::SpellmetaIdFixtureReserved { id } => write!(
+            f,
+            "spell metadata row {id} is fixture-reserved \
+             ({FIXTURE_RESERVED_ID_FLOOR}..={FIXTURE_RESERVED_ID_CEIL}); no Package may claim it"
+        ),
+        DeltaError::StatsLevelOutOfRange { level } => write!(
+            f,
+            "level {level} is outside 1..={MAX_STATS_LEVEL}; no stat curve carries a row for it"
         ),
         other => unreachable!("{other:?} is not an identifier-policy refusal"),
     }

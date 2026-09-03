@@ -16,6 +16,18 @@ const MISSING_SPELL: u32 = 4_000_000;
 const MISSING_CREATURE: u32 = 4_000_000;
 const PACKAGE_CREATURE_SPELL: u64 = 10_000_001;
 const PACKAGE_TRAINER_SPELL: u64 = 11_000_001;
+const PACKAGE_NPC_TEXT: u64 = 12_000_001;
+const PACKAGE_NPC_TEXT_SLOT: u64 = 12_000_002;
+const PACKAGE_GOSSIP_OPTION: u64 = 12_000_003;
+const MISSING_NPC_TEXT: u32 = 4_000_000;
+const PACKAGE_GRAVEYARD_ZONE: u64 = 13_000_001;
+const PACKAGE_CREATEINFO_SPELL: u64 = 13_000_002;
+const REAL_GRAVEYARD: u32 = 105; // Northshire Abbey, seeded by `init`.
+const MISSING_GRAVEYARD: u32 = 4_000_000;
+const PACKAGE_SPELL_LEARN: u64 = 14_000_001;
+/// Inside the Package spell band, and no `game_spell` row: what a rank link keyed on a spell that
+/// was never inserted looks like.
+const PACKAGE_SPELL: u32 = 6_000_001;
 
 fn arg(value: &str) -> String {
     serde_json::to_string(value).expect("a string encodes as JSON")
@@ -57,6 +69,78 @@ fn trainer_spell_insert(spell_id: u32, learn_skill_line: u32) -> String {
         "example.trainer",
         &format!(
             r#"{{"table":"game_trainer_spell","key":{{"id":{PACKAGE_TRAINER_SPELL}}},"operation":"insert","fields":{{"trainer_entry":{{"type":"u32","value":{FIXTURE_TRAINER}}},"spell_id":{{"type":"u32","value":{spell_id}}},"cost":{{"type":"u32","value":500}},"required_level":{{"type":"u8","value":10}},"learn_skill_line":{{"type":"u32","value":{learn_skill_line}}},"learn_skill_cap":{{"type":"u32","value":75}}}}}}"#
+        ),
+    )
+}
+
+fn npc_text_insert() -> String {
+    artifact(
+        "example.gossip.text",
+        &format!(
+            r#"{{"table":"game_npc_text","key":{{"text_id":{PACKAGE_NPC_TEXT}}},"operation":"insert","fields":{{"text":{{"type":"string","value":"The forge is cold, friend."}}}}}}"#
+        ),
+    )
+}
+
+fn npc_text_slot_insert(text_id: u32) -> String {
+    artifact(
+        "example.gossip.slot",
+        &format!(
+            r#"{{"table":"game_npc_text_slot","key":{{"id":{PACKAGE_NPC_TEXT_SLOT}}},"operation":"insert","fields":{{"text_id":{{"type":"u32","value":{text_id}}},"slot_index":{{"type":"u8","value":0}},"text_male":{{"type":"string","value":"Well met."}},"text_female":{{"type":"string","value":"Well met."}},"probability":{{"type":"f32","value":1.0}}}}}}"#
+        ),
+    )
+}
+
+fn gossip_option_insert(entry: u32) -> String {
+    artifact(
+        "example.gossip.option",
+        &format!(
+            r#"{{"table":"game_gossip_option","key":{{"row_id":{PACKAGE_GOSSIP_OPTION}}},"operation":"insert","fields":{{"entry":{{"type":"u32","value":{entry}}},"option_index":{{"type":"u32","value":0}},"icon":{{"type":"u32","value":0}},"text":{{"type":"string","value":"Tell me of the forge."}},"action":{{"type":"u32","value":1}},"action_menu_id":{{"type":"u32","value":0}},"cond_type":{{"type":"u32","value":0}},"cond_value1":{{"type":"u32","value":0}},"cond_value2":{{"type":"u32","value":0}}}}}}"#
+        ),
+    )
+}
+
+fn graveyard_zone_insert(safe_loc_id: u32) -> String {
+    artifact(
+        "example.globals.graveyard",
+        &format!(
+            r#"{{"table":"game_graveyard_zone","key":{{"row_id":{PACKAGE_GRAVEYARD_ZONE}}},"operation":"insert","fields":{{"safe_loc_id":{{"type":"u32","value":{safe_loc_id}}},"zone_id":{{"type":"u32","value":12}},"faction":{{"type":"u32","value":469}}}}}}"#
+        ),
+    )
+}
+
+fn createinfo_spell_insert(spell_id: u32) -> String {
+    artifact(
+        "example.globals.createinfo",
+        &format!(
+            r#"{{"table":"game_createinfo_spell","key":{{"id":{PACKAGE_CREATEINFO_SPELL}}},"operation":"insert","fields":{{"race":{{"type":"u8","value":1}},"class":{{"type":"u8","value":1}},"spell_id":{{"type":"u32","value":{spell_id}}}}}}}"#
+        ),
+    )
+}
+
+/// An insert on an update-only table. The key names a real class and level, so only the operation
+/// is wrong.
+fn class_level_stats_insert() -> String {
+    artifact(
+        "example.globals.curve",
+        r#"{"table":"game_class_level_stats","key":{"class":1,"level":10},"operation":"insert","fields":{"base_health":{"type":"u32","value":300},"base_mana":{"type":"u32","value":0}}}"#,
+    )
+}
+
+fn spell_chain_insert(spell_id: u32) -> String {
+    artifact(
+        "example.spellmeta.chain",
+        &format!(
+            r#"{{"table":"game_spell_chain","key":{{"spell_id":{spell_id}}},"operation":"insert","fields":{{"prev_spell":{{"type":"u32","value":0}},"first_spell":{{"type":"u32","value":{spell_id}}},"rank":{{"type":"u8","value":1}},"req_spell":{{"type":"u32","value":0}}}}}}"#
+        ),
+    )
+}
+
+fn spell_learn_insert(learn_spell: u32) -> String {
+    artifact(
+        "example.spellmeta.learn",
+        &format!(
+            r#"{{"table":"game_spell_learn","key":{{"id":{PACKAGE_SPELL_LEARN}}},"operation":"insert","fields":{{"parent_spell":{{"type":"u32","value":{REAL_SPELL}}},"learn_spell":{{"type":"u32","value":{learn_spell}}}}}}}"#
         ),
     )
 }
@@ -214,4 +298,150 @@ fn a_profession_offerings_marker_spell_is_exempt_but_a_class_offerings_is_not() 
     ));
     assert_eq!(trainer[0]["learn_skill_line"], COOKING.to_string());
     assert_eq!(trainer[0]["spell_id"], MARKER_SPELL_ID.to_string());
+}
+
+/// A gossip slot points at a greeting body, and a gossip option points at a creature template the
+/// creatures family owns. Both are checked against the Shard, and a Package-band body is satisfied
+/// by an insert in the same plan.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn gossip_claims_refuse_missing_cross_table_references() {
+    let standalone = Standalone::start("package-delta-gossip-references");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+
+    let refused_slot = apply(
+        &standalone,
+        "gossip",
+        &npc_text_slot_insert(MISSING_NPC_TEXT),
+    );
+    assert!(!refused_slot.status.success());
+    assert!(
+        refusal_text(&refused_slot).contains("text_id"),
+        "{}",
+        refusal_text(&refused_slot)
+    );
+
+    let refused_option = apply(
+        &standalone,
+        "gossip",
+        &gossip_option_insert(MISSING_CREATURE),
+    );
+    assert!(!refused_option.status.success());
+    assert!(
+        refusal_text(&refused_option).contains("entry"),
+        "{}",
+        refusal_text(&refused_option)
+    );
+
+    let plan = format!(
+        "{}\n{}\n{}",
+        npc_text_insert(),
+        npc_text_slot_insert(PACKAGE_NPC_TEXT as u32),
+        gossip_option_insert(FIXTURE_CREATURE)
+    );
+    let accepted = apply(&standalone, "gossip", &plan);
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let slot = standalone.query_rows(&format!(
+        "SELECT * FROM game_npc_text_slot WHERE id = {PACKAGE_NPC_TEXT_SLOT}"
+    ));
+    assert_eq!(slot[0]["text_id"], PACKAGE_NPC_TEXT.to_string());
+    let option = standalone.query_rows(&format!(
+        "SELECT * FROM game_gossip_option WHERE row_id = {PACKAGE_GOSSIP_OPTION}"
+    ));
+    assert_eq!(option[0]["entry"], FIXTURE_CREATURE.to_string());
+}
+
+/// A graveyard-zone link points at a `game_graveyard` row and a createinfo grant points at a
+/// `game_spell` row. `game_class_level_stats` permits no insert at all, whatever the key.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn globals_claims_refuse_missing_references_and_every_insert_on_a_fixed_key_table() {
+    let standalone = Standalone::start("package-delta-globals-references");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+
+    let refused_zone = apply(
+        &standalone,
+        "globals",
+        &graveyard_zone_insert(MISSING_GRAVEYARD),
+    );
+    assert!(!refused_zone.status.success());
+    assert!(
+        refusal_text(&refused_zone).contains("safe_loc_id"),
+        "{}",
+        refusal_text(&refused_zone)
+    );
+
+    let refused_grant = apply(
+        &standalone,
+        "globals",
+        &createinfo_spell_insert(MISSING_SPELL),
+    );
+    assert!(!refused_grant.status.success());
+    assert!(
+        refusal_text(&refused_grant).contains("spell_id"),
+        "{}",
+        refusal_text(&refused_grant)
+    );
+
+    let refused_curve = apply(&standalone, "globals", &class_level_stats_insert());
+    assert!(!refused_curve.status.success());
+    assert!(
+        refusal_text(&refused_curve).contains("game_class_level_stats"),
+        "{}",
+        refusal_text(&refused_curve)
+    );
+
+    let plan = format!(
+        "{}\n{}",
+        graveyard_zone_insert(REAL_GRAVEYARD),
+        createinfo_spell_insert(REAL_SPELL)
+    );
+    let accepted = apply(&standalone, "globals", &plan);
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let zone = standalone.query_rows(&format!(
+        "SELECT * FROM game_graveyard_zone WHERE row_id = {PACKAGE_GRAVEYARD_ZONE}"
+    ));
+    assert_eq!(zone[0]["safe_loc_id"], REAL_GRAVEYARD.to_string());
+    let grant = standalone.query_rows(&format!(
+        "SELECT * FROM game_createinfo_spell WHERE id = {PACKAGE_CREATEINFO_SPELL}"
+    ));
+    assert_eq!(grant[0]["spell_id"], REAL_SPELL.to_string());
+}
+
+/// Spell metadata describes a spell, so both the columns and the KEY are checked against
+/// `game_spell`: a rank link for a spell no Shard holds is a row nothing will ever read.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn spell_metadata_claims_refuse_a_missing_spell_in_the_key_and_in_a_column() {
+    let standalone = Standalone::start("package-delta-spellmeta-references");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+
+    let refused_chain = apply(&standalone, "spellmeta", &spell_chain_insert(PACKAGE_SPELL));
+    assert!(!refused_chain.status.success());
+    assert!(
+        refusal_text(&refused_chain).contains("spell_id"),
+        "{}",
+        refusal_text(&refused_chain)
+    );
+
+    let refused_learn = apply(&standalone, "spellmeta", &spell_learn_insert(MISSING_SPELL));
+    assert!(!refused_learn.status.success());
+    assert!(
+        refusal_text(&refused_learn).contains("learn_spell"),
+        "{}",
+        refusal_text(&refused_learn)
+    );
+
+    let accepted = apply(&standalone, "spellmeta", &spell_learn_insert(REAL_SPELL));
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let learn = standalone.query_rows(&format!(
+        "SELECT * FROM game_spell_learn WHERE id = {PACKAGE_SPELL_LEARN}"
+    ));
+    assert_eq!(learn[0]["learn_spell"], REAL_SPELL.to_string());
 }

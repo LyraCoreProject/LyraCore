@@ -46,18 +46,22 @@
 mod casts;
 #[cfg(test)]
 mod fixtures;
+mod globals;
+mod gossip;
 mod items;
 mod loot;
 mod quest;
 mod script;
 mod spell;
+mod spellmeta;
 mod trainers;
 
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
-    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, CAST_FAMILY, ITEM_FAMILY,
-    LOOT_FAMILY, QUEST_FAMILY, SCRIPT_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
+    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, CAST_FAMILY,
+    GLOBALS_FAMILY, GOSSIP_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SCRIPT_FAMILY,
+    SPELLMETA_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
 };
 
 use crate::helpers::require_operator;
@@ -105,6 +109,13 @@ enum ClaimFamily {
     Cast,
     /// `game_trainer_spell`.
     Trainer,
+    /// The six gossip tables (menus, menu profiles, options and the greeting text).
+    Gossip,
+    /// The seven world-wide reference tables (stat curves, start position, graveyard zones,
+    /// areatrigger destinations, and the two createinfo tables).
+    Globals,
+    /// `game_spell_chain`, `game_spell_learn` and `game_spell_proc_event`.
+    Spellmeta,
 }
 
 impl Family {
@@ -116,6 +127,9 @@ impl Family {
         Self::Claims(ClaimFamily::Loot),
         Self::Claims(ClaimFamily::Cast),
         Self::Claims(ClaimFamily::Trainer),
+        Self::Claims(ClaimFamily::Gossip),
+        Self::Claims(ClaimFamily::Globals),
+        Self::Claims(ClaimFamily::Spellmeta),
         Self::Script,
     ];
 
@@ -157,6 +171,9 @@ impl ClaimFamily {
             Self::Loot => LOOT_FAMILY,
             Self::Cast => CAST_FAMILY,
             Self::Trainer => TRAINER_FAMILY,
+            Self::Gossip => GOSSIP_FAMILY,
+            Self::Globals => GLOBALS_FAMILY,
+            Self::Spellmeta => SPELLMETA_FAMILY,
         }
     }
 
@@ -169,6 +186,9 @@ impl ClaimFamily {
             Self::Loot => loot::update_target(ctx, row),
             Self::Cast => casts::update_target(ctx, row),
             Self::Trainer => trainers::update_target(ctx, row),
+            Self::Gossip => gossip::update_target(ctx, row),
+            Self::Globals => globals::update_target(ctx, row),
+            Self::Spellmeta => spellmeta::update_target(ctx, row),
         }
     }
 
@@ -182,6 +202,9 @@ impl ClaimFamily {
             Self::Loot => loot::clear_package_range(ctx),
             Self::Cast => casts::clear_package_range(ctx),
             Self::Trainer => trainers::clear_package_range(ctx),
+            Self::Gossip => gossip::clear_package_range(ctx),
+            Self::Globals => globals::clear_package_range(ctx),
+            Self::Spellmeta => spellmeta::clear_package_range(ctx),
         }
     }
 
@@ -194,6 +217,9 @@ impl ClaimFamily {
             Self::Loot => loot::write_row(ctx, row),
             Self::Cast => casts::write_row(ctx, row),
             Self::Trainer => trainers::write_row(ctx, row),
+            Self::Gossip => gossip::write_row(ctx, row),
+            Self::Globals => globals::write_row(ctx, row),
+            Self::Spellmeta => spellmeta::write_row(ctx, row),
         }
     }
 
@@ -205,6 +231,9 @@ impl ClaimFamily {
             Self::Loot => loot::check_references(ctx, rows),
             Self::Cast => casts::check_references(ctx, rows),
             Self::Trainer => trainers::check_references(ctx, rows),
+            Self::Gossip => gossip::check_references(ctx, rows),
+            Self::Globals => globals::check_references(ctx, rows),
+            Self::Spellmeta => spellmeta::check_references(ctx, rows),
         }
     }
 }
@@ -630,11 +659,13 @@ fn stamp_provenance(ctx: &ReducerContext, family: Family, packages: &[PlannedPac
 #[cfg(test)]
 mod tests {
     use super::fixtures::{
-        artifact, creature_spell_claim, effect_claim, item_claim, pickpocket_loot_claim, plan,
-        quest_claim, spell_claim, trainer_spell_claim, HASH_A, PACKAGE_CREATURE_SPELL,
-        PACKAGE_ITEM, PACKAGE_LOOT, PACKAGE_QUEST, PACKAGE_SPELL, PACKAGE_TRAINER_SPELL,
-        REAL_SPELL, WHOLE_CREATURE_SPELL_ROW, WHOLE_EFFECT_ROW, WHOLE_ITEM_ROW,
-        WHOLE_PICKPOCKET_LOOT_ROW, WHOLE_QUEST_ROW, WHOLE_SPELL_ROW, WHOLE_TRAINER_SPELL_ROW,
+        artifact, creature_spell_claim, effect_claim, graveyard_zone_claim, item_claim,
+        npc_text_claim, pickpocket_loot_claim, plan, quest_claim, spell_claim, spell_learn_claim,
+        trainer_spell_claim, HASH_A, PACKAGE_CREATURE_SPELL, PACKAGE_GLOBALS, PACKAGE_GOSSIP,
+        PACKAGE_ITEM, PACKAGE_LOOT, PACKAGE_QUEST, PACKAGE_SPELL, PACKAGE_SPELL_LEARN,
+        PACKAGE_TRAINER_SPELL, REAL_SPELL, WHOLE_CREATURE_SPELL_ROW, WHOLE_EFFECT_ROW,
+        WHOLE_GRAVEYARD_ZONE_ROW, WHOLE_ITEM_ROW, WHOLE_NPC_TEXT_ROW, WHOLE_PICKPOCKET_LOOT_ROW,
+        WHOLE_QUEST_ROW, WHOLE_SPELL_LEARN_ROW, WHOLE_SPELL_ROW, WHOLE_TRAINER_SPELL_ROW,
     };
     use super::{check_claims_belong_to, ApplyPlan, ClaimFamily, Family, ARTIFACT_SEPARATOR};
     use lyracore_package_delta::PackageDelta;
@@ -798,15 +829,19 @@ mod tests {
 
     #[test]
     fn an_import_family_with_no_artifact_schema_is_refused_by_name() {
-        let refusal = Family::parse("gossip").expect_err("an unsupported family is refused");
+        // `creatures` is a dump family the importer loads and this crate gives no claim schema.
+        let refusal = Family::parse("creatures").expect_err("an unsupported family is refused");
 
-        assert!(refusal.contains("`gossip`"), "{refusal}");
+        assert!(refusal.contains("`creatures`"), "{refusal}");
         assert!(refusal.contains("`spell`"), "{refusal}");
         assert!(refusal.contains("`items`"), "{refusal}");
         assert!(refusal.contains("`quests`"), "{refusal}");
         assert!(refusal.contains("`loot`"), "{refusal}");
         assert!(refusal.contains("`casts`"), "{refusal}");
         assert!(refusal.contains("`trainers`"), "{refusal}");
+        assert!(refusal.contains("`gossip`"), "{refusal}");
+        assert!(refusal.contains("`globals`"), "{refusal}");
+        assert!(refusal.contains("`spellmeta`"), "{refusal}");
         assert!(refusal.contains("`script`"), "{refusal}");
     }
 
@@ -832,6 +867,18 @@ mod tests {
         assert_eq!(
             Family::parse("trainers"),
             Ok(Family::Claims(ClaimFamily::Trainer))
+        );
+        assert_eq!(
+            Family::parse("gossip"),
+            Ok(Family::Claims(ClaimFamily::Gossip))
+        );
+        assert_eq!(
+            Family::parse("globals"),
+            Ok(Family::Claims(ClaimFamily::Globals))
+        );
+        assert_eq!(
+            Family::parse("spellmeta"),
+            Ok(Family::Claims(ClaimFamily::Spellmeta))
         );
         assert_eq!(Family::parse("script"), Ok(Family::Script));
         for family in Family::ALL {
@@ -950,5 +997,56 @@ mod tests {
             Ok(())
         );
         assert!(check_claims_belong_to(ClaimFamily::Cast, &plan.rows).is_err());
+    }
+
+    /// A gossip plan is checked against the gossip family, not a sibling family it happens to sit
+    /// beside in this build's catalogue.
+    #[test]
+    fn a_gossip_plan_claims_only_gossip_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &npc_text_claim(PACKAGE_GOSSIP as u32, "insert", WHOLE_NPC_TEXT_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Gossip, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Globals, &plan.rows).is_err());
+    }
+
+    /// A globals plan is checked against the globals family, not a sibling family it happens to sit
+    /// beside in this build's catalogue.
+    #[test]
+    fn a_globals_plan_claims_only_globals_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &graveyard_zone_claim(PACKAGE_GLOBALS, "insert", WHOLE_GRAVEYARD_ZONE_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Globals, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Gossip, &plan.rows).is_err());
+    }
+
+    /// A spell metadata plan runs under `spellmeta`, NOT under `spell`, even though two of its
+    /// three tables key on a spell identifier.
+    #[test]
+    fn a_spell_metadata_plan_claims_only_spellmeta_family_tables() {
+        let plan = plan(&[artifact(
+            "example.bolt",
+            &spell_learn_claim(PACKAGE_SPELL_LEARN, "insert", WHOLE_SPELL_LEARN_ROW),
+        )])
+        .expect("plan builds");
+
+        assert_eq!(
+            check_claims_belong_to(ClaimFamily::Spellmeta, &plan.rows),
+            Ok(())
+        );
+        assert!(check_claims_belong_to(ClaimFamily::Spell, &plan.rows).is_err());
     }
 }

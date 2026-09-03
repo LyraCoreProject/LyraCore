@@ -39,6 +39,35 @@ pub const CAST_FAMILY: &str = "casts";
 /// `trainers` `--family` block stamps.
 pub const TRAINER_FAMILY: &str = "trainers";
 
+/// The Import Family that owns the gossip tables: the per-creature menu, the menu profiles a
+/// Package or a relay selects at runtime, their options, and the NPC greeting text they resolve to.
+/// The same name the `--dump` importer's `gossip` `--family` block stamps.
+pub const GOSSIP_FAMILY: &str = "gossip";
+
+/// The Import Family that owns the small world-wide reference tables: the two stat curves, the
+/// start position, the graveyard zone links, the areatrigger destinations, and the two createinfo
+/// tables. The same name the `--dump` importer's `globals` `--family` block stamps.
+///
+/// `game_start_item` is loaded by the same block and is deliberately NOT in this catalogue. That
+/// table has two owners: the `--dump` globals pass owns identifiers from 1,000,000 up, and the
+/// `--dbc` `CharStartOutfit` pass owns everything below. Only the first has a Package Delta stage,
+/// so a claim on a `--dbc`-owned row would be reverted by a pass this family cannot follow, with
+/// nothing to reapply it.
+///
+/// `game_graveyard` and `game_area_trigger` are NOT in it either, for a plainer reason: both are
+/// `--dbc` tables, not part of this family's block at all. They are still what this family's
+/// references are checked against.
+pub const GLOBALS_FAMILY: &str = "globals";
+
+/// The Import Family that owns the spell metadata tables: the rank chain, the auto-learn
+/// dependents, and the proc overlay. The same name the `--dump` importer's `spellmeta` `--family`
+/// block stamps.
+///
+/// Distinct from [`SPELL_FAMILY`], which owns the spell catalogue itself. Two of this family's
+/// three tables key on a spell identifier, so they take the spell family's identifier policy while
+/// still belonging to this family's apply.
+pub const SPELLMETA_FAMILY: &str = "spellmeta";
+
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
 /// needs no translation step.
 ///
@@ -88,6 +117,59 @@ pub enum Table {
     // ---- trainers ----
     /// `game_trainer_spell` — one spell a trainer teaches.
     TrainerSpell,
+    // ---- gossip ----
+    /// `game_gossip_menu` — which greeting text a creature template shows. Update-only: the
+    /// primary key names a creature template, which no Package may invent. See
+    /// [`crate::DeltaError::InsertNotSupported`].
+    GossipMenu,
+    /// `game_gossip_menu_profile` — a source gossip menu kept by menu id, for runtime selection.
+    /// Insert and partial update: `menu_id` is an identifier space of its own, not a creature.
+    GossipMenuProfile,
+    /// `game_gossip_menu_profile_option` — one clickable line of a menu profile. Insert and
+    /// partial update on its own surrogate `row_id`.
+    GossipMenuProfileOption,
+    /// `game_gossip_option` — one clickable line of a creature's own menu. Insert and partial
+    /// update on its own surrogate `row_id`; the creature it belongs to is a claimed column, not
+    /// the key.
+    GossipOption,
+    /// `game_npc_text` — one greeting body, by text id. Insert and partial update.
+    NpcText,
+    /// `game_npc_text_slot` — one weighted greeting variant of a text id. Insert and partial
+    /// update on its own surrogate `id`.
+    NpcTextSlot,
+    // ---- globals ----
+    /// `game_class_level_stats` — base health and mana for one (class, level). Update-only: the
+    /// key names a class and a level the client fixes, neither of which a Package may invent.
+    ClassLevelStats,
+    /// `game_level_stats` — the five base attributes for one (race, class, level). Update-only,
+    /// for the same reason as [`Table::ClassLevelStats`].
+    LevelStats,
+    /// `game_start_position` — where a fresh character of one (race, class) starts. Update-only:
+    /// the key names a race and a class the client fixes.
+    StartPosition,
+    /// `game_graveyard_zone` — which zone an imported graveyard serves. Insert and partial update
+    /// on its own surrogate `row_id`.
+    GraveyardZone,
+    /// `game_areatrigger_teleport` — where a portal sends the player. Update-only: the key is an
+    /// `AreaTrigger.dbc` trigger id, client data no Package may invent.
+    AreatriggerTeleport,
+    /// `game_createinfo_spell` — one spell a fresh character of a matching (race, class) starts
+    /// with. Insert and partial update on its own surrogate `id`.
+    CreateinfoSpell,
+    /// `game_createinfo_action` — one default action-bar button for a matching (race, class).
+    /// Insert and partial update on its own surrogate `row_id`.
+    CreateinfoAction,
+    // ---- spellmeta ----
+    /// `game_spell_chain` — one spell's rank-chain link. Insert and partial update, but the key IS
+    /// a spell identifier, so an insert must name a Package spell
+    /// ([`crate::PACKAGE_SPELL_ID_FLOOR`]) rather than an identifier of this family's own.
+    SpellChain,
+    /// `game_spell_learn` — one "learning this also teaches that" dependent. Insert and partial
+    /// update on its own surrogate `id`.
+    SpellLearn,
+    /// `game_spell_proc_event` — the proc overlay for one spell. Insert and partial update, with
+    /// the same spell-identifier policy as [`Table::SpellChain`].
+    SpellProcEvent,
 }
 
 impl Table {
@@ -110,6 +192,22 @@ impl Table {
         Self::CreatureCast,
         Self::CreatureSpell,
         Self::TrainerSpell,
+        Self::GossipMenu,
+        Self::GossipMenuProfile,
+        Self::GossipMenuProfileOption,
+        Self::GossipOption,
+        Self::NpcText,
+        Self::NpcTextSlot,
+        Self::ClassLevelStats,
+        Self::LevelStats,
+        Self::StartPosition,
+        Self::GraveyardZone,
+        Self::AreatriggerTeleport,
+        Self::CreateinfoSpell,
+        Self::CreateinfoAction,
+        Self::SpellChain,
+        Self::SpellLearn,
+        Self::SpellProcEvent,
     ];
 
     /// The durable table name, and the value the artifact's `table` member carries.
@@ -132,6 +230,22 @@ impl Table {
             Self::CreatureCast => "game_creature_cast",
             Self::CreatureSpell => "game_creature_spell",
             Self::TrainerSpell => "game_trainer_spell",
+            Self::GossipMenu => "game_gossip_menu",
+            Self::GossipMenuProfile => "game_gossip_menu_profile",
+            Self::GossipMenuProfileOption => "game_gossip_menu_profile_option",
+            Self::GossipOption => "game_gossip_option",
+            Self::NpcText => "game_npc_text",
+            Self::NpcTextSlot => "game_npc_text_slot",
+            Self::ClassLevelStats => "game_class_level_stats",
+            Self::LevelStats => "game_level_stats",
+            Self::StartPosition => "game_start_position",
+            Self::GraveyardZone => "game_graveyard_zone",
+            Self::AreatriggerTeleport => "game_areatrigger_teleport",
+            Self::CreateinfoSpell => "game_createinfo_spell",
+            Self::CreateinfoAction => "game_createinfo_action",
+            Self::SpellChain => "game_spell_chain",
+            Self::SpellLearn => "game_spell_learn",
+            Self::SpellProcEvent => "game_spell_proc_event",
         }
     }
 
@@ -157,6 +271,20 @@ impl Table {
             | Self::FishingLoot => LOOT_FAMILY,
             Self::CreatureCast | Self::CreatureSpell => CAST_FAMILY,
             Self::TrainerSpell => TRAINER_FAMILY,
+            Self::GossipMenu
+            | Self::GossipMenuProfile
+            | Self::GossipMenuProfileOption
+            | Self::GossipOption
+            | Self::NpcText
+            | Self::NpcTextSlot => GOSSIP_FAMILY,
+            Self::ClassLevelStats
+            | Self::LevelStats
+            | Self::StartPosition
+            | Self::GraveyardZone
+            | Self::AreatriggerTeleport
+            | Self::CreateinfoSpell
+            | Self::CreateinfoAction => GLOBALS_FAMILY,
+            Self::SpellChain | Self::SpellLearn | Self::SpellProcEvent => SPELLMETA_FAMILY,
         }
     }
 
@@ -180,6 +308,22 @@ impl Table {
             "game_creature_cast" => Some(Self::CreatureCast),
             "game_creature_spell" => Some(Self::CreatureSpell),
             "game_trainer_spell" => Some(Self::TrainerSpell),
+            "game_gossip_menu" => Some(Self::GossipMenu),
+            "game_gossip_menu_profile" => Some(Self::GossipMenuProfile),
+            "game_gossip_menu_profile_option" => Some(Self::GossipMenuProfileOption),
+            "game_gossip_option" => Some(Self::GossipOption),
+            "game_npc_text" => Some(Self::NpcText),
+            "game_npc_text_slot" => Some(Self::NpcTextSlot),
+            "game_class_level_stats" => Some(Self::ClassLevelStats),
+            "game_level_stats" => Some(Self::LevelStats),
+            "game_start_position" => Some(Self::StartPosition),
+            "game_graveyard_zone" => Some(Self::GraveyardZone),
+            "game_areatrigger_teleport" => Some(Self::AreatriggerTeleport),
+            "game_createinfo_spell" => Some(Self::CreateinfoSpell),
+            "game_createinfo_action" => Some(Self::CreateinfoAction),
+            "game_spell_chain" => Some(Self::SpellChain),
+            "game_spell_learn" => Some(Self::SpellLearn),
+            "game_spell_proc_event" => Some(Self::SpellProcEvent),
             _ => None,
         }
     }
@@ -222,6 +366,22 @@ impl Table {
             Self::CreatureCast => CREATURE_CAST_COLUMNS,
             Self::CreatureSpell => CREATURE_SPELL_COLUMNS,
             Self::TrainerSpell => TRAINER_SPELL_COLUMNS,
+            Self::GossipMenu => GOSSIP_MENU_COLUMNS,
+            Self::GossipMenuProfile => GOSSIP_MENU_PROFILE_COLUMNS,
+            Self::GossipMenuProfileOption => GOSSIP_MENU_PROFILE_OPTION_COLUMNS,
+            Self::GossipOption => GOSSIP_OPTION_COLUMNS,
+            Self::NpcText => NPC_TEXT_COLUMNS,
+            Self::NpcTextSlot => NPC_TEXT_SLOT_COLUMNS,
+            Self::ClassLevelStats => CLASS_LEVEL_STATS_COLUMNS,
+            Self::LevelStats => LEVEL_STATS_COLUMNS,
+            Self::StartPosition => START_POSITION_COLUMNS,
+            Self::GraveyardZone => GRAVEYARD_ZONE_COLUMNS,
+            Self::AreatriggerTeleport => AREATRIGGER_TELEPORT_COLUMNS,
+            Self::CreateinfoSpell => CREATEINFO_SPELL_COLUMNS,
+            Self::CreateinfoAction => CREATEINFO_ACTION_COLUMNS,
+            Self::SpellChain => SPELL_CHAIN_COLUMNS,
+            Self::SpellLearn => SPELL_LEARN_COLUMNS,
+            Self::SpellProcEvent => SPELL_PROC_EVENT_COLUMNS,
         }
     }
 
@@ -524,6 +684,184 @@ const TRAINER_SPELL_COLUMNS: &[Column] = &[
     column("required_level", FieldType::U8),
     column("learn_skill_line", FieldType::U32),
     column("learn_skill_cap", FieldType::U32),
+];
+
+// ---- gossip ----
+
+/// `game_gossip_menu` minus its `entry` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `GossipMenu` struct. Update-only
+/// ([`crate::DeltaError::InsertNotSupported`]), but a claim still sets a real value: retargeting
+/// which greeting a creature shows.
+const GOSSIP_MENU_COLUMNS: &[Column] = &[column("text_id", FieldType::U32)];
+
+/// `game_gossip_menu_profile` minus its `menu_id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `GossipMenuProfile` struct.
+const GOSSIP_MENU_PROFILE_COLUMNS: &[Column] = &[column("text_id", FieldType::U32)];
+
+/// `game_gossip_menu_profile_option` minus its `row_id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `GossipMenuProfileOption` struct.
+const GOSSIP_MENU_PROFILE_OPTION_COLUMNS: &[Column] = &[
+    column("menu_id", FieldType::U32),
+    column("option_index", FieldType::U32),
+    column("icon", FieldType::U32),
+    column("text", FieldType::Str),
+    column("action", FieldType::U32),
+    column("action_menu_id", FieldType::U32),
+    column("cond_type", FieldType::U32),
+    column("cond_value1", FieldType::U32),
+    column("cond_value2", FieldType::U32),
+];
+
+/// `game_gossip_option` minus its `row_id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `GossipOption` struct. `entry` names
+/// the creature template whose menu this line belongs to; it is a claimed column here, not part of
+/// the key, so a Package may add an option to a real creature.
+const GOSSIP_OPTION_COLUMNS: &[Column] = &[
+    column("entry", FieldType::U32),
+    column("option_index", FieldType::U32),
+    column("icon", FieldType::U32),
+    column("text", FieldType::Str),
+    column("action", FieldType::U32),
+    column("action_menu_id", FieldType::U32),
+    column("cond_type", FieldType::U32),
+    column("cond_value1", FieldType::U32),
+    column("cond_value2", FieldType::U32),
+];
+
+/// `game_npc_text` minus its `text_id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `NpcText` struct.
+const NPC_TEXT_COLUMNS: &[Column] = &[column("text", FieldType::Str)];
+
+/// `game_npc_text_slot` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `NpcTextSlot` struct.
+const NPC_TEXT_SLOT_COLUMNS: &[Column] = &[
+    column("text_id", FieldType::U32),
+    column("slot_index", FieldType::U8),
+    column("text_male", FieldType::Str),
+    column("text_female", FieldType::Str),
+    column("probability", FieldType::F32),
+];
+
+// ---- globals ----
+
+/// `game_class_level_stats` minus its packed `class_level` key and the `class` / `level` that key
+/// names.
+///
+/// Hand-maintained against `module/src/stats.rs`'s `ClassLevelStats` struct.
+const CLASS_LEVEL_STATS_COLUMNS: &[Column] = &[
+    column("base_health", FieldType::U32),
+    column("base_mana", FieldType::U32),
+];
+
+/// `game_level_stats` minus its packed `race_class_level` key and the `race` / `class` / `level`
+/// that key names.
+///
+/// Hand-maintained against `module/src/stats.rs`'s `LevelStats` struct.
+const LEVEL_STATS_COLUMNS: &[Column] = &[
+    column("strength", FieldType::U32),
+    column("agility", FieldType::U32),
+    column("stamina", FieldType::U32),
+    column("intellect", FieldType::U32),
+    column("spirit", FieldType::U32),
+];
+
+/// `game_start_position` minus its packed `race_class` key and the `race` / `class` that key names.
+///
+/// Hand-maintained against `module/src/config.rs`'s `StartPosition` struct.
+const START_POSITION_COLUMNS: &[Column] = &[
+    column("map_id", FieldType::U32),
+    column("zone_id", FieldType::U32),
+    column("x", FieldType::F32),
+    column("y", FieldType::F32),
+    column("z", FieldType::F32),
+    column("orientation", FieldType::F32),
+    column("display_id", FieldType::U32),
+];
+
+/// `game_graveyard_zone` minus its `row_id` primary key.
+///
+/// Hand-maintained against `module/src/graveyard.rs`'s `GraveyardZone` struct.
+const GRAVEYARD_ZONE_COLUMNS: &[Column] = &[
+    column("safe_loc_id", FieldType::U32),
+    column("zone_id", FieldType::U32),
+    column("faction", FieldType::U32),
+];
+
+/// `game_areatrigger_teleport` minus its `trigger_id` primary key.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `AreatriggerTeleport` struct. Update-only
+/// ([`crate::DeltaError::InsertNotSupported`]), but every column here is a real value: a Package
+/// may send an existing portal somewhere else.
+const AREATRIGGER_TELEPORT_COLUMNS: &[Column] = &[
+    column("target_map", FieldType::U32),
+    column("x", FieldType::F32),
+    column("y", FieldType::F32),
+    column("z", FieldType::F32),
+    column("o", FieldType::F32),
+    column("name", FieldType::Str),
+];
+
+/// `game_createinfo_spell` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/spell/spellbook.rs`'s `CreateinfoSpell` struct. `race` 0 and
+/// `class` 0 are wildcards, which is why neither is bounded here beyond its own width.
+const CREATEINFO_SPELL_COLUMNS: &[Column] = &[
+    column("race", FieldType::U8),
+    column("class", FieldType::U8),
+    column("spell_id", FieldType::U32),
+];
+
+/// `game_createinfo_action` minus its `row_id` primary key.
+///
+/// Hand-maintained against `module/src/action_bar.rs`'s `CreateinfoAction` struct. `action` is
+/// polymorphic on `action_type` (0 names a spell, other values an item or a macro), so no single
+/// catalogue answers it and no reference check is made on it.
+const CREATEINFO_ACTION_COLUMNS: &[Column] = &[
+    column("race", FieldType::U8),
+    column("class", FieldType::U8),
+    column("button", FieldType::U8),
+    column("action", FieldType::U32),
+    column("action_type", FieldType::U8),
+];
+
+// ---- spellmeta ----
+
+/// `game_spell_chain` minus its `spell_id` primary key.
+///
+/// Hand-maintained against `module/src/spell/spellbook.rs`'s `SpellChain` struct.
+const SPELL_CHAIN_COLUMNS: &[Column] = &[
+    column("prev_spell", FieldType::U32),
+    column("first_spell", FieldType::U32),
+    column("rank", FieldType::U8),
+    column("req_spell", FieldType::U32),
+];
+
+/// `game_spell_learn` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/spell/spellbook.rs`'s `SpellLearn` struct.
+const SPELL_LEARN_COLUMNS: &[Column] = &[
+    column("parent_spell", FieldType::U32),
+    column("learn_spell", FieldType::U32),
+];
+
+/// `game_spell_proc_event` minus its `spell_id` primary key.
+///
+/// Hand-maintained against `module/src/spell/tables.rs`'s `SpellProcEvent` struct.
+const SPELL_PROC_EVENT_COLUMNS: &[Column] = &[
+    column("proc_flags", FieldType::U32),
+    column("proc_ex", FieldType::U32),
+    column("school_mask", FieldType::U8),
+    column("family_name", FieldType::U8),
+    column("family_flags", FieldType::U64),
+    column("ppm_rate", FieldType::F32),
+    column("custom_chance", FieldType::U8),
+    column("icd_ms", FieldType::U32),
 ];
 
 /// The type tag a claimed value carries.

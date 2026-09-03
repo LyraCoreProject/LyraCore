@@ -210,8 +210,9 @@ fn row_deletion_is_refused() {
 }
 
 /// `game_creature_cast`'s key names a creature template, which no Package may invent — the worked
-/// example of an update-only table. See `cast_identifiers.rs` for the fuller identifier-band
-/// coverage this refusal sits beside.
+/// example of an update-only table. Five more follow it (`game_gossip_menu`, the two stat curves,
+/// `game_start_position`, `game_areatrigger_teleport`); see `gossip_identifiers.rs` and
+/// `globals_identifiers.rs` for their own coverage.
 #[test]
 fn an_insert_on_an_update_only_table_is_refused_by_name() {
     let json = artifact(

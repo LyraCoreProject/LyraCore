@@ -423,3 +423,158 @@ pub const fn is_package_trainer_id(id: u64) -> bool {
 pub const fn is_fixture_reserved_trainer_id(id: u64) -> bool {
     id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
 }
+
+// ===============================================================================================
+//  gossip
+// ===============================================================================================
+
+/// Lowest identifier a Package may INSERT in the gossip family.
+///
+/// The seventh application of the band formula, one decade above the Package trainer range: `12`
+/// names a Package gossip row. One band covers the whole family, the loot shape: five independent
+/// `SpacetimeDB` tables with independent primary-key spaces cannot collide by sharing a range. It
+/// is checked against `game_gossip_menu_profile.menu_id`, `game_gossip_menu_profile_option.row_id`,
+/// `game_gossip_option.row_id`, `game_npc_text.text_id` and `game_npc_text_slot.id`.
+///
+/// `game_gossip_menu` carries no band: its primary key is a creature template entry, which no
+/// Package may invent ([`crate::DeltaError::InsertNotSupported`]).
+///
+/// The band sits above every identifier the gossip base import spares by range: that import deletes
+/// `text_id` / `row_id` / `id` below 50,000 and `game_gossip_menu.entry` below 1,000,000
+/// (`importer/src/main.rs`, `docs/danger-zones.md`), so a Package row in those tables survives a
+/// base reload. The two menu-profile tables it clears whole; a Package row there is restored by the
+/// Package Delta stage the reload runs next, the way every family's reload restores its claims.
+pub const PACKAGE_GOSSIP_ID_FLOOR: u64 = 12_000_000;
+
+/// Highest identifier a Package may INSERT in the gossip family.
+pub const PACKAGE_GOSSIP_ID_CEIL: u64 = 12_999_999;
+
+const _: () = assert!(PACKAGE_GOSSIP_ID_FLOOR <= PACKAGE_GOSSIP_ID_CEIL);
+const _: () = assert!((RESERVED_ID_CEIL as u64) < PACKAGE_GOSSIP_ID_FLOOR);
+const _: () = assert!(PACKAGE_TRAINER_ID_CEIL < PACKAGE_GOSSIP_ID_FLOOR);
+
+/// True when a Package may INSERT a gossip row at this identifier.
+#[must_use]
+pub const fn is_package_gossip_id(id: u64) -> bool {
+    id >= PACKAGE_GOSSIP_ID_FLOOR && id <= PACKAGE_GOSSIP_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. The gossip family has no fixture cluster of its own, so the project-wide band is the
+/// whole check, the same shape as [`is_fixture_reserved_loot_id`].
+#[must_use]
+pub const fn is_fixture_reserved_gossip_id(id: u64) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
+}
+
+// ===============================================================================================
+//  globals
+// ===============================================================================================
+
+/// Lowest identifier a Package may INSERT in the globals family.
+///
+/// The eighth application of the band formula, one decade above the Package gossip range: `13`
+/// names a Package globals row. Checked against `game_graveyard_zone.row_id`,
+/// `game_createinfo_spell.id` and `game_createinfo_action.row_id` — the three tables of the family
+/// whose key is a free surrogate.
+///
+/// The family's other four tables carry no band at all, because none of their keys is free to
+/// invent: `game_class_level_stats`, `game_level_stats` and `game_start_position` key on a race,
+/// class and level the client fixes, and `game_areatrigger_teleport` keys on an `AreaTrigger.dbc`
+/// trigger id. All four are update-only ([`crate::DeltaError::InsertNotSupported`]).
+pub const PACKAGE_GLOBALS_ID_FLOOR: u64 = 13_000_000;
+
+/// Highest identifier a Package may INSERT in the globals family.
+pub const PACKAGE_GLOBALS_ID_CEIL: u64 = 13_999_999;
+
+const _: () = assert!(PACKAGE_GLOBALS_ID_FLOOR <= PACKAGE_GLOBALS_ID_CEIL);
+const _: () = assert!((RESERVED_ID_CEIL as u64) < PACKAGE_GLOBALS_ID_FLOOR);
+const _: () = assert!(PACKAGE_GOSSIP_ID_CEIL < PACKAGE_GLOBALS_ID_FLOOR);
+
+/// True when a Package may INSERT a globals row at this identifier.
+#[must_use]
+pub const fn is_package_globals_id(id: u64) -> bool {
+    id >= PACKAGE_GLOBALS_ID_FLOOR && id <= PACKAGE_GLOBALS_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. The globals family has no fixture cluster of its own, so the project-wide band is the
+/// whole check.
+#[must_use]
+pub const fn is_fixture_reserved_globals_id(id: u64) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
+}
+
+/// Highest `level` a claim may name on `game_class_level_stats` or `game_level_stats`.
+///
+/// Vanilla stops at 60 and the cmangos stat curves carry no row above it, so a claim past this
+/// would name a row that cannot exist. The same "real domain is narrower than the packed field
+/// width" shape [`MAX_SPELL_EFFECT_INDEX`] documents: the packed key reserves a whole byte.
+pub const MAX_STATS_LEVEL: u8 = 60;
+
+/// Packed `game_class_level_stats` primary key: `(class << 8) | level`.
+///
+/// Already canonical and load-bearing in the Module (`module/src/stats.rs`'s `class_level_key`),
+/// which is why this restates the formula rather than inventing one the way
+/// [`packed_quest_objective_id`] had to. A Package Delta never authors the packed value; it names
+/// the class and the level, and this derives the key.
+#[must_use]
+pub const fn packed_class_level_id(class: u8, level: u8) -> u64 {
+    ((class as u64) << 8) | level as u64
+}
+
+/// Packed `game_level_stats` primary key: `(race << 16) | (class << 8) | level`.
+///
+/// The Module's `race_class_level_key` (`module/src/stats.rs`), restated for the same reason as
+/// [`packed_class_level_id`].
+#[must_use]
+pub const fn packed_race_class_level_id(race: u8, class: u8, level: u8) -> u64 {
+    ((race as u64) << 16) | ((class as u64) << 8) | level as u64
+}
+
+/// Packed `game_start_position` primary key: `(race << 8) | class`.
+///
+/// The Module packs the same pair into a `u16` (`module/src/config.rs`'s `StartPosition`), and
+/// `module/src/config.rs`'s `game_start_item` uses the identical packing for its own `race_class`.
+#[must_use]
+pub const fn packed_race_class_id(race: u8, class: u8) -> u64 {
+    ((race as u64) << 8) | class as u64
+}
+
+// ===============================================================================================
+//  spellmeta
+// ===============================================================================================
+
+/// Lowest `game_spell_learn.id` a Package may INSERT.
+///
+/// The ninth application of the band formula, one decade above the Package globals range: `14`
+/// names a Package spell-metadata row.
+///
+/// It covers ONE table. `game_spell_chain` and `game_spell_proc_event` both key on a spell
+/// identifier, not a surrogate, so what a Package may invent there is exactly what it may invent in
+/// `game_spell` — [`PACKAGE_SPELL_ID_FLOOR`]..=[`PACKAGE_SPELL_ID_CEIL`], and
+/// [`is_fixture_reserved_spell_id`] for the fixtures. Giving those two tables a band of their own
+/// would let a Package write metadata for a spell that cannot exist.
+pub const PACKAGE_SPELLMETA_ID_FLOOR: u64 = 14_000_000;
+
+/// Highest `game_spell_learn.id` a Package may INSERT.
+pub const PACKAGE_SPELLMETA_ID_CEIL: u64 = 14_999_999;
+
+const _: () = assert!(PACKAGE_SPELLMETA_ID_FLOOR <= PACKAGE_SPELLMETA_ID_CEIL);
+const _: () = assert!((RESERVED_ID_CEIL as u64) < PACKAGE_SPELLMETA_ID_FLOOR);
+const _: () = assert!(PACKAGE_GLOBALS_ID_CEIL < PACKAGE_SPELLMETA_ID_FLOOR);
+
+/// True when a Package may INSERT a `game_spell_learn` row at this identifier.
+#[must_use]
+pub const fn is_package_spellmeta_id(id: u64) -> bool {
+    id >= PACKAGE_SPELLMETA_ID_FLOOR && id <= PACKAGE_SPELLMETA_ID_CEIL
+}
+
+/// True when the identifier belongs to a seeded fixture. No Package may claim one, under any
+/// operation. `game_spell_learn` has no fixture cluster of its own, so the project-wide band is the
+/// whole check. Its two spell-keyed siblings use [`is_fixture_reserved_spell_id`] instead, which
+/// also covers the seeded fixture spell cluster.
+#[must_use]
+pub const fn is_fixture_reserved_spellmeta_id(id: u64) -> bool {
+    id >= FIXTURE_RESERVED_ID_FLOOR as u64 && id <= FIXTURE_RESERVED_ID_CEIL as u64
+}

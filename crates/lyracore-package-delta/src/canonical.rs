@@ -62,30 +62,26 @@ fn write_claim(out: &mut String, claim: &Claim) {
 
 fn write_key(out: &mut String, key: PrimaryKey) {
     match key {
-        PrimaryKey::Spell { spell_id } => {
-            out.push_str("{\"spell_id\":");
-            out.push_str(&spell_id.to_string());
-            out.push('}');
+        PrimaryKey::Spell { spell_id }
+        | PrimaryKey::SpellChain { spell_id }
+        | PrimaryKey::SpellProcEvent { spell_id } => {
+            write_members(out, &[("spell_id", spell_id.into())]);
         }
         PrimaryKey::SpellEffect {
             spell_id,
             effect_index,
-        } => {
-            out.push_str("{\"spell_id\":");
-            out.push_str(&spell_id.to_string());
-            out.push_str(",\"effect_index\":");
-            out.push_str(&effect_index.to_string());
-            out.push('}');
-        }
-        PrimaryKey::Item { entry } | PrimaryKey::Quest { entry } => {
-            out.push_str("{\"entry\":");
-            out.push_str(&entry.to_string());
-            out.push('}');
-        }
+        } => write_members(
+            out,
+            &[
+                ("spell_id", spell_id.into()),
+                ("effect_index", effect_index.into()),
+            ],
+        ),
+        PrimaryKey::Item { entry }
+        | PrimaryKey::Quest { entry }
+        | PrimaryKey::GossipMenu { entry } => write_members(out, &[("entry", entry.into())]),
         PrimaryKey::QuestText { quest_entry } => {
-            out.push_str("{\"quest_entry\":");
-            out.push_str(&quest_entry.to_string());
-            out.push('}');
+            write_members(out, &[("quest_entry", quest_entry.into())]);
         }
         PrimaryKey::QuestObjective {
             quest_entry,
@@ -94,49 +90,89 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         | PrimaryKey::QuestCastObjective {
             quest_entry,
             obj_index,
-        } => {
-            out.push_str("{\"quest_entry\":");
-            out.push_str(&quest_entry.to_string());
-            out.push_str(",\"obj_index\":");
-            out.push_str(&obj_index.to_string());
-            out.push('}');
-        }
+        } => write_members(
+            out,
+            &[
+                ("quest_entry", quest_entry.into()),
+                ("obj_index", obj_index.into()),
+            ],
+        ),
         PrimaryKey::QuestRewardItem {
             quest_entry,
             item_entry,
-        } => {
-            out.push_str("{\"quest_entry\":");
-            out.push_str(&quest_entry.to_string());
-            out.push_str(",\"item_entry\":");
-            out.push_str(&item_entry.to_string());
-            out.push('}');
-        }
+        } => write_members(
+            out,
+            &[
+                ("quest_entry", quest_entry.into()),
+                ("item_entry", item_entry.into()),
+            ],
+        ),
         PrimaryKey::QuestRewardChoice {
             quest_entry,
             choice_index,
-        } => {
-            out.push_str("{\"quest_entry\":");
-            out.push_str(&quest_entry.to_string());
-            out.push_str(",\"choice_index\":");
-            out.push_str(&choice_index.to_string());
-            out.push('}');
-        }
+        } => write_members(
+            out,
+            &[
+                ("quest_entry", quest_entry.into()),
+                ("choice_index", choice_index.into()),
+            ],
+        ),
         PrimaryKey::PickpocketLoot { id }
         | PrimaryKey::GameobjectLoot { id }
         | PrimaryKey::SkinningLoot { id }
         | PrimaryKey::FishingLoot { id }
         | PrimaryKey::CreatureSpell { id }
-        | PrimaryKey::TrainerSpell { id } => {
-            out.push_str("{\"id\":");
-            out.push_str(&id.to_string());
-            out.push('}');
-        }
+        | PrimaryKey::TrainerSpell { id }
+        | PrimaryKey::NpcTextSlot { id }
+        | PrimaryKey::CreateinfoSpell { id }
+        | PrimaryKey::SpellLearn { id } => write_members(out, &[("id", id)]),
         PrimaryKey::CreatureCast { creature_entry } => {
-            out.push_str("{\"creature_entry\":");
-            out.push_str(&creature_entry.to_string());
-            out.push('}');
+            write_members(out, &[("creature_entry", creature_entry.into())]);
+        }
+        PrimaryKey::GossipMenuProfile { menu_id } => {
+            write_members(out, &[("menu_id", menu_id.into())]);
+        }
+        PrimaryKey::GossipMenuProfileOption { row_id } | PrimaryKey::GossipOption { row_id } => {
+            write_members(out, &[("row_id", row_id.into())]);
+        }
+        PrimaryKey::NpcText { text_id } => write_members(out, &[("text_id", text_id.into())]),
+        PrimaryKey::ClassLevelStats { class, level } => {
+            write_members(out, &[("class", class.into()), ("level", level.into())]);
+        }
+        PrimaryKey::LevelStats { race, class, level } => write_members(
+            out,
+            &[
+                ("race", race.into()),
+                ("class", class.into()),
+                ("level", level.into()),
+            ],
+        ),
+        PrimaryKey::StartPosition { race, class } => {
+            write_members(out, &[("race", race.into()), ("class", class.into())]);
+        }
+        PrimaryKey::GraveyardZone { row_id } | PrimaryKey::CreateinfoAction { row_id } => {
+            write_members(out, &[("row_id", row_id)]);
+        }
+        PrimaryKey::AreatriggerTeleport { trigger_id } => {
+            write_members(out, &[("trigger_id", trigger_id.into())]);
         }
     }
+}
+
+/// A key object, its members in the order the key declares them. That order is part of the
+/// canonical form: two artifacts that name the same row have to hash the same, so it is fixed here
+/// rather than left to whatever a generator emitted.
+fn write_members(out: &mut String, members: &[(&str, u64)]) {
+    out.push('{');
+    for (index, (name, value)) in members.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        write_json_string(out, name);
+        out.push(':');
+        out.push_str(&value.to_string());
+    }
+    out.push('}');
 }
 
 fn write_value(out: &mut String, value: &FieldValue) {

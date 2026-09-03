@@ -578,6 +578,31 @@ the curated trainer overrides the importer hands out fixed identifiers for at 5,
 (`CURATED_TRAINER_ID_BASE`), which is a reserved band this range clears, not a Package range.
 _Avoid_: custom id range, synthetic trainer range
 
+**Package Gossip Range**:
+The gossip family's Package Identifier Range: 12,000,000 to 12,999,999. One whole decade above the
+Package Trainer Range. One range covers all five insertable gossip tables — `game_npc_text`,
+`game_npc_text_slot`, `game_gossip_option`, `game_gossip_menu_profile` and
+`game_gossip_menu_profile_option` — the loot shape: independent primary-key spaces cannot collide by
+sharing a range. `game_gossip_menu` carries no range: its key names a creature template, so every
+insert on it is refused outright.
+_Avoid_: custom id range, synthetic gossip range
+
+**Package Globals Range**:
+The globals family's Package Identifier Range: 13,000,000 to 13,999,999. One whole decade above the
+Package Gossip Range. Covers the three tables of the family whose key is a free surrogate:
+`game_graveyard_zone`, `game_createinfo_spell` and `game_createinfo_action`. The family's other four
+tables carry no range because no Package may invent their keys: `game_class_level_stats`,
+`game_level_stats` and `game_start_position` key on a race, class and level the client fixes, and
+`game_areatrigger_teleport` keys on an `AreaTrigger.dbc` trigger id.
+_Avoid_: custom id range, synthetic globals range
+
+**Package Spell Metadata Range**:
+The spellmeta family's Package Identifier Range: 14,000,000 to 14,999,999. One whole decade above the
+Package Globals Range. Covers `game_spell_learn.id` alone. `game_spell_chain` and
+`game_spell_proc_event` key on a spell identifier rather than a surrogate, so an insert there takes
+the Package Spell Range instead: a metadata row cannot outlive the `game_spell` row it describes.
+_Avoid_: custom id range, synthetic spellmeta range
+
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation, in any Import
 Family. Two kinds: the project-wide 5,090,000 to 5,099,999 band, and a family's own fixture cluster —

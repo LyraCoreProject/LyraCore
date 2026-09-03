@@ -353,3 +353,182 @@ pub fn trainer_spell_claim(id: u64, operation: &str, fields: &str) -> String {
         r#"{{"table":"game_trainer_spell","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
     )
 }
+
+// ---- gossip ----
+
+/// A gossip row inside the Package gossip range, safe to insert. One band covers all five
+/// insertable gossip tables, so one constant serves them all.
+pub const PACKAGE_GOSSIP: u64 = 12_000_001;
+
+/// A real creature template entry with a gossip menu, safe to update and never safe to insert.
+pub const REAL_GOSSIP_MENU: u32 = 6;
+
+/// A real imported `game_npc_text` row, safe to update and never safe to insert.
+pub const REAL_NPC_TEXT: u32 = 1;
+
+/// Every claimable `game_npc_text` column, so an `insert` carries the whole row.
+pub const WHOLE_NPC_TEXT_ROW: &str = r#"{
+    "text": { "type": "string", "value": "The forge is cold, friend." }
+}"#;
+
+/// Every claimable `game_npc_text_slot` column, so an `insert` carries the whole row.
+pub const WHOLE_NPC_TEXT_SLOT_ROW: &str = r#"{
+    "text_id": { "type": "u32", "value": 12000001 },
+    "slot_index": { "type": "u8", "value": 0 },
+    "text_male": { "type": "string", "value": "The forge is cold, friend." },
+    "text_female": { "type": "string", "value": "The forge is cold, friend." },
+    "probability": { "type": "f32", "value": 1.0 }
+}"#;
+
+/// Every claimable `game_gossip_option` column, so an `insert` carries the whole row.
+pub const WHOLE_GOSSIP_OPTION_ROW: &str = r#"{
+    "entry": { "type": "u32", "value": 6 },
+    "option_index": { "type": "u32", "value": 0 },
+    "icon": { "type": "u32", "value": 0 },
+    "text": { "type": "string", "value": "Tell me of the forge." },
+    "action": { "type": "u32", "value": 1 },
+    "action_menu_id": { "type": "u32", "value": 0 },
+    "cond_type": { "type": "u32", "value": 0 },
+    "cond_value1": { "type": "u32", "value": 0 },
+    "cond_value2": { "type": "u32", "value": 0 }
+}"#;
+
+/// One `game_gossip_menu` claim.
+#[must_use]
+pub fn gossip_menu_claim(entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_gossip_menu","key":{{"entry":{entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_npc_text` claim.
+#[must_use]
+pub fn npc_text_claim(text_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_npc_text","key":{{"text_id":{text_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_npc_text_slot` claim.
+#[must_use]
+pub fn npc_text_slot_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_npc_text_slot","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_gossip_option` claim.
+#[must_use]
+pub fn gossip_option_claim(row_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_gossip_option","key":{{"row_id":{row_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+// ---- globals ----
+
+/// A globals row inside the Package globals range, safe to insert.
+pub const PACKAGE_GLOBALS: u64 = 13_000_001;
+
+/// A real imported `game_graveyard_zone` row, safe to update and never safe to insert.
+pub const REAL_GRAVEYARD_ZONE: u64 = 1;
+
+/// Every claimable `game_graveyard_zone` column, so an `insert` carries the whole row.
+pub const WHOLE_GRAVEYARD_ZONE_ROW: &str = r#"{
+    "safe_loc_id": { "type": "u32", "value": 105 },
+    "zone_id": { "type": "u32", "value": 12 },
+    "faction": { "type": "u32", "value": 0 }
+}"#;
+
+/// Every claimable `game_createinfo_spell` column, so an `insert` carries the whole row.
+pub const WHOLE_CREATEINFO_SPELL_ROW: &str = r#"{
+    "race": { "type": "u8", "value": 1 },
+    "class": { "type": "u8", "value": 1 },
+    "spell_id": { "type": "u32", "value": 133 }
+}"#;
+
+/// One `game_class_level_stats` claim.
+#[must_use]
+pub fn class_level_stats_claim(class: u8, level: u8, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_class_level_stats","key":{{"class":{class},"level":{level}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_start_position` claim.
+#[must_use]
+pub fn start_position_claim(race: u8, class: u8, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_start_position","key":{{"race":{race},"class":{class}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_graveyard_zone` claim.
+#[must_use]
+pub fn graveyard_zone_claim(row_id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_graveyard_zone","key":{{"row_id":{row_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_createinfo_spell` claim.
+#[must_use]
+pub fn createinfo_spell_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_createinfo_spell","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_areatrigger_teleport` claim.
+#[must_use]
+pub fn areatrigger_teleport_claim(trigger_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_areatrigger_teleport","key":{{"trigger_id":{trigger_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+// ---- spellmeta ----
+
+/// A `game_spell_learn` row inside the Package spell metadata range, safe to insert.
+pub const PACKAGE_SPELL_LEARN: u64 = 14_000_001;
+
+/// A real imported `game_spell_learn` row, safe to update and never safe to insert.
+pub const REAL_SPELL_LEARN: u64 = 1;
+
+/// Every claimable `game_spell_chain` column, so an `insert` carries the whole row.
+pub const WHOLE_SPELL_CHAIN_ROW: &str = r#"{
+    "prev_spell": { "type": "u32", "value": 133 },
+    "first_spell": { "type": "u32", "value": 133 },
+    "rank": { "type": "u8", "value": 2 },
+    "req_spell": { "type": "u32", "value": 0 }
+}"#;
+
+/// Every claimable `game_spell_learn` column, so an `insert` carries the whole row.
+pub const WHOLE_SPELL_LEARN_ROW: &str = r#"{
+    "parent_spell": { "type": "u32", "value": 133 },
+    "learn_spell": { "type": "u32", "value": 168 }
+}"#;
+
+/// One `game_spell_chain` claim.
+#[must_use]
+pub fn spell_chain_claim(spell_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_spell_chain","key":{{"spell_id":{spell_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_spell_learn` claim.
+#[must_use]
+pub fn spell_learn_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_spell_learn","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+/// One `game_spell_proc_event` claim.
+#[must_use]
+pub fn spell_proc_event_claim(spell_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_spell_proc_event","key":{{"spell_id":{spell_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
