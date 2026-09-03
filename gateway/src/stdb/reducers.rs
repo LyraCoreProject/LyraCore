@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::bindings::*;
 use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
+use lyracore_shared::auction::AuctionRefusal;
 
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
 
@@ -276,8 +277,8 @@ impl Coordinator {
 
         match result {
             Ok(auction_id) => Ok(CreateAuctionOutcome::Created { auction_id }),
-            Err(error) => match map_auction_refusal(&error) {
-                Some(outcome) => Ok(outcome),
+            Err(error) => match auction_refusal(&error) {
+                Some(refusal) => Ok(refusal.into()),
                 None => Err(error),
             },
         }
@@ -501,8 +502,8 @@ impl Coordinator {
         };
         match result {
             Ok(hold) => bid_outcome(&hold),
-            Err(error) => match map_bid_refusal(&error) {
-                Some(outcome) => Ok(outcome),
+            Err(error) => match auction_refusal(&error) {
+                Some(refusal) => Ok(refusal.into()),
                 None => Err(error),
             },
         }
@@ -589,7 +590,9 @@ impl Coordinator {
         decision: &AuctionBidDecision,
     ) -> Result<()> {
         if !bid_payload_matches(hold, decision) {
-            return Err(anyhow!("auction bid decision payload does not match its Hold"));
+            return Err(anyhow!(
+                "auction bid decision payload does not match its Hold"
+            ));
         }
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -681,9 +684,7 @@ impl Coordinator {
                 .game_auction_bid_hold()
                 .operation_id()
                 .find(&operation_id)
-                .filter(|hold| {
-                    hold.outcome != lyracore_shared::auction::bid_outcome::PENDING
-                })
+                .filter(|hold| hold.outcome != lyracore_shared::auction::bid_outcome::PENDING)
         })
     }
 
@@ -3058,18 +3059,10 @@ fn next_auction_operation_id() -> Result<u64> {
     }
 }
 
-fn map_auction_refusal(error: &anyhow::Error) -> Option<crate::world::CreateAuctionOutcome> {
-    use crate::world::CreateAuctionOutcome;
-    let text = format!("{error:#}");
-    if text.contains(lyracore_shared::auction::result::ITEM_NOT_FOUND) {
-        Some(CreateAuctionOutcome::ItemNotFound)
-    } else if text.contains(lyracore_shared::auction::result::NOT_ENOUGH_MONEY) {
-        Some(CreateAuctionOutcome::NotEnoughMoney)
-    } else if text.contains(lyracore_shared::auction::result::DATABASE) {
-        Some(CreateAuctionOutcome::Database)
-    } else {
-        None
-    }
+/// The Module's typed auction Refusal. Only a reducer the Module rejected carries a tag; a timeout,
+/// transport, or SDK failure stays an error with an unknown outcome.
+fn auction_refusal(error: &anyhow::Error) -> Option<AuctionRefusal> {
+    reducer_refusal_reason(error).and_then(AuctionRefusal::parse_tag)
 }
 
 fn bid_payload_matches(hold: &AuctionBidHold, decision: &AuctionBidDecision) -> bool {
@@ -3114,63 +3107,49 @@ fn bid_outcome(hold: &AuctionBidHold) -> Result<crate::world::PlaceBidOutcome> {
         bid_outcome::BID_INCREMENT => PlaceBidOutcome::BidIncrement,
         bid_outcome::BID_OWN => PlaceBidOutcome::BidOwn,
         bid_outcome::DATABASE => PlaceBidOutcome::Database,
-        outcome => return Err(anyhow!("auction bid Hold has non-terminal outcome {outcome}")),
+        outcome => {
+            return Err(anyhow!(
+                "auction bid Hold has non-terminal outcome {outcome}"
+            ))
+        }
     })
-}
-
-fn map_bid_refusal(error: &anyhow::Error) -> Option<crate::world::PlaceBidOutcome> {
-    use crate::world::PlaceBidOutcome;
-    let text = format!("{error:#}");
-    if text.contains(lyracore_shared::auction::result::NOT_ENOUGH_MONEY) {
-        Some(PlaceBidOutcome::NotEnoughMoney)
-    } else if text.contains(lyracore_shared::auction::result::DATABASE) {
-        Some(PlaceBidOutcome::Database)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]
 mod auction_reducer_tests {
     use super::*;
-    use crate::world::CreateAuctionOutcome;
+    use crate::stdb::connection::ReducerCallError;
 
     #[test]
-    fn reducer_tags_map_to_typed_listing_outcomes() {
-        let cases = [
-            (
-                lyracore_shared::auction::result::ITEM_NOT_FOUND,
-                CreateAuctionOutcome::ItemNotFound,
-            ),
-            (
-                lyracore_shared::auction::result::NOT_ENOUGH_MONEY,
-                CreateAuctionOutcome::NotEnoughMoney,
-            ),
-            (
-                lyracore_shared::auction::result::DATABASE,
-                CreateAuctionOutcome::Database,
+    fn only_a_rejected_reducer_carries_a_typed_refusal() {
+        for refusal in AuctionRefusal::ALL {
+            let error = anyhow::Error::from(ReducerCallError::Rejected {
+                operation: "gw_auction_hold_listing".to_string(),
+                reason: refusal.as_tag().to_string(),
+            })
+            .context("listing phase 1");
+            assert_eq!(auction_refusal(&error), Some(refusal));
+        }
+
+        let not_refusals = [
+            anyhow::Error::from(ReducerCallError::fatal(
+                "gw_auction_hold_listing reducer timed out after 10s".to_string(),
+            )),
+            anyhow::Error::from(ReducerCallError::fatal(
+                "gw_auction_hold_bid reducer failed: transport disconnected".to_string(),
+            )),
+            anyhow::Error::from(ReducerCallError::Rejected {
+                operation: "gw_auction_hold_bid".to_string(),
+                reason: "operator only".to_string(),
+            }),
+            anyhow!(
+                "wrapped text that mentions {}",
+                AuctionRefusal::Database.as_tag()
             ),
         ];
-        for (tag, expected) in cases {
-            assert_eq!(map_auction_refusal(&anyhow!("[{tag}] refused")), Some(expected));
+        for error in not_refusals {
+            assert_eq!(auction_refusal(&error), None, "{error:#}");
         }
-        assert_eq!(map_auction_refusal(&anyhow!("transport disconnected")), None);
-
-        assert_eq!(
-            map_bid_refusal(&anyhow!(
-                "[{}] refused",
-                lyracore_shared::auction::result::NOT_ENOUGH_MONEY
-            )),
-            Some(crate::world::PlaceBidOutcome::NotEnoughMoney)
-        );
-        assert_eq!(
-            map_bid_refusal(&anyhow!(
-                "[{}] refused",
-                lyracore_shared::auction::result::DATABASE
-            )),
-            Some(crate::world::PlaceBidOutcome::Database)
-        );
-        assert_eq!(map_bid_refusal(&anyhow!("transport disconnected")), None);
     }
 
     #[test]

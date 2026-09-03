@@ -23,11 +23,38 @@ pub fn minimum_next_bid(start_bid: u32, current_bid: u32) -> Option<u32> {
     }
 }
 
-/// Stable reducer-boundary result tags for listing gameplay refusals.
-pub mod result {
-    pub const DATABASE: &str = "AUCTION_DATABASE";
-    pub const ITEM_NOT_FOUND: &str = "AUCTION_ITEM_NOT_FOUND";
-    pub const NOT_ENOUGH_MONEY: &str = "AUCTION_NOT_ENOUGH_MONEY";
+/// Why the Module refused an auction Durable Request. The tag is the whole reducer error text,
+/// so neither tier matches on human prose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuctionRefusal {
+    ItemNotFound,
+    NotEnoughMoney,
+    InvalidTerms,
+    Database,
+}
+
+impl AuctionRefusal {
+    pub const ALL: [Self; 4] = [
+        Self::ItemNotFound,
+        Self::NotEnoughMoney,
+        Self::InvalidTerms,
+        Self::Database,
+    ];
+
+    pub fn as_tag(self) -> &'static str {
+        match self {
+            Self::ItemNotFound => "auction:item_not_found",
+            Self::NotEnoughMoney => "auction:not_enough_money",
+            Self::InvalidTerms => "auction:invalid_terms",
+            Self::Database => "auction:database",
+        }
+    }
+
+    pub fn parse_tag(tag: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|refusal| refusal.as_tag() == tag)
+    }
 }
 
 /// Stable terminal outcome codes shared by bid Hold and decision rows.
@@ -43,6 +70,20 @@ pub mod bid_outcome {
 
 #[cfg(test)]
 mod tests {
+    use super::AuctionRefusal;
+
+    #[test]
+    fn every_refusal_tag_round_trips() {
+        for refusal in AuctionRefusal::ALL {
+            assert_eq!(AuctionRefusal::parse_tag(refusal.as_tag()), Some(refusal));
+        }
+        assert_eq!(AuctionRefusal::parse_tag("auction:"), None);
+        assert_eq!(
+            AuctionRefusal::parse_tag("gw_auction_hold_bid reducer timed out after 10s"),
+            None
+        );
+    }
+
     #[test]
     fn bid_increment_is_five_percent_rounded_up() {
         assert_eq!(super::bid_increment(0), 0);
