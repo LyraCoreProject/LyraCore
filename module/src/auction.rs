@@ -937,6 +937,7 @@ trait HoldSink: ListingSource {
     fn commit_hold(&mut self, hold: ListingHold);
     fn confirm_hold(&mut self, receipt: ListingReceipt);
     fn delete_hold(&mut self, operation_id: u64);
+    fn release_hold(&mut self, operation_id: u64, mail: AuctionMail);
 }
 
 trait MarketSink {
@@ -1011,6 +1012,38 @@ fn settle_listing<S: HoldSink>(sink: &mut S, operation_id: u64) -> Result<(), Li
         }
         Some(_) => Err(ListingRefusal::InvalidTerms),
     }
+}
+
+/// Mail that returns a refused listing's item and deposit to the seller. Mail is the ordinary
+/// return path for listed value: it needs no bag slot and reaches an offline seller.
+fn listing_release_mail(listing: &PreparedListing) -> AuctionMail {
+    AuctionMail {
+        recipient_guid: listing.request.seller_guid,
+        sender_guid: 0,
+        subject: "Auction listing refused",
+        money: listing.deposit,
+        item: listing.snapshot,
+    }
+}
+
+/// Give a Hold's value back after realm-core refused its listing. A Hold with a matching receipt
+/// backs a live Auction and is never released; a missing Hold is a replay.
+fn release_listing<S: HoldSink>(
+    sink: &mut S,
+    operation_id: u64,
+    seller_guid: u64,
+) -> Result<(), ListingRefusal> {
+    if sink.receipt(operation_id).is_some() {
+        return Err(ListingRefusal::InvalidTerms);
+    }
+    let Some(hold) = sink.hold(operation_id) else {
+        return Ok(());
+    };
+    if hold.listing.request.seller_guid != seller_guid {
+        return Err(ListingRefusal::InvalidTerms);
+    }
+    sink.release_hold(operation_id, listing_release_mail(&hold.listing));
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1316,6 +1349,11 @@ impl HoldSink for CtxSource<'_> {
             .game_auction_hold()
             .operation_id()
             .delete(operation_id);
+    }
+
+    fn release_hold(&mut self, operation_id: u64, mail: AuctionMail) {
+        insert_auction_mail(self.ctx, mail);
+        self.delete_hold(operation_id);
     }
 }
 
@@ -1998,6 +2036,19 @@ pub fn realm_auction_settle_listing(ctx: &ReducerContext, operation_id: u64) -> 
     crate::helpers::require_operator(ctx)?;
     settle_listing(&mut CtxSource { ctx }, operation_id)
         .map_err(|refusal| tagged(refusal, "listing Hold is not confirmed"))
+}
+
+/// Sharded listing abort: after realm-core refuses phase 2, mail the held item and deposit back
+/// to the seller and delete the Hold. Refused once the Hold has a receipt.
+#[reducer]
+pub fn gw_auction_release_listing_hold(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    seller_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    release_listing(&mut CtxSource { ctx }, operation_id, seller_guid)
+        .map_err(|refusal| tagged(refusal, "listing Hold is confirmed"))
 }
 
 /// Single-database bid: full-offer Hold, realm decision, Auction update or buyout settlement,
@@ -2907,6 +2958,7 @@ mod tests {
         now_micros: i64,
         hold: Option<ListingHold>,
         receipt: Option<ListingReceipt>,
+        returned_mail: Vec<AuctionMail>,
     }
 
     impl ListingSource for FakeSource {
@@ -2957,6 +3009,11 @@ mod tests {
                 self.hold = None;
             }
         }
+
+        fn release_hold(&mut self, operation_id: u64, mail: AuctionMail) {
+            self.returned_mail.push(mail);
+            self.delete_hold(operation_id);
+        }
     }
 
     #[derive(Clone)]
@@ -2993,6 +3050,7 @@ mod tests {
             now_micros: 1_000,
             hold: None,
             receipt: None,
+            returned_mail: Vec::new(),
         }
     }
 
@@ -3197,6 +3255,78 @@ mod tests {
             Err(ListingRefusal::InvalidTerms)
         );
         assert_eq!(source.money, Some(40));
+        assert_eq!(market.auction_count, 1);
+    }
+
+    #[test]
+    fn realm_refusal_releases_the_hold_and_mails_the_item_and_deposit_back() {
+        let mut source = source();
+        let market = market();
+        let request = request();
+        fence_listing(&mut source, request).unwrap();
+        assert_eq!(source.money, Some(40));
+        assert!(source.item.is_none());
+
+        // Realm-core refused phase 2 (for example, its item catalogue lacks the template), so
+        // the market never took the listing and the source Hold is the only copy of the value.
+        assert!(market.receipt.is_none());
+        assert_eq!(
+            release_listing(&mut source, request.operation_id, request.seller_guid + 1),
+            Err(ListingRefusal::InvalidTerms),
+            "a wrong seller never releases another character's Hold"
+        );
+        assert!(source.hold.is_some());
+        assert_eq!(
+            release_listing(&mut source, request.operation_id, request.seller_guid),
+            Ok(())
+        );
+        assert!(source.hold.is_none());
+        assert_eq!(
+            source.returned_mail,
+            vec![AuctionMail {
+                recipient_guid: 7,
+                sender_guid: 0,
+                subject: "Auction listing refused",
+                money: 10,
+                item: item(23).snapshot,
+            }]
+        );
+
+        assert_eq!(
+            release_listing(&mut source, request.operation_id, request.seller_guid),
+            Ok(()),
+            "a replayed release finds no Hold and returns nothing twice"
+        );
+        assert_eq!(source.returned_mail.len(), 1);
+        assert_eq!(market.auction_count, 0);
+    }
+
+    #[test]
+    fn release_refuses_a_hold_that_backs_a_live_auction() {
+        let mut source = source();
+        let mut market = market();
+        let request = request();
+        fence_listing(&mut source, request).unwrap();
+        let hold = source.hold(request.operation_id).unwrap();
+        let auction_id = commit_held_listing(&mut market, hold.listing.clone()).unwrap();
+        confirm_listing(
+            &mut source,
+            ListingReceipt {
+                listing: hold.listing,
+                auction_id,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            release_listing(&mut source, request.operation_id, request.seller_guid),
+            Err(ListingRefusal::InvalidTerms)
+        );
+        assert!(source.hold.is_some());
+        assert!(source.returned_mail.is_empty());
+
+        assert_eq!(drive_sharded(&mut source, &mut market, request), Ok(41));
+        assert!(source.hold.is_none());
         assert_eq!(market.auction_count, 1);
     }
 

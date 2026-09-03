@@ -291,7 +291,16 @@ impl Coordinator {
         self.auction_hold_listing(operation_id, request)?;
         let hold = self.wait_for_auction_hold(operation_id)?;
         let realm = self.realm_core()?;
-        realm.auction_commit_listing(&hold)?;
+        if let Err(error) = realm.auction_commit_listing(&hold) {
+            // Only a Refusal proves realm-core took nothing. A timeout or transport failure
+            // leaves the Hold for the next replay, which commits idempotently.
+            if reducer_refusal_reason(&error).is_some()
+                && !realm.auction_receipt_is_visible(operation_id)
+            {
+                self.auction_release_listing_hold(&hold)?;
+            }
+            return Err(error);
+        }
         let receipt = realm.wait_for_auction_receipt(operation_id)?;
         self.auction_confirm_listing(operation_id, receipt.auction_id)?;
         self.wait_for_auction_receipt(operation_id)?;
@@ -381,6 +390,25 @@ impl Coordinator {
             "realm_auction_settle_listing",
             realm_auction_settle_listing_then(operation_id)
         )
+    }
+
+    fn auction_release_listing_hold(&self, hold: &AuctionHold) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_auction_release_listing_hold",
+            gw_auction_release_listing_hold_then(hold.operation_id, hold.seller_guid)
+        )
+    }
+
+    fn auction_receipt_is_visible(&self, operation_id: u64) -> bool {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_auction_operation_receipt()
+            .operation_id()
+            .find(&operation_id)
+            .is_some()
     }
 
     fn matching_auction_hold(

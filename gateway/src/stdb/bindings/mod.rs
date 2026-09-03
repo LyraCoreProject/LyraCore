@@ -599,6 +599,7 @@ pub mod gw_auction_finish_bid_reducer;
 pub mod gw_auction_hold_bid_reducer;
 pub mod gw_auction_hold_listing_reducer;
 pub mod gw_auction_list_local_reducer;
+pub mod gw_auction_release_listing_hold_reducer;
 pub mod gw_auto_bank_item_reducer;
 pub mod gw_begin_trade_reducer;
 pub mod gw_bind_home_reducer;
@@ -1560,6 +1561,7 @@ pub use gw_auction_finish_bid_reducer::gw_auction_finish_bid;
 pub use gw_auction_hold_bid_reducer::gw_auction_hold_bid;
 pub use gw_auction_hold_listing_reducer::gw_auction_hold_listing;
 pub use gw_auction_list_local_reducer::gw_auction_list_local;
+pub use gw_auction_release_listing_hold_reducer::gw_auction_release_listing_hold;
 pub use gw_auto_bank_item_reducer::gw_auto_bank_item;
 pub use gw_begin_trade_reducer::gw_begin_trade;
 pub use gw_bind_home_reducer::gw_bind_home;
@@ -2782,6 +2784,10 @@ pub enum Reducer {
         buyout: u32,
         duration_minutes: u32,
     },
+    GwAuctionReleaseListingHold {
+        operation_id: u64,
+        seller_guid: u64,
+    },
     GwAutoBankItem {
         actor_guid: u64,
         slot: u8,
@@ -3738,6 +3744,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwAuctionHoldBid { .. } => "gw_auction_hold_bid",
             Reducer::GwAuctionHoldListing { .. } => "gw_auction_hold_listing",
             Reducer::GwAuctionListLocal { .. } => "gw_auction_list_local",
+            Reducer::GwAuctionReleaseListingHold { .. } => "gw_auction_release_listing_hold",
             Reducer::GwAutoBankItem { .. } => "gw_auto_bank_item",
             Reducer::GwBeginTrade { .. } => "gw_begin_trade",
             Reducer::GwBindHome { .. } => "gw_bind_home",
@@ -5427,6 +5434,13 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 start_bid: start_bid.clone(),
                 buyout: buyout.clone(),
                 duration_minutes: duration_minutes.clone(),
+}),
+            Reducer::GwAuctionReleaseListingHold{
+                operation_id,
+                seller_guid,
+}             => __sats::bsatn::to_vec(&gw_auction_release_listing_hold_reducer::GwAuctionReleaseListingHoldArgs {
+                operation_id: operation_id.clone(),
+                seller_guid: seller_guid.clone(),
 }),
             Reducer::GwAutoBankItem{
                 actor_guid,
