@@ -12,12 +12,15 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_cast_id, is_fixture_reserved_item_id, is_fixture_reserved_loot_id,
-    is_fixture_reserved_quest_id, is_fixture_reserved_spell_id, is_fixture_reserved_trainer_id,
-    is_package_cast_id, is_package_item_id, is_package_loot_id, is_package_quest_id,
-    is_package_spell_id, is_package_trainer_id, packed_quest_objective_id,
-    packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_spell_effect_id,
-    MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
+    is_fixture_reserved_cast_id, is_fixture_reserved_globals_id, is_fixture_reserved_gossip_id,
+    is_fixture_reserved_item_id, is_fixture_reserved_loot_id, is_fixture_reserved_quest_id,
+    is_fixture_reserved_spell_id, is_fixture_reserved_spellmeta_id, is_fixture_reserved_trainer_id,
+    is_package_cast_id, is_package_globals_id, is_package_gossip_id, is_package_item_id,
+    is_package_loot_id, is_package_quest_id, is_package_spell_id, is_package_spellmeta_id,
+    is_package_trainer_id, packed_class_level_id, packed_quest_objective_id,
+    packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_race_class_id,
+    packed_race_class_level_id, packed_spell_effect_id, MAX_QUEST_OBJECTIVE_INDEX,
+    MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX, MAX_STATS_LEVEL,
 };
 use crate::schema::{FieldType, FieldValue, Table};
 
@@ -252,6 +255,101 @@ pub enum PrimaryKey {
         /// The row.
         id: u64,
     },
+    // ---- gossip ----
+    /// A `game_gossip_menu` row. Update-only: the key names a creature template, which no Package
+    /// may invent.
+    GossipMenu {
+        /// The creature template whose menu this is.
+        entry: u32,
+    },
+    /// A `game_gossip_menu_profile` row.
+    GossipMenuProfile {
+        /// The menu.
+        menu_id: u32,
+    },
+    /// A `game_gossip_menu_profile_option` row.
+    GossipMenuProfileOption {
+        /// The row.
+        row_id: u32,
+    },
+    /// A `game_gossip_option` row.
+    GossipOption {
+        /// The row.
+        row_id: u32,
+    },
+    /// A `game_npc_text` row.
+    NpcText {
+        /// The greeting text.
+        text_id: u32,
+    },
+    /// A `game_npc_text_slot` row.
+    NpcTextSlot {
+        /// The row.
+        id: u64,
+    },
+    // ---- globals ----
+    /// A `game_class_level_stats` row. Update-only: the key names a class and a level the client
+    /// fixes.
+    ClassLevelStats {
+        /// The class.
+        class: u8,
+        /// The character level.
+        level: u8,
+    },
+    /// A `game_level_stats` row. Update-only, for the same reason as [`PrimaryKey::ClassLevelStats`].
+    LevelStats {
+        /// The race.
+        race: u8,
+        /// The class.
+        class: u8,
+        /// The character level.
+        level: u8,
+    },
+    /// A `game_start_position` row. Update-only: the key names a race and a class the client fixes.
+    StartPosition {
+        /// The race.
+        race: u8,
+        /// The class.
+        class: u8,
+    },
+    /// A `game_graveyard_zone` row.
+    GraveyardZone {
+        /// The row.
+        row_id: u64,
+    },
+    /// A `game_areatrigger_teleport` row. Update-only: the key is an `AreaTrigger.dbc` trigger id.
+    AreatriggerTeleport {
+        /// The trigger.
+        trigger_id: u32,
+    },
+    /// A `game_createinfo_spell` row.
+    CreateinfoSpell {
+        /// The row.
+        id: u64,
+    },
+    /// A `game_createinfo_action` row.
+    CreateinfoAction {
+        /// The row.
+        row_id: u64,
+    },
+    // ---- spellmeta ----
+    /// A `game_spell_chain` row. The key IS a spell identifier, so it takes the spell family's
+    /// identifier policy.
+    SpellChain {
+        /// The spell whose rank link this is.
+        spell_id: u32,
+    },
+    /// A `game_spell_learn` row.
+    SpellLearn {
+        /// The row.
+        id: u64,
+    },
+    /// A `game_spell_proc_event` row. The key IS a spell identifier, like
+    /// [`PrimaryKey::SpellChain`].
+    SpellProcEvent {
+        /// The spell whose proc overlay this is.
+        spell_id: u32,
+    },
 }
 
 impl PrimaryKey {
@@ -450,6 +548,199 @@ impl PrimaryKey {
         Ok(Self::TrainerSpell { id })
     }
 
+    /// Names the greeting a creature template shows.
+    ///
+    /// No fixture or band check: the table is update-only, and its key names a creature template,
+    /// which is out of this crate's scope to police — the `game_creature_cast` shape.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for creature entry 0.
+    pub fn gossip_menu(entry: u32) -> Result<Self, DeltaError> {
+        if entry == 0 {
+            return Err(DeltaError::MalformedKey {
+                table: Table::GossipMenu,
+                detail: "`entry` 0 is not a creature".to_owned(),
+            });
+        }
+        Ok(Self::GossipMenu { entry })
+    }
+
+    /// Names a gossip menu profile.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for menu 0, and [`DeltaError::GossipIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn gossip_menu_profile(menu_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::GossipMenuProfile, "menu_id", u64::from(menu_id))?;
+        Ok(Self::GossipMenuProfile { menu_id })
+    }
+
+    /// Names one option of a gossip menu profile.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for row 0, and [`DeltaError::GossipIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn gossip_menu_profile_option(row_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::GossipMenuProfileOption, "row_id", u64::from(row_id))?;
+        Ok(Self::GossipMenuProfileOption { row_id })
+    }
+
+    /// Names one option of a creature's own gossip menu.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for row 0, and [`DeltaError::GossipIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn gossip_option(row_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::GossipOption, "row_id", u64::from(row_id))?;
+        Ok(Self::GossipOption { row_id })
+    }
+
+    /// Names one NPC greeting text.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for text 0, and [`DeltaError::GossipIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn npc_text(text_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::NpcText, "text_id", u64::from(text_id))?;
+        Ok(Self::NpcText { text_id })
+    }
+
+    /// Names one weighted greeting slot.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for id 0, and [`DeltaError::GossipIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn npc_text_slot(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_gossip_id(Table::NpcTextSlot, "id", id)?;
+        Ok(Self::NpcTextSlot { id })
+    }
+
+    /// Names one class-and-level stat-curve row.
+    ///
+    /// No band check: the table is update-only, and the key names a class and a level the client
+    /// fixes. The level is still bounded, so a claim cannot name a row no curve carries.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for class 0, and [`DeltaError::StatsLevelOutOfRange`] for a
+    /// level outside 1..=[`MAX_STATS_LEVEL`].
+    pub fn class_level_stats(class: u8, level: u8) -> Result<Self, DeltaError> {
+        if class == 0 {
+            return Err(DeltaError::MalformedKey {
+                table: Table::ClassLevelStats,
+                detail: "`class` 0 is not a class".to_owned(),
+            });
+        }
+        check_stats_level(level)?;
+        Ok(Self::ClassLevelStats { class, level })
+    }
+
+    /// Names one race-class-and-level stat-curve row.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for race or class 0, and [`DeltaError::StatsLevelOutOfRange`]
+    /// for a level outside 1..=[`MAX_STATS_LEVEL`].
+    pub fn level_stats(race: u8, class: u8, level: u8) -> Result<Self, DeltaError> {
+        check_race_and_class(Table::LevelStats, race, class)?;
+        check_stats_level(level)?;
+        Ok(Self::LevelStats { race, class, level })
+    }
+
+    /// Names one (race, class) start position.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for race or class 0.
+    pub fn start_position(race: u8, class: u8) -> Result<Self, DeltaError> {
+        check_race_and_class(Table::StartPosition, race, class)?;
+        Ok(Self::StartPosition { race, class })
+    }
+
+    /// Names one graveyard-to-zone link.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for row 0, and [`DeltaError::GlobalsIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn graveyard_zone(row_id: u64) -> Result<Self, DeltaError> {
+        check_claimable_globals_id(Table::GraveyardZone, "row_id", row_id)?;
+        Ok(Self::GraveyardZone { row_id })
+    }
+
+    /// Names one portal's destination.
+    ///
+    /// No band check: the table is update-only, and its key is an `AreaTrigger.dbc` trigger id,
+    /// client data this crate does not police.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for trigger 0.
+    pub fn areatrigger_teleport(trigger_id: u32) -> Result<Self, DeltaError> {
+        if trigger_id == 0 {
+            return Err(DeltaError::MalformedKey {
+                table: Table::AreatriggerTeleport,
+                detail: "`trigger_id` 0 is not a trigger".to_owned(),
+            });
+        }
+        Ok(Self::AreatriggerTeleport { trigger_id })
+    }
+
+    /// Names one character-creation spell grant.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for id 0, and [`DeltaError::GlobalsIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn createinfo_spell(id: u64) -> Result<Self, DeltaError> {
+        check_claimable_globals_id(Table::CreateinfoSpell, "id", id)?;
+        Ok(Self::CreateinfoSpell { id })
+    }
+
+    /// Names one character-creation action-bar button.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for row 0, and [`DeltaError::GlobalsIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn createinfo_action(row_id: u64) -> Result<Self, DeltaError> {
+        check_claimable_globals_id(Table::CreateinfoAction, "row_id", row_id)?;
+        Ok(Self::CreateinfoAction { row_id })
+    }
+
+    /// Names one spell's rank-chain link.
+    ///
+    /// The key is a spell identifier, so it takes the spell family's fixture check.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for spell 0, and [`DeltaError::SpellIdFixtureReserved`] for a
+    /// seeded fixture spell.
+    pub fn spell_chain(spell_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_spell_id(Table::SpellChain, spell_id)?;
+        Ok(Self::SpellChain { spell_id })
+    }
+
+    /// Names one auto-learn dependent.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for id 0, and [`DeltaError::SpellmetaIdFixtureReserved`] for a
+    /// seeded fixture row.
+    pub fn spell_learn(id: u64) -> Result<Self, DeltaError> {
+        if id == 0 {
+            return Err(DeltaError::MalformedKey {
+                table: Table::SpellLearn,
+                detail: "`id` 0 is not a row".to_owned(),
+            });
+        }
+        if is_fixture_reserved_spellmeta_id(id) {
+            return Err(DeltaError::SpellmetaIdFixtureReserved { id });
+        }
+        Ok(Self::SpellLearn { id })
+    }
+
+    /// Names one spell's proc overlay.
+    ///
+    /// # Errors
+    /// [`DeltaError::MalformedKey`] for spell 0, and [`DeltaError::SpellIdFixtureReserved`] for a
+    /// seeded fixture spell.
+    pub fn spell_proc_event(spell_id: u32) -> Result<Self, DeltaError> {
+        check_claimable_spell_id(Table::SpellProcEvent, spell_id)?;
+        Ok(Self::SpellProcEvent { spell_id })
+    }
+
     /// The table this row lives in.
     #[must_use]
     pub const fn table(self) -> Table {
@@ -470,6 +761,22 @@ impl PrimaryKey {
             Self::CreatureCast { .. } => Table::CreatureCast,
             Self::CreatureSpell { .. } => Table::CreatureSpell,
             Self::TrainerSpell { .. } => Table::TrainerSpell,
+            Self::GossipMenu { .. } => Table::GossipMenu,
+            Self::GossipMenuProfile { .. } => Table::GossipMenuProfile,
+            Self::GossipMenuProfileOption { .. } => Table::GossipMenuProfileOption,
+            Self::GossipOption { .. } => Table::GossipOption,
+            Self::NpcText { .. } => Table::NpcText,
+            Self::NpcTextSlot { .. } => Table::NpcTextSlot,
+            Self::ClassLevelStats { .. } => Table::ClassLevelStats,
+            Self::LevelStats { .. } => Table::LevelStats,
+            Self::StartPosition { .. } => Table::StartPosition,
+            Self::GraveyardZone { .. } => Table::GraveyardZone,
+            Self::AreatriggerTeleport { .. } => Table::AreatriggerTeleport,
+            Self::CreateinfoSpell { .. } => Table::CreateinfoSpell,
+            Self::CreateinfoAction { .. } => Table::CreateinfoAction,
+            Self::SpellChain { .. } => Table::SpellChain,
+            Self::SpellLearn { .. } => Table::SpellLearn,
+            Self::SpellProcEvent { .. } => Table::SpellProcEvent,
         }
     }
 
@@ -523,12 +830,16 @@ impl PrimaryKey {
     #[must_use]
     pub const fn row_id(self) -> u64 {
         match self {
-            Self::Spell { spell_id } => spell_id as u64,
+            Self::Spell { spell_id }
+            | Self::SpellChain { spell_id }
+            | Self::SpellProcEvent { spell_id } => spell_id as u64,
             Self::SpellEffect {
                 spell_id,
                 effect_index,
             } => packed_spell_effect_id(spell_id, effect_index),
-            Self::Item { entry } | Self::Quest { entry } => entry as u64,
+            Self::Item { entry } | Self::Quest { entry } | Self::GossipMenu { entry } => {
+                entry as u64
+            }
             Self::QuestText { quest_entry } => quest_entry as u64,
             Self::QuestObjective {
                 quest_entry,
@@ -551,8 +862,23 @@ impl PrimaryKey {
             | Self::SkinningLoot { id }
             | Self::FishingLoot { id }
             | Self::CreatureSpell { id }
-            | Self::TrainerSpell { id } => id,
+            | Self::TrainerSpell { id }
+            | Self::NpcTextSlot { id }
+            | Self::CreateinfoSpell { id }
+            | Self::SpellLearn { id } => id,
             Self::CreatureCast { creature_entry } => creature_entry as u64,
+            Self::GossipMenuProfile { menu_id } => menu_id as u64,
+            Self::GossipMenuProfileOption { row_id } | Self::GossipOption { row_id } => {
+                row_id as u64
+            }
+            Self::NpcText { text_id } => text_id as u64,
+            Self::ClassLevelStats { class, level } => packed_class_level_id(class, level),
+            Self::LevelStats { race, class, level } => {
+                packed_race_class_level_id(race, class, level)
+            }
+            Self::StartPosition { race, class } => packed_race_class_id(race, class),
+            Self::GraveyardZone { row_id } | Self::CreateinfoAction { row_id } => row_id,
+            Self::AreatriggerTeleport { trigger_id } => trigger_id as u64,
         }
     }
 }
@@ -565,7 +891,9 @@ impl fmt::Display for PrimaryKey {
                 spell_id,
                 effect_index,
             } => write!(f, "{{spell_id={spell_id}, effect_index={effect_index}}}"),
-            Self::Item { entry } | Self::Quest { entry } => write!(f, "{{entry={entry}}}"),
+            Self::Item { entry } | Self::Quest { entry } | Self::GossipMenu { entry } => {
+                write!(f, "{{entry={entry}}}")
+            }
             Self::QuestText { quest_entry } => write!(f, "{{quest_entry={quest_entry}}}"),
             Self::QuestObjective {
                 quest_entry,
@@ -591,9 +919,31 @@ impl fmt::Display for PrimaryKey {
             | Self::SkinningLoot { id }
             | Self::FishingLoot { id }
             | Self::CreatureSpell { id }
-            | Self::TrainerSpell { id } => write!(f, "{{id={id}}}"),
+            | Self::TrainerSpell { id }
+            | Self::NpcTextSlot { id }
+            | Self::CreateinfoSpell { id }
+            | Self::SpellLearn { id } => write!(f, "{{id={id}}}"),
             Self::CreatureCast { creature_entry } => {
                 write!(f, "{{creature_entry={creature_entry}}}")
+            }
+            Self::GossipMenuProfile { menu_id } => write!(f, "{{menu_id={menu_id}}}"),
+            Self::GossipMenuProfileOption { row_id } | Self::GossipOption { row_id } => {
+                write!(f, "{{row_id={row_id}}}")
+            }
+            Self::NpcText { text_id } => write!(f, "{{text_id={text_id}}}"),
+            Self::ClassLevelStats { class, level } => {
+                write!(f, "{{class={class}, level={level}}}")
+            }
+            Self::LevelStats { race, class, level } => {
+                write!(f, "{{race={race}, class={class}, level={level}}}")
+            }
+            Self::StartPosition { race, class } => write!(f, "{{race={race}, class={class}}}"),
+            Self::GraveyardZone { row_id } | Self::CreateinfoAction { row_id } => {
+                write!(f, "{{row_id={row_id}}}")
+            }
+            Self::AreatriggerTeleport { trigger_id } => write!(f, "{{trigger_id={trigger_id}}}"),
+            Self::SpellChain { spell_id } | Self::SpellProcEvent { spell_id } => {
+                write!(f, "{{spell_id={spell_id}}}")
             }
         }
     }
@@ -667,10 +1017,72 @@ fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
                 Err(DeltaError::TrainerIdNotClientSafe { id })
             }
         }
+        // The other update-only tables, the same shape: the key names a creature template, a race,
+        // a class, a level or a client trigger id, none of which a Package may invent.
+        PrimaryKey::GossipMenu { .. } => insert_refused(Table::GossipMenu),
+        PrimaryKey::ClassLevelStats { .. } => insert_refused(Table::ClassLevelStats),
+        PrimaryKey::LevelStats { .. } => insert_refused(Table::LevelStats),
+        PrimaryKey::StartPosition { .. } => insert_refused(Table::StartPosition),
+        PrimaryKey::AreatriggerTeleport { .. } => insert_refused(Table::AreatriggerTeleport),
+        PrimaryKey::GossipMenuProfile { menu_id: id }
+        | PrimaryKey::GossipMenuProfileOption { row_id: id }
+        | PrimaryKey::GossipOption { row_id: id }
+        | PrimaryKey::NpcText { text_id: id } => gossip_band(u64::from(id)),
+        PrimaryKey::NpcTextSlot { id } => gossip_band(id),
+        PrimaryKey::GraveyardZone { row_id: id }
+        | PrimaryKey::CreateinfoSpell { id }
+        | PrimaryKey::CreateinfoAction { row_id: id } => globals_band(id),
+        // The two spellmeta tables whose key IS a spell identifier: what a Package may invent here
+        // is exactly what it may invent in `game_spell`.
+        PrimaryKey::SpellChain { spell_id } | PrimaryKey::SpellProcEvent { spell_id } => {
+            check_band(
+                is_package_spell_id(spell_id),
+                DeltaError::SpellIdNotClientSafe { spell_id },
+            )
+        }
+        PrimaryKey::SpellLearn { id } => check_band(
+            is_package_spellmeta_id(id),
+            DeltaError::SpellmetaIdNotClientSafe { id },
+        ),
     }
 }
 
+/// The refusal every insert on an update-only table takes.
+fn insert_refused(table: Table) -> Result<(), DeltaError> {
+    Err(DeltaError::InsertNotSupported { table })
+}
+
+/// `Ok` when the identifier is inside its family's Package band, `refusal` otherwise. The arms of
+/// [`check_inventable`] that state only "inside the band, or refused" read as one line each through
+/// this rather than repeating the `if`.
+fn check_band(inside: bool, refusal: DeltaError) -> Result<(), DeltaError> {
+    if inside {
+        Ok(())
+    } else {
+        Err(refusal)
+    }
+}
+
+/// One band covers all five insertable gossip tables, so they share one check.
+fn gossip_band(id: u64) -> Result<(), DeltaError> {
+    check_band(
+        is_package_gossip_id(id),
+        DeltaError::GossipIdNotClientSafe { id },
+    )
+}
+
+/// One band covers all three insertable globals tables, so they share one check.
+fn globals_band(id: u64) -> Result<(), DeltaError> {
+    check_band(
+        is_package_globals_id(id),
+        DeltaError::GlobalsIdNotClientSafe { id },
+    )
+}
+
 /// A spell identifier is refused the same way under every operation when it is 0 or fixture-owned.
+///
+/// `game_spell_chain` and `game_spell_proc_event` share it: both key on a spell identifier, so the
+/// row each names is metadata for a `game_spell` row and cannot outlive it.
 fn check_claimable_spell_id(table: Table, spell_id: u32) -> Result<(), DeltaError> {
     if spell_id == 0 {
         return Err(DeltaError::MalformedKey {
@@ -740,6 +1152,62 @@ fn check_claimable_trainer_id(id: u64) -> Result<(), DeltaError> {
     }
     if is_fixture_reserved_trainer_id(id) {
         return Err(DeltaError::TrainerIdFixtureReserved { id });
+    }
+    Ok(())
+}
+
+/// A gossip identifier is refused the same way under every operation when it is 0 or
+/// fixture-owned. `member` names the key member so the refusal quotes the table's own spelling.
+fn check_claimable_gossip_id(table: Table, member: &str, id: u64) -> Result<(), DeltaError> {
+    if id == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: format!("`{member}` 0 is not a row"),
+        });
+    }
+    if is_fixture_reserved_gossip_id(id) {
+        return Err(DeltaError::GossipIdFixtureReserved { id });
+    }
+    Ok(())
+}
+
+/// A globals identifier is refused the same way under every operation when it is 0 or
+/// fixture-owned.
+fn check_claimable_globals_id(table: Table, member: &str, id: u64) -> Result<(), DeltaError> {
+    if id == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: format!("`{member}` 0 is not a row"),
+        });
+    }
+    if is_fixture_reserved_globals_id(id) {
+        return Err(DeltaError::GlobalsIdFixtureReserved { id });
+    }
+    Ok(())
+}
+
+/// Both stat curves stop at [`MAX_STATS_LEVEL`], and neither carries a level-0 row.
+fn check_stats_level(level: u8) -> Result<(), DeltaError> {
+    if level == 0 || level > MAX_STATS_LEVEL {
+        return Err(DeltaError::StatsLevelOutOfRange { level });
+    }
+    Ok(())
+}
+
+/// Race 0 and class 0 are wildcards in the createinfo tables, but a real key column in the three
+/// update-only globals tables, where neither is a row.
+fn check_race_and_class(table: Table, race: u8, class: u8) -> Result<(), DeltaError> {
+    if race == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: "`race` 0 is not a race".to_owned(),
+        });
+    }
+    if class == 0 {
+        return Err(DeltaError::MalformedKey {
+            table,
+            detail: "`class` 0 is not a class".to_owned(),
+        });
     }
     Ok(())
 }
@@ -874,9 +1342,9 @@ impl Claim {
 /// True for a column that is part of the row's primary key, and therefore never claimable.
 fn is_key_column(table: Table, name: &str) -> bool {
     match table {
-        Table::Spell => name == "spell_id",
+        Table::Spell | Table::SpellChain | Table::SpellProcEvent => name == "spell_id",
         Table::SpellEffect => matches!(name, "id" | "spell_id" | "effect_index"),
-        Table::Item | Table::Quest => name == "entry",
+        Table::Item | Table::Quest | Table::GossipMenu => name == "entry",
         Table::QuestText => name == "quest_entry",
         Table::QuestObjective | Table::QuestCastObjective => {
             matches!(name, "id" | "quest_entry" | "obj_index")
@@ -888,8 +1356,21 @@ fn is_key_column(table: Table, name: &str) -> bool {
         | Table::SkinningLoot
         | Table::FishingLoot
         | Table::CreatureSpell
-        | Table::TrainerSpell => name == "id",
+        | Table::TrainerSpell
+        | Table::NpcTextSlot
+        | Table::CreateinfoSpell
+        | Table::SpellLearn => name == "id",
         Table::CreatureCast => name == "creature_entry",
+        Table::GossipMenuProfile => name == "menu_id",
+        Table::GossipMenuProfileOption
+        | Table::GossipOption
+        | Table::GraveyardZone
+        | Table::CreateinfoAction => name == "row_id",
+        Table::NpcText => name == "text_id",
+        Table::ClassLevelStats => name == "class" || name == "level",
+        Table::LevelStats => name == "race" || name == "class" || name == "level",
+        Table::StartPosition => name == "race" || name == "class",
+        Table::AreatriggerTeleport => name == "trigger_id",
     }
 }
 
@@ -1062,7 +1543,25 @@ impl PackageDelta {
                     // whose own policy is stricter than "any identifier in the band".
                     | Table::CreatureCast
                     | Table::CreatureSpell
-                    | Table::TrainerSpell,
+                    | Table::TrainerSpell
+                    | Table::GossipMenuProfile
+                    | Table::GossipMenuProfileOption
+                    | Table::GossipOption
+                    | Table::NpcText
+                    | Table::NpcTextSlot
+                    | Table::GraveyardZone
+                    | Table::CreateinfoSpell
+                    | Table::CreateinfoAction
+                    | Table::SpellChain
+                    | Table::SpellLearn
+                    | Table::SpellProcEvent
+                    // Update-only, like `Table::CreatureCast` above: refused before a `Claim` can
+                    // exist, listed only to keep the match exhaustive at the type level.
+                    | Table::GossipMenu
+                    | Table::ClassLevelStats
+                    | Table::LevelStats
+                    | Table::StartPosition
+                    | Table::AreatriggerTeleport,
                 ) => counts.inserted_rows += 1,
             }
         }
@@ -1127,9 +1626,9 @@ fn parse_claim(value: &Value, index: usize) -> Result<Claim, DeltaError> {
 /// The `key` members a claim on `table` must carry, exactly.
 fn expected_key_members(table: Table) -> &'static [&'static str] {
     match table {
-        Table::Spell => &["spell_id"],
+        Table::Spell | Table::SpellChain | Table::SpellProcEvent => &["spell_id"],
         Table::SpellEffect => &["effect_index", "spell_id"],
-        Table::Item | Table::Quest => &["entry"],
+        Table::Item | Table::Quest | Table::GossipMenu => &["entry"],
         Table::QuestText => &["quest_entry"],
         Table::QuestObjective | Table::QuestCastObjective => &["obj_index", "quest_entry"],
         Table::QuestRewardItem => &["item_entry", "quest_entry"],
@@ -1139,8 +1638,21 @@ fn expected_key_members(table: Table) -> &'static [&'static str] {
         | Table::SkinningLoot
         | Table::FishingLoot
         | Table::CreatureSpell
-        | Table::TrainerSpell => &["id"],
+        | Table::TrainerSpell
+        | Table::NpcTextSlot
+        | Table::CreateinfoSpell
+        | Table::SpellLearn => &["id"],
         Table::CreatureCast => &["creature_entry"],
+        Table::GossipMenuProfile => &["menu_id"],
+        Table::GossipMenuProfileOption
+        | Table::GossipOption
+        | Table::GraveyardZone
+        | Table::CreateinfoAction => &["row_id"],
+        Table::NpcText => &["text_id"],
+        Table::ClassLevelStats => &["class", "level"],
+        Table::LevelStats => &["class", "level", "race"],
+        Table::StartPosition => &["class", "race"],
+        Table::AreatriggerTeleport => &["trigger_id"],
     }
 }
 
@@ -1175,77 +1687,85 @@ fn parse_key(value: &Value, table: Table) -> Result<PrimaryKey, DeltaError> {
 /// grows.
 fn build_key(key: &Map<String, Value>, table: Table) -> Result<PrimaryKey, DeltaError> {
     match table {
-        Table::Spell => {
-            let spell_id = key_number(key, table, "spell_id", u64::from(u32::MAX))? as u32;
-            PrimaryKey::spell(spell_id)
+        Table::Spell => PrimaryKey::spell(key_u32(key, table, "spell_id")?),
+        Table::SpellEffect => PrimaryKey::spell_effect(
+            key_u32(key, table, "spell_id")?,
+            key_u8(key, table, "effect_index")?,
+        ),
+        Table::Item => PrimaryKey::item(key_u32(key, table, "entry")?),
+        Table::Quest => PrimaryKey::quest(key_u32(key, table, "entry")?),
+        Table::QuestText => PrimaryKey::quest_text(key_u32(key, table, "quest_entry")?),
+        Table::QuestObjective => PrimaryKey::quest_objective(
+            key_u32(key, table, "quest_entry")?,
+            key_u8(key, table, "obj_index")?,
+        ),
+        Table::QuestCastObjective => PrimaryKey::quest_cast_objective(
+            key_u32(key, table, "quest_entry")?,
+            key_u8(key, table, "obj_index")?,
+        ),
+        Table::QuestRewardItem => PrimaryKey::quest_reward_item(
+            key_u32(key, table, "quest_entry")?,
+            key_u32(key, table, "item_entry")?,
+        ),
+        Table::QuestRewardChoice => PrimaryKey::quest_reward_choice(
+            key_u32(key, table, "quest_entry")?,
+            key_u8(key, table, "choice_index")?,
+        ),
+        Table::PickpocketLoot => PrimaryKey::pickpocket_loot(key_u64(key, table, "id")?),
+        Table::GameobjectLoot => PrimaryKey::gameobject_loot(key_u64(key, table, "id")?),
+        Table::SkinningLoot => PrimaryKey::skinning_loot(key_u64(key, table, "id")?),
+        Table::FishingLoot => PrimaryKey::fishing_loot(key_u64(key, table, "id")?),
+        Table::CreatureCast => PrimaryKey::creature_cast(key_u32(key, table, "creature_entry")?),
+        Table::CreatureSpell => PrimaryKey::creature_spell(key_u64(key, table, "id")?),
+        Table::TrainerSpell => PrimaryKey::trainer_spell(key_u64(key, table, "id")?),
+        Table::GossipMenu => PrimaryKey::gossip_menu(key_u32(key, table, "entry")?),
+        Table::GossipMenuProfile => {
+            PrimaryKey::gossip_menu_profile(key_u32(key, table, "menu_id")?)
         }
-        Table::SpellEffect => {
-            let spell_id = key_number(key, table, "spell_id", u64::from(u32::MAX))? as u32;
-            let effect_index = key_number(key, table, "effect_index", u64::from(u8::MAX))? as u8;
-            PrimaryKey::spell_effect(spell_id, effect_index)
+        Table::GossipMenuProfileOption => {
+            PrimaryKey::gossip_menu_profile_option(key_u32(key, table, "row_id")?)
         }
-        Table::Item => {
-            let entry = key_number(key, table, "entry", u64::from(u32::MAX))? as u32;
-            PrimaryKey::item(entry)
+        Table::GossipOption => PrimaryKey::gossip_option(key_u32(key, table, "row_id")?),
+        Table::NpcText => PrimaryKey::npc_text(key_u32(key, table, "text_id")?),
+        Table::NpcTextSlot => PrimaryKey::npc_text_slot(key_u64(key, table, "id")?),
+        Table::ClassLevelStats => PrimaryKey::class_level_stats(
+            key_u8(key, table, "class")?,
+            key_u8(key, table, "level")?,
+        ),
+        Table::LevelStats => PrimaryKey::level_stats(
+            key_u8(key, table, "race")?,
+            key_u8(key, table, "class")?,
+            key_u8(key, table, "level")?,
+        ),
+        Table::StartPosition => {
+            PrimaryKey::start_position(key_u8(key, table, "race")?, key_u8(key, table, "class")?)
         }
-        Table::Quest => {
-            let entry = key_number(key, table, "entry", u64::from(u32::MAX))? as u32;
-            PrimaryKey::quest(entry)
+        Table::GraveyardZone => PrimaryKey::graveyard_zone(key_u64(key, table, "row_id")?),
+        Table::AreatriggerTeleport => {
+            PrimaryKey::areatrigger_teleport(key_u32(key, table, "trigger_id")?)
         }
-        Table::QuestText => {
-            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
-            PrimaryKey::quest_text(quest_entry)
-        }
-        Table::QuestObjective => {
-            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
-            let obj_index = key_number(key, table, "obj_index", u64::from(u8::MAX))? as u8;
-            PrimaryKey::quest_objective(quest_entry, obj_index)
-        }
-        Table::QuestCastObjective => {
-            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
-            let obj_index = key_number(key, table, "obj_index", u64::from(u8::MAX))? as u8;
-            PrimaryKey::quest_cast_objective(quest_entry, obj_index)
-        }
-        Table::QuestRewardItem => {
-            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
-            let item_entry = key_number(key, table, "item_entry", u64::from(u32::MAX))? as u32;
-            PrimaryKey::quest_reward_item(quest_entry, item_entry)
-        }
-        Table::QuestRewardChoice => {
-            let quest_entry = key_number(key, table, "quest_entry", u64::from(u32::MAX))? as u32;
-            let choice_index = key_number(key, table, "choice_index", u64::from(u8::MAX))? as u8;
-            PrimaryKey::quest_reward_choice(quest_entry, choice_index)
-        }
-        Table::PickpocketLoot => {
-            let id = key_number(key, table, "id", u64::MAX)?;
-            PrimaryKey::pickpocket_loot(id)
-        }
-        Table::GameobjectLoot => {
-            let id = key_number(key, table, "id", u64::MAX)?;
-            PrimaryKey::gameobject_loot(id)
-        }
-        Table::SkinningLoot => {
-            let id = key_number(key, table, "id", u64::MAX)?;
-            PrimaryKey::skinning_loot(id)
-        }
-        Table::FishingLoot => {
-            let id = key_number(key, table, "id", u64::MAX)?;
-            PrimaryKey::fishing_loot(id)
-        }
-        Table::CreatureCast => {
-            let creature_entry =
-                key_number(key, table, "creature_entry", u64::from(u32::MAX))? as u32;
-            PrimaryKey::creature_cast(creature_entry)
-        }
-        Table::CreatureSpell => {
-            let id = key_number(key, table, "id", u64::MAX)?;
-            PrimaryKey::creature_spell(id)
-        }
-        Table::TrainerSpell => {
-            let id = key_number(key, table, "id", u64::MAX)?;
-            PrimaryKey::trainer_spell(id)
-        }
+        Table::CreateinfoSpell => PrimaryKey::createinfo_spell(key_u64(key, table, "id")?),
+        Table::CreateinfoAction => PrimaryKey::createinfo_action(key_u64(key, table, "row_id")?),
+        Table::SpellChain => PrimaryKey::spell_chain(key_u32(key, table, "spell_id")?),
+        Table::SpellLearn => PrimaryKey::spell_learn(key_u64(key, table, "id")?),
+        Table::SpellProcEvent => PrimaryKey::spell_proc_event(key_u32(key, table, "spell_id")?),
     }
+}
+
+/// A key member narrowed to `u8`. Narrowing here rather than at each call site is what keeps
+/// [`build_key`] one line per table.
+fn key_u8(key: &Map<String, Value>, table: Table, name: &str) -> Result<u8, DeltaError> {
+    key_number(key, table, name, u64::from(u8::MAX)).map(|n| n as u8)
+}
+
+/// A key member narrowed to `u32`.
+fn key_u32(key: &Map<String, Value>, table: Table, name: &str) -> Result<u32, DeltaError> {
+    key_number(key, table, name, u64::from(u32::MAX)).map(|n| n as u32)
+}
+
+/// A key member at its full `u64` width.
+fn key_u64(key: &Map<String, Value>, table: Table, name: &str) -> Result<u64, DeltaError> {
+    key_number(key, table, name, u64::MAX)
 }
 
 fn key_number(

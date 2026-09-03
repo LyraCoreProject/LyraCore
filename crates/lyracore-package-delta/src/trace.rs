@@ -1,5 +1,5 @@
-//! The conflict tracer: what several Packages together would do to the spell tables, and where they
-//! disagree.
+//! The conflict tracer: what several Packages together would do to one Import Family, and where
+//! they disagree.
 //!
 //! Read-only and pure. It decides nothing about applying; it produces the merged picture and the
 //! list of disagreements, which is exactly what a dry-run check prints and what an applier refuses
@@ -114,8 +114,9 @@ impl fmt::Display for ClaimConflict {
                 challenger_value,
             } => write!(
                 f,
-                "`{}` row {key}: packages `{holder}` and `{challenger}` both claim column \
+                "family `{}`, table `{}`, row {key}: packages `{holder}` and `{challenger}` both claim column \
                  `{field}` (`{holder}` sets {holder_value}, `{challenger}` sets {challenger_value})",
+                key.table().family(),
                 key.table()
             ),
             Self::InsertedRow {
@@ -124,7 +125,8 @@ impl fmt::Display for ClaimConflict {
                 challenger,
             } => write!(
                 f,
-                "`{}` row {key}: packages `{holder}` and `{challenger}` both insert this row",
+                "family `{}`, table `{}`, row {key}: packages `{holder}` and `{challenger}` both insert this row",
+                key.table().family(),
                 key.table()
             ),
         }

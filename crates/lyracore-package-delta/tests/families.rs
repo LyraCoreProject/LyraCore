@@ -4,7 +4,8 @@
 //! may touch. These cases hold the catalogue, the parser and the family map together.
 
 use lyracore_package_delta::{
-    Table, CAST_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
+    Table, CAST_FAMILY, GLOBALS_FAMILY, GOSSIP_FAMILY, ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY,
+    SPELLMETA_FAMILY, SPELL_FAMILY, TRAINER_FAMILY,
 };
 
 /// `Table::ALL`, `Table::as_str` and `Table::parse` are three hand-maintained lists of one
@@ -30,6 +31,22 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
             Table::CreatureCast => "game_creature_cast",
             Table::CreatureSpell => "game_creature_spell",
             Table::TrainerSpell => "game_trainer_spell",
+            Table::GossipMenu => "game_gossip_menu",
+            Table::GossipMenuProfile => "game_gossip_menu_profile",
+            Table::GossipMenuProfileOption => "game_gossip_menu_profile_option",
+            Table::GossipOption => "game_gossip_option",
+            Table::NpcText => "game_npc_text",
+            Table::NpcTextSlot => "game_npc_text_slot",
+            Table::ClassLevelStats => "game_class_level_stats",
+            Table::LevelStats => "game_level_stats",
+            Table::StartPosition => "game_start_position",
+            Table::GraveyardZone => "game_graveyard_zone",
+            Table::AreatriggerTeleport => "game_areatrigger_teleport",
+            Table::CreateinfoSpell => "game_createinfo_spell",
+            Table::CreateinfoAction => "game_createinfo_action",
+            Table::SpellChain => "game_spell_chain",
+            Table::SpellLearn => "game_spell_learn",
+            Table::SpellProcEvent => "game_spell_proc_event",
         };
 
         assert_eq!(table.as_str(), name);
@@ -38,7 +55,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
 
     assert_eq!(
         Table::ALL.len(),
-        16,
+        32,
         "a table reached the enum without reaching `Table::ALL`"
     );
 }
@@ -96,6 +113,49 @@ fn the_cast_tables_belong_to_the_casts_import_family() {
 fn the_trainer_table_belongs_to_the_trainers_import_family() {
     assert_eq!(Table::TrainerSpell.family(), TRAINER_FAMILY);
     assert_eq!(TRAINER_FAMILY, "trainers");
+}
+
+#[test]
+fn the_gossip_tables_belong_to_the_gossip_import_family() {
+    for table in [
+        Table::GossipMenu,
+        Table::GossipMenuProfile,
+        Table::GossipMenuProfileOption,
+        Table::GossipOption,
+        Table::NpcText,
+        Table::NpcTextSlot,
+    ] {
+        assert_eq!(table.family(), GOSSIP_FAMILY, "{table}");
+    }
+    assert_eq!(GOSSIP_FAMILY, "gossip");
+}
+
+#[test]
+fn the_globals_tables_belong_to_the_globals_import_family() {
+    for table in [
+        Table::ClassLevelStats,
+        Table::LevelStats,
+        Table::StartPosition,
+        Table::GraveyardZone,
+        Table::AreatriggerTeleport,
+        Table::CreateinfoSpell,
+        Table::CreateinfoAction,
+    ] {
+        assert_eq!(table.family(), GLOBALS_FAMILY, "{table}");
+    }
+    assert_eq!(GLOBALS_FAMILY, "globals");
+}
+
+/// The spell metadata tables belong to `spellmeta`, NOT to `spell`, even though two of the three
+/// key on a spell identifier. A base import reloads them in their own family's block, so an apply
+/// that ran them under `spell` would be reverted by the block that owns them.
+#[test]
+fn the_spell_metadata_tables_belong_to_the_spellmeta_import_family() {
+    for table in [Table::SpellChain, Table::SpellLearn, Table::SpellProcEvent] {
+        assert_eq!(table.family(), SPELLMETA_FAMILY, "{table}");
+    }
+    assert_eq!(SPELLMETA_FAMILY, "spellmeta");
+    assert_ne!(Table::SpellChain.family(), Table::Spell.family());
 }
 
 /// A family name travels as a reducer argument and as `game_import_meta.family`, where the importer
