@@ -445,3 +445,346 @@ fn spell_metadata_claims_refuse_a_missing_spell_in_the_key_and_in_a_column() {
     ));
     assert_eq!(learn[0]["learn_spell"], REAL_SPELL.to_string());
 }
+
+// ---- the two spatial families ----
+
+/// Eastern Kingdoms. Every in-box World Import Scope but `instances` owns some of it, and the
+/// Module never asks which — routing is the importer's, so a live apply takes the map as given.
+const REAL_MAP: u32 = 0;
+const PACKAGE_CREATURE_SPAWN: u32 = 15_000_001;
+const PACKAGE_CREATURE_TEMPLATE: u32 = 15_000_002;
+const PACKAGE_GAMEOBJECT_TEMPLATE: u32 = 16_000_001;
+const PACKAGE_GAMEOBJECT_SPAWN: u32 = 16_000_002;
+const MISSING_GAMEOBJECT: u32 = 4_000_000;
+const SEEDED_GAMEOBJECT: u32 = 50_100; // Battered Chest, seeded by `init`.
+
+/// The importer's `world_guid`, restated so the assertion derives the key the same way the artifact
+/// does not: the test names the components, the Module packs them.
+fn creature_guid(entry: u32, spawn_id: u32) -> u64 {
+    (0xF130u64 << 48) | (u64::from(entry) << 24) | u64::from(spawn_id)
+}
+
+/// The importer's `go_guid`.
+fn gameobject_guid(spawn_id: u32) -> u64 {
+    (0xF110u64 << 48) | u64::from(spawn_id)
+}
+
+fn creature_spawn_insert(map_id: u32, entry: u32, spawn_id: u32) -> String {
+    artifact(
+        "example.creatures.place",
+        &format!(
+            r#"{{"table":"game_creature_spawn","key":{{"map_id":{map_id},"entry":{entry},"spawn_id":{spawn_id}}},"operation":"insert","fields":{{"x":{{"type":"f32","value":-8949.95}},"y":{{"type":"f32","value":-132.493}},"z":{{"type":"f32","value":83.5312}},"orientation":{{"type":"f32","value":0.0}},"movement_type":{{"type":"u8","value":0}},"respawn_secs":{{"type":"u32","value":300}}}}}}"#
+        ),
+    )
+}
+
+/// A whole Package creature, template and spawn together — the plan an author writes to add an NPC.
+fn creature_template_and_spawn() -> String {
+    let template = artifact(
+        "example.creatures.invent",
+        &format!(
+            r#"{{"table":"game_creature_template","key":{{"entry":{PACKAGE_CREATURE_TEMPLATE}}},"operation":"insert","fields":{{"name":{{"type":"string","value":"Kindled Sentinel"}},"subname":{{"type":"string","value":"Forge Guard"}},"display_id":{{"type":"u32","value":1420}},"level":{{"type":"u32","value":12}},"health":{{"type":"u32","value":300}},"faction_template":{{"type":"u32","value":14}},"npc_flags":{{"type":"u32","value":0}},"unit_flags":{{"type":"u32","value":0}},"creature_type":{{"type":"u8","value":7}},"creature_family":{{"type":"u8","value":0}},"type_flags":{{"type":"u32","value":0}},"rank":{{"type":"u8","value":0}},"scale":{{"type":"f32","value":1.0}},"base_attack_time_ms":{{"type":"u32","value":2000}},"money_min":{{"type":"u32","value":10}},"money_max":{{"type":"u32","value":40}},"max_level":{{"type":"u32","value":13}},"max_level_health":{{"type":"u32","value":340}},"aggro_range":{{"type":"u32","value":0}},"damage_min":{{"type":"u32","value":6}},"damage_max":{{"type":"u32","value":9}},"armor":{{"type":"u32","value":120}},"pickpocket_loot_id":{{"type":"u32","value":0}},"skin_loot_id":{{"type":"u32","value":0}},"trainer_type":{{"type":"u8","value":0}},"trainer_class":{{"type":"u8","value":0}}}}}}"#
+        ),
+    );
+    format!(
+        "{template}\n{}",
+        creature_spawn_insert(REAL_MAP, PACKAGE_CREATURE_TEMPLATE, PACKAGE_CREATURE_SPAWN)
+    )
+}
+
+fn gameobject_spawn_insert(map_id: u32, spawn_id: u32, template_entry: u32) -> String {
+    artifact(
+        "example.gameobjects.place",
+        &format!(
+            r#"{{"table":"game_gameobject","key":{{"map_id":{map_id},"spawn_id":{spawn_id}}},"operation":"insert","fields":{{"template_entry":{{"type":"u32","value":{template_entry}}},"x":{{"type":"f32","value":-8949.95}},"y":{{"type":"f32","value":-132.493}},"z":{{"type":"f32","value":83.5312}},"orientation":{{"type":"f32","value":0.0}},"state":{{"type":"u8","value":0}},"rotation_0":{{"type":"f32","value":0.0}},"rotation_1":{{"type":"f32","value":0.0}},"rotation_2":{{"type":"f32","value":0.0}},"rotation_3":{{"type":"f32","value":0.0}}}}}}"#
+        ),
+    )
+}
+
+fn gameobject_template_insert() -> String {
+    artifact(
+        "example.gameobjects.invent",
+        &format!(
+            r#"{{"table":"game_gameobject_template","key":{{"entry":{PACKAGE_GAMEOBJECT_TEMPLATE}}},"operation":"insert","fields":{{"type_id":{{"type":"u8","value":3}},"display_id":{{"type":"u32","value":259}},"name":{{"type":"string","value":"Kindled Cache"}},"data0":{{"type":"u32","value":{REAL_ITEM}}},"data1":{{"type":"u32","value":0}},"gather_skill_line":{{"type":"u32","value":0}},"respawn_secs":{{"type":"u32","value":180}},"gather_gray":{{"type":"u32","value":0}},"lock_id":{{"type":"u32","value":0}},"size":{{"type":"f32","value":1.0}}}}}}"#
+        ),
+    )
+}
+
+/// A creature spawn is spatial and its guid is derived, so the preflight has two jobs: the template
+/// it places must exist after the plan lands, and no two claims may resolve to one durable
+/// creature. The second is what an invalid map-ownership statement looks like from inside a
+/// Shard, which never decides which maps it owns.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_maps() {
+    let standalone = Standalone::start("package-delta-creature-references");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+
+    let refused = apply(
+        &standalone,
+        "creatures",
+        &creature_spawn_insert(REAL_MAP, MISSING_CREATURE, PACKAGE_CREATURE_SPAWN),
+    );
+    assert!(!refused.status.success());
+    assert!(
+        refusal_text(&refused).contains("missing entry"),
+        "{}",
+        refusal_text(&refused)
+    );
+
+    let two_maps = format!(
+        "{}\n{}",
+        creature_spawn_insert(0, FIXTURE_CREATURE, PACKAGE_CREATURE_SPAWN),
+        creature_spawn_insert(1, FIXTURE_CREATURE, PACKAGE_CREATURE_SPAWN)
+            .replace("example.creatures.place", "example.creatures.elsewhere"),
+    );
+    let refused_twice = apply(&standalone, "creatures", &two_maps);
+    assert!(!refused_twice.status.success());
+    assert!(
+        refusal_text(&refused_twice).contains("one durable creature"),
+        "{}",
+        refusal_text(&refused_twice)
+    );
+
+    let accepted = apply(
+        &standalone,
+        "creatures",
+        &creature_spawn_insert(REAL_MAP, FIXTURE_CREATURE, PACKAGE_CREATURE_SPAWN),
+    );
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let guid = creature_guid(FIXTURE_CREATURE, PACKAGE_CREATURE_SPAWN);
+    let spawn = standalone.query_rows(&format!(
+        "SELECT * FROM game_creature_spawn WHERE guid = {guid}"
+    ));
+    assert_eq!(spawn[0]["entry"], FIXTURE_CREATURE.to_string());
+    assert_eq!(spawn[0]["map_id"], REAL_MAP.to_string());
+
+    // A Package that leaves the enabled set takes its invented rows with it: the same family
+    // applied with an empty plan clears the whole band.
+    let cleared = apply(&standalone, "creatures", "");
+    assert!(cleared.status.success(), "{}", refusal_text(&cleared));
+    assert!(standalone
+        .query_rows(&format!(
+            "SELECT * FROM game_creature_spawn WHERE guid = {guid}"
+        ))
+        .is_empty());
+
+    // A Package may also invent the creature it places, in one plan.
+    let invented = apply(&standalone, "creatures", &creature_template_and_spawn());
+    assert!(invented.status.success(), "{}", refusal_text(&invented));
+    let template = standalone.query_rows(&format!(
+        "SELECT * FROM game_creature_template WHERE entry = {PACKAGE_CREATURE_TEMPLATE}"
+    ));
+    // `spacetime sql` quotes a string column, so the expected value carries the quotes.
+    assert_eq!(template[0]["name"], "\"Kindled Sentinel\"");
+    let invented_guid = creature_guid(PACKAGE_CREATURE_TEMPLATE, PACKAGE_CREATURE_SPAWN);
+    assert!(!standalone
+        .query_rows(&format!(
+            "SELECT * FROM game_creature_spawn WHERE guid = {invented_guid}"
+        ))
+        .is_empty());
+}
+
+/// A gameobject spawn names its template in a COLUMN rather than in the key, so the preflight has
+/// to judge the row it will hold after the plan lands, not the column alone.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn gameobject_claims_refuse_a_missing_template_and_place_an_invented_one() {
+    let standalone = Standalone::start("package-delta-gameobject-references");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+
+    let refused = apply(
+        &standalone,
+        "gameobjects",
+        &gameobject_spawn_insert(REAL_MAP, PACKAGE_GAMEOBJECT_SPAWN, MISSING_GAMEOBJECT),
+    );
+    assert!(!refused.status.success());
+    assert!(
+        refusal_text(&refused).contains("missing template entry"),
+        "{}",
+        refusal_text(&refused)
+    );
+
+    let accepted = apply(
+        &standalone,
+        "gameobjects",
+        &gameobject_spawn_insert(REAL_MAP, PACKAGE_GAMEOBJECT_SPAWN, SEEDED_GAMEOBJECT),
+    );
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let guid = gameobject_guid(PACKAGE_GAMEOBJECT_SPAWN);
+    let spawn = standalone.query_rows(&format!(
+        "SELECT * FROM game_gameobject WHERE guid = {guid}"
+    ));
+    assert_eq!(spawn[0]["template_entry"], SEEDED_GAMEOBJECT.to_string());
+    assert_ne!(
+        spawn[0]["cell"], "0",
+        "the AOI cell is derived from the claimed position, not left at cell (0, 0)"
+    );
+
+    // The template and its spawn in one plan: the Package-band template is satisfied by the insert
+    // beside it, not by anything already on the Shard.
+    let plan = format!(
+        "{}\n{}",
+        gameobject_template_insert(),
+        gameobject_spawn_insert(
+            REAL_MAP,
+            PACKAGE_GAMEOBJECT_SPAWN,
+            PACKAGE_GAMEOBJECT_TEMPLATE
+        )
+    );
+    let invented = apply(&standalone, "gameobjects", &plan);
+    assert!(invented.status.success(), "{}", refusal_text(&invented));
+    let template = standalone.query_rows(&format!(
+        "SELECT * FROM game_gameobject_template WHERE entry = {PACKAGE_GAMEOBJECT_TEMPLATE}"
+    ));
+    assert_eq!(template[0]["name"], "\"Kindled Cache\"");
+
+    let cleared = apply(&standalone, "gameobjects", "");
+    assert!(cleared.status.success(), "{}", refusal_text(&cleared));
+    assert!(standalone
+        .query_rows(&format!(
+            "SELECT * FROM game_gameobject_template WHERE entry = {PACKAGE_GAMEOBJECT_TEMPLATE}"
+        ))
+        .is_empty());
+}
+
+// ---- the creature-ai family ----
+
+/// Blackfathom Deeps' Kelris. His EventAI notifies an Encounter Binding, so an encounter Package
+/// owns his fight.
+const KELRIS: u32 = 4_832;
+/// A broadcast text Kelris speaks, and one nothing encounter-owned names.
+const KELRIS_TEXT: u32 = 900;
+const ORDINARY_TEXT: u32 = 901;
+const PACKAGE_QUEST_EVENT_REQUIREMENT: u64 = 17_000_001;
+const MISSING_QUEST: u32 = 4_000_000;
+
+/// Two imported broadcast texts, in the shape the `creature-ai` base import loads them.
+fn seed_broadcast_texts(standalone: &Standalone) {
+    for (id, line) in [
+        (KELRIS_TEXT, "Ah, sweet innocence."),
+        (ORDINARY_TEXT, "Halt."),
+    ] {
+        standalone.assert_sql(&format!(
+            "INSERT INTO game_creature_ai_broadcast_text \
+             (id, male_text, female_text, chat_type, language_id, emote_delay_1_ms, emote_id_1, \
+             emote_delay_2_ms, emote_id_2, emote_delay_3_ms, emote_id_3) \
+             VALUES ({id}, '{line}', '{line}', 1, 0, 0, 0, 0, 0, 0, 0)"
+        ));
+    }
+}
+
+/// Kelris's loaded definition: one rule that speaks [`KELRIS_TEXT`] and notifies the encounter.
+/// That notification IS the Encounter Binding, so the text it speaks is encounter-owned.
+fn kelris_definition() -> String {
+    let subject = format!("entry:{KELRIS}");
+    let rules = format!(
+        "10,aggro,100,4294967295,once,all,ordinary,any-posture,\
+         speak:yell:self:{KELRIS_TEXT}+notify-encounter:blackfathom-deeps-kelris:begin"
+    );
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"lyracore-eventai-definition-v1");
+    hasher.update(format!("{subject}@{rules}").as_bytes());
+    let revision = u64::from_le_bytes(
+        hasher.finalize().as_bytes()[..8]
+            .try_into()
+            .expect("a BLAKE3 digest has at least eight bytes"),
+    );
+    format!("{subject}@{revision}@{rules}")
+}
+
+fn quest_event_requirement_insert(quest_entry: u32) -> String {
+    artifact(
+        "example.quest.event",
+        &format!(
+            r#"{{"table":"game_quest_event_requirement","key":{{"id":{PACKAGE_QUEST_EVENT_REQUIREMENT}}},"operation":"insert","fields":{{"quest_entry":{{"type":"u32","value":{quest_entry}}}}}}}"#
+        ),
+    )
+}
+
+fn broadcast_text_update(id: u32) -> String {
+    artifact(
+        "example.voice",
+        &format!(
+            r#"{{"table":"game_creature_ai_broadcast_text","key":{{"id":{id}}},"operation":"update","fields":{{"male_text":{{"type":"string","value":"You will burn."}}}}}}"#
+        ),
+    )
+}
+
+/// The creature-ai family has two preflight jobs the whole plan answers. A quest event requirement
+/// names a quest another family owns, and a catalogue row may already belong to an encounter whose
+/// Package owns that creature's fight. The last apply also proves the base-family replay: a Package
+/// that leaves the enabled set takes its invented rows with it.
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
+    let standalone = Standalone::start("package-delta-creature-ai-references");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+    seed_broadcast_texts(&standalone);
+
+    let refused = apply(
+        &standalone,
+        "creature-ai",
+        &quest_event_requirement_insert(MISSING_QUEST),
+    );
+    assert!(!refused.status.success());
+    assert!(
+        refusal_text(&refused).contains("quest_entry"),
+        "{}",
+        refusal_text(&refused)
+    );
+
+    let accepted = apply(
+        &standalone,
+        "creature-ai",
+        &quest_event_requirement_insert(FIXTURE_QUEST),
+    );
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let requirement = standalone.query_rows(&format!(
+        "SELECT * FROM game_quest_event_requirement WHERE id = {PACKAGE_QUEST_EVENT_REQUIREMENT}"
+    ));
+    assert_eq!(requirement[0]["quest_entry"], FIXTURE_QUEST.to_string());
+
+    standalone.assert_call(
+        "import_creature_ai_definitions",
+        &[&arg(&kelris_definition())],
+    );
+
+    let refused = apply(
+        &standalone,
+        "creature-ai",
+        &broadcast_text_update(KELRIS_TEXT),
+    );
+    assert!(!refused.status.success());
+    assert!(
+        refusal_text(&refused).contains("BlackfathomDeepsKelris"),
+        "{}",
+        refusal_text(&refused)
+    );
+
+    // A line no encounter-owned definition speaks is the ordinary case, and tuning it is the point.
+    let accepted = apply(
+        &standalone,
+        "creature-ai",
+        &broadcast_text_update(ORDINARY_TEXT),
+    );
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let text = standalone.query_rows(&format!(
+        "SELECT * FROM game_creature_ai_broadcast_text WHERE id = {ORDINARY_TEXT}"
+    ));
+    // `spacetime sql` quotes a string column, so the expected value carries the quotes.
+    assert_eq!(text[0]["male_text"], "\"You will burn.\"");
+
+    // That plan carries no quest event requirement, so the Package that invented one is gone from
+    // the enabled set and its row went with it.
+    assert!(standalone
+        .query_rows(&format!(
+            "SELECT * FROM game_quest_event_requirement WHERE id = {PACKAGE_QUEST_EVENT_REQUIREMENT}"
+        ))
+        .is_empty());
+}

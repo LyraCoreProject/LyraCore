@@ -363,6 +363,165 @@ pub(super) fn spell_learn_claim(id: u64, operation: &str, fields: &str) -> Strin
     )
 }
 
+// ---- creatures ----
+
+/// A creature identifier inside the Package creature range, safe to insert. One band covers the
+/// template and the spawn.
+pub(super) const PACKAGE_CREATURE: u32 = 15_000_001;
+
+/// A real imported creature template, safe to update and never safe to insert.
+pub(super) const REAL_CREATURE: u32 = 6; // Kobold Vermin.
+
+/// A real imported spawn identifier.
+pub(super) const REAL_CREATURE_SPAWN: u32 = 4_242;
+
+/// The map a spatial fixture claim sits on: Eastern Kingdoms.
+pub(super) const REAL_MAP: u32 = 0;
+
+pub(super) const WHOLE_CREATURE_TEMPLATE_ROW: &str = r#"{
+    "name": { "type": "string", "value": "Kindled Sentinel" },
+    "subname": { "type": "string", "value": "Forge Guard" },
+    "display_id": { "type": "u32", "value": 1420 },
+    "level": { "type": "u32", "value": 12 },
+    "health": { "type": "u32", "value": 300 },
+    "faction_template": { "type": "u32", "value": 14 },
+    "npc_flags": { "type": "u32", "value": 0 },
+    "unit_flags": { "type": "u32", "value": 0 },
+    "creature_type": { "type": "u8", "value": 7 },
+    "creature_family": { "type": "u8", "value": 0 },
+    "type_flags": { "type": "u32", "value": 0 },
+    "rank": { "type": "u8", "value": 0 },
+    "scale": { "type": "f32", "value": 1.0 },
+    "base_attack_time_ms": { "type": "u32", "value": 2000 },
+    "money_min": { "type": "u32", "value": 10 },
+    "money_max": { "type": "u32", "value": 40 },
+    "max_level": { "type": "u32", "value": 13 },
+    "max_level_health": { "type": "u32", "value": 340 },
+    "aggro_range": { "type": "u32", "value": 15 },
+    "damage_min": { "type": "u32", "value": 6 },
+    "damage_max": { "type": "u32", "value": 9 },
+    "armor": { "type": "u32", "value": 120 },
+    "pickpocket_loot_id": { "type": "u32", "value": 0 },
+    "skin_loot_id": { "type": "u32", "value": 0 },
+    "trainer_type": { "type": "u8", "value": 0 },
+    "trainer_class": { "type": "u8", "value": 0 }
+}"#;
+
+pub(super) fn creature_template_claim(entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_template","key":{{"entry":{entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn creature_spawn_claim(
+    map_id: u32,
+    entry: u32,
+    spawn_id: u32,
+    operation: &str,
+    fields: &str,
+) -> String {
+    format!(
+        r#"{{"table":"game_creature_spawn","key":{{"map_id":{map_id},"entry":{entry},"spawn_id":{spawn_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+// ---- gameobjects ----
+
+/// A gameobject identifier inside the Package gameobject range, safe to insert. One band covers
+/// the template, the trap and the spawn.
+pub(super) const PACKAGE_GAMEOBJECT: u32 = 16_000_001;
+
+/// A real imported gameobject spawn identifier.
+pub(super) const REAL_GAMEOBJECT_SPAWN: u32 = 7_777;
+
+pub(super) const WHOLE_GAMEOBJECT_TEMPLATE_ROW: &str = r#"{
+    "type_id": { "type": "u8", "value": 3 },
+    "display_id": { "type": "u32", "value": 259 },
+    "name": { "type": "string", "value": "Kindled Cache" },
+    "data0": { "type": "u32", "value": 25 },
+    "data1": { "type": "u32", "value": 0 },
+    "gather_skill_line": { "type": "u32", "value": 0 },
+    "respawn_secs": { "type": "u32", "value": 180 },
+    "gather_gray": { "type": "u32", "value": 0 },
+    "lock_id": { "type": "u32", "value": 0 },
+    "size": { "type": "f32", "value": 1.0 }
+}"#;
+
+pub(super) fn gameobject_template_claim(entry: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_gameobject_template","key":{{"entry":{entry}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn gameobject_spawn_claim(
+    map_id: u32,
+    spawn_id: u32,
+    operation: &str,
+    fields: &str,
+) -> String {
+    format!(
+        r#"{{"table":"game_gameobject","key":{{"map_id":{map_id},"spawn_id":{spawn_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+// ---- creature-ai ----
+
+/// A broadcast text inside the Package EventAI range, safe to insert. One band covers the text,
+/// the summon placement and the quest event requirement.
+pub(super) const PACKAGE_BROADCAST_TEXT: u32 = 17_000_001;
+
+/// A summon placement inside the Package EventAI range.
+pub(super) const PACKAGE_SUMMON: u32 = 17_000_002;
+
+/// A quest event requirement inside the Package EventAI range.
+pub(super) const PACKAGE_QUEST_EVENT_REQUIREMENT: u64 = 17_000_003;
+
+/// A real imported broadcast text identifier.
+pub(super) const REAL_BROADCAST_TEXT: u32 = 900;
+
+pub(super) const WHOLE_BROADCAST_TEXT_ROW: &str = r#"{
+    "male_text": { "type": "string", "value": "The forge remembers." },
+    "female_text": { "type": "string", "value": "The forge remembers." },
+    "chat_type": { "type": "u8", "value": 1 },
+    "language_id": { "type": "u8", "value": 0 },
+    "emote_delay_1_ms": { "type": "u32", "value": 0 },
+    "emote_id_1": { "type": "u32", "value": 5 },
+    "emote_delay_2_ms": { "type": "u32", "value": 0 },
+    "emote_id_2": { "type": "u32", "value": 0 },
+    "emote_delay_3_ms": { "type": "u32", "value": 0 },
+    "emote_id_3": { "type": "u32", "value": 0 }
+}"#;
+
+pub(super) const WHOLE_SUMMON_ROW: &str = r#"{
+    "x": { "type": "f32", "value": -8949.95 },
+    "y": { "type": "f32", "value": -132.493 },
+    "z": { "type": "f32", "value": 83.5312 },
+    "orientation": { "type": "f32", "value": 0.0 },
+    "lifetime_ms": { "type": "u32", "value": 30000 }
+}"#;
+
+pub(super) const WHOLE_QUEST_EVENT_REQUIREMENT_ROW: &str = r#"{
+    "quest_entry": { "type": "u32", "value": 8000001 }
+}"#;
+
+pub(super) fn broadcast_text_claim(id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_ai_broadcast_text","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn summon_claim(id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_creature_ai_summon","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn quest_event_requirement_claim(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_quest_event_requirement","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
 /// A value of the column's declared type, so a test can claim any column without spelling out what
 /// it holds.
 pub(super) fn some_value(column: Column) -> FieldValue {

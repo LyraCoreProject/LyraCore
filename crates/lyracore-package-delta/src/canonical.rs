@@ -60,6 +60,10 @@ fn write_claim(out: &mut String, claim: &Claim) {
     out.push_str("}}");
 }
 
+// One arm per key shape, and no wildcard: the canonical member order IS this crate's promise, so a
+// key that arrives without stating its order must fail the build rather than fall into a fallback.
+// That is what makes this function long; splitting it would trade the guarantee for the line count.
+#[allow(clippy::too_many_lines)]
 fn write_key(out: &mut String, key: PrimaryKey) {
     match key {
         PrimaryKey::Spell { spell_id }
@@ -79,7 +83,10 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         ),
         PrimaryKey::Item { entry }
         | PrimaryKey::Quest { entry }
-        | PrimaryKey::GossipMenu { entry } => write_members(out, &[("entry", entry.into())]),
+        | PrimaryKey::GossipMenu { entry }
+        | PrimaryKey::CreatureTemplate { entry }
+        | PrimaryKey::GameobjectTemplate { entry }
+        | PrimaryKey::GameobjectTrap { entry } => write_members(out, &[("entry", entry.into())]),
         PrimaryKey::QuestText { quest_entry } => {
             write_members(out, &[("quest_entry", quest_entry.into())]);
         }
@@ -125,7 +132,11 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         | PrimaryKey::TrainerSpell { id }
         | PrimaryKey::NpcTextSlot { id }
         | PrimaryKey::CreateinfoSpell { id }
-        | PrimaryKey::SpellLearn { id } => write_members(out, &[("id", id)]),
+        | PrimaryKey::SpellLearn { id }
+        | PrimaryKey::QuestEventRequirement { id } => write_members(out, &[("id", id)]),
+        PrimaryKey::CreatureAiBroadcastText { id } | PrimaryKey::CreatureAiSummon { id } => {
+            write_members(out, &[("id", id.into())]);
+        }
         PrimaryKey::CreatureCast { creature_entry } => {
             write_members(out, &[("creature_entry", creature_entry.into())]);
         }
@@ -156,6 +167,22 @@ fn write_key(out: &mut String, key: PrimaryKey) {
         PrimaryKey::AreatriggerTeleport { trigger_id } => {
             write_members(out, &[("trigger_id", trigger_id.into())]);
         }
+        PrimaryKey::CreatureSpawn {
+            map_id,
+            entry,
+            spawn_id,
+        } => write_members(
+            out,
+            &[
+                ("map_id", map_id.into()),
+                ("entry", entry.into()),
+                ("spawn_id", spawn_id.into()),
+            ],
+        ),
+        PrimaryKey::GameobjectSpawn { map_id, spawn_id } => write_members(
+            out,
+            &[("map_id", map_id.into()), ("spawn_id", spawn_id.into())],
+        ),
     }
 }
 

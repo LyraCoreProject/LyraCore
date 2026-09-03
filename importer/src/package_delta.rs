@@ -16,6 +16,19 @@
 //! The importer's own convention decides which: without `--apply` this prints the plan and writes
 //! nothing, with `--apply` it calls the reducer. The plan printed by a check is the plan an apply
 //! sends.
+//!
+//! # Routing a spatial claim
+//!
+//! Most claimed tables are global catalogues every Shard loads whole. Two are SPATIAL — a creature
+//! spawn and a gameobject spawn — and each names the map it sits on in its own key. A spatial claim
+//! belongs to this Shard exactly when this run's World Import Scope owns that map, which is the same
+//! fence the base import filters its own spawns through (`creature_row_kept_in_scope`). Routing
+//! reads that scope and nothing else: there is no second concept, and no per-Package Shard list to
+//! disagree with it.
+//!
+//! A claim for another Shard's map is DROPPED from this plan, not refused. Refusing it would make a
+//! realm of several Shards impossible to import, because every Shard would choke on the maps it does
+//! not own. The report names what was routed away, so a check still accounts for every claim.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,6 +39,7 @@ use lyracore_package_delta::{
     artifact_kind, trace, ArtifactKind, ClaimTrace, Operation, PackageDelta,
 };
 
+use crate::world_import_scope::WorldImportScope;
 use crate::{call_reducer_args, Args};
 
 /// Where a Package's generated Delta artifacts live, relative to the Package folder.
@@ -47,11 +61,16 @@ struct Artifact {
 /// Refuses the whole stage on an unreadable root, an invalid artifact, or a Claim Conflict — the
 /// module would refuse the same plan, and refusing here names the file.
 pub(crate) fn reapply(args: &Args, family: &str, root: &str) -> Result<()> {
-    let artifacts = artifacts_for_family(read_enabled(Path::new(root))?, family)?;
+    let scope = args.world_import_scope()?;
+    let for_family = artifacts_for_family(read_enabled(Path::new(root))?, family)?;
+    let (artifacts, routed_away) = routed_to_this_shard(&scope, for_family)?;
     let deltas: Vec<PackageDelta> = artifacts.iter().map(|a| a.delta.clone()).collect();
     let traced = trace(&deltas);
 
-    print!("{}", plan_report(root, &artifacts, &traced));
+    print!(
+        "{}",
+        plan_report(root, scope.name(), routed_away, &artifacts, &traced)
+    );
 
     if !traced.is_clear() {
         bail!(
@@ -109,6 +128,49 @@ fn artifacts_for_family(artifacts: Vec<Artifact>, family: &str) -> Result<Vec<Ar
             )
         })
         .collect()
+}
+
+/// Keep only the claims this Shard owns, and count the spatial ones it does not.
+///
+/// A claim with no map is a global catalogue row and always stays. A spatial claim stays exactly
+/// when the World Import Scope owns its map — `contains_map`, not `contains`: the base import's own
+/// rule for a forced creature is that a placed entry bypasses bounded geometry but never the map
+/// fence, and an authored spawn is placed the same way. A Package left with no claims at all drops
+/// out of the plan, the way it does when it claims no table of this family.
+fn routed_to_this_shard(
+    scope: &WorldImportScope,
+    artifacts: Vec<Artifact>,
+) -> Result<(Vec<Artifact>, usize)> {
+    let mut routed_away = 0usize;
+    let mut kept = Vec::new();
+    for artifact in artifacts {
+        let claims: Vec<_> = artifact
+            .delta
+            .claims()
+            .iter()
+            .filter(|claim| match claim.key().map_id() {
+                None => true,
+                Some(map) => {
+                    let owned = scope.contains_map(i64::from(map));
+                    routed_away += usize::from(!owned);
+                    owned
+                }
+            })
+            .cloned()
+            .collect();
+        if claims.is_empty() {
+            continue;
+        }
+        kept.push(Artifact {
+            path: artifact.path,
+            delta: PackageDelta::new(
+                artifact.delta.package().clone(),
+                artifact.delta.source_hash().clone(),
+                claims,
+            )?,
+        });
+    }
+    Ok((kept, routed_away))
 }
 
 /// The warning a base import prints when the operator did not name an enabled Package root.
@@ -193,8 +255,19 @@ fn pack(deltas: &[PackageDelta]) -> String {
 
 /// The plan, in the form a check prints and an apply announces: every Package with its file and row
 /// counts, then every claimed row, then every conflict.
-fn plan_report(root: &str, artifacts: &[Artifact], traced: &ClaimTrace) -> String {
+fn plan_report(
+    root: &str,
+    scope: &str,
+    routed_away: usize,
+    artifacts: &[Artifact],
+    traced: &ClaimTrace,
+) -> String {
     let mut out = format!("\n=== Package Deltas ({root}) ===\n");
+    if routed_away > 0 {
+        out.push_str(&format!(
+            "  {routed_away} spatial claim(s) routed away: scope `{scope}` does not own their map\n"
+        ));
+    }
     if artifacts.is_empty() {
         out.push_str("  no enabled Package claims this import family\n");
     }
@@ -238,6 +311,7 @@ fn plan_report(root: &str, artifacts: &[Artifact], traced: &ClaimTrace) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world_import_scope::WorldImportProfile;
 
     const HASH_A: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const PACKAGE_SPELL: u32 = 6_000_001;
@@ -268,6 +342,50 @@ mod tests {
     fn update_artifact(package: &str, spell_id: u32, field: &str, value: u32) -> String {
         format!(
             r#"{{"version":1,"package":"{package}","source_hash":"{HASH_A}","claims":[{{"table":"game_spell","key":{{"spell_id":{spell_id}}},"operation":"update","fields":{{"{field}":{{"type":"u32","value":{value}}}}}}}]}}"#
+        )
+    }
+
+    /// Eastern Kingdoms, inside the eastern profile's Elwynn slice.
+    const EASTERN_MAP: u32 = 0;
+    /// Kalimdor, which the eastern profile does not touch.
+    const KALIMDOR_MAP: u32 = 1;
+    /// Deadmines, the whole map the `instances` profile owns.
+    const INSTANCE_MAP: u32 = 36;
+    const REAL_CREATURE: u32 = 6;
+    const PACKAGE_CREATURE: u32 = 15_000_001;
+
+    fn spawn_claim(map_id: u32, spawn_id: u32) -> String {
+        format!(
+            r#"{{"table":"game_creature_spawn","key":{{"map_id":{map_id},"entry":{REAL_CREATURE},"spawn_id":{spawn_id}}},"operation":"update","fields":{{"x":{{"type":"f32","value":1.5}}}}}}"#
+        )
+    }
+
+    /// One Package placing the same creature on two maps: the shape a two-Shard realm produces.
+    fn two_map_artifact() -> String {
+        format!(
+            r#"{{"version":1,"package":"example.placer","source_hash":"{HASH_A}","claims":[{},{}]}}"#,
+            spawn_claim(EASTERN_MAP, 15_000_001),
+            spawn_claim(KALIMDOR_MAP, 15_000_002),
+        )
+    }
+
+    fn instance_spawn_artifact() -> String {
+        format!(
+            r#"{{"version":1,"package":"example.placer","source_hash":"{HASH_A}","claims":[{}]}}"#,
+            spawn_claim(INSTANCE_MAP, 15_000_003),
+        )
+    }
+
+    fn creature_template_artifact() -> String {
+        format!(
+            r#"{{"version":1,"package":"example.placer","source_hash":"{HASH_A}","claims":[{{"table":"game_creature_template","key":{{"entry":{PACKAGE_CREATURE}}},"operation":"update","fields":{{"level":{{"type":"u32","value":12}}}}}}]}}"#
+        )
+    }
+
+    /// One Package tuning an imported EventAI line and inventing a summon placement beside it.
+    fn creature_ai_artifact() -> String {
+        format!(
+            r#"{{"version":1,"package":"example.voice","source_hash":"{HASH_A}","claims":[{{"table":"game_creature_ai_broadcast_text","key":{{"id":900}},"operation":"update","fields":{{"male_text":{{"type":"string","value":"You will burn."}}}}}},{{"table":"game_creature_ai_summon","key":{{"id":17000001}},"operation":"insert","fields":{{"x":{{"type":"f32","value":1.5}},"y":{{"type":"f32","value":2.5}},"z":{{"type":"f32","value":3.5}},"orientation":{{"type":"f32","value":0.0}},"lifetime_ms":{{"type":"u32","value":30000}}}}}}]}}"#
         )
     }
 
@@ -421,6 +539,132 @@ mod tests {
         );
     }
 
+    /// A creature spawn on a map the scope owns stays in the plan; the same Package's spawn on a
+    /// map it does not own is routed to the Shard that does.
+    #[test]
+    fn a_spatial_claim_reaches_only_the_shard_whose_scope_owns_its_map() {
+        let t = Scratch::new("routing");
+        t.write("placer/data/.generated/creatures.json", &two_map_artifact());
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+        let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
+
+        let eastern = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
+            .expect("eastern profile");
+        let (kept, routed_away) =
+            routed_to_this_shard(&eastern, creatures).expect("routing succeeds");
+
+        assert_eq!(routed_away, 1);
+        assert_eq!(kept.len(), 1);
+        let claims = kept[0].delta.claims();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].key().map_id(), Some(EASTERN_MAP));
+    }
+
+    /// A global catalogue row states no map, so every Shard loads it however its scope is drawn.
+    #[test]
+    fn a_global_catalogue_claim_reaches_every_shard() {
+        let t = Scratch::new("routing-global");
+        t.write(
+            "placer/data/.generated/creatures.json",
+            &creature_template_artifact(),
+        );
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+        let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
+
+        let instances =
+            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+        let (kept, routed_away) =
+            routed_to_this_shard(&instances, creatures).expect("routing succeeds");
+
+        assert_eq!(routed_away, 0);
+        assert_eq!(kept.len(), 1, "a template is not spatial");
+    }
+
+    /// The EventAI catalogue names no map, so its whole family is global: an `instances` Shard and
+    /// an open-world Shard both load every claim. The base import writes these tables the same way,
+    /// with global SQL and no map predicate.
+    #[test]
+    fn every_creature_ai_claim_reaches_every_shard() {
+        let t = Scratch::new("routing-creature-ai");
+        t.write(
+            "voice/data/.generated/creature-ai.json",
+            &creature_ai_artifact(),
+        );
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+        let creature_ai = artifacts_for_family(found, "creature-ai").expect("the creature-ai plan");
+        assert_eq!(creature_ai[0].delta.claims().len(), 2);
+
+        for profile in [
+            WorldImportProfile::Instances,
+            WorldImportProfile::AllianceEastern,
+        ] {
+            let scope = WorldImportScope::canonical(profile).expect("a canonical profile");
+            let (kept, routed_away) = routed_to_this_shard(
+                &scope,
+                artifacts_for_family(
+                    read_enabled(&t.0).expect("discovery succeeds"),
+                    "creature-ai",
+                )
+                .expect("the creature-ai plan"),
+            )
+            .expect("routing succeeds");
+
+            assert_eq!(routed_away, 0, "{profile:?}");
+            assert_eq!(kept[0].delta.claims().len(), 2, "{profile:?}");
+        }
+    }
+
+    /// A Package whose every claim routed away drops out of the plan, the way it does when it
+    /// claims no table of the family at all.
+    #[test]
+    fn a_package_whose_claims_all_route_away_leaves_the_plan() {
+        let t = Scratch::new("routing-empty");
+        t.write("placer/data/.generated/creatures.json", &two_map_artifact());
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+        let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
+
+        // The instances profile owns Deadmines alone, so neither open-world spawn belongs to it.
+        let instances =
+            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+        let (kept, routed_away) =
+            routed_to_this_shard(&instances, creatures).expect("routing succeeds");
+
+        assert_eq!(routed_away, 2);
+        assert!(kept.is_empty());
+    }
+
+    /// A whole map in the scope owns every claim on it, with no bounded geometry to pass — the base
+    /// import's own rule for a forced creature, applied to an authored spawn.
+    #[test]
+    fn a_whole_map_in_the_scope_owns_every_spawn_on_it() {
+        let t = Scratch::new("routing-whole-map");
+        t.write(
+            "placer/data/.generated/creatures.json",
+            &instance_spawn_artifact(),
+        );
+        let found = read_enabled(&t.0).expect("discovery succeeds");
+        let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
+
+        let instances =
+            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+        let (kept, routed_away) =
+            routed_to_this_shard(&instances, creatures).expect("routing succeeds");
+
+        assert_eq!(routed_away, 0);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn the_report_accounts_for_the_claims_it_routed_away() {
+        let report = plan_report("packages", "alliance-eastern", 2, &[], &trace(&[]));
+
+        assert!(
+            report.contains("2 spatial claim(s) routed away"),
+            "{report}"
+        );
+        assert!(report.contains("alliance-eastern"), "{report}");
+    }
+
     #[test]
     fn the_payload_carries_one_canonical_artifact_per_line() {
         let deltas: Vec<PackageDelta> = ["example.alpha", "example.zeta"]
@@ -454,7 +698,7 @@ mod tests {
         let artifacts = read_enabled(&t.0).expect("discovery succeeds");
         let deltas: Vec<PackageDelta> = artifacts.iter().map(|a| a.delta.clone()).collect();
 
-        let report = plan_report("packages", &artifacts, &trace(&deltas));
+        let report = plan_report("packages", "test", 0, &artifacts, &trace(&deltas));
 
         assert!(report.contains("example.bolt"), "{report}");
         assert!(report.contains("spell.json"), "{report}");
@@ -479,7 +723,7 @@ mod tests {
         let artifacts = read_enabled(&t.0).expect("discovery succeeds");
         let deltas: Vec<PackageDelta> = artifacts.iter().map(|a| a.delta.clone()).collect();
 
-        let report = plan_report("packages", &artifacts, &trace(&deltas));
+        let report = plan_report("packages", "test", 0, &artifacts, &trace(&deltas));
 
         assert!(report.contains("CONFLICT"), "{report}");
         assert!(report.contains("example.first"), "{report}");
@@ -512,7 +756,7 @@ mod tests {
         let artifacts = read_enabled(&t.0).expect("discovery succeeds");
         let deltas: Vec<PackageDelta> = artifacts.iter().map(|a| a.delta.clone()).collect();
 
-        let report = plan_report("packages", &artifacts, &trace(&deltas));
+        let report = plan_report("packages", "test", 0, &artifacts, &trace(&deltas));
 
         assert!(report.contains("1 spells"), "{report}");
         assert!(

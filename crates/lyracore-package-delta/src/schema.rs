@@ -68,6 +68,48 @@ pub const GLOBALS_FAMILY: &str = "globals";
 /// still belonging to this family's apply.
 pub const SPELLMETA_FAMILY: &str = "spellmeta";
 
+/// The Import Family that owns the creature catalogue and its spawns
+/// (`game_creature_template`, `game_creature_spawn`). The same name the `--dump` importer's
+/// `creatures` `--family` block stamps.
+///
+/// `game_creature_waypoint` is loaded by the same block and is deliberately NOT in this catalogue.
+/// A waypoint names its creature by spawn guid and carries no map of its own, so a claim on one
+/// states no map for the routing rule every spatial claim is filtered by. Reaching a patrol from a
+/// Package is a named gap, not a table this build can route.
+pub const CREATURE_FAMILY: &str = "creatures";
+
+/// The Import Family that owns the gameobject catalogue and its spawns
+/// (`game_gameobject_template`, `game_gameobject_trap`, `game_gameobject`). The same name the
+/// `--dump` importer's `gameobjects` `--family` block stamps.
+///
+/// `game_gameobject_pool` and `game_gameobject_pool_member` are NOT in it. No base import writes
+/// either: they are seeded (`module/src/seed.rs`) or built by a debug reducer, so there is no
+/// family reload for a pool claim to replay after, and a pool member only becomes a live node when
+/// something arms the pool. Worth a maintainer's second look if authored pools are wanted.
+pub const GAMEOBJECT_FAMILY: &str = "gameobjects";
+
+/// The Import Family that owns the `EventAI` catalogue: the lines a speak action says, the placements
+/// a summon action spawns at, and the quests that need their source event before ordinary
+/// objectives can complete them. The same name the `--dump` importer's `creature-ai` `--family`
+/// block stamps.
+///
+/// The family's scripted definitions are deliberately NOT in this catalogue.
+/// `game_creature_ai_definition` carries a creature's whole rule set as a nested
+/// `Vec<EventAiRule>`, which no scalar column shape can state; the only claim left would be one
+/// opaque blob, and a Package Delta claims typed rows, never a script blob. Its base import is a
+/// whole-family reducer replace rather than row SQL, so there is no row for a claim to merge into
+/// either. `game_creature_ai_relay_definition` is out for both of those reasons.
+///
+/// `game_creature_ai_event` is out for a plainer one. It is the retained flat migration schema: no
+/// import writes it and no runtime reads it (`module/src/creatures/eventai/tables.rs`), so a claim
+/// there would apply cleanly and change nothing a player could see. `game_creature_ai_state` and
+/// `game_creature_ai_rule_state` are live state a running Shard writes, not import data.
+/// `game_creature_ai_spell_metadata` is loaded by the `--dbc` spell pass, not by this family's
+/// block, so a claim on it would be reverted by an import this family cannot follow.
+///
+/// Reaching a creature's rules from a Package is a named gap, not a table this build can claim.
+pub const CREATURE_AI_FAMILY: &str = "creature-ai";
+
 /// A table a Package Delta may claim rows in. The names are the durable table names, so an applier
 /// needs no translation step.
 ///
@@ -170,6 +212,43 @@ pub enum Table {
     /// `game_spell_proc_event` — the proc overlay for one spell. Insert and partial update, with
     /// the same spell-identifier policy as [`Table::SpellChain`].
     SpellProcEvent,
+    // ---- creatures ----
+    /// `game_creature_template` — the creature catalogue header. Insert and partial update on its
+    /// own `entry`, inside the Package creature range. A global catalogue: every Shard loads the
+    /// whole of it, so a claim here reaches every Shard.
+    CreatureTemplate,
+    /// `game_creature_spawn` — one placed creature. Insert and partial update; the key names the
+    /// map, the creature template and the spawn identifier, and the durable guid is derived from
+    /// the last two. SPATIAL: the map in the key is what routes the claim, so only the Shards
+    /// whose World Import Scope owns that map ever see it.
+    CreatureSpawn,
+    // ---- gameobjects ----
+    /// `game_gameobject_template` — the gameobject catalogue header. Insert and partial update on
+    /// its own `entry`, inside the Package gameobject range. A global catalogue, like
+    /// [`Table::CreatureTemplate`].
+    GameobjectTemplate,
+    /// `game_gameobject_trap` — the spell and cooldown one TRAP template fires. Insert and partial
+    /// update; its key IS a gameobject template entry, so it takes the same band rather than one of
+    /// its own. Global, like the template it describes.
+    GameobjectTrap,
+    /// `game_gameobject` — one placed gameobject. Insert and partial update; the key names the map
+    /// and the spawn identifier, and the durable guid is derived from the second. SPATIAL, like
+    /// [`Table::CreatureSpawn`].
+    GameobjectSpawn,
+    // ---- creature-ai ----
+    /// `game_creature_ai_broadcast_text` — one line an `EventAI` speak action says, with the emotes
+    /// it plays alongside. Insert and partial update on its own `id`, inside the Package `EventAI`
+    /// band. A global catalogue: the table names no map, so a claim here reaches every Shard.
+    CreatureAiBroadcastText,
+    /// `game_creature_ai_summon` — where an `EventAI` summon action places its creature. Insert and
+    /// partial update on its own `id`. Global, like the text above: the row is a named placement
+    /// the summoning creature resolves, not a row that belongs to a map.
+    CreatureAiSummon,
+    /// `game_quest_event_requirement` — a quest that needs its `EventAI` source event before
+    /// ordinary objectives can complete it. Insert and partial update on its own `id`. It names a
+    /// quest but the `creature-ai` block loads it, so it belongs to this family: an apply that ran
+    /// under `quests` would be reverted by the block that owns it.
+    QuestEventRequirement,
 }
 
 impl Table {
@@ -208,6 +287,14 @@ impl Table {
         Self::SpellChain,
         Self::SpellLearn,
         Self::SpellProcEvent,
+        Self::CreatureTemplate,
+        Self::CreatureSpawn,
+        Self::GameobjectTemplate,
+        Self::GameobjectTrap,
+        Self::GameobjectSpawn,
+        Self::CreatureAiBroadcastText,
+        Self::CreatureAiSummon,
+        Self::QuestEventRequirement,
     ];
 
     /// The durable table name, and the value the artifact's `table` member carries.
@@ -246,6 +333,14 @@ impl Table {
             Self::SpellChain => "game_spell_chain",
             Self::SpellLearn => "game_spell_learn",
             Self::SpellProcEvent => "game_spell_proc_event",
+            Self::CreatureTemplate => "game_creature_template",
+            Self::CreatureSpawn => "game_creature_spawn",
+            Self::GameobjectTemplate => "game_gameobject_template",
+            Self::GameobjectTrap => "game_gameobject_trap",
+            Self::GameobjectSpawn => "game_gameobject",
+            Self::CreatureAiBroadcastText => "game_creature_ai_broadcast_text",
+            Self::CreatureAiSummon => "game_creature_ai_summon",
+            Self::QuestEventRequirement => "game_quest_event_requirement",
         }
     }
 
@@ -285,6 +380,13 @@ impl Table {
             | Self::CreateinfoSpell
             | Self::CreateinfoAction => GLOBALS_FAMILY,
             Self::SpellChain | Self::SpellLearn | Self::SpellProcEvent => SPELLMETA_FAMILY,
+            Self::CreatureTemplate | Self::CreatureSpawn => CREATURE_FAMILY,
+            Self::GameobjectTemplate | Self::GameobjectTrap | Self::GameobjectSpawn => {
+                GAMEOBJECT_FAMILY
+            }
+            Self::CreatureAiBroadcastText
+            | Self::CreatureAiSummon
+            | Self::QuestEventRequirement => CREATURE_AI_FAMILY,
         }
     }
 
@@ -324,6 +426,14 @@ impl Table {
             "game_spell_chain" => Some(Self::SpellChain),
             "game_spell_learn" => Some(Self::SpellLearn),
             "game_spell_proc_event" => Some(Self::SpellProcEvent),
+            "game_creature_template" => Some(Self::CreatureTemplate),
+            "game_creature_spawn" => Some(Self::CreatureSpawn),
+            "game_gameobject_template" => Some(Self::GameobjectTemplate),
+            "game_gameobject_trap" => Some(Self::GameobjectTrap),
+            "game_gameobject" => Some(Self::GameobjectSpawn),
+            "game_creature_ai_broadcast_text" => Some(Self::CreatureAiBroadcastText),
+            "game_creature_ai_summon" => Some(Self::CreatureAiSummon),
+            "game_quest_event_requirement" => Some(Self::QuestEventRequirement),
             _ => None,
         }
     }
@@ -382,6 +492,14 @@ impl Table {
             Self::SpellChain => SPELL_CHAIN_COLUMNS,
             Self::SpellLearn => SPELL_LEARN_COLUMNS,
             Self::SpellProcEvent => SPELL_PROC_EVENT_COLUMNS,
+            Self::CreatureTemplate => CREATURE_TEMPLATE_COLUMNS,
+            Self::CreatureSpawn => CREATURE_SPAWN_COLUMNS,
+            Self::GameobjectTemplate => GAMEOBJECT_TEMPLATE_COLUMNS,
+            Self::GameobjectTrap => GAMEOBJECT_TRAP_COLUMNS,
+            Self::GameobjectSpawn => GAMEOBJECT_SPAWN_COLUMNS,
+            Self::CreatureAiBroadcastText => CREATURE_AI_BROADCAST_TEXT_COLUMNS,
+            Self::CreatureAiSummon => CREATURE_AI_SUMMON_COLUMNS,
+            Self::QuestEventRequirement => QUEST_EVENT_REQUIREMENT_COLUMNS,
         }
     }
 
@@ -863,6 +981,144 @@ const SPELL_PROC_EVENT_COLUMNS: &[Column] = &[
     column("custom_chance", FieldType::U8),
     column("icd_ms", FieldType::U32),
 ];
+
+// ---- creatures ----
+
+/// `game_creature_template` minus its `entry` primary key.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `CreatureTemplate` struct, the same
+/// convention `ITEM_COLUMNS` follows.
+const CREATURE_TEMPLATE_COLUMNS: &[Column] = &[
+    column("name", FieldType::Str),
+    column("subname", FieldType::Str),
+    column("display_id", FieldType::U32),
+    column("level", FieldType::U32),
+    column("health", FieldType::U32),
+    column("faction_template", FieldType::U32),
+    column("npc_flags", FieldType::U32),
+    column("unit_flags", FieldType::U32),
+    column("creature_type", FieldType::U8),
+    column("creature_family", FieldType::U8),
+    column("type_flags", FieldType::U32),
+    column("rank", FieldType::U8),
+    column("scale", FieldType::F32),
+    column("base_attack_time_ms", FieldType::U32),
+    column("money_min", FieldType::U32),
+    column("money_max", FieldType::U32),
+    column("max_level", FieldType::U32),
+    column("max_level_health", FieldType::U32),
+    column("aggro_range", FieldType::U32),
+    column("damage_min", FieldType::U32),
+    column("damage_max", FieldType::U32),
+    column("armor", FieldType::U32),
+    column("pickpocket_loot_id", FieldType::U32),
+    column("skin_loot_id", FieldType::U32),
+    column("trainer_type", FieldType::U8),
+    column("trainer_class", FieldType::U8),
+];
+
+/// `game_creature_spawn` minus its derived `guid` key, the `map_id` and `entry` that key names,
+/// and the three columns the shard owns rather than the artifact.
+///
+/// Hand-maintained against `module/src/creatures/spawn.rs`'s `CreatureSpawn` struct. `map_id` and
+/// `entry` sit in the claim's key: the map is what routes the claim to a Shard, and the entry is
+/// half the derived guid, so neither may be re-stated here and disagree with itself. `respawn_at`,
+/// `despawn_at` and `life_seq` are absent because they are live state a running Shard writes — an
+/// import stamps them, an artifact cannot.
+const CREATURE_SPAWN_COLUMNS: &[Column] = &[
+    column("x", FieldType::F32),
+    column("y", FieldType::F32),
+    column("z", FieldType::F32),
+    column("orientation", FieldType::F32),
+    column("movement_type", FieldType::U8),
+    column("respawn_secs", FieldType::U32),
+];
+
+// ---- gameobjects ----
+
+/// `game_gameobject_template` minus its `entry` primary key.
+///
+/// Hand-maintained against `module/src/gameobject.rs`'s `GameObjectTemplate` struct.
+const GAMEOBJECT_TEMPLATE_COLUMNS: &[Column] = &[
+    column("type_id", FieldType::U8),
+    column("display_id", FieldType::U32),
+    column("name", FieldType::Str),
+    column("data0", FieldType::U32),
+    column("data1", FieldType::U32),
+    column("gather_skill_line", FieldType::U32),
+    column("respawn_secs", FieldType::U32),
+    column("gather_gray", FieldType::U32),
+    column("lock_id", FieldType::U32),
+    column("size", FieldType::F32),
+];
+
+/// `game_gameobject_trap` minus its `entry` primary key.
+///
+/// Hand-maintained against `module/src/gameobject.rs`'s `GameObjectTrap` struct.
+const GAMEOBJECT_TRAP_COLUMNS: &[Column] = &[
+    column("spell_id", FieldType::U32),
+    column("cooldown_secs", FieldType::U32),
+];
+
+/// `game_gameobject` minus its derived `guid` key, the `map_id` that key names, and the columns
+/// the shard owns rather than the artifact.
+///
+/// Hand-maintained against `module/src/gameobject.rs`'s `GameObject` struct. `created_at`,
+/// `respawn_at_micros` and `instance_id` are live state. `grid_x`, `grid_y` and `cell` are DERIVED
+/// from `x` and `y` in the same write (`module/src/tripwires.rs`'s grid-cell tripwire enforces it),
+/// so a claim on one could put the row in a cell its coordinates do not sit in.
+const GAMEOBJECT_SPAWN_COLUMNS: &[Column] = &[
+    column("template_entry", FieldType::U32),
+    column("x", FieldType::F32),
+    column("y", FieldType::F32),
+    column("z", FieldType::F32),
+    column("orientation", FieldType::F32),
+    column("state", FieldType::U8),
+    column("rotation_0", FieldType::F32),
+    column("rotation_1", FieldType::F32),
+    column("rotation_2", FieldType::F32),
+    column("rotation_3", FieldType::F32),
+];
+
+// ---- creature-ai ----
+
+/// `game_creature_ai_broadcast_text` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/eventai/tables.rs`'s `CreatureAiBroadcastText`
+/// struct, the same convention `ITEM_COLUMNS` follows. The three emote pairs are client emote
+/// identifiers and the delays that stagger them, so a claim tunes presentation and nothing else.
+const CREATURE_AI_BROADCAST_TEXT_COLUMNS: &[Column] = &[
+    column("male_text", FieldType::Str),
+    column("female_text", FieldType::Str),
+    column("chat_type", FieldType::U8),
+    column("language_id", FieldType::U8),
+    column("emote_delay_1_ms", FieldType::U32),
+    column("emote_id_1", FieldType::U32),
+    column("emote_delay_2_ms", FieldType::U32),
+    column("emote_id_2", FieldType::U32),
+    column("emote_delay_3_ms", FieldType::U32),
+    column("emote_id_3", FieldType::U32),
+];
+
+/// `game_creature_ai_summon` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/creatures/eventai/tables.rs`'s `CreatureAiSummon` struct.
+/// The position is absolute world space with no map beside it: the summoning creature's own map is
+/// where the summon lands, which is why this table is global rather than spatial.
+const CREATURE_AI_SUMMON_COLUMNS: &[Column] = &[
+    column("x", FieldType::F32),
+    column("y", FieldType::F32),
+    column("z", FieldType::F32),
+    column("orientation", FieldType::F32),
+    column("lifetime_ms", FieldType::U32),
+];
+
+/// `game_quest_event_requirement` minus its `id` primary key.
+///
+/// Hand-maintained against `module/src/quest.rs`'s `QuestEventRequirement` struct. One claimable
+/// column, and it is a reference: `module/src/package_import/creature_ai.rs` refuses a claim whose
+/// quest will not be there after the plan lands.
+const QUEST_EVENT_REQUIREMENT_COLUMNS: &[Column] = &[column("quest_entry", FieldType::U32)];
 
 /// The type tag a claimed value carries.
 ///

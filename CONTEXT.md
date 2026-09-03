@@ -40,7 +40,10 @@ dependency path as emitted, normalized, excluded, dropped, or unapproved. An una
 Refusal for apply and remains visible in dry run.
 
 **Encounter Binding**:
-The map-scoped link from an imported EventAI action to the package that owns the encounter.
+The map-scoped link from an imported EventAI action to the package that owns the encounter. It also
+decides who may tune that creature's catalogue: a Claim on a broadcast text or a summon placement an
+encounter-bound definition depends on is refused, and the refusal names both the claim and the
+binding.
 
 **Encounter Signal**:
 A named Begin, Fail, Complete, or encounter-specific notification delivered through an Encounter
@@ -245,7 +248,8 @@ _Avoid_: proc cast, internal cast, free cast
 
 **Creature-AI Family**:
 The import family that loads the EventAI catalogue: event rows, broadcast texts, and summon
-locations.
+locations. Its Package Delta stage is global: no table in it names a map, so a Claim reaches every
+Shard, exactly as the family's own base import writes it.
 
 **Engagement**:
 One creature's fight, from the aggro that starts it until the creature is freed, however that
@@ -612,11 +616,54 @@ Package Globals Range. Covers `game_spell_learn.id` alone. `game_spell_chain` an
 the Package Spell Range instead: a metadata row cannot outlive the `game_spell` row it describes.
 _Avoid_: custom id range, synthetic spellmeta range
 
+**Package Creature Range**:
+The creatures family's Package Identifier Range: 15,000,000 to 15,999,999. One whole decade above
+the Package Spell Metadata Range. One range covers both insertable tables: a creature template's own
+`entry` and a creature spawn claim's own `spawn_id`, which are independent identifier spaces. Its
+ceiling has a second constraint no earlier range has — a creature spawn's durable guid packs the
+template entry and the spawn identifier into 24-bit fields, so the whole range has to fit inside
+one. The seeded creature fixtures at 51,000 to 51,999 are Fixture-Reserved Identifiers no Package
+may tune. `game_creature_waypoint` is not claimable at all: it names its creature by spawn guid and
+carries no map, so a Spatial Claim on it could not be routed.
+_Avoid_: custom id range, synthetic creature range
+
+**Package Gameobject Range**:
+The gameobjects family's Package Identifier Range: 16,000,000 to 16,999,999. One whole decade above
+the Package Creature Range. Covers three tables: `game_gameobject_template.entry`,
+`game_gameobject_trap.entry` and a `game_gameobject` claim's own `spawn_id`. The first two share one
+identifier space on purpose — a trap row describes the template of the same entry, so a Package trap
+is exactly as Package-owned as its template. The two gameobject pool tables are not claimable: no
+base import writes either, so a claim on one would have no family reload to replay after.
+_Avoid_: custom id range, synthetic gameobject range
+
+**Package EventAI Range**:
+The Creature-AI Family's Package Identifier Range: 17,000,000 to 17,999,999. One whole decade above
+the Package Gameobject Range. Covers three tables that share nothing else:
+`game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
+`game_quest_event_requirement.id`. The family's scripted definitions are not claimable at all: a
+definition carries a creature's whole rule set as a nested payload, which no claimed column can
+state, and a Claim is typed rows rather than a script blob. Reaching a creature's rules from a
+Package remains a named gap.
+_Avoid_: custom id range, synthetic eventai range
+
+**Spatial Claim**:
+A Claim on a row that sits on one map: a creature spawn or a gameobject spawn. Its primary key names
+the map as well as the row, and it reaches only the Shards whose World Import Scope owns that map.
+The importer applies that fence with the scope it already built for the base import, so a Spatial
+Claim needs no routing concept of its own; a claim for another Shard's map is dropped from this
+Shard's plan and reported, never refused. Every other claimed table is a global catalogue every
+Shard loads whole. The map never reaches the derived durable guid, which is what stops a Package
+from moving a placed row onto a map another Shard owns.
+_Avoid_: map claim, zoned claim, sharded claim
+
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation, in any Import
 Family. Two kinds: the project-wide 5,090,000 to 5,099,999 band, and a family's own fixture cluster —
-for spells, 50,000 to 50,999. Items have no fixture cluster of their own; their seeded fixtures ride
-real client entries or the project-wide band, so it is the whole check.
+for spells, 50,000 to 50,999, and for creature TEMPLATE entries, 51,000 to 51,999. Items have no
+fixture cluster of their own; their seeded fixtures ride real client entries or the project-wide
+band, so it is the whole check. A cluster covers one identifier space only: a creature spawn
+identifier takes the project-wide band alone, because real imported spawn identifiers run through
+51,000 to 51,999.
 _Avoid_: test id, reserved id (unqualified)
 
 ### Client content
