@@ -437,8 +437,10 @@ externally.
 
 ⚠ Re-arming after a schema change is a real operational step: a republish can leave a schedule row
 stale, because `init` does not re-run on an auto-migrating publish. `debug_repair_after_publish`
-re-arms them in one call. **Nothing runs it for you.** The operator calls it by hand on every shard
-after every publish:
+re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease and instance-reaper
+schedules, and re-seeds every fixture family `init` seeds. It does not repair every scheduled table:
+the event reaper and melee schedules are outside this reducer. **Nothing runs it for you.** The
+operator calls it by hand on every shard after every publish:
 
 ```bash
 spacetime call -s <server> <database> debug_repair_after_publish
