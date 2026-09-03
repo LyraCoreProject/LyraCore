@@ -13,7 +13,9 @@
 
 use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
 use crate::codec::auth_session::{read_auth_session, CMSG_AUTH_SESSION_OPCODE};
-use crate::read_deadline::{is_read_deadline, ReadDeadline, WORLD_AUTH_READ_DEADLINE};
+use crate::read_deadline::{
+    is_read_deadline, DeadlineClock, PreAuthDeadline, ReadDeadline, WORLD_AUTH_READ_DEADLINE,
+};
 use crate::stdb::PlayerSubscriptions;
 use crate::{codec, config::GatewayConfig, stdb::Coordinator};
 use anyhow::{anyhow, Result};
@@ -500,10 +502,10 @@ const QUEUE_RESEND_INTERVAL: Duration = Duration::from_millis(50);
 /// admission gate itself. On success returns the established per-connection crypto + account id; on
 /// a clean auth failure sends the failure response and returns `Ok(None)`; on a clean disconnect
 /// also returns `Ok(None)`.
-/// Test-only: production goes through [`world_handshake_with_queue`] (the listener in [`run`] owns
-/// the process-wide [`LoginQueue`]), so an unqueued handshake exists purely for tests.
+/// Test-only: the listener in [`run`] supplies the process-wide [`LoginQueue`] and the deadline it
+/// started at accept, so an unqueued handshake exists purely for tests.
 #[cfg(test)]
-pub fn world_handshake<S: Read + Write, St: WorldStore + ?Sized>(
+pub fn world_handshake<S: Read + Write + ReadDeadline, St: WorldStore + ?Sized>(
     stream: &mut S,
     store: &St,
 ) -> Result<Option<(WorldConn, EncrypterHalf)>> {
@@ -523,14 +525,28 @@ pub fn world_handshake<S: Read + Write, St: WorldStore + ?Sized>(
 ///
 /// A seat taken from `queue` is held for the lifetime of the returned session; the caller (normally
 /// [`run_world_session_with_queue`]) MUST call `queue.depart()` exactly once when that session ends.
-/// The one failure mode entirely inside this function — admitted, then the final `AUTH_OK` write
-/// itself fails (the client vanished in the instant between admission and delivery) — departs its
-/// own seat before propagating the error, so a caller that never sees `Ok(Some(..))` never owes a
-/// `depart()` call.
-pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
+/// The failure modes entirely inside this function after admission, the final `AUTH_OK` write or
+/// clearing the pre-auth socket timeout, depart their own seat before propagating the error. A
+/// caller that never sees `Ok(Some(..))` never owes a `depart()` call.
+#[cfg(test)]
+pub fn world_handshake_with_queue<S: Read + Write + ReadDeadline, St: WorldStore + ?Sized>(
     stream: &mut S,
     store: &St,
     queue: &LoginQueue,
+) -> Result<Option<(WorldConn, EncrypterHalf)>> {
+    let deadline = PreAuthDeadline::after(WORLD_AUTH_READ_DEADLINE);
+    world_handshake_with_queue_and_deadline(stream, store, queue, &deadline)
+}
+
+fn world_handshake_with_queue_and_deadline<
+    S: Read + Write + ReadDeadline,
+    St: WorldStore + ?Sized,
+    C: DeadlineClock,
+>(
+    stream: &mut S,
+    store: &St,
+    queue: &LoginQueue,
+    deadline: &PreAuthDeadline<C>,
 ) -> Result<Option<(WorldConn, EncrypterHalf)>> {
     // 1. Plaintext SMSG_AUTH_CHALLENGE with a fresh, single-use server seed (gateway-local
     //    RNG — protocol state, not game state).
@@ -540,7 +556,7 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
 
     // 2. Read the plaintext CMSG_AUTH_SESSION (account, client_seed, client_proof). Hand-decoded:
     //    the typed decoder sizes a buffer from a client field and unwraps the addon zlib.
-    let session = match read_auth_session(&mut *stream) {
+    let session = match read_auth_session(&mut deadline.reader(stream)) {
         Ok(claim) => claim,
         // Clean client disconnect before sending the session.
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
@@ -610,6 +626,14 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
         // instead of `Ok(Some(..))`, so no caller will ever see this session to `depart()` it.
         queue.depart();
         return Err(anyhow!("world auth write error (AUTH_OK): {e}"));
+    }
+
+    if let Err(e) = stream.set_read_timeout(None) {
+        // Authentication succeeded and a seat was granted, but the caller cannot safely enter the
+        // long-lived read loop with the pre-auth timeout still armed. It never receives the
+        // session, so release the seat here just as the AUTH_OK write failure does above.
+        queue.depart();
+        return Err(anyhow!("clear world read deadline: {e}"));
     }
 
     Ok(Some((
@@ -931,8 +955,8 @@ fn spawn_writer<S: DuplexStream>(
 /// Drive one world connection, gated by the unlimited [`LoginQueue`] — see
 /// [`run_world_session_with_queue`] for the admission gate itself. Every existing call site
 /// (tests, and anything that doesn't care about it) stays byte-identical to the pre-queue behavior.
-/// Test-only, for the same reason as [`world_handshake`]: production drives
-/// [`run_world_session_with_queue`] with the listener's shared queue.
+/// Test-only, for the same reason as [`world_handshake`]: production supplies the listener's shared
+/// queue and the deadline started at accept.
 #[cfg(test)]
 pub fn run_world_session<S: DuplexStream, St: WorldStore + ?Sized>(
     stream: S,
@@ -965,19 +989,32 @@ impl Drop for AdmissionSeat<'_> {
 /// accepted socket, so a queued connection never holds up anyone else's accept or handshake). Once
 /// admitted (`Ok(Some(..))`), this connection holds a seat in `queue` for the rest of the function —
 /// released by its [`AdmissionSeat`] exactly once, no matter which branch got there.
+#[cfg(test)]
 pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
-    mut stream: S,
+    stream: S,
     store: &St,
     queue: &LoginQueue,
 ) -> Result<()> {
-    let Some((mut conn, encrypt)) = world_handshake_with_queue(&mut stream, store, queue)? else {
+    let deadline = PreAuthDeadline::after(WORLD_AUTH_READ_DEADLINE);
+    run_world_session_with_queue_and_deadline(stream, store, queue, &deadline)
+}
+
+fn run_world_session_with_queue_and_deadline<
+    S: DuplexStream,
+    St: WorldStore + ?Sized,
+    C: DeadlineClock,
+>(
+    mut stream: S,
+    store: &St,
+    queue: &LoginQueue,
+    deadline: &PreAuthDeadline<C>,
+) -> Result<()> {
+    let Some((mut conn, encrypt)) =
+        world_handshake_with_queue_and_deadline(&mut stream, store, queue, deadline)?
+    else {
         return Ok(());
     };
     let seat = AdmissionSeat { queue };
-    // The pre-auth deadline the listener set ends here: the read loop below has no idle policy.
-    stream
-        .set_read_timeout(None)
-        .map_err(|e| anyhow!("clear world read deadline: {e}"))?;
 
     let wsock = stream
         .try_clone()
@@ -1736,10 +1773,11 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
         // machine on a blocking task with the socket in blocking mode (mirrors `logon`).
         // Per-SOCKET calls (a dup and an fcntl on the fd we just accepted), so they fail for the
         // same reasons accept does — EMFILE above all. Drop the one connection, keep the realm.
-        // The read deadline bounds the wait for CMSG_AUTH_SESSION; the session clears it on AUTH_OK.
+        // Start the total budget at accept, before this socket can wait for a blocking-pool thread.
+        // The session clears the socket timeout after AUTH_OK.
+        let deadline = PreAuthDeadline::after(WORLD_AUTH_READ_DEADLINE);
         let std_sock = match sock.into_std().and_then(|s| {
             s.set_nonblocking(false)?;
-            s.set_read_timeout(Some(WORLD_AUTH_READ_DEADLINE))?;
             Ok(s)
         }) {
             Ok(s) => s,
@@ -1752,7 +1790,9 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
             // `Coordinator` implements `WorldStore` directly (see `stdb::world_store`) — no wrapper.
             // `queue` gates admission INSIDE the handshake — a queued connection just blocks
             // this one `spawn_blocking` thread, never the accept loop above.
-            if let Err(e) = run_world_session_with_queue(std_sock, &coord, &queue) {
+            if let Err(e) =
+                run_world_session_with_queue_and_deadline(std_sock, &coord, &queue, &deadline)
+            {
                 log::warn!("world session {peer} ended: {e:#}");
             }
         });

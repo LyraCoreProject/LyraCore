@@ -4,7 +4,53 @@ use super::handlers::{
     TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
+use crate::read_deadline::{DeadlineClock, PreAuthDeadline};
+use std::cell::Cell;
+use std::io::Cursor;
 use std::os::unix::net::UnixStream;
+use std::rc::Rc;
+
+#[derive(Clone)]
+struct ManualClock(Rc<Cell<Instant>>);
+
+impl DeadlineClock for ManualClock {
+    fn now(&self) -> Instant {
+        self.0.get()
+    }
+}
+
+struct AdvancingStream {
+    input: Cursor<Vec<u8>>,
+    output: Vec<u8>,
+    clock: ManualClock,
+    per_read: Duration,
+}
+
+impl Read for AdvancingStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let one_byte = buf.len().min(1);
+        let read = self.input.read(&mut buf[..one_byte])?;
+        self.clock.0.set(self.clock.0.get() + self.per_read);
+        Ok(read)
+    }
+}
+
+impl Write for AdvancingStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.output.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl ReadDeadline for AdvancingStream {
+    fn set_read_timeout(&self, _timeout: Option<Duration>) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 /// The client side of every real world-session test has a bounded read. A missing server packet is
 /// a test failure, never an indefinitely blocked test process.
@@ -3333,16 +3379,21 @@ fn an_auth_session_with_an_absurd_addon_size_still_completes_the_handshake() {
     server.join().unwrap().unwrap();
 }
 
-/// The listener puts a read deadline on every accepted socket. A peer that reads the challenge
-/// and never answers must give its blocking thread back at the deadline.
+/// A peer that reads the challenge and never answers must give its blocking thread back at the
+/// total pre-auth deadline.
 #[test]
 fn a_silent_world_connection_is_closed_at_the_pre_auth_read_deadline() {
     let store = tester_store(42);
     let (mut client, server_end) = world_session_socket_pair();
-    server_end
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .unwrap();
-    let server = std::thread::spawn(move || run_world_session(server_end, &store));
+    let deadline = PreAuthDeadline::after(Duration::from_millis(200));
+    let server = std::thread::spawn(move || {
+        run_world_session_with_queue_and_deadline(
+            server_end,
+            &store,
+            &LoginQueue::unlimited(),
+            &deadline,
+        )
+    });
 
     ServerOpcodeMessage::read_unencrypted(&mut client).unwrap();
     let err = server
@@ -3361,17 +3412,60 @@ fn a_silent_world_connection_is_closed_at_the_pre_auth_read_deadline() {
     );
 }
 
+#[test]
+fn slow_auth_session_bytes_cannot_extend_the_pre_auth_read_deadline() {
+    let store = tester_store(42);
+    let mut input = Vec::new();
+    auth_session("TESTER", 1, [0; 20])
+        .write_unencrypted_client(&mut input)
+        .unwrap();
+    let start = Instant::now();
+    let clock = ManualClock(Rc::new(Cell::new(start)));
+    let deadline = PreAuthDeadline::with_clock(start + Duration::from_millis(8), clock.clone());
+    let mut stream = AdvancingStream {
+        input: Cursor::new(input),
+        output: Vec::new(),
+        clock,
+        per_read: Duration::from_millis(1),
+    };
+
+    let result = world_handshake_with_queue_and_deadline(
+        &mut stream,
+        &store,
+        &LoginQueue::unlimited(),
+        &deadline,
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("a slow auth frame must share one total deadline"),
+    };
+
+    assert!(
+        error.to_string().contains("pre-auth read deadline"),
+        "{error:#}"
+    );
+    assert!(
+        !stream.output.is_empty(),
+        "the server challenge must be written before the slow client frame times out"
+    );
+}
+
 /// The deadline covers the handshake only. An authenticated client may idle past it and still be
 /// served.
 #[test]
 fn the_read_deadline_ends_with_auth_ok() {
     let store = std::sync::Arc::new(tester_store(42));
     let (mut client, server_end) = world_session_socket_pair();
-    server_end
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .unwrap();
+    let deadline = PreAuthDeadline::after(Duration::from_millis(200));
     let server_store = store.clone();
-    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+    let server = std::thread::spawn(move || {
+        run_world_session_with_queue_and_deadline(
+            server_end,
+            server_store.as_ref(),
+            &LoginQueue::unlimited(),
+            &deadline,
+        )
+    });
 
     let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
     std::thread::sleep(Duration::from_millis(500));
