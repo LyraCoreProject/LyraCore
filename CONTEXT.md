@@ -151,6 +151,18 @@ The absolute budget from socket acceptance until the peer proves itself: 10 s on
 even when its blocking task has not started. Proof completion clears it before post-auth traffic.
 _Avoid_: pre-auth read deadline, read timeout, idle timeout (for this limit)
 
+**Logon Limiter**:
+The Gateway's in-memory caps on the logon port: three attempts per connection, ten failed logons
+per address per minute, eight open logon connections per address, and a 200 ms pause before a
+failed proof is answered. A refusal closes the socket. Per gateway process; a restart forgets it.
+_Avoid_: rate limiter, throttle, brute-force lockout
+
+**Session Expiry**:
+The one hour a `game_session` row stays valid after its logon. The world handshake refuses an
+expired row like an absent one, and the Module's `reap_sessions` deletes it. Every logon rewrites
+the row, so a returning player always starts a fresh hour.
+_Avoid_: session timeout, TTL (in prose)
+
 ### Sharding and transfer
 
 **Transfer**:

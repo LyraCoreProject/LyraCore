@@ -7,6 +7,7 @@ use spacetimedb_sdk::Table;
 use super::super::bindings::*;
 use super::super::connection::Coordinator;
 use super::super::views::{character_view, AccountRow, RealmRow};
+use crate::realm_core::SessionKey;
 
 impl Coordinator {
     /// Read the single realm row for the realm-list reply (Phase 1).
@@ -230,8 +231,8 @@ impl Coordinator {
         Ok(crate::config::synthetic_owner_identity(account_id))
     }
 
-    /// Read the shared session key K for the world handshake (Phase 2).
-    pub fn session_key(&self, account_id: u64) -> Result<Option<[u8; 40]>> {
+    /// Read the shared session key K, with its expiry, for the world handshake.
+    pub fn session_key(&self, account_id: u64) -> Result<Option<SessionKey>> {
         Ok(self
             .0
             .coord()
@@ -240,7 +241,12 @@ impl Coordinator {
             .game_session()
             .account_id()
             .find(&account_id)
-            .and_then(|s| <[u8; 40]>::try_from(s.session_key).ok()))
+            .and_then(|s| {
+                Some(SessionKey {
+                    key: <[u8; 40]>::try_from(s.session_key).ok()?,
+                    expires_at_micros: s.expires_at.to_micros_since_unix_epoch(),
+                })
+            }))
     }
 
     /// Find `owner_guid`'s corpse location `(map_id, x, y, z)` from the privileged cache, for the
