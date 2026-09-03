@@ -107,7 +107,7 @@ pub(crate) const E_PERSISTENT_AREA: u8 = 0x1B; // GROUND-AoE (118, Consecration/
 pub(crate) const E_FISH: u8 = 0x1C; // Fishing (060): gateway-intercepted like E_ENCHANT_ITEM/E_DISENCHANT — CMSG_CAST_SPELL for a spell carrying this kind routes to the `fish` reducer (instant-resolve alpha catch; the bobber/channel flow is the deferred follow-up). Inert in-module (no resolve arm); exists so the gateway routes by DATA, never a spell-id list.
 pub(crate) const E_OPEN_LOCK: u8 = 0x1D; // Pick Lock (119): gateway-intercepted like E_FISH (0x1C) — CMSG_CAST_SPELL for a spell carrying this kind routes to the `pick_lock` reducer (unlock a locked GameObject, gated on the caster's Lockpicking 633 skill vs the game_lock required_skill). Inert in-module (NO resolve arm in cast.rs); exists so the gateway routes by DATA, never a spell-id list. 0x1E is reserved for a future E_SUMMON_PORTAL — do NOT reuse.
 pub(crate) const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116): a self-cast position change reusing the teleport core (like E_CHARGE), clamped to the furthest nav-LoS-clear point so it doesn't cross geometry. Root/snare removal rides a separate A_IMMUNITY effect. The importer name-rescues the dead SCRIPT teleport effect (raw 29) to this kind
-pub(crate) const E_RECALL_HOME: u8 = 0x1F; // teleport the caster to its bound HOME (Hearthstone, #387): a self-cast recall reusing the shared `world::recall_to_home` core, always to instance 0 regardless of the caster's current instance. Data-driven — a consumable's `spellid_1` naming a spell that carries this kind IS "a recall item"; `items::ops::apply_item_use` reads that (not a hardcoded item entry) to skip the normal stack-consumption a used-up consumable takes, since a recall trinket is never consumed. No cost/cooldown gate yet (the vanilla ~10s cast + 1hr CD is the same later follow-up E_BLINK's forward-teleport already defers)
+pub(crate) const E_RECALL_HOME: u8 = 0x1F; // teleport the caster to its bound HOME (Hearthstone): a self-cast recall reusing the shared `world::recall_to_home` core, always to instance 0 regardless of the caster's current instance. Data-driven — a consumable's `spellid_1` naming a spell that carries this kind IS "a recall item"; `items::ops::apply_item_use` reads that (not a hardcoded item entry) to skip the normal stack-consumption a used-up consumable takes, since a recall trinket is never consumed. No cost/cooldown gate yet (the vanilla ~10s cast + 1hr CD is the same later follow-up E_BLINK's forward-teleport already defers)
 pub(crate) const E_DUEL: u8 = 0x22; // Duel (raw effect 83): request a server-authoritative Duel; p0 is the duel-flag gameobject template entry
 /// Remove the target's active LAND MOUNT (Dazed's mount-removal half). An instant effect that calls the
 /// one shared `mount::dismount` — idempotent, a silent no-op on an unmounted target, and never touched by
@@ -234,8 +234,7 @@ pub(crate) const SPELLMOD_OP_CASTING_TIME: i32 = 10;
 // Slot 11 of the p0_kind taxonomy. Not read by any engine seam yet (the spell-mod fold reaches the
 // op through `A_SPELLMOD_*`'s own `p0`), but the NUMBER is a stored data contract: the importer
 // writes p0_kind values into `game_spell_effect`, so deleting the name would leave 11 undocumented
-// and free for a future kind to collide with. Named here, deliberately unused.
-#[allow(dead_code)]
+// and free for a future kind to collide with.
 pub(crate) const P_SPELLMOD_OP: u8 = 11; // p0 is a SpellModOp (A_SPELLMOD_*: 0=damage, 7=crit, 10=cast time, 14=cost); p1 carries the 32-bit affected-spell family mask
 /// The effect's `amount` is a PERCENT of the caster's MAX power, not an absolute figure (Mage Evocation's
 /// A_PERIODIC_ENERGIZE restores 15% of max mana per tick). `aura_apply` reads this tag and converts the
@@ -368,7 +367,7 @@ pub(crate) const RESIST_ARMOR: u8 = 0x01; // physical armor (bit 0 of the school
 /// that exists": `tests.rs`'s `instant_kind_wire_values_exhaustive` loops it (never a hand-copied
 /// duplicate) so a kind is exhaustively covered by construction, and referencing every `E_*` const here
 /// keeps an as-yet-unwired one from tripping `dead_code` (CI's clippy gate runs `-D warnings`, so a
-/// kind added to the taxonomy but left OFF this slice fails the build, not just a test). #367: this
+/// kind added to the taxonomy but left OFF this slice fails the build, not just a test). This
 /// replaces the old `_TAXONOMY` scaffold + four separately hand-copied `E_*`/`A_*` lists in `tests.rs`,
 /// one of which had drifted (E_BLINK/E_PERSISTENT_AREA/E_FISH/E_OPEN_LOCK were missing from it).
 /// `#[allow(dead_code)]`: like `_TAXONOMY` before it, this binding is read only from `#[cfg(test)]`
@@ -412,7 +411,7 @@ pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_DISMOUNT,
 ];
 
-/// Canonical, ordered list of every AURA (`A_*`) kind — same rationale and same #367 fix as
+/// Canonical, ordered list of every AURA (`A_*`) kind — same rationale and same fix as
 /// [`ALL_INSTANT_KINDS`] above (that older hand-copied list had drifted too, missing
 /// A_SPELLMOD_FLAT/A_SPELLMOD_PCT). Same `#[allow(dead_code)]` rationale as `ALL_INSTANT_KINDS` above.
 #[allow(dead_code)]
@@ -451,8 +450,8 @@ pub(crate) const ALL_AURA_KINDS: &[u8] = &[
 // drifted the way the two lists above did — so it does not need a canonical, loop-tested slice of its
 // own. A subset of it has no OTHER production call site yet though (only a test-only reference, same as
 // every `E_*`/`A_*` kind before `ALL_INSTANT_KINDS`/`ALL_AURA_KINDS` existed), so it still needs SOME
-// scaffold to keep `dead_code` from tripping on the non-test `lib` build — this is that scaffold, sized
-// to just the residue (down from `_TAXONOMY`'s ~100 entries to these 16).
+// aggregate to keep `dead_code` from tripping on the non-test `lib` build. It holds just the residue,
+// down from `_TAXONOMY`'s ~100 entries to these 18.
 #[allow(dead_code)]
 const _RESERVED_NON_KIND_TAXONOMY: &[u8] = &[
     P_NONE,
@@ -465,6 +464,7 @@ const _RESERVED_NON_KIND_TAXONOMY: &[u8] = &[
     P_ITEM_ENTRY,
     P_ENTRY,
     P_ENCHANT_ID,
+    P_SPELLMOD_OP,
     P_DISPLAY_ID,
     P_RAW,
     T_SCRIPTED,

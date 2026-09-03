@@ -1,5 +1,5 @@
 //! The `apply_*` mutation cores that don't belong to the vendor economy (`economy.rs`) or the
-//! move/split/equip slot machinery (`inventory.rs`, #387 split): grant / use items, take corpse loot,
+//! move/split/equip slot machinery (`inventory.rs`, split): grant / use items, take corpse loot,
 //! the starter-loadout grant, and the equipped-stat sum. Each is the shared core behind a thin player
 //! reducer and its debug twin (see `reducers.rs`). All effects are additive: they touch only the item
 //! rows + the actor's health/money.
@@ -172,7 +172,7 @@ pub(crate) fn grant_item(
     )
 }
 
-/// Add `count` units of `tmpl` to `player_guid`'s backpack the way vanilla auto-store does (parity #14):
+/// Add `count` units of `tmpl` to `player_guid`'s backpack the way vanilla auto-store does (parity):
 /// TOP UP existing partial stacks of the same entry first (lowest slot first), then spill the remainder
 /// into free backpack slots (each new stack ≤ `max_stack`). `Err("inventory full")` if it can't all fit —
 /// the caller's reducer rolls back (so a buy that overflows un-charges). Shared by grant / buy / loot so a
@@ -371,7 +371,7 @@ pub(crate) fn remove_items(
 pub(crate) const RECENTLY_BANDAGED_SPELL: u32 = 11196;
 
 /// The on-use spell for `tmpl`, or `None` if it carries no on-use effect. `spellid_1`/`spelltrigger_1`
-/// (`ItemTemplate`, shipped to the client for tooltips) are the SINGLE on-use authority (#387, finishing
+/// (`ItemTemplate`, shipped to the client for tooltips) are the SINGLE on-use authority (finishing
 /// the migration `rules.rs` used to name as the end state): a nonzero `spellid_1` whose trigger slot is
 /// `ItemSpellTriggerType::OnUse` (0) IS the item's on-use cast. This retires the old hardcoded
 /// `USE_EFFECTS` shadow-map (a duplicate of exactly this column) — the importer/seed data populate the
@@ -387,7 +387,7 @@ fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
 /// Two kinds qualify today, both keyed on the SPELL's effect kind rather than an item-entry allowlist, so
 /// any future recall trinket or mount is reusable with zero code:
 ///
-/// - `E_RECALL_HOME` (0x1F) — the Hearthstone's shape (#387). A recall trinket is never used up.
+/// - `E_RECALL_HOME` (0x1F) — the Hearthstone's shape. A recall trinket is never used up.
 /// - `A_MOUNTED` — a mount item, via `mount::spell_is_mount`, the one place that classification lives.
 ///   Vanilla mounts are permanent bag items, not one-shot potions.
 ///
@@ -443,7 +443,7 @@ fn spell_restores_power(ctx: &ReducerContext, spell_id: u32) -> bool {
 }
 
 /// Shared use-an-item logic for the player + debug paths: resolve the item -> run its gates -> consume
-/// one unit (unless it's a non-consuming recall item) -> `begin_cast` its `spellid_1` (#387). `spellid_1`
+/// one unit (unless it's a non-consuming recall item) -> `begin_cast` its `spellid_1`. `spellid_1`
 /// (trigger 0) is the SINGLE on-use authority — this retired the old three-mechanism `apply_item_use`
 /// (a hardcoded Hearthstone special case, the `USE_EFFECTS` shadow-map, and a legacy vital-restore
 /// fallback with its own duplicated mana gate): every usable item, consumable or not (a potion, a
@@ -476,7 +476,7 @@ pub(crate) fn apply_item_use(
         .entry()
         .find(inst.entry)
         .ok_or_else(|| format!("no template for item entry {}", inst.entry))?;
-    // spellid_1 (trigger 0) is the item's on-use spell — the single authority now (#387). No mapped
+    // spellid_1 (trigger 0) is the item's on-use spell — the single authority now. No mapped
     // spell means nothing to "use" (a plain reagent, a piece of gear, an un-migrated item).
     let spell_id =
         use_spell_for(&tmpl).ok_or_else(|| format!("item {} is not consumable", inst.entry))?;
@@ -495,7 +495,7 @@ pub(crate) fn apply_item_use(
     ) {
         return Err("Recently Bandaged".to_string());
     }
-    // GATE A (the one surviving mana-class gate, #387 retired its legacy-branch duplicate): a mana potion
+    // GATE A (the one surviving mana-class gate, retired its legacy-branch duplicate): a mana potion
     // / drink restores POWER through E_ENERGIZE / A_PERIODIC_ENERGIZE — for a non-mana class that is
     // rage/energy, the out-of-combat preload exploit. `begin_cast` has no power-class gate of its own, so
     // DENY a power-restoring on-use spell here, BEFORE consuming/casting, when the user isn't a mana
@@ -710,7 +710,7 @@ pub(crate) fn apply_take_loot(
         .entry()
         .find(row.item_entry)
         .ok_or_else(|| format!("no template for item entry {}", row.item_entry))?;
-    // Auto-store with stacking (parity #14): a looted stackable tops up a matching partial stack first,
+    // Auto-store with stacking (parity): a looted stackable tops up a matching partial stack first,
     // then spills into free slots (visible only to its owner via owner_identity). `?` so an inventory-full
     // loot rolls back and the loot row stays for a retry.
     store_item(
@@ -771,7 +771,7 @@ mod tests {
         bandage_cooldown_blocks, death_durability_loss, use_spell_for, RECENTLY_BANDAGED_SPELL,
     };
 
-    /// `use_spell_for` (#387): `spellid_1` is the on-use spell IFF it's nonzero AND `spelltrigger_1` names
+    /// `use_spell_for`: `spellid_1` is the on-use spell IFF it's nonzero AND `spelltrigger_1` names
     /// the on-use trigger slot (0 — `ItemSpellTriggerType::OnUse`). A trigger-1 (on-equip) spell is NOT
     /// an on-use cast even with a nonzero id, and a zero `spellid_1` (a plain reagent/gear piece/
     /// un-migrated item) resolves to `None` regardless of its trigger byte. Replaces the old hardcoded

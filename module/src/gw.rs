@@ -1,4 +1,4 @@
-//! The TRUSTED GATEWAY verb surface (#468 stage 4a).
+//! The TRUSTED GATEWAY verb surface (stage 4a).
 //!
 //! One reducer family — `gw_<verb>(ctx, actor_guid, ...)` — for a gateway that holds a SHARED
 //! SpacetimeDB connection instead of one connection per player. The sender-shaped player reducers
@@ -17,7 +17,7 @@
 //!   (`world::apply_movement_update`, the `actor.rs` verbs, ...). Gates live in the cores and
 //!   cannot drift between the two entries.
 //!
-//! These are THE player-verb surface (#483): the sender-shaped (`ctx.sender`-authorized) twins
+//! These are THE player-verb surface: the sender-shaped (`ctx.sender`-authorized) twins
 //! are deleted, and every player action reaches the module through a `gw_*` verb on the
 //! gateway's privileged connection.
 
@@ -31,7 +31,7 @@ use crate::helpers::{acting_entity_by_guid, require_operator};
 //  The gateway lease — bounded ghost lifetime for shared-connection sessions [server]
 // ===========================================================================================
 //
-// THE #468 sharp edge: under one shared connection, a gateway crash fires ONE
+// THE sharp edge: under one shared connection, a gateway crash fires ONE
 // `client_disconnected` instead of one per player, so nothing per-player tears world entities
 // down and a crash would leave every seated player as a permanent world ghost. The fix is a
 // LEASE: each gateway heartbeats its row; sessions opened through the shared connection bind
@@ -39,7 +39,7 @@ use crate::helpers::{acting_entity_by_guid, require_operator};
 // scheduled reaper removes the world entities of any lease that stops heartbeating.
 //
 // Deliberately TTL-ONLY — no sweep on the shared connection's own disconnect. The coordinator
-// connection reconnects routinely (module republish closes every websocket, #278), and a
+// connection reconnects routinely (module republish closes every websocket), and a
 // disconnect-triggered sweep would mass-despawn every player on a live gateway that is merely
 // reconnecting. A dead gateway simply stops heartbeating and lapses; ghost lifetime is bounded
 // by TTL + reap interval (~75 s worst case) no matter HOW the gateway died.
@@ -66,7 +66,7 @@ pub struct GatewaySession {
 }
 
 /// The reaper's schedule row — armed by `seed::init` on a fresh database and ensured by
-/// `debug_repair_after_publish` on every publish (the #465 lesson: `init` never re-runs on an
+/// `debug_repair_after_publish` on every publish (the lesson: `init` never re-runs on an
 /// auto-migrate republish). [server]
 #[table(accessor = game_gateway_lease_reaper_schedule, scheduled(reap_gateway_leases))]
 pub struct GatewayLeaseReaperSchedule {
@@ -197,7 +197,7 @@ pub fn gw_movement_update(
     crate::world::apply_movement_update(ctx, mover, opcode, movement_info, x, y, z, o, move_time_ms)
 }
 
-/// One movement update inside a [`gw_movement_batch`] call (#482). Field-for-field the
+/// One movement update inside a [`gw_movement_batch`] call. Field-for-field the
 /// `gw_movement_update` argument list with the actor made explicit per entry.
 #[derive(spacetimedb::SpacetimeType)]
 pub struct GwMove {
@@ -231,7 +231,7 @@ fn apply_movement_batch(
     }
 }
 
-/// #482: ONE transaction per gateway tick instead of one per player heartbeat. The measured wall
+/// ONE transaction per gateway tick instead of one per player heartbeat. The measured wall
 /// behind this: ~10k `gw_movement_update` transactions/s at ~43µs of per-transaction machinery
 /// each put the writer at 92% while the actual row work (the batched `publish_motion` side) was
 /// a fraction of that. The gateway collects a tick's worth of movement (25–50ms) and sends it
@@ -259,8 +259,8 @@ pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(),
             )
         },
     );
-    // #482: drain the staged motion INSIDE this transaction — the subscription sweep is paid
-    // once per batch either way (#461's whole point), and inline draining removes the publish
+    // Drain the staged motion INSIDE this transaction — the subscription sweep is paid
+    // once per batch either way (the whole point), and inline draining removes the publish
     // schedule's 50ms latency quantum plus the pending-row churn for this path.
     crate::motion::publish_staged(ctx);
     Ok(())
@@ -293,7 +293,7 @@ pub fn gw_cast_at(
 
 /// [`crate::spell::scheduler::apply_cast_spell_at`] behind the gateway gate — the GROUND-TARGET
 /// cast form (`CMSG`-routed `cast_spell_at`): spellbook + NaN + self-target-default gates, target
-/// coords carried. Distinct from [`gw_cast_at`], which is the unit-target instant core (#479).
+/// coords carried. Distinct from [`gw_cast_at`], which is the unit-target instant core.
 #[reducer]
 pub fn gw_cast_spell_at(
     ctx: &ReducerContext,
@@ -357,7 +357,7 @@ pub fn gw_stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
 }
 
 /// [`crate::world::apply_set_sheathed`] behind the gateway gate — the `CMSG_SETSHEATHED` a client
-/// sends on `Z`. `state` is raw client input and is range-checked in the apply fn, not here. [#101]
+/// sends on `Z`. `state` is raw client input and is range-checked in the apply fn, not here.
 #[reducer]
 pub fn gw_set_sheathed(ctx: &ReducerContext, actor_guid: u64, state: u8) -> Result<(), String> {
     require_operator(ctx)?;
@@ -559,7 +559,7 @@ pub fn gw_send_emote(
     crate::chat::apply_send_emote(ctx, sender, text_emote, emote_anim, target_guid)
 }
 
-/// The shared-connection login (#468 stage 4d): enter the world with the account named by id and
+/// The shared-connection login (stage 4d): enter the world with the account named by id and
 /// the session bound to this gateway's lease. Delegates to the same [`crate::world::apply_player_login`]
 /// core the sender path uses; the OWNER identity stamped onto the entity and the character's
 /// owner-RLS rows is the account's BOUND identity (from `establish_session`), so a per-player
@@ -627,7 +627,7 @@ pub fn gw_leave_world(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
 }
 
 // ===========================================================================================
-//  Chat / social (#479 batch B)
+//  Chat / social (batch B)
 // ===========================================================================================
 
 /// [`crate::chat::apply_send_roll`] with the roller named by guid — `MSG_RANDOM_ROLL`.
@@ -734,7 +734,7 @@ pub fn gw_del_ignore(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) ->
 }
 
 // ===========================================================================================
-//  Group (#479 batch B)
+//  Group (batch B)
 // ===========================================================================================
 
 /// [`crate::group::invite_core`] with the inviter named by guid.
@@ -757,7 +757,7 @@ pub fn gw_group_decline(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Str
     crate::group::decline_invite_for(ctx, actor_guid)
 }
 
-/// [`crate::trade::apply_initiate_trade`] — propose a Trade Session against `target_guid` (#120).
+/// [`crate::trade::apply_initiate_trade`] — propose a Trade Session against `target_guid`.
 /// Refusals are protocol answers on the trade-event relay, never an `Err` here.
 #[reducer]
 pub fn gw_initiate_trade(
@@ -788,7 +788,7 @@ pub fn gw_cancel_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Stri
 }
 
 /// [`crate::trade::apply_set_trade_item`] — offer the item in absolute inventory slot `inv_slot`
-/// in window slot `trade_slot` (#121). The gateway already mapped the client's (bag, slot) pair.
+/// in window slot `trade_slot`. The gateway already mapped the client's (bag, slot) pair.
 #[reducer]
 pub fn gw_set_trade_item(
     ctx: &ReducerContext,
@@ -801,7 +801,7 @@ pub fn gw_set_trade_item(
     crate::trade::apply_set_trade_item(ctx, acting, trade_slot, inv_slot)
 }
 
-/// [`crate::trade::apply_clear_trade_item`] (#121).
+/// [`crate::trade::apply_clear_trade_item`].
 #[reducer]
 pub fn gw_clear_trade_item(
     ctx: &ReducerContext,
@@ -813,7 +813,7 @@ pub fn gw_clear_trade_item(
     crate::trade::apply_clear_trade_item(ctx, acting, trade_slot)
 }
 
-/// [`crate::trade::apply_set_trade_gold`] — `copper` is the offered amount (#121).
+/// [`crate::trade::apply_set_trade_gold`] — `copper` is the offered amount.
 #[reducer]
 pub fn gw_set_trade_gold(ctx: &ReducerContext, actor_guid: u64, copper: u32) -> Result<(), String> {
     require_operator(ctx)?;
@@ -822,7 +822,7 @@ pub fn gw_set_trade_gold(ctx: &ReducerContext, actor_guid: u64, copper: u32) -> 
 }
 
 /// [`crate::trade::apply_accept_trade`] — accept the current offer; dual-accept runs the Trade
-/// Commit (#122).
+/// Commit.
 #[reducer]
 pub fn gw_accept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
@@ -830,7 +830,7 @@ pub fn gw_accept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Stri
     crate::trade::apply_accept_trade(ctx, acting)
 }
 
-/// [`crate::trade::apply_unaccept_trade`] — withdraw an accept (#122).
+/// [`crate::trade::apply_unaccept_trade`] — withdraw an accept.
 #[reducer]
 pub fn gw_unaccept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
@@ -838,7 +838,7 @@ pub fn gw_unaccept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), St
     crate::trade::apply_unaccept_trade(ctx, acting)
 }
 
-/// [`crate::trade::apply_busy_trade`] — decline a proposal as busy (#123).
+/// [`crate::trade::apply_busy_trade`] — decline a proposal as busy.
 #[reducer]
 pub fn gw_busy_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
@@ -846,7 +846,7 @@ pub fn gw_busy_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String
     crate::trade::apply_busy_trade(ctx, acting)
 }
 
-/// [`crate::trade::apply_ignore_trade`] — decline a proposal via ignore (#123).
+/// [`crate::trade::apply_ignore_trade`] — decline a proposal via ignore.
 #[reducer]
 pub fn gw_ignore_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
@@ -925,7 +925,7 @@ pub fn gw_push_quest_to_party(
 }
 
 // ===========================================================================================
-//  Inventory / vendor / professions (#479 batch B)
+//  Inventory / vendor / professions (batch B)
 // ===========================================================================================
 
 /// [`crate::items::apply_item_move`] with the owner named by guid.
@@ -1043,7 +1043,7 @@ pub fn gw_bind_home(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String>
 }
 
 // ===========================================================================================
-//  Loot (#479 batch B)
+//  Loot (batch B)
 // ===========================================================================================
 
 /// [`crate::professions::skin_corpse`] with the skinner named by guid.
@@ -1083,7 +1083,7 @@ pub fn gw_loot_master_give(
 }
 
 // ===========================================================================================
-//  Spells (#479 batch B)
+//  Spells (batch B)
 // ===========================================================================================
 
 /// [`crate::spell::do_cast_spell`] with the caster named by guid — the SPELLBOOK-GATED player cast
@@ -1118,7 +1118,7 @@ pub fn gw_cancel_aura(ctx: &ReducerContext, actor_guid: u64, spell_id: u32) -> R
 }
 
 // ===========================================================================================
-//  World / misc (#479 batch B)
+//  World / misc (batch B)
 // ===========================================================================================
 
 /// [`crate::world::apply_gossip_select`] with the clicker named by guid — the notify-only hook.
@@ -1153,7 +1153,7 @@ pub fn gw_learn_talent(ctx: &ReducerContext, actor_guid: u64, talent_id: u32) ->
 }
 
 /// [`crate::talent::do_reset_talents`] behind the gateway gate — the "I wish to unlearn my
-/// talents." gossip option (work-item 198's respec primitive, wired to gossip by #516).
+/// talents." gossip option (work-item 198's respec primitive, wired to gossip).
 #[reducer]
 pub fn gw_reset_talents(
     ctx: &ReducerContext,
@@ -1256,7 +1256,7 @@ pub fn gw_pet_command(
 
 
 
-/// [`crate::bridge::apply_client_command`] with the sender named by guid (#479, operator call:
+/// [`crate::bridge::apply_client_command`] with the sender named by guid (operator call:
 /// the GM/bridge surface rides the gateway path like every other verb; authorization was never
 /// the connection identity).
 #[reducer]

@@ -1,4 +1,4 @@
-//! The swing tick (#382 split of the former monolithic `combat/mod.rs`, on top of #370's shared damage
+//! The swing tick (split of the former monolithic `combat/mod.rs`, on top of the shared damage
 //! pipeline): `tick_melee`'s three passes (`leash_pass`/`aggro_pass`/`resolve_swing`), the positional
 //! gate (`swing_blocked`), and the resolvers that actually roll + fire a hit (`fire_melee_swing`,
 //! `resolve_offhand_swing`, `fire_ranged_shot`, and the scheduled `ranged_impact` reducer). Every
@@ -192,7 +192,7 @@ fn aggro_pass(ctx: &ReducerContext) {
 /// persists its own `last_offhand_swing_ms` stamp directly — it does not rely on the main hand's
 /// tail-of-loop stamp, which that path's various early returns (corpse/CC/lethal) may skip.
 ///
-/// The DAMAGE half is not duplicated at all any more (#370): the same
+/// The DAMAGE half is not duplicated at all any more: the same
 /// `fold_incoming_damage` → `final_damage` → event → [`apply_hit`] the main-hand swing and ranged
 /// impact use, over the off-hand's AP-scaled range reduced by `apply_offhand_penalty` (vanilla's 50%
 /// dual-wield penalty). What stays off-hand-specific is only what vanilla makes MAIN-HAND-only: it does not arm
@@ -251,9 +251,9 @@ fn resolve_offhand_swing(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    // The SHARED pipeline (#370): outgoing % → incoming % → absorb → godmode, then the wire event,
+    // The SHARED pipeline: outgoing % → incoming % → absorb → godmode, then the wire event,
     // then the application (rage/skill/lethal fork/health/break-on-damage/threat). Identical to the
-    // main-hand swing by construction — this is exactly the copy whose Disarm gate drifted (#361).
+    // main-hand swing by construction — this is exactly the copy whose Disarm gate drifted.
     let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
     let damage = final_damage(ctx, target_guid, dmg);
     let lethal = is_lethal(target.health, damage.amount);
@@ -294,7 +294,7 @@ fn resolve_offhand_swing(
 /// Pass 2 — swings. For each engagement (re-read, since aggro may have added rows), run the SHARED
 /// ELIGIBILITY GATE and, if it passes, fire the swing.
 ///
-/// This function is the gate and nothing else (#370): both parties still in the world and not
+/// This function is the gate and nothing else: both parties still in the world and not
 /// corpses, the attacker not crowd-controlled and not routing, the ranged weapon still equipped, the
 /// vanilla movement rule for a ranged loop, [`swing_blocked`]'s positional checks, the off-hand's
 /// independent second stream, and the swing timer. What a swing then DOES lives in one of two
@@ -421,7 +421,7 @@ fn resolve_swing(ctx: &ReducerContext) {
         }
 
         // POSITIONAL eligibility — max range, ranged minimum range, line of sight, facing — all four
-        // in ONE gate (#370). They used to be four separate `if ... { if ranged_due { delete } continue }`
+        // in ONE gate. They used to be four separate `if ... { if ranged_due { delete } continue }`
         // blocks, i.e. four copies of the teardown rule ("a blocker on a DUE ranged shot INTERRUPTS the
         // auto-repeat loop; a melee blocker just waits for the next tick") — one per gate, each free to
         // drift. `swing_blocked` is side-effect-free and short-circuits in the same order, so this is
@@ -489,7 +489,7 @@ fn resolve_swing(ctx: &ReducerContext) {
 
         // FIRE. Everything above is the SHARED eligibility gate — existence, corpse, CC, rout, the
         // ranged weapon, the movement rule, position, the off-hand's independent stream, and the swing
-        // timer. What a fired swing then DOES splits cleanly in two (#370): a melee swing (the full
+        // timer. What a fired swing then DOES splits cleanly in two: a melee swing (the full
         // attack table, the seal / next-swing / react procs, an instant hit) and a ranged shot (a
         // reduced table, ammo, and a projectile whose damage lands on a scheduled impact). Each
         // resolver owns its own wire event and its own `last_swing_ms` stamp, and both apply damage
@@ -696,7 +696,7 @@ fn fire_melee_swing(
         wear_weapon(ctx, attacker_guid);
     }
 
-    // The SHARED modifier fold (#370): outgoing % → incoming % → absorb → godmode. `lethal` is needed
+    // The SHARED modifier fold: outgoing % → incoming % → absorb → godmode. `lethal` is needed
     // HERE, before the events, for the wire's `killing_blow` flag; `apply_hit` re-derives it for the
     // fork from the same shared predicate.
     let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
@@ -757,7 +757,7 @@ fn fire_melee_swing(
         });
     }
 
-    // The SHARED application (#370): rage both ways, weapon/defense skill-ups, the lethal fork through
+    // The SHARED application: rage both ways, weapon/defense skill-ups, the lethal fork through
     // kill_player/kill_creature, the health write, break-on-damage, and threat.
     let combat_ended = apply_hit(
         ctx,
@@ -889,7 +889,7 @@ fn fire_ranged_shot(
     // melee swing.
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    // The SHARED modifier fold (#370). Vanilla folds absorb at impact; this engine freezes that
+    // The SHARED modifier fold. Vanilla folds absorb at impact; this engine freezes that
     // chain at launch, then resolves the lethal floor and damage log together at impact.
     let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
 
@@ -966,11 +966,11 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     // The rest of the chain (outgoing %, damage-taken %, absorb) was folded and FROZEN at launch by
     // `fire_ranged_shot`, so the delayed damage LOG equals what actually lands — but godmode can be
     // toggled on DURING the arrow's flight, and re-checking only the frozen value would let a delayed
-    // arrow land damage that a melee swing at the same instant would zero (issue #361). `false` for a
+    // arrow land damage that a melee swing at the same instant would zero. `false` for a
     // non-godmode target, so this is byte-identical for them.
     let dmg = if target.godmode { 0 } else { shot.damage };
     let damage = final_damage(ctx, shot.target_guid, dmg);
-    // The SHARED pipeline (#370) — the same one the main-hand and off-hand swings route through, so a
+    // The SHARED pipeline — the same one the main-hand and off-hand swings route through, so a
     // shot can never again drift from a swing (a godmode-zeroed hit is now a full no-op here too,
     // instead of running the survivor path with a 0 damage value).
     let outcome = apply_hit(
@@ -998,14 +998,14 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
 
 #[cfg(test)]
 mod damage_pipeline_drift_tests {
-    // #361 found TWO live divergences in what was then a copy-pasted post-roll damage pipeline —
+    // Found TWO live divergences in what was then a copy-pasted post-roll damage pipeline —
     // off-hand swings ignored Disarm, ranged impacts ignored godmode — and pinned each fix in place.
-    // #370 removed the copies: there is now ONE pipeline (`fold_incoming_damage` → `final_damage`
+    // Removed the copies: there is now ONE pipeline (`fold_incoming_damage` → `final_damage`
     // → `apply_hit`) that
     // every damaging path routes through, so the drift class those two tests guard against can no
     // longer be introduced one resolver at a time. These tests therefore moved UP a level: instead of
     // pinning each fix in each copy, they pin that every resolver still goes through the one
-    // chokepoint (plus the two #361 guards that remain genuinely resolver-local).
+    // chokepoint (plus the two guards that remain genuinely resolver-local).
     //
     // There is no `ReducerContext` harness in this crate by design (see `test_scan`'s doc comment /
     // playbook §7), so — same as the other chokepoint tests in this file — these pin the wiring's
@@ -1149,7 +1149,7 @@ mod damage_pipeline_drift_tests {
 
     #[test]
     fn offhand_swing_checks_disarm_before_rolling_its_range() {
-        // #361, still resolver-local: Disarm strips the MAIN hand inside `swing_range_ctx`, and the
+        // Still resolver-local: Disarm strips the MAIN hand inside `swing_range_ctx`, and the
         // off-hand derives its own range, so the gate has to be read here too.
         let body = code_of(include_str!("swing.rs"), "fn resolve_offhand_swing(");
         assert!(
@@ -1162,7 +1162,7 @@ mod damage_pipeline_drift_tests {
 
     #[test]
     fn ranged_impact_re_checks_godmode_at_impact_time() {
-        // #361, still resolver-local: the rest of the modifier chain is frozen at LAUNCH, so this is
+        // Still resolver-local: the rest of the modifier chain is frozen at LAUNCH, so this is
         // the one fold the impact must re-evaluate (godmode can be toggled during the arrow's flight).
         let body = code_of(include_str!("swing.rs"), "pub fn ranged_impact(");
         assert!(
@@ -1175,7 +1175,7 @@ mod damage_pipeline_drift_tests {
 
     #[test]
     fn the_ranged_teardown_rule_is_written_once() {
-        // #370: the "a blocker on a DUE ranged shot INTERRUPTS the auto-repeat loop" teardown used to
+        // The "a blocker on a DUE ranged shot INTERRUPTS the auto-repeat loop" teardown used to
         // be repeated at each of the four positional gates (range / minimum range / LoS / facing).
         // Those gates now live in the side-effect-free `swing_blocked`, so `resolve_swing` states the
         // teardown once. Pinned by absence: the gates' own predicates must not reappear inline.

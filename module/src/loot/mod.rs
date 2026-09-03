@@ -4,7 +4,7 @@
 //! on the same killing blow; the gateway reads them to populate the loot window, and taking one
 //! (`CMSG_AUTOSTORE_LOOT_ITEM`) is `crate::items::take_loot` → `apply_take_loot`. [server]/[entity]
 //!
-//! Split (issue #384) into three files that stay one Rust module (`crate::loot::*` paths are
+//! Split into three files that stay one Rust module (`crate::loot::*` paths are
 //! unaffected — everything below re-exports through): this file (the roll core, the money split,
 //! and the loot-family DATA tables — creature/pickpocket/gameobject/skinning/fishing), `rolls.rs`
 //! (the NEED/GREED/round-robin/master group-loot machinery), and the sibling top-level
@@ -49,7 +49,7 @@ use crate::character::game_character; // credit_purse's offline-recipient fallba
 use crate::game_group_member; // clone_quest_loot_for_group's GameObject roster read
 use crate::game_world_entity;
 use crate::quest::objective_kind;
-use crate::{game_character_quest, game_quest_objective}; // killer_needs_item (fishing's zone resolve now lives in terrain::zone_id_at, #375)
+use crate::{game_character_quest, game_quest_objective}; // killer_needs_item (fishing's zone resolve now lives in terrain::zone_id_at)
 use lyracore_shared::loot_roll::event_kind as roll_event_kind; // apply_loot_money's MONEY_SHARE push
 
 mod rolls;
@@ -58,7 +58,7 @@ pub(crate) mod tag;
 pub use tag::*;
 
 // The profession reducers (skinning/fishing/enchanting) live in the sibling top-level
-// `crate::professions` module (issue #384) — re-exported here so every existing
+// `crate::professions` module — re-exported here so every existing
 // `crate::loot::skin_corpse`/`apply_fish`/`apply_disenchant`/`apply_enchant_item`/`entry_is_beast`
 // call site (debug.rs's twins) keeps compiling unchanged even though nothing in THIS file uses
 // them directly.
@@ -202,7 +202,7 @@ pub fn scale_money_for_rank(money: u32, rank: u8) -> u32 {
 /// (work-item 187 slice 0): quest rows now roll into `game_corpse_loot` UNCONDITIONALLY — the
 /// drop-CHANCE still applies; only the old pre-roll `killer_needs_item` GATE is gone (module doc,
 /// decision #1's fix) — so the caller needs to know which winners were quest-only to stamp the new
-/// `quest_only` column. This is the ONE roll body every family's wrapper calls (issue #384's "one
+/// `quest_only` column. This is the ONE roll body every family's wrapper calls (the "one
 /// roll core" — `roll_loot_rows` below used to duplicate this whole algorithm minus the flag). Draws
 /// from the module RNG (`ctx.random`), so it has no direct unit test; its pure primitives
 /// (`loot_drops`/`group_pick`) are tested below.
@@ -242,7 +242,7 @@ pub(crate) fn roll_loot_rows_quest_aware(
 /// Returns the winners as `(item_entry, count)`, in table order for independents then group order —
 /// callers decide what a winner MEANS (a `game_corpse_loot` row, a direct `grant_item`, …).
 ///
-/// A thin adapter over [`roll_loot_rows_quest_aware`] (issue #384's "one roll core"): tag every row
+/// A thin adapter over [`roll_loot_rows_quest_aware`] (the "one roll core"): tag every row
 /// `quest_only = false`, delegate, then drop the flag off each winner. The RNG draw sequence is
 /// IDENTICAL to the old standalone body this replaces (the same `ctx.random` calls in the same
 /// order), so `professions::skin_corpse`/`professions::apply_fish` — the two callers with no
@@ -401,7 +401,7 @@ pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item:
 /// fresh roll ever writes to it. Two residue sources land here: (a) work-item 267's corpse-guid REUSE
 /// (a harness SQL teardown or `debug_spawn_at_feet` skipping the decay reaper leaves a departed kill's
 /// `game_corpse_loot_eligible` snapshot behind for the next creature minted at that guid), and (b)
-/// issue #358's pickpocket/kill collision — `roll_pickpocket_loot` inserts `game_corpse_loot` rows at
+/// the pickpocket/kill collision — `roll_pickpocket_loot` inserts `game_corpse_loot` rows at
 /// slots 0.. keyed on the LIVE creature's guid (vanilla lets a rogue crack a pocket before the kill);
 /// if the mob dies before every row is taken, `roll_creature_loot` re-inserts kill drops starting at
 /// slot 0 on the SAME guid, producing duplicate `(corpse_guid, slot)` pairs that every first-match
@@ -434,7 +434,7 @@ pub(crate) fn purge_corpse_residue(ctx: &ReducerContext, guid: u64) {
 /// be owned by a roll that matters). This one runs when the corpse itself goes away, and must respect
 /// the withheld gate below.
 ///
-/// Issue #50 fix: a `game_corpse_loot` row still `withheld` is locked by a live NEED/GREED roll —
+/// Fix: a `game_corpse_loot` row still `withheld` is locked by a live NEED/GREED roll —
 /// which, in a sharded deployment, may be authoritative on realm-core and invisible to this
 /// database's own `game_loot_roll` table (promoted away within ~200ms of kill-time; see
 /// `creatures::tick::pass_decay`'s matching fix). Reaping it here would delete the item out from
@@ -480,7 +480,7 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
 /// Insert `winners` as sequential `game_corpse_loot` rows on `corpse_guid`, starting at slot 0, each
 /// freshly unclaimed (`reserved_for = 0`) and FFA (group-loot stamping happens AFTER this returns, in
 /// `apply_group_loot_rules` — never at insert time). The ONE insert loop [`roll_creature_loot`] and
-/// [`roll_pickpocket_loot`] used to each carry a copy of (issue #384's dedup).
+/// [`roll_pickpocket_loot`] used to each carry a copy of (the dedup).
 fn insert_corpse_rows(ctx: &ReducerContext, corpse_guid: u64, winners: Vec<(u32, u32, bool)>) {
     for (slot, (item_entry, count, quest_only)) in winners.into_iter().enumerate() {
         ctx.db.game_corpse_loot().insert(CorpseLoot {
@@ -903,7 +903,7 @@ pub(crate) fn apply_loot_money(
 /// mirroring the looter's own transfer in [`apply_loot_money`]. No-op if the guid resolves to neither
 /// (a deleted character mid-flight) — never panics on a stale snapshot row.
 ///
-/// DEFER verdict for the in-transit case (issue #30). This is the one audited by-guid path a REFUSAL
+/// DEFER verdict for the in-transit case. This is the one audited by-guid path a REFUSAL
 /// gets wrong: the recipient is a PARTY MEMBER collecting their share of someone else's kill, so
 /// dropping the write would silently short a third party who is not transferring and cannot know
 /// why. `transfer::defer_money_delta` folds the copper into the escrowed export blob instead, so it
@@ -1393,7 +1393,7 @@ mod tests {
 
     use crate::test_scan::code_of;
 
-    /// Issue #358: `purge_corpse_residue` is the ONE helper `kill_creature` calls to close the
+    /// `purge_corpse_residue` is the ONE helper `kill_creature` calls to close the
     /// pickpocket/kill slot collision, and the issue explicitly asks for it to cover BOTH residue
     /// tables (`game_corpse_loot` — the actual colliding rows — and `game_corpse_loot_eligible`, the
     /// pre-existing work-item-267 reused-guid residue). Losing either `by_corpse().filter(&guid)`

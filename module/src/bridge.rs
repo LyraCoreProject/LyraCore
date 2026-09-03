@@ -51,7 +51,7 @@ pub(crate) fn send(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload
     });
 }
 
-/// The shared core behind [`client_command`] and its gateway twin `gw_client_command` (#479):
+/// The shared core behind [`client_command`] and its gateway twin `gw_client_command`:
 /// dispatch with the sender already resolved to a guid.
 pub(crate) fn apply_client_command(
     ctx: &ReducerContext,

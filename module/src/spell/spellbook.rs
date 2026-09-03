@@ -31,7 +31,7 @@ crate::character_owned!(delete, fn sweep_delete_game_player_spell(ctx, character
         spells.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19), HOT: the spellbook is what the character can DO on arrival —
+// CROSS-DATABASE transport, HOT: the spellbook is what the character can DO on arrival —
 // without it the login spellbook is empty and every cast fails "spell not known". `id` is a
 // surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_player_spell(ctx, character_guid, io) {

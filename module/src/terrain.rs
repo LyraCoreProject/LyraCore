@@ -52,7 +52,7 @@ pub fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32
 /// Snap a derived destination Z to terrain, keeping `fallback` off-slice. The one-liner every
 /// wander/flee/fear/bot leg goes through (work-item 174).
 ///
-/// #526: also takes the `max` against the topmost imported vmap model floor (bridge, WMO
+/// Also takes the `max` against the topmost imported vmap model floor (bridge, WMO
 /// interior deck) at or below this same Z — `vmap::floor_z` returns `None` off vmap-slice/gate,
 /// so an unimported map is byte-identical to before this line existed. The terrain heightmap and
 /// the vmap floor never both apply to the same surface (a bridge deck isn't in the ADT MCVT
@@ -126,7 +126,7 @@ pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), Stri
 /// callers skip zone-scoping entirely rather than guessing wrong — a wrong guess would silently narrow
 /// a candidate set (graveyards, fishing loot) to the WRONG zone.
 ///
-/// The single canonical zone resolver (#375, work-item 209 idiom): `world::graveyard`'s release pick
+/// The single canonical zone resolver (work-item 209 idiom): `world::graveyard`'s release pick
 /// and `loot::apply_fish`'s catch roll both call this instead of each keeping its own one-hop walk.
 pub fn zone_id_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<u32> {
     area_at(ctx, map_id, x, y).map(|area| zone_of(&area))

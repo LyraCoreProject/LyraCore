@@ -243,7 +243,7 @@ crate::character_owned!(delete, fn sweep_delete_game_item_instance(ctx, characte
         items.guid().delete(r.guid);
     }
 });
-// CROSS-DATABASE transport (issue #19), HOT: worn gear + bags. The item `guid` is PRESERVED, unlike
+// CROSS-DATABASE transport, HOT: worn gear + bags. The item `guid` is PRESERVED, unlike
 // every surrogate-PK table here: it is derived from the OWNER guid (`item_guid_for`), so it is
 // already namespaced per character and cannot collide with the destination's own items — and it is
 // the id the CLIENT knows an item by (equipment slots, loot, trade). Re-minting it would make every
@@ -363,7 +363,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_buyback(ctx, char
         buybacks.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19): the buyback ring is real value the player can still reclaim
+// CROSS-DATABASE transport: the buyback ring is real value the player can still reclaim
 // (they paid for the item once). Dropping it at a shard boundary is a silent refund window closing.
 // `id` orders the ring (newest = highest), so re-minting preserves the order: `move_rows` inserts in
 // export order, and export order is index order.

@@ -373,7 +373,7 @@ pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
 }
 
 /// Cancel `caster_guid`'s in-progress (timed) cast(s) — delete its `game_pending_cast` row(s), which also
-/// cancels the scheduled `fire_pending_cast`, so the spell never resolves (rank #118 CC interrupt).
+/// cancels the scheduled `fire_pending_cast`, so the spell never resolves (rank CC interrupt).
 /// Reached through the `by_caster` index (perf catalog 1.18) — `break_channel` calls this on every
 /// moving heartbeat, so the old full scan sat on the hottest path. Returns whether anything was interrupted; a caster with no pending cast → `false` (no-op). The
 /// client-facing cast-bar cancel (an `SMSG_SPELL_FAILED`/interrupted wire push) is a gateway follow-up —

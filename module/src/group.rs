@@ -9,17 +9,17 @@
 //! events carry the roster snapshot in their payload, built in the SAME transaction as the
 //! membership change (a relay-time coordinator read would race the event across connections).
 //!
-//! **Where this state LIVES (issue #22, group slice).** `game_group` / `game_group_member` /
+//! **Where this state LIVES (group slice).** `game_group` / `game_group_member` /
 //! `game_group_invite` are authoritative on **realm-core** — none of the three is coupled to space,
 //! and all three broke the moment a second database existed (a player inside Deadmines could not
 //! invite one in Elwynn: `invite_core` resolved the target inside the CALLING database and a
 //! character on another shard has no row there). The gateway drives them there through the
 //! operator-gated [`realm_group_op`], and each world shard's copy is a write-through cache it
-//! refreshes with [`sync_group_mirror`] — the `game_account`/`game_session` relationship from #20.
+//! refreshes with [`sync_group_mirror`] — the `game_account`/`game_session` relationship.
 //! A single-database deployment has no realm-core to route to and keeps calling the player-facing
 //! reducers below exactly as before; the whole split is a gateway routing decision, not a schema one.
 //!
-//! **Server-driven invites (issue #54).** A playerbot's serendipity invite has no client and no
+//! **Server-driven invites.** A playerbot's serendipity invite has no client and no
 //! `ctx.sender()` to resolve — it is a decision the module's own goal tick makes. It cannot write
 //! group rows for the same reason a player's cross-shard invite cannot: only the gateway can reach
 //! realm-core. [`BotInviteIntent`] is the module's half of that split — a DECISION, not a write —
@@ -125,33 +125,32 @@ crate::character_owned!(restamp, fn sweep_restamp_game_group_member(ctx, charact
     }
 });
 
-// CROSS-DATABASE transport (issue #22, group slice): membership does NOT ride the export blob.
+// CROSS-DATABASE transport (group slice): membership does NOT ride the export blob.
 //
-// #19 shipped an interim MIRROR here — the member row travelled in the manifest carrying its
+// Shipped an interim MIRROR here — the member row travelled in the manifest carrying its
 // original `group_id`, and an `ensure_group` helper re-created the parent `game_group` row at the
 // destination. Its own AC#3 called for that mirror to be deleted once membership had one
-// authoritative home, and #22 gives it one: `game_group` / `game_group_member` / `game_group_invite`
+// authoritative home, and the group slice gives it one: `game_group` / `game_group_member` / `game_group_invite`
 // are authoritative on REALM-CORE, and each world shard's copy is a gateway-maintained write-through
-// cache (`sync_group_mirror` below) — the same relationship `game_account` / `game_session` have had
-// since #20.
+// cache (`sync_group_mirror` below) — the same relationship `game_account` / `game_session` have.
 //
 // So the blob must not carry membership: it would race the authority. The gateway re-pushes the
 // realm-core roster onto the destination at world entry (`world::party::on_world_entry`), which is
 // strictly better than the snapshot — a party SPLIT across the boundary re-syncs both sides, where
 // the snapshot could only carry what the character had when it stepped into the portal.
 //
-// This also settles the three OPEN entries on the in-transit exception list (`transfer/mod.rs`, issue
-// #30): a third party's accept/kick/leave for an in-transit character is now a REALM-CORE write, so
+// This also settles the three OPEN entries on the in-transit exception list (`transfer/mod.rs`):
+// a third party's accept/kick/leave for an in-transit character is now a REALM-CORE write, so
 // there is no source-copy write left to lose.
 crate::character_owned!(not_transported, fn sweep_transfer_game_group_member());
 
 /// Drop a character's MIRROR row on the shard it is leaving, without the leave/disband semantics
-/// (issue #19, re-scoped by #22).
+/// (re-scoped).
 ///
 /// `transfer::do_finish` calls this immediately before `cascade_delete_character` tears the source
 /// copy down. A shard hop is not a departure: running `remove_member` would fire DESTROYED at the
 /// remaining members and DISBAND a two-person party the moment its first member stepped through the
-/// portal. Under #22 that would be worse than wrong — it would be a MIRROR inventing a membership
+/// portal. On realm-core that would be worse than wrong — it would be a MIRROR inventing a membership
 /// change and notifying clients about it, when the authority (realm-core) recorded nothing at all.
 /// Deleting the row and nothing else is exactly what a departing cache entry should do.
 ///
@@ -201,14 +200,14 @@ crate::character_owned!(delete, fn sweep_delete_game_group_invite(ctx, character
         invites.id().delete(id);
     }
 });
-// CROSS-DATABASE transport (issue #19): a pending invite is a 2-minute dialog with a GC TTL, and
+// CROSS-DATABASE transport: a pending invite is a 2-minute dialog with a GC TTL, and
 // the inviter is by definition NOT transferring with the target (they are still standing in the
 // open world). Carrying it would pop an invite dialog for a party the arriving character cannot see.
 // Not transported, by decision — the invite dies with the source copy, exactly as a decline would.
 crate::character_owned!(not_transported, fn sweep_transfer_game_group_invite());
 
-/// A bot-initiated invite the MODULE has DECIDED but cannot execute (issue #54, closing the gap
-/// #22's group slice opened): `game_group`/`game_group_member` are authoritative on realm-core, and
+/// A bot-initiated invite the MODULE has DECIDED but cannot execute (closing the gap
+/// the group slice opened): `game_group`/`game_group_member` are authoritative on realm-core, and
 /// only the gateway can reach it — the module never has. Before this table existed, playerbots'
 /// serendipity invite (`packages/playerbots/src/goals.rs`, `maybe_invite_fellow_quester`) called
 /// [`invite_core`] directly, writing this shard's LOCAL `game_group`/`game_group_member` rows, which
@@ -248,7 +247,7 @@ pub struct BotInviteIntent {
     pub op: u8,
 }
 
-/// Record a bot's serendipity invite DECISION for the gateway to execute (issue #54). No gating here
+/// Record a bot's serendipity invite DECISION for the gateway to execute. No gating here
 /// beyond existence-of-nothing — every real gate (leader-only, party cap, already-grouped,
 /// pending-invite-replaces-older) lives in `invite_core_on`/`realm_group_op`, which the gateway calls
 /// against the correct authority; this is a pure write, mirroring how a player's own CMSG_GROUP_INVITE
@@ -326,8 +325,8 @@ pub struct GroupEvent {
     // column (String cannot be #[default]-ed — the macro's typecheck is const): fine because this
     // whole table has no pre-payload row to migrate anywhere real.
     pub payload: String,
-    /// The recipient's CHARACTER GUID (issue #22, group slice). END-appended + `#[default(0)]`, so
-    /// this is an additive auto-migration and every pre-#22 row reads as 0.
+    /// The recipient's CHARACTER GUID (group slice). END-appended + `#[default(0)]`, so
+    /// this is an additive auto-migration and every earlier row reads as 0.
     ///
     /// `recipient_identity` cannot address a recipient on REALM-CORE: an identity is minted per
     /// (account, database) by the node, so the identity a player holds on a world shard names
@@ -351,7 +350,7 @@ pub(crate) fn push_event(
     other_guid: u64,
     payload: String,
 ) {
-    // #22: no longer an early return on a missing character row. On a world shard the row is there
+    // No longer an early return on a missing character row. On a world shard the row is there
     // and this is byte-identical to before; on REALM-CORE there are no character rows at all, and
     // returning early there would mean the directory database could never notify anybody — every
     // invite popup and roster refresh for a cross-shard party would be dropped at the source.
@@ -430,7 +429,7 @@ pub(crate) fn group_of(ctx: &ReducerContext, character_guid: u64) -> Option<Grou
 }
 
 /// The leader-authorization sequence shared by `invite_core_on` / `uninvite_from_group` /
-/// `set_loot_method_for` (issue #372): resolve `guid`'s group membership, its `Group` row, and confirm
+/// `set_loot_method_for`: resolve `guid`'s group membership, its `Group` row, and confirm
 /// `guid` actually IS that group's leader. `Err(group_err::NOT_IN_GROUP)` if `guid` has no group at
 /// all; `Err(group_err::NOT_LEADER)` if it does but isn't the leader. Both are the shared error CODE
 /// constants (not ad-hoc strings), so `gateway/src/world/social.rs`'s `party_result_for` substring-match
@@ -489,7 +488,7 @@ fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
 /// `CMSG_GROUP_INVITE` (name gateway-resolved to `target_guid`): validate, record the pending
 /// invite (replacing any older one on the target), notify the target, and fire the
 /// `on_group_invite` package hook (a bot target auto-accepts through it — but only on the plane where
-/// the bot's own rows live: see [`invite_core_on`]'s note on the hook, issue #51). Reached via
+/// the bot's own rows live: see [`invite_core_on`]'s note on the hook). Reached via
 /// `gw::gw_group_invite`.
 ///
 /// The identity-free invite core (the `accept_invite_for` pattern): shared by `gw::gw_group_invite`
@@ -513,7 +512,7 @@ fn invite_core_on(
         return Err("cannot invite yourself".to_string());
     }
     // EXISTENCE + PRESENCE are the two gates that need a database holding characters and live
-    // entities, so they are the two the directory plane cannot run (issue #22): realm-core has
+    // entities, so they are the two the directory plane cannot run: realm-core has
     // neither table populated, and a shard's copy only knows about its own players — which is the
     // whole bug this slice fixes (a target inside Deadmines "does not exist" to the open world).
     // On REALM-CORE the gateway has already resolved both ACROSS every connected shard before
@@ -567,13 +566,13 @@ fn invite_core_on(
         inviter_guid,
         String::new(),
     );
-    // The hook is PLANE-LOCAL, and issue #51 is what that costs: package tables live on the world
+    // The hook is PLANE-LOCAL, and this is what that costs: package tables live on the world
     // shards, so on a TRUE multi-database realm-core `pkg_playerbots_bot` is empty and the playerbots
     // auto-accept handler returns immediately — a player's invite to a bot was created correctly and
     // then nobody answered it (observed live 2026-07-26). Fired here regardless: a single-database
     // gateway's realm-core IS the world shard, so `pkg_playerbots_bot` is populated and the hook
     // still answers in this transaction there — including every bot-to-bot serendipity invite
-    // (issue #54), which since that fix runs through `realm_group_op`/Plane::RealmCore like every
+    // which since that fix runs through `realm_group_op`/Plane::RealmCore like every
     // other invite, never through `invite_core`/Plane::Shard directly. On a real multi-database
     // deployment the gateway answers instead, where it can see both databases
     // (`gateway/src/world/party.rs`, `answer_for_session_less`).
@@ -688,7 +687,7 @@ fn accept_invite_on(ctx: &ReducerContext, plane: Plane, acceptor_guid: u64) -> R
     Ok(())
 }
 
-/// The identity-free decline core (#22): the body `group_decline` used to inline, so the realm-core
+/// The identity-free decline core: the body `group_decline` used to inline, so the realm-core
 /// plane runs the SAME code rather than a second implementation of it.
 pub(crate) fn decline_invite_for(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), String> {
     let invites = ctx.db.game_group_invite();
@@ -708,7 +707,7 @@ pub(crate) fn decline_invite_for(ctx: &ReducerContext, decliner_guid: u64) -> Re
     Ok(())
 }
 
-/// The identity-free leave core (#22) — the body `group_leave` used to inline.
+/// The identity-free leave core — the body `group_leave` used to inline.
 pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), String> {
     if group_of(ctx, leaver_guid).is_none() {
         return Err(group_err::NOT_IN_GROUP.to_string());
@@ -717,7 +716,7 @@ pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<
     Ok(())
 }
 
-/// The identity-free kick core (#22) — the body `group_uninvite` used to inline.
+/// The identity-free kick core — the body `group_uninvite` used to inline.
 pub(crate) fn uninvite_from_group(
     ctx: &ReducerContext,
     leader_guid: u64,
@@ -736,7 +735,7 @@ pub(crate) fn uninvite_from_group(
     Ok(())
 }
 
-/// The identity-free loot-method core (#22) — the body `group_loot_method` used to inline.
+/// The identity-free loot-method core — the body `group_loot_method` used to inline.
 pub(crate) fn set_loot_method_for(
     ctx: &ReducerContext,
     leader_guid: u64,
@@ -881,10 +880,10 @@ pub(crate) fn leader_after_removal(
 }
 
 // ===========================================================================================
-//  REALM-CORE plane (issue #22, group slice)
+//  REALM-CORE plane (group slice)
 // ===========================================================================================
 
-/// Which DEPLOYMENT of this one module a group call is running on (issue #22).
+/// Which DEPLOYMENT of this one module a group call is running on.
 ///
 /// Realm-core is not a different crate — it is this same wasm published under a second database name
 /// (`realm_core.rs`'s header). Every table exists on both; what differs is which rows are ever
@@ -936,7 +935,7 @@ pub fn realm_group_op(
     }
 }
 
-/// Replace this database's MIRROR of one party with realm-core's authoritative roster (issue #22).
+/// Replace this database's MIRROR of one party with realm-core's authoritative roster.
 ///
 /// The world shards keep their `game_group` / `game_group_member` tables — the constraint is that a
 /// live deployment cannot drop a table, and the invalidation story is the better answer anyway:
@@ -945,11 +944,11 @@ pub fn realm_group_op(
 /// `instance.rs`) resolve membership through `group_of`/`members_of` against the LOCAL rows, and
 /// every one of them is a hot-path read that must not become a cross-database call. So the shard's
 /// copy becomes a gateway-maintained write-through cache of realm-core's, exactly as `game_account`
-/// and `game_session` became caches of realm-core's copies in #20.
+/// and `game_session` became caches of realm-core's copies.
 ///
 /// Invalidation: the gateway re-pushes this after every party op it runs (to every connected world
 /// shard) and at every world entry (to the shard the character just entered — which is what carries
-/// a party across a shard boundary now that the #19 blob mirror is gone). A shard that misses a push
+/// a party across a shard boundary now that the blob mirror is gone). A shard that misses a push
 /// re-syncs on the next of either. Nothing here NOTIFIES anybody: the realm-core plane owns the
 /// client-facing relay, and a mirror that pushed its own `SMSG_GROUP_LIST` would double-render the
 /// party frame on the acting player's shard.
@@ -1199,7 +1198,7 @@ mod tests {
         assert!(!valid_loot_threshold(255));
     }
 
-    // ---- The realm-core mirror (issue #22, group slice) ----
+    // ---- The realm-core mirror (group slice) ----
 
     #[test]
     fn the_mirror_diff_deletes_departed_rows_and_inserts_arriving_members() {
@@ -1221,14 +1220,14 @@ mod tests {
         assert_eq!(mirror_plan(&[], &[100, 200]), (vec![], vec![100, 200]));
     }
 
-    // event_recipient_identity's pinned test moved to helpers.rs with the function itself (issue #371).
+    // event_recipient_identity's pinned test moved to helpers.rs with the function itself.
 
     // A reducer body needs a live `ReducerContext`, so the authorization and dispatch decisions
     // below use narrow Architecture Tests.
 
     /// The `//`-stripped body of `signature`'s function — assert on CODE, never on the prose beside
     /// it. Shared with every other file's copy of this scan as [`crate::test_scan::code_of`]
-    /// (issue #64 — this used to be six near-identical, drifted-apart copies).
+    /// (this used to be six near-identical, drifted-apart copies).
     use crate::test_scan::code_of;
 
     /// **The operator gate is the entire authorization of Gateway-driven party work.**
@@ -1244,7 +1243,7 @@ mod tests {
             "pub fn sync_group_mirror(",
         ] {
             let body = code_of(include_str!("group.rs"), f);
-            // The FIRST STATEMENT, not merely present (review of PR #56). A bare `contains` was
+            // The FIRST STATEMENT, not merely present (review). A bare `contains` was
             // satisfied by a gate that never runs: wrapping the line in `if false { … }` — the
             // tripwire defeat this batch has already documented twice — left all 521 module tests
             // green with `realm_group_op` completely ungated, and so would `let _ = …` or an early

@@ -1,6 +1,6 @@
-//! Exploration / discovery XP (work-item 200; the "Discovered: <area>" toast + map fog landed in
-//! #41). Entering a subzone for the FIRST time awards discovery XP and sends TWO packets — this is
-//! retail parity, not a duplicate (issue #89; see `check_area_exploration`'s doc comment for the
+//! Exploration / discovery XP (work-item 200; the "Discovered: <area>" toast + map fog have
+//! landed). Entering a subzone for the FIRST time awards discovery XP and sends TWO packets — this is
+//! retail parity, not a duplicate (see `check_area_exploration`'s doc comment for the
 //! cited source): `SMSG_EXPLORATION_EXPERIENCE` (the toast + fog-clear, off the
 //! `game_character_explored` insert) and `SMSG_LOG_XPGAIN` (the "+N experience" text, off a non-kill
 //! `game_xp_event` insert — the same relay kill/quest XP use). Hooked into `movement_update`
@@ -54,7 +54,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_explored(ctx, cha
         ex.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19): the fog-of-war map is durable progression — losing it at a
+// CROSS-DATABASE transport: the fog-of-war map is durable progression — losing it at a
 // shard boundary would re-fog zones and re-pay discovery XP. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_character_explored(ctx, character_guid, io) {
     table = game_character_explored,
@@ -69,7 +69,7 @@ crate::character_owned!(transfer, fn sweep_transfer_game_character_explored(ctx,
 /// isn't discoverable (`area_bit < 0` or `exploration_level == 0`), the discovery XP rounds to 0
 /// (grey / capped), or the area was already explored. [entity]
 ///
-/// Issue #89: a paying discovery inserts BOTH `game_character_explored` (→ the gateway's
+/// A paying discovery inserts BOTH `game_character_explored` (→ the gateway's
 /// `SMSG_EXPLORATION_EXPERIENCE` "Discovered: <area>" toast, carrying `experience`) AND
 /// `game_xp_event` (→ `SMSG_LOG_XPGAIN`, the "+N experience" text) — two packets for one grant, not a
 /// double-count. This is retail parity, not an artifact of this codebase: confirmed against vmangos
@@ -121,7 +121,7 @@ pub(crate) fn check_area_exploration(
         crate::xp::grant_xp(ctx, mover, xp); // folds the GM .xprate, spends level thresholds
                                              // "+N experience" feedback via the existing SMSG_LOG_XPGAIN relay (non-kill form) — a SECOND,
                                              // deliberately overlapping packet, not a duplicate: retail sends both a discovery toast AND
-                                             // SMSG_LOG_XPGAIN for one discovery (issue #89 — see this fn's doc comment for the vmangos
+                                             // SMSG_LOG_XPGAIN for one discovery (see this fn's doc comment for the vmangos
                                              // citation). The map fog-clear and the "Discovered: <area>" toast both ride the
                                              // game_character_explored insert above (the gateway's on_insert sets the PLAYER_EXPLORED_ZONES
                                              // bit and reads `experience` for the toast).

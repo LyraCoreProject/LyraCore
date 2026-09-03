@@ -57,7 +57,7 @@ pub struct PetCommand {
 crate::character_owned!(delete, fn sweep_delete_game_pet_command(ctx, character_guid) {
     ctx.db.game_pet_command().owner_guid().delete(character_guid);
 });
-// CROSS-DATABASE transport (issue #19): the row is EPHEMERAL bar state for a live pet ENTITY, and
+// CROSS-DATABASE transport: the row is EPHEMERAL bar state for a live pet ENTITY, and
 // the pet entity does not cross the boundary (it is a `game_world_entity`, not character-owned) —
 // it despawns with the owner and is re-summoned on the far side, which re-derives the default
 // Follow+Defensive the absent row already means. Not transported, by decision.

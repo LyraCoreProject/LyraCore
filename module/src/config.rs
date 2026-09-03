@@ -59,16 +59,16 @@ pub struct ServerConfig {
     // or `UPDATE game_config SET nav_enabled = false WHERE id = 0`.
     #[default(true)]
     pub nav_enabled: bool,
-    // END-APPENDED (issue #39): does THIS database host dungeon-instance POPULATIONS? Default `true`
+    // END-APPENDED: does THIS database host dungeon-instance POPULATIONS? Default `true`
     // = every single-database realm behaves exactly as it always has (the portal spawns the dungeon
     // where the player is standing). Set `false` on the OPEN-WORLD shard of a multi-database
-    // deployment (spec #12 Phase A): `create_instance_with_id` then files the `game_instance` row +
+    // deployment (spec Phase A): `create_instance_with_id` then files the `game_instance` row +
     // binding as a LEASE and spawns nothing, so the world writer never pays for a dungeon whose run
     // happens on another database — the instances shard, where this stays `true`, spawns the
     // population when the gateway mirrors the id there via `ensure_instance`.
     //
-    // Deliberately a WORLD POLICY, not a shard id: the module still knows nothing about shards (spec
-    // #12), it only knows whether it hosts instance populations — the `nav_enabled` precedent.
+    // Deliberately a WORLD POLICY, not a shard id: the module still knows nothing about shards;
+    // it only knows whether it hosts instance populations — the `nav_enabled` precedent.
     // Operator-set, like `nav_enabled`: `UPDATE game_config SET hosts_instances = false WHERE id = 0`.
     // Deliberate simplification: one SQL line in the Phase A runbook rather than a gateway→module
     // policy push. Ceiling: an operator who forgets it gets today's behavior (the dungeon spawns
@@ -84,15 +84,15 @@ pub struct ServerConfig {
     // Operator-set like `nav_enabled`: `UPDATE game_config SET bots_idle = true WHERE id = 0`.
     #[default(false)]
     pub bots_idle: bool,
-    // END-APPENDED (issue #521, decision #10): exact per-cell vmap collision-triangle consumption
-    // gate — the LoS/collision ray queries in `vmap::los_ray`/`vmap::collision_ray`, and (#523)
+    // END-APPENDED (decision): exact per-cell vmap collision-triangle consumption
+    // gate — the LoS/collision ray queries in `vmap::los_ray`/`vmap::collision_ray`, and
     // `nav::has_los`'s consumers (aggro/assist/creature-casts/engage/swing-gate/caster hold-range)
     // plus Blink's collision clamp. Default OFF: the standard import pipeline
     // (`importer/scripts/import-world.sh`) has no vmap step, so a normally-provisioned world has
     // ZERO `game_vmap_chunk` rows for every map — and the missing-chunk contract (no row = "no
     // obstruction known here") then reads as "every ray is clear" MAP-WIDE, not just per-cell.
     // That's fine for a partially-covered map (the intended degrade) but wrong as a global
-    // default while vmap import is a manual, unwired path (#520/#521). Flip per-map only after
+    // default while vmap import is a manual, unwired path. Flip per-map only after
     // `importer --vmap` has actually populated `game_vmap_chunk` for it. Toggle:
     // `debug_set_vmap_enabled` or `UPDATE game_config SET vmap_enabled = true WHERE id = 0`.
     #[default(false)]

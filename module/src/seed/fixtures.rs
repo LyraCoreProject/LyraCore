@@ -23,10 +23,10 @@ use crate::{
 /// Canonical fixture-NPC/item constructors — the single source of truth for the synthetic rows
 /// that BOTH `seed::init` (fresh publish) and the post-import fixture-restore path
 /// (`seed_scenario_fixtures`, invoked by `debug_seed_scenario_fixtures` after a world-ETL
-/// re-import truncates `game_creature_template`/`game_item_template`) insert. Before this (#363)
+/// re-import truncates `game_creature_template`/`game_item_template`) insert. Before this
 /// the restore path re-authored these as hand-copied literals that drifted from `init`'s own
 /// (Profession Trainer: level 30/1500hp/"Cooking & Skinning" vs level 10/100hp/"Fixture"; Test
-/// Wolf: money_min/max 0/0 vs 25/50) — the exact cross-shard divergence class #85 was filed to
+/// Wolf: money_min/max 0/0 vs 25/50) — the exact cross-shard divergence class was filed to
 /// kill, reintroduced by copy-paste. Both callers now build from these fns so there is nothing
 /// left to hand-copy out of sync. `init`'s values are treated as authoritative (they carry the
 /// original design rationale, preserved below).
@@ -389,7 +389,7 @@ pub(crate) fn tempered_blade_template(entry: u32) -> ItemTemplate {
 
 /// "Tough Jerky" — hand-authored reference food (licensing firewall: never bulk-imported;
 /// display 1542 ships in 5875, placeholder icon). `entry` parameterized the same way as
-/// `tempered_blade_template`. spellid_1 (#387) points at "Eating" (50115) — the same food HoT the
+/// `tempered_blade_template`. spellid_1 points at "Eating" (50115) — the same food HoT the
 /// real Tough Jerky (117) / Tough Hunk of Bread (4540) items use — so this NO-IMPORT fixture stays
 /// usable now that `apply_item_use` reads spellid_1 as the single on-use authority.
 pub(crate) fn tough_jerky_template(entry: u32) -> ItemTemplate {
@@ -436,7 +436,7 @@ pub(crate) fn riding_reins_template(entry: u32) -> ItemTemplate {
     }
 }
 
-/// Base-row constructors (#377) — every meaningful field of a fixture `Spell`/`SpellEffect`/
+/// Base-row constructors — every meaningful field of a fixture `Spell`/`SpellEffect`/
 /// `ItemTemplate` is a struct-update override at the call site; every OTHER field (the ~80% that
 /// are 0/false/empty on a synthetic fixture row) comes from one of these three fns. Mirrors the
 /// `seed.rs` `spell`/`effect` closures' own implicit defaults exactly (so a fixture built this way
@@ -759,8 +759,8 @@ pub(crate) fn seed_mana_burn_fixture(ctx: &ReducerContext) {
 /// (never timer-reaped; see `spell::taxonomy::A_STEALTH` / `scheduler.rs`'s reap-skip). IDEMPOTENT
 /// (inserts only if absent).
 ///
-/// Issue #85 audit: until this call was wired into `init` below, this fixture was reachable ONLY via
-/// `debug_seed_stealth_fixture` — the exact bug class #85 fixed for the item/faction fixtures, just
+/// Audit: until this call was wired into `init` below, this fixture was reachable ONLY via
+/// `debug_seed_stealth_fixture` — the exact bug class fixed for the item/faction fixtures, just
 /// for `game_spell`/`game_spell_effect` (the `spells` catalogue-fingerprint family) instead. It was
 /// masked live only because 1784 is a REAL vanilla id the Spell.dbc importer already seeds on every
 /// shard that has imported, so the insert-if-absent guards below silently no-op post-import — but a
@@ -1116,12 +1116,12 @@ pub(crate) fn seed_regen_fixture(ctx: &ReducerContext) {
 /// a production build.
 pub(crate) const FIXTURE_BLADE: u32 = 5090050;
 pub(crate) const FIXTURE_JERKY: u32 = 5090052;
-/// The reserved reusable MOUNT item (issue #22) — same reserved-entry rationale as the two above.
+/// The reserved reusable MOUNT item — same reserved-entry rationale as the two above.
 pub(crate) const FIXTURE_REINS: u32 = 5090054;
 
 /// Insert the two reserved fixture item templates (insert-if-absent) — built from the same
 /// `tempered_blade_template`/`tough_jerky_template` constructors the mock-seed's Tempered Blade
-/// (50) / Tough Jerky (52) use, under the reserved entries above (#363: this used to be a
+/// (50) / Tough Jerky (52) use, under the reserved entries above (this used to be a
 /// hand-copied literal that could drift from the mock-seed's).
 fn seed_fixture_items(ctx: &ReducerContext) {
     let items = ctx.db.game_item_template();
@@ -1136,7 +1136,7 @@ fn seed_fixture_items(ctx: &ReducerContext) {
     }
 }
 
-// --- LAND-MOUNT FIXTURE (issue #22) -------------------------------------------------------------
+// --- LAND-MOUNT FIXTURE -------------------------------------------------------------
 // Reserved ids so a headless sandbox can ride, dismount and fail every mount gate with no Spell.dbc.
 // A real imported world reaches the same behaviour through taxonomy + skill data alone; nothing here
 // is referenced by runtime code.
@@ -1288,9 +1288,9 @@ pub(crate) const FIXTURE_FACTION: u32 = 50900;
 
 /// Seed the reserved-id CATALOGUE rows the scenario fixtures reference: the two fixture items
 /// (`FIXTURE_BLADE`/`FIXTURE_JERKY`) and the fixture faction above. Split out from
-/// `seed_scenario_fixtures` (issue #85) and called from `init` too — same precedent as
+/// `seed_scenario_fixtures` and called from `init` too — same precedent as
 /// `seed_pw_shield_fixture` — because these rows land in tables the cross-shard catalogue parity
-/// check (#82) fingerprints whole (`game_item_template`, `game_faction`): before this, only a shard
+/// check fingerprints whole (`game_item_template`, `game_faction`): before this, only a shard
 /// that had `debug_seed_scenario_fixtures` run against it (historically the wire-suite's target,
 /// lyracore) carried them, so its `items`/`dbc_reference` fingerprints permanently disagreed
 /// with siblings that never ran the harness reducer — a false catalogue-skew signal, not a real one.
@@ -1432,7 +1432,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
     // dump — the INIT-seeded fixture templates (Test Wolf 51000, Profession Trainer 51001) vanish
     // on every re-import, breaking the wire scenarios until someone reseeds by hand. Re-seed them
     // HERE (this reducer is the operator's idempotent post-import fixture restore) from the SAME
-    // canonical constructors `seed::init` uses (#363: this used to be a hand-copied literal that
+    // canonical constructors `seed::init` uses (this used to be a hand-copied literal that
     // drifted — Profession Trainer was level 10/100hp/"Fixture" here vs level 30/1500hp/"Cooking &
     // Skinning" in init, and Test Wolf's money_min/max disagreed too).
     let templates = ctx.db.game_creature_template();
@@ -1684,7 +1684,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
         });
     }
 
-    // --- RIDING TRAINER (issue #22): the `trainer_type::MOUNTS` NPC that teaches the Riding skill line
+    // --- RIDING TRAINER: the `trainer_type::MOUNTS` NPC that teaches the Riding skill line
     // at its two vanilla tiers. Same offering shape as the weapon master, but `learn_skill_line` names
     // Riding, so `apply_trainer_buy` takes the riding fork (grant whole at the offering's tier) and
     // refuses the row on any trainer that is not a MOUNTS trainer.
@@ -1740,7 +1740,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
 /// re-imported kit + a fixture re-seed collided live 2026-07-15. Delete-then-insert keeps the
 /// fixture authoritative for its own rows without tripping the constraint.
 ///
-/// THE DISCIPLINE (#377): delete-then-insert is idempotent BY CONSTRUCTION — calling it twice with
+/// THE DISCIPLINE: delete-then-insert is idempotent BY CONSTRUCTION — calling it twice with
 /// the same row is a no-op, and calling it with a changed shape self-corrects the row in place. So
 /// every call site below calls this UNCONDITIONALLY, with no `if find(id).is_none() { ... }` guard
 /// around it. A guard doesn't just add noise: it makes the delete dead code (the branch that would

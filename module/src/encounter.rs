@@ -876,8 +876,8 @@ pub fn encounter_reset_full(
 /// row that would otherwise respawn into instance 0 — see [`EncounterSpawn`]), any equip row, and the
 /// tracking row itself.
 ///
-/// Issue #359: this used to carry a private copy of the checklist, and that copy deleted every
-/// `game_corpse_loot` row on the guid with NO `!withheld` filter — the #50 invariant, which the other
+/// This used to carry a private copy of the checklist, and that copy deleted every
+/// `game_corpse_loot` row on the guid with NO `!withheld` filter — the invariant, which the other
 /// two teardown paths honour. Wave adds are ordinary group-killable creatures and `encounter_reset` is
 /// the wipe handler, so a mid-roll wipe hit exactly this delete and silently ate the winner's item.
 fn despawn_tracked(ctx: &ReducerContext, tracked: &[EncounterSpawn]) {

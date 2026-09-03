@@ -9,7 +9,7 @@
 //!     active-cell sweep and rows-visited evidence logs, the shared candidate gate
 //!     `movable_creature`, the rout predicates, and the one spline writer
 //!     (`emit_move_spline`/`emit_creature_leg`) every movement decision funnels through.
-//!   - [`lifecycle`] — the canonical despawn checklist (issue #359) + decay/respawn/GO-respawn, the
+//!   - [`lifecycle`] — the canonical despawn checklist + decay/respawn/GO-respawn, the
 //!     due-time passes that run regardless of proximity.
 
 use lyracore_shared::spatial;
@@ -81,7 +81,7 @@ pub struct CreatureMoveEvent {
     accessor = game_creature_spline,
     public,
     index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y])),
-    // #456: the AOI cell index — exactly 3 columns, all matched by equality terms, which is the
+    // The AOI cell index — exactly 3 columns, all matched by equality terms, which is the
     // only shape SpacetimeDB 2.7.1's subscription planner can serve (see the `cell` column).
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
@@ -117,7 +117,7 @@ pub struct CreatureSpline {
     pub spline_id: u32,
     #[default(false)]
     pub run: bool,
-    /// #456: `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
+    /// `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
     ///
     /// SpacetimeDB 2.7.1's subscription planner can only serve a query from an index when EVERY
     /// column of that index is matched by an equality term, and it skips any index with more than 3
@@ -139,7 +139,7 @@ pub struct CreatureSpline {
     /// `backfill_cell_ids` covers it for completeness.
     #[default(0i64)]
     pub cell: i64,
-    /// #518: this leg is a FACING-ONLY packet (the mover does NOT move — `sx/sy/sz` == `dx/dy/dz`,
+    /// This leg is a FACING-ONLY packet (the mover does NOT move — `sx/sy/sz` == `dx/dy/dz`,
     /// `dur_ms` is 0) and `facing_angle` is the new heading the client should snap to
     /// (`SMSG_MONSTER_MOVE`'s `FacingAngle` variant). A stationary stand-and-swing creature never
     /// throws a normal leg (nothing to interpolate), so without this the client never learns its
@@ -577,7 +577,7 @@ pub(crate) fn emit_move_spline(
     }
 }
 
-/// #518: write a FACING-ONLY spline row — `guid` doesn't move (start == dest, `dur_ms` 0) but its
+/// Write a FACING-ONLY spline row — `guid` doesn't move (start == dest, `dur_ms` 0) but its
 /// heading changes to `angle_rad`. Routes through the SAME `game_creature_spline` relay carrier as
 /// every other creature leg (one AOI-scoped table, one gateway subscription) rather than a new one;
 /// the gateway distinguishes it by the `facing` flag and emits `SMSG_MONSTER_MOVE`'s `FacingAngle`
@@ -766,7 +766,7 @@ mod relay_tripwire {
     /// scan: no module or package source may INSERT into that table. (Reads/reaps are fine — the
     /// table still exists and `gc.rs` sweeps whatever is left.)
     ///
-    /// #357: this used to be a HAND-PICKED file list (`tick.rs` + `encounter.rs` + `spell/cast.rs` +
+    /// This used to be a HAND-PICKED file list (`tick.rs` + `encounter.rs` + `spell/cast.rs` +
     /// playerbots), and the list omitted `creatures/pet.rs` — the Follow leg it writes leaked
     /// undelivered rows into this table every sense tick, unbounded, on a live shard, and the scan
     /// never saw it. Scan the WHOLE compiled tree instead — `character_owned_tripwire::scanned_files`
@@ -778,7 +778,7 @@ mod relay_tripwire {
     /// at RUN time instead so it is never spelled out contiguously in source anywhere, which is
     /// self-exclusion that can't rot.
     ///
-    /// Issue #383: this test used to live in `tick.rs`'s `due_timer_tripwire` mod alongside the
+    /// This test used to live in `tick.rs`'s `due_timer_tripwire` mod alongside the
     /// decay/respawn and aggro tripwires below. Split with the file it pins: `emit_move_spline`
     /// (the ONE writer this test protects) stays in `tick/mod.rs`, so the test stays here too — the
     /// other two moved to `lifecycle.rs`/`sense.rs` with the passes they actually test.

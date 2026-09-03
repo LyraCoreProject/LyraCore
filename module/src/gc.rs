@@ -64,7 +64,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
             }
         }};
     }
-    // `game_movement_event` is GONE (dropped — #350): peer movement rides the per-mover
+    // `game_movement_event` is GONE (dropped): peer movement rides the per-mover
     // `game_entity_motion` row, which is updated in place and needs no reaping at all (perf catalog
     // 2.1). This reap was the second half of the O(C²) cost: at 200 co-located players it deleted
     // 67,753 rows/s to match the 70,568 the writer had just inserted.
@@ -86,18 +86,18 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     reap!(game_addon_message); // addon-bridge UI messages (184, RLS-scoped)
     reap!(game_roll_event); // /roll broadcast results
     reap!(game_group_event); // group invite/roster notifications (RLS-scoped)
-    reap!(game_trade_event); // trade-status relay rows (#120, RLS-scoped)
+    reap!(game_trade_event); // trade-status relay rows (RLS-scoped)
     reap!(game_duel_event); // Duel lifecycle relay rows (RLS-scoped)
-    reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup (issue #54)
+    reap!(game_bot_invite_intent); // bot-decided invites awaiting gateway pickup
     reap!(game_bot_transfer_intent); // bot-decided Shard crossings awaiting gateway pickup
-    reap!(game_movement_violation); // recent anti-cheat diagnostics (issue #211)
-                                    // Rest-area zzz/blue-bar relay rows (196). Caught missing by the #379 gc_reap_tripwire: this
+    reap!(game_movement_violation); // recent anti-cheat diagnostics
+                                    // Rest-area zzz/blue-bar relay rows (196). Caught missing by the gc_reap_tripwire: this
                                     // table carries the same `id: u64` + `created_at: Timestamp` TTL shape as every table above but
                                     // had no reap line — every inn threshold crossing for the lifetime of a character left one more
                                     // row behind. The durable rest state (`Character.resting`/`rested_xp`) lives elsewhere; this row
                                     // is only the one-shot PLAYER_BYTES_2 relay.
     reap!(game_rest_state_event);
-    reap!(game_breath_relay_event); // breath timer edges + drowning damage relay (#141)
+    reap!(game_breath_relay_event); // breath timer edges + drowning damage relay
 
     // Never-answered pending invites. Same id+created_at shape as the event tables, but on
     // the longer INVITE_TTL (a human is looking at the invite dialog). After that the row is dead
@@ -116,7 +116,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
         }
     }
 
-    // Idle Trade Sessions (#123): `created_at` is bumped by every trade action, so the pure
+    // Idle Trade Sessions: `created_at` is bumped by every trade action, so the pure
     // policy (`trade::session_is_stale`) measures idleness — a live negotiation is never reaped.
     // Torn down THROUGH `cancel_trade_for`, never a bare delete, so both clients hear
     // `TradeCanceled` instead of keeping stale windows open.

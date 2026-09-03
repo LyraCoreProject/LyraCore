@@ -185,7 +185,7 @@ pub(crate) struct LevelStatsDelta {
 /// This was three hand-mirrored copies (`build_player_entity` at login, `grant_xp`'s ding loop, and
 /// `set_character_level`) held in sync only by a comment ("mirrors build_player_entity"). The third
 /// one drifted and dropped the armor line, so a level-SET character kept stale armor until its next
-/// relog (#362). One function now, called from all three sites — the drift class is gone structurally,
+/// relog. One function now, called from all three sites — the drift class is gone structurally,
 /// not just patched at the one site that happened to be caught.
 pub(crate) fn apply_level_stats(
     ctx: &ReducerContext,
@@ -259,7 +259,7 @@ pub(crate) fn set_character_level(
         e.health = e.max_health;
         e.power = e.max_power; // refill power to the new max
         entities.guid().update(e);
-        // Sheet AP/damage-range are level-derived (#517) and only ever move via `recompute_sheet` —
+        // Sheet AP/damage-range are level-derived and only ever move via `recompute_sheet` —
         // without this a GM `.level` set leaves the paperdoll's AP/damage numbers frozen at the
         // pre-set level until an unrelated trigger (aura/gear/relog) fires.
         crate::spell::recompute_sheet(ctx, character_guid);
@@ -319,14 +319,14 @@ mod tests {
         assert!(crate::xp::xp_to_next_level(10) > crate::xp::xp_to_next_level(1));
     }
 
-    /// #362: the level-derived stat block (attributes, armor, max health/power) used to be
+    /// The level-derived stat block (attributes, armor, max health/power) used to be
     /// hand-mirrored at three call sites — `build_player_entity` (login), `grant_xp`'s ding loop, and
     /// `set_character_level` — kept in sync only by a comment ("mirrors build_player_entity"). The
     /// third one drifted and dropped the armor recompute, so a level-SET character kept stale armor
     /// until its next relog. The fix extracts ONE `apply_level_stats` writer; this pins that (a) the
     /// writer still recomputes armor, and (b) all three sites still route through it rather than
     /// re-inlining the curve lookups — a fresh hand-rolled copy at any of them reintroduces the exact
-    /// drift class #362 was filed for.
+    /// drift class was filed for.
     #[test]
     fn the_level_recompute_writer_and_all_three_call_sites_stay_wired_together() {
         let writer_body =

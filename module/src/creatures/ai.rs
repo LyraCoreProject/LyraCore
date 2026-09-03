@@ -608,7 +608,7 @@ impl TickScope {
     /// item forbids. They cover ALL instances (including dedicated-row ones) from the catch-all row,
     /// at the unchanged global cadence — so a dedicated row is a movement/AI smoothing knob only, and
     /// deleting it can never strand an instance's timers. COROLLARY: the catch-all row is
-    /// load-bearing — never delete it (`debug_repair_after_publish`, #378, restores it).
+    /// load-bearing — never delete it (`debug_repair_after_publish` restores it).
     pub(crate) fn runs_global_passes(&self) -> bool {
         matches!(self, TickScope::CatchAll { .. })
     }

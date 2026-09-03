@@ -1,5 +1,5 @@
 //! The `init` lifecycle reducer — the single entrypoint that populates a fresh database. `init`
-//! itself is a four-line dispatcher (#377) over four banner-stratum fns, each a straight
+//! itself is a four-line dispatcher over four banner-stratum fns, each a straight
 //! extraction of what used to be one ~1,600-line function (a reader still sees the whole seed by
 //! reading top to bottom — the split is fn boundaries, not a reorder):
 //!
@@ -7,7 +7,7 @@
 //!    fallback graveyard/graveyard-zone rows (work-item 209), the TEST account + pre-seeded
 //!    character (with its starter spellbook/action-bar kit), and the EventAI on-aggro barks. Every
 //!    fresh database needs this regardless of whether it will ever host a real import.
-//! 2. **`seed_map0_demo_content`** (the in-body `DECISION (issue #79)` comment has the full
+//! 2. **`seed_map0_demo_content`** (the in-body `DECISION` comment has the full
 //!    reasoning): NPCs, a starter weapon, profession items, a skinning beast, a profession trainer,
 //!    gameobjects, gather nodes, a tier-variety demonstrator, and the temporary Elwynn Forest /
 //!    Westfall weather climate, each under its own `// ---` banner.
@@ -50,7 +50,7 @@ use crate::{game_alpha_test_tools_enrollment, AlphaTestToolsEnrollment};
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
-    // Four banner strata (#377 split these out of what used to be one ~1,600-line fn — see this
+    // Four banner strata (split these out of what used to be one ~1,600-line fn — see this
     // file's header for what each one seeds and why the split points fall where they do). Order
     // matters: later strata reference nothing from earlier ones (each re-derives its own `hw`
     // alias), but the production core must exist before anything reads `game_config`/`game_realm`,
@@ -82,14 +82,14 @@ fn seed_production_core(ctx: &ReducerContext) {
     // Server tunables: the xp_rate singleton starts Blizzlike (1.0×). Admins tune it via SQL
     // (`UPDATE game_config SET xp_rate = N WHERE id = 0`) or the `debug_set_xp_rate` reducer.
     // `hosts_instances` starts TRUE — a fresh single-database realm spawns dungeon populations
-    // itself, exactly as before #39. A multi-database deployment turns it off on the world shard.
+    // itself, exactly as before. A multi-database deployment turns it off on the world shard.
     ctx.db.game_config().insert(ServerConfig {
         id: 0,
         xp_rate: 1.0,
         nav_enabled: true,
         hosts_instances: true,
         bots_idle: false, // bots think by default; the load-test lever freezes them
-        vmap_enabled: false, // #521/#523: off until an operator imports vmap data + flips it
+        vmap_enabled: false, // Off until an operator imports vmap data + flips it
         nav_coverage_enabled: false, // off until an operator prepares coverage + flips it
     });
 
@@ -236,7 +236,7 @@ fn seed_production_core(ctx: &ReducerContext) {
     crate::creatures::seed_on_aggro_fixtures(ctx);
 }
 
-/// Stratum 2 — Map-0 (Northshire) demo/fixture content (the `DECISION (issue #79)` comment below
+/// Stratum 2 — Map-0 (Northshire) demo/fixture content (the `DECISION` comment below
 /// has the full reasoning): NPCs, a starter weapon, profession items, a skinning beast, a
 /// profession trainer, gameobjects, gather nodes, a tier-variety demonstrator, and the temporary
 /// Elwynn Forest / Westfall weather climate. Every row here is wholesale-replaced the moment a real
@@ -248,7 +248,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
 
     seed_taxi_fixture(ctx);
 
-    // DECISION (issue #79): everything from here down through the gather-pool block seeds MAP-0
+    // DECISION: everything from here down through the gather-pool block seeds MAP-0
     // (Northshire) spatial content — 4 creature spawns (Chicken 620, Test Wolf 51000, Profession
     // Trainer 51001, Test Flight Master 51006) and up to 5 live `game_gameobject` rows (the
     // chest/goober/2 standalone gather nodes + the tier-pool's one armed point) — into EVERY freshly
@@ -381,7 +381,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     // is demonstrable: its 8–12 / 2.6s profile is clearly above the Worn Shortsword's 1–3, so equipping
     // it visibly raises the swing readout. Hand-authored reference data (licensing firewall: never
     // bulk-imported), display 1542 ships in 5875. inventory_type 21 = main-hand, quality 2 = Uncommon.
-    // Canonical constructor shared with the fixture-restore path (`tempered_blade_template`, #363) —
+    // Canonical constructor shared with the fixture-restore path (`tempered_blade_template`) —
     // the reserved-id copy under FIXTURE_BLADE stays in sync with this one by construction now.
     ctx.db
         .game_item_template()
@@ -405,7 +405,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         bonding: crate::items::bonding::NONE, // plain common gear — unbound/tradeable
         ..base_item(51, "Recruit's Tunic")
     });
-    // Canonical constructor shared with the fixture-restore path (`tough_jerky_template`, #363).
+    // Canonical constructor shared with the fixture-restore path (`tough_jerky_template`).
     ctx.db.game_item_template().insert(tough_jerky_template(52));
 
     // --- PROFESSION ITEMS: every profession reagent/product/yield points at a REAL vanilla
@@ -437,7 +437,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     // are Timestamps) — the parent re-imports OR `debug_spawn_at_feet(guid, 51000)` materializes a live
     // wolf. type_flags 0x100 = SKINNABLE (the skin gate keys on creature_type==1 alone; the flag is
     // carried for data parity).
-    // Canonical constructor shared with the fixture-restore path (`test_wolf_template`, #363) —
+    // Canonical constructor shared with the fixture-restore path (`test_wolf_template`) —
     // the post-import restore reducer builds the same row from the same fn, so a shard restored
     // after an ETL wipe can never drift from a freshly-published one again.
     let wolf_tmpl = ctx.db.game_creature_template().insert(test_wolf_template());
@@ -472,8 +472,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     // 50085→171 Alchemy, 50086→129 First Aid, 50087→197 Tailoring, 50088→164 Blacksmithing —
     // Smelting rides Mining, NO offering) are NOT seeded here — `game_trainer_spell` is populated for
     // this entry by the world-import ETL instead.
-    // Canonical constructor shared with the fixture-restore path (`profession_trainer_template`,
-    // #363) — same drift-proofing as the Test Wolf above.
+    // Canonical constructor shared with the fixture-restore path (`profession_trainer_template`)
+    // — same drift-proofing as the Test Wolf above.
     let trainer_tmpl = ctx
         .db
         .game_creature_template()
@@ -501,7 +501,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     // The Hearthstone (entry 6948) — every character starts with one (granted in `grant_starter_item`);
     // using it recalls to the bound home (`Character::home_*`). Real vanilla values: class 15 (Misc),
     // display 6418 (the hearthstone icon, ships in 5875), unsellable, non-stacking, no stats.
-    // spellid_1/spelltrigger_1 (#387) name its on-use spell — "Call Stone" (50119, seeded in
+    // spellid_1/spelltrigger_1 name its on-use spell — "Call Stone" (50119, seeded in
     // `seed_spell_registry` below), trigger 0 (on-use). `apply_item_use` now reads spellid_1 as the
     // single on-use authority for EVERY item, so this is what makes the Hearthstone usable at all;
     // the old hardcoded entry-id special case in items::ops is retired.
@@ -616,7 +616,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
-        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw (#515)
+        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw
     });
     ctx.db
         .game_gameobject_template()
@@ -651,7 +651,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
-        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw (#515)
+        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw
     });
 
     // --- GATHER nodes: a Copper Vein (MINING) + a Peacebloom (HERBALISM) by the player spawn so the
@@ -692,7 +692,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
-        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw (#515)
+        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw
     });
     ctx.db
         .game_gameobject_template()
@@ -727,7 +727,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
-        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw (#515)
+        rotation_3: 0.0, // seed fixtures orient via `orientation` only; codec derives yaw
     });
 
     // --- TIER-VARIETY DEMONSTRATOR (gather multinodes): an IN-PLACE Copper point that ~15% of the time
@@ -1011,7 +1011,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     // auto-migrate publish, so an already-migrated dev DB re-seeds via the debug reducer (same
     // precedent as `talent::seed_talents`/`debug_seed_talents`).
     seed_pw_shield_fixture(ctx); // Weakened Soul (6788) + Test PW:Shield (50072) — linked-debuff mechanic
-                                 // issue #85: the scenario-fixture items (Tempered Blade/Tough Jerky) + fixture faction 50900 land
+                                 // The scenario-fixture items (Tempered Blade/Tough Jerky) + fixture faction 50900 land
                                  // in fingerprinted catalogue tables (game_item_template/game_faction) — seed them here too, not
                                  // only from debug_seed_scenario_fixtures, so every fresh shard agrees regardless of whether the
                                  // wire-suite harness ever ran against it (see seed::fixtures::seed_fixture_catalogue's doc).
@@ -1025,8 +1025,8 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     seed_mana_burn_fixture(ctx); // Mana Burn (8129) — E_POWER_BURN drain-mana-into-damage
     seed_demon_skin_fixture(ctx); // Demon Skin (696 rank 2) — combat-independent health-per-5 tick
     seed_regen_fixture(ctx); // Test Regeneration (50137) — the combat-regen probe's kind-169 source
-                             // issue #85 audit: this one was previously reachable ONLY via `debug_seed_stealth_fixture` (never
-                             // from init), the same divergence-hazard shape #85 fixed for items/faction — see
+                             // Audit: this one was previously reachable ONLY via `debug_seed_stealth_fixture` (never
+                             // from init), the same divergence-hazard shape fixed for items/faction — see
                              // `seed::fixtures::seed_stealth_fixture`'s doc.
     seed_stealth_fixture(ctx); // Stealth (1784) — A_STEALTH presence marker
     seed_mount_fixture(ctx); // Test Riding Horse (50310) + Test Dazed (50311) + the Riding skill data
@@ -1208,9 +1208,9 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         ..base_effect(50118, 1)
     }); // id 200473
 
-    // (6) Call Stone 50119 (#387) — the Hearthstone's on-use spell: ONE E_RECALL_HOME (0x1F) instant
+    // (6) Call Stone 50119 — the Hearthstone's on-use spell: ONE E_RECALL_HOME (0x1F) instant
     // effect, T_SELF, that teleports the caster to its bound home via `world::recall_to_home`. No
-    // cost/cooldown/cast-time (matches the pre-#387 hardcoded path's IMMEDIATE-teleport behavior — the
+    // cost/cooldown/cast-time (matches the earlier hardcoded path's IMMEDIATE-teleport behavior — the
     // vanilla ~10s cast + 1hr CD is a later follow-up, same as Blink's forward-teleport). Wired onto the
     // Hearthstone template's spellid_1 below (bonding BIND_ON_PICKUP) — `apply_item_use` reads it as
     // ANY other on-use spell now, with one data-driven exception: `spell_keeps_item` (keyed on THIS
@@ -1409,7 +1409,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
         });
 
-    // Movement republish tick every 50ms = 20 Hz (#461): drains the PRIVATE
+    // Movement republish tick every 50ms = 20 Hz: drains the PRIVATE
     // `game_entity_motion_pending` staging table into the public `game_entity_motion` relay in ONE
     // transaction, so SpacetimeDB's per-transaction subscription sweep runs 20×/s instead of once
     // per movement packet. LOAD-BEARING — without this row peer movement stages and never relays.
@@ -1425,7 +1425,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             )),
         });
 
-    // Gateway lease reaper (#468 stage 4a): despawns the players of a gateway that stopped
+    // Gateway lease reaper (stage 4a): despawns the players of a gateway that stopped
     // heartbeating (the shared-connection crash case). Inert while `game_gateway_session` is
     // empty — nothing binds sessions to leases until stage 4d — but armed from day one so the
     // ghost bound exists the moment the first leased session appears. Same three-net story as
@@ -1678,7 +1678,7 @@ pub(crate) const CREATEINFO_KIT: &[(u8, u8, u32)] = &[
 ];
 
 // ===========================================================================================
-//  #223 — seed idempotence + fixture completeness.
+//  Seed idempotence + fixture completeness.
 //
 //  `init` is a `#[reducer(init)]`: it runs ONCE per database and does NOT re-run on an
 //  auto-migrate publish. Everything it seeds is therefore either only-if-empty or an upsert, and
@@ -1687,7 +1687,7 @@ pub(crate) const CREATEINFO_KIT: &[(u8, u8, u32)] = &[
 //  `ReducerContext` harness exists by design), so the DATA
 //  invariants are asserted directly and the two structural ones are pinned by a source scan
 //  through `test_scan::code_of`, which strips comments (a bare `.contains()` on an unstripped body
-//  is exactly what a trailing-comment needle defeats — issue #64).
+//  is exactly what a trailing-comment needle defeats).
 // ===========================================================================================
 #[cfg(test)]
 mod tests {
@@ -1914,7 +1914,7 @@ mod tests {
         }
     }
 
-    /// COLLISION SAFETY for the land-mount fixture (issue #22). Every id it reserves has to sit in a
+    /// COLLISION SAFETY for the land-mount fixture. Every id it reserves has to sit in a
     /// range the world ETL and the DBC import never write, and none may shadow an existing fixture —
     /// an id that collides silently replaces real imported data on a live shard, or is silently
     /// replaced by it, and either way the headless mount scenario stops testing what it claims to.
@@ -1969,7 +1969,7 @@ mod tests {
     /// publish, so a fixture reachable ONLY from `init` never lands on an already-provisioned
     /// shard, and one reachable only from a `debug_seed_*` reducer never lands on a fresh one
     /// unless a harness happens to call it. Both halves have gone wrong here: the comments in
-    /// `init` record `seed_stealth_fixture` having been debug-only (issue #85's audit) and
+    /// `init` record `seed_stealth_fixture` having been debug-only (the audit) and
     /// `seed_fixture_catalogue` being moved into `init` for exactly this reason.
     ///
     /// So: every fixture seeder must be called from at least one of the two, and the failure names
@@ -2009,20 +2009,20 @@ mod tests {
         }
     }
 
-    /// DRIFT REGRESSION (#363). The post-import fixture-restore path
+    /// DRIFT REGRESSION. The post-import fixture-restore path
     /// (`seed_scenario_fixtures`/`seed_fixture_items`, run via `debug_seed_scenario_fixtures`
     /// after a world-ETL re-import truncates `game_creature_template`/`game_item_template`) used
     /// to re-author full `CreatureTemplate`/`ItemTemplate` literals as hand-copies of `init`'s —
     /// and they drifted: the Profession Trainer was level 30/1500hp/"Cooking & Skinning" in
     /// `init` but level 10/100hp/"Fixture" in the restore copy, and the Test Wolf's
     /// money_min/max disagreed too. A shard restored after an ETL wipe therefore carried
-    /// different fixtures than a fresh one — the exact cross-shard divergence class #85 was
+    /// different fixtures than a fresh one — the exact cross-shard divergence class was
     /// filed to kill, reintroduced by copy-paste.
     ///
     /// The fix collapses both paths onto ONE canonical constructor per fixture
     /// (`test_wolf_template`, `profession_trainer_template`, `tempered_blade_template`,
     /// `tough_jerky_template`, all in `seed/fixtures.rs`). This pins that both `init` (via
-    /// `seed_map0_demo_content`, #377's stratum-2 split-out — see this file's header) and the
+    /// `seed_map0_demo_content`, the stratum-2 split-out — see this file's header) and the
     /// restore path call the SAME constructors — a hand-copied struct literal reintroduced in
     /// either one fails this test loudly instead of silently drifting again.
     #[test]

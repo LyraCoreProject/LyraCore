@@ -234,7 +234,7 @@ fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<
 }
 
 /// Line of sight for gameplay checks (aggro sensing, hostile casts, engage, swing gate, caster
-/// hold-range). Issue #523 (decision #10 §10, `#522`'s benchmark PASS): when exact vmap data is
+/// hold-range) (decision §10, benchmark PASS): when exact vmap data is
 /// consuming (`vmap::vmap_enabled`), this defers to the exact WMO-only ray
 /// (`vmap::los_ray`) instead of the coarse grid raymarch — a hostile behind a real wall is
 /// "unseen" at the true wall plane rather than the nearest whole nav cell. Falls back to the grid
@@ -264,7 +264,7 @@ const LEG_MAX_EXPANSIONS: u32 = 4096;
 /// A missing path may aim straight at the goal, but the commit gate stops it at obstructions.
 ///
 /// PERF NOTE: the gate fires on every committed movement step for chase/return/wander/flee/
-/// pet-follow — the ~500ms movement tick, 8x more often than the ~4s sense tick `#522`'s benchmark
+/// pet-follow — the ~500ms movement tick, 8x more often than the ~4s sense tick the benchmark
 /// (`debug_bench_los`) measured `vmap::los_ray` against. `debug_bench_collision_gate`
 /// (`debug/instance.rs`) is the companion harness for THIS path — run it against the same box
 /// before flipping `vmap_enabled` on a populated map, and compare its wall time to

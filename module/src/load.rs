@@ -1,4 +1,4 @@
-//! Per-shard writer occupancy and per-region population, queryable as plain SQL (issue #78).
+//! Per-shard writer occupancy and per-region population, queryable as plain SQL.
 //!
 //! The GATEWAY is the one component that can see the whole realm — every shard's `/v1/metrics`
 //! endpoint, every session, every live position — so it is the one that SAMPLES (a periodic
@@ -9,7 +9,7 @@
 //! shard id, so it has no idea which database it is running on).
 //!
 //! Two tables, RING-BUFFERED rather than TTL-reaped — each keeps the last [`SHARD_LOAD_RING`] /
-//! [`REGION_LOAD_RING`] samples per key, oldest evicted on insert. Issue #211 is the reason this is
+//! [`REGION_LOAD_RING`] samples per key, oldest evicted on insert. The reason this is
 //! spelled out: a `game_*` table nothing ever reaps grows forever, and a scheduled reaper is not the
 //! only way to avoid that — bounding the table AT WRITE TIME needs no schedule, no GC pass, and no
 //! extra reducer. At the gateway's default 30s sample cadence, 20 samples is ~10 minutes of
@@ -49,7 +49,7 @@ pub struct ShardLoad {
     pub sampled_at_micros: i64,
     pub writer_occupancy_pct: f32,
     pub sessions: u32,
-    /// Which GATEWAY PROCESS wrote this sample (issue #308). With N gateway processes sampling the
+    /// Which GATEWAY PROCESS wrote this sample. With N gateway processes sampling the
     /// same shard, `sessions` is only ever that ONE process's own player-connection cache size
     /// (`Coordinator::session_count`) — never the shard's realm-wide total. Keying the ring by
     /// `(shard, gateway_key)` instead of `shard` alone means every gateway's samples survive
@@ -68,7 +68,7 @@ pub struct ShardLoad {
     pub gateway_key: u64,
 }
 
-/// The realm-wide total for one shard, MATERIALIZED at write time (issue #308's actual
+/// The realm-wide total for one shard, MATERIALIZED at write time (the actual
 /// Done-when: `game_shard_load` alone is per-`(shard, gateway_key)` rows, and `spacetime sql` has
 /// no `GROUP BY`/`SUM` (`docs/danger-zones.md` §2) to fold those into a total on read — so
 /// [`record_shard_load`] recomputes and upserts this row on every sample instead, and an operator
@@ -149,7 +149,7 @@ pub(crate) fn validate_occupancy_pct(pct: f32) -> Result<(), String> {
     Ok(())
 }
 
-/// Record one shard's writer-occupancy + session sample (issue #78). Operator-gated like
+/// Record one shard's writer-occupancy + session sample. Operator-gated like
 /// [`crate::region::set_region_assignment`] — in production this is called by the gateway's own
 /// periodic sampling task over its privileged coordinator connection
 /// (that connection's identity IS the claimed operator, the same one
@@ -169,7 +169,7 @@ pub fn record_shard_load(
     }
     validate_occupancy_pct(writer_occupancy_pct)?;
     let table = ctx.db.game_shard_load();
-    // Ring-scoped per (shard, gateway_key), NOT per shard alone — issue #308: with N gateways
+    // Ring-scoped per (shard, gateway_key), NOT per shard alone — with N gateways
     // sampling the same shard, keying eviction (and therefore the ring) by shard alone let each
     // gateway's insert evict every OTHER gateway's rows, so only the last writer's share ever
     // survived. Scoping the ring per gateway too means every gateway keeps its own ~10 minutes of
@@ -191,7 +191,7 @@ pub fn record_shard_load(
         sessions,
         gateway_key,
     });
-    // Recompute and upsert the realm-wide total (issue #308's actual Done-when) rather than
+    // Recompute and upsert the realm-wide total (the actual Done-when) rather than
     // leaving that fold as a manual eyeball step — see `ShardLoadTotal`'s doc.
     let total_sessions = realm_wide_sessions(
         table
@@ -213,7 +213,7 @@ pub fn record_shard_load(
     Ok(())
 }
 
-/// Record one region's open-world player-count sample (issue #78). Same gating and ring-buffer
+/// Record one region's open-world player-count sample. Same gating and ring-buffer
 /// discipline as [`record_shard_load`]; see that reducer's doc.
 #[reducer]
 pub fn record_region_load(

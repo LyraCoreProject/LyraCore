@@ -1,5 +1,5 @@
 //! Profession reducers that are feature logic layered OVER a corpse or gear slot, not loot-table
-//! machinery themselves (issue #384): SKINNING (a skill-gated corpse interaction modeled on
+//! machinery themselves: SKINNING (a skill-gated corpse interaction modeled on
 //! `loot::loot_money`), FISHING (an immediate-catch cast), and ENCHANTING (the per-instance
 //! `enchant_id` overlay — which never touches a corpse at all, the reason this split exists).
 //!
@@ -260,7 +260,7 @@ pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), String> 
         crate::skill::skill_line::FISHING,
         crate::skill::APPRENTICE_CAP,
     );
-    // Zone-keyed catch (work-item 210, resolver hoisted to `terrain::zone_id_at` by #375): resolve the
+    // Zone-keyed catch (work-item 210, resolver hoisted to `terrain::zone_id_at`): resolve the
     // caster's zone and roll its real table; an unresolved zone (unimported terrain/AreaTable, or
     // off-slice) rolls an empty Vec, which `roll_loot_rows` correctly turns into zero winners —
     // `pick_caught_fish` then floors to the flat pool either way. `?`-rollback: a full bag fails here

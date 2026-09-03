@@ -70,7 +70,7 @@ crate::character_owned!(delete, fn sweep_delete_game_rest_state_event(ctx, chara
         ev.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19): a rest-state event is a one-shot RELAY row with a GC TTL —
+// CROSS-DATABASE transport: a rest-state event is a one-shot RELAY row with a GC TTL —
 // the gateway turns it into one PLAYER_BYTES_2 packet and it is done. It carries no durable state
 // (the durable half is `Character.resting`/`rested_xp`, which rides the character row), so carrying
 // it would replay a stale zzz-icon flip at the destination. Exports NOTHING, deliberately: the arm
@@ -174,7 +174,7 @@ crate::game_tick_pass!(fn rested_accrue_pass(ctx) {
     // Deliberate simplification: full game_character scan every 30s; add a `by_resting` index if
     // the table grows large.
     //
-    // REFUSE verdict (issue #30). This pass is BACKGROUND, not caller-driven, so "the guid came from
+    // REFUSE verdict. This pass is BACKGROUND, not caller-driven, so "the guid came from
     // a live entity" — the argument that fences every other rest write — does not apply: the filter
     // reads the DURABLE row's flags and nothing here ever looks at `game_world_entity`.
     // `begin_transfer` persists with `set_offline: false`, and it is the `set_offline` branch of

@@ -65,7 +65,7 @@ pub struct TrainerSpell {
 /// What a successful trainer purchase GRANTS (professions slice 3) — `crate::skill::learn_profession` for
 /// a flagged profession/weapon offering, `crate::spell::learn_spell_with_dependents` for a plain class
 /// spell. Each `apply_trainer_buy` arm constructs its OWN variant directly at the point it already knows
-/// which one applies (issue #372) — there is no longer a separate `grant_for` routing function: the old
+/// which one applies — there is no longer a separate `grant_for` routing function: the old
 /// shape threaded a `(to_learn, known, cap)` tuple with a `0u32` dead-sentinel `to_learn` on the two
 /// profession/weapon arms (never read on those arms — only `grant_for` re-derived, from `profession_line`
 /// ALONE, the exact branch each tuple was already built in) through to a `grant_for` call that just
@@ -162,8 +162,8 @@ pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
 /// Resolve + validate a trainer interaction: `trainer_guid` must be a real in-range TRAINER on `caster`'s
 /// own map+instance, and one that SERVES `caster`'s class — a Paladin trainer refuses a Warrior
 /// outright. Shared by [`apply_trainer_buy`] and `talent::do_reset_talents` (the respec path,
-/// which is trainer-gated identically — its own comment used to read "Same gates as apply_trainer_buy")
-/// (issue #372). Returns the resolved trainer entity.
+/// which is trainer-gated identically — its own comment used to read "Same gates as apply_trainer_buy").
+/// Returns the resolved trainer entity.
 ///
 /// Bare error strings (no gtker `[N]` tag): `apply_trainer_buy` prefixes its own `"[0] "` tag on top so
 /// its wire-visible `SMSG_TRAINER_BUY_FAILED` text is unchanged; `do_reset_talents` is untagged (its
@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(trainer_buy_check(false, 40, 1, 1000, 100), Ok(()));
     }
 
-    // --- issue #22: the riding fork ------------------------------------------------------------------
+    // --- the riding fork ------------------------------------------------------------------
 
     /// A riding purchase is TIER-gated the same way a profession is: Apprentice-75 has not met the
     /// Journeyman-150 offering, so the second tier is buyable exactly once, and re-buying the tier you

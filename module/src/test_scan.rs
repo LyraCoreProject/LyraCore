@@ -4,7 +4,7 @@
 //! into a pure function and asserted on directly instead, wherever that is reachable — see
 //! `helpers::gate_in_transit` for the pattern).
 //!
-//! Issue #64: this used to be six near-identical copies (`auth.rs`, `chat.rs`, `group.rs`,
+//! This used to be six near-identical copies (`auth.rs`, `chat.rs`, `group.rs`,
 //! `instance.rs`, `world.rs`, `transfer.rs`), and they had already drifted — two of them stripped a
 //! `// trailing comment` off an otherwise-live line, the other four only dropped a line that was
 //! ENTIRELY a comment. A needle planted in a trailing comment (`let _ = ctx; // the real call used
@@ -85,14 +85,14 @@ pub(crate) fn shape_of(src: &str, signature: &str) -> String {
 }
 
 // ================================================================================================
-//  Shared engine for a "raw table read outside its chokepoint" tripwire (issue #379).
+//  Shared engine for a "raw table read outside its chokepoint" tripwire.
 // ================================================================================================
 //
 // `partition_discipline_tripwire::raw_scans` (spatial whole-table `.iter()`/`.count()`) and
 // `character_fence_tripwire::raw_lookups` (raw `game_character` point lookups) used to be ~70-line
 // near-clones of this — identical bound-handle walk-back, handle dedup and comment-line filtering
 // — and had already drifted from each other in small ways neither review caught. The exact drift
-// pattern issue #64 consolidated once already, one layer up (`body_of`/`code_of`, above). One
+// pattern consolidated once already, one layer up (`body_of`/`code_of`, above). One
 // engine now; the two callers differ only in which accessor(s) they watch and what counts as
 // "opens a read" they care about.
 
@@ -237,7 +237,7 @@ pub(crate) fn raw_table_reads(
 //   named file is not, that is a PATH TYPO, and the tripwire must fail on it.
 
 /// Concatenate every file in `module/src/debug/` (the `#[cfg(feature = "debug_reducers")]`
-/// directory module #386 split out of the former single `debug.rs`) into one blob, so a text-scan
+/// directory module split out of the former single `debug.rs`) into one blob, so a text-scan
 /// tripwire that used to `include_str!("debug.rs")` keeps seeing every debug reducer regardless of
 /// which of the seven files it landed in. Directory-read order (unspecified) is fine — every caller
 /// only substring/signature-searches, never anchors on cross-file position or file boundaries.
@@ -350,7 +350,7 @@ pub(crate) fn read_scanned(rel: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// The fixture the trailing-comment defeat looked like for real (round-1 review, #59): a `let
+    /// The fixture the trailing-comment defeat looked like for real (round-1 review): a `let
     /// _ = ctx;` no-op with the real call demoted to a trailing comment. The weak four-file version
     /// of `code_of` (`.filter(|l| !l.trim_start().starts_with("//"))`) left that comment's text
     /// intact, so `.contains("bump_guid_high_water")` still passed. This must now be gone.

@@ -1,7 +1,7 @@
-//! Escrowed character transfer — the ONE primitive behind every sharding granularity (issue #16,
-//! spec issue #12: instance entry, continent travel, seam crossings, bulk region migration).
+//! Escrowed character transfer — the ONE primitive behind every sharding granularity (
+//! spec instance entry, continent travel, seam crossings, bulk region migration).
 //!
-//! # Where the pieces live (#380)
+//! # Where the pieces live
 //!
 //! | file | what is in it |
 //! |---|---|
@@ -38,7 +38,7 @@
 //!
 //! While either escrow row exists the character is *in transit* — [`is_in_transit`]. Four chokepoints
 //! enforce that, and it is worth being precise about which side each one covers, because the epic
-//! (#19, the real cross-database move) is built on top of this claim:
+//! (the real cross-database move) is built on top of this claim:
 //!
 //! 1. `helpers::entity_by_owner` — the ACTOR side. Every player-fired reducer resolves "who is
 //!    acting" through it, so an in-transit character can take no action itself.
@@ -47,13 +47,13 @@
 //! 3. `begin_transfer`'s delete of the live `game_world_entity` row — the TARGET side. The ~50
 //!    hand-rolled `map_id`/`instance_id` gates, the aggro candidate scan, the threat lists and the
 //!    AOI relay all resolve through that row, so they stop seeing the character by construction.
-//! 4. `helpers::character_by_guid` / `character_by_name` — the BY-GUID side (issue #30). Reducers
+//! 4. `helpers::character_by_guid` / `character_by_name` — the BY-GUID side. Reducers
 //!    that reach a character by guid or by name straight into `game_character` (or into a
 //!    character-owned table) touch none of the first three; this pair is the gate they route
 //!    through, and it reads an in-transit character as ABSENT so each caller's existing
 //!    "no such character" arm fires (no new error string, no gateway edit).
 //!
-//! # The by-guid verdict table (issue #30)
+//! # The by-guid verdict table
 //!
 //! REFUSE is not the right answer everywhere, so the class is settled per path. Four verdicts exist:
 //!
@@ -67,7 +67,7 @@
 //!   `Character.owner_identity` is per-CONNECTION derived state; a carried copy would arrive stale
 //!   and be overwritten immediately, and a field that is always wrong on arrival is worse than no
 //!   field. Pinned by `owner_identity_is_regenerated_at_the_destination_never_carried`.
-//! * **NOT A TRANSFER CONCERN** — the group verbs, settled by #22: party membership is
+//! * **NOT A TRANSFER CONCERN** — the group verbs, settled: party membership is
 //!   authoritative on realm-core, so there is no source-copy write left to lose. What replaced the
 //!   fence question is a REPLICATION one, answered by putting `game_group_member` on
 //!   [`NOT_TRANSPORTED`] and having the gateway re-push realm-core's roster at world entry.
@@ -75,7 +75,7 @@
 //! The audited exception list is EMPTY: every by-guid path in the tree is either fenced or holds one
 //! of the three other verdicts. **The issue-by-issue reasoning for each one — which path, which
 //! field it would have lost, why its verdict is what it is — is archived at
-//! `docs/history/transfer-by-guid-verdict-table.md` (#380).** Read it before deciding a NEW path's
+//! `docs/history/transfer-by-guid-verdict-table.md`.** Read it before deciding a NEW path's
 //! verdict; nothing in it is stale, it is simply not something the protocol's own source has to
 //! restate.
 //!
@@ -84,10 +84,10 @@
 //! them), and `tripwires.rs`'s `character_fence_tripwire` is the ratchet that stops a NEW unfenced
 //! by-guid path from being added.
 //!
-//! # The CROSS-DATABASE protocol (issue #19)
+//! # The CROSS-DATABASE protocol
 //!
-//! #16 shipped the state machine within ONE database (two `instance_id` partitions, so
-//! `import_character` re-partitions a row rather than materialising a second). #19 makes the move
+//! Shipped the state machine within ONE database (two `instance_id` partitions, so
+//! `import_character` re-partitions a row rather than materialising a second). The cross-database work makes the move
 //! real: two SpacetimeDB databases, with the gateway carrying the blob between them. The escrow is
 //! not forked — the same ledger, the same `plan_*` verdicts, the same reaper — but two facts the
 //! same-database deployment gets for free have to be supplied explicitly:
@@ -128,8 +128,8 @@
 //! - `do_finish` cascade-deletes the source copy for a cross-database escrow (there IS a second copy
 //!   now), which is a no-op same-database by construction.
 //!
-//! What is still parked: the LIVE two-database run. Every acceptance criterion of #19 needs a real
-//! 1.12.1 client, two published databases and an operator — see issue #231. What is proven
+//! What is still parked: the LIVE two-database run. Every acceptance criterion needs a real
+//! 1.12.1 client, two published databases and an operator — What is proven
 //! headlessly is the state machine (the crash matrix in `tests.rs`, now walked for the six-step
 //! cross-database sequence too), the transport ratchet, and the whole six-step sequence executed
 //! across two `FakeDb`s in `harness.rs`.
@@ -137,7 +137,7 @@
 //! # Why every step is written against a SINK
 //!
 //! `ReducerContext` cannot be constructed in a unit test, so before the sinks existed the only thing
-//! a test in this crate could do to a reducer body was read its TEXT. The #36 review ran 21
+//! a test in this crate could do to a reducer body was read its TEXT. The review ran 21
 //! mutations against that surface and 17 left the suite green. Each step therefore has its body
 //! written against a trait — [`BeginSink`], [`ImportSink`], [`FinishSink`], [`ReapSink`], all over
 //! the shared [`ShardLedger`] — with [`CtxShard`] as the one production adapter and
@@ -187,7 +187,7 @@ const TRANSFER_REAP_INTERVAL_MICROS: u64 = 5_000_000; // 5s
 /// Note: the spec asks for the in-transit flag as a COLUMN on `game_character`. It lives here
 /// instead because `game_character` is gateway-subscribed with a HAND-MAINTAINED binding
 /// (`docs/danger-zones.md` §1.2 / §1.6) — a column there needs a lockstep gateway edit, which is
-/// issue #19's tree, not this one's. The ledger row is a strictly stronger flag anyway (it carries
+/// the tree, not this one's. The ledger row is a strictly stronger flag anyway (it carries
 /// the destination and the blob), and the `by_character` index makes the check one indexed lookup.
 /// Upgrade path: fold into a `Character.in_transit_id` column when the gateway bindings are
 /// regenerated for multi-shard routing.
@@ -213,7 +213,7 @@ pub struct TransferOut {
     /// bsatn of [`ExportBlob`].
     pub blob: Vec<u8>,
     pub created_micros: i64,
-    /// **Is the destination a different DATABASE?** (issue #19.) Two things hang off it, and both
+    /// **Is the destination a different DATABASE?** Two things hang off it, and both
     /// are dupe/loss safety, not convenience:
     ///
     /// 1. `do_finish` must `cascade_delete_character` the source copy — same-database there is no
@@ -224,7 +224,7 @@ pub struct TransferOut {
     ///    "not imported" for a transfer that imported perfectly — and `recovery` would roll BACK
     ///    past the point of no return, duplicating the character. See [`reap_transfers`].
     ///
-    /// END-appended + `#[default(false)]` → additive auto-migration; every pre-#19 escrow row reads
+    /// END-appended + `#[default(false)]` → additive auto-migration; every earlier escrow row reads
     /// as same-database, which is exactly what it was.
     #[default(false)]
     pub cross_database: bool,
@@ -440,16 +440,16 @@ pub(crate) fn plan_begin(
 /// Which character the ledger rows filed under one transfer id name: the SOURCE out-row's, with
 /// the DESTINATION in-row's as the fallback.
 ///
-/// The fallback is not tidiness. Now that the transfer id IS the character guid (#19), a database
+/// The fallback is not tidiness. Now that the transfer id IS the character guid, a database
 /// holding only an unreleased ARRIVAL in-row — the state left by a driver killed between
 /// `finish_transfer` and `release_transfer` — would otherwise read as an UNUSED id. `plan_begin`
 /// would then answer `Escrow`... except it never gets there, because [`is_in_transit`] sees the
 /// in-row and answers `AlreadyInTransit`, so the character is refused a transfer OUT of the shard
-/// it is stuck on, permanently, with no operator recourse (the #36 review's blocker 2). Reading the
+/// it is stuck on, permanently, with no operator recourse (the review's blocker 2). Reading the
 /// in-row here is what turns that into the `Replay` the `settle_transfer` fence-clear then repairs.
 ///
 /// Pure, so it is pinned by a real assertion rather than by the reducer's text — the whole line was
-/// a #36 mutation survivor (issue #37).
+/// a mutation survivor.
 pub(crate) fn escrowed_guid(out_row: Option<u64>, in_row: Option<u64>) -> Option<u64> {
     out_row.or(in_row)
 }
@@ -515,7 +515,7 @@ pub(crate) enum Recovery {
 /// guessing roll-forward against a failed one destroys it. Same-database (this ticket) always
 /// answers `Some(..)` by reading the in-row directly.
 ///
-/// Note: cross-database (issue #19) the answer comes from the gateway querying the destination
+/// Note: cross-database, the answer comes from the gateway querying the destination
 /// shard, and `None` — destination unreachable — holds the escrow indefinitely. That is the correct
 /// failure mode: a frozen character is recoverable, a duplicated or deleted one is not. Escalation
 /// (alerting an operator on a long-held escrow) is ops tooling, not this primitive.
@@ -566,7 +566,7 @@ pub(crate) fn is_in_transit(ctx: &ReducerContext, character_guid: u64) -> bool {
 
 /// Every instance id an in-transit character has a claim on: the escrow's DESTINATION and the
 /// source instance `begin_transfer` parked on the durable row. Consumed by
-/// `instance::occupied_instances` (issue #30, REFUSE verdict) so the instance reaper cannot tear
+/// `instance::occupied_instances` (REFUSE verdict) so the instance reaper cannot tear
 /// down an instance — and with it the character's `game_instance_binding` manifest rows — while a
 /// transfer into or out of it is still in flight.
 ///
@@ -592,7 +592,7 @@ pub(crate) fn in_transit_instances(ctx: &ReducerContext) -> Vec<u64> {
     out
 }
 
-/// DEFER verdict (issue #30) — fold a post-`begin_transfer` `money` credit into the escrowed export
+/// DEFER verdict — fold a post-`begin_transfer` `money` credit into the escrowed export
 /// blob, so value that lands after the character was serialized still travels with it. Returns
 /// `true` when the delta was deferred (the caller is talking to an in-transit character), `false`
 /// when there is nothing in escrow and the caller should just write the row.
@@ -606,9 +606,10 @@ pub(crate) fn in_transit_instances(ctx: &ReducerContext) -> Vec<u64> {
 /// nothing reads the blob again — same-database that is harmless because both partitions share the
 /// one `game_character` row the caller also writes directly, so no copper is lost either way.
 /// Note: the residual post-import window is the ONE place a cross-database delta would still
-/// need a destination-side replay hop, and that hop is #19's (it owns the gateway leg that would
-/// carry it). Folding unconditionally here means the final blob is already correct when #19 wires
-/// `finish_transfer` to ship residual deltas — no call-site edit at that point.
+/// need a destination-side replay hop, and that hop belongs to the cross-database work (it owns
+/// the gateway leg that would carry it). Folding unconditionally here means the final blob is
+/// already correct when that work wires `finish_transfer` to ship residual deltas — no call-site
+/// edit at that point.
 pub(crate) fn defer_money_delta(ctx: &ReducerContext, character_guid: u64, amount: u32) -> bool {
     let outs = ctx.db.game_transfer_out();
     let Some(mut row) = outs.by_character().filter(character_guid).next() else {
@@ -712,7 +713,7 @@ pub(crate) trait BeginSink: ShardLedger {
 
 /// What **step 2, cross-database** touches, on the DESTINATION database.
 ///
-/// This trait IS the seam of issue #37. `ReducerContext` cannot be constructed in a unit test, so
+/// This trait IS the seam. `ReducerContext` cannot be constructed in a unit test, so
 /// before it existed nothing in the crate could execute the import — its guards were pinned by
 /// source scans that matched their own text, and 17 of 21 mutations against them left the suite
 /// green.
@@ -724,15 +725,15 @@ pub(crate) trait ImportSink: ShardLedger {
     /// The payload half — [`import_rows`] against this database's transport registry.
     fn import_rows(&mut self, guid: u64, payload: &[TableRows]) -> Result<(), String>;
     fn ensure_shadow_account(&mut self, account_id: u64);
-    /// Ratchet THIS database's guid high-water mark up to at least `guid` (issue #59 AC#3) — so a
+    /// Ratchet THIS database's guid high-water mark up to at least `guid` (AC#3) — so a
     /// locally created character can never later collide with one this database received by import.
     /// Unconditional, same as `world::cascade_delete_character`'s call through this same method —
     /// the GATE on whether an arriving guid is even allowed to reach here lives in
-    /// [`apply_import_blob`] (issue #237), not in this method, precisely so the two sinks can never
+    /// [`apply_import_blob`], not in this method, precisely so the two sinks can never
     /// diverge on it (see `own_guid_range`'s doc comment).
     fn bump_guid_high_water(&mut self, guid: u64);
     /// THIS database's own `game_guid_range` (`(base, size)`), if one is installed. A FACT query,
-    /// not a decision — issue #237's [`apply_import_blob`] is what turns it into "should this
+    /// not a decision — the [`apply_import_blob`] is what turns it into "should this
     /// arrival ratchet the allocator" via `auth::in_guid_range`, so both sinks share the one
     /// decision instead of each re-implementing it. Putting the gate here instead would let a
     /// `FakeDb` that forgot to reimplement it silently validate a shard-poisoning import as green.
@@ -741,7 +742,7 @@ pub(crate) trait ImportSink: ShardLedger {
 
 /// What **step 3** touches, on the SOURCE database.
 ///
-/// The same seam as [`ImportSink`], for the same reason (issue #37, extended by #34).
+/// The same seam as [`ImportSink`], for the same reason (extended).
 /// [`apply_finish`]'s ORDER — detach, then cascade, then write the forwarding receipt, then delete
 /// the escrow — was pinned only by source scans that matched their own text, and the ordering
 /// constraint is not cosmetic: `game_character_shard` is itself character-owned, so a cascade that
@@ -763,7 +764,7 @@ pub(crate) trait ReapSink: FinishSink {
 }
 
 /// The ONE production adapter: the real `ReducerContext`, wearing every sink at once. It used to be
-/// three separate structs (#380 merged them, so there is one place a `ctx.db` line can be wrong
+/// three separate structs (merged them, so there is one place a `ctx.db` line can be wrong
 /// instead of three).
 ///
 /// **This layer is the seam's own blind spot and there is no headless way to close it.** The harness
@@ -773,7 +774,7 @@ pub(crate) trait ReapSink: FinishSink {
 /// struct on the first full run, which is why `.cargo/mutants.toml` excludes it BY NAME with that
 /// number written down). So it stays pinned by exact-shape equality, in
 /// `tests::the_production_adapter_is_the_pass_through_the_harness_assumes` — the one string pin
-/// #380 kept. Every method below must remain a single expression; if this stops being a layer of
+/// Kept. Every method below must remain a single expression; if this stops being a layer of
 /// pass-throughs, the harness underneath it stops meaning what it claims.
 struct CtxShard<'a> {
     ctx: &'a ReducerContext,
@@ -985,7 +986,7 @@ pub fn begin_transfer(
 }
 
 /// The whole of [`begin_transfer`] bar the operator gate, over a [`BeginSink`]. Executed for real by
-/// `harness` (#380) — before that it was 120 lines of `ReducerContext` code whose only coverage was
+/// `harness` — before that it was 120 lines of `ReducerContext` code whose only coverage was
 /// three `.contains()` scans of its own text.
 pub(crate) fn apply_begin<S: BeginSink>(
     sink: &mut S,
@@ -1031,7 +1032,7 @@ pub(crate) fn apply_begin<S: BeginSink>(
     // because those all resolve through `game_world_entity`.
     sink.freeze_live_entity(character_guid);
 
-    // The ROWS (issue #19). Serialized here, in the same transaction that froze the character, so
+    // The ROWS. Serialized here, in the same transaction that froze the character, so
     // the payload is a consistent snapshot: nothing can write a manifest table between the freeze
     // and the export (the in-transit fence covers every writer bar the audited exceptions in this
     // module's verdict table). The character row is read AFTER the freeze — `freeze_live_entity`
@@ -1079,8 +1080,8 @@ pub(crate) fn apply_begin<S: BeginSink>(
 
 /// **Step 2 — commit the arrival copy. Idempotent on `transfer_id` (unique PK).**
 ///
-/// Same-database tracer: the escrowed blob is read from the local out-row. Cross-database (issue
-/// #19) the gateway ships the blob and [`import_character_blob`] takes it as an argument — the ONLY
+/// Same-database tracer: the escrowed blob is read from the local out-row. Cross-database,
+/// the gateway ships the blob and [`import_character_blob`] takes it as an argument — the ONLY
 /// difference, which is why the state machine is provable now.
 ///
 /// The ONE reducer in this module still written straight against `ReducerContext` rather than a
@@ -1172,7 +1173,7 @@ pub fn import_character_blob(
 }
 
 /// The whole of [`import_character_blob`] bar the operator gate — every guard, in order, over an
-/// [`ImportSink`]. Executed for real by `harness` (issue #37).
+/// [`ImportSink`]. Executed for real by `harness`.
 pub(crate) fn apply_import_blob<S: ImportSink>(
     sink: &mut S,
     transfer_id: u64,
@@ -1219,7 +1220,7 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
 
     // Materialise `game_character`. Decoded with THIS build's `Character` type, then relocated to
     // the destination coordinates and given the money the blob carries (which is the escrowed value
-    // PLUS any `defer_money_delta` folded in after the freeze — issue #30's residual, replayed here
+    // PLUS any `defer_money_delta` folded in after the freeze — the residual, replayed here
     // because this is the hop that reads the blob at the destination).
     let mut c: crate::character::Character =
         spacetimedb::sats::bsatn::from_slice(&decoded.character_row).map_err(|e| {
@@ -1238,7 +1239,7 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     // wiped before the re-insert, so the arriving payload never lands on top of rows that would
     // PK-collide (or worse, survive as a second, older loadout).
     //
-    // UNCONDITIONAL (issue #83): this used to run only `if sink.has_character(guid)`, which wipes
+    // UNCONDITIONAL: this used to run only `if sink.has_character(guid)`, which wipes
     // every owned table when `game_character` itself survived — but says nothing about a table
     // that has this guid's rows WITHOUT a `game_character` row to key off. That combination is
     // exactly the one no transfer-id witness can see (the witness is a fact about
@@ -1251,28 +1252,28 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     // replay. See `orphaned_owned_rows_with_no_character_row_are_wiped_before_a_fresh_import_lands`.
     sink.cascade_delete_character(guid);
     sink.insert_character(c);
-    // Issue #59 AC#3: ratchet this database's guid allocator past `guid` NOW, in the same
+    // AC#3: ratchet this database's guid allocator past `guid` NOW, in the same
     // transaction as the materialisation — so a `create_character` racing this import (or run any
     // time after) can never hand the same guid to a brand-new local character.
     //
-    // ONLY when `guid` is actually inside THIS database's own range (issue #237). Ranges are
-    // disjoint by construction (#108) — a foreign-range arrival (e.g. a world-1 character crossing
+    // ONLY when `guid` is actually inside THIS database's own range. Ranges are
+    // disjoint by construction — a foreign-range arrival (e.g. a world-1 character crossing
     // into core) can never collide with anything core mints, so ratcheting past it protects
     // nothing and instead walks core's own mark toward, and eventually past, its own range end.
     // That is exactly what was hit live: `lyracore`'s high_water sat at its range end with
     // zero local characters above it, and every local `create_character` failed
-    // GUID_RANGE_EXHAUSTED. A local-range arrival still ratchets, unchanged from #59 AC#3.
+    // GUID_RANGE_EXHAUSTED. A local-range arrival still ratchets, unchanged AC#3.
     if crate::auth::in_guid_range(sink.own_guid_range(), guid) {
         sink.bump_guid_high_water(guid);
     }
     sink.import_rows(guid, &decoded.payload)?;
 
     // The destination has no `game_account` row (accounts are realm-scoped and live on the default
-    // database until realm-core, #22). `gw::gw_player_login` resolves the account by id, so
+    // database until realm-core). `gw::gw_player_login` resolves the account by id, so
     // without one the arriving player cannot log in at all.
     // Deliberate simplification: a SHADOW account — id + a synthetic username, no credentials. The
     // gateway rebinds `identity` through `establish_session` on this shard at every world entry, which is the only
-    // field this row exists to hold. Upgrade path: realm-core owns accounts (#12 Phase B) and this
+    // field this row exists to hold. Upgrade path: realm-core owns accounts (Phase B) and this
     // whole arm goes away. Never a login credential: SRP runs on the logon tier against the realm
     // database, never here.
     sink.ensure_shadow_account(account_id);
@@ -1315,7 +1316,7 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
 ///
 /// So the gateway, which is the one component that can see both databases, writes the in-row HERE
 /// after `import_character_blob` has COMMITTED at the destination. Everything downstream —
-/// `plan_finish`, `recovery`, the whole #16 crash matrix — then works unchanged, because the in-row
+/// `plan_finish`, `recovery`, the whole crash matrix — then works unchanged, because the in-row
 /// still means precisely what it meant: *the destination copy is durable*.
 ///
 /// **The obligation this moves out of the module**: nothing here can check that the import really
@@ -1417,7 +1418,7 @@ pub(crate) fn apply_finish_step<S: FinishSink>(
     let has_out = sink.out_row(transfer_id).is_some();
     let has_in = sink.in_row(transfer_id).is_some();
     match plan_finish(has_out, has_in) {
-        // NO-OP, and it must SAY so (#99). The gateway's drive calls `finish_transfer` on a specific
+        // NO-OP, and it must SAY so. The gateway's drive calls `finish_transfer` on a specific
         // database and reads `Ok(())` as "the source released the character", then proceeds to
         // publish_shard_index / release_transfer / evict. Returning success silently here makes a
         // finish driven against the WRONG database indistinguishable from one that did the work —
@@ -1441,11 +1442,11 @@ pub(crate) fn apply_finish_step<S: FinishSink>(
 }
 
 /// The delete-last body, shared by [`finish_transfer`] and the reaper's roll-forward. Executed for
-/// real — order and all — by `harness` (issue #34).
+/// real — order and all — by `harness`.
 pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
     let mut cascaded = false;
     if let Some(out) = sink.out_row(transfer_id) {
-        // CROSS-DATABASE (issue #19): the source shard's teardown is `cascade_delete_character` —
+        // CROSS-DATABASE: the source shard's teardown is `cascade_delete_character` —
         // the existing character-owned delete sweep, the exact counterpart of the payload this blob
         // exported. Skipping it leaves a full second copy of the character on the source, which is a
         // dupe the moment anything logs it in. Same-database there is nothing to cascade: the two
@@ -1454,7 +1455,7 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
         // row — the source's claim on the character.
         cascaded = out.cross_database;
         if out.cross_database {
-            // The group MIRROR (issue #19, AC#4) — done HERE, before the cascade, rather than inside
+            // The group MIRROR (AC#4) — done HERE, before the cascade, rather than inside
             // `sweep_delete_game_group_member`, so it depends on no sweep ordering. A shard hop is not
             // a departure: `remove_member`'s leader-transfer/disband would tear the party down on the
             // source the instant the FIRST member hops, and the second member would then arrive with no
@@ -1465,11 +1466,11 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
             sink.detach_for_transfer(out.character_guid);
             sink.cascade_delete_character(out.character_guid);
         }
-        // #20 AC#3: the character→shard index entry is written HERE, inside the same transaction that
+        // AC#3: the character→shard index entry is written HERE, inside the same transaction that
         // releases the escrow, from the out-row's own destination fields — so "the escrow settled" and
         // "the directory says where it settled" can never disagree on this database.
         //
-        // Cross-database, this is only HALF the index (issue #34). There is no transaction spanning
+        // Cross-database, this is only HALF the index. There is no transaction spanning
         // two SpacetimeDB databases, so realm-core's copy — the one `home_shard` actually reads —
         // cannot be written from here at all. What the gateway does instead is REPLICATE this row:
         // `world::transfer::run_transfer` publishes the same `(guid, map, instance)` to realm-core
@@ -1486,7 +1487,7 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
         // have to be fixed together before anything routes on it. See
         // `gateway/src/realm_core.rs::publish_shard_index`.
         //
-        // MERGE ORDER (#19 × #20): this runs AFTER the cascade, never before. `game_character_shard`
+        // MERGE ORDER: this runs AFTER the cascade, never before. `game_character_shard`
         // is itself character-owned (`realm_core.rs`'s delete sweep), so a cascade that ran second
         // would wipe the forwarding receipt the source shard is supposed to keep — the receipt that
         // lets a gateway whose realm-core is unconfigured (`realm_core()` == the default shard) still
@@ -1494,7 +1495,7 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
         sink.record_shard(out.character_guid, out.dest_map_id, out.dest_instance_id);
     }
     sink.clear_escrow(transfer_id);
-    // Name what actually happened (#99): "complete" alone read identically whether the source copy
+    // Name what actually happened: "complete" alone read identically whether the source copy
     // was cascade-deleted or the transfer was same-database (where there is no source copy to
     // destroy). "finish ran" and "the source copy is gone" are different facts and were one line.
     log::info!(
@@ -1518,14 +1519,14 @@ pub fn reap_transfers(ctx: &ReducerContext, _schedule: TransferReaperSchedule) {
 }
 
 /// The whole of [`reap_transfers`] bar the scheduler-identity gate, over a [`ReapSink`]. Executed
-/// for real by `harness` (#380) — the `cross_database && !has_in` rule below used to be pinned by a
+/// for real by `harness` — the `cross_database && !has_in` rule below used to be pinned by a
 /// `.contains()` scan of the reducer's own text.
 pub(crate) fn apply_reap<S: ReapSink>(sink: &mut S) {
     let now = sink.now_micros();
     for (transfer_id, character_guid, created_micros, cross_database) in sink.escrows() {
         let age = now - created_micros;
         let has_in = sink.in_row(transfer_id).is_some();
-        // CROSS-DATABASE (issue #19): the destination's arrival copy is on ANOTHER database, so an
+        // CROSS-DATABASE: the destination's arrival copy is on ANOTHER database, so an
         // ABSENT in-row here does not mean "not imported" — it means "not yet ATTESTED"
         // ([`confirm_import`]). Reading it as `Some(false)` would roll the escrow BACK past the
         // point of no return, unfreezing the source copy while the destination copy is live: a

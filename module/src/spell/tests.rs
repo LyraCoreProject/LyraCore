@@ -487,10 +487,10 @@ fn kind_wire_values() {
 /// `Effect` ids onto): a drift here would silently re-route the importer's dispatch and desync it from
 /// the seed data / the SDK binding. Loops [`ALL_INSTANT_KINDS`] — taxonomy.rs's single canonical list —
 /// rather than a second hand-copied array, so a kind is covered here purely by being IN that slice
-/// (exhaustive by construction: #367 found this test's own hand-copied predecessor missing
+/// (exhaustive by construction: the canonical list found this test's own hand-copied predecessor missing
 /// E_BLINK/E_PERSISTENT_AREA/E_FISH/E_OPEN_LOCK, and a kind left off `ALL_INSTANT_KINDS` itself now
 /// fails CI's `-D warnings` clippy gate via `dead_code` instead of silently passing every test). Also
-/// doubles as the #90 passive-filter regression pin: `passive_applies_effect_kind` is exactly `kind &
+/// doubles as the passive-filter regression pin: `passive_applies_effect_kind` is exactly `kind &
 /// KIND_AURA_BIT != 0`, so asserting every instant kind clears the bit is asserting every instant kind
 /// is rejected by the passive-apply path (the old, separately hand-copied
 /// `apply_spell_auras_rejects_instant_effects` test — now redundant with this loop and retired).
@@ -523,11 +523,11 @@ fn instant_kind_wire_values_exhaustive() {
 }
 
 /// Pin EVERY `A_*` aura kind wire value: same rationale, same [`ALL_AURA_KINDS`]-loop construction, and
-/// same #90-filter double duty as [`instant_kind_wire_values_exhaustive`] above (that test's old sibling
+/// same-filter double duty as [`instant_kind_wire_values_exhaustive`] above (that test's old sibling
 /// hand-copied list was missing A_SPELLMOD_FLAT/A_SPELLMOD_PCT). This is the control: a genuinely
 /// passive talent/racial (an `A_*` aura-kind effect) must keep applying through `apply_spell_auras` — an
 /// over-eager filter that rejected real auras too would silently disable every passive talent in the
-/// game, worse than the cosmetic bug #90 fixes (the old, separately hand-copied
+/// game, worse than the cosmetic bug the passive filter fixes (the old, separately hand-copied
 /// `apply_spell_auras_still_applies_aura_effects` test — now redundant with this loop and retired).
 #[test]
 fn aura_kind_wire_values_exhaustive() {
@@ -560,15 +560,15 @@ fn aura_kind_wire_values_exhaustive() {
 /// `apply_spell_auras_still_applies_aura_effects` tests both called `passive_applies_effect_kind`
 /// DIRECTLY — they pinned the predicate's logic but never touched `apply_spell_auras` itself. A
 /// reviewer deleted the `.filter(|e| passive_applies_effect_kind(e.kind))` call from
-/// `apply_spell_auras`'s effect query (the #90 fix's actual production wiring) and the full test suite
+/// `apply_spell_auras`'s effect query (the fix's actual production wiring) and the full test suite
 /// stayed green, because nothing exercised the call site. This is a source-scan tripwire on that WIRING:
 /// it catches the filter call being DELETED (the shape this defect took, confirmed by mutating it and
 /// watching this test go red) or the query losing the `.filter(` step entirely. It does NOT catch the
 /// filter being wired to a DIFFERENT, wrong predicate at the same call site (`.filter(|e|
 /// some_other_fn(e.kind))` still reads as "filtered" to a scan) — the two kind-exhaustive tests above
 /// are what pin the LOGIC; this one only pins that SOME call to `passive_applies_effect_kind` still
-/// gates the query. Uses the crate-shared scan primitives (`crate::test_scan`, #64) rather than a local
-/// copy — #367 found this file's own copy was the seventh, and it carried the weaker (non-string-
+/// gates the query. Uses the crate-shared scan primitives (`crate::test_scan`) rather than a local
+/// copy — found this file's own copy was the seventh, and it carried the weaker (non-string-
 /// literal-aware) trailing-comment stripper the canonical one was hardened against.
 #[test]
 fn apply_spell_auras_still_calls_the_passive_effect_filter() {
@@ -702,7 +702,7 @@ fn aura_moves_vitals_gate() {
 
 /// The sheet-recompute gate: wider than `aura_moves_vitals` — every `A_MOD_STAT` attribute (including
 /// STR/AGI/SPI, which are inert for vitals) trips it, and so does an `A_MOD_COMBAT(COMBAT_ATTACK_POWER)`
-/// aura (Battle Shout) or an `A_MOD_COMBAT(COMBAT_CRIT)` aura (#532 — a crit-rating buff like the test
+/// aura (Battle Shout) or an `A_MOD_COMBAT(COMBAT_CRIT)` aura (a crit-rating buff like the test
 /// "Combat Insight") even though neither kind moves a pool.
 #[test]
 fn aura_moves_sheet_gate() {
@@ -782,7 +782,7 @@ fn is_due_for_expiry_permanent_sentinel_never_reaped() {
     assert!(!is_due_for_expiry(A_STEALTH, permanent, far_future_now));
 }
 
-// --- Consumable on-use magnitudes (moved from items::ops, #387 "smalls": these exercise ONLY
+// --- Consumable on-use magnitudes (moved from items::ops, "smalls": these exercise ONLY
 // crate::spell functions against hand-copied seed magnitudes, not anything item-specific) --------------
 
 /// Potion heal CLAMPS to max health — the potion routes through `E_HEAL`→`apply_heal`→`healed_value`,

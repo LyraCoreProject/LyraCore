@@ -765,7 +765,7 @@ pub(crate) fn aura_moves_vitals(kind: u8, p0: i32) -> bool {
 
 /// True iff `effect` is an aura that moves a character-sheet number `recompute_sheet` derives: any
 /// `A_MOD_STAT` (all five attributes, including `STAT_ALL`), an `A_MOD_COMBAT(COMBAT_ATTACK_POWER)`
-/// aura (Battle Shout), or an `A_MOD_COMBAT(COMBAT_CRIT)` aura (#532 — `sheet_crit_bp`, the
+/// aura (Battle Shout), or an `A_MOD_COMBAT(COMBAT_CRIT)` aura (`sheet_crit_bp`, the
 /// `PLAYER_CRIT_PERCENTAGE` source). Strictly wider than [`aura_moves_vitals`] (which only cares about
 /// the two stats that move a pool) — a +STR/+AGI/+SPI buff, an AP buff, or a crit-rating buff moves the
 /// sheet even though none of them move a pool. Pure → unit-tested (mirrors `aura_moves_vitals`'s test

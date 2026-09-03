@@ -343,7 +343,7 @@ crate::character_owned!(delete, fn sweep_delete_game_player_skill(ctx, character
         skills.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19), HOT: weapon/defense/profession skill values gate every
+// CROSS-DATABASE transport, HOT: weapon/defense/profession skill values gate every
 // swing the character makes on arrival. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_player_skill(ctx, character_guid, io) {
     table = game_player_skill,
@@ -1159,7 +1159,7 @@ pub fn debug_set_skill(
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
 pub fn debug_reseed_skills(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    // REFUSE verdict (issue #30): `game_player_skill` is a HOT manifest table, so a post-begin
+    // REFUSE verdict: `game_player_skill` is a HOT manifest table, so a post-begin
     // reseed is a lost write cross-database.
     let ch = crate::helpers::require_character(ctx, character_guid)
         .map_err(|_| format!("no game_character row for guid {character_guid}"))?;

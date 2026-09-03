@@ -22,12 +22,12 @@
 //! MUST NOT use `entity_by_owner(ctx, ctx.sender())` (that only resolves the gateway's per-player
 //! connection identity). This is the single most important difference from the player reducers.
 //!
-//! # LAYOUT (#386)
-//! Split along the section banners after the #378 reseed/rearm collapse: this file (`mod`) holds the
+//! # LAYOUT
+//! Split along the section banners after the reseed/rearm collapse: this file (`mod`) holds the
 //! world/combat/item levers + the shared `equip_into` helper; `readout` is the `DebugReadout` table +
 //! its two writers; `audit` is the class-kit/quest-chain content audits; `repair` is the consolidated
 //! post-publish repair pass; `encounter`/`instance` are the work-item 228/190 operator levers; and
-//! `fingerprint` is the catalogue-parity content hash (#82). `lib.rs`'s single `#[cfg(feature =
+//! `fingerprint` is the catalogue-parity content hash. `lib.rs`'s single `#[cfg(feature =
 //! "debug_reducers")] mod debug;` gates the whole directory unchanged — a directory module resolves
 //! identically to a single file as far as that `cfg` and the crate-root `pub use debug::*;` are
 //! concerned.
@@ -200,7 +200,7 @@ pub fn debug_apply_damage(
 ///
 /// Routes through the SAME shared kill path combat uses (`combat::kill_player` / `combat::kill_creature`)
 /// so a debug kill is byte-identical to a real killing blow, including channel teardown and combat-
-/// deadline zeroing — not a re-expression of the swing-loop kill logic (#386: this doc used to sit,
+/// deadline zeroing — not a re-expression of the swing-loop kill logic (this doc used to sit,
 /// misattached, above `debug_apply_damage`, and claimed "the combat module has no reusable kill fn",
 /// which the body below has not been true of since `combat::kill_player`/`kill_creature` landed).
 #[reducer]
@@ -385,7 +385,7 @@ pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> R
         return Ok(());
     }
 
-    // REFUSE verdict (issue #30). This is `player_login`'s RE-MATERIALISATION path wearing a harness
+    // REFUSE verdict. This is `player_login`'s RE-MATERIALISATION path wearing a harness
     // hat: it builds a live entity straight off the durable row, so without the fence it is a second
     // way to put a live copy back on a shard the character has left — the dual-liveness dupe the
     // escrow exists to prevent. `player_login` fences it; so must this.
@@ -453,7 +453,7 @@ pub fn debug_set_level(
     character_guid: u64,
     level: u32,
 ) -> Result<(), String> {
-    // REFUSE verdict (issue #30) — the `debug_set_money` sibling. `set_character_level` writes
+    // REFUSE verdict — the `debug_set_money` sibling. `set_character_level` writes
     // `Character.level` (an `ExportBlob` field) and `Character.xp` on the DURABLE row and needs no
     // live entity to do it (it errors only when neither an entity nor a character row exists), so
     // by-guid it reaches an escrowed character. Fenced here, not in `stats`: `gm_command`'s caller
@@ -772,7 +772,7 @@ pub fn debug_spawn_gameobject(
             grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
             grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
             cell: lyracore_shared::spatial::cell_id_at(x, y),
-            // All-zero (issue #515): the debug spawn lever doesn't carry a spawn quaternion this
+            // All-zero: the debug spawn lever doesn't carry a spawn quaternion this
             // slice — the codec's yaw-only derive-from-orientation fallback covers it (orientation
             // is also 0.0 here, so the derived quaternion is the identity rotation, byte-consistent
             // with a hand-seeded fixture that never set these).
@@ -1333,7 +1333,7 @@ pub fn debug_accept_quest(
 /// `junk_rows` used to pad the transaction with `game_creature_move_event` inserts (rows no
 /// subscription matched, reaped by the old 1s event TTL) as ballast for the fat-transaction/AOI-churn
 /// relay-drop class. That table has had no gateway subscriber since perf 2.3 (`gc.rs`), so those
-/// inserts stopped being ballast and became a pure leak (#357) — deleted here, not rerouted. Kept as
+/// inserts stopped being ballast and became a pure leak — deleted here, not rerouted. Kept as
 /// an accepted-but-ignored arg so an existing caller passing a nonzero value doesn't hit an arity
 /// error; it just no longer does anything.
 #[reducer]
@@ -1377,7 +1377,7 @@ pub fn debug_expire_quest(
     character_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
-    // REFUSE verdict (issue #30): the write lands in `game_character_quest`, a MANIFEST table — the
+    // REFUSE verdict: the write lands in `game_character_quest`, a MANIFEST table — the
     // export blob's own enumeration — so post-begin it is a lost write cross-database.
     crate::helpers::require_character(ctx, character_guid)?;
     crate::quest::debug_force_expire(ctx, character_guid, quest_entry)
@@ -1531,7 +1531,7 @@ pub fn debug_enchant_item(
     crate::loot::apply_enchant_item(ctx, character_guid, target_slot, enchant_id)
 }
 
-/// Start `attacker_guid`'s RANGED auto-attack (#10) on the NEAREST live creature, with `spell_id`
+/// Start `attacker_guid`'s RANGED auto-attack on the NEAREST live creature, with `spell_id`
 /// (75 Auto Shot / 5019 wand Shoot) — the small-arg test hook (a creature's own guid is a u64 > 2^53 the
 /// CLI `spacetime call` mangles). Requires a ranged weapon equipped (the shared gate enforces it). Mirrors
 /// `debug_kill_nearest`'s nearest-search, then arms the engagement via `apply_start_ranged_attack`.
@@ -1552,7 +1552,7 @@ pub fn debug_ranged_attack_nearest(
     crate::actor::ranged_attack(ctx, attacker_guid, target_guid, spell_id)
 }
 
-/// Teach `character_guid` the spell `spell_id` (#10 test hook — e.g. Auto Shot 75 on a non-Hunter so the
+/// Teach `character_guid` the spell `spell_id` (test hook — e.g. Auto Shot 75 on a non-Hunter so the
 /// client's spellbook gets it and `CastSpellByName("Auto Shot")` works). Drives the shared
 /// `spell::learn_spell` by explicit guid (the player path is `ctx.sender`-bound). Needs a relog for the
 /// learned spell to reach the client spellbook (sent in SMSG_INITIAL_SPELLS at login).
@@ -1593,10 +1593,10 @@ pub fn debug_set_xp_rate(ctx: &ReducerContext, rate: f32) -> Result<(), String> 
     Ok(())
 }
 
-/// #456 — the REQUIRED post-publish step for the `cell` column migration.
+/// The REQUIRED post-publish step for the `cell` column migration.
 ///
 /// `cell` was END-appended to the four AOI-scoped tables with `#[default(0i64)]`, and 0 is not a
-/// sentinel: it is the legitimate id of cell (0, 0). So on the first publish after #456 EVERY
+/// sentinel: it is the legitimate id of cell (0, 0). So on the first publish EVERY
 /// pre-existing row claims to live in that one cell, and the AOI subscription — which now probes
 /// `cell` by equality — finds nothing where those rows actually are. Moving entities self-heal on
 /// their next heartbeat or spline leg (sub-second), but **gameobjects are static and never re-stamp
@@ -1686,7 +1686,7 @@ pub fn debug_regrid(ctx: &ReducerContext) -> Result<(), String> {
         .iter()
         .filter_map(|e| {
             let (gx, gy) = spatial::grid_cell(e.x, e.y);
-            // #456: `cell` too — a migrated row has the RIGHT grid_x/grid_y and a stale cell of 0,
+            // `cell` too — a migrated row has the RIGHT grid_x/grid_y and a stale cell of 0,
             // so comparing only the grid columns would skip every row this sweep exists to fix.
             (e.grid_x != gx || e.grid_y != gy || e.cell != spatial::grid_cell_id(gx, gy))
                 .then_some((e.guid, gx, gy))
@@ -1705,7 +1705,7 @@ pub fn debug_regrid(ctx: &ReducerContext) -> Result<(), String> {
     Ok(())
 }
 
-/// Grant `amount` reputation for `character_guid` with `faction_id` (#13 server-verify hook — quest-rep is
+/// Grant `amount` reputation for `character_guid` with `faction_id` (server-verify hook — quest-rep is
 /// the only live caller, and the player turn-in path is `ctx.sender`-bound). Drives `reputation::grant_reputation`
 /// directly; no-ops if the faction has no rep bar / is unknown. Verify via `SELECT * FROM game_player_reputation`
 /// and the relayed `SMSG_SET_FACTION_STANDING`. Faction ids are small (< 2^53) so `spacetime call` carries them fine.
@@ -1716,7 +1716,7 @@ pub fn debug_grant_reputation(
     faction_id: u32,
     amount: i32,
 ) -> Result<(), String> {
-    // REFUSE verdict (issue #30): `game_player_reputation` is a MANIFEST table — see
+    // REFUSE verdict: `game_player_reputation` is a MANIFEST table — see
     // `debug_expire_quest` for the same reasoning.
     crate::helpers::require_character(ctx, character_guid)?;
     crate::reputation::grant_reputation(ctx, character_guid, faction_id, amount);
@@ -1989,7 +1989,7 @@ pub fn debug_set_money(
     copper: u32,
 ) -> Result<(), String> {
     let chars = ctx.db.game_character();
-    // REFUSE verdict (issue #30) — harness writers get the same fence as production ones.
+    // REFUSE verdict — harness writers get the same fence as production ones.
     let mut c = crate::helpers::require_character(ctx, character_guid)?;
     c.money = copper;
     chars.guid().update(c);

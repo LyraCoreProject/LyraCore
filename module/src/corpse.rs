@@ -172,7 +172,7 @@ pub struct Corpse {
     pub instance_id: u64,
 }
 
-/// The corpse-reclaim core, actor-explicit (#479): everything [`reclaim_corpse`] does after
+/// The corpse-reclaim core, actor-explicit: everything [`reclaim_corpse`] does after
 /// resolving WHOSE ghost is reclaiming. Takes the row because the reclaim mutates it in place.
 pub(crate) fn apply_reclaim_corpse(
     ctx: &ReducerContext,
@@ -252,7 +252,7 @@ pub(crate) fn apply_reclaim_corpse(
 /// delete (→ SMSG_DESTROY_OBJECT), same as reclaim.
 ///
 /// Called from `gc.rs`'s `reap_movement_events` tick — the same sibling-sweep pattern as
-/// `spell::stacking::sweep_dr_state` / `loot::sweep_loot_rolls` (#379 pulled the inline block out of
+/// `spell::stacking::sweep_dr_state` / `loot::sweep_loot_rolls` (this pulled the inline block out of
 /// `gc.rs`, which had no business knowing what bones are).
 ///
 /// Full scan is safe: the corpse table holds at most one row per RECENTLY-dead player (reclaim

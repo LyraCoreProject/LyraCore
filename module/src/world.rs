@@ -1,6 +1,6 @@
 //! The live in-world player: the field-sync `WorldEntity` row (also reused for creatures, type
 //! Unit), the per-recipient movement-relay event table, and the login/movement/death cores the
-//! `gw::gw_*` reducers drive (#483 — the sender-path twins are gone) plus `on_disconnect`.
+//! `gw::gw_*` reducers drive (the sender-path twins are gone) plus `on_disconnect`.
 //! [entity]/[event]
 
 use lyracore_shared::constants::sheath_state;
@@ -8,7 +8,7 @@ use lyracore_shared::spatial;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
 use crate::faction::game_faction_template;
-// Graveyard resolution (work-item 209/226) lives in `graveyard.rs` (issue #385 extraction) — this
+// Graveyard resolution (work-item 209/226) lives in `graveyard.rs` (extraction) — this
 // alias keeps every `graveyard::...` call site below byte-identical.
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
@@ -100,7 +100,7 @@ pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instan
     public,
     index(accessor = by_map, btree(columns = [map_id])),
     index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y])),
-    // #456: the AOI subscription's index. Exactly 3 columns, all matched by equality terms —
+    // The AOI subscription's index. Exactly 3 columns, all matched by equality terms —
     // the only shape SpacetimeDB 2.7.1's subscription planner can serve (see the `cell` column).
     // `by_grid` stays: the MODULE reaches it through the generated index accessor, not SQL, so
     // the 3-column planner limit does not apply to `helpers::entities_near`.
@@ -336,7 +336,7 @@ pub struct WorldEntity {
     /// bool itself — the rest byte ships via PLAYER_BYTES_2 in `game_rest_state_event`).
     #[default(false)]
     pub resting: bool,
-    /// #456: `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
+    /// `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
     ///
     /// SpacetimeDB 2.7.1's subscription planner can only serve a query from an index when EVERY
     /// column of that index is matched by an equality term, and it skips any index with more than 3
@@ -359,7 +359,7 @@ pub struct WorldEntity {
     /// post-publish step this migration REQUIRES.
     #[default(0i64)]
     pub cell: i64,
-    /// Character-sheet numbers (#517): `spell::recompute_sheet` is the SINGLE chokepoint that writes
+    /// Character-sheet numbers: `spell::recompute_sheet` is the SINGLE chokepoint that writes
     /// these sheet fields (base + `A_MOD_STAT`/`A_MOD_COMBAT(ATTACK_POWER)` aura + equipped gear incl.
     /// enchants — the exact same folds `combat::swing_range_ctx` rolls against), so the gateway's
     /// `build_sheet_stats_values` is a plain row read, never a second copy of aura/gear semantics. A
@@ -386,7 +386,7 @@ pub struct WorldEntity {
     pub sheet_dmg_min: u32,
     #[default(0)]
     pub sheet_dmg_max: u32,
-    /// Melee crit chance in basis points (#532) — a plain copy of `combat::effective_crit_bp`'s
+    /// Melee crit chance in basis points — a plain copy of `combat::effective_crit_bp`'s
     /// output, the SAME fold the swing table rolls against (flat base + agility-derived,
     /// level-suppressed + gear crit rating + `A_MOD_COMBAT(CRIT)` auras). No second formula: this
     /// column exists only so the gateway can relay `PLAYER_CRIT_PERCENTAGE` without recomputing crit
@@ -394,7 +394,7 @@ pub struct WorldEntity {
     /// so `publish` auto-migrates.
     #[default(0)]
     pub sheet_crit_bp: u32,
-    /// `UNIT_FIELD_BYTES_2` (#101): byte 0 is the SHEATH STATE — 0 = weapons stowed, 1 = melee drawn,
+    /// `UNIT_FIELD_BYTES_2`: byte 0 is the SHEATH STATE — 0 = weapons stowed, 1 = melee drawn,
     /// 2 = ranged drawn. Written only by `set_sheathed` (the `CMSG_SETSHEATHED` the client sends on
     /// `Z`), read by the gateway create block + relay so PEERS see a weapon drawn or stowed at all.
     /// Distinct from `unit_bytes_1` (stand state / shapeshift / ghost vis) and from `player_bytes_2`
@@ -466,7 +466,7 @@ impl WorldEntity {
 
 /// **The per-mover motion row (perf catalog 2.1).** One row per moving entity, UPDATED IN PLACE,
 /// carrying the same `(opcode, movement_info)` payload the old per-recipient `game_movement_event`
-/// relay table used to carry (dropped — #350; nothing wrote it any more after this table replaced
+/// relay table used to carry (dropped; nothing wrote it any more after this table replaced
 /// it).
 ///
 /// Why it exists: the old table inserted one row PER NEARBY PLAYER per movement, so a crowd cost
@@ -489,7 +489,7 @@ impl WorldEntity {
     accessor = game_entity_motion,
     public,
     index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y])),
-    // #456: the AOI cell index — see the `cell` column's doc comment.
+    // The AOI cell index — see the `cell` column's doc comment.
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
 pub struct EntityMotion {
@@ -504,7 +504,7 @@ pub struct EntityMotion {
     pub opcode: u16,
     pub movement_info: Vec<u8>,
     pub seq: u32,
-    /// #456: `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
+    /// `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
     ///
     /// SpacetimeDB 2.7.1's subscription planner can only serve a query from an index when EVERY
     /// column of that index is matched by an equality term, and it skips any index with more than 3
@@ -579,7 +579,7 @@ fn is_gm_character(ctx: &ReducerContext, guid: u64) -> bool {
 }
 
 /// One heartbeat's raw position/time delta since the mover's last PERSISTED heartbeat — the anti-cheat
-/// scorer's whole input, and what `plan_movement` derives `moved` from. Issue #385: bundled instead of
+/// scorer's whole input, and what `plan_movement` derives `moved` from. Bundled instead of
 /// 7 loose positional floats/u32s (`score_and_log_movement` used to take 9 arguments counting
 /// `ctx`/`guid`; `debug_score_movement` builds one of these from its own flat wire args to call it).
 pub(crate) struct MovementDelta {
@@ -657,7 +657,7 @@ pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &Mo
 /// A logged movement-plausibility anomaly (255). One row per flagged delta; the flag is advisory (the
 /// move was NOT rejected). Not `public` — server-internal until the GM console (205) surfaces it. These
 /// are recent diagnostics, reaped after the shared `EVENT_TTL_MICROS` window so a benchmark's intentional
-/// speeders cannot grow the table without bound (issue #211). Query a live character with
+/// speeders cannot grow the table without bound. Query a live character with
 /// `SELECT * FROM game_movement_violation WHERE guid = :guid`; durable forensics belongs in reducer logs.
 #[table(accessor = game_movement_violation)]
 pub struct MovementViolation {
@@ -796,7 +796,7 @@ pub(crate) fn teleport_player(
     if e.map_id != map_id || e.instance_id != instance_id {
         crate::duel::interrupt_duel_for(ctx, player_guid);
     }
-    // #461: a movement packet staged before the teleport describes the OLD position. Left queued, the
+    // A movement packet staged before the teleport describes the OLD position. Left queued, the
     // next `publish_motion` firing would relay it up to a tick AFTER the teleport landed and snap
     // every nearby peer's view of this player back to where they were. Drop it in both branches —
     // the authoritative position is the destination, and the player's next heartbeat relays it.
@@ -899,7 +899,7 @@ pub(crate) fn set_home(ctx: &ReducerContext, guid: u64) {
 /// Recall a character to its hearthstone home — an IMMEDIATE teleport via the shared core (the vanilla
 /// ~10s channel/cast is a follow-up). No-op if the character row is gone. [entity]
 ///
-/// REFUSE verdict (issue #30). This is the ONE `teleport_player` caller that needs no live entity —
+/// REFUSE verdict. This is the ONE `teleport_player` caller that needs no live entity —
 /// it resolves the home coords straight off the durable row — so it is the only route by which
 /// `teleport_player`'s unconditional durable-row write (map_id/x/y/z/orientation/pending_instance_id,
 /// FIVE `ExportBlob` fields plus the id `in_transit_instances` reads) can land on an escrowed
@@ -926,10 +926,10 @@ pub(crate) fn recall_to_home(ctx: &ReducerContext, guid: u64) {
 //  Enter world
 // ===========================================================================================
 
-/// The login core, actor-explicit (#468 stage 4d): everything the old sender-path `player_login`
+/// The login core, actor-explicit (stage 4d): everything the old sender-path `player_login`
 /// did after resolving WHOSE login this is. `owner` is the identity stamped onto the live entity
 /// and the character's owner-RLS rows — on the gateway path (`gw::gw_player_login`, the only
-/// remaining caller, #483) the account's BOUND identity, so the rows a per-player connection would
+/// remaining caller) the account's BOUND identity, so the rows a per-player connection would
 /// see stay owned by the identity that connection would present.
 pub(crate) fn apply_player_login(
     ctx: &ReducerContext,
@@ -946,7 +946,7 @@ pub(crate) fn apply_player_login(
         return Err("character does not belong to caller".to_string());
     }
 
-    // IN-TRANSIT FENCE (issue #16): `begin_transfer` deleted this character's live entity, so every
+    // IN-TRANSIT FENCE: `begin_transfer` deleted this character's live entity, so every
     // targeting/aggro/threat/AOI gate already cannot see it — login is the one path that could
     // materialise it again, which on a shard the character has left is exactly the dual-liveness
     // dupe the escrow exists to prevent. Refuse until `finish_transfer` (or the reaper) clears the
@@ -1177,7 +1177,7 @@ fn restamp_owned_data(ctx: &ReducerContext, character_guid: u64, identity: Ident
 /// combat/event rows (auras, combo points, lockouts, pending casts) are exempt from all of this —
 /// they die with the live entity/session, not the durable character. [entity]
 pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64) {
-    // Issue #59 defect 1: floor the guid allocator at `character_guid` BEFORE it disappears, on
+    // Defect 1: floor the guid allocator at `character_guid` BEFORE it disappears, on
     // EVERY delete path (this is the one chokepoint all of them share — transfer, CMSG_CHAR_DELETE,
     // debug_delete_character). A lazily-seeded allocator that has never been touched yet seeds
     // itself from a scan of the SURVIVING rows the moment `next_character_guid` first runs — which,
@@ -1196,7 +1196,7 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
     // resurrection sickness (live find, 2026-07-19).
     //
     // Auras ON the character used to be hand-deleted here too, for the identical reason
-    // (`target_guid` is not one of the tripwire's magic field names). Issue #72's hot-state audit
+    // (`target_guid` is not one of the tripwire's magic field names). The hot-state audit
     // gave `game_aura` a real `character_owned!` marker instead (`sweep_delete_game_aura` /
     // `sweep_transfer_game_aura`, `spell/tables.rs`) — the delete half above already runs it via
     // `CHARACTER_OWNED_DELETE_SWEEPS`, and the marker is also what lets a warm handoff carry the
@@ -1221,7 +1221,7 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
     // never be re-armed, and nothing ever disengaged it. Despawning 300 bots orphaned ~100 creatures
     // this way (live, 2026-07-29) and they piled onto the only player left standing.
     //
-    // Issue #365: this used to hand-roll `combat::disengage` inline (delete the outgoing row, free
+    // This used to hand-roll `combat::disengage` inline (delete the outgoing row, free
     // attackers via `by_target`, clear_target each, `threat::clear_for_unit`) — the same three steps
     // the logout path (below) and the cross-map teleport path call the real helper for. The hand-roll
     // had drifted: `disengage` ALSO drops IN_COMBAT (+ zeroes `combat_until_ms`) on any attacker left
@@ -1233,7 +1233,7 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
         .game_corpse()
         .guid()
         .delete(crate::corpse::corpse_guid_for(character_guid));
-    crate::motion::drop_pending(ctx, character_guid); // #461: staged-but-unpublished motion too
+    crate::motion::drop_pending(ctx, character_guid); // Staged-but-unpublished motion too
     ctx.db.game_entity_motion().guid().delete(character_guid); // see the despawn path
     ctx.db.game_world_entity().guid().delete(character_guid);
     ctx.db.game_character().guid().delete(character_guid);
@@ -1243,7 +1243,7 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
 /// `cascade_delete_character` behind an ownership check; this debug entry is otherwise gate-free for
 /// the harness.
 ///
-/// REFUSE verdict (issue #30) — the SAME verdict `auth::delete_character` carries, for the same
+/// REFUSE verdict — the SAME verdict `auth::delete_character` carries, for the same
 /// reason: this destroys a durable copy another shard holds a claim on. It is strictly worse here
 /// than there, because `cascade_delete_character` runs the `character_owned!` sweep, which includes
 /// `sweep_delete_game_transfer_out` — so an unfenced call deletes the character AND both escrow rows
@@ -1271,7 +1271,7 @@ pub fn debug_delete_character(ctx: &ReducerContext, character_guid: u64) -> Resu
 //  Movement: persist + relay
 // ===========================================================================================
 
-/// #110 ground truth. The gateway reports submitting ~400 movement calls/s at 200 players and
+/// Ground truth. The gateway reports submitting ~400 movement calls/s at 200 players and
 /// receiving a completion for every one, while `spacetime_num_txns_total{reducer="movement_update"}`
 /// reports ~200/s. Exactly one of those is wrong, and no amount of gateway-side instrumentation can
 /// say which — this counts ENTRIES TO THE REDUCER ITSELF, which is the only unambiguous witness.
@@ -1325,7 +1325,7 @@ pub(crate) fn snapshot_needs_persist(
         || drift_sq > PERSIST_MAX_DRIFT_YD * PERSIST_MAX_DRIFT_YD
 }
 
-/// Environmental damage, absorbed out of `movement_update`'s own inline block (issue #385): given the
+/// Environmental damage, absorbed out of `movement_update`'s own inline block: given the
 /// shared curve's damage figure (`lyracore_shared::env::fall_damage`, already computed by the caller
 /// from the client's airborne time + max_health) and the mover's CURRENT health, decide the health to
 /// carry forward and whether the landing is lethal. A lethal fall does NOT subtract here — the
@@ -1349,10 +1349,10 @@ pub(crate) fn resolve_environmental_damage(dmg: u32, health: u32) -> (u32, bool)
 /// already run against `mover`. From here on the reducer does nothing but execute this: no further
 /// branching on raw movement state happens after `plan_movement` returns.
 ///
-/// Issue #385: this replaces the reducer's own formatted source as what the "relay is never gated on
+/// This replaces the reducer's own formatted source as what the "relay is never gated on
 /// the persist decision" invariant pins against — a whitespace-collapsed exact-body match that broke
 /// on every rename or rustfmt re-wrap. `relay_motion` is unconditionally `true` (see `plan_movement`'s
-/// doc) regardless of every other field, which is exactly the shape `#109` regressed on once (only the
+/// doc) regardless of every other field, which is exactly the shape that regressed once (only the
 /// entity row gated; the per-mover motion relay never is) — and it is now an ordinary value-level unit
 /// test (`plan_movement`'s tests, below) instead of a source scan.
 pub(crate) struct MovementPlan {
@@ -1411,7 +1411,7 @@ pub(crate) fn plan_movement(
     }
 }
 
-/// The movement core, actor-explicit (#468 stage 4): everything the old sender-path `movement_update`
+/// The movement core, actor-explicit (stage 4): everything the old sender-path `movement_update`
 /// did after resolving WHO moved. The trusted gateway path (`gw::gw_movement_update`) delegates here
 /// — same shape as every `actor.rs` verb, factored out per that file's own rule for still-inlined cores.
 #[allow(clippy::too_many_arguments)]
@@ -1429,7 +1429,7 @@ pub(crate) fn apply_movement_update(
     if crate::taxi::movement_is_suppressed(ctx, mover.guid) {
         return Ok(());
     }
-    // #110 ground truth — see MOVEMENT_ENTRIES. Counted in the CORE, not the sender reducer, so
+    // Ground truth — see MOVEMENT_ENTRIES. Counted in the CORE, not the sender reducer, so
     // the gateway path's heartbeats land in the same total.
     {
         let n = MOVEMENT_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -1521,7 +1521,7 @@ pub(crate) fn apply_movement_update(
         }
     }
     // Rest state (196): not grid-gated (an inn is smaller than a 50yd cell) but THROTTLED to
-    // ~1Hz per mover (#482): gate on the heartbeat clock crossing a second boundary. At run
+    // ~1Hz per mover: gate on the heartbeat clock crossing a second boundary. At run
     // speed that is a check every ~7yd — still finer than any inn — and it removes a per-
     // heartbeat rest evaluation from the hottest path on the server (measured: the per-move
     // hook chain was ~58µs at 10k moves/s).
@@ -1614,7 +1614,7 @@ pub(crate) fn apply_movement_update(
     // PER-MOVER MOTION ROW (perf catalog 2.1) — the ONLY movement relay path. Gated on
     // `plan.relay_motion` — which `plan_movement`'s own tests prove is ALWAYS `true` — never on
     // `plan.persist_entity` or any raw movement state re-derived here: recreating that coupling is
-    // exactly the #109 regression this used to guard against with a much larger, rename-brittle scan.
+    // exactly the regression this used to guard against with a much larger, rename-brittle scan.
     //
     // This replaced a 25-probe recipient scan plus one `game_movement_event` INSERT per nearby
     // player: O(C) writes per heartbeat, so O(C²) per second zone-wide, plus the same again for the
@@ -1622,7 +1622,7 @@ pub(crate) fn apply_movement_update(
     // gateway's AOI tracker already subscribes this exact 5×5 box, so recipient selection was being
     // computed twice — once here, once by the subscription engine. Only the second one remains.
     //
-    // #461: it no longer writes the PUBLIC `game_entity_motion` row inline. SpacetimeDB pays its
+    // It no longer writes the PUBLIC `game_entity_motion` row inline. SpacetimeDB pays its
     // subscription sweep per TRANSACTION, so one transaction per movement packet cost 7.8 ms/call at
     // 500 players (98.5% of it subscription work, 1.5% our wasm). `queue_motion` stages the payload
     // in the PRIVATE `game_entity_motion_pending` table — no subscribers, therefore no sweep — and
@@ -1653,7 +1653,7 @@ pub(crate) fn apply_movement_update(
 //  Targeting
 // ===========================================================================================
 
-/// The target-write core, actor-explicit (#468 stage 4a) — `gw::gw_set_target` delegates here.
+/// The target-write core, actor-explicit (stage 4a) — `gw::gw_set_target` delegates here.
 pub(crate) fn apply_set_target(
     ctx: &ReducerContext,
     mut player: WorldEntity,
@@ -1703,7 +1703,7 @@ pub(crate) fn can_inspect(
 /// fail-open convention as `combat::start_attack`'s friendly-gate, so a dev/test server without an
 /// imported `FactionTemplate.dbc` never blocks inspect.
 ///
-/// The inspect core, actor-explicit (#479) — same split as [`apply_set_target`].
+/// The inspect core, actor-explicit — same split as [`apply_set_target`].
 pub(crate) fn apply_inspect(
     ctx: &ReducerContext,
     inspector: crate::WorldEntity,
@@ -1904,7 +1904,7 @@ pub(crate) fn ghost_restored_fields(player_flags: u32, unit_bytes_1: u32) -> (bo
 /// turns the row change into a VALUES packet, which is the ONLY way an observer learns that someone
 /// else drew or stowed a weapon. Without this the field stays 0 forever and every peer renders every
 /// player permanently unarmed. Where a stowed weapon hangs is a different field — the per-item
-/// `item_template.sheath` byte in the item query. [#101]
+/// `item_template.sheath` byte in the item query.
 pub(crate) fn apply_set_sheathed(
     ctx: &ReducerContext,
     mut actor: WorldEntity,
@@ -2114,7 +2114,7 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
     // its own attack and any attacks targeting it (future PvP).
     crate::combat::disengage(ctx, entity.guid);
 
-    // A live Trade Session dies with the leaver — the partner hears `TradeCanceled` (#120).
+    // A live Trade Session dies with the leaver — the partner hears `TradeCanceled`.
     crate::trade::cancel_trade_for(ctx, entity.guid);
 
     // Clear the player's corpse on leaving the world (logout/disconnect) so a dead/ghost
@@ -2155,7 +2155,7 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
 
     // The per-mover motion row dies with the entity (perf catalog 2.1's named lifecycle gap): a row
     // left behind never updates again, so it relays nothing, but it would leak one row per character
-    // that has ever moved and hand a fresh subscriber a stale motion on first sync. #461: the
+    // that has ever moved and hand a fresh subscriber a stale motion on first sync. The
     // STAGED payload goes with it, so the next `publish_motion` firing cannot re-create the row we
     // are deleting here (the tick's own liveness gate is the second net, not the only one).
     crate::motion::drop_pending(ctx, entity.guid);
@@ -2171,7 +2171,7 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
 /// `debug_gossip_select` drives the same fire by explicit guid for the harness (the CLI identity
 /// owns no entity).
 ///
-/// The gossip-notify core, actor-explicit (#479) — same split as [`apply_set_target`], keyed by
+/// The gossip-notify core, actor-explicit — same split as [`apply_set_target`], keyed by
 /// guid (the hook payload is the only thing the body reads off the actor).
 pub(crate) fn apply_gossip_select(
     ctx: &ReducerContext,
@@ -2278,9 +2278,9 @@ mod tests {
 
     /// The WIRING, and the half that matters most: the gate covers the ENTITY row and must never
     /// reach the per-mover MOTION row. `game_entity_motion` is the only peer-movement relay when
-    /// AOI is on — gating it would recreate #109 (peers frozen, server perfectly healthy) as a
+    /// AOI is on — gating it would recreate (peers frozen, server perfectly healthy) as a
     /// performance optimisation.
-    // ---- Issue #385: movement_update as plan-then-apply --------------------------------------
+    // ---- movement_update as plan-then-apply --------------------------------------
     //
     // `plan_movement` (and the `MovementDelta`/`resolve_fall_damage` pieces it's built from) replace
     // the reducer's own formatted source as what the "relay is never gated on the persist decision"
@@ -2709,10 +2709,10 @@ mod tests {
         assert_eq!(RESURRECTION_SICKNESS_SPELL, 15007);
     }
 
-    // ---- Issue #59 defect 1: cascade_delete_character ratchets the guid allocator -------------
+    // ---- defect 1: cascade_delete_character ratchets the guid allocator -------------
 
     /// `body_of`/`code_of`/`shape_of` are the shared scan primitives in [`crate::test_scan`]
-    /// (issue #64 — this used to be six near-identical copies, drifted apart).
+    /// (this used to be six near-identical copies, drifted apart).
     use crate::test_scan::shape_of;
 
     /// Every character-delete path — transfer-driven, CMSG_CHAR_DELETE, `debug_delete_character` —
@@ -2733,7 +2733,7 @@ mod tests {
     /// row against a guid that no longer existed, which the aggro pass then refuses to re-arm
     /// (it skips anything already attacking) and nothing ever disengages.
     ///
-    /// Issue #365: this used to assert the three hand-rolled needles (`melee.attacker_guid().delete`,
+    /// This used to assert the three hand-rolled needles (`melee.attacker_guid().delete`,
     /// `melee.by_target().filter`, `threat::clear_for_unit`) that `cascade_delete_character` inlined
     /// instead of calling the real `combat::disengage` helper — which is exactly why the hand-roll
     /// was free to drift (it silently omitted `disengage`'s IN_COMBAT clear on freed attackers). Now

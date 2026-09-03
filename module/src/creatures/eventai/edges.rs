@@ -263,7 +263,6 @@ pub(crate) fn eventai_on_reached_home(ctx: &ReducerContext, creature_guid: u64) 
     );
 }
 
-#[allow(dead_code, reason = "typed producer seam for EventAI relay actions")]
 pub(crate) fn eventai_on_receive_ai_event(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -350,7 +349,6 @@ pub(crate) fn send_relay_ai_event(
     Ok(())
 }
 
-#[allow(dead_code, reason = "typed producer seam for pathfinding authority")]
 pub(crate) fn eventai_on_target_not_reachable(ctx: &ReducerContext, creature_guid: u64) {
     let current_target_guid = ctx
         .db

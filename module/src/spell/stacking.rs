@@ -98,21 +98,13 @@ pub struct DrState {
 /// cross-checking a category assignment against public documentation cheap) — NOT the same numbering
 /// as this crate's own `M_STUN`/`M_ROOT`/`M_FEAR`/`M_POLY` mechanic consts in `taxonomy.rs`, hence the
 /// separate mapping fn below rather than reusing the mechanic value directly). Only stun/fear/root/poly are
-/// reachable today (the only mechanics we have — `M_CHARM`/`M_SLEEP`/`M_DISORIENT` don't exist yet);
-/// charm/sleep/disorient are declared for completeness and to extend cleanly as those mechanics import.
+/// reachable today — they are the only mechanics we have.
+// 3, 5 and 7 are left unnamed: charm/sleep/disorient have no mechanic in `taxonomy.rs` yet, so
+// naming them now would be a constant with no reader.
 pub(crate) const DR_CAT_STUN: u8 = 1;
 pub(crate) const DR_CAT_FEAR: u8 = 2;
-// Reserved: no mechanic maps to these yet (`M_CHARM`/`M_SLEEP`/`M_DISORIENT` don't exist in `taxonomy.rs`
-// today) — declared now so `dr_category_for_mechanic` extends by adding ONE match arm when they import,
-// never a renumbering. `#[allow(dead_code)]` documents that as deliberate.
-#[allow(dead_code)]
-pub(crate) const DR_CAT_CHARM: u8 = 3;
 pub(crate) const DR_CAT_ROOT: u8 = 4;
-#[allow(dead_code)]
-pub(crate) const DR_CAT_SLEEP: u8 = 5;
 pub(crate) const DR_CAT_POLY: u8 = 6;
-#[allow(dead_code)]
-pub(crate) const DR_CAT_DISORIENT: u8 = 7;
 
 /// 15 seconds, in micros — the DR window length, measured from the CC aura's REMOVAL (not its apply).
 pub(crate) const DR_WINDOW_MICROS: i64 = 15_000_000;
