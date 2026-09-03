@@ -7,7 +7,7 @@
 # any other 5875 core?" unanswerable.
 #
 # ONE line: `<tag> <full commit sha>`, and BOTH halves are load-bearing.
-#   * the TAG is what `scripts/wire-harness.sh` checks out — a release, not a branch. There is
+#   * the TAG is what `lyracore dev smoke` checks out — a release, not a branch. There is
 #     deliberately no way to say "main" here.
 #   * the SHA is what it then VERIFIES the checkout resolved to. A git tag is a mutable ref; a
 #     re-pointed tag would otherwise change what this checkout builds without changing this file,

@@ -441,10 +441,12 @@ sleep 4
 # RUST_LOG=info deliberately, not info,gateway::world=debug: since the raw-bytes relay, every packet
 # logs a line, which floods at scale.
 
-# `scripts/publish-module.sh` already calls `debug_repair_after_publish` after every publish above
-# (#378) — it re-arms the creature tick + aura/ground-area/instance-reaper schedules and re-seeds
-# every fixture family `init` seeds but a plain republish doesn't re-run. No manual call needed here
-# unless you bypassed the script.
+# ⚠ Now call `debug_repair_after_publish` BY HAND, on EVERY shard you just published. Nothing runs
+# it for you. It re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease and
+# instance-reaper schedules and re-seeds every fixture family `init` seeds but an auto-migrating
+# republish does not re-run. Skipping it presents as a mid-session hang, not an error.
+# Folding it into `lyracore publish` is issue 41 in the lyracore-cli repository.
+spacetime call -s local lyracore debug_repair_after_publish   # ...and once per further shard
 # If you changed world DATA (spawns/quests/items): re-run the content import.
 
 # After EVERY shard is published or re-imported, prove the replicated catalogues (spells, items, the

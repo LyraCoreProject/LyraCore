@@ -1,18 +1,13 @@
-# Pins the DEVELOPMENT toolchain (what you build/test/fmt with day to day) to a specific version so
-# `cargo fmt`/`cargo clippy` output and `spacetime generate`'s wasm build are reproducible across
-# machines and CI. This is the SAME version as the workspace's declared MSRV
-# (`workspace.package.rust-version = "1.93.0"` in Cargo.toml — see that field's comment for why: the
-# original 1.80 MSRV was amended to 1.85 on #231, then #229's CI work found even 1.85 isn't
-# buildable — `spacetimedb`/`spacetimedb-sdk` themselves declare `rust-version = "1.93.0"` (true at
-# 2.5.0 and re-checked at 2.7.1), so there is no real floor below the toolchain pinned here today).
-# rustup transparently
-# fetches/switches to this exact toolchain for any cargo command run from this repo, and fails fast
-# with an actionable "toolchain '1.93.0' is not installed" if it isn't present, rather than silently
-# formatting/building with whatever `rustc` happens to be on PATH.
+# Pins the development toolchain (what you build, test and format with) so `cargo fmt`, `cargo
+# clippy` and `spacetime generate`'s wasm build are reproducible across machines. It is the same
+# version as `workspace.package.rust-version` in Cargo.toml, and that field's comment says why the
+# two cannot differ. rustup fetches this exact toolchain for any cargo command run from this repo,
+# and fails with "toolchain '1.93.0' is not installed" instead of silently using whatever `rustc` is
+# on PATH.
 [toolchain]
 channel = "1.93.0"
 components = ["rustfmt", "clippy"]
-# The module compiles to wasm (see module/Cargo.toml); the gateway's `spacetime generate` schema
-# extraction (scripts/preflight.sh check 2) also builds it. Listed here so a fresh checkout gets the
-# target for free instead of a build failing on a missing target with no hint why.
+# The module compiles to wasm (see module/Cargo.toml), and the `spacetime generate` schema extraction
+# that `lyracore preflight` runs builds it too. Listed here so a fresh checkout gets the target for
+# free instead of failing on a missing target with no hint why.
 targets = ["wasm32-unknown-unknown"]

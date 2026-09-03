@@ -24,9 +24,9 @@ debug_reducers = []
 blake3 = "1"
 # `unstable` enables row-level-security visibility filters (client_visibility_filter / Filter),
 # which the design uses to pin per-owner tables (character, movement_event) to their owner.
-# Pinned exactly (not "2.5") — the SpacetimeDB CLI/SDK/module-crate contract is a single unit (see
-# gateway/Cargo.toml's spacetimedb-sdk/-lib pins and scripts/preflight.sh's CLI-version check); a
-# minor bump here can silently drift the module ahead of what `spacetime` on PATH can publish.
+# Pinned exactly (not "2.5"): the SpacetimeDB CLI, SDK and module-crate contract is a single unit
+# (see gateway/Cargo.toml's spacetimedb-sdk/-lib pins; `lyracore preflight` check 0 asserts the CLI
+# version). A minor bump here can silently drift the module ahead of what `spacetime` can publish.
 spacetimedb = { version = "=2.7.1", features = ["unstable"] }
 lyracore-shared.workspace = true
 # The Package Delta artifact and the claim conflict tracer (src/package_import.rs). Pure and

@@ -1,6 +1,6 @@
 # Schema — the SpacetimeDB data model
 
-**Status:** current — verified against the tree on 2026-08-04. This document is a *map* of the data
+**Status:** current — verified against the tree on 2026-09-03. This document is a *map* of the data
 model, not a copy of it. **The code is authoritative**: every table is a Rust `#[table]` struct in
 `module/src/**` — or in an extension package compiled into the same module — and where a snippet here
 and the code disagree, the code wins.
@@ -25,9 +25,9 @@ Start at [`architecture.md`](./architecture.md) for how these tables fit into th
   single `#[table(…)]` attribute.
 - **Visibility.** `public` = subscribable by a client connection. Omitting it makes the table
   **private** — only the database owner (the gateway's coordinator connection) can read it.
-- **RLS.** A public table holding per-player rows additionally carries a
-  `#[client_visibility_filter]`, which requires SpacetimeDB's `unstable` feature (pinned in
-  `module/Cargo.toml` with the reason).
+- **RLS.** The module declares no `#[client_visibility_filter]` today; §4 says why, and what a new
+  one would still have to satisfy. `module/Cargo.toml` keeps SpacetimeDB's `unstable` feature
+  pinned, because the attribute needs it.
 - **Migration discipline.** Every table is designed to grow by **END-appending** a column with an
   explicitly typed `#[default(...)]`. Ordering-sensitive data uses explicit sequence or timestamp
   columns, never auto-inc ordering.
@@ -54,34 +54,39 @@ publish presents as an unrelated mid-session hang, not a loud "no such table".
 
 ## 2. Inventory
 
-**177 tables** — 168 of them in `module/src/**`, the remaining 9 contributed by extension packages
-compiled into the same module. **109 public, 68 private.**
+**238 tables**, all of them in `module/src/**`: 122 public, 116 private. No table comes from a
+package in this tree; `packages/example` is the only in-tree package and it declares none. Recount
+rather than trust the numbers below, which drift on every schema change:
+
+```bash
+grep -rn '^#\[table(' module/src --include='*.rs' | wc -l   # 238 on 2026-09-03
+```
 
 | Domain | Tables | Public | Where |
 |---|---:|---:|---|
-| Auth / session / identity | 5 | 0 | `auth.rs` |
-| Character + per-character progression | 13 | 13 | `character.rs`, `skill.rs`, `reputation.rs`, `talent.rs`, `spell/spellbook.rs`, `action_bar.rs`, `chat.rs`, `combo.rs`, `rest.rs`, `corpse.rs`, `xp.rs`, `exploration.rs` |
-| World entity + movement | 8 | 7 | `world.rs`, `creatures/tick.rs` |
-| Terrain / nav | 2 | 2 | `terrain.rs`, `nav.rs` |
-| Chat / social / addon bridge | 7 | 7 | `chat.rs`, `bridge.rs` |
-| Combat / threat | 6 | 3 | `combat/mod.rs`, `threat.rs` |
-| Spell / aura | 23 | 11 | `spell/tables.rs`, `spell/spellbook.rs`, `spell/stacking.rs` |
-| Talent tree (static) | 2 | 2 | `talent.rs` |
-| Quest | 9 | 8 | `quest.rs` |
-| Item / vendor | 4 | 3 | `items/tables.rs` |
+| Auth / session / identity | 6 | 0 | `auth.rs` |
+| Character and per-character progression | 23 | 19 | `character.rs`, `skill.rs`, `reputation.rs`, `talent.rs`, `spell/spellbook.rs`, `action_bar.rs`, `combo.rs`, `rest.rs`, `corpse.rs`, `xp.rs`, `exploration.rs`, `breath.rs`, `breath_relay.rs`, `graveyard.rs` |
+| World entity and movement | 8 | 3 | `world.rs`, `motion.rs` |
+| Terrain / nav / exact vmap | 9 | 5 | `terrain.rs`, `nav.rs`, `vmap.rs` |
+| Chat / social / addon bridge | 9 | 9 | `chat.rs`, `bridge.rs` |
+| Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
+| Spell / aura | 20 | 10 | `spell/tables.rs`, `spell/stacking.rs` |
+| Quest | 12 | 8 | `quest.rs` |
+| Item / vendor / trade / mail | 11 | 5 | `items/tables.rs`, `trade.rs`, `mail.rs`, `mail_escrow.rs` |
 | Auction house | 7 | 2 | `auction.rs` |
-| Creature (template, spawn, AI, pet, trainer) | 15 | 11 | `creatures/*`, `trainer.rs` |
-| GameObject | 6 | 6 | `gameobject.rs` |
-| Loot | 9 | 6 | `loot.rs` |
+| Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
+| GameObject | 9 | 6 | `gameobject.rs`, `go_model.rs` |
+| Loot | 12 | 6 | `loot/*` |
 | Group / party | 5 | 3 | `group.rs` |
-| Instance / encounter | 7 | 0 | `instance.rs`, `encounter.rs` |
-| Region / sharding / transfer / load | 7 | 0 | `region.rs`, `load.rs`, `transfer/` |
+| Instance / encounter | 7 | 1 | `instance.rs`, `encounter.rs` |
+| Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
 | Realm-core | 2 | 0 | `realm_core.rs` |
-| Config / static data / diagnostics | 23 | 22 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `action_bar.rs`, `import_meta.rs`, `debug.rs` |
-| Taxi progression / service | 5 | 1 | `taxi.rs` |
-| GC | 1 | 0 | `gc.rs` |
-| Exact vmap generations | 5 | 0 | `vmap.rs` |
-| Extension packages | 9 | 2 | compiled into the module; maintained outside this repository |
+| Gateway leases | 3 | 0 | `gw.rs` |
+| Taxi | 5 | 1 | `taxi.rs` |
+| Weather | 3 | 1 | `weather.rs` |
+| Packages | 3 | 1 | `package_config.rs`, `package_import.rs`, `script_binding.rs` |
+| Event GC | 1 | 0 | `gc.rs` |
+| Config / static data / diagnostics | 22 | 21 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
 
 Two shapes recur and are worth naming:
 
@@ -345,53 +350,32 @@ until the generation is verified again or the vmap data is imported again.
 
 ## 4. Row-level security
 
-**16 `#[client_visibility_filter]` filters**, every one of the same shape:
+**The module declares no `#[client_visibility_filter]` filters.** Recount at any time:
 
-```sql
-SELECT * FROM <table> WHERE <identity column> = :sender
+```bash
+grep -rn 'client_visibility_filter' module/src --include='*.rs'
 ```
 
-| Filter on | Identity column | Where |
-|---|---|---|
-| `game_character` | `owner_identity` | `character.rs:176` |
-| `game_player_action` | `owner_identity` | `action_bar.rs:60` |
-| `game_addon_message` | `recipient_identity` | `bridge.rs:39` |
-| `game_whisper_event` | `recipient_identity` | `chat.rs:318` |
-| `game_character_contact` | `owner_identity` | `chat.rs:543` |
-| `game_group_event` | `recipient_identity` | `group.rs:297` |
-| `game_item_instance` | `owner_identity` | `items/tables.rs:219` |
-| `game_character_quest` | `owner_identity` | `quest.rs:304` |
-| `game_player_reputation` | `owner_identity` | `reputation.rs:45` |
-| `game_player_skill` | `owner_identity` | `skill.rs:312` |
-| `game_player_spell` | `owner_identity` | `spell/spellbook.rs:27` |
-| `game_resurrect_request` | `target_identity` | `spell/tables.rs:588` |
-| `game_character_talent` | `owner_identity` | `talent.rs:137` |
-| `game_teleport_event` | `recipient_identity` | `world.rs:500` |
-| `game_xp_event` | `recipient_identity` | `xp.rs:38` |
-| `game_levelup_event` | `recipient_identity` | `xp.rs:71` |
+Only two comment lines match. This document used to list sixteen owner-scoped filters, all of the
+shape `SELECT * FROM <table> WHERE <identity column> = :sender`. Commit `7fda35a` (2026-08-11)
+deleted every one of them, in the same change that deleted per-player client connections. An RLS
+filter only ever applied to a client-identity subscription, and no client-identity subscription is
+left: the coordinator connection authenticates as the owner and bypasses RLS by design.
 
-**Three limits worth stating plainly.**
+Visibility is therefore entirely gateway-side. The gateway reads every table through the owner token
+and decides what each player sees with its own recipient-keyed lookups, audience predicates and
+area-of-interest tracker. See [`architecture.md`](./architecture.md) §5.2, §5.3 and §5.4.
 
-1. **RLS cannot express spatial scoping.** `:sender` is a static identity; a filter cannot join on
-   the caller's *current* position. Interest management is therefore gateway-managed — see
-   [`architecture.md`](./architecture.md) §5.2.
-2. **Not every public table has a filter.** `game_character_explored` is public with none: it has no
-   `owner_identity` column, and adding one would be a migration on a live table. Before #483 it was
-   scoped by a per-player subscription predicate plus a gateway-side self guard; the coordinator now
-   subscribes it unqualified like every other base table (there is no per-player connection left to
-   put a predicate on), and the self-scoping happens entirely in-gateway, by the same owner-session
-   lookup the other self-only relay families use (`module/src/exploration.rs:26–32`).
-3. **Offline validation covers identifiers, not shapes.** Step 3 of `lyracore preflight` is an
-   RLS-filter validation pass: it parses every `Filter::Sql` and checks its tables and
-   columns against the generated bindings — it **fails the preflight** on an unknown identifier.
-   (This post-dates the comment at `gateway/src/stdb/subscriptions.rs:3305`, which still says nothing
-   validates RLS offline; that comment is stale.) What is still unvalidated is the *query shape*:
-   SpacetimeDB keeps this SQL as raw text during extraction, so a filter the node's RLS engine
-   rejects fails `subscribe()` and breaks **every login**. A new filter shape is a live-verification
-   item; a renamed column is caught offline.
+Two constraints survive the removal and bind any filter added later.
 
-The coordinator connection authenticates as the owner and **bypasses RLS entirely** — by design, it
-is the cache the gateway reads through.
+1. **RLS cannot express spatial scoping.** `:sender` is a static identity, so a filter cannot join on
+   the caller's *current* position. Interest management stays gateway-managed.
+2. **Offline validation covers identifiers, not shapes.** Step 3 of `lyracore preflight` parses every
+   `Filter::Sql` and checks its tables and columns against the generated bindings, and it fails the
+   preflight on an unknown identifier. It cannot check the query *shape*: SpacetimeDB keeps this SQL
+   as raw text during extraction, so a filter the node's RLS engine rejects fails `subscribe()` on
+   the connection that carries it. A new filter shape is a live-verification item; a renamed column
+   is caught offline.
 
 ---
 
@@ -413,32 +397,55 @@ is the cache the gateway reads through.
 
 ## 6. Scheduled tables
 
-Twelve scheduled tables drive every periodic and deferred effect in the game. Nothing on a gateway
-timer decides gameplay.
+**23 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
+timer decides gameplay. Recount and re-list them with:
+
+```bash
+grep -rn 'scheduled(' module/src --include='*.rs'   # 23 tables plus 4 comment lines, 2026-09-03
+```
 
 | Scheduled table | Reducer | Cadence | Where |
 |---|---|---|---|
-| `game_melee_schedule` | `tick_melee` | 100 ms | `combat/mod.rs:1183` |
-| `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass → ~4 s) | `creatures/tick.rs:126` |
-| `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs:458` |
-| `game_aura_schedule` | `tick_auras` | 1 s | `spell/tables.rs:402` |
-| `game_event_reaper_schedule` | `reap_movement_events` | 1 s | `gc.rs:15` |
-| `game_transfer_reaper_schedule` | `reap_transfers` | 5 s | `transfer/mod.rs` |
-| `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs:276` |
-| `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs:468` |
-| `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:515` |
-| `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/mod.rs:1196` |
-| `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs` |
-| `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs` |
+| `game_motion_publish_schedule` | `publish_motion` | 50 ms (20 Hz) | `motion.rs:102` |
+| `game_melee_schedule` | `tick_melee` | 100 ms | `combat/engage.rs:462` |
+| `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs:81` |
+| `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs:56` |
+| `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, so ~4 s) | `creatures/tick/mod.rs:178` |
+| `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs:632` |
+| `game_aura_schedule` | `tick_auras` | 1 s | `spell/tables.rs:576` |
+| `game_breath_schedule` | `tick_breath` | 1 s | `breath.rs:32` |
+| `game_event_reaper_schedule` | `reap_movement_events` | 1 s (`EVENT_TTL_MICROS`) | `gc.rs:24` |
+| `game_transfer_reaper_schedule` | `reap_transfers` | 5 s, armed lazily by `begin_transfer` | `transfer/mod.rs:250` |
+| `game_mail_escrow_reaper_schedule` | `reap_mail_escrows` | 5 s, armed lazily | `mail_escrow.rs:68` |
+| `game_pet_care_schedule` | `tick_pet_care` | 7.5 s | `creatures/pet_care.rs:18` |
+| `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s | `gw.rs:71` |
+| `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs:312` |
+| `game_weather_schedule` | `tick_weather` | 10 min | `weather.rs:153` |
+| `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs:643` |
+| `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:689` |
+| `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/engage.rs:474` |
+| `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs:162` |
+| `game_creature_ai_summon_expiry` | `expire_eventai_summon` | one-shot at summon lifetime end | `creatures/eventai/mobility.rs:17` |
+| `game_creature_ai_forced_despawn` | `fire_eventai_forced_despawn` | one-shot at the authored despawn time | `creatures/eventai/mobility.rs:51` |
+| `game_creature_ai_relay_continuation` | `resume_relay_run` | one-shot at the authored relay delay | `creatures/eventai/relay.rs:295` |
+| `game_creature_ai_relay_arrival` | `resume_relay_arrival` | one-shot on movement completion | `creatures/eventai/relay.rs:309` |
 
-The interval rows are inserted by `init` (`module/src/seed.rs:1358–1408`), except the transfer reaper
-which `begin_transfer` arms lazily and idempotently. Scheduled reducers self-gate on
-`ctx.sender() == ctx.database_identity()` so they cannot be driven externally.
+The interval rows are inserted by `init` (`seed_scheduler_arming`, `module/src/seed.rs`), except the
+transfer and mail-escrow reapers, which their own entry points arm lazily and idempotently.
+Scheduled reducers self-gate on `ctx.sender() == ctx.database_identity()` so they cannot be driven
+externally.
 
-⚠ Re-arming after a schema change is a real operational step: the schedule re-arms exist because a
-republish can leave a schedule row stale. `debug_repair_after_publish` (#378) runs all of them —
-creature tick, aura, ground-area, instance reaper — in one call, and `scripts/publish-module.sh`
-invokes it automatically after every publish.
+⚠ Re-arming after a schema change is a real operational step: a republish can leave a schedule row
+stale, because `init` does not re-run on an auto-migrating publish. `debug_repair_after_publish`
+re-arms them in one call. **Nothing runs it for you.** The operator calls it by hand on every shard
+after every publish:
+
+```bash
+spacetime call -s <server> <database> debug_repair_after_publish
+```
+
+Folding this into `lyracore publish` is tracked as issue 41 in the `lyracore-cli` repository. Until
+it lands, a skipped call presents as a mid-session hang rather than a loud error.
 
 Packages get a periodic hook without a table of their own: `game_tick_pass!` runs at the end of
 every `tick_creatures` pass, after all core passes, and is expected to self-quantize for a slower

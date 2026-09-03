@@ -1,10 +1,14 @@
 # Changelog
 
-All notable changes to LyraCore are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html) — with the caveat that a `0.x` alpha
-makes no compatibility promise at all: schemas, environment variables, CLI flags, and database
-names may change between pre-releases without a deprecation period.
+This file records release-level changes only. It is **not** a running log of every merge, and it is
+not maintained as one: day-to-day changes are the
+[merged pull requests](https://github.com/LyraCoreProject/LyraCore/pulls?q=is%3Apr+is%3Amerged),
+which are the honest history. Read this file for what a release means, and the PR list for what
+happened.
+
+Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html), with the caveat that a
+`0.x` alpha makes no compatibility promise at all: schemas, environment variables, CLI flags and
+database names may change between pre-releases without a deprecation period.
 
 This file starts at the first public release. The work before it happened in a private repository
 and is not reconstructed here.
