@@ -4008,7 +4008,7 @@ fn collect_creature_spawns(dump: &str, scope: &WorldImportScope) -> Vec<Creature
     // 1) spawns in range → the content slice.
     // db_guid, entry, x,y,z,o, movement_type, respawn_secs, map (map END-appended, work-item 226 —
     // an --include-map row carries its OWN map into the packed payload, not args.map).
-    let mut spawns: Vec<(u64, u64, f64, f64, f64, f64, u8, u32, i64)> = Vec::new();
+    let mut spawns: Vec<CreatureSpawnRow> = Vec::new();
     let mut pool_resolved = 0u32;
     let mut pool_skipped = 0u32;
     for row in parse_table(dump, "creature") {
@@ -5031,12 +5031,12 @@ fn push_world_content_statements(args: &Args, content: MappedContent, stmts: &mu
     if family_active(args, "creatures") {
         stmts.push("DELETE FROM game_creature_waypoint WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_template WHERE entry > 0".into());
-        push_insert(stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", &templates);
+        push_insert(stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", templates);
         push_insert(
             stmts,
             "game_creature_waypoint",
             "id,creature_guid,x,y,z",
-            &waypoints,
+            waypoints,
         );
     }
 
@@ -5044,18 +5044,18 @@ fn push_world_content_statements(args: &Args, content: MappedContent, stmts: &mu
         stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
         stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
         stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
-        push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race", &item_rows);
+        push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race", item_rows);
         push_insert(
             stmts,
             "game_creature_loot",
             "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
-            &loot_rows,
+            loot_rows,
         );
         push_insert(
             stmts,
             "game_npc_vendor",
             "id,creature_entry,item_entry,slot,max_count",
-            &vendor_rows,
+            vendor_rows,
         );
     }
 
@@ -5068,25 +5068,25 @@ fn push_world_content_statements(args: &Args, content: MappedContent, stmts: &mu
             stmts,
             "game_pickpocket_loot",
             "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
-            &pickpocket_rows,
+            pickpocket_rows,
         );
         push_insert(
             stmts,
             "game_skinning_loot",
             "id,skin_loot_id,item_entry,chance_bp,count,group_id",
-            &skinning_rows,
+            skinning_rows,
         );
         push_insert(
             stmts,
             "game_gameobject_loot",
             "id,loot_id,item_entry,chance_bp,count,group_id,quest_only",
-            &gameobject_loot_rows,
+            gameobject_loot_rows,
         );
         push_insert(
             stmts,
             "game_fishing_loot",
             "id,zone_id,item_entry,chance_bp,count,group_id",
-            &fishing_rows,
+            fishing_rows,
         );
     }
 
@@ -5210,12 +5210,12 @@ fn push_quest_and_gameobject_statements(
     if family_active(args, "gameobjects") {
         stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
         stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
-        push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", &go_template_rows);
+        push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", go_template_rows);
         push_insert(
             stmts,
             "game_gameobject_trap",
             "entry,spell_id,cooldown_secs",
-            &go_trap_rows,
+            go_trap_rows,
         );
     }
     // Trainer spell lists (family "trainers").
@@ -5225,7 +5225,7 @@ fn push_quest_and_gameobject_statements(
             stmts,
             "game_trainer_spell",
             "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap",
-            &trainer_rows,
+            trainer_rows,
         );
     }
 }
@@ -5250,7 +5250,7 @@ fn push_creature_behaviour_statements(
             stmts,
             "game_creature_cast",
             "creature_entry,spell_id",
-            &creature_casts,
+            creature_casts,
         );
         // Rotation rows (game_creature_spell, rank 20): multi-spell casters use these instead of (or in
         // addition to) game_creature_cast. Clear ALL rows first (same pattern as game_creature_cast: the
@@ -5261,7 +5261,7 @@ fn push_creature_behaviour_statements(
             stmts,
             "game_creature_spell",
             "id,creature_entry,spell_id,priority,condition,condition_value",
-            &creature_rotation_rows,
+            creature_rotation_rows,
         );
     }
 

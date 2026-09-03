@@ -43,9 +43,9 @@ homepage = "https://github.com/LyraCoreProject/LyraCore"
 # either repository — so the whole workspace is publish-gated here rather than crate by crate.
 publish = false
 
-# A function this long stops fitting in one head (human or agent). The threshold in `clippy.toml`
-# is set above today's worst untouched offenders, so the lint holds the line without burying the
-# real findings; lower it as those shrink.
+# A function above the threshold in `clippy.toml` no longer fits in one head. Existing warnings
+# mark untouched long functions; changed code stays below the 200-line ceiling. Lower it as those
+# functions shrink.
 [workspace.lints.clippy]
 too_many_lines = "warn"
 

@@ -1564,7 +1564,7 @@ fn push_spell_effect_rows(
             // against the cast header's family_flags.
             s.effect_item_type[i]
         } else {
-            power_word_shield_p1_override(spell_id, &name, kind, 0i32)
+            power_word_shield_p1_override(spell_id, name, kind, 0i32)
         };
         let script_id = 0u32;
         // [093] data-driven "this energize enters/holds combat": set on Bloodrage (cast 2687 + trickle
@@ -1623,9 +1623,9 @@ fn push_spell_effect_rows(
     // SoC are distinct ids), so a single free slot suffices. These are REAL kinds → counted toward
     // coverage like any mapped effect.
     let synth_slot = used_slots.iter().position(|&u| !u).unwrap_or(3) as u8;
-    if let Some(synth) = synthetic_control_effect(spell_id, &name, synth_slot)
-        .or_else(|| synthetic_stealth_slow_effect(spell_id, &name, synth_slot))
-        .or_else(|| synthetic_seal_effect(spell_id, &name, synth_slot))
+    if let Some(synth) = synthetic_control_effect(spell_id, name, synth_slot)
+        .or_else(|| synthetic_stealth_slow_effect(spell_id, name, synth_slot))
+        .or_else(|| synthetic_seal_effect(spell_id, name, synth_slot))
     {
         cov.effects += 1;
         cov.real += 1;
@@ -1668,7 +1668,7 @@ fn resolve_effect_kind(
         )
     };
     // Curated correction (Spell.sql analog): reclassify the known script-effect-as-generic spells.
-    let kind = correct_script_effect_kind(&name, kind);
+    let kind = correct_script_effect_kind(name, kind);
 
     // DISMOUNT reclassify (data-driven, never by name/id): a raw DISPEL_MECHANIC effect whose
     // misc value names the mount mechanic becomes E_DISMOUNT. Runs on the RAW effect id (not
@@ -1686,7 +1686,7 @@ fn resolve_effect_kind(
     // MOUNT DISPLAY resolution: an A_MOUNTED effect's p0 already defaults to the raw misc value
     // (resolve_aura_params) — resolve the rarer creature-template indirection here, mirroring
     // the stance/CREATE_ITEM kind-keyed p0 fix-ups above.
-    let p0 = mount_display_p0(kind, p0, &creature_displays);
+    let p0 = mount_display_p0(kind, p0, creature_displays);
 
     // PROC_DAMAGE school: an A_PROC_DAMAGE effect deals its frozen amount as damage of the
     // proc spell's own school — mirrors the mount/stance p0 fix-ups above.
@@ -1885,7 +1885,7 @@ fn resolve_effect_target(
     // Same DBC-collapse trap hits the paladin/priest friendly single-target kit — Holy
     // Light (635/639), Lay on Hands (633), Blessing of Might (19740) and Purify (1152) all
     // import with implicit_target_a=0 (see work-item 007, archived), so they share this override.
-    let target = friendly_self_or_ally_target_override(&name, target);
+    let target = friendly_self_or_ally_target_override(name, target);
     // CHANNEL self-marker: a channeled spell carries an inert A_FLAG "you are channeling" marker
     // (Arcane Missiles eff2) that the DBC reads as ALLY-targeted — but the channel is cast AT an
     // ENEMY, so an ally-typed effect would make the faction gate REJECT the enemy cast (the same
@@ -1894,13 +1894,11 @@ fn resolve_effect_target(
     // hits_ally/hits_enemy scan (a self-cast effect imposes no faction constraint). Generic over the
     // channeled bit + the A_FLAG kind, never a spell id; the channel's A_PERIODIC_TRIGGER tick effect
     // is already T_SELF, so only the stray marker is corrected.
-    let target = if channeled && kind == A_FLAG {
+    if channeled && kind == A_FLAG {
         T_SELF
     } else {
         target
-    };
-
-    target
+    }
 }
 
 /// The `game_trainer_spell` rows for each `--trainer <entry>=<ids>` binding.
