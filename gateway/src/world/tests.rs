@@ -1,5 +1,5 @@
 use super::handlers::{
-    AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, DuelActionStore,
+    AuctionActionStore, AuctionInteraction, CastStore, DuelActionStore,
     ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
     QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
@@ -279,7 +279,7 @@ struct InMemoryStore {
     session: Option<WorldSession>,
     characters: Vec<codec::CharacterView>,
     login_entity: Option<codec::EntityView>,
-    /// Named player/auctioneer snapshots returned to the focused auction interaction seam.
+    /// The auctioneer's house and faction verdict returned to the focused auction seam.
     auction_interaction: Option<AuctionInteraction>,
     moves: std::sync::Mutex<Vec<MoveRecord>>,
     /// Vendor stock the seam's `vendor_stock` read returns (empty by default).
@@ -2978,12 +2978,12 @@ impl DuelActionStore for InMemoryStore {
 }
 
 impl AuctionActionStore for InMemoryStore {
-    fn auction_entities(
+    fn auction_interaction(
         &self,
         _player_guid: u64,
         _auctioneer_guid: u64,
     ) -> Result<Option<AuctionInteraction>> {
-        self.rec("auction_entities");
+        self.rec("auction_interaction");
         Ok(self.auction_interaction)
     }
 
@@ -6708,19 +6708,6 @@ fn played_time_replies_with_the_durable_total_plus_the_live_session_span() {
 
 fn imported_auction_interaction() -> AuctionInteraction {
     AuctionInteraction {
-        player: AuctionEntity {
-            type_mask: lyracore_shared::constants::type_mask::PLAYER,
-            health: 1,
-            ..Default::default()
-        },
-        auctioneer: AuctionEntity {
-            type_mask: lyracore_shared::constants::type_mask::CREATURE,
-            entry: 8_670,
-            npc_flags: lyracore_shared::constants::npc_flags::AUCTIONEER,
-            health: 1,
-            x: 5.0,
-            ..Default::default()
-        },
         house: super::handlers::AuctionHousePolicy {
             id: 1,
             deposit_rate: 5,

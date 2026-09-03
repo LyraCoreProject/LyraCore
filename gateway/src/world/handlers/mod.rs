@@ -37,7 +37,7 @@ pub(crate) use auction::{
     CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 #[cfg(test)]
-pub(crate) use auction::{AuctionEntity, AuctionHousePolicy, AuctionInteraction};
+pub(crate) use auction::{AuctionHousePolicy, AuctionInteraction};
 pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;

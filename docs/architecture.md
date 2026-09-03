@@ -110,6 +110,14 @@ Each of these re-implements *the read the module gate performed*, not a new rule
 the module's own error strings so the client sees identical behaviour on a single-database
 deployment. The rationale is recorded in the maintainers' internal security analysis.
 
+One narrower class sits alongside them. A Durable Read has no reducer to refuse it, so the faction
+refusal that closes an NPC window is answered by the Gateway on the read paths: vendor stock,
+trainer lists, the bank window, and the auction window and its browse pages all call
+`npc_refuses_interaction`. Every other interaction condition stays in the Module: alive,
+selectable, in range, on the same map, and carrying the right `npc_flags`. The Module applies them
+inside the Durable Request the packet drives. The Gateway does not restate them, because two copies
+of one Gate drift.
+
 Account-owned Alpha Test Tools follows a narrower cross-shard path. On every dot-Say command, the
 Gateway reads the current Account authority from Realm-core and conveys it in the one Durable
 Request to the Character's Home Shard. The Module combines that value with the Character's GM level
