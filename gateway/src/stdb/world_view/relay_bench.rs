@@ -2,12 +2,13 @@
 //!
 //! Run with `cargo test -p lyracore-gateway --release relay_scaling -- --ignored --nocapture`.
 //! It prints one row per population size: the pump cost of a burst of combat, cast and impact
-//! events, the writer-side cost of draining every job those enqueued, and the aura relay's
-//! audience and array-sync cost. Ignored by default because it is a measurement, not a check.
+//! events, the writer-side cost of draining every job those enqueued, the aura relay's audience
+//! and array-sync cost, and the yell audience. Ignored by default because it is a measurement,
+//! not a check.
 
 use super::*;
 use crate::codec::property_tests::Rng;
-use crate::stdb::bindings::{Aura, CombatEvent, SpellCastEvent, SpellImpactEvent};
+use crate::stdb::bindings::{Aura, ChatEvent, CombatEvent, SpellCastEvent, SpellImpactEvent};
 use crate::world::{Outbound, SessionTx};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -87,7 +88,14 @@ fn aura(id: u64, target_guid: u64, eff_kind: u8) -> Aura {
 /// player spread over every entity.
 fn build(players: usize, rng: &mut Rng) -> SyntheticRealm {
     let side = ((players / PLAYERS_PER_CELL) as f64).sqrt().ceil() as i32;
-    let cell = |rng: &mut Rng| CellKey::at(0, 0, rng.below(side as usize) as i32, rng.below(side as usize) as i32);
+    let cell = |rng: &mut Rng| {
+        CellKey::at(
+            0,
+            0,
+            rng.below(side as usize) as i32,
+            rng.below(side as usize) as i32,
+        )
+    };
     let view = Arc::new(WorldView::new(true));
     let mut viewers = Vec::with_capacity(players);
     let mut queues = Vec::with_capacity(players);
@@ -127,10 +135,16 @@ fn build(players: usize, rng: &mut Rng) -> SyntheticRealm {
             } else {
                 creatures[pick - players].0
             };
-            let kind = if i % 20 == 0 { super::super::subscriptions::A_STEALTH } else { 0xA0 };
+            let kind = if i % 20 == 0 {
+                super::super::subscriptions::A_STEALTH
+            } else {
+                0xA0
+            };
             aura(1 + i as u64, target, kind)
         })
         .collect();
+    view.auras
+        .replace_all(auras.iter().map(|row| (0, row.clone())));
     SyntheticRealm {
         view,
         viewers,
@@ -223,6 +237,18 @@ impl SyntheticRealm {
         }
     }
 
+    fn yell_row(&self, speaker: usize) -> ChatEvent {
+        ChatEvent {
+            id: speaker as u64,
+            sender_guid: self.viewers[speaker].self_guid,
+            chat_type: 1,
+            language: 7,
+            message: "LFG".to_string(),
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            target_guid: 0,
+        }
+    }
+
     /// Run every queued job on every writer queue: `(jobs run, packets produced)`.
     fn drain(&self) -> (usize, usize) {
         let (mut jobs, mut packets) = (0, 0);
@@ -277,7 +303,7 @@ fn aura_burst(realm: &SyntheticRealm, rng: &mut Rng) -> (Duration, usize, Durati
     for _ in 0..AURA_BURST {
         let row = &realm.auras[rng.below(realm.auras.len())];
         let started = Instant::now();
-        let recipients = realm.view.viewers_on_shard(0);
+        let recipients = aura_audience(&realm.view, row);
         audience += started.elapsed();
         candidates += recipients.len();
         for viewer in recipients {
@@ -288,7 +314,7 @@ fn aura_burst(realm: &SyntheticRealm, rng: &mut Rng) -> (Duration, usize, Durati
             }
             let started = Instant::now();
             let _ = super::super::subscriptions::aura_sync(
-                realm.auras.iter().cloned(),
+                realm.view.auras.on_target(row.target_guid).into_iter(),
                 row.target_guid,
             );
             sync += started.elapsed();
@@ -312,16 +338,16 @@ fn relay_scaling() {
         let n = players;
         let combat = {
             let rows: Vec<CombatEvent> = (0..n).map(|i| realm.combat_row(i, &mut rng)).collect();
-            burst(&realm, |i| combat_event_appeared(&realm.view, 0, &rows[i]))
+            burst(&realm, |i| combat_event_appeared(&realm.view, &rows[i]))
         };
         let cast = {
             let rows: Vec<SpellCastEvent> = (0..n).map(|i| realm.cast_row(i, &mut rng)).collect();
-            burst(&realm, |i| cast_event_appeared(&realm.view, 0, &rows[i]))
+            burst(&realm, |i| cast_event_appeared(&realm.view, &rows[i]))
         };
         let impact = {
             let rows: Vec<SpellImpactEvent> =
                 (0..n).map(|i| realm.impact_row(i, &mut rng)).collect();
-            burst(&realm, |i| impact_appeared(&realm.view, 0, &rows[i]))
+            burst(&realm, |i| impact_appeared(&realm.view, &rows[i]))
         };
         for (name, b) in [("combat", combat), ("cast", cast), ("impact", impact)] {
             println!(
@@ -344,7 +370,24 @@ fn relay_scaling() {
             micros_per(sync, AURA_BURST),
             synced as f64 / AURA_BURST as f64,
         );
+        let yells: Vec<ChatEvent> = (0..n).map(|i| realm.yell_row(i)).collect();
+        let started = Instant::now();
+        let candidates: usize = yells
+            .iter()
+            .map(|row| chat_audience(&realm.view, row).len())
+            .sum();
+        let audience = started.elapsed();
+        println!(
+            "| {players} | {} | {} | yell | {:.1} | {:.0} | n/a | n/a |",
+            realm.creatures.len(),
+            realm.auras.len(),
+            micros_per(audience, n),
+            candidates as f64 / n as f64,
+        );
     }
     println!();
     println!("aura columns: pump = audience selection, jobs = candidate viewers, drain = array syncs built, packets = viewers past the visibility gate");
+    println!(
+        "yell columns: pump = audience selection over the widened span, jobs = candidate viewers"
+    );
 }

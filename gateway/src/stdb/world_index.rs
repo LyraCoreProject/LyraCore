@@ -118,10 +118,16 @@ impl CellKey {
     /// symmetric — `neighbourhood_is_exactly_the_grid_box_bounds` (below) pins it against
     /// `GridBox::bounds`, the predicate the deleted subscription SQL was built from.
     pub fn neighbourhood(&self) -> impl Iterator<Item = CellKey> {
+        self.neighbourhood_within(BOX_HALF_SPAN)
+    }
+
+    /// The `(2·half_span+1)`-square of keys centred here, this key included. The box is the
+    /// `BOX_HALF_SPAN` case; a relay whose range exceeds the box (a yell) widens it.
+    pub fn neighbourhood_within(&self, half_span: i32) -> impl Iterator<Item = CellKey> {
         let (gx, gy) = lyracore_shared::spatial::grid_cell_of_id(self.cell);
         let (map_id, instance_id) = (self.map_id, self.instance_id);
-        ((gx - BOX_HALF_SPAN)..=(gx + BOX_HALF_SPAN)).flat_map(move |cx| {
-            ((gy - BOX_HALF_SPAN)..=(gy + BOX_HALF_SPAN))
+        ((gx - half_span)..=(gx + half_span)).flat_map(move |cx| {
+            ((gy - half_span)..=(gy + half_span))
                 .map(move |cy| CellKey::at(map_id, instance_id, cx, cy))
         })
     }
@@ -278,10 +284,9 @@ impl WorldIndex {
         Some(key)
     }
 
-    /// (Inspection only — the dispatch never needs it; the differential tests do.)
-    #[cfg(test)]
-    /// Where the index believes `guid` is. `None` for a guid it has never seen (a row on a table it
-    /// does not index, or one deleted already).
+    /// Where the index believes `guid` is: the anchor of a relay driven by a table with no cell of
+    /// its own (an aura names its target, a chat line its speaker). `None` for a guid it has never
+    /// seen (a row on a table it does not index, or one deleted already).
     pub fn entity_cell(&self, layer: EntityLayer, guid: u64) -> Option<CellKey> {
         let inner = self.lock();
         Self::layer(&inner, layer).entity_cell.get(&guid).map(|(k, _)| *k)
@@ -340,6 +345,13 @@ impl WorldIndex {
     /// both layers use the same viewer anchors. O(25 + V) with cell scoping on; O(total viewers)
     /// with `LYRACORE_AOI=0`.
     pub fn viewers_of(&self, _layer: EntityLayer, key: CellKey) -> Vec<SessionId> {
+        self.viewers_within(key, BOX_HALF_SPAN)
+    }
+
+    /// Every session anchored within `half_span` cells of `key`. The box (`BOX_HALF_SPAN`) is
+    /// what [`Self::viewers_of`] asks; a relay whose range exceeds the box widens the span so the
+    /// yard-range gate in its job still sees every candidate. O((2·half_span+1)² + V).
+    pub fn viewers_within(&self, key: CellKey, half_span: i32) -> Vec<SessionId> {
         let inner = self.lock();
         if !self.cell_scoped {
             let partition = key.partition();
@@ -351,7 +363,7 @@ impl WorldIndex {
                 .collect();
         }
         let mut out = Vec::new();
-        for anchor in key.neighbourhood() {
+        for anchor in key.neighbourhood_within(half_span) {
             if let Some(sessions) = inner.cell_viewers.get(&anchor) {
                 out.extend_from_slice(sessions);
             }
@@ -775,6 +787,36 @@ mod tests {
         assert!(key
             .neighbourhood()
             .all(|k| k.map_id == 3 && k.instance_id == 9));
+    }
+
+    /// A widened span names exactly the anchors within that many cells on both axes, and the
+    /// box span is the ordinary `viewers_of` answer.
+    #[test]
+    fn viewers_within_widens_the_box_by_chebyshev_distance() {
+        let index = WorldIndex::new(true);
+        let centre = CellKey::at(0, 0, 0, 0);
+        let mut expected: HashMap<i32, HashSet<SessionId>> = HashMap::new();
+        let mut session = 0;
+        for gx in -8..=8 {
+            for gy in -8..=8 {
+                session += 1;
+                index.add_viewer(session, CellKey::at(0, 0, gx, gy));
+                for span in 0..=8 {
+                    if gx.abs() <= span && gy.abs() <= span {
+                        expected.entry(span).or_default().insert(session);
+                    }
+                }
+            }
+        }
+        index.add_viewer(session + 1, CellKey::at(0, 1, 0, 0)); // another instance
+        for span in 0..=8 {
+            let got: HashSet<SessionId> = index.viewers_within(centre, span).into_iter().collect();
+            assert_eq!(got, expected[&span], "span {span}");
+        }
+        assert_eq!(
+            index.viewers_within(centre, BOX_HALF_SPAN),
+            index.viewers_of(EntityLayer::WorldEntity, centre)
+        );
     }
 
     // ===========================================================================================
