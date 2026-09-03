@@ -43,6 +43,12 @@ homepage = "https://github.com/LyraCoreProject/LyraCore"
 # either repository — so the whole workspace is publish-gated here rather than crate by crate.
 publish = false
 
+# A function this long stops fitting in one head (human or agent). The threshold in `clippy.toml`
+# is set above today's worst untouched offenders, so the lint holds the line without burying the
+# real findings; lower it as those shrink.
+[workspace.lints.clippy]
+too_many_lines = "warn"
+
 [workspace.dependencies]
 lyracore-shared = { path = "crates/lyracore-shared" }
 lyracore-package-delta = { path = "crates/lyracore-package-delta" }

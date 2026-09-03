@@ -49,3 +49,6 @@ getrandom = "0.3"
 # parameter has to arrive as a JSON string literal rather than as bare text — this encodes them.
 # Already in the lockfile through `lyracore-package-delta`, so it adds nothing to the tree.
 serde_json = "1"
+
+[lints]
+workspace = true

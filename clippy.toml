@@ -1,0 +1,5 @@
+# `too_many_lines` (warn, workspace-wide) holds a ceiling rather than describing today's code: the
+# default 100 fires on 140 pre-existing functions and buries every real finding. 200 is the size the
+# split of the four longest production functions targeted, so only untouched code exceeds it. Lower
+# it as those shrink.
+too-many-lines-threshold = 200

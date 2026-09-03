@@ -71,3 +71,6 @@ dhat-heap = ["dep:dhat"]
 # drift tripwire.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 lyracore-module = { path = "../module" }
+
+[lints]
+workspace = true

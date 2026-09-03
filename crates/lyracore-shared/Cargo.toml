@@ -12,3 +12,6 @@ description = "LyraCore: protocol-agnostic constants and helpers shared by the S
 # Intentionally NO external dependencies: this crate is consumed both by the wasm module
 # and the native gateway, so it must stay portable and trivially compilable.
 [dependencies]
+
+[lints]
+workspace = true
