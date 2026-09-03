@@ -1,7 +1,7 @@
 //! The crash matrix, the pure-planner enumerations, and the source-scan tripwires that pin the
 //! fences a pure model cannot see.
 //!
-//! Split out of `transfer.rs` by #380; `harness.rs` holds the half that EXECUTES the protocol
+//! Split out of `transfer.rs`; `harness.rs` holds the half that EXECUTES the protocol
 //! against two in-memory databases.
 
 use super::*;
@@ -41,10 +41,10 @@ fn manifest_is_the_generated_enumeration_minus_the_machinery() {
 }
 
 /// [`MANIFEST_EXCLUDE`] is the ONLY input to three separate subtractions — the manifest, the
-/// export loop, and (issue #42) the arriving payload's required set — and nothing pinned its
+/// export loop, and the arriving payload's required set — and nothing pinned its
 /// CONTENTS. Verified by mutation: adding a real character-owned table to it left all 501
 /// module tests green while that table silently vanished from the manifest, was never exported,
-/// and was no longer required of an arriving payload. That is the #42 defect reintroduced one
+/// and was no longer required of an arriving payload. That is the defect reintroduced one
 /// name at a time, and it is data loss (a transfer would drop the rows) rather than a missing
 /// popup. The test above cannot see it: both sides of its length equation move together.
 ///
@@ -93,7 +93,7 @@ fn hot_marks_name_only_real_manifest_tables() {
 }
 
 // -------------------------------------------------------------------------------------
-// Issue #72 hot-state audit: auras ON the character (buffs/debuffs/Stealth) must ride the
+// Hot-state audit: auras ON the character (buffs/debuffs/Stealth) must ride the
 // blob like every other manifest table. Before this, `game_aura` had NO `character_owned!`
 // marker at all (its columns name `target_guid`/`caster_guid`, neither of which the tripwire
 // in tripwires.rs recognizes), so a warm handoff silently dropped every buff, DoT, HoT and the
@@ -119,7 +119,7 @@ fn aura_rows_are_a_manifest_table_marked_hot() {
         );
 }
 
-/// The exact question issue #72 asked: does a 10-minute buff resume with the right REMAINING
+/// The exact question asked: does a 10-minute buff resume with the right REMAINING
 /// time, or does the export/import round trip re-base it? `applied_at`/`expires_at` are
 /// `Timestamp` — an ABSOLUTE point in wall-clock time, never a duration — so the answer should
 /// be "unchanged bit-for-bit", and remaining-duration-against-a-fixed-`now` should therefore be
@@ -215,7 +215,7 @@ fn aura_absolute_expiry_survives_the_export_import_round_trip_with_the_same_rema
 /// with an unrelated row the destination already minted under that same id, or (same-value
 /// coincidence aside) simply means nothing there.
 ///
-/// Since #380 that is one word in the arm's declaration (`remint = id` vs `keep_key`) rather
+/// Since that is one word in the arm's declaration (`remint = id` vs `keep_key`) rather
 /// than a hand-written `row.id = 0` the macro cannot see — so this scan asserts the DECLARED
 /// choice. `keep_key` is right for exactly one table in the tree (`game_item_instance`, whose
 /// guid is derived from the owner and is the id the CLIENT knows the item by); everything else
@@ -707,7 +707,7 @@ fn reaper_is_inert_before_the_stale_window_and_with_no_escrow() {
     );
 }
 
-/// #223 — the ENTIRE recovery decision, enumerated rather than sampled.
+/// The ENTIRE recovery decision, enumerated rather than sampled.
 ///
 /// The tests above sample `recovery` at the points that mattered when each was written. This
 /// walks every combination of its three inputs — `has_out` × `dest_imported` (all three states,
@@ -826,7 +826,7 @@ fn the_pure_planners_are_enumerated_over_their_whole_input_space() {
     );
     assert!(!login_allowed(true, true));
 
-    // escrowed_guid — out-row first, in-row as the fallback that un-strands #36's blocker 2.
+    // escrowed_guid — out-row first, in-row as the fallback that un-strands blocker 2.
     assert_eq!(escrowed_guid(None, None), None);
     assert_eq!(escrowed_guid(Some(7), None), Some(7));
     assert_eq!(
@@ -924,14 +924,14 @@ fn a_character_round_trips_between_two_partitions() {
 /// not "the file mentions it somewhere in a doc comment".
 ///
 /// `body_of`/`code_of` (comment-stripped) are the shared scan primitives in
-/// [`crate::test_scan`] (issue #64 — this used to be six near-identical copies across this file
+/// [`crate::test_scan`] (this used to be six near-identical copies across this file
 /// and five others, and they had already drifted: the first cut of
 /// `every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint` matched
 /// comments that EXPLAIN each fence rather than the fence itself, and a trailing (as opposed to
 /// whole-line) comment defeated the weak four-file version entirely).
 use crate::test_scan::{body_of, code_of, shape_of};
 
-/// Issue #64: this used to be the ONLY guard on `entity_by_owner`'s in-transit fence, and it is
+/// This used to be the ONLY guard on `entity_by_owner`'s in-transit fence, and it is
 /// a source scan — it can prove the right identifiers appear, but not that they mean the right
 /// thing. The SENSE is now pinned directly (no `ReducerContext` needed) by
 /// `helpers::tests::gate_in_transit_refuses_an_in_transit_candidate_and_returns_a_normal_one`;
@@ -939,7 +939,7 @@ use crate::test_scan::{body_of, code_of, shape_of};
 /// never do. This test still earns its keep: it is what catches the fence being deleted, or its
 /// call to the gate being routed around, outright.
 ///
-/// #380 collapsed all three chokepoints onto `helpers::gate_by_guid`, so the exact-shape STRING
+/// Collapsed all three chokepoints onto `helpers::gate_by_guid`, so the exact-shape STRING
 /// PIN that used to sit next to this test (a whitespace-collapsed verbatim copy of
 /// `entity_by_owner`'s body, which every legitimate edit had to update twice) is gone: there is
 /// one two-line expression left where a `!` could hide, and it is inside `.cargo/mutants.toml`'s
@@ -978,7 +978,7 @@ fn the_shared_gate_consults_the_ledger_and_defers_to_the_pure_decision() {
 
 #[test]
 fn player_login_still_refuses_an_in_transit_character() {
-    // #468 stage 4d: the fence lives in the shared login core — both the sender reducer and
+    // Stage 4d: the fence lives in the shared login core — both the sender reducer and
     // gw_player_login delegate there, so pinning the core covers both entries.
     let body = body_of(
         include_str!("../world.rs"),
@@ -1008,15 +1008,15 @@ fn import_character_still_refuses_when_no_destination_copy_materialises() {
 }
 
 // -------------------------------------------------------------------------------------
-// ENFORCEMENT tripwires for the BY-GUID chokepoint (issue #30), one NAMED test per fenced
-// path — the #26 review's lesson: deleting a fence must turn a test red, and a pure model
+// ENFORCEMENT tripwires for the BY-GUID chokepoint, one NAMED test per fenced
+// path — the review's lesson: deleting a fence must turn a test red, and a pure model
 // sees no reducers, so each of these is a source scan of the call site's own body.
 // -------------------------------------------------------------------------------------
 
 /// The gate itself. Same shared decision as the actor chokepoint — all three route through
 /// `helpers::gate_by_guid` and thence `gate_in_transit`, so
 /// `gate_in_transit_refuses_an_in_transit_candidate_and_returns_a_normal_one` pins the SENSE of
-/// all three at once (issue #64), and
+/// all three at once, and
 /// `the_shared_gate_consults_the_ledger_and_defers_to_the_pure_decision` pins the one wrapper.
 /// This scan is what catches the fence being deleted, or routed around, outright.
 #[test]
@@ -1036,7 +1036,7 @@ fn the_by_guid_chokepoint_still_calls_the_in_transit_gate() {
 /// Every REFUSE-verdict call site, one assertion each: `(file, fn signature, what breaks)`.
 /// Deleting the gate call from any one of them fails THIS test by name.
 ///
-/// A sign inversion (issue #64) does NOT need re-checking at each of these ~12 sites: none of
+/// A sign inversion does NOT need re-checking at each of these ~12 sites: none of
 /// them touches `is_in_transit` — they call `character_by_guid`/`character_by_name`, and the
 /// SENSE of those two now lives in exactly one place (`helpers::gate_in_transit`), pinned once
 /// by `the_by_guid_chokepoint_is_exactly_the_pinned_shape`. A sign flip anywhere in the fence
@@ -1044,7 +1044,7 @@ fn the_by_guid_chokepoint_still_calls_the_in_transit_gate() {
 /// needs to prove each site still calls the (now sense-safe) wrapper at all.
 #[test]
 fn every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint() {
-    // #386 split `debug.rs` into the `debug/` directory; every `"debug.rs"` site below now
+    // Split `debug.rs` into the `debug/` directory; every `"debug.rs"` site below now
     // scans this concatenation-of-the-whole-directory blob instead of one `include_str!`.
     let debug_src = crate::test_scan::debug_dir_src();
     let sites: &[(&str, &str, &str, &str)] = &[
@@ -1059,7 +1059,7 @@ fn every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint() 
         (
             "chat.rs",
             include_str!("../chat.rs"),
-            // #479 moved the body into the actor-explicit core; the fence travelled with it.
+            // Moved the body into the actor-explicit core; the fence travelled with it.
             "pub(crate) fn apply_send_whisper(",
             "apply_send_whisper reaches an in-transit character by NAME because begin_transfer \
                  persists with `set_offline: false`",
@@ -1107,7 +1107,7 @@ fn every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint() 
             "pub fn debug_reseed_skills(",
             "debug_reseed_skills writes game_player_skill, a HOT manifest table",
         ),
-        // --- Added by the #30 review's independent call-site audit. ---
+        // --- Added by the review's independent call-site audit. ---
         (
             "world.rs",
             include_str!("../world.rs"),
@@ -1140,7 +1140,7 @@ fn every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint() 
     ];
     for (file, src, signature, why) in sites {
         let body = code_of(src, signature);
-        // `require_character` (issue #371) is `character_by_guid(..).ok_or_else(..)` folded
+        // `require_character` is `character_by_guid(..).ok_or_else(..)` folded
         // into one helper — the fence is the SAME `character_by_guid` call, just no longer
         // spelled out at the caller, so it counts as routing through the chokepoint too.
         assert!(
@@ -1154,7 +1154,7 @@ fn every_refuse_verdict_call_site_still_routes_through_the_by_guid_chokepoint() 
     }
 }
 
-/// The BACKGROUND writers, found by the #30 review's independent audit. Both are `game_tick_pass!`
+/// The BACKGROUND writers, found by the review's independent audit. Both are `game_tick_pass!`
 /// bodies, so the argument that fences every other caller in their files — "the guid came from a
 /// live entity, and `begin_transfer` deleted it" — does not reach them: neither reads
 /// `game_world_entity` at all. They carry their own `is_in_transit` gate instead of routing
@@ -1302,7 +1302,7 @@ fn owner_identity_is_regenerated_at_the_destination_never_carried() {
              `player_login`, so a carried copy arrives stale and is immediately overwritten — the \
              REGENERATE verdict in this file's table (issue #30). Blob was:\n{blob}"
     );
-    // #468 stage 4d: restamp lives in the shared login core (owner = ctx.sender() on the sender
+    // Stage 4d: restamp lives in the shared login core (owner = ctx.sender() on the sender
     // path, the account's bound identity on the gateway path — same regenerate semantics).
     let login = code_of(
         include_str!("../world.rs"),
@@ -1331,7 +1331,7 @@ fn the_in_transit_predicate_is_the_login_fence_itself() {
 }
 
 // -------------------------------------------------------------------------------------
-// CROSS-DATABASE (issue #19): the transport ratchet, and the six-step crash matrix
+// CROSS-DATABASE: the transport ratchet, and the six-step crash matrix
 // -------------------------------------------------------------------------------------
 
 /// THE RATCHET. A character-owned table with no `character_owned!(transfer, ..)` arm does not
@@ -1346,11 +1346,11 @@ fn the_in_transit_predicate_is_the_login_fence_itself() {
 /// recorded at the table is a different thing from an omission nobody noticed.
 ///
 /// Reads `crate::CHARACTER_OWNED_TRANSFER_NAMES`, the plain-string half of the generated
-/// registry (#380). Deliberately not `crate::CHARACTER_OWNED_TRANSFERS` itself: referencing that
+/// registry. Deliberately not `crate::CHARACTER_OWNED_TRANSFERS` itself: referencing that
 /// array materializes every registered fn's POINTER, which drags the SpacetimeDB host imports
 /// (`datastore_insert_bsatn`, `row_iter_bsatn_advance`, …) into this native test binary, which
 /// cannot link them. Same reasoning — and the same discovery-by-linker-error — as
-/// `tripwires::build_scan_strip_tripwire::commented_out_markers_do_not_register`. Before #380 this test string-parsed the
+/// `tripwires::build_scan_strip_tripwire::commented_out_markers_do_not_register`. Before this test string-parsed the
 /// generated Rust source to get the same list; build.rs emits it directly now.
 #[test]
 fn every_manifest_table_can_cross_a_database_boundary() {
@@ -1400,7 +1400,7 @@ fn every_manifest_table_can_cross_a_database_boundary() {
 /// `sweep_transfer_game_item_instance` at `not_transported` left all 468 module tests green
 /// while deleting every character's entire inventory and equipped gear on every shard hop.
 ///
-/// **The mechanism changed in #380.** "Transports" vs "declines" is no longer a property of an
+/// **The mechanism changed.** "Transports" vs "declines" is no longer a property of an
 /// arm's BODY that a scanner has to read back out of the source — a transport arm has no body
 /// any more. It is the `character_owned!` marker KIND (`transfer` vs `not_transported`), which
 /// build.rs already parses, so the mechanical half of the decision arrives here as a generated
@@ -1860,13 +1860,13 @@ fn the_arrival_copy_stays_fenced_until_the_source_copy_is_gone() {
 
 // `finish_destroys_the_source_copy_for_a_cross_database_transfer` and its ordering assertions
 // used to live here as a source scan of `fn do_finish(`. `do_finish` is now a two-line adapter
-// over `apply_finish` (issue #34's seam), and every property that scan asserted — the cascade,
+// over `apply_finish` (the seam), and every property that scan asserted — the cascade,
 // its `cross_database` gate, detach-before-cascade, cascade-before-record_shard — is executed
 // for real against `harness::FakeDb`. See `mod harness`'s `finish_*` tests.
 
 #[test]
 fn import_character_blob_still_proves_the_destination_copy_is_durable() {
-    // The reducer is now a two-line adapter over `apply_import_blob` (issue #37's seam), so the
+    // The reducer is now a two-line adapter over `apply_import_blob` (the seam), so the
     // guards below live in that body — but the ADAPTER still has to call it, and still has to
     // gate on the operator. Both, in order, or the whole harness is testing dead code.
     let shim = code_of(include_str!("mod.rs"), "pub fn import_character_blob(");
@@ -1904,7 +1904,7 @@ fn import_character_blob_still_proves_the_destination_copy_is_durable() {
              importing on top of a resident character is the dual-liveness dupe with extra steps \
              (and cross-database the source cannot see it). Body was:\n{body}"
     );
-    // The MANIFEST-DRIFT guard — #16's contract, which the blob path inherited and which no
+    // The MANIFEST-DRIFT guard — the contract, which the blob path inherited and which no
     // test pinned (verified by mutation: deleting it left all 468 module tests green). Without
     // it a shard on a different build accepts a payload for a table set it does not have, and
     // silently drops whatever it cannot place.
@@ -1925,7 +1925,7 @@ fn import_character_blob_still_proves_the_destination_copy_is_durable() {
              finish_transfer to cascade-delete the source copy the missing rows came from. Body \
              was:\n{body}"
     );
-    // #30's `defer_money_delta` residual: the blob's money is the escrowed value PLUS every
+    // the `defer_money_delta` residual: the blob's money is the escrowed value PLUS every
     // delta folded in after the freeze, and this assignment is the only thing that replays them
     // at the destination. Dropping it left all 468 module tests green.
     assert!(
@@ -1954,13 +1954,13 @@ fn import_character_blob_still_proves_the_destination_copy_is_durable() {
 /// | `CtxShard::record_shard` → no-op | the source keeps no forwarding receipt |
 /// | `CtxShard::ensure_shadow_account` → no-op | the arriving player cannot log in at all |
 /// | `CtxShard::has_live_entity` → `false` | the dual-liveness dupe guard is dead |
-/// | `CtxShard::bump_guid_high_water` → no-op | #59: this database can re-issue an imported character's guid |
-/// | `CtxShard::own_guid_range` → `None` | #237's gate always reads "foreign"; a local arrival stops ratcheting |
+/// | `CtxShard::bump_guid_high_water` → no-op | this database can re-issue an imported character's guid |
+/// | `CtxShard::own_guid_range` → `None` | the gate always reads "foreign"; a local arrival stops ratcheting |
 /// | a `dest_y`/`dest_z` transposition in `begin_transfer`'s shim | the character arrives at the wrong place, and NOTHING else can see it |
 /// | `return Ok(())` above any shim's `apply_*` call | the reducer the gateway calls does nothing while every test passes |
 ///
-/// **Why this pin survived #380 when the others did not.** The plan was to replace every
-/// exact-shape pin with the cargo-mutants gate (`.cargo/mutants.toml`), and for the pins over
+/// **Why this pin survived the mutation sweep when the others did not.** The plan was to replace
+/// every exact-shape pin with the cargo-mutants gate (`.cargo/mutants.toml`), and for the pins over
 /// `begin_transfer`'s and `reap_transfers`' 120-line BODIES that is exactly what happened —
 /// those bodies are `apply_begin`/`apply_reap` now and the harness runs them, so the stringified
 /// twin that had to be edited alongside every legitimate change is gone. But cargo-mutants
@@ -2105,7 +2105,7 @@ fn the_transport_arms_are_the_only_thing_that_moves_rows() {
         "import_rows no longer refuses an unknown table — it now silently drops its rows, and \
              `finish_transfer` will destroy the source copy they came from. Body was:\n{body}"
     );
-    // Issue #42 AC 2 — the refusal must be LOUD, naming the tables in the module log and not
+    // AC 2 — the refusal must be LOUD, naming the tables in the module log and not
     // only in the returned error. Nothing in this crate can capture SpacetimeDB's `log::error!`,
     // so this is a source scan: the behavioural half (refuse, name them, file no in-row) is
     // covered for real by `a_payload_missing_a_manifest_table_is_refused_and_files_no_in_row`,
@@ -2130,7 +2130,7 @@ fn the_transport_arms_are_the_only_thing_that_moves_rows() {
 }
 
 // -------------------------------------------------------------------------------------
-//  SCAN-PINNED, and why (issue #37 AC 5)
+//  SCAN-PINNED, and why (AC 5)
 //
 //  Both guards below are a single call inside a reducer body, and their effect is only
 //  observable in real table state — `teardown_instance_inner`'s row deletion and
@@ -2168,7 +2168,7 @@ fn the_cross_database_eviction_keeps_the_instance_lease() {
     );
 }
 
-/// Issue #22 (group slice) DELETED the #19 interim group mirror — membership is realm-core's,
+/// (group slice) DELETED the interim group mirror — membership is realm-core's,
 /// and the blob carrying a `begin_transfer` snapshot of it would race the authority (which is
 /// what made a party SPLIT across the boundary unable to see itself in the first place).
 ///

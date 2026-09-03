@@ -1,5 +1,5 @@
-//! Effective-value folds over aura/gear + the weapon-damage/attack-table roll family (#382 split of the
-//! former monolithic `combat/mod.rs`, on top of #370's shared damage pipeline). Everything here is the
+//! Effective-value folds over aura/gear + the weapon-damage/attack-table roll family (split of the
+//! former monolithic `combat/mod.rs`, on top of the shared damage pipeline). Everything here is the
 //! "what does this unit's swing look like right now" layer: the `effective_*` stat folds (dodge/parry/
 //! block/crit/miss/swing-time/armor/strength/agility/move-speed), the seal-on-swing + queued-strike
 //! (Heroic Strike/Cleave) on-next-swing folds, the react-window (Overpower/Revenge) arm/check, the
@@ -336,8 +336,8 @@ fn mounted_move_pct(move_pct: i32, mounted_pct: i32, mounted: bool) -> i32 {
 /// (a shield/holdable frill in the off-hand, a relic/quiver in the ranged slot), or it holds a BROKEN
 /// weapon (has durability and it hit 0 — that unit swings unarmed until it is repaired). The ONE
 /// equipped-weapon reader: main-hand / off-hand / ranged all differ only in the slot they name, and
-/// keeping three copies of this join is exactly how the "non-weapon" and "broken" gates drift apart
-/// (issue #370). The tooltip `damage_min`/`damage_max` are `f32`; rounded to whole points for the
+/// keeping three copies of this join is exactly how the "non-weapon" and "broken" gates drift apart.
+/// The tooltip `damage_min`/`damage_max` are `f32`; rounded to whole points for the
 /// integer swing math (vanilla weapon damage is whole numbers). `subclass` is the weapon subclass
 /// (BOW=2, GUN=3, CROSSBOW=18, WAND=19, …) — only the ranged path reads it. [entity]
 fn weapon_profile_in_slot(

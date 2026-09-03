@@ -1,5 +1,5 @@
-//! Death + the shared damage pipeline (#382 split of the former monolithic `combat/mod.rs`, on top of
-//! #370's shared damage pipeline). `kill_creature`/`kill_player` are the two chokepoints every lethal
+//! Death + the shared damage pipeline (split of the former monolithic `combat/mod.rs`, on top of
+//! the shared damage pipeline). `kill_creature`/`kill_player` are the two chokepoints every lethal
 //! path funnels through so a melee kill, `debug_set_health(0)`, and a lethal DoT tick all produce an
 //! IDENTICAL corpse/release. `fold_incoming_damage` (the MODIFIER stage: outgoing % → incoming % →
 //! absorb → godmode), `final_damage` (the EventAI lethal floor), and `apply_hit` (the APPLICATION
@@ -577,7 +577,7 @@ fn kill_creature_with_attribution(
     roll_corpse_loot(ctx, &mut target, target_guid, entitlement.as_ref());
     target.health = 0;
     target.dead = true;
-    // #519: a creature killed mid-leg (flee/patrol/chase) still carries an in-flight
+    // A creature killed mid-leg (flee/patrol/chase) still carries an in-flight
     // `game_creature_spline` row with a real duration — left alone, the client keeps interpolating the
     // corpse toward the old destination after death (a Kobold Vermin sliding onward while dead). Same
     // "TOLD to halt instead of left interpolating" 0-duration stop the cycle's chase phase uses when a
@@ -594,13 +594,13 @@ fn kill_creature_with_attribution(
     //      (`world_view.rs`), so a bare delete relays nothing — the corpse would keep sliding exactly as
     //      before this fix.
     //   2. `game_creature_spline` deletion is deliberately confined to ONE chokepoint,
-    //      `despawn_creature_entity` (issue #359's "canonical despawn checklist" — see its doc + tripwire
+    //      `despawn_creature_entity` (the "canonical despawn checklist" — see its doc + tripwire
     //      in `tick/lifecycle.rs`), which forbids new deletion sites for this table on the same grounds
-    //      #395 retired the old per-caller copies. Adding a second deletion path here would be exactly
-    //      the divergence #359 exists to prevent.
+    //      Retired the old per-caller copies. Adding a second deletion path here would be exactly
+    //      the divergence this checklist exists to prevent.
     // So the row is left for the existing 60s corpse-decay reap (`pass_decay` → `despawn_creature_entity`,
     // a LATER transaction) to clear, same as it always has for every other creature death. This means
-    // #519's literal "no row for the dead guid" Done-when only becomes true after that reap, not
+    // the literal "no row for the dead guid" Done-when only becomes true after that reap, not
     // immediately on kill — the stop-spline packet and position are what a headless check right after
     // kill can assert; row absence is a 60s-later assertion. See the issue-519 comment reconciling this.
     if ctx
@@ -780,10 +780,10 @@ fn award_tag_rewards(
 
 /// Roll a dead creature's money + item loot onto its corpse, apply the GROUP loot method's
 /// need/greed/round-robin/master-loot stamping, and mark it LOOTABLE if anything dropped. Also purges
-/// any stale corpse-loot residue on this guid (issue #358) BEFORE rolling fresh drops — the fix MUST
+/// any stale corpse-loot residue on this guid BEFORE rolling fresh drops — the fix MUST
 /// run on every kill so a leftover pickpocket row can't collide with a freshly-rolled kill-drop slot
 /// (see `corpse_residue_tripwire` below, which pins the ordering). Extracted out of `kill_creature`'s
-/// inline body (issue #382) so the death sequence reads as a table of contents.
+/// inline body so the death sequence reads as a table of contents.
 fn roll_corpse_loot(
     ctx: &ReducerContext,
     target: &mut WorldEntity,
@@ -878,7 +878,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     // who dies is dismounted HERE, by ordinary aura removal — the corpse must not keep its mount, its
     // buffs, or the crowd control that was on it.
     crate::spell::remove_auras_on_death(ctx, victim_guid);
-    // A live Trade Session dies with the victim — both windows hear `TradeCanceled` (#123).
+    // A live Trade Session dies with the victim — both windows hear `TradeCanceled`.
     crate::trade::cancel_trade_for(ctx, victim_guid);
     crate::items::apply_death_durability_loss(ctx, victim_guid);
     crate::hooks::fire_on_death(
@@ -894,11 +894,11 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
 }
 
 // ===========================================================================================
-//  The SHARED damage pipeline (#370) [entity]
+//  The SHARED damage pipeline [entity]
 //
 //  Everything that happens to a target AFTER the damage number is rolled used to exist in four
 //  near-verbatim copies — the main-hand swing, the off-hand swing, the ranged projectile impact, and
-//  `spell::apply_target_damage`. They drifted twice (issue #361: the off-hand ignored Disarm, the
+//  `spell::apply_target_damage`. They drifted twice (the off-hand ignored Disarm, the
 //  ranged impact ignored godmode), which is what a copy of a pipeline always eventually does. The
 //  pipeline now lives here, exactly once, in three stages:
 //
@@ -1087,8 +1087,8 @@ pub(crate) fn fold_incoming_damage(
 ///
 /// A 0-damage hit (miss, fully absorbed, godmode) is a complete no-op: no health write, no kill, no
 /// break-on-damage, no threat — matching what the melee swing and `apply_target_damage` have always
-/// done, and what the ranged impact now does too (before #370 it ran the survivor path with a 0
-/// damage value on a godmode target — the same drift class #361 fixed twice).
+/// done, and what the ranged impact now does too (before it ran the survivor path with a 0
+/// damage value on a godmode target — the same drift class fixed twice).
 ///
 /// The one 0-damage hit that is NOT inert is a hit a Lethal Damage Floor reduced to nothing: it
 /// still refreshes the pursuit leash and fires the death-prevented hook once, because the creature
@@ -1425,13 +1425,13 @@ mod lethality_tests {
 mod corpse_residue_tripwire {
     use crate::test_scan::code_of;
 
-    /// Issue #358: `roll_pickpocket_loot` inserts `game_corpse_loot` rows at slots 0.. on the LIVE
+    /// `roll_pickpocket_loot` inserts `game_corpse_loot` rows at slots 0.. on the LIVE
     /// creature's guid; if the mob dies before every row is taken, `roll_creature_loot` re-inserts
     /// kill drops starting at slot 0 on the SAME guid, producing duplicate `(corpse_guid, slot)` pairs
     /// that every first-match loot consumer addresses ambiguously. The fix is a purge that MUST run
     /// on every kill, BEFORE the fresh roll — this is `ReducerContext` glue invisible to a behavioural
     /// test (no in-process DB harness here), so the wiring is pinned directly, in two parts since
-    /// issue #382 extracted the corpse/loot step out of `kill_creature`'s inline body:
+    /// Extracted the corpse/loot step out of `kill_creature`'s inline body:
     /// `kill_creature` must still route every kill through `roll_corpse_loot`, and `roll_corpse_loot`
     /// itself must call `loot::purge_corpse_residue` strictly before `roll_creature_loot`. Losing any
     /// of the three pieces silently reopens the collision.

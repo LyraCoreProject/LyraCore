@@ -1,5 +1,5 @@
 //! Graveyard resolution (work-item 209/226): the death-release subsystem `world::do_repop` calls to
-//! pick where a ghost teleports. Extracted from `world.rs` (issue #385) — it used to be an inline
+//! pick where a ghost teleports. Extracted from `world.rs` — it used to be an inline
 //! `mod graveyard` sitting inside the player-entity file, a complete subsystem (five consts, zone
 //! resolution, faction teams, the instance-map arm, three candidate builders, two pickers) plus its
 //! own ~250-line test battery, living inside a 2,700-line file it had nothing else to do with.
@@ -140,7 +140,7 @@ const STATIC_CANDIDATES: [Graveyard; 5] = [
 
 /// The instance map's own zone id (cmangos `game_graveyard_zone.ghost_zone` for deaths inside) —
 /// the map→zone hop `terrain::zone_id_at` can't make without terrain. `None` = not an instance map →
-/// the normal open-world chain runs untouched. Issue #376: a field read off
+/// the normal open-world chain runs untouched. A field read off
 /// `crate::instance::DUNGEON_MAPS`, the one dungeon-detail record shared with
 /// `instance_static_fallback` below and `crate::instance::entrance_fallback` — see that table's
 /// doc for the Deadmines/zone-1581 provenance note this used to carry directly.
@@ -152,7 +152,7 @@ pub(crate) fn instance_release_zone(map_id: u32) -> Option<u32> {
 /// state): Deadmines releases at Sentinel Hill (the Westfall graveyard nearest the Moonbrook
 /// entrance in spirit — the exact safe loc is `[V]`, same provenance caveat as the const itself).
 /// NEVER fall through to `nearest(px, py)` for an instance map — cross-map 2-D distance against
-/// the static consts is meaningless (see the section comment above). Issue #376: a field read
+/// the static consts is meaningless (see the section comment above). A field read
 /// off `crate::instance::DUNGEON_MAPS` (see [`instance_release_zone`]).
 pub(crate) fn instance_static_fallback(map_id: u32) -> Option<Graveyard> {
     crate::instance::dungeon(map_id).map(|d| {
@@ -223,7 +223,7 @@ pub(crate) fn pick_graveyard(
 pub(crate) use lyracore_shared::faction::team_for_race;
 
 /// Convert one `game_graveyard` row into the pure [`Graveyard`] shape every candidate source
-/// converges on — the identical 7-line map every caller below used to repeat inline (issue #385).
+/// converges on — the identical 7-line map every caller below used to repeat inline.
 fn to_gy(g: GraveyardLoc) -> Graveyard {
     Graveyard {
         map: g.map_id,
@@ -242,7 +242,7 @@ fn to_gy(g: GraveyardLoc) -> Graveyard {
 /// `map_filter`: `Some(map_id)` restricts to that map — the open-world call (never cross-map; see
 /// the RESOLVED note below). `None` doesn't filter — the instance-release arm (work-item 226): a
 /// dungeon zone's linked graveyard is deliberately on ANOTHER map (Deadmines zone → Westfall, map
-/// 0), which is precisely what the map filter exists to prevent for open-world zones. Issue #385:
+/// 0), which is precisely what the map filter exists to prevent for open-world zones.:
 /// this used to be two near-identical functions (`zone_linked`/`zone_linked_cross_map`, the second
 /// the first minus one `.filter()`); collapsed into one.
 // NOTE (190 slice 2, RESOLVED — no instance gate needed here): graveyard data is static,
@@ -297,7 +297,7 @@ pub(crate) fn resolve_graveyard(
     // falling back to the per-map static const when nothing is imported. Handled BEFORE the
     // open-world chain, whose every step (terrain zone resolve / same-map candidates / raw
     // nearest-const) is meaningless inside a WMO map.
-    // Issue #376: the "map_id != 0 with no instance arm" runtime `warn!` this branch used to
+    // The "map_id != 0 with no instance arm" runtime `warn!` this branch used to
     // carry is gone — it existed because `instance_release_zone` and `instance_static_fallback`
     // used to be TWO independently-hand-matched functions that could disagree on which maps were
     // "instance maps", and the warn was the only way that disagreement surfaced (a garbled

@@ -1,4 +1,4 @@
-//! Batched movement republish (#461) — the private staging table + the scheduled reducer that
+//! Batched movement republish — the private staging table + the scheduled reducer that
 //! drains it into the public `game_entity_motion` relay.
 //!
 //! # Why
@@ -50,7 +50,7 @@ use crate::{game_entity_motion, game_world_entity, EntityMotion};
 //  Cadence
 // ===========================================================================================
 
-/// Default republish cadence — 50 000 µs = **20 Hz** (#461's default). Peer movement gains at most
+/// Default republish cadence — 50 000 µs = **20 Hz** (the default). Peer movement gains at most
 /// one tick (50 ms) of latency; vanilla clients dead-reckon between updates, and BitCraft ships far
 /// coarser (one row per path segment, lerped on read).
 pub const MOTION_TICK_MICROS: i64 = 50_000;
@@ -84,7 +84,7 @@ pub struct PendingMotion {
     pub grid_y: i32,
     /// `(grid_x, grid_y)` packed — the AOI cell key, carried through to the public row verbatim.
     /// Written in the SAME statement as `grid_x`/`grid_y` from
-    /// `lyracore_shared::spatial::grid_cell_id`, per #456 (see `tripwires::grid_cell_tripwire`).
+    /// `lyracore_shared::spatial::grid_cell_id` (see `tripwires::grid_cell_tripwire`).
     pub cell: i64,
     pub opcode: u16,
     pub movement_info: Vec<u8>,
@@ -195,7 +195,7 @@ pub(crate) fn tick_action(entity_alive: bool) -> TickAction {
 // ===========================================================================================
 
 /// Publish ONE staged payload into the public `game_entity_motion` relay, minting `seq` off the
-/// public row (`+1`, or 0 for a mover's first ever motion) exactly as the pre-#461 inline relay did.
+/// public row (`+1`, or 0 for a mover's first ever motion) exactly as the earlier inline relay did.
 fn publish(ctx: &ReducerContext, p: &PendingMotion) {
     let motions = ctx.db.game_entity_motion();
     match motions.guid().find(p.guid) {
@@ -313,7 +313,7 @@ pub(crate) fn drop_pending(ctx: &ReducerContext, guid: u64) {
 //  The tick
 // ===========================================================================================
 
-/// **The 20 Hz republish (#461).** Drains `game_entity_motion_pending` into the public
+/// **The 20 Hz republish.** Drains `game_entity_motion_pending` into the public
 /// `game_entity_motion` in ONE transaction, so SpacetimeDB's subscription sweep runs once per
 /// firing instead of once per movement packet.
 ///
@@ -334,8 +334,8 @@ pub fn publish_motion(ctx: &ReducerContext, _schedule: MotionPublishSchedule) {
 }
 
 /// The drain behind [`publish_motion`] — republish every staged mover into the public relay.
-/// #482 also runs this at the END of `gw_movement_batch`, INSIDE the batch transaction: the
-/// subscription sweep (the whole reason the pending stage exists, #461) is paid once per batch
+/// Also runs this at the END of `gw_movement_batch`, INSIDE the batch transaction: the
+/// subscription sweep (the whole reason the pending stage exists) is paid once per batch
 /// either way, and draining inline removes the schedule's 50ms latency quantum plus the
 /// pending-row churn for the gateway path. The scheduled tick keeps running for the legacy
 /// per-player path and is a cheap no-op when the batch already drained.
@@ -646,7 +646,7 @@ mod tests {
         for guid in 0..100u64 {
             w.alive.insert(guid);
         }
-        // Three heartbeats per player inside one window (the pre-#461 cost: 300 transactions).
+        // Three heartbeats per player inside one window (the earlier cost: 300 transactions).
         for _ in 0..3 {
             for guid in 0..100u64 {
                 w.movement(guid, HEARTBEAT, &[0x01]);

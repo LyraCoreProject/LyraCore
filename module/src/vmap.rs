@@ -1,5 +1,5 @@
-//! Exact per-cell collision-triangle store + ray queries (issue #521, part of the #169 full-vmap
-//! epic; design record `docs/decisions.md` §10). Builds on #520's codec/binning
+//! Exact per-cell collision-triangle store + ray queries (part of the full-vmap
+//! epic; design record `docs/decisions.md` §10). Builds on the codec/binning
 //! (`lyracore_shared::vmap`): this slice adds the module-PRIVATE table the packed per-cell blobs
 //! land in, the import reducers that fill it (mirroring `nav::import_nav_chunks`/`_append`), and
 //! the module-side wrappers over `lyracore_shared::vmap::cast_ray` — LoS (WMO-class triangles
@@ -454,7 +454,7 @@ pub fn discard_vmap_generation(ctx: &ReducerContext, generation_id: u64) -> Resu
 }
 
 // ===========================================================================================
-//  Nav coverage derivation (issue #195) — per-cell walk/obstruction blobs derived module-side
+//  Nav coverage derivation — per-cell walk/obstruction blobs derived module-side
 //  from a generation's OWN staged `VmapGenerationChunk` rows, never a re-import and never
 //  `game_nav_chunk` (that table has no generation column and is cleared wholesale by the `--nav`
 //  import pipeline). Coverage is generation-scoped so it can never half-exist: it belongs to
@@ -748,7 +748,7 @@ pub fn import_vmap_chunks_append(ctx: &ReducerContext, packed: String) -> Result
 }
 
 // ===========================================================================================
-//  Runtime consumption (#521) — module-side wrappers over `lyracore_shared::vmap::cast_ray`,
+//  Runtime consumption — module-side wrappers over `lyracore_shared::vmap::cast_ray`,
 //  gated on `game_config.vmap_enabled`.
 // ===========================================================================================
 
@@ -846,7 +846,7 @@ pub fn probe_rays(
 }
 
 // ===========================================================================================
-//  Model floor heights (#526) — a down-ray probe over the same collision-class triangle store,
+//  Model floor heights — a down-ray probe over the same collision-class triangle store,
 //  so creature Z-placement/movement can stand on model floors (bridges, WMO interiors like
 //  Deadmines' decks) that terrain's heightmap knows nothing about (`terrain::ground_z` only
 //  samples the ADT MCVT grid — the walkable surface UNDER a bridge, not the deck itself).
@@ -889,7 +889,7 @@ pub fn probe_floor_z(
 }
 
 // ===========================================================================================
-//  Indoor/outdoor area-info (#527) — mangos parity: `VMapManager2::getAreaInfo` / the indoor
+//  Indoor/outdoor area-info — mangos parity: `VMapManager2::getAreaInfo` / the indoor
 //  half of `Player::CheckAreaExploreAndOutdoor`. Same down-ray probe shape as `floor_z`, but
 //  WMO-only (a doodad standing in an open field doesn't make the point "indoor") and reporting
 //  the containing group's id + MOGP indoor bit instead of just the hit height.
@@ -918,12 +918,12 @@ pub fn area_info(
 }
 
 // ===========================================================================================
-//  Per-cell indoor presence (issue #22) — a derived, module-private pre-reject in front of
+//  Per-cell indoor presence — a derived, module-private pre-reject in front of
 //  `area_info`, so a movement heartbeat can ask "am I indoors?" every 100 ms without paying a
 //  ray cast anywhere the map has no interior geometry at all (which is nearly everywhere).
 //
 //  Kept in one region at the END of this file on purpose: the generation lifecycle above is
-//  contested ground (issue #195's coverage derivation lands there too), and everything here is
+//  contested ground (the coverage derivation lands there too), and everything here is
 //  additive — one table, one marker write inside `verify_vmap_generation`'s existing decode
 //  pass, one indexed find on the read path.
 // ===========================================================================================

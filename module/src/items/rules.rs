@@ -4,7 +4,7 @@
 //! taxonomy/arithmetic tests live at the bottom of this file.
 //!
 //! `consumable_heal` — the flat-plus-item-level HP formula that stood in for a real on-use effect id —
-//! is RETIRED (#387): every on-use item now carries a real `spellid_1` cast through `begin_cast`
+//! is RETIRED: every on-use item now carries a real `spellid_1` cast through `begin_cast`
 //! (`items::ops::apply_item_use`), so the magnitude lives in `game_spell_effect.base_points` like any
 //! other spell, not in a second, item-only formula.
 
@@ -603,7 +603,7 @@ pub(crate) mod tests {
 
     /// A bare `ItemTemplate` for the stat-sum tests: zero everything except the stat columns the test
     /// sets via the returned mutable handle. Keeps the pure stat arithmetic testable without a module.
-    // pub(crate): reused by `trade::tests` (#121) — the one 100-field template fixture.
+    // pub(crate): reused by `trade::tests` — the one 100-field template fixture.
     pub(crate) fn blank_template(entry: u32) -> ItemTemplate {
         ItemTemplate {
             entry,

@@ -1,4 +1,4 @@
-//! Catalogue parity fingerprint (issue #82) — content-hash the tables that are supposed to be
+//! Catalogue parity fingerprint — content-hash the tables that are supposed to be
 //! IDENTICAL on every shard (spells, items, DBC-derived reference tables), so a partial or stale
 //! re-import shows up as a loud mismatch instead of "this spell behaves differently in Durotar".
 //! Row counts alone are not enough (a count matches trivially while contents differ): every row is

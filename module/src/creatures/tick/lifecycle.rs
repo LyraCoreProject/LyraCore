@@ -1,5 +1,5 @@
-//! The creature lifecycle passes (issue #383 split of tick.rs): the canonical despawn checklist
-//! (issue #359 — every teardown path in the crate routes through `despawn_creature_entity`), then
+//! The creature lifecycle passes (split of tick.rs): the canonical despawn checklist
+//! (every teardown path in the crate routes through `despawn_creature_entity`), then
 //! decay/respawn/GO-respawn — the due-time passes that run on schedule regardless of proximity. See
 //! `tick/mod.rs`'s module doc for the pipeline's load-bearing pass ORDER; this split does not change
 //! it (every pass here keeps its original name and signature, called by bare name via `tick/mod.rs`'s
@@ -12,7 +12,7 @@ use crate::{game_corpse_loot, game_gameobject, game_gameobject_pool_member, game
 use super::*;
 
 // ===========================================================================================
-//  The canonical creature-despawn checklist (issue #359)
+//  The canonical creature-despawn checklist
 // ===========================================================================================
 
 /// Delete a live creature entity AND every satellite row keyed on its guid. **This is the one
@@ -22,8 +22,8 @@ use super::*;
 /// `game_creature_spawn` row and the encounter tracking/equip rows for the first two, the respawn-timer
 /// re-arm for the third — and none of them re-implements the list below.
 ///
-/// Issue #359: those three had each grown a private copy and DIVERGED. `despawn_tracked` deleted
-/// `game_corpse_loot` by corpse guid with no `!withheld` filter — the exact delete the #50 fix removed
+/// Those three had each grown a private copy and DIVERGED. `despawn_tracked` deleted
+/// `game_corpse_loot` by corpse guid with no `!withheld` filter — the exact delete the fix removed
 /// from the other two — so a mid-roll wipe on a sharded realm silently ate the winner's item (the roll
 /// is authoritative on realm-core and invisible here; `settle_loot_roll`'s grant then finds no row and
 /// no-ops). It also skipped the rest of the loot family and the taunt lock. Adding a satellite table
@@ -31,7 +31,7 @@ use super::*;
 ///
 /// NOT on the list: `game_creature_move_event`. Two of the three copies scanned that whole table for
 /// the mover's pending legs; nothing has written it since perf 2.3 moved legs onto the per-creature
-/// `game_creature_spline` row (#395 retired the last writers, and the tripwire below forbids new
+/// `game_creature_spline` row (retired the last writers, and the tripwire below forbids new
 /// ones — `gc.rs` stopped reaping it on the same grounds). A full-table scan per despawned creature,
 /// to delete from a provably empty table, teaches the next reader that the table is live.
 ///
@@ -51,7 +51,7 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     let _ = crate::creatures::set_creature_gossip_menu(ctx, guid, None);
     crate::loot::tag::clear(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid); // the LIVE leg row (perf 2.3)
-    crate::motion::drop_pending(ctx, guid); // #461: the staged, not-yet-republished payload too
+    crate::motion::drop_pending(ctx, guid); // The staged, not-yet-republished payload too
     ctx.db.game_entity_motion().guid().delete(guid); // motion row dies with the entity (perf 2.1)
     crate::loot::reap_corpse_loot_family(ctx, guid); // item rows (withheld-safe) + eligibility + rolls + votes
     ctx.db.game_world_entity().guid().delete(guid); // last — the on_delete relay destroys the object
@@ -106,7 +106,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
         // future constant change could put deadlines past decay), keep the corpse one more tick
         // rather than discard a live roll — the sweep resolves it next pass.
         //
-        // Issue #50 fix: `sweep_loot_rolls` and the `game_loot_roll` check above only see rolls
+        // Fix: `sweep_loot_rolls` and the `game_loot_roll` check above only see rolls
         // whose STATE lives on THIS database. In a sharded deployment a roll promoted to realm-core
         // clears its local staging row within ~200ms of kill-time, so neither of the above can see
         // it anymore even though it is still open there — decay would otherwise reap this corpse's
@@ -130,7 +130,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
         {
             continue;
         }
-        // The ONE checklist (issue #359): entity + spline/motion + the whole loot family (slice 4's
+        // The ONE checklist: entity + spline/motion + the whole loot family (slice 4's
         // item rows and work-item 187's eligibility snapshot + resolved rolls + votes, so a decayed
         // corpse never orphans them — an UNRESOLVED roll blocked the decay above). This pass's own
         // extra is the respawn-timer re-arm below.
@@ -297,7 +297,7 @@ mod due_timer_tripwire {
     ///   the past and the row is revisited forever. That failure is invisible: behaviour stays
     ///   correct and only the cost comes back.
     ///
-    /// Issue #383: moved from `tick.rs`'s combined `due_timer_tripwire` mod to `lifecycle.rs` with
+    /// Moved from `tick.rs`'s combined `due_timer_tripwire` mod to `lifecycle.rs` with
     /// the passes it pins (`pass_decay`/`pass_respawn` now live here, not in `tick/mod.rs`).
     #[test]
     fn the_due_time_passes_range_scan_their_index_and_disarm_after_firing() {
@@ -356,7 +356,7 @@ mod due_timer_tripwire {
 mod despawn_checklist_tripwire {
     use crate::test_scan::code_of;
 
-    /// **One despawn checklist** (issue #359). `despawn_creature_entity` is the only place that knows
+    /// **One despawn checklist**. `despawn_creature_entity` is the only place that knows
     /// what a dying creature leaves behind; pinning its steps is how a satellite table stops being
     /// dropped from the list by a refactor that "only touched one caller".
     ///
@@ -435,7 +435,7 @@ mod despawn_checklist_tripwire {
 
     /// **The three teardown paths route through the checklist and re-implement none of it.**
     ///
-    /// This is the actual issue-#359 regression: `encounter::despawn_tracked` carried a private copy
+    /// This is the actual regression: `encounter::despawn_tracked` carried a private copy
     /// that deleted `game_corpse_loot` by corpse guid with NO `!withheld` filter, so a wipe mid
     /// NEED/GREED roll deleted the item out from under a roll that — on a sharded realm — is
     /// authoritative on realm-core and invisible locally, and `settle_loot_roll`'s grant then found
@@ -494,8 +494,8 @@ mod despawn_checklist_tripwire {
         );
     }
 
-    /// The #50 invariant lives in ONE function now (`loot::reap_corpse_loot_family`, moved there from
-    /// `instance.rs` by issue #359 to sit next to the tables it cleans). Losing the `!withheld`
+    /// The invariant lives in ONE function now (`loot::reap_corpse_loot_family`, moved there from
+    /// `instance.rs` to sit next to the tables it cleans). Losing the `!withheld`
     /// filter silently breaks the cross-shard NEED/GREED grant on every teardown path at once.
     #[test]
     fn the_canonical_loot_family_reap_never_deletes_a_withheld_row() {

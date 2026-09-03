@@ -19,7 +19,7 @@ use crate::game_gameobject_loot; // CHEST data-driven loot table (work-item 210)
 use crate::game_player_skill; // GATHER skill-gate reads the gather skill row (accessor trait)
 use crate::game_world_entity;
 use crate::loot::CorpseLoot;
-use crate::nav::game_nav_chunk; // arm_pool's map-fence (issue #79) — neither is wildcard-exported at the crate root
+use crate::nav::game_nav_chunk; // arm_pool's map-fence — neither is wildcard-exported at the crate root
 use crate::terrain::game_terrain_chunk;
 
 /// The gameobject types this slice handles (cmangos `GAMEOBJECT_TYPE_*`). Deliberate
@@ -205,7 +205,7 @@ pub struct GameObjectUnlocked {
     // sentinel on every live row, so a `1..=now` range visits only DUE nodes — the same trick
     // `game_aura.by_next_tick` uses.
     index(accessor = by_respawn_at, btree(columns = [respawn_at_micros])),
-    // #456: the AOI cell index — exactly 3 columns, all matched by equality terms, which is the
+    // The AOI cell index — exactly 3 columns, all matched by equality terms, which is the
     // only shape SpacetimeDB 2.7.1's subscription planner can serve (see the `cell` column).
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
@@ -243,7 +243,7 @@ pub struct GameObject {
     pub grid_x: i32,
     #[default(0i32)]
     pub grid_y: i32,
-    /// #456: `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
+    /// `(grid_x, grid_y)` packed into ONE indexed value — the AOI subscription's cell key.
     ///
     /// SpacetimeDB 2.7.1's subscription planner can only serve a query from an index when EVERY
     /// column of that index is matched by an equality term, and it skips any index with more than 3
@@ -265,7 +265,7 @@ pub struct GameObject {
     /// nothing ever re-stamps them on its own. That backfill is a REQUIRED post-publish step.
     #[default(0i64)]
     pub cell: i64,
-    /// The cmangos spawn quaternion (`gameobject.rotation0..3`) — issue #515. The client renders a
+    /// The cmangos spawn quaternion (`gameobject.rotation0..3`). The client renders a
     /// static prop's ORIENTATION from this 4-float quaternion (`GAMEOBJECT_ROTATION`, wire index 10),
     /// not from `orientation` alone: rot2/rot3 carry yaw, rot0/rot1 carry the terrain pitch/roll a
     /// bench flush against a sloped wall needs. `orientation` above still drives movement-facing math
@@ -276,7 +276,7 @@ pub struct GameObject {
     /// `orientation` instead of sending a degenerate zero rotation — see
     /// `gateway/src/codec/gameobject.rs::build_gameobject_rotation_values`.
     /// ⚠ Field spelling: SpacetimeDB normalizes column names to snake_case, so a Rust field
-    /// `rotation0` is STORED as column `rotation_0`. #515 shipped as `rotation0..3` (stored
+    /// `rotation0` is STORED as column `rotation_0`. The import shipped it as `rotation0..3` (stored
     /// `rotation_0..3`); a parallel session saw the normalized live columns, took them for orphans,
     /// and re-declared them as `rotation_0..3` — same four columns, two spellings, briefly published
     /// as a duplicate-name type that broke row decode. The merge collapsed everything onto the
@@ -467,7 +467,7 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         grid_y: lyracore_shared::spatial::grid_cell(m.x, m.y).1,
         cell: lyracore_shared::spatial::cell_id_at(m.x, m.y),
         // Pool members carry no spawn quaternion (cmangos pool_gameobject has none either) — the
-        // codec derives a yaw-only quaternion from `orientation` for the all-zero case (#515).
+        // codec derives a yaw-only quaternion from `orientation` for the all-zero case.
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -476,7 +476,7 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
 }
 
 /// Every map id this database currently holds REAL imported spatial content for, read off
-/// `game_terrain_chunk`/`game_nav_chunk` — the same ground-truth signal issue #79's fresh-shard guard
+/// `game_terrain_chunk`/`game_nav_chunk` — the same ground-truth signal the fresh-shard guard
 /// uses in `importer/scripts/import-world.sh`'s `db_imported_probe`. `init` seeds neither table (only a real
 /// `importer --apply` run ever writes to them; see both files' module doc comments), so an EMPTY
 /// result here means this database has never received a real import — everything it holds is `init`'s
@@ -496,7 +496,7 @@ fn imported_terrain_maps(ctx: &ReducerContext) -> HashSet<u32> {
 /// call (and a bare-dev-DB `debug_setup_gather_pool`) must still arm every pool — this admits
 /// everything in that case. Once ANY map has real terrain/nav content, a member on a DIFFERENT map is
 /// foreign: refusing it is what stops `arm_all_pools` resurrecting another continent's fixture after
-/// that continent's own import already wiped it (issue #79 — the false REGRESSION a clean map-1 import
+/// that continent's own import already wiped it (the false REGRESSION a clean map-1 import
 /// used to end with, because the demo tier-pool's map-0 Northshire point got re-armed regardless).
 pub(crate) fn pool_member_map_is_live(member_map: u32, imported_maps: &HashSet<u32>) -> bool {
     imported_maps.is_empty() || imported_maps.contains(&member_map)
@@ -507,7 +507,7 @@ pub(crate) fn pool_member_map_is_live(member_map: u32, imported_maps: &HashSet<u
 /// pool's currently-armed point guids at `pool_point_guid`). Pulled out to a pure fn (no
 /// `ReducerContext`, `members`/`active_point_guids` are plain owned/borrowed values a unit test can
 /// construct directly) SPECIFICALLY so this splice point — not just the isolated
-/// `pool_member_map_is_live` predicate — has an automated mutation-testing guard (issue #79 review: the
+/// `pool_member_map_is_live` predicate — has an automated mutation-testing guard (review: the
 /// original review disclosed this wiring as unreachable without a live `ReducerContext`; it isn't —
 /// `arm_pool` below now calls this directly, so mutating IT mutates the real production code path).
 pub(crate) fn eligible_pool_candidates(
@@ -572,7 +572,7 @@ pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
 /// re-run on a plain (auto-migrate) publish, and the importer writes the pool HEADER + MEMBER rows via
 /// SQL but no live `game_gameobject` rows (those carry a Timestamp), so something must turn members into
 /// active spawns once the SQL load lands. The ETL calls this after the load (importer/scripts/import-world.sh),
-/// exactly like the creature-tick rearm folded into `debug_repair_after_publish` (#378). Idempotent: `arm_pool` clears each pool's prior live rows
+/// exactly like the creature-tick rearm folded into `debug_repair_after_publish`. Idempotent: `arm_pool` clears each pool's prior live rows
 /// first, so re-running it never drifts the count. Operator-gated (a world-open privileged reducer).
 /// Collect the ids first (house style — though `arm_pool` mutates `game_gameobject`, not the pool header).
 #[reducer]
@@ -644,8 +644,8 @@ fn locked_shut(ctx: &ReducerContext, go_guid: u64, lock_id: u32) -> bool {
             .is_none()
 }
 
-/// The GO target-acquisition gate shared by [`apply_pick_lock`] and [`apply_use_gameobject`] (issue
-/// #372): resolve the GameObject + its template, resolve the caster's live entity, and confirm they
+/// The GO target-acquisition gate shared by [`apply_pick_lock`] and [`apply_use_gameobject`]:
+/// resolve the GameObject + its template, resolve the caster's live entity, and confirm they
 /// share a map+instance and are within [`USE_RANGE_SQ`]. Every error string below is preserved verbatim
 /// from both call sites (the two ~30-line blocks were byte-identical before this extraction).
 fn usable_go(
@@ -1119,7 +1119,7 @@ pub fn debug_pick_lock_entry(
 /// `import_gameobjects_append` in the SAME commit, not a table migration: this is a string protocol
 /// between the importer and this reducer, not a reducer arg) lets a DOOR/BUTTON spawn already-open
 /// (cmangos `startOpen`); every other type's importer row carries 0 (ready/closed), byte-identical to
-/// the pre-211 always-0 shape. `rot0..3` (issue #515, END fields — the cmangos spawn quaternion) ride
+/// the pre-211 always-0 shape. `rot0..3` (END fields — the cmangos spawn quaternion) ride
 /// AFTER `initial_state` rather than beside `orientation` so every pre-515 packed-row builder in this
 /// file's tests keeps working unmodified; a hand-built row that omits them fails loudly (field-count
 /// check below) rather than silently importing a zero quaternion.
@@ -1151,7 +1151,7 @@ pub fn import_gameobjects_append(ctx: &ReducerContext, packed: String) -> Result
 /// `guid,template_entry,map,x,y,z,o,initial_state,rot0,rot1,rot2,rot3`) into `game_gameobject` rows
 /// (stamped at `ctx.timestamp`), returning the count loaded. Shared by both reducers above.
 /// `initial_state` is work-item 211's DOOR/BUTTON `startOpen` carry — every non-door/button importer
-/// row still sends 0, so existing content is byte-identical. `rot0..3` (issue #515) is the cmangos
+/// row still sends 0, so existing content is byte-identical. `rot0..3` is the cmangos
 /// spawn quaternion; the importer sends the dump's literal `0,0,0,0` for any row it doesn't have one
 /// for, so this reducer never needs to derive a fallback itself — that derivation is the WIRE codec's
 /// job (`gateway/src/codec/gameobject.rs`), not storage's.
@@ -1171,7 +1171,7 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         let pu32 = |s: &str| s.parse::<u32>().map_err(|_| format!("bad u32: {s}"));
         let pf32 = |s: &str| s.parse::<f32>().map_err(|_| format!("bad f32: {s}"));
         let pu8 = |s: &str| s.parse::<u8>().map_err(|_| format!("bad u8 state: {s}"));
-        // Parse the position ONCE (#456): the grid columns used to re-parse `f[3]`/`f[4]` per
+        // Parse the position ONCE: the grid columns used to re-parse `f[3]`/`f[4]` per
         // component, and `cell` would have made that four parses of the same two fields. Hoisting
         // also makes it structurally impossible for `grid_x`, `grid_y` and `cell` below to be
         // derived from different coordinates.
@@ -1362,7 +1362,7 @@ mod tests {
         assert_eq!(respawn_window_micros(180), RESPAWN_WINDOW_MICROS); // 180s == the const, no surprise
     }
 
-    /// Issue #79 — `arm_pool`'s map-fence. An EMPTY imported-maps set (nothing has ever been really
+    /// `arm_pool`'s map-fence. An EMPTY imported-maps set (nothing has ever been really
     /// imported into this database) must admit every member regardless of its map: that's `init`'s own
     /// publish-time arm, and a bare-dev-DB `debug_setup_gather_pool`, and both must keep working exactly
     /// as before this fence existed.
@@ -1409,7 +1409,7 @@ mod tests {
         assert!(!pool_member_map_is_live(1, &multi_map));
     }
 
-    /// `eligible_pool_candidates` — the ACTUAL splice `arm_pool` calls each iteration (issue #79 review:
+    /// `eligible_pool_candidates` — the ACTUAL splice `arm_pool` calls each iteration (review:
     /// the disclosed gap was that only the isolated `pool_member_map_is_live` predicate had a unit test,
     /// not the wiring; this exercises the real production filter — weight>0 AND live-map AND not-already-
     /// active — together, exactly as `arm_pool` composes them).

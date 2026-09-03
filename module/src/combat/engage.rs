@@ -1,4 +1,4 @@
-//! The engagement model (#382 split of the former monolithic `combat/mod.rs`, on top of #370's shared
+//! The engagement model (split of the former monolithic `combat/mod.rs`, on top of the shared
 //! damage pipeline): `enter_combat`/`disengage`/`clear_target`/`break_own_attacks` + the `is_engaged`/
 //! `melee_combatant_guids` queries over `game_melee_attack` (the single source of truth for who fights
 //! whom — see the banner below for the both-directions rule those two helpers encode), the engagement
@@ -494,7 +494,7 @@ pub struct RangedImpactSchedule {
 // ===========================================================================================
 
 /// The TARGET-side half of the attack-command gate, shared verbatim by `apply_start_attack` and
-/// `apply_start_ranged_attack` (#370 — it was a copy-paste, and a copy of a gate is a gate that
+/// `apply_start_ranged_attack` (it was a copy-paste, and a copy of a gate is a gate that
 /// eventually only half-holds): the target must EXIST, be on the same map + instance, not be a
 /// CORPSE, and not be FRIENDLY. Returns the resolved target row so the caller doesn't fetch it twice.
 ///

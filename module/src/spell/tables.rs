@@ -274,7 +274,7 @@ pub struct Aura {
     pub proc_ready_micros: i64,
 }
 
-// UNIT-keyed character-owned sweep (issue #72, the warm-handoff hot-state audit). `Aura`'s columns
+// UNIT-keyed character-owned sweep (the warm-handoff hot-state audit). `Aura`'s columns
 // name ANY unit (`target_guid`/`caster_guid` — creatures have auras too), never `character_guid`/
 // `player_guid`/`owner_guid`, so `tripwires.rs`'s `character_owned_tripwire` never flags this table and no
 // marker was mandatory. That silence is exactly why the TRANSFER half went missing while the DELETE
@@ -291,7 +291,7 @@ crate::character_owned!(delete, fn sweep_delete_game_aura(ctx, character_guid) {
         auras.id().delete(id);
     }
 });
-// CROSS-DATABASE transport (issue #19/#72): `id` is `#[auto_inc]` — meaningless, and possibly
+// CROSS-DATABASE transport: `id` is `#[auto_inc]` — meaningless, and possibly
 // COLLIDING, on the destination — reset to 0 so the insert mints a fresh one, mirroring
 // `sweep_transfer_game_character_talent`'s identical re-mint of its own surrogate PK. Every OTHER
 // column, including `applied_at`/`expires_at`, rides unchanged: both are ABSOLUTE `Timestamp`s (a

@@ -364,7 +364,7 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
         // skill-up window `raise_skill`/`gain_weapon_skill`/`gain_defense_skill` climb into.
         crate::skill::raise_combat_caps(ctx, p.guid, p.level);
         // Attributes + armor + max health/power for the new level, via the ONE shared writer
-        // (`stats::apply_level_stats` — also used by login and a GM level-set, #362) so this can never
+        // (`stats::apply_level_stats` — also used by login and a GM level-set) so this can never
         // drift from either. `delta` carries the pre-recompute values for the popup math below —
         // without this the ding loop would otherwise leave STR/AGI/STA/INT/SPI/armor frozen at their
         // pre-ding values until the next relog, even though combat reads these STORED fields directly
@@ -421,7 +421,7 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
         );
     }
     if leveled {
-        // Sheet AP/damage-range are level-derived (#517) and only ever move via `recompute_sheet`,
+        // Sheet AP/damage-range are level-derived and only ever move via `recompute_sheet`,
         // which re-fetches the row by guid — so the ding's level/stat write must be PERSISTED first
         // (a mid-loop call would see the still-stale pre-ding row). Pull the recomputed row back into
         // `p` afterward so the caller's own `entities.guid().update(p)` (documented above as the

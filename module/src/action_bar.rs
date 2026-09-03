@@ -66,7 +66,7 @@ crate::character_owned!(delete, fn sweep_delete_game_player_action(ctx, characte
         actions.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19). `id` is a surrogate `#[auto_inc]` PK — the LOGICAL key is
+// CROSS-DATABASE transport. `id` is a surrogate `#[auto_inc]` PK — the LOGICAL key is
 // (character, button) — so it is re-minted at the destination rather than carried; carrying it would
 // insert explicit ids without advancing the destination's sequence (danger-zones §2).
 crate::character_owned!(transfer, fn sweep_transfer_game_player_action(ctx, character_guid, io) {
@@ -141,7 +141,7 @@ pub(crate) fn grant_createinfo_actions(
     }
 }
 
-/// The action-bar write core, actor-explicit (#479): everything [`set_action_button`] does after
+/// The action-bar write core, actor-explicit: everything [`set_action_button`] does after
 /// resolving WHOSE bar this is. Takes the row — the insert arm stamps the owner's RLS identity
 /// off it.
 pub(crate) fn apply_set_action_button(

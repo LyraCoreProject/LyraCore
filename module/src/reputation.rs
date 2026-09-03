@@ -26,7 +26,7 @@ pub struct PlayerReputation {
     // END-APPENDED (#[default(0)] → additive auto-migrate; negative defaults aren't accepted by the macro).
     // The Faction.dbc ReputationListID — the SMALL 0..63 index the 5875 client's SMSG_SET_FACTION_STANDING
     // addresses in its rep array. The client does NOT key on faction_id: sending faction_id 72 (Stormwind)
-    // instead of its rep-index 19 indexes PAST the 64-slot array → null deref → ERROR #132 crash on the first
+    // instead of its rep-index 19 indexes PAST the 64-slot array → null deref → ERROR crash on the first
     // rep-granting turn-in (Marshal McBride). We STORE it here (grant_reputation has the faction lookup) so the
     // gateway relay sends the right index without joining game_faction (which it doesn't bind). grant_reputation
     // only ever writes rows for rep-bar factions and ALWAYS stamps the real index, so a row never carries the
@@ -49,7 +49,7 @@ crate::character_owned!(delete, fn sweep_delete_game_player_reputation(ctx, char
         reps.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19): standings are durable progression, and the login
+// CROSS-DATABASE transport: standings are durable progression, and the login
 // SMSG_INITIALIZE_FACTIONS is built from them — a character arriving without them shows every
 // faction at neutral. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_player_reputation(ctx, character_guid, io) {
@@ -228,7 +228,7 @@ pub(crate) fn grant_reputation(
     });
 }
 
-/// The At-War core, actor-explicit (#479): everything [`set_faction_at_war`] does after resolving
+/// The At-War core, actor-explicit: everything [`set_faction_at_war`] does after resolving
 /// WHOSE rep pane this is. Takes the row — the seed arm stamps `owner_identity` off it.
 pub(crate) fn apply_set_faction_at_war(
     ctx: &ReducerContext,

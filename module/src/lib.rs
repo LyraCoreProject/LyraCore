@@ -41,8 +41,8 @@
 ///   &ReducerContext, guid: u64, identity: Identity)`.
 ///
 ///   `character_owned!(transfer, fn <name>(<ctx>, <guid>, <io>) { table = .., by = .., .. })` and
-///   `character_owned!(not_transported, fn <name>())` — the CROSS-DATABASE row transport (issue
-///   #19), which is what lets a table's rows actually leave one SpacetimeDB database and arrive in
+///   `character_owned!(not_transported, fn <name>())` — the CROSS-DATABASE row transport,
+///   which is what lets a table's rows actually leave one SpacetimeDB database and arrive in
 ///   another. Both expand to `pub(crate) fn <name>(ctx: &ReducerContext, guid: u64, io: &mut
 ///   crate::transfer::RowIo)`. Required for every `game_*` manifest table —
 ///   `transfer::every_manifest_table_can_cross_a_database_boundary` fails the test suite if one is
@@ -52,11 +52,11 @@
 ///
 /// See `crate::reputation::sweep_delete_game_player_reputation` for a worked example.
 ///
-/// # The transport GRAMMAR, and why it is a grammar (#380)
+/// # The transport GRAMMAR, and why it is a grammar
 ///
 /// A transport arm used to be a free-form `$body:block`, so "does this arm actually transport, or
 /// does it silently drop the table's rows?" was a question only a source SCANNER could answer — and
-/// a scanner is an arms race it eventually loses. The #36 review proved it: repointing
+/// a scanner is an arms race it eventually loses. The review proved it: repointing
 /// `sweep_transfer_game_item_instance` at `not_transported` deleted every character's gear on every
 /// hop with 468 module tests green, and each hardening of the scan (`contains("move_rows")`, then
 /// "exactly once", then "at the top", then "and it filters by the guid") was defeated by the next
@@ -263,7 +263,7 @@ mod exploration;
 // clear_creatures) for the client-automation harness. PROD-SAFE: the whole module is behind the
 // `debug_reducers` Cargo feature (default OFF) — a plain build / production publish compiles it out
 // entirely. Enable for the test build via `--build-options='--features=debug_reducers'`. See
-// debug/mod.rs (#386 split this into a directory along its section banners: mod/readout/audit/
+// debug/mod.rs (split this into a directory along its section banners: mod/readout/audit/
 // repair/encounter/instance/fingerprint).
 #[cfg(feature = "debug_reducers")]
 mod debug;
@@ -279,7 +279,7 @@ mod gm;
 // Consumption (the state-gated ray merge) is the `game_go_collider` registry.
 mod go_model;
 // Graveyard resolution (work-item 209/226): the death-release subsystem `world::do_repop` calls to
-// pick where a ghost teleports. Extracted from `world.rs` (issue #385).
+// pick where a ghost teleports. Extracted from `world.rs`.
 mod graveyard;
 mod group;
 mod gw;
@@ -300,7 +300,7 @@ mod mail;
 /// caller-chosen id, and the reaper. The mechanism for moving value into a mail row across a
 /// database boundary no transaction spans; the single-database plane deliberately bypasses it.
 mod mail_escrow;
-/// Batched movement republish (#461): the PRIVATE `game_entity_motion_pending` staging table that
+/// Batched movement republish: the PRIVATE `game_entity_motion_pending` staging table that
 /// `movement_update` writes, and the 20 Hz `publish_motion` tick that drains it into the public
 /// `game_entity_motion` relay in one transaction.
 mod motion;
@@ -318,7 +318,7 @@ mod package_config;
 /// `import_meta` is not: nothing outside this module reads its table.
 mod package_import;
 mod professions;
-/// Deploy-safety tripwire (#223): source-scans `scripts/**` + `tools/**` for a destructive
+/// Deploy-safety tripwire: source-scans `scripts/**` + `tools/**` for a destructive
 /// `spacetime publish -c`, and pins the sanctioned deploy script's own argv guard and required
 /// flags. Test-only; reads files, never runs the CLI.
 #[cfg(test)]
@@ -349,11 +349,11 @@ mod threat;
 mod trade;
 mod trainer;
 mod transfer;
-/// Exact per-cell vmap collision-triangle store + LoS/collision ray queries (issue #521, part of
-/// the #169 full-vmap epic). Builds on `nav`'s obstruction-grid approximation with an exact
+/// Exact per-cell vmap collision-triangle store + LoS/collision ray queries (part of
+/// the full-vmap epic). Builds on `nav`'s obstruction-grid approximation with an exact
 /// triangle store; see the module doc comment for the split.
 pub mod vmap;
-// Source-scan tripwires (issue #379 pulled these out of this file, which had grown to 1,146 lines —
+// Source-scan tripwires (pulled these out of this file, which had grown to 1,146 lines —
 // four fifths of it cfg(test) scan machinery — so the doc comment atop this file ("this is the thin
 // index") stayed true). See `tripwires.rs`'s own module doc for the roster and the shared engine in
 // `test_scan.rs` it now runs on.
@@ -369,7 +369,7 @@ pub use action_bar::*;
 pub use auction::*;
 pub use auth::*;
 pub use breath::*;
-pub use breath_relay::BreathRelayEvent; // gateway schema-parity relay (#141)
+pub use breath_relay::BreathRelayEvent; // gateway schema-parity relay
 pub use bridge::*;
 pub use character::*;
 pub use chat::*;
@@ -382,7 +382,7 @@ pub use debug::*;
 pub use duel::*;
 pub use encounter::*;
 pub use exploration::CharacterExplored; // re-exported for the gateway schema-parity test (282)
-pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (#468 4c)
+pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (4c)
 pub use spell::stacking::SpellGroupRule; // Keeps this generated table in schema-parity coverage.
 pub use faction::*;
 pub use gameobject::*;
@@ -411,7 +411,7 @@ pub use taxi::*;
 pub use threat::*;
 pub use trade::*;
 pub use trainer::*;
-// Re-exported for the gateway schema-parity test (#19).
+// Re-exported for the gateway schema-parity test.
 pub use transfer::{BotTransferIntent, TransferOut};
 pub use weather::*;
 pub use world::*;

@@ -1,5 +1,5 @@
 //! The vendor/armorer economy — sell / buyback / buy / repair, plus the shared NPC-interaction trust
-//! gate all four reduce to (#387: split off `ops.rs`, pure code-motion, no behavior change). Each
+//! gate all four reduce to (split off `ops.rs`, pure code-motion, no behavior change). Each
 //! `apply_*` is the shared core behind a thin player reducer and its debug twin (see `reducers.rs`).
 
 use spacetimedb::{ReducerContext, Table};
@@ -23,7 +23,7 @@ const VENDOR_RANGE_SQ: f32 = 100.0;
 /// The shared trust-boundary gate for a player-initiated NPC interaction — vendor sell/buyback/buy and
 /// armorer repair all reduce to the SAME five checks: the player must be alive, the target must be a
 /// real NPC (never another player, `is_player()`) carrying `required_flag`, on the player's own
-/// map+instance, within `VENDOR_RANGE_SQ`. Extracted (issue #372, "the exact place drift happens" — the
+/// map+instance, within `VENDOR_RANGE_SQ`. Extracted ("the exact place drift happens" — the
 /// 190 review already caught one copy of this shape missing the instance check once) from
 /// `apply_item_sell` / `apply_buyback_item` / `apply_buy_item` / `apply_player_repair`, which used to
 /// paste this ~20-line block four times.
@@ -263,7 +263,7 @@ pub(crate) fn apply_item_sell(
     vendor_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
-    // Vendor gating, mirroring apply_buy_item/apply_buyback_item/apply_player_repair (issue #372's
+    // Vendor gating, mirroring apply_buy_item/apply_buyback_item/apply_player_repair (the
     // shared npc_interaction_gate): a dead/ghost player can't vendor; the sale must be to a real
     // VENDOR creature within range on the same map+instance. Unlike buy there is NO vendor_sells()
     // check — vanilla lets you sell any sellable item to any vendor (junk goes to anyone), only the
@@ -403,7 +403,7 @@ pub(crate) fn apply_buy_item(
     // standing at, and that vendor must actually stock the item — you can't buy arbitrary items or
     // from a non-vendor.
     //
-    // ORDERING NOTE (issue #372): before this extraction, `count == 0` was checked BETWEEN the dead
+    // ORDERING NOTE: before this extraction, `count == 0` was checked BETWEEN the dead
     // check and the vendor-resolution gate; `npc_interaction_gate` folds dead+vendor into one atomic
     // check, so `count == 0` now runs AFTER the vendor/range gate instead. This only changes which
     // error string comes back for a MALFORMED packet that combines count=0 with a bogus/out-of-range
@@ -449,7 +449,7 @@ pub(crate) fn apply_buy_item(
     }
     // DEBIT FIRST: deduct (saturating, never wraps) and persist the player BEFORE granting the item, so a
     // subsequent failure (inventory full) rolls the whole tx back rather than charging for nothing. A buy
-    // of more than `max_stack` now SPILLS across stacks (parity #14) — and tops up an existing partial
+    // of more than `max_stack` now SPILLS across stacks (parity) — and tops up an existing partial
     // stack of the same item — instead of being rejected.
     player.money = player.money.saturating_sub(cost);
     let owner_identity = player.owner_identity;
@@ -503,7 +503,7 @@ pub(crate) fn apply_player_repair(
     slot: u8,
 ) -> Result<(), String> {
     // REPAIR-NPC gate — same shape as apply_item_sell's vendor gate, keyed on the REPAIR flag
-    // (issue #372's shared npc_interaction_gate).
+    // (the shared npc_interaction_gate).
     let (mut player, _npc) = npc_interaction_gate(
         ctx,
         player_guid,
@@ -696,7 +696,7 @@ mod tests {
         }
     }
 
-    /// #514: this crate has no `ReducerContext` harness by design (`test_scan`'s doc comment /
+    /// This crate has no `ReducerContext` harness by design (`test_scan`'s doc comment /
     /// playbook §7), so `apply_player_repair`'s actual gating/cost/durability-restore behavior
     /// against real table state is verified live via the wire harness, not here — the same boundary
     /// every other reducer in this module lives behind (see `combat/swing.rs`'s chokepoint tests for

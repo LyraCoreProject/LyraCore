@@ -459,9 +459,9 @@ pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<
     Ok(())
 }
 
-/// #194: retire every creature whose SPAWN point sits inside the given cell box on THIS database —
+/// Retire every creature whose SPAWN point sits inside the given cell box on THIS database —
 /// spawn row, live entity, spline leg, and (globally, like `import_creature_spawns`) the threat
-/// table. Regions are single-owner (creatures are region-static, spec #12): when a region is
+/// table. Regions are single-owner (creatures are region-static, spec): when a region is
 /// assigned to another shard, the non-owner runs this so exactly one database holds the
 /// population. Keyed by SPAWN position, not the entity's current one — a wanderer belongs to the
 /// region of its home. Recoverable only by re-import; operator- and debug-feature-gated on purpose.
@@ -659,7 +659,7 @@ pub fn scale_creature_damage_for_level(
 /// enters the world without any core dispatch-site edits. Player-entity inserts (login,
 /// debug_spawn_player_entity) deliberately do NOT come through here.
 pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut entity: WorldEntity) {
-    // #526: stand on a model floor (bridge, WMO interior deck) instead of the imported spawn.z
+    // Stand on a model floor (bridge, WMO interior deck) instead of the imported spawn.z
     // when one's imported at/below this spawn point — `floor_z` is `None` off vmap-slice/gate, so
     // an unimported map spawns byte-identical to before this line existed.
     if let Some(floor) = crate::vmap::floor_z(ctx, entity.map_id, entity.x, entity.y, entity.z) {
@@ -794,7 +794,7 @@ pub fn build_creature_entity(
 /// (the player counterpart to `build_creature_entity`). Resolves the power type, the gender-correct
 /// per-race display + faction from the imported ChrRaces data (falling back to the Human-Male values
 /// — display 49 / faction 1 — when the table isn't loaded), and the full stat curve via
-/// `stats::apply_level_stats` (the same writer the ding loop and a GM level-set use, #362); health ==
+/// `stats::apply_level_stats` (the same writer the ding loop and a GM level-set use); health ==
 /// max_health on a fresh build, mana classes start full while rage/energy start empty
 /// (`stats::starting_power`).
 ///
@@ -889,7 +889,7 @@ pub fn build_player_entity(
         } else {
             0
         },
-        // Sheath state UNARMED (#101). Deliberately NOT persisted across logout: vanilla rebuilds a
+        // Sheath state UNARMED. Deliberately NOT persisted across logout: vanilla rebuilds a
         // player with weapons stowed, and the client re-sends `CMSG_SETSHEATHED` when the player
         // draws again, so there is nothing to restore.
         unit_bytes_2: 0,
@@ -965,7 +965,7 @@ pub fn build_player_entity(
     }
     // The level-derived stat block — the five base attributes, armor, and max health/power — from the
     // real class/level curve (importer P3), via the ONE shared writer also used by the ding loop and a
-    // GM level-set (#362). Falls back to the flat placeholder/zeros when the curve isn't loaded, so an
+    // GM level-set. Falls back to the flat placeholder/zeros when the curve isn't loaded, so an
     // L1 character is 60 HP either way.
     crate::stats::apply_level_stats(ctx, &mut entity, character.race, character.class, level);
     // Resume at the persisted vitals rather than always healing to full.

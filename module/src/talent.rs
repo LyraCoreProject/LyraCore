@@ -139,7 +139,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_talent(ctx, chara
         talents.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19): spent talent ranks are durable progression — a character
+// CROSS-DATABASE transport: spent talent ranks are durable progression — a character
 // arriving without them is a respec nobody asked for. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_character_talent(ctx, character_guid, io) {
     table = game_character_talent,
@@ -455,7 +455,6 @@ pub fn apply_learned_talents(ctx: &ReducerContext, guid: u64, owner: Identity, l
 //  Respec — unlearn every learned talent for an escalating gold cost (work-item 198)
 // ===========================================================================================
 
-#[allow(dead_code)] // core kept for a future gw_reset_talents twin (#483 deleted the sender-path reducer)
 /// Gold cost (copper) of a character's NEXT respec, given `respec_count` prior resets: vanilla's
 /// `Player::resetTalentsCost` step table — 1g / 5g / 10g, then +5g per further reset, capped at 50g
 /// (1.12 has no cost decay — that's a TBC addition). Expressed directly in copper (1g = 10_000c, the
@@ -471,8 +470,8 @@ pub(crate) fn respec_cost_copper(respec_count: u32) -> u32 {
     copper.min(CAP_COPPER)
 }
 
-#[allow(dead_code)] // core kept for a future gw_reset_talents twin (#483 deleted the sender-path reducer)
-/// Shared validated core of a talent respec (the player + debug reducers both call this). Gates
+/// Shared validated core of a talent respec (`gw_reset_talents` and the debug reducer both call
+/// this). Gates
 /// EXACTLY like `trainer::apply_trainer_buy` (a real in-range TRAINER on the same map), then charges
 /// `respec_cost_copper(character.respec_count)` and unwinds every learned talent: the passive auras
 /// those talents applied (deleted directly — `cancel_aura` refuses a PASSIVE spell) and the abilities
@@ -489,7 +488,7 @@ pub(crate) fn do_reset_talents(
         .guid()
         .find(character_guid)
         .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
-    // Same gates as `apply_trainer_buy` (issue #372's shared validate_trainer_interaction): a real
+    // Same gates as `apply_trainer_buy` (the shared validate_trainer_interaction): a real
     // TRAINER, on the caller's map, within interaction range.
     crate::trainer::validate_trainer_interaction(ctx, &entity, trainer_guid)?;
 

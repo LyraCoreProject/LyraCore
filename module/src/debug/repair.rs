@@ -1,4 +1,4 @@
-//! The consolidated post-publish repair pass (#378) — the one reducer the publish script calls after
+//! The consolidated post-publish repair pass — the one reducer the publish script calls after
 //! every deploy to re-seed/rearm everything `seed::init` would have inserted on a fresh database but
 //! that a plain auto-migrate republish silently leaves absent.
 
@@ -14,13 +14,13 @@ use crate::{
     CreatureMoveSchedule, DuelSchedule, GroundAreaSchedule, PetCareSchedule,
 };
 
-/// Consolidated post-publish repair pass (#378). SpacetimeDB's `init` reducer runs ONLY on a
+/// Consolidated post-publish repair pass. SpacetimeDB's `init` reducer runs ONLY on a
 /// database's first-ever publish, never again on a plain (auto-migrate) republish — so every
 /// seed/fixture/schedule row `seed::init` inserts is silently ABSENT on an already-migrated live DB
 /// until something re-seeds it by hand. That "something" used to be 17 near-identical
 /// `debug_seed_*`/`debug_ensure_*`/`debug_rearm_*` reducers, one per fixture family — a model that
 /// failed operationally at least four times (aura schedule, ground-area schedule, regen fixture,
-/// catalogue drift #85), and forced `debug_seed_scenario_fixtures` to bolt two extra seeders onto
+/// catalogue drift), and forced `debug_seed_scenario_fixtures` to bolt two extra seeders onto
 /// itself as a stopgap when a live suite hard-failed on a missing fixture. Every underlying seeder
 /// is idempotent-if-absent by construction (each deleted reducer documented the same precedent), so
 /// running all of them unconditionally on every publish — fresh or auto-migrated — is always safe,
@@ -71,7 +71,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         .count() as u64;
 
     crate::seed::seed_fixture_catalogue(ctx);
-    // Tempered Blade 5090050 + Tough Jerky 5090052 + fixture faction 50900 (issue #85)
+    // Tempered Blade 5090050 + Tough Jerky 5090052 + fixture faction 50900
     let fixture_catalogue = [crate::seed::FIXTURE_BLADE, crate::seed::FIXTURE_JERKY]
         .iter()
         .filter(|e| ctx.db.game_item_template().entry().find(**e).is_some())
@@ -194,7 +194,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         1
     };
 
-    // #461: ensure — never REARM — the 20 Hz movement-republish schedule. Ensure, because
+    // Ensure — never REARM — the 20 Hz movement-republish schedule. Ensure, because
     // `scheduled_at` IS the cadence knob (`set_motion_tick_ms`), and a publish must not silently
     // undo an operator's retune. Absent, movement stages into the private table and never relays,
     // so this is the row whose absence is loudest.
@@ -266,7 +266,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         )),
     });
 
-    // #468 stage 4a: re-arm the gateway lease reaper (bounded ghost lifetime for sessions riding
+    // Stage 4a: re-arm the gateway lease reaper (bounded ghost lifetime for sessions riding
     // the shared connection). Rearm-not-ensure is safe here — unlike the motion tick there is no
     // operator tuning knob to preserve; the canonical interval is the only interval.
     let lease_sched = ctx.db.game_gateway_lease_reaper_schedule();

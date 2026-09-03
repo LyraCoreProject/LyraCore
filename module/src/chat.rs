@@ -63,7 +63,7 @@ pub fn normalized_message(raw: &str) -> Option<String> {
     Some(trimmed.chars().take(MAX_CHAT_LEN).collect())
 }
 
-/// The say/yell core, actor-explicit (#468 stage 4a): everything the old sender-path `send_chat`
+/// The say/yell core, actor-explicit (stage 4a): everything the old sender-path `send_chat`
 /// did after resolving WHO spoke. Trims + length-caps the message and rejects an empty one; an
 /// unsupported chat type is a clean `Err` (the gateway drops it). `gw::gw_send_chat` delegates here.
 pub(crate) fn apply_send_chat(
@@ -148,7 +148,7 @@ pub fn normalize_channel(name: &str) -> String {
 /// Join `channel` (065, CMSG_JOIN_CHANNEL): dedupe on (key, character). The gateway acks with
 /// SMSG_CHANNEL_NOTIFY(YouJoined) unconditionally — vanilla treats a re-join as idempotent.
 ///
-/// The channel-join core, actor-explicit (#479) — same split as [`apply_send_chat`].
+/// The channel-join core, actor-explicit — same split as [`apply_send_chat`].
 pub(crate) fn apply_join_channel(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -179,7 +179,7 @@ pub(crate) fn apply_join_channel(
 
 /// Leave `channel` (065, CMSG_LEAVE_CHANNEL). Idempotent — leaving a channel you're not in is a no-op.
 ///
-/// The channel-leave core, actor-explicit (#479) — same split as [`apply_send_chat`].
+/// The channel-leave core, actor-explicit — same split as [`apply_send_chat`].
 pub(crate) fn apply_leave_channel(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -203,7 +203,7 @@ pub(crate) fn apply_leave_channel(
 /// client can't normally send to an un-joined channel — a modified one gets an Err). Same
 /// dead-guard + length cap as say/yell.
 ///
-/// The channel-speak core, actor-explicit (#479) — same split as [`apply_send_chat`].
+/// The channel-speak core, actor-explicit — same split as [`apply_send_chat`].
 pub(crate) fn apply_send_channel_message(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -276,7 +276,7 @@ pub struct EmoteEvent {
 /// `text_emote` / `emote_anim` ids come from the client; invalid ones degrade gracefully gateway-side
 /// (the text line is skipped / the animation is dropped) rather than erroring.
 ///
-/// The text-emote core, actor-explicit (#468 stage 4a) — same split as [`apply_send_chat`].
+/// The text-emote core, actor-explicit (stage 4a) — same split as [`apply_send_chat`].
 pub(crate) fn apply_send_emote(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -329,8 +329,8 @@ pub struct WhisperEvent {
     pub is_inform: bool,
     pub message: String,
     pub created_at: Timestamp,
-    /// The recipient's CHARACTER GUID (issue #22, whisper slice). END-appended + defaulted, so this
-    /// is an additive auto-migration and every pre-#22 row reads back as 0.
+    /// The recipient's CHARACTER GUID (whisper slice). END-appended + defaulted, so this
+    /// is an additive auto-migration and every earlier row reads back as 0.
     ///
     /// `recipient_identity` cannot address a recipient on REALM-CORE: an identity is minted per
     /// (account, database) by the node, so the identity a player holds on a world shard names nobody
@@ -407,14 +407,14 @@ fn prepare_system_message(
 /// a clean `Err` the gateway turns into `SMSG_CHAT_PLAYER_NOT_FOUND`. Name match is case-insensitive
 /// (vanilla `/w bob` reaches "Bob").
 ///
-/// **The SHARD plane** of #22's whisper slice: this core resolves the target inside the CALLING
+/// **The SHARD plane** of the whisper slice: this core resolves the target inside the CALLING
 /// database, which is exactly why a whisper could not cross a shard boundary, and it stays the only
-/// path a single-database gateway ever takes (byte-identical to pre-#22 — same gates, same order,
+/// path a single-database gateway ever takes (byte-identical to earlier — same gates, same order,
 /// same rows). A multi-database gateway routes to [`realm_whisper`] instead; the ROW SHAPE both
 /// planes write is the one shared core below ([`whisper_rows`] + [`push_whisper`]), so the ignore
 /// rule and the sender's echo cannot drift between them.
 ///
-/// The shard-plane whisper core, actor-explicit (#479) — everything the old sender-path
+/// The shard-plane whisper core, actor-explicit — everything the old sender-path
 /// `send_whisper` did after resolving WHO spoke. Same split as [`apply_send_chat`];
 /// `gw::gw_send_whisper` is the entry.
 pub(crate) fn apply_send_whisper(
@@ -424,7 +424,7 @@ pub(crate) fn apply_send_whisper(
     message: String,
 ) -> Result<(), String> {
     let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
-    // Case-insensitive name match (vanilla `/w bob` reaches "Bob"). REFUSE verdict (issue #30): the
+    // Case-insensitive name match (vanilla `/w bob` reaches "Bob"). REFUSE verdict: the
     // fenced `character_by_name` reads an in-transit character as ABSENT, so a whisper aimed at a
     // character mid-shard-hop falls into the existing not-found arm the gateway already maps to
     // SMSG_CHAT_PLAYER_NOT_FOUND — no new error string, no gateway edit.
@@ -452,7 +452,7 @@ pub(crate) fn apply_send_whisper(
     Ok(())
 }
 
-/// The REALM-CORE plane of the whisper (issue #22, whisper slice): deliver `message` from
+/// The REALM-CORE plane of the whisper (whisper slice): deliver `message` from
 /// `sender_guid` to `target_guid`, both named by GUID because a name means nothing here.
 ///
 /// **Operator-gated, and it has to be** — the same trust boundary `realm_group_op` sits on. It takes
@@ -495,13 +495,13 @@ pub fn realm_whisper(
 }
 
 /// The rows one whisper produces, as `(recipient_guid, other_guid, is_inform)` — the whole delivery
-/// rule of a whisper, extracted so it is the SAME on the shard plane and on realm-core (issue #22).
+/// rule of a whisper, extracted so it is the SAME on the shard plane and on realm-core.
 ///
 /// Two rows, because a whisper is two chat lines: the incoming line to the target
 /// ("<sender> whispers: …") and the echo to the sender ("To <target>: …"). The echo is unconditional
 /// and the incoming line is not: an ignored sender's line is dropped at the source, so no
 /// `SMSG_MESSAGECHAT` can reach the ignorer, and the sender is told nothing (vanilla shows no error —
-/// the whisper simply never arrives). Order is incoming-then-echo, matching pre-#22 insert order.
+/// the whisper simply never arrives). Order is incoming-then-echo, matching earlier insert order.
 ///
 /// Pure — unit-tested without a `ReducerContext`, which is the only way either plane's delivery rule
 /// is testable in this crate at all.
@@ -518,7 +518,7 @@ pub(crate) fn whisper_rows(
     rows
 }
 
-/// Insert one whisper row, addressed BOTH ways (issue #22, whisper slice): by `recipient_guid` (the
+/// Insert one whisper row, addressed BOTH ways (whisper slice): by `recipient_guid` (the
 /// realm-wide name, which the gateway's realm-core relay self-filters on) and by the recipient's bound
 /// `recipient_identity` (the per-player RLS a world shard delivers through, unchanged).
 ///
@@ -576,7 +576,7 @@ fn push_whisper(
 /// Unlike `send_chat`, this core takes no `language` argument: like whispers, party lines aren't
 /// language-filtered (always Universal on the wire), so there is nothing to thread through.
 ///
-/// The party-chat core, actor-explicit (#479) — same split as [`apply_send_chat`].
+/// The party-chat core, actor-explicit — same split as [`apply_send_chat`].
 pub(crate) fn apply_party_chat(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -663,7 +663,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_contact(ctx, char
         contacts.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19): the character's OWN friend/ignore rows travel with it (`id`
+// CROSS-DATABASE transport: the character's OWN friend/ignore rows travel with it (`id`
 // re-minted — surrogate PK). Rows where it is the TARGET belong to OTHER characters and stay where
 // their owner is, which is why only `by_owner` is exported: a friend list is per-owner state, and
 // copying someone else's row would fork it.
@@ -741,7 +741,7 @@ pub(crate) fn remove_contact(
 
 // `CMSG_ADD_FRIEND` / `CMSG_DEL_FRIEND` / `CMSG_ADD_IGNORE` / `CMSG_DEL_IGNORE` all land on
 // `add_contact`/`remove_contact` above via `gw::gw_add_friend`/`gw_del_friend`/`gw_add_ignore`/
-// `gw_del_ignore` (#483 — the sender-path wrappers are gone).
+// `gw_del_ignore` (the sender-path wrappers are gone).
 
 // ===========================================================================================
 //  Random roll [event] — `/roll` broadcast (MSG_RANDOM_ROLL)
@@ -782,7 +782,7 @@ pub struct RollEvent {
 /// (`min > max`) by swapping and caps both ends at 10 000 (the vanilla client ceiling).
 /// Dead players can roll (vanilla allows it).
 ///
-/// The `/roll` core, actor-explicit (#479) — same split as [`apply_send_chat`].
+/// The `/roll` core, actor-explicit — same split as [`apply_send_chat`].
 pub(crate) fn apply_send_roll(
     ctx: &ReducerContext,
     roller: crate::WorldEntity,
@@ -948,7 +948,7 @@ mod tests {
         assert_eq!(party_chat_other_recipients(7, &[7]), Vec::<u64>::new());
     }
 
-    // ---- Whisper delivery (issue #22, whisper slice) ----
+    // ---- Whisper delivery (whisper slice) ----
 
     /// The delivery rule both planes share. A whisper is TWO lines, and which of them exists is the
     /// whole of the ignore rule: the echo is unconditional (the sender is never told they were
@@ -956,7 +956,7 @@ mod tests {
     /// relay can reach the ignorer.
     #[test]
     fn a_whisper_writes_the_incoming_line_and_the_senders_echo() {
-        // (recipient, other, is_inform) — incoming first, echo second, matching pre-#22 order.
+        // (recipient, other, is_inform) — incoming first, echo second, matching earlier order.
         assert_eq!(
             whisper_rows(10, 20, false),
             vec![(20, 10, false), (10, 20, true)]
@@ -988,7 +988,7 @@ mod tests {
         );
     }
 
-    // ---- `realm_whisper`'s two unreachable decisions (issue #22, whisper slice) ----
+    // ---- `realm_whisper`'s two unreachable decisions (whisper slice) ----
     //
     // A reducer body needs a live `ReducerContext`, so the two below cannot be EXECUTED by a test in
     // this crate — which is why they are scanned. Same technique, and the same reason, as
@@ -996,7 +996,7 @@ mod tests {
 
     /// The `//`-stripped body of `signature`'s function — assert on CODE, never on the prose beside
     /// it. Shared with every other file's copy of this scan as [`crate::test_scan::code_of`]
-    /// (issue #64 — this used to be six near-identical, drifted-apart copies).
+    /// (this used to be six near-identical, drifted-apart copies).
     use crate::test_scan::code_of;
 
     /// **The operator gate is the entire authorization of the realm-core whisper plane.**
@@ -1103,7 +1103,7 @@ mod tests {
                 "whisper_rows(sender_guid, target_guid, sender_is_ignored)",
             ),
             (
-                // #479 factored the shard plane's body out of the `send_whisper` reducer into the
+                // Factored the shard plane's body out of the `send_whisper` reducer into the
                 // actor-explicit core both entries (sender + `gw_send_whisper`) delegate to — the
                 // pin follows the body, which is where the delivery rule actually lives.
                 "the SHARD plane",

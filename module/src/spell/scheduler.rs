@@ -110,7 +110,7 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
     });
 }
 
-/// The spellbook-gated cast core, actor-explicit (#479): everything [`cast_spell`] does after
+/// The spellbook-gated cast core, actor-explicit: everything [`cast_spell`] does after
 /// resolving WHO is casting — the sender reducer above and `gw::gw_cast_spell` both delegate here.
 /// Distinct from [`crate::actor::cast_at`], which drives `resolve_cast_at` and skips the spellbook
 /// gate; this is the player-shaped entry (cast-time aware, self-cast on `target_guid == 0`).
@@ -143,7 +143,7 @@ pub(crate) fn do_cast_spell(
     )
 }
 
-/// The shared core behind [`cast_spell_at`] and its gateway twin `gw_cast_at` (#479) — the
+/// The shared core behind [`cast_spell_at`] and its gateway twin `gw_cast_at` — the
 /// ground-target cast with the spellbook, NaN and self-target-default gates.
 pub(crate) fn apply_cast_spell_at(
     ctx: &ReducerContext,
@@ -216,7 +216,7 @@ pub(crate) fn do_resurrect_response(
     Ok(())
 }
 
-/// The cancel-cast core, actor-explicit (#479) — same split as [`do_cast_spell`].
+/// The cancel-cast core, actor-explicit — same split as [`do_cast_spell`].
 pub(crate) fn do_cancel_cast(
     ctx: &ReducerContext,
     caster: crate::WorldEntity,
@@ -234,7 +234,7 @@ pub(crate) fn do_cancel_cast(
     Ok(())
 }
 
-/// The cancel-aura core, actor-explicit (#479) — same split as [`do_cast_spell`], keyed by guid
+/// The cancel-aura core, actor-explicit — same split as [`do_cast_spell`], keyed by guid
 /// (the body never reads another column off the row).
 pub(crate) fn do_cancel_aura(
     ctx: &ReducerContext,
@@ -291,7 +291,7 @@ pub(crate) fn do_cancel_aura(
     if revitalize {
         recompute_vitals(ctx, player_guid);
     }
-    // #517: same wider gate as the apply site (targeting.rs) — AFTER vitals so a lost STA/INT aura's
+    // Same wider gate as the apply site (targeting.rs) — AFTER vitals so a lost STA/INT aura's
     // sheet recompute sees the already-updated `e.spirit`.
     if resheet {
         recompute_sheet(ctx, player_guid);
@@ -646,7 +646,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         auras.count()
     );
     let mut revitalize: Vec<u64> = Vec::new();
-    // #517: same expiry snapshot, wider gate — a reaped Battle Shout (or a STR/AGI/SPI stat aura) must
+    // Same expiry snapshot, wider gate — a reaped Battle Shout (or a STR/AGI/SPI stat aura) must
     // pull the sheet numbers back down too, even though it never touched a vitals pool.
     let mut resheet: Vec<u64> = Vec::new();
     // A mount aura reaping on its own timer must leave the same end state as right-clicking the buff
@@ -868,7 +868,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
 /// Ensure the 500ms `tick_ground_areas` schedule row exists — called wherever a `game_ground_area`
 /// row is BORN (perf catalog 1.20's disarm deletes it whenever the area table drains). Idempotent and
 /// cheap: the table holds 0 or 1 rows. Must stay in lockstep with the interval in `seed::init` /
-/// `debug_repair_after_publish` (#378, formerly the standalone `debug_ensure_ground_area_schedule`).
+/// `debug_repair_after_publish` (formerly the standalone `debug_ensure_ground_area_schedule`).
 pub(crate) fn arm_ground_area_tick(ctx: &ReducerContext) {
     if ctx.db.game_ground_area_schedule().count() > 0 {
         return;

@@ -194,7 +194,7 @@ pub fn debug_nav_leg(ctx: &ReducerContext, map: u32, x0: f32, y0: f32, x1: f32, 
     );
 }
 
-/// Toggle vmap ray consumption (`game_config.vmap_enabled`, issue #521) — upserts row 0 like
+/// Toggle vmap ray consumption (`game_config.vmap_enabled`) — upserts row 0 like
 /// `debug_set_nav_enabled`. OFF = every ray query returns clear (no vmap data consulted).
 #[reducer]
 pub fn debug_set_vmap_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
@@ -247,7 +247,7 @@ pub fn debug_set_nav_coverage_enabled(ctx: &ReducerContext, enabled: bool) -> Re
 
 /// 521 spot-probe: cast an exact vmap ray from (x0,y0,z0) to (x1,y1,z1) on `map`, BOTH flavors —
 /// LoS (WMO-only) and collision (WMO + M2 doodads). Analogue of `debug_nav_leg`; vmap has no
-/// client-visible readback, so this is the server-side verification hook (decision #10). Logs
+/// client-visible readback, so this is the server-side verification hook (decision). Logs
 /// hit/miss + the first-hit point for each flavor so a doodad-vs-wall distinction is directly
 /// observable: a doodad blocks `collision` but leaves `los` clear.
 #[reducer]
@@ -287,7 +287,7 @@ pub fn debug_floor_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32, probe_z
 
 /// 527 spot-probe: log the WMO area-info at `(x, y, z)` for `map` — which group (if any) contains
 /// the point and whether it's indoor. Analogue of `debug_vmap_ray`/`debug_floor_probe`; vmap has
-/// no client-visible readback, so this is the server-side verification hook (decision #10 §query
+/// no client-visible readback, so this is the server-side verification hook (decision §query
 /// surface). Done-when's live check: a point inside the Northshire abbey logs `indoor=true` with a
 /// group id, a point outside logs `indoor=None`/no group.
 #[reducer]
@@ -301,7 +301,7 @@ pub fn debug_vmap_area_info(ctx: &ReducerContext, map: u32, x: f32, y: f32, z: f
     );
 }
 
-/// #526 done-when: server-side proof that a probe (and a creature spawn) stand on a model floor
+/// Done-when: server-side proof that a probe (and a creature spawn) stand on a model floor
 /// instead of the terrain underneath it — the headless substitute for eyeballing a bridge/WMO
 /// interior deck (e.g. Deadmines) in the live client. Same synthetic-rig shape as
 /// `debug_assert_blink_clamp`/`debug_assert_chase_stops_at_column` (the exact
@@ -519,7 +519,7 @@ pub fn debug_assert_floor_snap(
     Ok(())
 }
 
-/// #523 done-when: server-side proof that Blink's collision clamp lands SHORT of an obstacle
+/// Done-when: server-side proof that Blink's collision clamp lands SHORT of an obstacle
 /// plane instead of teleporting through it — the headless substitute for a client screenshot at
 /// the abbey columns. Wires a synthetic 2-triangle vertical wall straight out of
 /// `lyracore_shared::vmap::encode` (the SAME codec `import_vmap_chunks` writes — not a shortcut
@@ -668,7 +668,7 @@ pub fn debug_assert_blink_clamp(ctx: &ReducerContext, character_guid: u64) -> Re
     Ok(())
 }
 
-/// #525 done-when: server-side proof that a COMMITTED `nav_step` move stops at a known column
+/// Done-when: server-side proof that a COMMITTED `nav_step` move stops at a known column
 /// instead of walking through it — the headless substitute for driving a live chase and eyeballing
 /// the client. Same synthetic-wall rig as `debug_assert_blink_clamp` (the exact
 /// `lyracore_shared::vmap::encode` codec, duplicated across every cell the wall's AABB could
@@ -937,7 +937,7 @@ pub fn debug_assert_unreachable_goal_stops_at_wall(
     Ok(())
 }
 
-/// #522 benchmark harness: run `directions` synthetic LoS queries around EVERY real creature
+/// Benchmark harness: run `directions` synthetic LoS queries around EVERY real creature
 /// (`type_mask::CREATURE`) inside `[min_x,max_x]×[min_y,max_y]` on `map` — one probe segment per
 /// creature per compass direction at `radius` yd, i.e. exactly the (creature × in-range-candidate)
 /// shape `best_aggro_target` walks on a sense tick (`sense.rs`), scaled to a box of real,
@@ -1005,14 +1005,14 @@ pub fn debug_bench_los(
     );
 }
 
-/// #525 perf-risk companion to `debug_bench_los`: `nav_step`'s collision gate (`vmap::collision_ray`)
+/// Perf-risk companion to `debug_bench_los`: `nav_step`'s collision gate (`vmap::collision_ray`)
 /// runs on every COMMITTED movement step (chase/return/wander/flee/pet-follow — the 500ms tick),
-/// not the 4s sense tick #522 measured, so it pays the exact-ray cost 8x more often per mover. Same
+/// not the 4s sense tick the LoS benchmark measured, so it pays the exact-ray cost 8x more often per mover. Same
 /// shape as `debug_bench_los` — one probe per real creature per compass direction, `radius` yd out
 /// — but calls `nav::nav_step` (the actual committed-step choke point) instead of a raw LoS ray, so
 /// the query volume this produces is directly comparable against `debug_bench_los`'s numbers on the
 /// SAME box: if this reducer's wall time isn't roughly `directions`× cheaper per creature than
-/// `debug_bench_los(exact=true)`, the per-tick multiplication the #525 review flagged is real and
+/// `debug_bench_los(exact=true)`, the per-tick multiplication the review flagged is real and
 /// needs the "cheap PK existence check" fallback the issue text proposed. `gated` counts how many
 /// probes the ray actually truncated (checksum, not just speed, so two runs can be diffed for
 /// correctness too).
@@ -1073,7 +1073,7 @@ pub fn debug_grant_default_actions(
     ctx: &ReducerContext,
     character_name: String,
 ) -> Result<(), String> {
-    // REFUSE verdict (issue #30) — harness writers get the same fence as production ones.
+    // REFUSE verdict — harness writers get the same fence as production ones.
     let c = crate::helpers::character_by_name(ctx, &character_name)
         .ok_or_else(|| format!("no character named {character_name}"))?;
     crate::action_bar::grant_createinfo_actions(ctx, c.guid, c.owner_identity, c.race, c.class);
@@ -1091,7 +1091,7 @@ pub fn debug_backfill_go_grid(ctx: &ReducerContext) {
     for guid in all {
         if let Some(mut g) = gos.guid().find(guid) {
             let (gx, gy) = lyracore_shared::spatial::grid_cell(g.x, g.y);
-            // #456: `cell` too — see `debug_regrid`'s note; a migrated row's grid is already right.
+            // `cell` too — see `debug_regrid`'s note; a migrated row's grid is already right.
             if g.grid_x != gx
                 || g.grid_y != gy
                 || g.cell != lyracore_shared::spatial::grid_cell_id(gx, gy)

@@ -1,5 +1,5 @@
 //! GROUP LOOT METHODS (work-item 187 slices 1-4) — round-robin / need-greed rolls / master looter.
-//! Split out of `loot.rs` into its own submodule (issue #384): the decision enum, the rr cursor,
+//! Split out of `loot.rs` into its own submodule: the decision enum, the rr cursor,
 //! `LootRoll`/`LootRollVote`, vote/resolve/sweep/disband, and the realm-core plane. Pure code motion
 //! — every gate and grant below is byte-identical to before the split.
 //!
@@ -19,8 +19,8 @@
 //! `lyracore_shared::loot_roll`'s module doc for the full rationale. The actual roll STATE
 //! (`LootRoll`/`LootRollVote` below) is never read by the gateway for the CLIENT's sake.
 //!
-//! **Where the roll DECISION lives (issue #50).** `LootRoll`/`LootRollVote` are authoritative on
-//! REALM-CORE, alongside `game_group`/`game_group_member` (#22) — a roll's audience is who is in the
+//! **Where the roll DECISION lives.** `LootRoll`/`LootRollVote` are authoritative on
+//! REALM-CORE, alongside `game_group`/`game_group_member` — a roll's audience is who is in the
 //! group, not where anyone stands, exactly like the membership it is snapshotted from. Kill-time
 //! creation (`start_roll`, below) still runs on the corpse's own WORLD SHARD unconditionally — combat
 //! resolution has no path to another database — so in a sharded deployment this write is a TRANSIENT
@@ -43,12 +43,12 @@
 //! computed spatially at kill time and stays world-shard-local too — it is `apply_group_loot_rules`'s
 //! own `recipients` snapshot, not part of the roll's realm-core state.
 //!
-//! **The new case (issue #50).** A roll's PARTICIPANTS could not previously be on different shards —
+//! **The new case.** A roll's PARTICIPANTS could not previously be on different shards —
 //! `kill_reward_recipients` only ever names members who are physically near the corpse, i.e. on its
-//! own shard, at the moment the roll starts. What #50 makes possible is a participant LEAVING that
-//! shard mid-roll (a portal, a dungeon entry) during the 60s window. Pre-#50 that voter's row was
+//! own shard, at the moment the roll starts. The new case is a participant LEAVING that
+//! shard mid-roll (a portal, a dungeon entry) during the 60s window. Before, that voter's row was
 //! simply unreachable from wherever they went — their vote auto-passed at the deadline, same as being
-//! offline. Post-#50 it is reachable: voting is realm-core state, and the gateway routes a vote
+//! offline. Now it is reachable: voting is realm-core state, and the gateway routes a vote
 //! through whichever shard the player is CURRENTLY on, so a mid-roll shard-hopper can still vote from
 //! their new location. No special-casing was needed for this — it falls out of routing votes to
 //! realm-core rather than to "the shard that created the roll".
@@ -329,7 +329,7 @@ pub(crate) fn apply_group_loot_rules(ctx: &ReducerContext, corpse_guid: u64, gro
 
 /// Insert one [`LootRoll`] row + one [`LootRollVote`] per recipient (`voted=false`), with NO event
 /// push. The shared core of [`start_roll`] (kill time — this database keeps the roll unsharded, or
-/// stages it for promotion sharded) and `realm_loot_op`'s `loot_op::START` arm (issue #50 — this
+/// stages it for promotion sharded) and `realm_loot_op`'s `loot_op::START` arm (this
 /// database IS realm-core, RE-CREATING a roll a world shard already announced locally; pushing
 /// `ROLL_START` again here would double the popup). Returns the new roll's id.
 fn insert_roll_rows(
@@ -364,7 +364,7 @@ fn insert_roll_rows(
 
 /// Spawn a NEED/GREED/NBG roll at KILL TIME: [`insert_roll_rows`] + `ROLL_START` to every recipient.
 ///
-/// Issue #50: this ALWAYS runs on the corpse's own WORLD SHARD — kill-time combat resolution has no
+/// This ALWAYS runs on the corpse's own WORLD SHARD — kill-time combat resolution has no
 /// path to another database — so in a SHARDED deployment the row it creates is a TRANSIENT staging
 /// copy: the gateway's loot-roll relay (`gateway/src/world/loot.rs::relay_tick`) promotes it onto
 /// realm-core and clears this copy (`clear_promoted_loot_roll`) so voting/resolution never runs
@@ -397,12 +397,12 @@ fn start_roll(
     }
 }
 
-/// The identity-free vote core (issue #50, mirrors `group.rs`'s `*_on` cores): shared by the player
+/// The identity-free vote core (mirrors `group.rs`'s `*_on` cores): shared by the player
 /// reducer above (the world shard the voter is physically standing on) and `realm_loot_op`'s VOTE arm
 /// (realm-core, once the roll has been promoted there). Same gates, same resolution, in the same
 /// order — `loot_roll` is byte-identical for clients. Unlike a group op, nothing about a vote's RULES
 /// differs by which database it runs on, only which one `game_loot_roll`'s `ctx.db` resolves to — the
-/// caller already picked that by calling this on the right connection, so (issue #384 smalls) there is
+/// caller already picked that by calling this on the right connection, so (smalls) there is
 /// no `plane` parameter to thread through.
 pub(crate) fn cast_vote_on(
     ctx: &ReducerContext,
@@ -465,7 +465,7 @@ pub(crate) fn cast_vote_on(
     Ok(())
 }
 
-/// Grant a resolved roll's item to its winner, on WHICHEVER database holds the corpse (issue #50).
+/// Grant a resolved roll's item to its winner, on WHICHEVER database holds the corpse.
 ///
 /// Called inline by [`resolve_roll`] / [`force_resolve_rolls_for_disband`], wherever they execute —
 /// a single database, or REALM-CORE in a sharded one — and by the [`settle_loot_roll`] operator
@@ -493,7 +493,7 @@ pub(crate) fn settle_roll_grant(
         .filter(&corpse_guid)
         .find(|l| l.slot == slot)
     else {
-        // #99 AC#4 sweep. This return is the one that ATE A WINNER'S ITEM (#50's review): a slow
+        // AC#4 sweep. This return is the one that ATE A WINNER'S ITEM (the review): a slow
         // voter had `CORPSE_DECAY_MICROS == ROLL_WINDOW_MICROS` reap the corpse out from under the
         // roll, settlement found no row, and it returned with no grant, no error and no log.
         //
@@ -579,7 +579,7 @@ fn resolve_roll(ctx: &ReducerContext, roll: &LootRoll, votes: &[LootRollVote], r
     let winning_vote = votes[tier[w]].vote; // NEED or GREED — the tier that actually won (finding #3)
 
     // Grant, then finalize the CorpseLoot row per the outcome (module doc: 068 mail is deferred).
-    // Issue #50: on a single database this runs inline, right here, exactly as before. On REALM-CORE
+    // On a single database this runs inline, right here, exactly as before. On REALM-CORE
     // (sharded) `game_corpse_loot` is always empty — no kills happen there — so this no-ops for free,
     // and the ACTUAL grant happens on the corpse's own world shard via `settle_loot_roll`, which the
     // gateway's loot-roll relay calls after observing the `ROLL_WON` event pushed below.
@@ -688,7 +688,7 @@ pub(crate) fn force_resolve_rolls_for_disband(
         });
         match survivor.filter(|s| all.iter().any(|v| v.voter_guid == *s)) {
             Some(winner_guid) => {
-                // Issue #50: inline on a single database (unchanged), a free no-op on REALM-CORE
+                // Inline on a single database (unchanged), a free no-op on REALM-CORE
                 // (no local `game_corpse_loot` row there) — the real grant then settles onto the
                 // corpse's own world shard via `settle_loot_roll`, driven by the gateway's loot-roll
                 // relay off the `ROLL_WON` event pushed below. See `settle_roll_grant`'s own doc.
@@ -717,12 +717,12 @@ pub(crate) fn force_resolve_rolls_for_disband(
 }
 
 // ===========================================================================================
-//  REALM-CORE plane (issue #50) — mirrors `group.rs`'s realm-core section for the roll itself.
+//  REALM-CORE plane — mirrors `group.rs`'s realm-core section for the roll itself.
 // ===========================================================================================
 
 // `#[reducer]`: SpacetimeDB reducers take their arguments FLAT off the wire, so a parameter struct is not available.
 #[allow(clippy::too_many_arguments)]
-/// The realm-wide loot-roll ops (issue #50), as ONE operator-gated reducer keyed by
+/// The realm-wide loot-roll ops, as ONE operator-gated reducer keyed by
 /// [`lyracore_shared::loot_roll::loot_op`] — the same one-reducer-not-several trade `realm_group_op`
 /// made (`lyracore_shared::group::realm_op`'s doc), for the same reason: every gateway-callable reducer
 /// needs a hand-maintained SDK binding (`docs/danger-zones.md` §1.2).
@@ -765,7 +765,7 @@ pub fn realm_loot_op(
     }
 }
 
-/// Grant a resolved roll's item on the WORLD SHARD that actually holds the corpse (issue #50). The
+/// Grant a resolved roll's item on the WORLD SHARD that actually holds the corpse. The
 /// gateway's loot-roll relay calls this on every connected world shard after observing realm-core's
 /// `ROLL_WON` event — [`settle_roll_grant`]'s own guards make every wrong-shard call a harmless
 /// no-op, so the relay never needs to know in advance WHICH shard holds the corpse.
@@ -782,7 +782,7 @@ pub fn settle_loot_roll(
 }
 
 /// Delete a STAGING roll's rows on the WORLD SHARD that created them, once the gateway's loot-roll
-/// relay has promoted the roll onto realm-core (issue #50) — [`cleanup_roll`], the same delete a
+/// relay has promoted the roll onto realm-core — [`cleanup_roll`], the same delete a
 /// resolved roll already used, called here for an UNRESOLVED one that just changed which database is
 /// authoritative for it.
 #[reducer]
@@ -792,7 +792,7 @@ pub fn clear_promoted_loot_roll(ctx: &ReducerContext, roll_id: u64) -> Result<()
     Ok(())
 }
 
-/// The identity-free master-give core (#479, the `cast_vote_on` shape): everything
+/// The identity-free master-give core (the `cast_vote_on` shape): everything
 /// [`loot_master_give`] does after resolving WHO the master looter is. `gw::gw_loot_master_give` is
 /// the other entry.
 pub(crate) fn apply_master_give(
@@ -944,11 +944,11 @@ mod tests {
         assert!(pick_roll_winner(&[]).is_none());
     }
 
-    // ---- The realm-core loot-roll plane (issue #50) ----
+    // ---- The realm-core loot-roll plane ----
     //
     // A reducer body needs a live `ReducerContext`, so none of these can be EXECUTED by a test in
     // this crate — exactly why they are scanned, the same technique `group.rs` uses for its own
-    // realm-plane reducers (issue #22's review of PR #49).
+    // realm-plane reducers (the review).
 
     use crate::test_scan::code_of;
 
@@ -1023,7 +1023,7 @@ mod tests {
         );
     }
 
-    /// Issue #50's own acceptance test: `group::remove_member`'s disband branch must call
+    /// The acceptance test for this: `group::remove_member`'s disband branch must call
     /// `force_resolve_rolls_for_disband` UNCONDITIONALLY and BEFORE it tears the group row down.
     /// That ordering — not a `Plane` flag, which does not exist on `remove_member` — is what makes a
     /// disbanding party's live rolls resolve on the SAME database, in the SAME transaction, as the

@@ -4,7 +4,7 @@
 //!
 //! `ReducerContext` cannot be constructed in a unit test, so every other test in `module/` is
 //! either a pure model or a source scan. That left `export_rows` / `import_rows` / `move_rows` /
-//! `import_character_blob` pinned by their TEXT: the #36 review ran 21 mutations against that
+//! `import_character_blob` pinned by their TEXT: the review ran 21 mutations against that
 //! surface and 17 left the suite green or hung it — including repointing
 //! `sweep_transfer_game_item_instance` at `not_transported` (which deletes every character's
 //! inventory and gear on every hop) with **468 passed, 0 failed**.
@@ -24,7 +24,7 @@
 //!    test one. Every guard each reducer has is executed here against real bsatn blobs built by the
 //!    real [`build_export_blob`] — including the whole six-step cross-database sequence, driven
 //!    across TWO `FakeDb`s in
-//!    `the_six_step_sequence_moves_a_populated_character_between_two_databases` (#380).
+//!    `the_six_step_sequence_moves_a_populated_character_between_two_databases`.
 //!
 //! # The ceiling — what this harness still CANNOT run, and why
 //!
@@ -40,7 +40,7 @@
 //!   - each REAL table's arm EXISTS (`every_manifest_table_can_cross_a_database_boundary`) — read
 //!     off build.rs's generated `CHARACTER_OWNED_TRANSFER_NAMES`, not off source text;
 //!   - each arm transports rather than declining
-//!     (`the_not_transported_allowlist_matches_the_arms_that_decline`) — likewise generated. #380
+//!     (`the_not_transported_allowlist_matches_the_arms_that_decline`) — likewise generated.
 //!     moved this from a 100-line brace-depth parser to the `character_owned!` marker KIND, so
 //!     "does this arm actually move rows" is a parse-time property now, not a scan's guess;
 //!   - the cross-database eviction keeps the instance LEASE
@@ -52,10 +52,10 @@
 //!   total: no-op'ing `CtxShard::import_rows` means **no manifest table's rows ever arrive**, and an
 //!   early `return Ok(())` in a reducer shim means the reducer the gateway calls does nothing at all
 //!   while every test below still passes. It stays pinned by EXACT-SHAPE equality
-//!   (`tests::the_production_adapter_is_the_pass_through_the_harness_assumes`), and #380's
+//!   (`tests::the_production_adapter_is_the_pass_through_the_harness_assumes`), and the
 //!   cargo-mutants run is what proved that pin still has to exist: a mutation tool can only ask
 //!   whether a test FAILS, and 54 mutants across `CtxShard` were MISSED because no headless test can
-//!   execute a `ReducerContext` at all. What #380 DID retire is the pins over `begin_transfer`'s and
+//!   execute a `ReducerContext` at all. What DID retire is the pins over `begin_transfer`'s and
 //!   `reap_transfers`' 120-line bodies — those bodies are `apply_begin`/`apply_reap` now, and this
 //!   file runs them.
 //! * **What is still not covered anywhere headless**: SpacetimeDB's transaction rollback. A real
@@ -101,7 +101,7 @@ pub struct RelayRow {
 
 /// One "database". `RefCell`, not `Mutex`, on purpose: a re-entrant access PANICS (a named
 /// test failure) instead of deadlocking. A hang is not a pass — see the same fix applied to the
-/// gateway's `FakeShardDb` (issue #37).
+/// gateway's `FakeShardDb`.
 #[derive(Default)]
 pub struct FakeDb {
     chars: RefCell<HashMap<u64, crate::character::Character>>,
@@ -114,13 +114,13 @@ pub struct FakeDb {
     #[allow(clippy::type_complexity)]
     /// `game_transfer_in`: transfer_id -> (character_guid, blob, created_micros).
     in_rows: RefCell<HashMap<u64, (u64, Vec<u8>, i64)>>,
-    /// `game_transfer_out`: transfer_id -> the escrow's routing fields (issue #34).
+    /// `game_transfer_out`: transfer_id -> the escrow's routing fields.
     out_rows: RefCell<HashMap<u64, XOut>>,
     /// `game_group_member`: character_guid -> group_id.
     group_members: RefCell<HashMap<u64, u64>>,
     /// Parties torn down by `remove_member`'s disband — what the character-owned DELETE sweep
     /// does to a party when one of its members is deleted, and precisely what
-    /// `detach_for_transfer` exists to run AHEAD of (issue #19 AC#4).
+    /// `detach_for_transfer` exists to run AHEAD of (AC#4).
     disbanded: RefCell<HashSet<u64>>,
     /// `game_character_shard`: the forwarding receipt. CHARACTER-OWNED, so the cascade sweeps
     /// it — which is why `apply_finish` must record it AFTER the cascade, never before.
@@ -130,18 +130,18 @@ pub struct FakeDb {
     /// Makes `insert_character` silently do nothing — the ONE thing a real destination can do
     /// that this fake otherwise cannot: accept the call and materialise no row. That is the
     /// state `apply_import_blob`'s post-import PROOF exists to catch, and without a way to
-    /// reach it the proof was pinned only by its own text (a #36 mutation survivor).
+    /// reach it the proof was pinned only by its own text (a mutation survivor).
     swallow_inserts: Cell<bool>,
-    /// `game_guid_allocator.high_water` (issue #59): what `bump_guid_high_water` has ratcheted
+    /// `game_guid_allocator.high_water`: what `bump_guid_high_water` has ratcheted
     /// it to. Starts at 0 (unseeded), same as a fresh database.
     guid_high_water: Cell<u64>,
-    /// `game_guid_range` (issue #108/#237): the `(base, size)` THIS fake database mints from,
+    /// `game_guid_range`: the `(base, size)` THIS fake database mints from,
     /// if any. `None` (the default) models a database that never installed one — same as a
     /// fresh real database before `install_guid_range` runs.
     guid_range: Cell<Option<(u64, u64)>>,
     /// `game_transfer_reaper_schedule`: has `begin_transfer` armed the reaper on this database?
     /// A bool rather than a row, because the only thing the protocol asserts about it is that
-    /// the FIRST escrow arms it (#380) — a live database that never gets one has a frozen player
+    /// the FIRST escrow arms it — a live database that never gets one has a frozen player
     /// nobody ever recovers.
     reaper_armed: Cell<bool>,
     /// How many times `freeze_live_entity` ran. The live-entity delete is the fence covering
@@ -152,7 +152,7 @@ pub struct FakeDb {
 }
 
 /// The escrow out-row's columns, kept as their own struct so the fake never needs `TransferOut`
-/// itself to be `Clone`. It mirrors every column now (#380): `apply_begin` writes one and
+/// itself to be `Clone`. It mirrors every column now: `apply_begin` writes one and
 /// `apply_confirm` copies the escrowed BLOB onto the attestation, so a fake that dropped the
 /// blob would have made the six-step sequence untestable end to end.
 #[derive(Clone, Default)]
@@ -424,7 +424,7 @@ impl ShardLedger for FakeDb {
     }
 }
 
-/// The #380 seam: `apply_begin` runs here for real — the freeze, the export, the blob build and
+/// The seam: `apply_begin` runs here for real — the freeze, the export, the blob build and
 /// the escrow row, in order.
 impl BeginSink for FakeDb {
     fn has_active_taxi_flight(&self, guid: u64) -> bool {
@@ -481,7 +481,7 @@ fn active_taxi_refuses_transfer_before_any_source_mutation() {
     assert!(!src.reaper_armed.get());
 }
 
-/// The issue #34 seam: `apply_finish` runs here for real, ordering included.
+/// The seam: `apply_finish` runs here for real, ordering included.
 impl FinishSink for FakeDb {
     fn detach_for_transfer(&mut self, guid: u64) {
         // The RAW removal: membership goes, the party does not.
@@ -551,7 +551,7 @@ impl ImportSink for FakeDb {
 
 const GUID: u64 = 4242;
 const NEIGHBOUR: u64 = 4343;
-const XFER: u64 = GUID; // the transfer id IS the character guid (#19)
+const XFER: u64 = GUID; // the transfer id IS the character guid
                         // `o` is an arbitrary FACING (radians), not an approximation of π: the fixture only has to be a
                         // legal orientation that survives the escrow round-trip byte-for-byte.
 #[allow(clippy::approx_constant)]
@@ -563,14 +563,14 @@ const DEST: Destination = Destination {
     z: 12.5,
     o: 3.14,
 };
-/// The range a `dst` fixture installs in tests that need one (issue #237) — small and round
+/// The range a `dst` fixture installs in tests that need one — small and round
 /// so a "foreign" guid reads as obviously outside it at a glance, deliberately not shaped
 /// like a real shard's billion-wide slot so a failing assertion's numbers read as test
 /// fixture, never as a live shard's actual range.
 const LOCAL_RANGE: (u64, u64) = (0, 1_000_000);
 /// A guid OUTSIDE `LOCAL_RANGE` — stands for a `lyracore-world-1`-born character (a
 /// different slot entirely) crossing into a database that owns `LOCAL_RANGE`. This is the
-/// live #237 trigger: any Kalimdor-born character crossing into `lyracore`.
+/// live trigger: any Kalimdor-born character crossing into `lyracore`.
 const FOREIGN_GUID: u64 = 5_000_000_000;
 
 /// A fully populated character — every field set to something DISTINGUISHABLE, so a field that
@@ -830,7 +830,7 @@ fn export_import_export_produces_an_identical_blob() {
     assert_eq!(export(&third_db, GUID, XFER, here), first);
 
     // A hop to a DIFFERENT destination differs in the six positional fields and NOTHING else.
-    // Those six live on the CHARACTER ROW now (#380 deleted the blob's duplicate copies of
+    // Those six live on the CHARACTER ROW now (deleted the blob's duplicate copies of
     // them), so the assertion reads them off the arrived row rather than off the blob header.
     let moved = export(&dst, GUID, XFER, DEST);
     let mut far = FakeDb::new();
@@ -860,12 +860,12 @@ fn export_import_export_produces_an_identical_blob() {
 }
 
 // =======================================================================================
-//  Issue #59 — importing a character ratchets the destination's guid allocator
+//  Importing a character ratchets the destination's guid allocator
 // =======================================================================================
 
 /// AC#3: an imported character bumps the destination's guid high-water mark, so a
 /// `create_character` on THIS database afterward can never hand out the same guid. This is
-/// the LOCAL-range half of issue #237's fix — `GUID` sits inside `dst`'s own `LOCAL_RANGE`,
+/// the LOCAL-range half of the fix — `GUID` sits inside `dst`'s own `LOCAL_RANGE`,
 /// so the new gate must not regress this property: importing a character that belongs HERE
 /// still ratchets exactly as before.
 #[test]
@@ -891,7 +891,7 @@ fn importing_a_character_bumps_the_destinations_guid_high_water() {
 /// The mark never moves backwards — importing a LOWER guid after a higher one is already
 /// tracked must not pull the mark down (it would re-open the higher guid to reuse). `dst`
 /// installs `LOCAL_RANGE` so `GUID`'s bump attempt actually reaches `bump_guid_high_water`
-/// (and therefore its never-lowers rule) rather than being skipped by the #237 gate for an
+/// (and therefore its never-lowers rule) rather than being skipped by the gate for an
 /// unrelated reason — the two properties are independent and this test must keep exercising
 /// the never-lowers one specifically.
 #[test]
@@ -909,9 +909,9 @@ fn a_lower_imported_guid_does_not_pull_the_high_water_mark_down() {
     );
 }
 
-/// **Issue #237, the regression fixed here.** An arrival whose guid belongs to ANOTHER
+/// **The regression fixed here.** An arrival whose guid belongs to ANOTHER
 /// shard's range must leave THIS database's allocator untouched — ranges are disjoint by
-/// construction (#108), so `FOREIGN_GUID` can never collide
+/// construction, so `FOREIGN_GUID` can never collide
 /// with anything `dst` mints, and ratcheting past it anyway is exactly what pushed
 /// `lyracore`'s real high-water mark to its own range end with zero local characters
 /// above it — every subsequent local `create_character` then failed
@@ -920,7 +920,7 @@ fn a_lower_imported_guid_does_not_pull_the_high_water_mark_down() {
 #[test]
 fn importing_a_foreign_range_guid_leaves_the_destinations_allocator_untouched() {
     let src = FakeDb::populated(FOREIGN_GUID);
-    let blob = export(&src, FOREIGN_GUID, FOREIGN_GUID, DEST); // transfer_id IS the guid (#19)
+    let blob = export(&src, FOREIGN_GUID, FOREIGN_GUID, DEST); // transfer_id IS the guid
 
     let mut dst = FakeDb::new();
     dst.guid_range.set(Some(LOCAL_RANGE)); // FOREIGN_GUID is nowhere near [0, 1_000_000)
@@ -943,7 +943,7 @@ fn importing_a_foreign_range_guid_leaves_the_destinations_allocator_untouched() 
 
 #[test]
 fn an_import_that_cannot_place_a_table_files_no_in_row() {
-    // The #36 mutation: `import_rows(..)?` -> `let _ = import_rows(..)`. A partial character is
+    // The mutation: `import_rows(..)?` -> `let _ = import_rows(..)`. A partial character is
     // committed and the in-row filed anyway, which licenses cascade-deleting the source copy
     // the missing rows came from.
     let src = FakeDb::populated(GUID);
@@ -964,7 +964,7 @@ fn an_import_that_cannot_place_a_table_files_no_in_row() {
     );
 }
 
-/// Issue #42, the inverse of the test above and the one the drift contract forgot: a table the
+/// The inverse of the test above and the one the drift contract forgot: a table the
 /// registry expects that the PAYLOAD does not carry. This used to import with a clean `Ok(())`,
 /// file the in-row, and license `finish_transfer` to destroy the complete source copy of a
 /// character that had arrived without that table.
@@ -1037,7 +1037,7 @@ fn an_undecodable_table_payload_aborts_the_import() {
 
 #[test]
 fn a_manifest_from_another_build_is_refused() {
-    // #16's stated contract. Deleting this guard left 468 tests green.
+    // the stated contract. Deleting this guard left 468 tests green.
     let src = FakeDb::populated(GUID);
     let mut blob = export(&src, GUID, XFER, DEST);
     blob.manifest.push(ManifestEntry {
@@ -1173,7 +1173,7 @@ fn a_stale_copy_from_an_earlier_hop_is_wiped_before_the_arrival_lands() {
     assert!(dst.has_in_row(XFER));
 }
 
-/// Issue #83: the wipe above only fired when `has_character(guid)` was true, so an ORPHANED
+/// The wipe above only fired when `has_character(guid)` was true, so an ORPHANED
 /// owned row (this guid's OWN item/quest/etc. left behind with no accompanying `game_character`
 /// row and no `game_transfer_in` witness — the residual state a table-level witness cannot see,
 /// since it is a fact about a DIFFERENT table) survived untouched and a fresh import landed
@@ -1224,7 +1224,7 @@ fn orphaned_owned_rows_with_no_character_row_are_wiped_before_a_fresh_import_lan
 
 #[test]
 fn money_folded_into_the_escrow_after_the_freeze_arrives_with_the_character() {
-    // #30's DEFER verdict, end to end: `credit_purse` on an in-transit character folds copper
+    // the DEFER verdict, end to end: `credit_purse` on an in-transit character folds copper
     // into the escrowed blob, and `apply_import_blob`'s `c.money = decoded.money` is the ONLY
     // thing that replays it at the destination. Deleting that line left 468 tests green.
     let src = FakeDb::populated(GUID);
@@ -1264,8 +1264,8 @@ fn a_character_with_nothing_still_crosses() {
 
 /// The post-import durability PROOF, EXECUTED. `Apply` ⇒ the destination copy is durable is a
 /// claim the model makes; this is the only place it is checked against a destination that
-/// accepted the insert and materialised nothing. Deleting the proof left 468 tests green in
-/// #36, and it stayed scan-only through the first cut of this harness — the scan is defeated by
+/// accepted the insert and materialised nothing. Deleting the proof left 468 tests green,
+/// and it stayed scan-only through the first cut of this harness — the scan is defeated by
 /// leaving its own message in a dead branch, which is how it was found.
 #[test]
 fn an_arrival_that_never_materialised_files_no_in_row() {
@@ -1295,7 +1295,7 @@ fn a_corrupt_blob_is_refused_rather_than_half_applied() {
 }
 
 /// The export loop's OWN guards, driven directly: the guid it hands each mover, and the
-/// machinery filter. (`export_rows` passing guid `0` to every mover was a #36 survivor.)
+/// machinery filter. (`export_rows` passing guid `0` to every mover was a survivor.)
 #[test]
 fn the_export_loop_hands_each_mover_the_transferring_guid() {
     let src = FakeDb::populated(GUID);
@@ -1360,7 +1360,7 @@ fn the_import_loop_refuses_a_table_this_build_has_no_arm_for() {
 }
 
 // -----------------------------------------------------------------------------------------
-//  `apply_finish` — the delete-last body, executed (issue #34).
+//  `apply_finish` — the delete-last body, executed.
 //
 //  These four replace the `fn do_finish(` source scan that used to stand in for them. Each
 //  states the live consequence of the single line it pins; deleting that line turns exactly
@@ -1427,7 +1427,7 @@ fn a_same_database_finish_never_cascades_the_shared_character_row() {
     );
 }
 
-/// Issue #19 AC#4: a shard hop is not a departure.
+/// AC#4: a shard hop is not a departure.
 #[test]
 fn finish_detaches_the_party_before_the_cascade_so_the_party_survives_the_hop() {
     let mut db = finishing(GUID, true);
@@ -1457,7 +1457,7 @@ fn finish_detaches_the_party_before_the_cascade_so_the_party_survives_the_hop() 
     );
 }
 
-/// Issue #34 / the #19 × #20 merge order, as a behaviour rather than a comment.
+/// The merge order, as a behaviour rather than a comment.
 #[test]
 fn the_forwarding_receipt_survives_the_cascade_that_would_sweep_it() {
     let mut db = finishing(GUID, true);
@@ -1494,7 +1494,7 @@ fn not_transported_exports_nothing_and_absorbs_anything() {
 }
 
 // -----------------------------------------------------------------------------------------
-//  `apply_begin` — step 1, EXECUTED (#380).
+//  `apply_begin` — step 1, EXECUTED.
 //
 //  Everything below used to be three `.contains()` scans of `begin_transfer`'s 120-line body
 //  ("it deletes the live entity row", "it calls export_rows", "it calls build_export_blob").
@@ -1639,7 +1639,7 @@ fn begin_refuses_a_character_with_no_durable_row_and_a_reserved_id() {
 }
 
 // -----------------------------------------------------------------------------------------
-//  `apply_confirm` / `apply_release` — the two cross-database-only steps, EXECUTED (#380).
+//  `apply_confirm` / `apply_release` — the two cross-database-only steps, EXECUTED.
 // -----------------------------------------------------------------------------------------
 
 #[test]
@@ -1710,7 +1710,7 @@ fn release_drops_the_arrival_fence_but_refuses_on_the_source() {
 }
 
 // -----------------------------------------------------------------------------------------
-//  The WHOLE six-step cross-database sequence, across two FakeDbs (#380).
+//  The WHOLE six-step cross-database sequence, across two FakeDbs.
 //
 //  Every step above is proven in isolation; this is the one that proves they COMPOSE — that
 //  the blob step 1 wrote is the blob step 2 reads, that step 2b's attestation is what step 3
@@ -1797,7 +1797,7 @@ fn the_six_step_sequence_moves_a_populated_character_between_two_databases() {
 }
 
 // -----------------------------------------------------------------------------------------
-//  `apply_reap` — the recovery net, EXECUTED (#380).
+//  `apply_reap` — the recovery net, EXECUTED.
 //
 //  The `cross_database && !has_in` rule below used to be pinned by a `.contains()` scan of
 //  `reap_transfers`' own text, which cannot tell the rule apart from its inverse.
@@ -1905,7 +1905,7 @@ fn finish_before_the_attestation_refuses_and_leaves_the_source_copy_alone() {
     );
 
     // ...and on a database with no escrow at all it is a logged NO-OP, not an error: the
-    // gateway fans a finish out across shards and only one of them holds the claim (#99).
+    // gateway fans a finish out across shards and only one of them holds the claim.
     let mut elsewhere = FakeDb::new();
     apply_finish_step(&mut elsewhere, XFER).expect("no escrow here — nothing to finish");
 }

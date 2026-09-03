@@ -26,7 +26,7 @@ pub fn require_operator(ctx: &ReducerContext) -> Result<(), String> {
 ///
 /// THE actor chokepoint: every player-fired reducer resolves "who is acting" through here
 /// (60+ call sites, all shaped `entity_by_owner(ctx, ctx.sender()).ok_or_else(|| "... not in
-/// world")?`). That is why the escrowed-transfer in-transit gate (issue #16) lives here rather than
+/// world")?`). That is why the escrowed-transfer in-transit gate lives here rather than
 /// at each caller — an in-transit character reads as "not in world" everywhere, for free.
 /// `begin_transfer` also DELETES the live entity row in the same transaction it writes the escrow,
 /// so the target side (the ~50 `map_id`/`instance_id` gates, aggro candidate scans, threat lists,
@@ -34,14 +34,14 @@ pub fn require_operator(ctx: &ReducerContext) -> Result<(), String> {
 /// braces: it fences the actor side even if a live row somehow survives.
 ///
 /// SCOPE: this gates the ACTOR side only. Reducers that reach a character by `character_guid` or by
-/// name go through [`character_by_guid`] / [`character_by_name`] instead (issue #30) — see the
+/// name go through [`character_by_guid`] / [`character_by_name`] instead — see the
 /// verdict table in `transfer.rs`'s module doc for the paths that are deliberately NOT gated.
 ///
 /// The candidate is collapsed to AT MOST one row with `.next()` FIRST, then handed to
 /// [`gate_by_guid`] — never `Iterator::filter` ahead of `.next()`, which would SKIP an in-transit
 /// row and hand back the next matching entity instead of none, silently defeating the fence rather
 /// than closing it. The sense of the check itself (in-transit ⇒ refuse) lives in
-/// [`gate_in_transit`], not here — see its doc for why (issue #64).
+/// [`gate_in_transit`], not here — see its doc for why.
 pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEntity> {
     gate_by_guid(
         ctx,
@@ -51,7 +51,7 @@ pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEnt
 }
 
 /// The ACTING entity resolved by guid — `entity_by_owner`'s guid-keyed twin for the trusted
-/// gateway verb surface (#468 stage 4), where the actor arrives as an explicit `actor_guid` on a
+/// gateway verb surface (stage 4), where the actor arrives as an explicit `actor_guid` on a
 /// `require_operator`-gated reducer instead of via `ctx.sender()`. Same in-transit fence, same
 /// shared [`gate_by_guid`]: a mid-transfer character reads "not in world" on the `gw_*` path
 /// exactly as it does on the sender path. NOT [`live_entity`], which deliberately skips the fence.
@@ -59,14 +59,14 @@ pub fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEnt
     gate_by_guid(ctx, ctx.db.game_world_entity().guid().find(guid), |e| e.guid)
 }
 
-/// THE by-guid chokepoint (issue #30) — `entity_by_owner`'s twin for every reducer that reaches a
+/// THE by-guid chokepoint — `entity_by_owner`'s twin for every reducer that reaches a
 /// character by `character_guid` instead of through the acting entity. Returns the durable
 /// `game_character` row unless the character is mid-transfer, in which case it reads as ABSENT and
 /// the caller's existing "no such character" arm fires.
 ///
 /// Reading as absent is deliberate and is what keeps this a zero-cost seam: every call site already
 /// has a not-found arm with an error string the gateway already handles, so fencing adds no new
-/// player-facing error and no gateway edit (the constraint in issue #30's design notes).
+/// player-facing error and no gateway edit (the constraint in the design notes).
 ///
 /// SCOPE — this gate is the REFUSE verdict, and refusal is NOT the right answer everywhere. Three
 /// other verdicts exist and are deliberately not routed through here; the audited table lives in
@@ -75,8 +75,8 @@ pub fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEnt
 ///     (`transfer::defer_money_delta`); refusing would DROP a third party's copper.
 ///   * REGENERATE — `auth::establish_session` rewrites `Character.owner_identity`, which is
 ///     per-CONNECTION derived state the destination rebinds on arrival.
-///   * OPEN     — `group::group_accept`/`group_uninvite`/`group_leave`; spec #12 puts group
-///     membership on realm-core, settled by issue #22.
+///   * OPEN     — `group::group_accept`/`group_uninvite`/`group_leave`; spec puts group
+///     membership on realm-core, settled by the group slice.
 ///
 /// Same `.find()`-then-check ordering as `entity_by_owner` above, and the same shared
 /// [`gate_by_guid`] for the check itself.
@@ -101,7 +101,7 @@ pub fn character_by_name(ctx: &ReducerContext, name: &str) -> Option<Character> 
 /// The ONE place in the tree that asks "is this row's character mid-transfer?" and acts on the
 /// answer. All three chokepoints above route through it; `guid_of` is the only thing they differ in.
 ///
-/// It exists because of the shape of the mutation it is defending against (#64/#380). Each
+/// It exists because of the shape of the mutation it is defending against. Each
 /// chokepoint used to compute its own `in_transit` boolean inline, and a `!` glued anywhere into
 /// that expression — onto `is_in_transit`, or onto the `candidate.as_ref().is_some_and(..)` around
 /// it — inverts the fence with the same identifiers in the same order, which no `.contains()` scan
@@ -125,7 +125,7 @@ fn gate_by_guid<T>(
 /// The decision every in-transit fence in this file reduces to, pulled out pure and generic so its
 /// SENSE — not just its presence — can be pinned by a direct assertion instead of a source scan.
 ///
-/// Issue #64: every chokepoint above used to spell this as `.filter(|x| !is_in_transit(..))` at
+/// Every chokepoint above used to spell this as `.filter(|x| !is_in_transit(..))` at
 /// the call site. A scan can confirm `is_in_transit` is called and in what order, but nothing short
 /// of running the code can tell `!is_in_transit(..)` apart from `is_in_transit(..)` — same
 /// identifiers, same order, opposite meaning. Dropping that one `!` made `entity_by_owner` return
@@ -152,25 +152,23 @@ pub(crate) fn dist_sq(a: &WorldEntity, b: &WorldEntity) -> f32 {
     dx * dx + dy * dy + dz * dz
 }
 
-/// Max distance for a player-to-player interaction (a Trade Session, #119): (10 yd)², the same
+/// Max distance for a player-to-player interaction (a Trade Session): (10 yd)², the same
 /// interaction-range convention as `VENDOR_RANGE_SQ` / `INSPECT_RANGE_SQ` et al.
-#[allow(dead_code)] // callers land with the Trade Session work (#120)
 const PLAYER_INTERACTION_RANGE_SQ: f32 = 100.0;
 
 /// Why [`player_interaction_gate`] refused — a typed decision enum in the house pure-gate style
 /// (`trainer::BuyGrant`, `stacking::ApplyDecision`, `rolls::GroupLootDecision`): the Trade Session
-/// opener (#120) maps each reason onto a distinct `SMSG_TRADE_STATUS` variant, a mapping that
+/// opener maps each reason onto a distinct `SMSG_TRADE_STATUS` variant, a mapping that
 /// substring-matching `Err(String)` text would leave fragile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // callers land with the Trade Session work (#120)
 pub(crate) enum PlayerInteractionDenied {
     ActorDead,
     NoTarget,
     TargetNotPlayer,
     TargetDead,
     /// The target is outside the actor's `(map_id, instance_id)` partition — either dimension.
-    /// "Partition", not "map": danger-zones §1.7 fixes the two-dimensional vocabulary, and #120
-    /// must not read this as map-only when it picks a wire status.
+    /// "Partition", not "map": danger-zones §1.7 fixes the two-dimensional vocabulary, so the
+    /// Trade Session must not read this as map-only when it picks a wire status.
     DifferentPartition,
     OutOfRange,
 }
@@ -180,7 +178,6 @@ pub(crate) enum PlayerInteractionDenied {
 /// The caller resolves the partner through a FENCED lookup ([`acting_entity_by_guid`]) and passes
 /// the result: a mid-transfer or offline partner arrives as `None` and reads NoTarget, the same
 /// absent-semantics the fence guarantees everywhere else.
-#[allow(dead_code)] // callers land with the Trade Session work (#120)
 pub(crate) fn player_interaction_gate(
     actor: &WorldEntity,
     target: Option<&WorldEntity>,
@@ -289,7 +286,7 @@ pub(crate) fn nearest_entity(
 /// so a ZERO-addressed row is visible to the owner-token coordinator alone, which is exactly who
 /// reads realm-core's events. Pure, so the fallback is pinned by a test rather than by a live node.
 ///
-/// Moved here from `group.rs` (issue #371): work-item 187's roll/master-loot notifications
+/// Moved here from `group.rs`: work-item 187's roll/master-loot notifications
 /// (`loot.rs`) and `chat.rs`'s whisper relay (`push_whisper`) both reuse this SAME address rule, so
 /// it lives with the other cross-module lookups rather than under the module it happened to be
 /// written for first.
@@ -297,7 +294,7 @@ pub(crate) fn event_recipient_identity(bound: Option<Identity>) -> Identity {
     bound.unwrap_or(Identity::ZERO)
 }
 
-/// The live `game_world_entity` row for `guid`, the canonical "must be in world" fetch (issue #371)
+/// The live `game_world_entity` row for `guid`, the canonical "must be in world" fetch
 /// that replaces the 38 hand-rolled `ctx.db.game_world_entity().guid().find(guid).ok_or_else(||
 /// format!(...))?` call sites scattered across the reducer modules (debug.rs alone had 14). Most of
 /// those sites already spelled their error text exactly as this helper's default below; callers whose
@@ -315,8 +312,8 @@ pub fn live_entity(ctx: &ReducerContext, guid: u64) -> Result<WorldEntity, Strin
 }
 
 /// [`character_by_guid`], REFUSING (`Err`) instead of `Option::None` — the durable-row twin of
-/// [`live_entity`] for the issue-#30 REFUSE character fence, hand-rolled as `character_by_guid(ctx,
-/// guid).ok_or_else(|| format!("no character ..."))?` at half a dozen call sites (issue #371). Same
+/// [`live_entity`] for the REFUSE character fence, hand-rolled as `character_by_guid(ctx,
+/// guid).ok_or_else(|| format!("no character ..."))?` at half a dozen call sites. Same
 /// zero-behavior-change discipline as `live_entity`: the default message below is what most callers
 /// already spelled verbatim; a caller with different wording keeps it via `.map_err(...)`.
 ///
@@ -500,10 +497,10 @@ mod tests {
         }
     }
 
-    /// The event addressing #22 rests on: a recipient this database knows gets their bound identity
+    /// The event addressing realm-core rests on: a recipient this database knows gets their bound identity
     /// (so the per-player RLS still scopes the row on a world shard), and one it does not gets ZERO
     /// — which no client's `:sender` can ever equal, so a realm-core event row is visible to the
-    /// owner-token coordinator alone. Moved from `group.rs` with the function itself (issue #371).
+    /// owner-token coordinator alone. Moved from `group.rs` with the function itself.
     #[test]
     fn a_recipient_without_a_character_row_addresses_the_event_to_nobody() {
         let bound = Identity::from_byte_array([7u8; 32]);
@@ -516,7 +513,7 @@ mod tests {
         );
     }
 
-    /// THE fix for issue #64. `entity_by_owner` / `character_by_guid` / `character_by_name` all
+    /// THE fix. `entity_by_owner` / `character_by_guid` / `character_by_name` all
     /// reduce to this one pure decision, so pinning it here pins the sense of all three chokepoints
     /// at once — no `ReducerContext` needed, unlike the reducers that call it.
     ///
@@ -543,7 +540,7 @@ mod tests {
     }
 
     /// `entity_addr` exists ONLY so the event-constructor `signal_at` variants (`SpellCastEvent`/
-    /// `CombatEvent`, issue #369) and the chat broadcast reducers can stamp a row's AOI address off an
+    /// `CombatEvent`) and the chat broadcast reducers can stamp a row's AOI address off an
     /// already-fetched entity without a redundant `grid_of` lookup. Its whole contract is "same four
     /// fields, same order, as `grid_of`'s `(map_id, instance_id, grid_x, grid_y)` tuple" — a swapped
     /// `grid_x`/`grid_y` here would compile clean (both are `i32`) yet silently mis-place every
@@ -565,8 +562,8 @@ mod tests {
     }
 
     /// The player-interaction gate's two load-bearing outcomes for opening a Trade Session
-    /// (#119/#120): a living player standing next to another living player passes, and a partner
-    /// the fenced lookup could not produce (offline, or mid-transfer behind the issue-#16 fence)
+    /// a living player standing next to another living player passes, and a partner
+    /// the fenced lookup could not produce (offline, or mid-transfer behind the fence)
     /// reads as NoTarget — never a panic, never a pass.
     #[test]
     fn a_living_player_next_to_a_living_player_passes_and_an_absent_partner_is_no_target() {
@@ -579,7 +576,7 @@ mod tests {
         );
     }
 
-    /// Every refusal the gate owes the trade handshake, each mapped 1:1 to a wire status by #120 —
+    /// Every refusal the gate owes the trade handshake, each mapped 1:1 to a wire status —
     /// plus the two edges that don't survive careless edits: the boundary (exactly 10 yd is IN
     /// range, mirroring `can_inspect`'s `>` comparison) and precedence (a dead actor outranks an
     /// absent partner, so the client hears YouDead, not NoTarget).

@@ -6,7 +6,7 @@
 //! a **player** target also dies at 0 HP (health=0 + `dead` → the death/release/ghost corpse-run, see
 //! `world::repop`). [entity]/[event]/[server]
 //!
-//! Submodules (#382 split along this file's own comment banners, on top of #370's shared damage
+//! Submodules (split along this file's own comment banners, on top of the shared damage
 //! pipeline):
 //!   - `tables` — the ctx-free hit-table/damage/regen math (pure formulas, exhaustive tests; unchanged
 //!     by the split — it is the model file for the module).

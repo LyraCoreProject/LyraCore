@@ -1,4 +1,4 @@
-//! Regions: the cell→region→shard hierarchy as DATA (issue #23, spec #12).
+//! Regions: the cell→region→shard hierarchy as DATA (spec).
 //!
 //! Two tables, one job each, and **no game logic in this file reads either of them**:
 //!
@@ -23,7 +23,7 @@
 //! Nothing here migrates anything. With every region of a map assigned to one shard — or with no
 //! assignment rows at all, the default — routing is a strict no-op and the seams are dormant.
 //! View-merge, warm handoff, relayed intents and live migration are later tickets, gated on the
-//! #18 benchmark showing a tuned writer actually saturating.
+//! Benchmark showing a tuned writer actually saturating.
 
 use lyracore_shared::region::RegionMap;
 use spacetimedb::{reducer, table, ReducerContext, Table};

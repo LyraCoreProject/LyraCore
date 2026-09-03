@@ -107,7 +107,7 @@ pub(crate) const E_PERSISTENT_AREA: u8 = 0x1B; // GROUND-AoE (118, Consecration/
 pub(crate) const E_FISH: u8 = 0x1C; // Fishing (060): gateway-intercepted like E_ENCHANT_ITEM/E_DISENCHANT — CMSG_CAST_SPELL for a spell carrying this kind routes to the `fish` reducer (instant-resolve alpha catch; the bobber/channel flow is the deferred follow-up). Inert in-module (no resolve arm); exists so the gateway routes by DATA, never a spell-id list.
 pub(crate) const E_OPEN_LOCK: u8 = 0x1D; // Pick Lock (119): gateway-intercepted like E_FISH (0x1C) — CMSG_CAST_SPELL for a spell carrying this kind routes to the `pick_lock` reducer (unlock a locked GameObject, gated on the caster's Lockpicking 633 skill vs the game_lock required_skill). Inert in-module (NO resolve arm in cast.rs); exists so the gateway routes by DATA, never a spell-id list. 0x1E is reserved for a future E_SUMMON_PORTAL — do NOT reuse.
 pub(crate) const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116): a self-cast position change reusing the teleport core (like E_CHARGE), clamped to the furthest nav-LoS-clear point so it doesn't cross geometry. Root/snare removal rides a separate A_IMMUNITY effect. The importer name-rescues the dead SCRIPT teleport effect (raw 29) to this kind
-pub(crate) const E_RECALL_HOME: u8 = 0x1F; // teleport the caster to its bound HOME (Hearthstone, #387): a self-cast recall reusing the shared `world::recall_to_home` core, always to instance 0 regardless of the caster's current instance. Data-driven — a consumable's `spellid_1` naming a spell that carries this kind IS "a recall item"; `items::ops::apply_item_use` reads that (not a hardcoded item entry) to skip the normal stack-consumption a used-up consumable takes, since a recall trinket is never consumed. No cost/cooldown gate yet (the vanilla ~10s cast + 1hr CD is the same later follow-up E_BLINK's forward-teleport already defers)
+pub(crate) const E_RECALL_HOME: u8 = 0x1F; // teleport the caster to its bound HOME (Hearthstone): a self-cast recall reusing the shared `world::recall_to_home` core, always to instance 0 regardless of the caster's current instance. Data-driven — a consumable's `spellid_1` naming a spell that carries this kind IS "a recall item"; `items::ops::apply_item_use` reads that (not a hardcoded item entry) to skip the normal stack-consumption a used-up consumable takes, since a recall trinket is never consumed. No cost/cooldown gate yet (the vanilla ~10s cast + 1hr CD is the same later follow-up E_BLINK's forward-teleport already defers)
 pub(crate) const E_DUEL: u8 = 0x22; // Duel (raw effect 83): request a server-authoritative Duel; p0 is the duel-flag gameobject template entry
 /// Remove the target's active LAND MOUNT (Dazed's mount-removal half). An instant effect that calls the
 /// one shared `mount::dismount` — idempotent, a silent no-op on an unmounted target, and never touched by
@@ -368,7 +368,7 @@ pub(crate) const RESIST_ARMOR: u8 = 0x01; // physical armor (bit 0 of the school
 /// that exists": `tests.rs`'s `instant_kind_wire_values_exhaustive` loops it (never a hand-copied
 /// duplicate) so a kind is exhaustively covered by construction, and referencing every `E_*` const here
 /// keeps an as-yet-unwired one from tripping `dead_code` (CI's clippy gate runs `-D warnings`, so a
-/// kind added to the taxonomy but left OFF this slice fails the build, not just a test). #367: this
+/// kind added to the taxonomy but left OFF this slice fails the build, not just a test). This
 /// replaces the old `_TAXONOMY` scaffold + four separately hand-copied `E_*`/`A_*` lists in `tests.rs`,
 /// one of which had drifted (E_BLINK/E_PERSISTENT_AREA/E_FISH/E_OPEN_LOCK were missing from it).
 /// `#[allow(dead_code)]`: like `_TAXONOMY` before it, this binding is read only from `#[cfg(test)]`
@@ -412,7 +412,7 @@ pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_DISMOUNT,
 ];
 
-/// Canonical, ordered list of every AURA (`A_*`) kind — same rationale and same #367 fix as
+/// Canonical, ordered list of every AURA (`A_*`) kind — same rationale and same fix as
 /// [`ALL_INSTANT_KINDS`] above (that older hand-copied list had drifted too, missing
 /// A_SPELLMOD_FLAT/A_SPELLMOD_PCT). Same `#[allow(dead_code)]` rationale as `ALL_INSTANT_KINDS` above.
 #[allow(dead_code)]

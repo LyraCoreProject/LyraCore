@@ -959,7 +959,7 @@ fn check_cast_gate_suffix(
         }
     }
 
-    // Linked-debuff refusal gate (Weakened Soul / "diminishing re-application" mechanic, #013): an aura
+    // Linked-debuff refusal gate (Weakened Soul / "diminishing re-application" mechanic): an aura
     // effect may carry a LINKED debuff spell id in its otherwise-dead `p1` field (every current aura effect
     // imports/seeds `p1 == 0` — see `aura_apply`'s `eff_p1` freeze, which only special-cases
     // `A_PERIODIC_TRIGGER`; this is the first consumer of a nonzero `p1` on any OTHER aura kind). When set,
@@ -1304,7 +1304,7 @@ fn begin_cast_with_admission(
 /// effect, `E_PERSISTENT_AREA` — a ground-AoE) has no business being handed to `aura_apply`: that fn does
 /// not interpret instant-kind semantics, it just inserts a `game_aura` row verbatim, which manufactures a
 /// spurious aura — and buff-bar/floating-combat-text feedback — for a spell the target never actually cast
-/// (#90: every talent-granted ACTIVE did this on login and world-change). Pure so it is unit-tested
+/// (every talent-granted ACTIVE did this on login and world-change). Pure so it is unit-tested
 /// without a `ReducerContext` (module crate convention — no ctx harness by design).
 pub(crate) fn passive_applies_effect_kind(kind: u8) -> bool {
     kind & KIND_AURA_BIT != 0
@@ -1321,7 +1321,7 @@ pub(crate) fn passive_applies_effect_kind(kind: u8) -> bool {
 /// `E_PERSISTENT_AREA` effect, no aura effects) must light nothing here; `learn_spell` (the caller in
 /// `talent.rs`) already puts the spell in the book, which is what makes it castable. Mirrors the same
 /// `KIND_AURA_BIT` filter the real cast path already applies (`apply_effect`/`apply_linked_debuff` above).
-/// #90: this filter was previously missing, so EVERY instant effect of a talent rank spell (e.g.
+/// This filter was previously missing, so EVERY instant effect of a talent rank spell (e.g.
 /// Consecration's ground-AoE) was handed to `aura_apply`, minting a spurious aura row / floating combat
 /// text on every login and world change. [entity]
 pub(crate) fn apply_spell_auras(

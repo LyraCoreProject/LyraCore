@@ -88,7 +88,7 @@ pub(crate) fn apply_target_damage(
     {
         return (0, 0);
     }
-    // Stage 1 of the SHARED damage pipeline (#370): the caster's outgoing % (Defensive Stance's −10%
+    // Stage 1 of the SHARED damage pipeline: the caster's outgoing % (Defensive Stance's −10%
     // plus any A_MOD_COMBAT(COMBAT_DMG_DONE) curse), the target's A_MOD_DAMAGE_TAKEN %, absorb shields
     // (soaked BEFORE the kill check, so a fully-absorbed hit can't kill), and the GM godmode zero.
     // This is the exact chain the melee/ranged swings fold — they used to be four hand-maintained
@@ -255,7 +255,7 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
     entities.guid().update(e);
 }
 
-/// Recompute `unit_guid`'s CHARACTER-SHEET numbers (#517) — the paperdoll fields the gateway's
+/// Recompute `unit_guid`'s CHARACTER-SHEET numbers — the paperdoll fields the gateway's
 /// `build_sheet_stats_values` merely reads back, never computes: this is the SINGLE fold, so no aura or
 /// gear rule is ever duplicated gateway-side (the trap the previous gateway-only `sheet_stats` mirror
 /// hit — it never read `game_aura`, so no aura, including Battle Shout, could ever move the sheet).
@@ -306,7 +306,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         e.level,
         crate::combat::equipped_ranged_weapon(ctx, unit_guid),
     );
-    // #532: melee crit for the sheet is a plain READ of the same fold the swing table rolls
+    // Melee crit for the sheet is a plain READ of the same fold the swing table rolls
     // against — never a second crit formula.
     let crit_bp = crate::combat::effective_crit_bp(ctx, &e);
 

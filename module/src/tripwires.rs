@@ -1,21 +1,22 @@
-//! Source-scan tripwires (issue #379): `lib.rs` used to open with "this is the thin index" while
+//! Source-scan tripwires: `lib.rs` used to open with "this is the thin index" while
 //! carrying 900+ lines of `#[cfg(test)]` scan machinery below its real index — pulled out here so
 //! that doc comment stays true. `#[cfg(test)] mod tripwires;` is `lib.rs`'s only mention of this
 //! file; every mod below is unchanged in what it enforces, only in where it lives.
 //!
-//! Five tripwires, in file order:
+//! Six tripwires, in file order:
 //! - [`character_owned_tripwire`] — every character-keyed table has a `character_owned` sweep marker.
 //! - [`build_scan_strip_tripwire`] — a commented-out marker invocation never registers.
 //! - [`partition_discipline_tripwire`] — no raw whole-table scan of a spatial table outside the
-//!   partition-scoped helpers, plus its #23 extension (no module game logic reads a shard id).
+//!   partition-scoped helpers, plus its extension (no module game logic reads a shard id).
 //! - [`character_fence_tripwire`] — no raw `game_character` lookup outside the by-guid chokepoint.
-//! - [`print_macro_tripwire`] — no print-family macro anywhere under `module/src` (new with #432).
-//! - [`gc_reap_tripwire`] — every TTL-shaped event table is named in `gc.rs` (new with #379).
+//! - [`print_macro_tripwire`] — no print-family macro anywhere under `module/src` (new).
+//! - [`gc_reap_tripwire`] — every TTL-shaped event table is named in `gc.rs` (new).
+//! - [`issue_reference_tripwire`] — no comment carries a tracker issue reference.
 //!
 //! `partition_discipline_tripwire::raw_scans` and `character_fence_tripwire::raw_lookups` used to
 //! be ~70-line near-clones — identical bound-handle walk-back, handle dedup, comment-line filtering
 //! — that had already drifted from each other in small ways neither review caught. The exact drift
-//! pattern issue #64 consolidated once already, one file down (`body_of`/`code_of` into
+//! pattern consolidated once already, one file down (`body_of`/`code_of` into
 //! `test_scan.rs`). Both now defer to the one engine there, [`crate::test_scan::raw_table_reads`]:
 //! they differ only in which accessor(s) they watch and what counts as "opens a read" (`.iter()` /
 //! `.count()` for a whole-table scan vs `.guid().find(` for a raw point lookup), so the two can no
@@ -64,7 +65,7 @@ pub(crate) mod character_owned_tripwire {
     /// them too). Shared with `partition_discipline_tripwire` below and `gc_reap_tripwire`.
     ///
     /// `pub(crate)`, not `pub(super)`: `creatures::tick`'s
-    /// `nothing_writes_the_unsubscribed_move_event_table` (#357) walks the whole compiled tree the
+    /// `nothing_writes_the_unsubscribed_move_event_table` walks the whole compiled tree the
     /// same way, from outside this module entirely.
     pub(crate) fn scanned_files() -> Vec<PathBuf> {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -244,7 +245,7 @@ mod build_scan_strip_tripwire {
     }
 }
 
-/// ENFORCEMENT tripwire (issue #14, part of the elastic-world-sharding spec #12): a full
+/// ENFORCEMENT tripwire (part of the elastic-world-sharding spec): a full
 /// `.iter()` over a SPATIAL table reads the whole world, so it silently breaks shardability —
 /// once the world is cut into region/continent/instance shards, a whole-table scan can only ever
 /// see the rows on the caller's own shard, and the code that relied on seeing everything goes
@@ -288,8 +289,8 @@ mod partition_discipline_tripwire {
 
     /// `(repo-relative path, allowed raw-scan count, why)`. One line of justification each.
     const WHITELIST: &[(&str, usize, &str)] = &[
-        // Diagnostics and harness code — never on a gameplay path. #386 split the former single
-        // `debug.rs` (budget 9, after #368 dropped it from 12) into a directory; the 9 raw scans
+        // Diagnostics and harness code — never on a gameplay path. A split of the former single
+        // `debug.rs` (budget 9, down from 12) into a directory; the 9 raw scans
         // landed in two of the seven files — same total, just split along the new file boundary.
         ("module/src/debug/mod.rs", 9, "`debug_reducers`-gated test harness; compiled out of production builds entirely (2 of these are #456's `debug_backfill_cell_ids`, a deliberately whole-shard migration sweep — each shard runs it once after the publish that adds the `cell` column)"),
         ("module/src/debug/instance.rs", 4, "`debug_reducers`-gated test harness; compiled out of production builds entirely; +2 for #526's `debug_assert_floor_snap`, which scans game_creature_spawn/game_world_entity by `entry` for a guid high-water mark (template-keyed, not a spatial query) before minting a scratch spawn guid"),
@@ -304,12 +305,12 @@ mod partition_discipline_tripwire {
         // Unindexed lookups whose target is co-located with the caller anyway.
         ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` — KNOWN DEBT, a textbook `entities_near` radius search kept only because pets are rare (one per online warlock)"),
         ("packages/deadmines/src/choreography.rs", 1, "single instance-scoped boss-liveness check inside one encounter"),
-        // Issue #383 split tick.rs into tick/{mod,movement,lifecycle,sense}.rs; this budget-5 entry
+        // Split tick.rs into tick/{mod,movement,lifecycle,sense}.rs; this budget-5 entry
         // splits with it, same total (3 + 2 = 5), same reasoning as the pre-split note below.
         ("module/src/creatures/tick/mod.rs", 3, "per-tick world sweep that locates every player (`active_cell_creatures`, feeding the pets/in_combat/active-cell sets) plus the 2 throttled work-item 230/233 rows-visited counters (`log_active_cell_stats`/`log_narrowed_pass_stats`) — perf-catalog Tier 1 took the OLD combined file from 10 to 7 (1.6/1.7/1.10), and the `timer_never` sentinel took corpse-decay and respawn-due (now in lifecycle.rs) off the list entirely"),
         ("module/src/creatures/cycle/ctx.rs", 2, "the aggro phase's sense-tick player snapshot (no players-only index) plus regeneration's health/power candidate read (no `hurt or has a power bar` index) — both moved here verbatim with their passes, the KNOWN DEBT tick/sense.rs used to carry, not new scans"),
         ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance; a textbook `helpers::entities_near` call (perf-catalog Tier 1)"),
-        // #368: both nearest-trainer scans now route through `helpers::nearest_entity` (an
+        // Both nearest-trainer scans now route through `helpers::nearest_entity` (an
         // indexed `by_map` scan, partition-scoped) — this file's raw-scan count dropped to 0, so
         // it no longer needs a whitelist entry.
     ];
@@ -330,7 +331,7 @@ mod partition_discipline_tripwire {
     /// accessor (`ctx.db.game_world_entity().iter()`) or off a local handle bound from it
     /// (`let entities = ctx.db.game_world_entity();` ... `entities.iter()`). Both forms count:
     /// the binding form is the one this codebase actually writes most of the time. Runs on
-    /// `crate::test_scan::raw_table_reads` (issue #379) — the shared engine this and
+    /// `crate::test_scan::raw_table_reads` — the shared engine this and
     /// `character_fence_tripwire::raw_lookups` used to duplicate.
     fn raw_scans(content: &str) -> Vec<(usize, &'static str)> {
         crate::test_scan::raw_table_reads(content, SPATIAL_ACCESSORS, opens_whole_table_read)
@@ -412,12 +413,12 @@ mod partition_discipline_tripwire {
     }
 
     // ==========================================================================================
-    //  #23 EXTENSION: no module game logic may read a SHARD ID.
+    //  EXTENSION: no module game logic may read a SHARD ID.
     // ==========================================================================================
 
     /// The only files allowed to touch a shard column: the one that DEFINES the assignment table
     /// and the operator reducer that writes it (`region.rs`), and the one that DEFINES the
-    /// per-shard load-sample table and ITS operator reducer (`load.rs`, issue #78) — `game_shard_load
+    /// per-shard load-sample table and ITS operator reducer (`load.rs`) — `game_shard_load
     /// .shard` is a database-name LABEL an ops sample is filed under, ring-evicted and compared for
     /// equality, exactly like `RegionAssignment.shard`. Both write or compare; neither branches on
     /// the value to decide anything gameplay-visible.
@@ -429,7 +430,7 @@ mod partition_discipline_tripwire {
     /// ever writing a dot (both forms were confirmed to slip past the first two). You cannot
     /// destructure a type you may not name. `game_character_shard` / `CharacterShard` deliberately
     /// do NOT count — that table stores a `(map_id, instance_id)` LOCATION precisely so nothing has
-    /// to name a database. `game_shard_load` / `ShardLoad` (issue #78) get the same destructuring
+    /// to name a database. `game_shard_load` / `ShardLoad` get the same destructuring
     /// protection as `RegionAssignment` — they carry a shard-name LABEL an ops sample is filed
     /// under, not a location, but the same "cannot destructure a type you may not name" argument
     /// applies to it too.
@@ -465,7 +466,7 @@ mod partition_discipline_tripwire {
         out
     }
 
-    /// AC#1 of #23: **region definitions are data; shard ids are the gateway's business.** The
+    /// AC#1 of **region definitions are data; shard ids are the gateway's business.** The
     /// module stores `region_assignment { map_id, region_id, shard, epoch }` (it has to — realm-core
     /// is this same wasm under another database name), but the instant a reducer *branches* on
     /// `shard` the module stops being relocatable: the same code on two databases would take two
@@ -475,7 +476,7 @@ mod partition_discipline_tripwire {
     /// `crates/lyracore-shared/src`**, which is compiled INTO this module and therefore just as capable
     /// of naming a database.
     ///
-    /// Issue #48 moved `DUNGEON_MAPS` out of `module/src/instance.rs` into `lyracore_shared::instance` so
+    /// Moved `DUNGEON_MAPS` out of `module/src/instance.rs` into `lyracore_shared::instance` so
     /// the gateway and the module could not disagree about which maps are dungeons. A map-id set is a
     /// world fact and entirely fine here — but the move quietly put a piece of module logic in a crate
     /// this tripwire did not look at, so "no module game logic reads a shard id" would have stopped
@@ -545,12 +546,12 @@ mod partition_discipline_tripwire {
     }
 }
 
-/// ENFORCEMENT tripwire (issue #30, part of the elastic-world-sharding spec #12): a reducer that
+/// ENFORCEMENT tripwire (part of the elastic-world-sharding spec): a reducer that
 /// reaches a character by GUID or by NAME straight into `game_character` touches none of the
 /// escrowed-transfer chokepoints — not `helpers::entity_by_owner` (the actor side), not
 /// `world::player_login` (re-materialisation), not `begin_transfer`'s delete of the live entity
 /// (the target side). Same-database that is harmless: the write lands on the SAME row the
-/// destination reads. Cross-database (#19) each one is a LOST WRITE, because the export blob was
+/// destination reads. Cross-database each one is a LOST WRITE, because the export blob was
 /// serialized at `begin_transfer` and the mutation dies with the source copy.
 ///
 /// The fence is `helpers::character_by_guid` / `character_by_name`, which read an in-transit
@@ -579,7 +580,7 @@ mod character_fence_tripwire {
         ("module/src/transfer/tests.rs", 1, "NOT a lookup: the expected-shape STRING LITERAL inside `the_production_adapter_is_the_pass_through_the_harness_assumes`, which quotes `CtxShard::has_character`'s body verbatim so any edit to it fails. This scanner reads text and is right to count it"),
         ("module/src/transfer/mod.rs", 4, "TRANSFER MACHINERY, all four reading the row the fence hides because that is the row they exist to move: `in_transit_instances` (the instance reaper's claim census — this call site exists BECAUSE the character is in transit, so a fenced reader would return None every time), `import_character`'s same-database re-partition, and `CtxShard`'s two sink methods — `has_character` (the plan probe, the materialise upsert AND the post-import durability PROOF that the destination copy exists before an in-row licenses deleting the source) and `with_character` (the escrow's own export read, taken after the freeze). #380 dropped this from 8 to 4: the other four were expected-shape STRING LITERALS inside exact-shape pins that quoted `CtxImportSink`'s and `helpers.rs`'s bodies verbatim. The `helpers.rs` ones are gone (all three chokepoints collapsed onto one `gate_by_guid`, whose mutants cargo-mutants CATCHES); the adapter's moved to `transfer/tests.rs`, which is why that file now has a budget of its own"),
         ("module/src/world.rs", 8, "player_login carries its own `is_in_transit` fence (the re-materialisation chokepoint, 2 reads); teleport_player, set_home, persist_entity and is_gm_character take a guid already resolved through a fenced entity (persist_entity is called BY begin_transfer); debug_delete_character keeps a raw existence probe so a missing character stays a no-op while an in-transit one is REFUSED, with the fence on the same expression; cascade_delete_character's raw row DELETE is the sweep that probe guards. `recall_to_home` is now FENCED (character_by_guid) — it was the one teleport_player caller needing no live entity"),
-        // OPEN, not decided — spec #12 puts group MEMBERSHIP state on realm-core, settled by #22.
+        // OPEN, not decided — spec puts group MEMBERSHIP state on realm-core, settled.
         ("module/src/group.rs", 6, "OPEN: group_accept/group_uninvite/group_leave have a THIRD party mutate game_group_member; if #22 lands membership on realm-core these stop being a world shard's concern entirely. Guessing a verdict here is the mistake #30 exists to correct"),
         // REGENERATE at the destination — connection-derived state, never carried in the blob.
         ("module/src/auth.rs", 4, "REGENERATE: create_character's two name checks (NAME_IN_USE, pre-insert and the race-losing retry) predate any character; its guid-allocator seed scan (`legacy_guid_seed_now`, first-ever touch only) needs the whole table; delete_character keeps a raw find so NO_SUCH_CHAR/NOT_OWNER/CHAR_IN_TRANSIT stay three answers, with the fence on the next line. establish_session's owner_identity rebind and create_character's per-account cap check now route through the `by_account` index instead of a full scan (issue #390), so they no longer count here"),
@@ -595,8 +596,8 @@ mod character_fence_tripwire {
         ("module/src/talent.rs", 1, "the guid comes from the caller's own entity_by_owner-resolved entity"),
         ("module/src/gm.rs", 2, "set_gm_level is FENCED (character_by_name); the two raw reads are gm_command's own gm_level probe and its .money write, both on the caller's entity_by_owner-resolved guid"),
         ("module/src/loot/mod.rs", 1, "DEFER: credit_purse writes the durable row AFTER folding the delta into the escrowed blob (`transfer::defer_money_delta`) — refusing would drop a third party's copper"),
-        // #386 split the former single `debug.rs` into a directory; this lookup lives in the one
-        // reducer the #378 collapse put it in.
+        // Split the former single `debug.rs` into a directory; this lookup lives in the one
+        // reducer the collapse put it in.
         ("module/src/debug/repair.rs", 1, "`debug_repair_after_publish`'s gm-tester backfill (guid 1, formerly the standalone `debug_seed_gm_tester`); every debug WRITER that touches character state is fenced"),
         ("packages/playerbots/src/goals.rs", 1, "a bot reads a nearby player's NAME for goal selection — no write"),
         ("packages/playerbots/src/mod.rs", 4, "bot roster bookkeeping over rows this same reducer just created — free-name probe, post-create fetch, post-update re-read; +1 for `ensure_bot_account`'s per-account character COUNT, which reaches no character (it decides which bot account still has room under the 10-character cap) — an in-transit bot counting or not counting toward that cap is harmless either way"),
@@ -633,7 +634,7 @@ mod character_fence_tripwire {
 
     /// Every line where `game_character` is read raw — inline off the accessor, or off a local
     /// handle bound from it (`let chars = ctx.db.game_character();`, this codebase's dominant idiom).
-    /// Runs on `crate::test_scan::raw_table_reads` (issue #379) — the shared engine this and
+    /// Runs on `crate::test_scan::raw_table_reads` — the shared engine this and
     /// `partition_discipline_tripwire::raw_scans` used to duplicate.
     fn raw_lookups(content: &str) -> Vec<usize> {
         let mut out: Vec<usize> =
@@ -726,10 +727,10 @@ mod character_fence_tripwire {
     }
 }
 
-/// ENFORCEMENT tripwire (issue #432): SpacetimeDB's own CLI (2.7.1) source-scans this whole crate
+/// ENFORCEMENT tripwire: SpacetimeDB's own CLI (2.7.1) source-scans this whole crate
 /// for the print family — four macro names, each followed by a `!` — and aborts the build the
 /// instant one appears ANYWHERE under `module/src`, including behind `#[cfg(test)]`: the scan is
-/// source-level and does not know what `cfg` means. #432 was three diagnostic notes in test-only
+/// source-level and does not know what `cfg` means. The trigger was three diagnostic notes in test-only
 /// code (`publish_safety.rs` ×2, `test_scan.rs` ×1) that never compile into the wasm at all, yet
 /// still failed every fresh clone's first `preflight` — the alpha's own start command, blocked for
 /// everyone before a single reducer ever ran. Fixed there by swapping each to
@@ -786,7 +787,7 @@ pub(crate) mod print_macro_tripwire {
     }
 }
 
-/// ENFORCEMENT tripwire (issue #379): `gc.rs` has a hand-maintained `reap!` list. It covers the
+/// ENFORCEMENT tripwire: `gc.rs` has a hand-maintained `reap!` list. It covers the
 /// fifteen event tables reaped on their 1s `EVENT_TTL_MICROS` and the handful of tables with their
 /// own ad-hoc TTL block below it. A NEW short-lived event table
 /// that forgets to add its line leaks forever, silently: nothing else ever deletes its rows.
@@ -870,7 +871,7 @@ mod gc_reap_tripwire {
 }
 
 // =================================================================================================
-//  #456: every `grid_x` write is accompanied by the packed `cell` write
+//  Every `grid_x` write is accompanied by the packed `cell` write
 // =================================================================================================
 
 /// The four AOI-scoped tables carry a `cell` column that packs `(grid_x, grid_y)` into one indexed
@@ -881,7 +882,7 @@ mod gc_reap_tripwire {
 /// every player standing on it and visible to whoever happens to occupy the cell it wrongly claims.
 ///
 /// Nothing in the type system couples them: `grid_x`, `grid_y` and `cell` are three independent
-/// columns, and the census behind #456 found **24 independent write sites** across 8 files, with no
+/// columns, and the census behind this tripwire found **24 independent write sites** across 8 files, with no
 /// shared constructor for `game_world_entity` re-stamps (7 hand-rolled `e.grid_x = ..` runs) or for
 /// `game_gameobject` (9 independent struct literals). Adding a 25th and forgetting the third line
 /// compiles clean, passes every existing test, and shows up live as entities that vanish.
@@ -1196,7 +1197,7 @@ pub(crate) mod grid_cell_tripwire {
         );
     }
 
-    /// Issue #467: the tripwire's original `grid_x: ` needle never saw field-init SHORTHAND
+    /// The tripwire's original `grid_x: ` needle never saw field-init SHORTHAND
     /// (`grid_x,`, no `: value`) — what an initializer built from same-named locals uses, the
     /// idiom `motion.rs` uses throughout. This feeds `grid_x_writes_missing_cell` a struct literal
     /// written that way and asserts a broken one (no `cell` field) is CAUGHT, a correct one PASSES,
@@ -1244,7 +1245,7 @@ pub(crate) mod grid_cell_tripwire {
         );
     }
 
-    /// A code-review finding on #467: the shorthand path resolved its enclosing struct-literal type
+    /// A code-review finding on the shorthand path resolved its enclosing struct-literal type
     /// by searching the file for `struct <name> { .. }`, which finds nothing for the near-universal
     /// `Self { .. }` constructor idiom (`impl E { fn f() -> Self { Self { .. } } }`) — `Self` is not
     /// a struct declaration. Confirms a broken `Self { .. }` shorthand initializer is still CAUGHT.
@@ -1266,7 +1267,7 @@ pub(crate) mod grid_cell_tripwire {
         );
     }
 
-    /// A code-review finding on #467: `is_own_line` required the ENTIRE trimmed line to be exactly
+    /// A code-review finding on `is_own_line` required the ENTIRE trimmed line to be exactly
     /// `grid_x,`, so a compact one-liner (`E { grid_x, grid_y }`, multiple fields sharing a line)
     /// was skipped outright — violation or not. Confirms a broken compact literal is still CAUGHT.
     #[test]
@@ -1285,5 +1286,86 @@ pub(crate) mod grid_cell_tripwire {
             grid_x_writes_missing_cell(&good).is_empty(),
             "a compact one-line shorthand initializer that also sets `cell` must PASS"
         );
+    }
+}
+
+/// ENFORCEMENT tripwire: a comment must stay understandable without tracker history, so no comment
+/// under `module/src` may carry an issue reference (a hash sign followed by 2..=4 digits). The
+/// allow-list below is a RATCHET of MAXIMUMS: cleaning a file up lowers its number, and a file that
+/// reaches zero drops off the list entirely.
+#[cfg(test)]
+pub(crate) mod issue_reference_tripwire {
+    /// `(path under `module/src`, tracker references still tolerated there)`.
+    const RATCHET: &[(&str, usize)] = &[("spell/cast/targeting.rs", 6)];
+
+    /// Lines whose comment carries a tracker reference: a hash sign opening a 2..=4 digit token
+    /// after a space or an opening bracket. A build, opcode, patch or revision number is not one.
+    fn tracker_refs(content: &str) -> Vec<usize> {
+        let bytes = content.as_bytes();
+        let mut out = Vec::new();
+        for (i, _) in content.match_indices('#') {
+            let digits = bytes[i + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit())
+                .count();
+            if !(2..=4).contains(&digits) || i == 0 || !matches!(bytes[i - 1], b' ' | b'(' | b'[') {
+                continue;
+            }
+            if !crate::test_scan::on_comment_line(content, i) {
+                continue;
+            }
+            let head = content[..i - 1].trim_end();
+            let word = &head[head.rfind(char::is_whitespace).map_or(0, |j| j + 1)..];
+            if matches!(word, "build" | "opcode" | "patch" | "rev") {
+                continue;
+            }
+            out.push(crate::test_scan::line_of(content, i));
+        }
+        out
+    }
+
+    #[test]
+    fn no_comment_carries_a_tracker_issue_reference() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        super::character_owned_tripwire::collect_rs_files(&root, &mut files);
+        let mut violations = Vec::new();
+        for file in files {
+            let rel = file
+                .strip_prefix(&root)
+                .expect("scanned under module/src")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let content = std::fs::read_to_string(&file).expect("readable module source");
+            let lines = tracker_refs(&content);
+            let budget = RATCHET
+                .iter()
+                .find(|(p, _)| *p == rel)
+                .map_or(0, |(_, n)| *n);
+            if lines.len() > budget {
+                let found = lines.len();
+                violations.push(format!(
+                    "{rel}: {found} refs (budget {budget}), lines {lines:?}"
+                ));
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "tracker issue references found in module/src comments:\n  {}\n\n\
+             Record the reasoning in the comment itself: a reader with no tracker access must still \
+             understand why the constraint exists.",
+            violations.join("\n  ")
+        );
+    }
+
+    /// The scan catches a reference and leaves a build number, an opcode id and live code alone.
+    #[test]
+    fn the_scan_separates_a_tracker_reference_from_an_ordinary_number() {
+        let h = '#';
+        assert_eq!(tracker_refs(&format!("// a note ({h}119)\n")), vec![1]);
+        assert_eq!(tracker_refs(&format!("/// see {h}42 for why\n")), vec![1]);
+        assert!(tracker_refs(&format!("// build {h}5875 ships it\n")).is_empty());
+        assert!(tracker_refs(&format!("// opcode {h}117 is CMSG\n")).is_empty());
+        assert!(tracker_refs(&format!("let s = \"({h}119)\";\n")).is_empty());
     }
 }

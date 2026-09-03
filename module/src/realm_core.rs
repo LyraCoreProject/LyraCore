@@ -1,4 +1,4 @@
-//! Realm-core: the realm-wide **character→shard index** (issue #20, spec issue #12).
+//! Realm-core: the realm-wide **character→shard index** (spec).
 //!
 //! # What "realm-core" is
 //!
@@ -56,7 +56,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_shard(ctx, charac
     ctx.db.game_character_shard().character_guid().delete(character_guid);
 });
 
-// CROSS-DATABASE transport (issue #19 × #20): the directory entry deliberately does NOT ride the
+// CROSS-DATABASE transport: the directory entry deliberately does NOT ride the
 // export blob. It is not character data — it is a routing HINT about WHERE the character is, and the
 // blob's whole purpose is to change that. The source's row is snapshotted by `begin_transfer` while
 // it still names the SOURCE, so importing it would give the destination a forwarding receipt
@@ -65,13 +65,13 @@ crate::character_owned!(delete, fn sweep_delete_game_character_shard(ctx, charac
 // directory honest are `transfer::do_finish` (the source's own row, rewritten to name the
 // destination, in the escrow's transaction) and the gateway's `set_character_shard` against
 // realm-core, which is the authoritative copy — driven as a required step of
-// `world::transfer::run_transfer` immediately after `finish_transfer` commits (issue #34), and
+// `world::transfer::run_transfer` immediately after `finish_transfer` commits, and
 // re-driven by the login self-heal probe whenever the two disagree.
 crate::character_owned!(not_transported, fn sweep_transfer_game_character_shard());
 
 /// Upsert the index entry for `character_guid`. Shared by [`set_character_shard`] (the gateway's
 /// write, on realm-core) and by `transfer::do_finish` (the module's write, in the SAME transaction
-/// that releases the escrow — issue #20 AC#3).
+/// that releases the escrow — AC#3).
 pub(crate) fn record_shard(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -97,13 +97,13 @@ pub(crate) fn record_shard(
 /// input, so a client that could write it could redirect another player's login.
 ///
 /// Two callers, both on the gateway's realm-core handle: `world::transfer::run_transfer` publishes
-/// the settled destination here as a required step of every escrowed transfer (issue #34 — strictly
+/// the settled destination here as a required step of every escrowed transfer (strictly
 /// after `finish_transfer` committed, so it can only ever name a destination the escrow reached),
 /// and `home_shard`'s login self-heal rewrites it whenever the fallback probe disagrees with what
 /// the index says. Only the FIRST of those runs in production today: the gateway's world-entry
 /// resolver is `settle_home_shard`, which overrides `home_shard` and scans the shards instead of
 /// consulting this table, so the index is currently written-but-never-read and its self-heal never
-/// fires. #39/#21 is what changes that.
+/// fires. The instance-placement work is what changes that.
 #[reducer]
 pub fn set_character_shard(
     ctx: &ReducerContext,
@@ -117,11 +117,11 @@ pub fn set_character_shard(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Guid-range registry (#108) — realm-core answers "which shard mints from where"
+// Guid-range registry — realm-core answers "which shard mints from where"
 // ---------------------------------------------------------------------------------------------
 
 /// How many guids a slot owns. Slot *n* is `[n · GUID_RANGE_SIZE, (n+1) · GUID_RANGE_SIZE)`, which
-/// makes #105's hand-applied floors (core 0, world-1 1e9, instances 2e9, realm-core 3e9) slots
+/// makes the hand-applied floors (core 0, world-1 1e9, instances 2e9, realm-core 3e9) slots
 /// 0/1/2/3 exactly — so the live databases migrate into this registry by being *recorded*, with no
 /// guid changing. Decimal and small on purpose (`GuidRange`'s doc, `auth.rs`): readable in logs and SQL,
 /// a billion characters per shard, and far below `2^53`, above which `spacetime call` mangles a u64
@@ -218,7 +218,7 @@ mod guid_range_registry_tests {
 
     #[test]
     fn a_shard_keeps_the_slot_it_is_already_minting_from_whatever_the_claim_order() {
-        // The four live databases, by their #105 floors — claimed in the WORST order (highest
+        // The four live databases, by their floors — claimed in the WORST order (highest
         // first), which is exactly what a `max + 1` allocator would mangle.
         let live = [
             ("world-1", 1_000_000_101u64),

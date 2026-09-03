@@ -411,7 +411,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_quest(ctx, charac
         quests.id().delete(r.id);
     }
 });
-// CROSS-DATABASE transport (issue #19): the quest log IS the run — a Deadmines party arriving with
+// CROSS-DATABASE transport: the quest log IS the run — a Deadmines party arriving with
 // an empty log could not turn anything in. `id` is a surrogate PK, re-minted.
 crate::character_owned!(transfer, fn sweep_transfer_game_character_quest(ctx, character_guid, io) {
     table = game_character_quest,
@@ -2260,7 +2260,7 @@ crate::game_tick_pass!(fn quest_timer_pass(ctx) {
     let log = ctx.db.game_character_quest();
     // `is_expired`'s own `deadline_micros != 0` check makes this a cheap no-op scan for the (typical)
     // all-untimed quest log — no separate index needed for this table's expected small size.
-    // REFUSE verdict (issue #30) — the production twin of `debug::debug_expire_quest`, fenced there
+    // REFUSE verdict — the production twin of `debug::debug_expire_quest`, fenced there
     // for exactly this reason: the write lands in `game_character_quest`, a MANIFEST table, so
     // post-`begin_transfer` it is a lost write cross-database. This pass is BACKGROUND, so the
     // "the guid came from a live entity" argument that fences the rest of `quest.rs` does not reach
@@ -2408,7 +2408,7 @@ pub(crate) fn debug_force_expire(
 //  Player reducers — authorized via ctx.sender, delegate to the cores
 // ===========================================================================================
 
-/// The abandon core, actor-explicit (#479) — the body [`abandon_quest`] used to inline, shared with
+/// The abandon core, actor-explicit — the body [`abandon_quest`] used to inline, shared with
 /// `gw::gw_abandon_quest`.
 pub(crate) fn apply_abandon_quest(
     ctx: &ReducerContext,

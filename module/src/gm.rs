@@ -294,7 +294,7 @@ pub(crate) fn parse_gm_command(text: &str) -> Result<GmCommand, String> {
 pub fn set_gm_level(ctx: &ReducerContext, character_name: String, level: u8) -> Result<(), String> {
     require_operator(ctx)?;
     let chars = ctx.db.game_character();
-    // REFUSE verdict (issue #30): an in-transit character reads as absent, so this operator write
+    // REFUSE verdict: an in-transit character reads as absent, so this operator write
     // cannot land on a source copy the destination already serialized past.
     let mut c = crate::helpers::character_by_name(ctx, &character_name)
         .ok_or_else(|| format!("no player named {character_name}"))?;

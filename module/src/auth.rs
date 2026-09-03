@@ -65,7 +65,7 @@ fn current_alpha_test_tools_enrollment(ctx: &ReducerContext) -> bool {
     )
 }
 
-/// Ensure a SHADOW account row exists for `account_id` on THIS database (issue #19).
+/// Ensure a SHADOW account row exists for `account_id` on THIS database.
 ///
 /// Accounts are realm-scoped: SRP6 lives on the logon tier and writes `game_account` on the realm
 /// (default) database only. An instance/continent shard therefore has no account row at all — and
@@ -79,7 +79,7 @@ fn current_alpha_test_tools_enrollment(ctx: &ReducerContext) -> bool {
 ///
 /// Deliberate simplification: the username is synthetic (`#<id>`, which no real account name can
 /// collide with — account names are uppercased alphanumerics) purely to satisfy the `#[unique]`
-/// constraint. Upgrade path: realm-core (#22) owns accounts for every shard and this function is
+/// constraint. Upgrade path: realm-core owns accounts for every shard and this function is
 /// deleted.
 /// Idempotent — a second call is a no-op, and it NEVER overwrites a real account row. The explicit
 /// id does not advance the table's `auto_inc` sequence (danger-zones §2), which is safe only
@@ -151,7 +151,7 @@ fn operator_claim_action(
 #[reducer]
 pub fn claim_operator(ctx: &ReducerContext) -> Result<(), String> {
     let ops = ctx.db.game_operator();
-    // `find(0)`, not `find(&0)` — main's #226 clippy sweep dropped the needless borrow.
+    // `find(0)`, not `find(&0)` — main's clippy sweep dropped the needless borrow.
     let claimed_identity = ops.id().find(0).map(|operator| operator.identity);
     if operator_claim_action(claimed_identity, ctx.sender())? == OperatorClaimAction::Insert {
         ops.insert(Operator {
@@ -397,7 +397,7 @@ pub fn establish_session(
 
     // No per-character owner_identity restamp here: it existed so per-owner RLS would admit the
     // player's own connection, which no longer exists — `apply_player_login` stamps owner rows
-    // via `restamp_owned_data`, and the gateway predicates are the visibility layer (#483).
+    // via `restamp_owned_data`, and the gateway predicates are the visibility layer.
 
     let now = ctx.timestamp;
     let expires = now
@@ -420,7 +420,7 @@ pub fn establish_session(
 }
 
 // ===========================================================================================
-//  Realm-safe guid allocation (issue #59)
+//  Realm-safe guid allocation
 // ===========================================================================================
 
 /// Durable high-water mark for `game_character.guid`. Singleton row (`id` is always 0). Private —
@@ -440,7 +440,7 @@ pub fn establish_session(
 /// so a guid this database has ever handed out — locally or by import — can never be handed out
 /// here again, even after the character that held it is long deleted.
 ///
-/// `create_character` is unrouted (§ premise check, issue #59): the gateway always calls it
+/// `create_character` is unrouted (§ premise check): the gateway always calls it
 /// against the account's home/default database, never a routed shard, so a per-database mark is
 /// sufficient — no cross-database plumbing on the creation path itself.
 #[table(accessor = game_guid_allocator)]
@@ -458,7 +458,7 @@ fn ratchet_high_water(current: u64, floor: u64) -> u64 {
     current.max(floor)
 }
 
-/// The ORIGINAL per-database scan (issue #59's precursor — see `create_character`'s old comment),
+/// The ORIGINAL per-database scan (the precursor — see `create_character`'s old comment),
 /// generalised over guid iterators so it needs no `ReducerContext` either. Used ONLY to seed a
 /// `game_guid_allocator` row that has never been touched — an auto-migrated database that already
 /// has characters seeds from their real max instead of resetting to 0 and re-issuing them.
@@ -533,7 +533,7 @@ pub(crate) fn next_character_guid(ctx: &ReducerContext) -> u64 {
     next
 }
 
-/// Ratchet the mark up to at least `guid`. Two call sites (issue #59): `transfer::apply_import_blob`
+/// Ratchet the mark up to at least `guid`. Two call sites: `transfer::apply_import_blob`
 /// right after it materialises an imported character (AC#3 — so THIS database can never later
 /// re-issue a guid it just received from another one), and `world::cascade_delete_character` right
 /// before it removes a `game_character` row on ANY delete path (defect 1 — so a database that has
@@ -553,13 +553,13 @@ pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
     write_high_water(ctx, existing, mark);
 }
 
-/// **Issue #108 — the guid range THIS database was assigned, and its licence to mint.**
+/// **The guid range THIS database was assigned, and its licence to mint.**
 ///
 /// `game_character.guid` is a per-database `#[auto_inc]`-style mark, so two databases that both
 /// MINT characters mint colliding guids — and `transfer_id` **is** the character guid, so a
 /// collision means two characters sharing an escrow ledger row. It was demonstrated live: guid 59
 /// was one character on `lyracore` and a different one on `lyracore-world-1`, and routing
-/// sent the second player to the first's shard. #59 already built the receiving half
+/// sent the second player to the first's shard. The receiving half already exists
 /// (`apply_import_blob` and `cascade_delete_character` ratchet the mark), so a shard can never
 /// re-issue a guid it was *given*; this table is the other half: a shard that mints its own starts
 /// from a floor nobody else will reach.
@@ -569,7 +569,7 @@ pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
 /// below both `2^53` (above which `spacetime call` mangles u64 arguments — danger-zones) and the
 /// high-bit type markers real entity guids carry.
 ///
-/// #103's first cut (since deleted, issue #390) gave each database its floor by hand through a
+/// the first cut (since deleted) gave each database its floor by hand through a
 /// standalone reducer that only ratcheted `game_guid_allocator.high_water` — a collision became
 /// *impossible*, but the guarantee rested on an operator remembering to run it on every new shard;
 /// a shard provisioned without it minted from zero into `lyracore`'s range, silently at creation,
@@ -618,12 +618,12 @@ pub(crate) fn require_guid_range(ctx: &ReducerContext) -> Result<(), String> {
 }
 
 /// Is `guid` inside `range`? Pure, same reason as [`may_mint`] — testable without a
-/// `ReducerContext`. Issue #237: `transfer::apply_import_blob` calls this to decide whether an
+/// `ReducerContext`. `transfer::apply_import_blob` calls this to decide whether an
 /// ARRIVING character's guid may ratchet THIS database's `game_guid_allocator` — ranges are
-/// disjoint by construction (#108), so a guid outside this
+/// disjoint by construction, so a guid outside this
 /// database's own range belongs to another shard and can never collide with anything this shard
 /// mints; ratcheting past it anyway is pure self-harm (it walks this shard's own mark toward, or
-/// past, its own range end for a guid it will never be asked to re-mint — the live #237
+/// past, its own range end for a guid it will never be asked to re-mint — the live
 /// incident).
 ///
 /// `None` (no range installed yet) is conservatively `false`, i.e. "not inside" — never a bump.
@@ -639,7 +639,7 @@ pub(crate) fn in_guid_range(range: Option<(u64, u64)>, guid: u64) -> bool {
     guid >= base && guid < base.saturating_add(size)
 }
 
-/// Install the range realm-core assigned to this database (#108). Idempotent — re-installing the
+/// Install the range realm-core assigned to this database. Idempotent — re-installing the
 /// same range is how the gateway confirms one is held — and it never *moves* a range: a different
 /// base is an error, not an overwrite.
 ///
@@ -690,12 +690,12 @@ pub fn install_guid_range(ctx: &ReducerContext, base: u64) -> Result<(), String>
 mod guid_allocator_tests {
     use super::{allocate_next_guid, legacy_guid_seed, ratchet_high_water};
 
-    /// **Issue #103.** Two shards that both mint characters must never mint the same guid, and the
+    /// Two shards that both mint characters must never mint the same guid, and the
     /// mechanism is a per-shard floor. The property that makes a floor SAFE to apply to a live
     /// database — and safe to re-apply — is that it can only ratchet UP: a floor below the current
     /// mark must not rewind the allocator onto guids that are already issued. `install_guid_range`
-    /// (below) is the only caller left that applies one (issue #390 deleted the standalone
-    /// `set_guid_floor` reducer — dead since #108 gave every shard's floor a licensed, non-optional
+    /// (below) is the only caller left that applies one (deleted the standalone
+    /// `set_guid_floor` reducer — dead once every shard's floor got a licensed, non-optional
     /// path instead), and it reaches the mark through this same function, so this pin still covers
     /// it. Mutation target: swapping `ratchet_high_water(seed, floor)` for a plain assignment inside
     /// `bump_guid_high_water` makes the second assertion re-issue guid 40.
@@ -713,7 +713,7 @@ mod guid_allocator_tests {
         );
     }
 
-    /// **Issue #108.** The floor above is monotonic but *optional* — a shard nobody ran it on mints
+    /// The floor above is monotonic but *optional* — a shard nobody ran it on mints
     /// from zero. This is the rule that makes it non-optional, and the two refusals are the whole
     /// point: no range at all, and a mark that has escaped the range it was assigned.
     #[test]
@@ -736,7 +736,7 @@ mod guid_allocator_tests {
         );
     }
 
-    /// **Issue #237.** `in_guid_range` is the pure decision `transfer::apply_import_blob` calls to
+    /// `in_guid_range` is the pure decision `transfer::apply_import_blob` calls to
     /// decide whether an ARRIVING character's guid may ratchet this database's allocator.
     /// Boundary-checked the same way as `may_mint` just above (base included, end excluded), and,
     /// like it, conservative when there is no range installed at all.
@@ -768,7 +768,7 @@ mod guid_allocator_tests {
 
     /// …and the WIRING (playbook §8 — the repo's dominant test failure is pinning the helper and
     /// not the call site). `create_character` must consult the rule BEFORE it writes anything;
-    /// deleting that one line brings back exactly the silent minting #108 exists to end, with every
+    /// deleting that one line brings back exactly the silent minting this rule exists to end, with every
     /// other test in this file still green.
     #[test]
     fn create_character_refuses_before_it_writes_anything() {
@@ -809,7 +809,7 @@ mod guid_allocator_tests {
     }
 
     /// Mutation target: swap the `.max` between the two iterators, or drop either arm, and this
-    /// goes red — it's the exact scan `create_character` used to run inline (issue #59).
+    /// goes red — it's the exact scan `create_character` used to run inline.
     #[test]
     fn legacy_guid_seed_is_the_max_of_both_sources() {
         assert_eq!(
@@ -838,10 +838,10 @@ mod guid_allocator_tests {
         );
     }
 
-    /// Issue #59 defect 1, COMPOSED end-to-end through the pure functions (no ctx, so this can run
+    /// Defect 1, COMPOSED end-to-end through the pure functions (no ctx, so this can run
     /// as a plain unit test): a database with characters up to 49 has JUST cascade-deleted guid 50
     /// (a departed transfer) — `legacy_guid_seed` therefore only sees the survivors, exactly the
-    /// scan `create_character` used to run inline before issue #59. Flooring the mark at 50 (what
+    /// scan `create_character` used to run inline. Flooring the mark at 50 (what
     /// `cascade_delete_character`'s new `bump_guid_high_water` call does) must make the NEXT
     /// allocation land on 51, never re-issue the departed 50. This is the outcome the individual
     /// `ratchet_high_water`/`allocate_next_guid` tests above don't quite prove on their own — this
@@ -858,7 +858,7 @@ mod guid_allocator_tests {
     }
 
     /// `body_of`/`code_of`/`shape_of` are the shared scan primitives in [`crate::test_scan`]
-    /// (issue #64 — this used to be six near-identical copies, drifted apart).
+    /// (this used to be six near-identical copies, drifted apart).
     use crate::test_scan::shape_of;
 
     /// Collapse whitespace the same way [`shape_of`] does, for a hand-written "what it SHOULD be"
@@ -901,7 +901,7 @@ mod guid_allocator_tests {
     }
 
     /// Same reasoning as above, for the other entry point: `bump_guid_high_water` must actually
-    /// ratchet at `guid` and persist the result, or issue #59's defect 1/AC#3 fix (the two call
+    /// ratchet at `guid` and persist the result, or the defect 1/AC#3 fix (the two call
     /// sites in `world::cascade_delete_character` and `transfer::apply_import_blob`) does nothing.
     #[test]
     fn bump_guid_high_water_is_exactly_the_pinned_shape() {
@@ -959,7 +959,7 @@ pub fn create_character(
     facial_hair: u8,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    // #108: minting is licensed by a range realm-core assigned, and an unlicensed database refuses
+    // Minting is licensed by a range realm-core assigned, and an unlicensed database refuses
     // rather than minting from zero into another shard's guids. FIRST — before any write, and
     // before the cheaper validations, so the refusal is unambiguous in the log.
     require_guid_range(ctx)?;
@@ -971,7 +971,7 @@ pub fn create_character(
     // Per-realm character cap (vanilla: 10). The 5875 client can't render a char list with >10 entries
     // (it rejects SMSG_CHAR_ENUM → "Error retrieving character list"), so refuse the 11th here with a
     // distinguished error the gateway maps to CHAR_CREATE_SERVER_LIMIT ("cannot create any more").
-    // Routed through the `by_account` index (issue #390) — this used to be a full-table scan.
+    // Routed through the `by_account` index — this used to be a full-table scan.
     if chars.by_account().filter(&account_id).count() >= 10 {
         return Err("SERVER_LIMIT".to_string());
     }
@@ -1004,7 +1004,7 @@ pub fn create_character(
         .or_else(|| positions.race_class().find(human_warrior))
         .ok_or_else(|| "no start position seeded".to_string())?;
 
-    // Realm-safe GUID allocation (issue #59): a durable high-water mark, not a per-transaction scan
+    // Realm-safe GUID allocation: a durable high-water mark, not a per-transaction scan
     // of THIS database alone. The old scan (still the seed a never-touched mark bootstraps from —
     // see `legacy_guid_seed`) looked free the instant a cross-database transfer deleted the departed
     // character's row (and its items) here, and the next creation could re-issue that guid while the
@@ -1114,14 +1114,14 @@ pub fn delete_character(
     if c.account_id != account_id {
         return Err("NOT_OWNER".to_string());
     }
-    // IN-TRANSIT FENCE (issue #16). `cascade_delete_character` runs the `character_owned!` delete
+    // IN-TRANSIT FENCE. `cascade_delete_character` runs the `character_owned!` delete
     // sweeps, which include `sweep_delete_game_transfer_out` — so a delete landing mid-transfer wipes
     // the character AND both escrow rows in one transaction, voiding a transfer another shard is
     // still driving. Cross-database that is the annihilation case: the destination's in-row and its
     // arrival copy survive the source's delete, and its reaper (no out-row ⇒ `Hold`) never settles
     // them. The escrow must be resolved (finished or reaped) before the character can be destroyed.
     //
-    // Routed through the shared gate (issue #30) rather than a bespoke `is_in_transit` call, but the
+    // Routed through the shared gate rather than a bespoke `is_in_transit` call, but the
     // DISTINGUISHED error is kept: the raw `find` above is what lets NO_SUCH_CHAR / NOT_OWNER /
     // CHAR_IN_TRANSIT stay three different answers, which `character_by_guid` alone would flatten to
     // NO_SUCH_CHAR. The gateway maps every non-OK delete the same way, so no seam either way.

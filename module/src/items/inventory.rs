@@ -1,4 +1,4 @@
-//! Move / split / equip / unequip + the slot-space vocabulary and free-slot search (#387: split off
+//! Move / split / equip / unequip + the slot-space vocabulary and free-slot search (split off
 //! `ops.rs`, pure code-motion, no behavior change except the free-slot search's index-scan count — see
 //! `first_free_backpack_slot`/`first_free_bag_slot`). Each `apply_*` is the shared core behind a thin
 //! player reducer and its debug twin (see `reducers.rs`).
@@ -18,17 +18,19 @@ use super::tables::{
 };
 use crate::{game_player_reputation, game_player_skill};
 
-#[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
-/// Shared stack-split logic for the player + debug paths: split `count` units off the stack in `slot`
-/// into the empty `to_slot`, leaving the remainder in the source. Vanilla only splits a STRICT subset
+// Live only under `debug_reducers`: `debug_split_item` is its sole caller.
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+/// Stack-split core: split `count` units off the stack in `slot` into the empty `to_slot`, leaving
+/// the remainder in the source. Vanilla only splits a STRICT subset
 /// (you can't split off the whole stack — that's a move), so `count == 0` or `count >= stack_count` is
-/// rejected; the destination must be empty AND outside the equipment region (`valid_split_dest_slot`,
-/// #360) — a split can never legitimately land on the body, and unlike `apply_item_move` this path runs
-/// no equip-validation at all, so admitting 0..=18 here bypassed `can_equip_into`/proficiency/
-/// required-level/BoE entirely. The new partial-stack row reuses the source's entry / owner /
-/// durability and takes a fresh per-slot guid (`item_guid_for`) + the current timestamp. Errors if the
-/// source slot is empty, the count is invalid, the destination is an equipment slot, or the destination
-/// is occupied. Additive — decrements the source row and inserts one new item row. [entity]
+/// rejected; the destination must be empty AND outside the equipment region
+/// (`valid_split_dest_slot`) — a split can never legitimately land on the body, and unlike
+/// `apply_item_move` this path runs no equip-validation at all, so admitting 0..=18 here bypassed
+/// `can_equip_into`/proficiency/required-level/BoE entirely. The new partial-stack row reuses the
+/// source's entry / owner / durability and takes a fresh per-slot guid (`item_guid_for`) + the
+/// current timestamp. Errors if the source slot is empty, the count is invalid, the destination is
+/// an equipment slot, or the destination is occupied. Additive — decrements the source row and
+/// inserts one new item row. [entity]
 pub(crate) fn apply_item_split(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -382,7 +384,8 @@ pub(crate) fn is_carried_slot(slot: u8) -> bool {
         || (BAG_CONTENT_OFFSET..BAG_CONTENT_END).contains(&slot) // 120..=191
 }
 
-#[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
+// Live only under `debug_reducers`: `apply_item_split` is its sole caller.
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 /// The destination-slot gate for `apply_item_split` ONLY: everything `valid_dest_slot` admits, MINUS
 /// the equipment region (0..=`equip_slot::END`, i.e. 0..=18). A split can never legitimately place an
 /// item on the body — `apply_item_move` is the only path that runs equip-validation
@@ -403,7 +406,7 @@ pub(crate) fn bag_content_decompose(to_slot: u8) -> (u8, u8) {
     (offset / MAX_BAG_SIZE, offset % MAX_BAG_SIZE)
 }
 
-/// The bag-content CAPACITY gate shared by `apply_item_move` and `apply_item_split` (issue #372): once
+/// The bag-content CAPACITY gate shared by `apply_item_move` and `apply_item_split`: once
 /// `to_slot` has already passed `valid_dest_slot`/`valid_split_dest_slot`, a bag-content destination
 /// (120..=191) additionally needs the corresponding bag-equip slot to actually hold an equipped bag
 /// whose template covers `slot_in_bag`. A no-op (`Ok(())`) for a non-bag-content destination — the
@@ -439,7 +442,8 @@ pub(crate) fn validate_bag_dest_slot(
     Ok(())
 }
 
-#[allow(dead_code)] // core kept for a future gw_split_item twin (#483 deleted the sender-path reducer)
+// Live only under `debug_reducers`: `apply_item_split` is its sole caller.
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 /// A split must leave at least one unit in BOTH the source and the new stack — splitting off none
 /// (`count == 0`) or the whole stack (`count >= stack_count`, that's a move) is rejected. Extracted from
 /// `apply_item_split` (pure code-motion) so the count-gate boundaries are unit-tested without a live
@@ -449,7 +453,7 @@ pub(crate) fn valid_split_count(count: u32, stack_count: u32) -> bool {
 }
 
 /// First backpack slot (23..39) not occupied by any of the player's items, or `None` if the backpack
-/// is full. Collects the owner's occupied slots into a set ONCE (#387 smalls: was one `by_owner_guid`
+/// is full. Collects the owner's occupied slots into a set ONCE (smalls: was one `by_owner_guid`
 /// index scan PER CANDIDATE slot — up to 16 full scans for a nearly-full backpack) then does a plain
 /// membership check per candidate. Vanilla auto-store fills the first free bag slot.
 /// The occupied-slot set behind the two backpack probes below — one spelling of the scan.
@@ -510,7 +514,7 @@ fn first_free_bag_equip_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u
 /// `store_item` as the fallback after the 16-slot backpack is exhausted — bags thus act as
 /// overflow storage. A bag equip slot with no item is skipped; a bag whose template is missing
 /// or has `container_slots == 0` (not a real bag) is also skipped. Collects the owner's rows ONCE
-/// (#387 smalls, same fix as `first_free_backpack_slot`) instead of one index scan per candidate
+/// (smalls, same fix as `first_free_backpack_slot`) instead of one index scan per candidate
 /// content slot — up to 18 scans per bag before this. [entity]
 pub(crate) fn first_free_bag_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {
     let templates = ctx.db.game_item_template();
@@ -759,14 +763,14 @@ mod tests {
         assert!(!valid_dest_slot(255));
     }
 
-    /// SPLIT DESTINATION GATE (#360 regression): a split can never legitimately target the body, so
+    /// SPLIT DESTINATION GATE (regression): a split can never legitimately target the body, so
     /// `valid_split_dest_slot` must refuse every equipment-region slot (0..=18) even though
     /// `valid_dest_slot` alone admits it (0..=38 is the modeled equip+bag-equip+backpack range). Every
     /// non-equipment slot `valid_dest_slot` admits stays admitted.
     #[test]
     fn valid_split_dest_slot_refuses_the_equipment_region() {
         // The whole equipment region (0..=18, e.g. HEAD=0..=TABARD=18) is valid for a plain move/dest
-        // check but MUST be refused for a split — this is the exact bypass #360 reports.
+        // check but MUST be refused for a split — this is the exact reported bypass.
         for slot in 0u8..=equip_slot::END {
             assert!(
                 valid_dest_slot(slot),

@@ -138,10 +138,10 @@ fn shell_shape(src: &str) -> String {
 
 /// The scan roots, each with its own file FLOOR: `(dir, minimum *.sh/*.py files)`.
 ///
-/// `adapters/` joined the list with #246, when the wire harness moved to its own repository: the
+/// `adapters/` joined the list, when the wire harness moved to its own repository: the
 /// live-test entrypoint that survived here (`adapters/lyracore/run-suite.sh`) shells out against a
 /// running stack, which is exactly the shape of script this scan exists to police. `importer/`
-/// joined it with #323, when the world-import ETL moved out of `scripts/` and into
+/// joined it, when the world-import ETL moved out of `scripts/` and into
 /// `importer/scripts/` — it is the same seven scripts, and one of them DOCUMENTS a publish command
 /// in its abort message. A root that is not scanned is a root where a `spacetime publish -c` can
 /// sit unnoticed.
@@ -545,11 +545,11 @@ spacetime publish -cy lyracore
     /// Sanity FLOOR. A scan rooted at the wrong directory finds zero files, flags zero violations
     /// and reports success — so the floor is what makes a green result mean something.
     ///
-    /// The floor was 40 until #246. It is 25 now, and the drop is a REAL loss of surface, not a
+    /// The floor was 40 once. It is 25 now, and the drop is a REAL loss of surface, not a
     /// relaxed standard: 47 of the files this used to scan were the wire harness's live-stack
     /// orchestrators under `tools/wire-client/`, and they are in another repository now. What is
     /// left (26 in `scripts/` + `tools/` + `importer/scripts/`, plus `adapters/lyracore/run-suite.sh`)
-    /// is every script this repo still ships. #323 moved seven of those files from `scripts/` to
+    /// is every script this repo still ships. A later change moved seven of those files to
     /// `importer/scripts/` and added that root to the scan in the same change, so the count did not
     /// move — a relocation must never be allowed to shrink this number by leaving a root behind.
     /// Lower it again only alongside a comparable structural move, and never to make a red run
