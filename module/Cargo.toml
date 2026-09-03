@@ -13,17 +13,16 @@ description = "LyraCore SpacetimeDB module: all WoW 1.12 game state and logic."
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# Layer 1 client-automation test reducers (module/src/debug.rs). OFF by default so a plain build and
-# any production publish compile them out entirely (they set arbitrary players' HP/level/position, so
-# they must never exist in prod). The test build / automation harness opts in via:
+# Layer 1 client-automation test reducers (`module/src/debug/`). They are off by default, but the
+# current deploy procedure deliberately enables them for every publish via:
 #   spacetime publish -s local --build-options='--features=debug_reducers' lyracore
-# (`--build-options` is forwarded verbatim to the underlying `cargo build` for the wasm target.)
+# `--build-options` is forwarded verbatim to the wasm-target `cargo build`. `danger-zones.md` §3 is
+# authoritative on this accepted alpha posture.
 debug_reducers = []
 
 [dependencies]
 blake3 = "1"
-# `unstable` enables row-level-security visibility filters (client_visibility_filter / Filter),
-# which the design uses to pin per-owner tables (character, movement_event) to their owner.
+# `unstable` opts into SpacetimeDB's unstable schema API.
 # Pinned exactly (not "2.5"): the SpacetimeDB CLI, SDK and module-crate contract is a single unit
 # (see gateway/Cargo.toml's spacetimedb-sdk/-lib pins; `lyracore preflight` check 0 asserts the CLI
 # version). A minor bump here can silently drift the module ahead of what `spacetime` can publish.
