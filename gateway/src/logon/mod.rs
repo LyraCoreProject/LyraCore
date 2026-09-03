@@ -10,6 +10,7 @@
 //! (K) — both via `LogonStore`. Everything else is per-connection handshake scratch.
 
 use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
+use crate::read_deadline::{is_read_deadline, ReadDeadline, LOGON_AUTH_READ_DEADLINE};
 use crate::{config::GatewayConfig, stdb::Coordinator};
 use anyhow::{anyhow, Result};
 use std::io::{Read, Write};
@@ -91,7 +92,8 @@ pub trait LogonStore: Send + Sync {
 
 /// Drive one logon connection to completion (challenge -> proof -> realm list). Returns when
 /// the client disconnects. Pure protocol logic; no async, no direct IO beyond `stream`.
-pub fn handle_logon<S: Read + Write, St: LogonStore + ?Sized>(
+/// The listener's pre-auth read deadline stays on `stream` until the proof succeeds.
+pub fn handle_logon<S: Read + Write + ReadDeadline, St: LogonStore + ?Sized>(
     stream: &mut S,
     store: &St,
 ) -> Result<()> {
@@ -110,6 +112,9 @@ pub fn handle_logon<S: Read + Write, St: LogonStore + ?Sized>(
             // Clean client disconnect.
             Err(ExpectedOpcodeError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 return Ok(());
+            }
+            Err(ExpectedOpcodeError::Io(e)) if is_read_deadline(&e) => {
+                return Err(anyhow!("no logon packet before the pre-auth read deadline"));
             }
             Err(e) => return Err(anyhow!("logon read error: {e}")),
         };
@@ -132,6 +137,10 @@ pub fn handle_logon<S: Read + Write, St: LogonStore + ?Sized>(
                     p.client_proof,
                 )?
                 .map(|id| (id, username));
+                if authenticated.is_some() {
+                    // Proven. The realm-list phase that follows has no idle policy.
+                    stream.set_read_timeout(None)?;
+                }
             }
             ClientOpcodeMessage::CMD_REALM_LIST(_) => {
                 // Without a completed proof we don't know the account; advertise nothing.
@@ -314,8 +323,10 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
         // machine on a blocking task with the socket in blocking mode.
         // These two are per-SOCKET (a dup and an fcntl on the fd we just accepted), so they fail
         // for the same reasons accept does — EMFILE above all. Drop the one connection.
+        // The read deadline bounds the handshake; `handle_logon` clears it once the proof succeeds.
         let std_sock = match sock.into_std().and_then(|s| {
             s.set_nonblocking(false)?;
+            s.set_read_timeout(Some(LOGON_AUTH_READ_DEADLINE))?;
             Ok(s)
         }) {
             Ok(s) => s,
@@ -1639,6 +1650,105 @@ mod tests {
             "the replay must be rejected as having no pending SRP state; got: {err:#}"
         );
         drop(client);
+    }
+
+    /// Client side of challenge -> proof for a provisioned account; asserts the proof succeeds.
+    fn prove(client: &mut UnixStream, username: &str, password: &str) {
+        challenge_client(username).write(&mut *client).unwrap();
+        let (g, n, s_salt, server_pubkey) = match ServerOpcodeMessage::read(&mut *client).unwrap() {
+            ServerOpcodeMessage::CMD_AUTH_LOGON_CHALLENGE(
+                CMD_AUTH_LOGON_CHALLENGE_Server::Success {
+                    generator,
+                    large_safe_prime,
+                    salt,
+                    server_public_key,
+                    ..
+                },
+            ) => (generator, large_safe_prime, salt, server_public_key),
+            other => panic!("expected challenge success, got {other:?}"),
+        };
+        let n: [u8; 32] = n.try_into().unwrap();
+        let challenge = SrpClientChallenge::new(
+            ns(username),
+            ns(password),
+            g[0],
+            n,
+            PublicKey::from_le_bytes(server_pubkey).unwrap(),
+            s_salt,
+        );
+        wow_login_messages::version_3::CMD_AUTH_LOGON_PROOF_Client {
+            client_public_key: *challenge.client_public_key(),
+            client_proof: *challenge.client_proof(),
+            crc_hash: [0u8; 20],
+            telemetry_keys: vec![],
+            security_flag:
+                wow_login_messages::version_3::CMD_AUTH_LOGON_PROOF_Client_SecurityFlag::None,
+        }
+        .write(&mut *client)
+        .unwrap();
+        match ServerOpcodeMessage::read(&mut *client).unwrap() {
+            ServerOpcodeMessage::CMD_AUTH_LOGON_PROOF(CMD_AUTH_LOGON_PROOF_Server::Success {
+                ..
+            }) => {}
+            other => panic!("the proof must succeed, got {other:?}"),
+        }
+    }
+
+    /// The listener puts a read deadline on every accepted socket. A peer that connects and sends
+    /// nothing must give its blocking thread back at the deadline, not hold it forever.
+    #[test]
+    fn a_silent_connection_is_closed_at_the_pre_auth_read_deadline() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let (mut client, server_end) = UnixStream::pair().unwrap();
+        server_end
+            .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+            .unwrap();
+        let server = std::thread::spawn(move || {
+            let mut s = server_end;
+            handle_logon(&mut s, &store)
+        });
+
+        let err = server
+            .join()
+            .unwrap()
+            .expect_err("a silent peer must be cut at the deadline");
+        assert!(
+            err.to_string().contains("pre-auth read deadline"),
+            "{err:#}"
+        );
+        let mut byte = [0u8];
+        assert_eq!(
+            client.read(&mut byte).unwrap(),
+            0,
+            "the socket must be closed"
+        );
+    }
+
+    /// The deadline covers the handshake only. Once the proof succeeds the client may idle at the
+    /// realm list past it and still get an answer.
+    #[test]
+    fn the_read_deadline_ends_once_the_proof_succeeds() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let (mut client, server_end) = UnixStream::pair().unwrap();
+        server_end
+            .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+            .unwrap();
+        let server = std::thread::spawn(move || {
+            let mut s = server_end;
+            handle_logon(&mut s, &store)
+        });
+
+        prove(&mut client, "TEST", "PASSWORD");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        wow_login_messages::version_8::CMD_REALM_LIST_Client {}
+            .write(&mut client)
+            .unwrap();
+        match ServerOpcodeMessage::read(&mut client).unwrap() {
+            ServerOpcodeMessage::CMD_REALM_LIST(reply) => assert_eq!(reply.realms.len(), 1),
+            other => panic!("expected realm list, got {other:?}"),
+        }
+        drop(client);
+        server.join().unwrap().unwrap();
     }
 
     /// The complement: a SECOND challenge must replace the pending SRP state, not be ignored in

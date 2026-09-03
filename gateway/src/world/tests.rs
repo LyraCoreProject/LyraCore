@@ -3288,6 +3288,104 @@ fn handshake_succeeds_and_traffic_is_encrypted_both_ways() {
     server.join().unwrap();
 }
 
+/// The typed decoder would size a buffer from the addon field and unwrap the zlib. The gateway
+/// never reads the addon list, so a 4 GiB claim over garbage bytes changes nothing: the proof is
+/// checked and AUTH_OK goes out.
+#[test]
+fn an_auth_session_with_an_absurd_addon_size_still_completes_the_handshake() {
+    let store = std::sync::Arc::new(tester_store(42));
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+
+    let server_seed = match ServerOpcodeMessage::read_unencrypted(&mut client).unwrap() {
+        ServerOpcodeMessage::SMSG_AUTH_CHALLENGE(c) => c.server_seed,
+        other => panic!("expected SMSG_AUTH_CHALLENGE, got {other}"),
+    };
+    let client_seed = ProofSeed::new();
+    let client_seed_value = client_seed.seed();
+    let (client_proof, crypto) =
+        client_seed.into_client_header_crypto(&ns("TESTER"), K, server_seed);
+    let (_c_enc, mut c_dec) = crypto.split();
+
+    // Hand-built frame: the fixed fields, then a 4 GiB decompressed-size claim over garbage.
+    let mut body = Vec::new();
+    body.extend_from_slice(&5875u32.to_le_bytes());
+    body.extend_from_slice(&1u32.to_le_bytes());
+    body.extend_from_slice(b"TESTER\0");
+    body.extend_from_slice(&client_seed_value.to_le_bytes());
+    body.extend_from_slice(&client_proof);
+    body.extend_from_slice(&u32::MAX.to_le_bytes());
+    body.extend_from_slice(&[0xFF; 32]);
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&((body.len() + 4) as u16).to_be_bytes());
+    frame.extend_from_slice(&CMSG_AUTH_SESSION_OPCODE.to_le_bytes());
+    frame.extend_from_slice(&body);
+    client.write_all(&frame).unwrap();
+
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_AUTH_RESPONSE(r) => {
+            assert!(matches!(*r, SMSG_AUTH_RESPONSE::AuthOk { .. }));
+        }
+        other => panic!("expected encrypted AUTH_OK, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap().unwrap();
+}
+
+/// The listener puts a read deadline on every accepted socket. A peer that reads the challenge
+/// and never answers must give its blocking thread back at the deadline.
+#[test]
+fn a_silent_world_connection_is_closed_at_the_pre_auth_read_deadline() {
+    let store = tester_store(42);
+    let (mut client, server_end) = world_session_socket_pair();
+    server_end
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let server = std::thread::spawn(move || run_world_session(server_end, &store));
+
+    ServerOpcodeMessage::read_unencrypted(&mut client).unwrap();
+    let err = server
+        .join()
+        .unwrap()
+        .expect_err("a silent peer must be cut at the deadline");
+    assert!(
+        err.to_string().contains("pre-auth read deadline"),
+        "{err:#}"
+    );
+    let mut byte = [0u8];
+    assert_eq!(
+        client.read(&mut byte).unwrap(),
+        0,
+        "the socket must be closed"
+    );
+}
+
+/// The deadline covers the handshake only. An authenticated client may idle past it and still be
+/// served.
+#[test]
+fn the_read_deadline_ends_with_auth_ok() {
+    let store = std::sync::Arc::new(tester_store(42));
+    let (mut client, server_end) = world_session_socket_pair();
+    server_end
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let server_store = store.clone();
+    let server = std::thread::spawn(move || run_world_session(server_end, server_store.as_ref()));
+
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    std::thread::sleep(Duration::from_millis(500));
+    CMSG_CHAR_ENUM {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_CHAR_ENUM(_) => {}
+        other => panic!("expected SMSG_CHAR_ENUM, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap().unwrap();
+}
+
 #[test]
 fn queued_handshake_sends_wait_queue_then_admits_once_a_seat_frees() {
     let store = std::sync::Arc::new(tester_store(42));

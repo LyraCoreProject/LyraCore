@@ -145,6 +145,10 @@ The Module's record that an Account is logged in on a Character.
 The Gateway's per-connection loop for one client on the world port.
 _Avoid_: session (unqualified, when meaning the connection)
 
+**Pre-auth Read Deadline**:
+The idle limit a listener puts on an accepted socket until the peer has proven itself: 10 s on the logon port, 15 s for `CMSG_AUTH_SESSION` on the world port. The session clears it once auth succeeds.
+_Avoid_: read timeout, idle timeout (for this limit)
+
 ### Sharding and transfer
 
 **Transfer**:

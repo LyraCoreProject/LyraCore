@@ -15,6 +15,7 @@
 //! builders live in `values`.
 
 pub mod addon;
+pub mod auth_session;
 pub mod social;
 pub mod update_mask;
 

@@ -20,6 +20,7 @@ mod load_sample;
 mod logon;
 mod movement_batch_metrics;
 mod provision_cli;
+mod read_deadline;
 mod realm_core;
 mod stdb;
 #[cfg(test)]
@@ -578,6 +579,12 @@ mod boundary_panic_tripwire {
             include_str!("codec/addon.rs"),
             "the only hand-rolled decoder of CLIENT bytes in `codec/` (everything else there builds \
              server frames); its slice math is driven by a client-supplied NUL position",
+        ),
+        (
+            "codec/auth_session.rs",
+            include_str!("codec/auth_session.rs"),
+            "the plaintext CMSG_AUTH_SESSION frame — read before the world peer has proven \
+             anything, sized by a client header",
         ),
         (
             "config.rs",

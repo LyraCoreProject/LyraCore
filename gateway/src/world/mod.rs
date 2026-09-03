@@ -12,6 +12,8 @@
 //! from `game_session` and the same handshake re-runs.
 
 use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
+use crate::codec::auth_session::{read_auth_session, CMSG_AUTH_SESSION_OPCODE};
+use crate::read_deadline::{is_read_deadline, ReadDeadline, WORLD_AUTH_READ_DEADLINE};
 use crate::stdb::PlayerSubscriptions;
 use crate::{codec, config::GatewayConfig, stdb::Coordinator};
 use anyhow::{anyhow, Result};
@@ -23,7 +25,6 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use wow_srp::normalized_string::NormalizedString;
 use wow_srp::vanilla_header::{DecrypterHalf, EncrypterHalf, ProofSeed};
-use wow_world_messages::errors::ExpectedOpcodeError;
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
 use wow_world_messages::vanilla::{
     CMSG_MESSAGECHAT_ChatType, MovementInfo, PartyOperation, PartyResult,
@@ -206,7 +207,7 @@ impl SessionTx {
 /// reader. Implemented for the production `TcpStream` and (test-only) `UnixStream`; both share the
 /// underlying fd across clones, so the writer thread can own a clone while the reader keeps the
 /// original.
-pub trait DuplexStream: Read + Write + Send + Sized + 'static {
+pub trait DuplexStream: Read + Write + ReadDeadline + Send + Sized + 'static {
     fn try_clone(&self) -> std::io::Result<Self>;
     fn shutdown_both(&self) -> std::io::Result<()>;
 }
@@ -537,13 +538,16 @@ pub fn world_handshake_with_queue<S: Read + Write, St: WorldStore + ?Sized>(
     let server_seed = seed.seed();
     SMSG_AUTH_CHALLENGE { server_seed }.write_unencrypted_server(&mut *stream)?;
 
-    // 2. Read the plaintext CMSG_AUTH_SESSION (account, client_seed, client_proof, addons).
-    let session = match ClientOpcodeMessage::read_unencrypted(&mut *stream) {
-        Ok(ClientOpcodeMessage::CMSG_AUTH_SESSION(s)) => s,
-        Ok(other) => return Err(anyhow!("expected CMSG_AUTH_SESSION, got {other}")),
+    // 2. Read the plaintext CMSG_AUTH_SESSION (account, client_seed, client_proof). Hand-decoded:
+    //    the typed decoder sizes a buffer from a client field and unwraps the addon zlib.
+    let session = match read_auth_session(&mut *stream) {
+        Ok(claim) => claim,
         // Clean client disconnect before sending the session.
-        Err(ExpectedOpcodeError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Ok(None);
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) if is_read_deadline(&e) => {
+            return Err(anyhow!(
+                "no CMSG_AUTH_SESSION before the pre-auth read deadline"
+            ));
         }
         Err(e) => return Err(anyhow!("world auth read error: {e}")),
     };
@@ -970,6 +974,10 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
         return Ok(());
     };
     let seat = AdmissionSeat { queue };
+    // The pre-auth deadline the listener set ends here: the read loop below has no idle policy.
+    stream
+        .set_read_timeout(None)
+        .map_err(|e| anyhow!("clear world read deadline: {e}"))?;
 
     let wsock = stream
         .try_clone()
@@ -1031,6 +1039,10 @@ pub fn run_world_session_with_queue<S: DuplexStream, St: WorldStore + ?Sized>(
                     dispatch_raw_auction_browse(&tx, st, &mut conn, request)
                 })?;
                 continue;
+            }
+            if hdr.opcode == CMSG_AUTH_SESSION_OPCODE {
+                // Auth is over, and the typed decoder would size a buffer from the body.
+                return Err(anyhow!("world read error: CMSG_AUTH_SESSION after auth"));
             }
             let mut framed = Vec::with_capacity(6 + body.len());
             framed.extend_from_slice(&hdr.size.to_be_bytes());
@@ -1724,8 +1736,10 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
         // machine on a blocking task with the socket in blocking mode (mirrors `logon`).
         // Per-SOCKET calls (a dup and an fcntl on the fd we just accepted), so they fail for the
         // same reasons accept does — EMFILE above all. Drop the one connection, keep the realm.
+        // The read deadline bounds the wait for CMSG_AUTH_SESSION; the session clears it on AUTH_OK.
         let std_sock = match sock.into_std().and_then(|s| {
             s.set_nonblocking(false)?;
+            s.set_read_timeout(Some(WORLD_AUTH_READ_DEADLINE))?;
             Ok(s)
         }) {
             Ok(s) => s,
