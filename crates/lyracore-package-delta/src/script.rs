@@ -53,9 +53,9 @@
 //!
 //! # What it traces
 //!
-//! [`trace_scripts`] puts several Packages' artifacts together. Two Packages shipping one
-//! `script_id`, or one name, is a [`ScriptConflict`] naming both Packages. There is no merge case
-//! and there are no priority numbers to break the tie with: `priority` orders scripts at an event,
+//! [`trace_scripts`] puts several Packages' artifacts together. A Package appearing twice, or two
+//! Packages shipping one `script_id` or name, is a [`ScriptConflict`]. There is no merge case and
+//! there are no priority numbers to break the tie with: `priority` orders scripts at an event,
 //! never Packages against each other.
 
 use core::fmt;
@@ -601,9 +601,14 @@ pub struct TracedScript {
     pub source_hash: SourceHash,
 }
 
-/// Two Packages claiming one Runtime Script identity. Only a human can settle it.
+/// Script Artifacts that cannot belong to one plan. Only a human can settle the inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptConflict {
+    /// One Package supplied more than one Script Artifact.
+    Package {
+        /// The Package named by both artifacts.
+        package: PackageId,
+    },
     /// Both Packages ship a script at this identifier.
     Id {
         /// The contested identifier.
@@ -627,6 +632,12 @@ pub enum ScriptConflict {
 impl fmt::Display for ScriptConflict {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Package { package } => {
+                write!(
+                    f,
+                    "package `{package}` appears in more than one Script Artifact"
+                )
+            }
             Self::Id {
                 script_id,
                 first,
@@ -668,7 +679,7 @@ impl ScriptTrace {
         &self.conflicts
     }
 
-    /// True when no two Packages disagree, which is the only state an applier may write.
+    /// True when every Package supplied one artifact and no two Packages disagree.
     #[must_use]
     pub fn is_clear(&self) -> bool {
         self.conflicts.is_empty()
@@ -677,8 +688,8 @@ impl ScriptTrace {
 
 /// Merge several Packages' Script Artifacts into one plan, reporting every collision.
 ///
-/// A script is never merged with another: the whole row belongs to one Package. So the only thing
-/// to trace is identity — an identifier or a name that two Packages both claim.
+/// A script is never merged with another: the whole row belongs to one Package. The tracer first
+/// requires one artifact per Package, then checks each identifier and name across Packages.
 ///
 /// A conflicting script is still carried into [`ScriptTrace::scripts`], from whichever Package
 /// shipped it first. That keeps the plan describable in a report; it is not applyable, because an
@@ -686,7 +697,15 @@ impl ScriptTrace {
 #[must_use]
 pub fn trace_scripts(artifacts: &[ScriptArtifact]) -> ScriptTrace {
     let mut trace = ScriptTrace::default();
+    let mut packages: Vec<PackageId> = Vec::new();
     for artifact in artifacts {
+        if packages.contains(&artifact.package) {
+            trace.conflicts.push(ScriptConflict::Package {
+                package: artifact.package.clone(),
+            });
+            continue;
+        }
+        packages.push(artifact.package.clone());
         for script in &artifact.scripts {
             if let Some(seen) = trace
                 .scripts

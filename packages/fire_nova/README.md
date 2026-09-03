@@ -1,18 +1,21 @@
 # fire_nova
 
-The worked example of a DATA-ONLY Package: no Rust, no client half, one Package Delta.
+The worked example of a DATA-ONLY Package: no Rust, no client half, one Package Delta and one
+Script Artifact.
 
-Its content is authored in `datascripts/src/fire_nova/spells.ts`, which clones a real spell into a
-five-rank ladder of Package spells. Read that file — it is the example.
+Its data is authored in `datascripts/src/fire_nova/spells.ts`, which clones a real spell into a
+five-rank ladder of Package spells. Its one Runtime Script is `scripts/ember_echo.ts`, which ships
+switched off. Read those two files — they are the example.
 
-Nothing under `data/` is committed. `lyracore packages build` runs the Datascript and writes
-`data/.generated/spell.json`, which the importer then reapplies after every spell import. Build it
-yourself:
+Nothing under `data/` is committed. `lyracore packages build` runs the Datascript, compiles the
+Runtime Scripts and writes both artifacts; the importer reapplies them after every spell import.
+Build them yourself:
 
 ```
 lyracore-importer --dbc <client Data/ dir> --spell-snapshot datascripts/generated/base-snapshot.json
 bun run datascripts/src/fire_nova/spells.ts
-lyracore-delta-check packages/fire_nova/data/.generated/spell.json
+bun run datascripts/runtime-scripts/build-scripts.ts fire_nova
+lyracore-delta-check packages/fire_nova/data/.generated/*.json
 ```
 
 An unmodified client shows no tooltip for a Package spell: it renders spells from its own

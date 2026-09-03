@@ -1,0 +1,8 @@
+{
+  "name": "lyracore-script-compiler",
+  "private": true,
+  "dependencies": {
+    "typescript": "6.0.2",
+    "typescript-to-lua": "1.37.1"
+  }
+}

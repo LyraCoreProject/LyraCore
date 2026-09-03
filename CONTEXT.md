@@ -494,11 +494,13 @@ records where a Package was installed from.
 _Avoid_: apply log, history, audit trail
 
 **Build Identity**:
-The recorded inputs `packages build` writes next to a Package's generated artifact, in a sibling
-file rather than inside it: hashes of the Package's Datascript source tree, the generated Module
-typings, the Base Snapshot, the authoring library, and the pinned Datascript toolchain files, plus
-the pinned Bun version and the artifact's own hash. `lyracore packages check` and preflight
-recompute it against the checkout on disk and refuse, naming the input that changed.
+The recorded inputs `packages build` writes next to a source-built artifact, in a sibling file
+rather than inside it. A Package Delta records its Datascript source tree, generated Module
+typings, Base Snapshot, authoring library, and pinned Datascript toolchain. A source-built Script
+Artifact records its `scripts/` sources, Runtime Script Toolchain, Bun pin, and artifact hash. A
+source-free prebuilt Script Artifact has no local author inputs or Build Identity; the authoritative
+checker still parses and traces it. `lyracore packages check` and preflight recompute a present
+identity against the checkout on disk and refuse, naming the input that changed.
 _Avoid_: identity file, build fingerprint, artifact metadata
 
 **Claim**:
@@ -552,6 +554,20 @@ the shipping Package. Anything else is refused at author time. Several scripts m
 event: lower priority runs first and the script identifier breaks a tie, so every Shard runs one
 plan in one order.
 _Avoid_: hook registration, subscription, listener
+
+**Script Directive**:
+A `@key value` comment line at the top of a Runtime Script source, declaring what the file cannot
+say in its own code: `@event` and `@id` are required, `@priority` and `@enabled` have defaults. The
+identifier is written down rather than derived, because it is durable — deriving it from a file
+index would renumber a Package's scripts the moment an author added one.
+_Avoid_: annotation, frontmatter, pragma, metadata header
+
+**Runtime Script Toolchain**:
+The pinned compiler that turns a Package's `scripts/` sources into its Script Artifact: Bun plus
+`typescript-to-lua`, its config, the hand-maintained Host API typings, and the emitter that keeps
+generated Lua off the interpreter's known call-shape fault. It lives in
+`datascripts/runtime-scripts/` and runs at author time only; an Operator installs the prebuilt Lua.
+_Avoid_: transpiler, build pipeline, SDK
 
 **Package Item Range**:
 The items family's Package Identifier Range: 7,000,000 to 7,999,999. Above every reserved band, and

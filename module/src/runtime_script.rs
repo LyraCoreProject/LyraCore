@@ -70,8 +70,8 @@ use spacetimedb::log;
 
 use piccolo::closure::UpValueState;
 use piccolo::{
-    Callback, CallbackReturn, Closure, Context, Error, Executor, Fuel, IntoValue, Lua, MetaMethod,
-    StashedClosure, Table, UserData, Value,
+    Callback, CallbackReturn, Closure, Context, Error, Execution, Executor, Fuel, IntoValue, Lua,
+    MetaMethod, StashedClosure, Table, UserData, Value,
 };
 
 /// Fuel handed to one `Executor::step`. The interpreter checks its budget between operations, so a
@@ -461,6 +461,12 @@ impl RuntimeScriptHost {
     /// On success, returns everything the script staged and the Script Answer it returned — nothing
     /// has touched the world yet. On any failure, returns a bounded diagnostic and both the staged
     /// effects and the answer are dropped unread.
+    ///
+    /// Piccolo exposes the caller's generated-Lua line while a Host callback is running, which is
+    /// why `error`, `assert`, and Host Verb diagnostics carry one. Native VM failures reach this
+    /// boundary only after Piccolo has unwound those frames, and an unfinished fuel step exposes no
+    /// frame. Their diagnostics therefore retain the Runtime Script, Event Binding, failure kind,
+    /// and interpreter message, but cannot reliably name a line with Piccolo 0.3.3.
     pub(crate) fn invoke(
         &mut self,
         script: RuntimeScript<'_>,
@@ -600,10 +606,52 @@ fn fresh_environment<'gc>(
 
     let actor_guid = event.actor.as_ref().map(|actor| actor.guid);
     set(ctx, env, "event", event_table(ctx, event));
+    set(ctx, env, "assert", located_assert_operation(ctx));
+    set(ctx, env, "error", located_error_operation(ctx));
     set(ctx, env, "heal", heal_operation(ctx, actor_guid, &staged));
     set(ctx, env, "send_chat", send_chat_operation(ctx, &staged));
     set(ctx, env, "grant_xp", grant_xp_operation(ctx, &staged));
     env
+}
+
+/// Refuse a false value and carry the generated Lua line of the call site.
+fn located_assert_operation<'gc>(ctx: Context<'gc>) -> Callback<'gc> {
+    Callback::from_fn(&ctx, |ctx, execution, stack| {
+        if stack.get(0).to_bool() {
+            return Ok(CallbackReturn::Return);
+        }
+        let error = if stack.get(1).is_nil() {
+            text(ctx, "assertion failed!").into_value(ctx).into()
+        } else {
+            Error::from(stack.get(1))
+        };
+        Err(error_with_location(ctx, &execution, error))
+    })
+}
+
+/// Raise a Lua error that carries the generated Lua line of the call site.
+fn located_error_operation<'gc>(ctx: Context<'gc>) -> Callback<'gc> {
+    Callback::from_fn(&ctx, |ctx, execution, stack| {
+        let error = Error::from(stack.get(0));
+        Err(error_with_location(ctx, &execution, error))
+    })
+}
+
+fn error_with_location<'gc>(
+    ctx: Context<'gc>,
+    execution: &Execution<'gc, '_>,
+    error: Error<'gc>,
+) -> Error<'gc> {
+    let Some(frame) = execution.upper_lua_frame() else {
+        return error;
+    };
+    let message = match error {
+        Error::Lua(error) => error.to_string(),
+        Error::Runtime(error) => error.to_string(),
+    };
+    text(ctx, &format!("line {}: {message}", frame.current_line))
+        .into_value(ctx)
+        .into()
 }
 
 /// The environment's standard library, rebuilt name by name from [`ALLOWED_GLOBALS`] and
@@ -686,21 +734,24 @@ fn heal_operation<'gc>(
     staged: &Rc<RefCell<Vec<StagedEffect>>>,
 ) -> Callback<'gc> {
     let staged = Rc::clone(staged);
-    Callback::from_fn(&ctx, move |ctx, _execution, mut stack| {
-        let (entity, amount): (Value, Value) = stack.consume(ctx)?;
-        let target = entity_argument(ctx, "heal", "target", entity)?;
-        let amount = amount_argument(ctx, "heal", amount)?;
-        stage(
-            ctx,
-            &staged,
-            "heal",
-            StagedEffect::Heal {
-                healer_guid: actor_guid.unwrap_or(0),
-                target_guid: target.guid,
-                amount,
-            },
-        )?;
-        Ok(CallbackReturn::Return)
+    Callback::from_fn(&ctx, move |ctx, execution, mut stack| {
+        (|| {
+            let (entity, amount): (Value, Value) = stack.consume(ctx)?;
+            let target = entity_argument(ctx, "heal", "target", entity)?;
+            let amount = amount_argument(ctx, "heal", amount)?;
+            stage(
+                ctx,
+                &staged,
+                "heal",
+                StagedEffect::Heal {
+                    healer_guid: actor_guid.unwrap_or(0),
+                    target_guid: target.guid,
+                    amount,
+                },
+            )?;
+            Ok(CallbackReturn::Return)
+        })()
+        .map_err(|error| error_with_location(ctx, &execution, error))
     })
 }
 
@@ -711,22 +762,25 @@ fn send_chat_operation<'gc>(
     staged: &Rc<RefCell<Vec<StagedEffect>>>,
 ) -> Callback<'gc> {
     let staged = Rc::clone(staged);
-    Callback::from_fn(&ctx, move |ctx, _execution, mut stack| {
-        let (entity, text): (Value, Value) = stack.consume(ctx)?;
-        let recipient = player_argument(ctx, "send_chat", "recipient", entity)?;
-        let text = text_argument(ctx, "send_chat", text)?;
-        let message = crate::chat::normalized_message(&text)
-            .ok_or_else(|| host_error(ctx, "send_chat", "the message is empty"))?;
-        stage(
-            ctx,
-            &staged,
-            "send_chat",
-            StagedEffect::SendChat {
-                recipient_guid: recipient.guid,
-                message,
-            },
-        )?;
-        Ok(CallbackReturn::Return)
+    Callback::from_fn(&ctx, move |ctx, execution, mut stack| {
+        (|| {
+            let (entity, text): (Value, Value) = stack.consume(ctx)?;
+            let recipient = player_argument(ctx, "send_chat", "recipient", entity)?;
+            let text = text_argument(ctx, "send_chat", text)?;
+            let message = crate::chat::normalized_message(&text)
+                .ok_or_else(|| host_error(ctx, "send_chat", "the message is empty"))?;
+            stage(
+                ctx,
+                &staged,
+                "send_chat",
+                StagedEffect::SendChat {
+                    recipient_guid: recipient.guid,
+                    message,
+                },
+            )?;
+            Ok(CallbackReturn::Return)
+        })()
+        .map_err(|error| error_with_location(ctx, &execution, error))
     })
 }
 
@@ -736,20 +790,23 @@ fn grant_xp_operation<'gc>(
     staged: &Rc<RefCell<Vec<StagedEffect>>>,
 ) -> Callback<'gc> {
     let staged = Rc::clone(staged);
-    Callback::from_fn(&ctx, move |ctx, _execution, mut stack| {
-        let (entity, amount): (Value, Value) = stack.consume(ctx)?;
-        let character = player_argument(ctx, "grant_xp", "recipient", entity)?;
-        let amount = amount_argument(ctx, "grant_xp", amount)?;
-        stage(
-            ctx,
-            &staged,
-            "grant_xp",
-            StagedEffect::GrantXp {
-                character_guid: character.guid,
-                amount,
-            },
-        )?;
-        Ok(CallbackReturn::Return)
+    Callback::from_fn(&ctx, move |ctx, execution, mut stack| {
+        (|| {
+            let (entity, amount): (Value, Value) = stack.consume(ctx)?;
+            let character = player_argument(ctx, "grant_xp", "recipient", entity)?;
+            let amount = amount_argument(ctx, "grant_xp", amount)?;
+            stage(
+                ctx,
+                &staged,
+                "grant_xp",
+                StagedEffect::GrantXp {
+                    character_guid: character.guid,
+                    amount,
+                },
+            )?;
+            Ok(CallbackReturn::Return)
+        })()
+        .map_err(|error| error_with_location(ctx, &execution, error))
     })
 }
 
@@ -1068,6 +1125,17 @@ local roster = table.concat(shouted, ",")
 if #roster > 0 then grant_xp(event.actor, 25) end
 "#;
 
+    /// The SAME workload, as the pinned TypeScript toolchain actually emits it.
+    ///
+    /// `datascripts/runtime-scripts/fuel-workload.ts` is the source; `packages build` compiles
+    /// Package scripts with exactly this toolchain, and
+    /// `datascripts/tests/runtime-scripts.test.ts` recompiles the workload and refuses these bytes
+    /// if they have gone stale. So the budget is sized against real transpiler output — the
+    /// `____tbl` guard, the inlined lua library, the `self` conventions and all — not against a
+    /// hand-written impression of it.
+    const GENERATED_SCRIPT: &str =
+        include_str!("../../datascripts/runtime-scripts/fuel-workload.lua");
+
     const PLAYER_GUID: u64 = 7;
     const CREATURE_GUID: u64 = 9;
 
@@ -1265,6 +1333,34 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         assert_eq!(failure.event, "on_levelup");
         assert_eq!(failure.kind, FailureKind::Syntax);
         assert!(!failure.message.is_empty());
+    }
+
+    #[test]
+    /// Piccolo gives a caller frame only to an active callback. After `Executor::step` returns,
+    /// its public API exposes no native-fault or fuel-exhaustion frame. Keep the stable context
+    /// rather than inventing a line or instrumenting generated Lua, which would move its Fuel
+    /// Budget measurement.
+    fn native_vm_and_fuel_diagnostics_keep_the_stable_invocation_context() {
+        let mut host = RuntimeScriptHost::new();
+        for (name, source, kind) in [
+            (
+                "native-fault",
+                "local missing = nil\nreturn missing.value",
+                FailureKind::Runtime,
+            ),
+            ("spin", "while true do end", FailureKind::Fuel),
+        ] {
+            let failure = host
+                .invoke(script(name, source), &unattended("on_damage_taken"))
+                .expect_err("the Runtime Script must fail");
+            assert_eq!(failure.script, name);
+            assert_eq!(failure.event, "on_damage_taken");
+            assert_eq!(failure.kind, kind);
+            assert!(!failure.message.is_empty());
+            let report = failure.to_string();
+            assert!(report.contains(name), "{report}");
+            assert!(report.contains("on_damage_taken"), "{report}");
+        }
     }
 
     #[test]
@@ -1645,6 +1741,11 @@ if #roster > 0 then grant_xp(event.actor, 25) end
                 "`{source}` must report `{fault}`, got `{}`",
                 failure.message
             );
+            assert!(
+                failure.message.contains("line 1"),
+                "`{source}` must name generated Lua line 1, got `{}`",
+                failure.message
+            );
         }
     }
 
@@ -1915,6 +2016,49 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         );
     }
 
+    /// The two facts `datascripts/runtime-scripts/lua-emit.cjs` rewrites generated Lua against.
+    /// If either stops holding, that rewrite is either unnecessary or no longer sufficient, and the
+    /// Package build has to be revisited before the next Runtime Script ships.
+    #[test]
+    fn only_a_trailing_table_constructor_leaks_and_a_one_parameter_passthrough_stops_it() {
+        let mut host = RuntimeScriptHost::new();
+        let event = engagement();
+        // 1 when the second parameter arrived nil, which is what a correct call gives.
+        let preamble = "local function seen(a, b) if b == nil then return 1 end return 2 end\n";
+        for (shape, source) in [
+            (
+                "a table constructor that is not the last argument",
+                "grant_xp(event.actor, seen({7, 8, 9}, nil))",
+            ),
+            (
+                "a table constructor passed through a one-parameter function",
+                "local function pass(t) return t end\ngrant_xp(event.actor, seen(pass({7, 8, 9})))",
+            ),
+        ] {
+            assert_eq!(
+                granted_amounts(
+                    &committed(&mut host, &event, &format!("{preamble}{source}")).unwrap()
+                ),
+                [1],
+                "{shape} must not leak"
+            );
+        }
+        // Parentheses do NOT stop it: the leak is in how the call site counts its arguments, not
+        // in adjusting a multiple-value expression, so the obvious one-token fix is not one.
+        assert_eq!(
+            granted_amounts(
+                &committed(
+                    &mut host,
+                    &event,
+                    &format!("{preamble}grant_xp(event.actor, seen(({{7, 8, 9}})))")
+                )
+                .unwrap()
+            ),
+            [2],
+            "parenthesising the constructor must still leak"
+        );
+    }
+
     #[test]
     fn the_shim_supplies_the_table_concat_piccolo_lacks() {
         let mut host = RuntimeScriptHost::new();
@@ -1957,6 +2101,88 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         let heavier = REPRESENTATIVE_SCRIPT.replace("1, 20 do", "1, 1000 do");
         host.invoke(script("heavier", &heavier), &event)
             .expect("fifty times the representative workload must still fit");
+    }
+
+    /// Real transpiler output runs on this Host, answers its caller, and fits the Fuel Budget.
+    ///
+    /// The three claims are one test on purpose: a chunk that compiles but cannot reach a Host Verb
+    /// is not evidence that the toolchain works, and a chunk that works but does not fit the budget
+    /// is not evidence that the budget is sized for one.
+    #[test]
+    fn the_generated_representative_script_runs_answers_and_fits_the_fuel_budget() {
+        let mut host = RuntimeScriptHost::new();
+        let event = engagement();
+
+        let invocation = host
+            .invoke(script("fire_nova.generated", GENERATED_SCRIPT), &event)
+            .expect("generated Lua must run inside the Fuel Budget");
+
+        // "UNIT1".."UNIT20" joined by 19 commas is 130 characters. The chunk's own answer proves
+        // the lua library, the string work and the join all ran, not just the Host Verb.
+        assert_eq!(invocation.answer, Some(130.0));
+        let mut sink = FakeEffects::default();
+        invocation.effects.commit(&mut sink);
+        assert_eq!(granted_amounts(&sink.committed), [25]);
+    }
+
+    /// A diagnostic's line number is a line of the GENERATED Lua — the bytes `game_script.source`
+    /// holds and an Operator can read — never a line of the TypeScript it came from. There is no
+    /// source map, and a number that pointed into a file no Shard holds would be worse than none.
+    ///
+    #[test]
+    fn a_syntax_failure_names_a_line_of_the_generated_lua_not_of_its_typescript() {
+        let mut host = RuntimeScriptHost::new();
+        let generated_lines = GENERATED_SCRIPT.lines().count();
+        let broken = format!("{GENERATED_SCRIPT}local a = 1 +\n");
+
+        let diagnostic = host
+            .invoke(
+                script("fire_nova.generated", &broken),
+                &unattended("on_login"),
+            )
+            .expect_err("the chunk does not parse");
+
+        assert_eq!(diagnostic.kind, FailureKind::Syntax);
+        assert!(
+            diagnostic
+                .message
+                .contains(&format!("line {}", generated_lines + 1)),
+            "the diagnostic must name line {} of the generated Lua: {}",
+            generated_lines + 1,
+            diagnostic.message
+        );
+        // The lua library prologue and the guard put the generated Lua well past the length of the
+        // TypeScript, so this number could not be a source-mapped one.
+        assert!(generated_lines > 25);
+    }
+
+    #[test]
+    fn a_runtime_failure_names_its_line_in_the_generated_lua() {
+        let mut host = RuntimeScriptHost::new();
+        for fault in ["error('broken')", "assert(false, 'broken')"] {
+            let generated = format!(
+                "local function ____tbl(t) return t end\n\
+                 local function script()\n\
+                   local amount = 1\n\
+                   {fault}\n\
+                 end\n\
+                 return script()\n"
+            );
+
+            let diagnostic = host
+                .invoke(
+                    script("fire_nova.generated", &generated),
+                    &unattended("on_login"),
+                )
+                .expect_err("the generated Lua raises an error");
+
+            assert_eq!(diagnostic.kind, FailureKind::Runtime);
+            assert!(
+                diagnostic.message.contains("line 4"),
+                "the diagnostic must name generated Lua line 4: {}",
+                diagnostic.message
+            );
+        }
     }
 
     /// A Runtime Script that reaches the host again through an effect it staged must be refused,
