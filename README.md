@@ -30,9 +30,9 @@ Point your client's `realmlist.wtf` at `127.0.0.1` and play.
 
 ## Can I use my existing client?
 
-A client never speaks to SpacetimeDB — it speaks SRP6 and WoW opcodes — so the gateway is translator and every mutation the world can undergo is a reducer call. The
-realm is sharded across several databases running the *same* wasm; `dev up` brings up a sharded
-fixture with a live seam you can walk across mid-session.
+Yes. An unmodified 1.12.1 client, build 5875, is the only client this project supports. Nothing is
+patched, no launcher is replaced, and no addon is required. Point its `realmlist.wtf` at your realm
+and log in. Other 1.12.x builds fail at the logon challenge or mid-handshake.
 
 
 ## Importing data
@@ -45,6 +45,13 @@ The import tool pulls game data *you* supply: cmangos' public
 `classic-db` dump and the DBCs inside your own client.
 
 ## Architecture at a glance
+
+A client never speaks to SpacetimeDB. It speaks SRP6 and WoW opcodes, so the gateway is the
+translator and every mutation the world can undergo is a reducer call. The realm is sharded across
+several databases that all run the *same* wasm. `dev up` brings up that fixture: Eastern Kingdoms on
+`lyracore`, Kalimdor on `lyracore-kalimdor`, dungeons on `lyracore-instances`, and accounts and
+sessions on `lyracore-realm`. Crossing between World Shards is an escrowed character transfer, not a
+walk. `dev up --single` brings up `lyracore` alone.
 
 ```
             unmodified 1.12.1 clients (build 5875)

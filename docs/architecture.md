@@ -1,6 +1,6 @@
 # LyraCore architecture
 
-**Status:** current — verified against the tree on 2026-08-04. Every claim below cites the file
+**Status:** current — verified against the tree on 2026-09-03. Every claim below cites the file
 that makes it true; where an older document disagreed with the code, the code won.
 
 **Authority note:** [`danger-zones.md`](./danger-zones.md) is authoritative over this document and
@@ -68,15 +68,15 @@ routing fact; module game logic never reads one, and an architecture test fails 
 
 ### 2.1 The module owns
 
-- **Every durable table** — 176 `#[table]` declarations (167 in the core module, plus 9
-  contributed by in-tree extension packages), of which 109 are `public` and 67 private. Full
-  inventory is covered in depth in the maintainers' internal docs; §4 below is the summary.
-- **Every state transition** — 240 `#[reducer]` functions in the core module (116 of them in a
-  default build, the rest behind the `debug_reducers` feature), plus more from any installed
-  extension package.
-- **All periodic work** — 12 scheduled tables drive combat swings, creature AI, aura ticks, ground
-  areas, instance reaping, transfer reaping, and event GC. Nothing on a gateway timer decides
-  gameplay.
+- **Every durable table** — every `#[table]` declaration lives in `module/src/**`, plus any an
+  installed extension package contributes. §4 and [`schema.md`](./schema.md) §2 hold the summary;
+  `grep -rn '^#\[table(' module/src --include='*.rs' | wc -l` is the count that cannot go stale.
+- **Every state transition** — every `#[reducer]` function, likewise:
+  `grep -rn '^#\[reducer' module/src --include='*.rs' | wc -l`. Roughly a third of them are behind
+  the `debug_reducers` feature and absent from a plain build (§8).
+- **All periodic work** — scheduled tables drive combat swings, creature AI, aura ticks, ground
+  areas, motion republishing, weather, and every reaper.
+  [`schema.md`](./schema.md) §6 lists them all. Nothing on a gateway timer decides gameplay.
 - **All authorization of writes** — a reducer derives its actor from `ctx.sender`.
 
 ### 2.2 The gateway owns
@@ -268,15 +268,17 @@ connectivity.
 Full inventory and the load-bearing row shapes are covered in depth in the maintainers' internal
 docs. The summary:
 
-- **176 tables**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages. External gtker
-  crates keep their `wow_` names and are never renamed.
-- **109 public / 67 private.** `public` means "subscribable by a client connection". Private tables
+- **238 tables on 2026-09-03**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages.
+  External gtker crates keep their `wow_` names and are never renamed. Recount with
+  `grep -rn '^#\[table(' module/src --include='*.rs' | wc -l`; the per-domain breakdown is
+  [`schema.md`](./schema.md) §2.
+- **122 public / 116 private.** `public` means "subscribable by a client connection". Private tables
   (`game_account`, `game_session`, `game_operator`, every region/transfer/instance/realm-core table)
   are readable only over the owner token.
-- **16 `#[client_visibility_filter]` RLS filters**, every one of the same shape
-  `SELECT * FROM <table> WHERE <identity column> = :sender`, scoping owner-private rows
-  (`game_character`, `game_item_instance`, `game_player_spell`, …) and recipient-addressed events
-  (`game_group_event`, `game_whisper_event`, `game_xp_event`, …).
+- **No `#[client_visibility_filter]` RLS filters.** The sixteen owner-scoped filters this document
+  used to list went out in commit `7fda35a` (2026-08-11), with the per-player client connections
+  they were the only thing that applied to. §5.4 and [`schema.md`](./schema.md) §4 give the
+  consequences.
 - **Spatial partitioning is baked into the rows.** `game_world_entity` carries `grid_x`/`grid_y`
   cell columns and indexes `(map_id, instance_id, grid_x, grid_y)`; seven event/motion tables carry
   the identical 4-column grid key so an AOI box query is a range scan.
@@ -372,9 +374,10 @@ broadcast tier.
   operator-gated (`gw_*`, `require_operator`), and the sender-path player reducers are deleted
   (#483) — but **the model's safety still rests on `:3000` being unreachable**, and nothing in
   this repository enforces that today.
-- **RLS does not gate delivery.** The gateway reads every table through the owner token and gates
-  visibility with its own predicates (§5.3); the deployed `client_visibility_filter` rules only
-  ever applied to client-identity subscriptions, which no longer exist.
+- **RLS does not gate delivery, and there is no RLS left.** The gateway reads every table through
+  the owner token and gates visibility with its own predicates (§5.3). The
+  `client_visibility_filter` rules only ever applied to client-identity subscriptions; those
+  subscriptions are gone, and commit `7fda35a` (2026-08-11) deleted the rules with them.
 - **RLS validation is partial, and knowing which half matters.** Preflight's RLS-filter validation
   step checks every filter against the generated bindings and **fails** if a filter names an
   unknown table or column — so an identifier typo no longer survives to production. What preflight
@@ -538,15 +541,17 @@ table outside a shrinking whitelist; every character-keyed table must carry
 Each has a companion ratchet test that fails when its whitelist names something that no
 longer needs to be there.
 
-**Debug reducers are compiled out by default.** `module/Cargo.toml` declares
-`debug_reducers = []` with no `default`, and `module/src/debug/` (#386 split the former single
-`debug.rs` into a directory along its section banners) is `#![cfg(feature =
-"debug_reducers")]` in its entirety. A debug build adds 124 reducers (109 in `debug/`, 15 more
-gated individually elsewhere — one `#[cfg(feature = "debug_reducers")]` per function — across ten
-other files, including the not-obviously-named `set_guid_floor` in `auth.rs`; `grep -rn
-'cfg(feature = "debug_reducers")' module/src` finds every one of them. A production build must be a
-plain build; the deploy wrapper `lyracore publish` enables the feature deliberately because the
-local headless-client tests need it.
+**Debug reducers are compiled out by default.** `module/Cargo.toml` declares `debug_reducers = []`
+with no `default`, and `module/src/debug/` is `#![cfg(feature = "debug_reducers")]` in its entirety.
+Enabling the feature adds 127 reducers: 112 in `debug/`, and 15 more gated one function at a time
+across ten other files, including the not-obviously-named `set_guid_floor` in `auth.rs`.
+`grep -rn 'cfg(feature = "debug_reducers")' module/src` finds every one of them.
+
+What a real deploy actually publishes is not decided here.
+[`danger-zones.md`](./danger-zones.md) §3 is authoritative, and today it publishes **with**
+`--features=debug_reducers` and runs the unoptimized `./target/debug/lyracore-gateway` binary on
+every realm, production included. That is an accepted posture of the alpha, which the README's
+warning banner states plainly, not a contradiction to resolve in this document.
 
 ---
 
@@ -560,6 +565,7 @@ local headless-client tests need it.
 | [`../CONTEXT.md`](../CONTEXT.md) | The glossary. The words this document and the code are supposed to use, and the words to avoid. |
 | [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. Read before any engine change. |
 | [`schema.md`](./schema.md) | The table-level data model. |
+| [`package-api.md`](./package-api.md) | The Package API, version 1: what a Package's Rust half may call, and what core promises about it. |
 | [`region-sharding.md`](./region-sharding.md) | Retired (#471): the removed region tier's design — seam menus, assignments, view merge — kept for reference. |
 
 ### Operating and building
@@ -569,7 +575,24 @@ local headless-client tests need it.
 | [`quickstart.md`](./quickstart.md) | The shortest path from a clean checkout to a running realm. |
 | [`development-cli.md`](./development-cli.md) | The `./lyracore` CLI: the pinned shim, and the build, preflight, publish and local-stack commands. |
 | [`data-ingestion.md`](./data-ingestion.md) | Where vanilla content comes from and the licensing firewall. |
-| [`aura-capacity-verification.md`](./aura-capacity-verification.md) | The live-stack procedure proving the 32-buff/16-debuff cap end to end: refusal, untouched survivors, the overflow log line, and the wire-level `SMSG_SPELL_FAILURE` relay. |
-| [`mount-verification.md`](./mount-verification.md) | The land-mount fixture ids, the attended procedure, and the Headless Client scenario for the next pinned release. |
+
+### Verification write-ups
+
+Each of these records one behaviour proven against a live stack, with the fixture, the exact
+procedure, and what the result was. They are reproducible recipes, not status reports. §8 above
+explains why two rungs of the ladder are written down instead of automated.
+
+| Document | What it verifies |
+|---|---|
+| [`aura-capacity-verification.md`](./aura-capacity-verification.md) | The 32-buff/16-debuff cap end to end: refusal, untouched survivors, the overflow log line, and the wire-level `SMSG_SPELL_FAILURE` relay. |
+| [`aura-stacking-probes.md`](./aura-stacking-probes.md) | The stacking-family decision on real `game_aura` rows, as an operator sees it. |
+| [`cc-diminishing-returns-probe.md`](./cc-diminishing-returns-probe.md) | Crowd-control diminishing returns, whose persisted state and removal-time window only a live database shows. |
+| [`vmap-rollout.md`](./vmap-rollout.md) | Exact collision on both populated World Shards, and that the Instance Pool receives no open-world vmap generation. |
+| [`mount-verification.md`](./mount-verification.md) | The land-mount fixture ids, the attended procedure, and the Headless Client scenario. |
+| [`taxi-flight-verification.md`](./taxi-flight-verification.md) | The direct-route flight baseline, and the cancel path when catalogue geometry mutates mid-flight. |
+| [`movement-batch-acceptance.md`](./movement-batch-acceptance.md) | The steady-heartbeat batching path under a load driver, on a `disposable:` realm only. Script in `scripts/`. |
+| [`auction-house-client-check.md`](./auction-house-client-check.md) | The auction house against a real 5875 client. Status: outstanding, needs a human. |
+| [`duel-client-check.md`](./duel-client-check.md) | Duel visuals against a real 5875 client, which the automated tests cannot see. Status: outstanding. |
+| [`hunter-pet-live-check.md`](./hunter-pet-live-check.md) | Taming, pet bars and pet lifecycle against a live development realm and a real client. |
 
 **The work queue is GitHub Issues**, which is the single source of truth for what is open.

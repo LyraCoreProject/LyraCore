@@ -28,8 +28,8 @@ gateway/gateway-stderr.log
 dhat-heap.json
 __pycache__/
 
-# cargo-mutants report output (#380). Regenerated on every run; the CI job uploads it as an
-# artifact instead. `.cargo/mutants.toml` is the configuration and IS checked in.
+# cargo-mutants report output. Regenerated on every run, so it is never committed. This repository
+# carries no mutants configuration file; the maintainers run cargo-mutants from their own repository.
 /mutants.out/
 /mutants.out.old/
 .scratch/
