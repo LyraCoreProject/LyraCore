@@ -239,8 +239,10 @@ holds the Account's Alpha Test Tools authority. Existing Accounts receive that a
 end-appended default. New Accounts copy `game_alpha_test_tools_enrollment`, which starts enabled;
 changing enrollment never changes an existing Account.
 `game_session` holds the SRP6 session key **K**, which is what makes gateways stateless: the logon
-flow writes it, and any world gateway can read it to complete the handshake. `game_operator` is a
-singleton holding the one trusted operator identity, captured (not derived) by `claim_operator`.
+flow writes it, and any world gateway can read it to complete the handshake. A row is valid for
+one hour from its logon (`expires_at`): the handshake refuses an expired row like an absent one,
+and `reap_sessions` deletes expired rows every five minutes. `game_operator` is a singleton
+holding the one trusted operator identity, captured (not derived) by `claim_operator`.
 
 On a realm-core deployment these live on realm-core, and the world shards' copies are downgraded to
 a **write-through cache that is never read for auth**: a world shard's own `game_account`/
@@ -401,11 +403,11 @@ Two constraints survive the removal and bind any filter added later.
 
 ## 6. Scheduled tables
 
-**23 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
+**24 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
 timer decides gameplay. Recount and re-list them with:
 
 ```bash
-grep -rn 'scheduled(' module/src --include='*.rs'   # 23 tables plus 4 comment lines, 2026-09-03
+grep -rn 'scheduled(' module/src --include='*.rs'   # 24 tables plus 4 comment lines, 2026-09-03
 ```
 
 | Scheduled table | Reducer | Cadence | Where |
@@ -424,6 +426,7 @@ grep -rn 'scheduled(' module/src --include='*.rs'   # 23 tables plus 4 comment l
 | `game_pet_care_schedule` | `tick_pet_care` | 7.5 s | `creatures/pet_care.rs:18` |
 | `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s | `gw.rs:71` |
 | `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs:312` |
+| `game_session_reaper_schedule` | `reap_sessions` | 5 min, armed lazily by `establish_session` | `auth.rs:127` |
 | `game_weather_schedule` | `tick_weather` | 10 min | `weather.rs:153` |
 | `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs:643` |
 | `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:689` |
@@ -435,7 +438,7 @@ grep -rn 'scheduled(' module/src --include='*.rs'   # 23 tables plus 4 comment l
 | `game_creature_ai_relay_arrival` | `resume_relay_arrival` | one-shot on movement completion | `creatures/eventai/relay.rs:309` |
 
 The interval rows are inserted by `init` (`seed_scheduler_arming`, `module/src/seed.rs`), except the
-transfer and mail-escrow reapers, which their own entry points arm lazily and idempotently.
+transfer, mail-escrow and session reapers, which their own entry points arm lazily and idempotently.
 Scheduled reducers self-gate on `ctx.sender() == ctx.database_identity()` so they cannot be driven
 externally.
 

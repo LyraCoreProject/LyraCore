@@ -1,7 +1,9 @@
 //! Account / auth tables (private — never delivered to clients) and the two gateway-coordination
 //! reducers that provision SRP6 credentials and establish a session. [session]
 
-use spacetimedb::{reducer, table, Identity, ReducerContext, Table, TimeDuration, Timestamp};
+use spacetimedb::{
+    reducer, table, Identity, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp,
+};
 
 use crate::items::game_item_instance; // monotonic-guid: don't reuse a guid that still owns items
 use crate::{game_char_base_info, game_character, game_start_position, Character};
@@ -102,6 +104,8 @@ pub(crate) fn ensure_shadow_account(ctx: &ReducerContext, account_id: u64) {
 }
 
 /// Gateway coordination: shared session key K. Private. [session]
+/// A row lives `SESSION_TTL_MICROS` from its last logon; the world handshake refuses an expired
+/// row and `reap_sessions` deletes it.
 #[table(accessor = game_session)]
 pub struct Session {
     #[primary_key]
@@ -110,6 +114,68 @@ pub struct Session {
     pub identity: Option<Identity>,
     pub created_at: Timestamp,
     pub expires_at: Timestamp,
+}
+
+/// How long a logon's session key stays valid for the world handshake. Every logon rewrites the
+/// row, so a returning player always gets a fresh window.
+pub(crate) const SESSION_TTL_MICROS: i64 = 3_600_000_000;
+/// How often the reaper deletes expired sessions.
+pub(crate) const SESSION_REAP_MICROS: i64 = 300_000_000;
+
+/// Drives `reap_sessions`. Armed lazily by `establish_session`, so no post-publish repair step
+/// is needed for it.
+#[table(accessor = game_session_reaper_schedule, scheduled(reap_sessions))]
+pub struct SessionReaperSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
+/// The one expiry rule, shared by the reaper and by the gateway's handshake lookup.
+pub(crate) fn session_expired(now_micros: i64, expires_at_micros: i64) -> bool {
+    expires_at_micros <= now_micros
+}
+
+/// Which of `sessions` (account id, expiry) the reaper deletes at `now_micros`.
+pub(crate) fn expired_sessions(
+    sessions: impl Iterator<Item = (u64, i64)>,
+    now_micros: i64,
+) -> Vec<u64> {
+    sessions
+        .filter(|(_, expires_at_micros)| session_expired(now_micros, *expires_at_micros))
+        .map(|(account_id, _)| account_id)
+        .collect()
+}
+
+/// Delete every session whose window has closed. Scheduler-only.
+#[reducer]
+pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> Result<(), String> {
+    if ctx.sender() != ctx.database_identity() {
+        return Err("scheduler only".to_string());
+    }
+    let sessions = ctx.db.game_session();
+    let expired = expired_sessions(
+        sessions
+            .iter()
+            .map(|s| (s.account_id, s.expires_at.to_micros_since_unix_epoch())),
+        ctx.timestamp.to_micros_since_unix_epoch(),
+    );
+    for account_id in expired {
+        sessions.account_id().delete(account_id);
+    }
+    Ok(())
+}
+
+fn ensure_session_reaper_armed(ctx: &ReducerContext) {
+    let schedule = ctx.db.game_session_reaper_schedule();
+    if schedule.iter().next().is_some() {
+        return;
+    }
+    schedule.insert(SessionReaperSchedule {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(SESSION_REAP_MICROS)),
+    });
 }
 
 /// The single trusted OPERATOR identity — the gateway's coordinator connection + the deploy CLI, which
@@ -401,7 +467,7 @@ pub fn establish_session(
 
     let now = ctx.timestamp;
     let expires = now
-        .checked_add(TimeDuration::from_micros(3_600_000_000))
+        .checked_add(TimeDuration::from_micros(SESSION_TTL_MICROS))
         .unwrap_or(now);
     let sessions = ctx.db.game_session();
     let row = Session {
@@ -416,7 +482,66 @@ pub fn establish_session(
     } else {
         sessions.insert(row);
     }
+    ensure_session_reaper_armed(ctx);
     Ok(())
+}
+
+#[cfg(test)]
+mod session_expiry_tests {
+    use super::{expired_sessions, session_expired, SESSION_REAP_MICROS, SESSION_TTL_MICROS};
+
+    #[test]
+    fn a_session_expires_at_its_deadline_and_not_before() {
+        assert!(!session_expired(999, 1_000));
+        assert!(session_expired(1_000, 1_000));
+        assert!(session_expired(1_001, 1_000));
+    }
+
+    #[test]
+    fn the_reaper_selects_only_the_sessions_whose_window_closed() {
+        let rows = [(1, 500), (2, 1_000), (3, 1_500)].into_iter();
+        assert_eq!(expired_sessions(rows, 1_000), vec![1, 2]);
+    }
+
+    #[test]
+    fn the_reaper_runs_far_more_often_than_a_session_lives() {
+        assert!(SESSION_REAP_MICROS * 10 <= SESSION_TTL_MICROS);
+    }
+
+    #[test]
+    fn the_reaper_refuses_every_caller_but_the_scheduler() {
+        let body = crate::test_scan::code_of(
+            include_str!("auth.rs"),
+            "pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> Result<(), String> {",
+        );
+        let gate = body
+            .find("if ctx.sender() != ctx.database_identity() {")
+            .expect("reap_sessions has no scheduler gate");
+        let delete = body
+            .find(".delete(")
+            .expect("reap_sessions deletes nothing");
+        assert!(
+            gate < delete,
+            "the scheduler gate must come before any delete"
+        );
+    }
+
+    #[test]
+    fn every_logon_rewrites_the_row_and_arms_the_reaper() {
+        let body = crate::test_scan::code_of(
+            include_str!("auth.rs"),
+            "pub fn establish_session(
+",
+        );
+        assert!(
+            body.contains("sessions.account_id().update(row)"),
+            "a returning player's stale row must be replaced, never refused"
+        );
+        assert!(
+            body.contains("ensure_session_reaper_armed(ctx);"),
+            "the reaper is armed lazily from the one reducer every logon runs"
+        );
+    }
 }
 
 // ===========================================================================================

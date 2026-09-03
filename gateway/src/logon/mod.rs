@@ -9,13 +9,17 @@
 //! The only state this touches is the `game_account` read (salt/verifier) and the session write
 //! (K) — both via `LogonStore`. Everything else is per-connection handshake scratch.
 
+pub mod limiter;
+
 use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};
 use crate::read_deadline::{
     is_io_deadline, DeadlineClock, IoDeadline, PreAuthDeadline, LOGON_AUTH_DEADLINE,
 };
 use crate::{config::GatewayConfig, stdb::Coordinator};
 use anyhow::{anyhow, Result};
+use limiter::{LogonConnection, LogonLimiter, PROOF_FAILURE_DELAY};
 use std::io::{Read, Write};
+use std::time::Instant;
 use tokio::net::TcpListener;
 use wow_login_messages::all::CMD_AUTH_LOGON_CHALLENGE_Client;
 use wow_login_messages::errors::ExpectedOpcodeError;
@@ -94,16 +98,25 @@ pub trait LogonStore: Send + Sync {
 
 /// Drive one logon connection to completion (challenge -> proof -> realm list). Returns when
 /// the client disconnects. Pure protocol logic; no async, no direct IO beyond `stream`.
-/// One total pre-auth I/O budget covers every read and write until the proof succeeds.
+/// One total pre-auth I/O budget covers every read and write until the proof succeeds, and a
+/// fresh Logon Limiter connection caps the attempts.
 #[cfg(test)]
 pub fn handle_logon<S: Read + Write + IoDeadline, St: LogonStore + ?Sized>(
     stream: &mut S,
     store: &St,
 ) -> Result<()> {
     let mut deadline = PreAuthDeadline::after(LOGON_AUTH_DEADLINE);
-    handle_logon_with_deadline(stream, store, &mut deadline)
+    handle_logon_with_deadline(stream, store, &mut deadline, &mut loopback_connection())
 }
 
+#[cfg(test)]
+fn loopback_connection() -> LogonConnection {
+    LogonLimiter::new()
+        .admit(std::net::Ipv4Addr::LOCALHOST.into(), Instant::now())
+        .expect("a fresh limiter admits its first connection")
+}
+
+/// A refused attempt ends the connection: the limiter's verdict is the error the listener logs.
 fn handle_logon_with_deadline<
     S: Read + Write + IoDeadline,
     St: LogonStore + ?Sized,
@@ -112,6 +125,7 @@ fn handle_logon_with_deadline<
     stream: &mut S,
     store: &St,
     deadline: &mut PreAuthDeadline<C>,
+    connection: &mut LogonConnection,
 ) -> Result<()> {
     // Per-connection scratch: the in-flight SRP proof + which account it is for (id AND the
     // normalized username — see `LogonStore::save_session`). `SrpProof` is consumed by
@@ -144,7 +158,11 @@ fn handle_logon_with_deadline<
 
         match msg {
             ClientOpcodeMessage::CMD_AUTH_LOGON_CHALLENGE(c) => {
+                connection.start_attempt(Instant::now())?;
                 pending = handle_challenge(&mut deadline.io(stream), store, &c)?;
+                if pending.is_none() {
+                    connection.record_failure(Instant::now())?;
+                }
             }
             ClientOpcodeMessage::CMD_AUTH_LOGON_PROOF(p) => {
                 let Some((proof, account_id, username)) = pending.take() else {
@@ -160,9 +178,10 @@ fn handle_logon_with_deadline<
                     p.client_proof,
                 )?
                 .map(|id| (id, username));
-                if authenticated.is_some() {
+                match authenticated {
                     // Proven. The realm-list phase that follows has no pre-auth deadline.
-                    deadline.finish(stream)?;
+                    Some(_) => deadline.finish(stream)?,
+                    None => connection.record_failure(Instant::now())?,
                 }
             }
             ClientOpcodeMessage::CMD_REALM_LIST(_) => {
@@ -258,21 +277,15 @@ fn handle_proof<S: Read + Write, St: LogonStore + ?Sized>(
     client_public_key: [u8; 32],
     client_proof: [u8; 20],
 ) -> Result<Option<u64>> {
-    let client_public_key = match PublicKey::from_le_bytes(client_public_key) {
-        Ok(k) => k,
-        Err(_) => {
-            CMD_AUTH_LOGON_PROOF_Server::FailIncorrectPassword.write(&mut *stream)?;
-            return Ok(None);
-        }
-    };
-
-    let (server, server_proof) = match proof.into_server(client_public_key, client_proof) {
-        Ok(v) => v,
-        Err(_) => {
-            // Proof mismatch == wrong password. Common; not an error.
-            CMD_AUTH_LOGON_PROOF_Server::FailIncorrectPassword.write(&mut *stream)?;
-            return Ok(None);
-        }
+    let verified = PublicKey::from_le_bytes(client_public_key)
+        .ok()
+        .and_then(|key| proof.into_server(key, client_proof).ok());
+    let Some((server, server_proof)) = verified else {
+        // Proof mismatch == wrong password. Common; not an error. The pause makes every guess
+        // cost wall-clock time on top of the modexp it already cost the server.
+        std::thread::sleep(PROOF_FAILURE_DELAY);
+        CMD_AUTH_LOGON_PROOF_Server::FailIncorrectPassword.write(&mut *stream)?;
+        return Ok(None);
     };
 
     let session_key = *server.session_key();
@@ -317,6 +330,7 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
     // for the policy and for the errno that actually killed the gateway on 2026-08-07.
     let mut backoff = AcceptBackoff::new();
     let mut capacity_was_full = false;
+    let limiter = LogonLimiter::new();
     loop {
         let (sock, peer) = match listener.accept().await {
             Ok(pair) => {
@@ -345,6 +359,14 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
                     continue;
                 }
             },
+        };
+        // Refused before the socket costs a deadline, a permit or a thread.
+        let mut connection = match limiter.admit(peer.ip(), Instant::now()) {
+            Ok(connection) => connection,
+            Err(refusal) => {
+                log::debug!("logon: refused {peer}: {refusal}");
+                continue;
+            }
         };
         // The budget begins at accept, before this socket can wait for a blocking-pool thread.
         let mut deadline = PreAuthDeadline::after(LOGON_AUTH_DEADLINE);
@@ -383,7 +405,9 @@ pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
             let _task_permit = task_permit;
             let store = CoordinatorStore::new(coord);
             let mut s = std_sock;
-            if let Err(e) = handle_logon_with_deadline(&mut s, &store, &mut deadline) {
+            if let Err(e) =
+                handle_logon_with_deadline(&mut s, &store, &mut deadline, &mut connection)
+            {
                 log::warn!("logon session {peer} ended: {e:#}");
             }
         });
@@ -1752,6 +1776,127 @@ mod tests {
         drop(client);
     }
 
+    /// One failed logon attempt: a challenge for `username`, then a proof for `wrong_password`,
+    /// answered with FailIncorrectPassword.
+    fn fail_proof(client: &mut UnixStream, username: &str, wrong_password: &str) {
+        challenge_client(username).write(&mut *client).unwrap();
+        let (g, n, s_salt, server_pubkey) = match ServerOpcodeMessage::read(&mut *client).unwrap() {
+            ServerOpcodeMessage::CMD_AUTH_LOGON_CHALLENGE(
+                CMD_AUTH_LOGON_CHALLENGE_Server::Success {
+                    generator,
+                    large_safe_prime,
+                    salt,
+                    server_public_key,
+                    ..
+                },
+            ) => (generator, large_safe_prime, salt, server_public_key),
+            other => panic!("expected challenge success, got {other:?}"),
+        };
+        let n: [u8; 32] = n.try_into().unwrap();
+        let challenge = SrpClientChallenge::new(
+            ns(username),
+            ns(wrong_password),
+            g[0],
+            n,
+            PublicKey::from_le_bytes(server_pubkey).unwrap(),
+            s_salt,
+        );
+        wow_login_messages::version_3::CMD_AUTH_LOGON_PROOF_Client {
+            client_public_key: *challenge.client_public_key(),
+            client_proof: *challenge.client_proof(),
+            crc_hash: [0u8; 20],
+            telemetry_keys: vec![],
+            security_flag:
+                wow_login_messages::version_3::CMD_AUTH_LOGON_PROOF_Client_SecurityFlag::None,
+        }
+        .write(&mut *client)
+        .unwrap();
+        match ServerOpcodeMessage::read(&mut *client).unwrap() {
+            ServerOpcodeMessage::CMD_AUTH_LOGON_PROOF(
+                CMD_AUTH_LOGON_PROOF_Server::FailIncorrectPassword,
+            ) => {}
+            other => panic!("expected FailIncorrectPassword, got {other:?}"),
+        }
+    }
+
+    fn socket_is_closed(client: &mut UnixStream) -> bool {
+        let mut byte = [0u8];
+        matches!(client.read(&mut byte), Ok(0))
+    }
+
+    #[test]
+    fn the_third_failed_proof_closes_the_connection() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let (mut client, server_end) = UnixStream::pair().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut s = server_end;
+            handle_logon(&mut s, &store)
+        });
+
+        for _ in 0..limiter::ATTEMPTS_PER_CONNECTION {
+            fail_proof(&mut client, "TEST", "WRONGPASS");
+        }
+
+        assert!(
+            socket_is_closed(&mut client),
+            "the client still saw its last FailIncorrectPassword, then lost the socket"
+        );
+        let err = server
+            .join()
+            .unwrap()
+            .expect_err("the handler ends with the limiter's verdict");
+        assert!(err.to_string().contains("logon attempts"), "{err:#}");
+    }
+
+    #[test]
+    fn a_failed_proof_is_answered_after_the_failure_delay() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let (mut client, server_end) = UnixStream::pair().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut s = server_end;
+            let _ = handle_logon(&mut s, &store);
+        });
+
+        let started = Instant::now();
+        fail_proof(&mut client, "TEST", "WRONGPASS");
+        assert!(
+            started.elapsed() >= PROOF_FAILURE_DELAY,
+            "a wrong proof was answered in {:?}",
+            started.elapsed()
+        );
+
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn an_address_that_exhausted_its_window_is_closed_at_the_next_challenge() {
+        let store = provisioned_store("TEST", "PASSWORD", false);
+        let limiter = LogonLimiter::new();
+        let peer: std::net::IpAddr = std::net::Ipv4Addr::new(10, 0, 0, 1).into();
+        let now = Instant::now();
+        let mut connection = limiter.admit(peer, now).unwrap();
+        for _ in 0..limiter::FAILURES_PER_WINDOW {
+            let mut other = limiter.admit(peer, now).unwrap();
+            other.start_attempt(now).unwrap();
+            other.record_failure(now).unwrap();
+        }
+        let (mut client, server_end) = UnixStream::pair().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut s = server_end;
+            let mut deadline = PreAuthDeadline::after(LOGON_AUTH_DEADLINE);
+            handle_logon_with_deadline(&mut s, &store, &mut deadline, &mut connection)
+        });
+
+        challenge_client("TEST").write(&mut client).unwrap();
+        assert!(
+            socket_is_closed(&mut client),
+            "no challenge reply: the connection is closed before any SRP math"
+        );
+        let err = server.join().unwrap().expect_err("the limiter's verdict");
+        assert!(err.to_string().contains("failed"), "{err:#}");
+    }
+
     /// Client side of challenge -> proof for a provisioned account; asserts the proof succeeds.
     fn prove(client: &mut UnixStream, username: &str, password: &str) {
         challenge_client(username).write(&mut *client).unwrap();
@@ -1802,7 +1947,7 @@ mod tests {
         let mut deadline = PreAuthDeadline::after(Duration::from_millis(200));
         let server = std::thread::spawn(move || {
             let mut s = server_end;
-            handle_logon_with_deadline(&mut s, &store, &mut deadline)
+            handle_logon_with_deadline(&mut s, &store, &mut deadline, &mut loopback_connection())
         });
 
         let err = server
@@ -1821,12 +1966,16 @@ mod tests {
         );
     }
 
+    /// The uncapped pre-auth request (an unauthenticated realm list gets an empty reply) must
+    /// still share the one total deadline; challenges are capped by the Logon Limiter instead.
     #[test]
-    fn repeated_challenges_cannot_extend_the_pre_auth_deadline() {
+    fn repeated_pre_auth_requests_cannot_extend_the_pre_auth_deadline() {
         let store = provisioned_store("TEST", "PASSWORD", false);
         let mut input = Vec::new();
         for _ in 0..64 {
-            challenge_client("TEST").write(&mut input).unwrap();
+            wow_login_messages::version_8::CMD_REALM_LIST_Client {}
+                .write(&mut input)
+                .unwrap();
         }
         let start = Instant::now();
         let clock = ManualClock(Rc::new(Cell::new(start)));
@@ -1841,8 +1990,13 @@ mod tests {
             write_timeout_calls: Rc::new(Cell::new(0)),
         };
 
-        let error = handle_logon_with_deadline(&mut stream, &store, &mut deadline)
-            .expect_err("complete challenge retries must share one total deadline");
+        let error = handle_logon_with_deadline(
+            &mut stream,
+            &store,
+            &mut deadline,
+            &mut loopback_connection(),
+        )
+        .expect_err("complete pre-auth requests must share one total deadline");
 
         assert!(
             error.to_string().contains("pre-auth I/O deadline"),
@@ -1850,7 +2004,7 @@ mod tests {
         );
         assert!(
             !stream.output.is_empty(),
-            "at least one complete challenge must make progress before the deadline"
+            "at least one complete request must make progress before the deadline"
         );
     }
 
@@ -1873,8 +2027,13 @@ mod tests {
             write_timeout_calls: write_timeout_calls.clone(),
         };
 
-        let error = handle_logon_with_deadline(&mut stream, &store, &mut deadline)
-            .expect_err("the challenge reply must not write past the total deadline");
+        let error = handle_logon_with_deadline(
+            &mut stream,
+            &store,
+            &mut deadline,
+            &mut loopback_connection(),
+        )
+        .expect_err("the challenge reply must not write past the total deadline");
 
         assert_eq!(
             write_timeout_calls.get(),
@@ -1900,7 +2059,7 @@ mod tests {
         let mut deadline = PreAuthDeadline::after(Duration::from_millis(200));
         let server = std::thread::spawn(move || {
             let mut s = server_end;
-            handle_logon_with_deadline(&mut s, &store, &mut deadline)
+            handle_logon_with_deadline(&mut s, &store, &mut deadline, &mut loopback_connection())
         });
 
         prove(&mut client, "TEST", "PASSWORD");
