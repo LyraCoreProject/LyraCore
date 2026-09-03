@@ -329,7 +329,8 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                 // The gate fails open — missing standing data must not lock a player out of a
                 // giver — but a dead reducer transport is not missing data and ends the session.
                 Err(e)
-                    if classify_quest_action_error(&e) == QuestActionErrorClass::GameplayRefusal =>
+                    if classify_quest_action_error(&e)
+                        == QuestActionErrorClass::GameplayRefusal =>
                 {
                     log::debug!(
                         "world: questgiver {giver} interaction gate unavailable (account {}): {e}",
@@ -371,7 +372,8 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
             match store.accept_quest(player.account_id, self_guid, a.guid.guid(), a.quest_id) {
                 Ok(()) => {}
                 Err(e)
-                    if classify_quest_action_error(&e) == QuestActionErrorClass::GameplayRefusal =>
+                    if classify_quest_action_error(&e)
+                        == QuestActionErrorClass::GameplayRefusal =>
                 {
                     log::debug!(
                         "world: accept_quest ignored (account {}): {e}",
@@ -436,7 +438,8 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
                     },
                 }),
                 Err(e)
-                    if classify_quest_action_error(&e) == QuestActionErrorClass::GameplayRefusal =>
+                    if classify_quest_action_error(&e)
+                        == QuestActionErrorClass::GameplayRefusal =>
                 {
                     log::debug!(
                         "world: turn_in_quest refused (quest {}, reward index {}): {e}",
@@ -493,7 +496,8 @@ pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
             match store.push_quest(player.account_id, self_guid, p.quest_id) {
                 Ok(()) => {}
                 Err(e)
-                    if classify_quest_action_error(&e) == QuestActionErrorClass::GameplayRefusal =>
+                    if classify_quest_action_error(&e)
+                        == QuestActionErrorClass::GameplayRefusal =>
                 {
                     log::debug!(
                         "world: push_quest ignored (account {}): {e}",
@@ -796,7 +800,9 @@ mod tests {
     fn outbound(outcome: QuestActionOutcome) -> Vec<Outbound> {
         match outcome {
             QuestActionOutcome::Handled { outbound } => outbound,
-            QuestActionOutcome::PassThrough(_) => panic!("expected the quest module to handle this"),
+            QuestActionOutcome::PassThrough(_) => {
+                panic!("expected the quest module to handle this")
+            }
         }
     }
 
@@ -828,7 +834,8 @@ mod tests {
             ..Default::default()
         };
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), status_query(GIVER)).unwrap());
+        let batch =
+            outbound(dispatch_quest_action(&actions, player(), status_query(GIVER)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -850,7 +857,9 @@ mod tests {
             ..one_quest(codec::ROLE_START, false, false)
         };
 
-        assert!(outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap()).is_empty());
+        assert!(
+            outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap()).is_empty()
+        );
         assert_eq!(
             actions.gate_requests.lock().unwrap().as_slice(),
             &[(GIVER, SELF_GUID)]

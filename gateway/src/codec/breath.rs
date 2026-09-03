@@ -1,10 +1,10 @@
 //! Breath mirror-timer and drowning combat-log packets.
 
-use wow_world_messages::vanilla::{
-    EnvironmentalDamageType, SMSG_ENVIRONMENTAL_DAMAGE_LOG, SMSG_START_MIRROR_TIMER,
-    SMSG_STOP_MIRROR_TIMER, TimerType,
-};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::{
+    EnvironmentalDamageType, TimerType, SMSG_ENVIRONMENTAL_DAMAGE_LOG, SMSG_START_MIRROR_TIMER,
+    SMSG_STOP_MIRROR_TIMER,
+};
 
 /// The only timer this relay currently mirrors: underwater breath.
 const BREATH_TIMER: TimerType = TimerType::Breath;
@@ -25,7 +25,9 @@ pub fn build_breath_timer_start(time_remaining_ms: u32, duration_ms: u32) -> Ser
 
 /// Client-side countdown stop on the surface edge.
 pub fn build_breath_timer_stop() -> ServerOpcodeMessage {
-    ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(SMSG_STOP_MIRROR_TIMER { timer: BREATH_TIMER })
+    ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(SMSG_STOP_MIRROR_TIMER {
+        timer: BREATH_TIMER,
+    })
 }
 
 /// Combat-log line for exactly the health amount the server's drowning resolver removed.

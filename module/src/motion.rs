@@ -675,7 +675,10 @@ mod tests {
             body.contains("ctx.sender() != ctx.database_identity()"),
             "the tick must stay scheduler-only. Body was:\n{body}"
         );
-        let drain = crate::test_scan::code_of(include_str!("motion.rs"), "pub(crate) fn publish_staged(ctx: &ReducerContext) {");
+        let drain = crate::test_scan::code_of(
+            include_str!("motion.rs"),
+            "pub(crate) fn publish_staged(ctx: &ReducerContext) {",
+        );
         assert!(
             drain.contains("tick_action(entities.guid().find(row.guid).is_some())"),
             "every queued row must go through `tick_action` with a REAL liveness probe — a \

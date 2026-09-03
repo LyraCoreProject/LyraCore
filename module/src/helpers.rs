@@ -56,7 +56,9 @@ pub fn entity_by_owner(ctx: &ReducerContext, owner: Identity) -> Option<WorldEnt
 /// shared [`gate_by_guid`]: a mid-transfer character reads "not in world" on the `gw_*` path
 /// exactly as it does on the sender path. NOT [`live_entity`], which deliberately skips the fence.
 pub fn acting_entity_by_guid(ctx: &ReducerContext, guid: u64) -> Option<WorldEntity> {
-    gate_by_guid(ctx, ctx.db.game_world_entity().guid().find(guid), |e| e.guid)
+    gate_by_guid(ctx, ctx.db.game_world_entity().guid().find(guid), |e| {
+        e.guid
+    })
 }
 
 /// THE by-guid chokepoint — `entity_by_owner`'s twin for every reducer that reaches a

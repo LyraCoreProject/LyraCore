@@ -53,7 +53,6 @@ impl SessionEpochs {
     }
 }
 
-
 #[cfg(test)]
 mod session_epoch_tests {
     use super::SessionEpochs;

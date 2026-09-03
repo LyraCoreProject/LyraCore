@@ -93,7 +93,11 @@ mod frozen_sql_oracle {
     /// ONE point-probe query per (table, cell) — the shape the missing-AOI-index fix landed. Kept alongside the range
     /// form because a future change has to satisfy BOTH or it has narrowed visibility on one of
     /// them.
-    fn cell_queries(map_id: u32, instance_id: u64, cells: impl Iterator<Item = i64>) -> Vec<String> {
+    fn cell_queries(
+        map_id: u32,
+        instance_id: u64,
+        cells: impl Iterator<Item = i64>,
+    ) -> Vec<String> {
         let cells: Vec<i64> = cells.collect();
         let mut out = Vec::with_capacity(BOX_SCOPED_TABLES.len() * cells.len());
         for table in BOX_SCOPED_TABLES {

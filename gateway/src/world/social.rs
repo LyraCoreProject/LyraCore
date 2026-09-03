@@ -312,9 +312,7 @@ fn friend_result_for(refusal: ContactRefusal, is_ignore: bool) -> FriendResult {
         // row that is not there, both read as the one "no such entry" line vanilla has.
         (ContactRefusal::NotOnList, false)
         | (ContactRefusal::NoSuchPlayer, _)
-        | (ContactRefusal::ActorUnavailable, _) => {
-            FriendResult::NotFound
-        }
+        | (ContactRefusal::ActorUnavailable, _) => FriendResult::NotFound,
     }
 }
 

@@ -343,9 +343,7 @@ pub(crate) fn active_cell_creatures(
             if e.owner_guid != 0 {
                 pets.push(e.guid);
             }
-            if global
-                && e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
-            {
+            if global && e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
                 in_combat.push(e.guid);
             }
         }

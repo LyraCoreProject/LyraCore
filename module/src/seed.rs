@@ -1393,12 +1393,14 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
         scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
     });
 
-    ctx.db.game_duel_schedule().insert(crate::duel::DuelSchedule {
-        scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-            crate::duel::DUEL_TICK_MICROS,
-        )),
-    });
+    ctx.db
+        .game_duel_schedule()
+        .insert(crate::duel::DuelSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                crate::duel::DUEL_TICK_MICROS,
+            )),
+        });
 
     // Ground-AoE damage tick every 500ms (118): drives game_ground_area (Consecration/…). 500ms so a
     // 1s/2s area period fires within ~½ tick of due. Areas gate on their own next_tick_micros.
@@ -1937,14 +1939,22 @@ mod tests {
             crate::skill::LEARN_JOURNEYMAN_RIDING_SPELL_ID,
         ];
         let unique: std::collections::BTreeSet<u32> = ids.iter().copied().collect();
-        assert_eq!(unique.len(), ids.len(), "fixture spell ids collide: {ids:?}");
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "fixture spell ids collide: {ids:?}"
+        );
 
         // Creature template + item entry: the same reserved families the other fixtures use.
         assert!(
             (51_000..52_000).contains(&RIDING_TRAINER_ENTRY),
             "the riding trainer must use a reserved 51xxx creature entry"
         );
-        for entry in [TEST_WOLF_ENTRY, PROFESSION_TRAINER_ENTRY, TEST_TAME_BOAR_ENTRY] {
+        for entry in [
+            TEST_WOLF_ENTRY,
+            PROFESSION_TRAINER_ENTRY,
+            TEST_TAME_BOAR_ENTRY,
+        ] {
             assert_ne!(
                 entry, RIDING_TRAINER_ENTRY,
                 "the riding trainer shadows an existing fixture creature"

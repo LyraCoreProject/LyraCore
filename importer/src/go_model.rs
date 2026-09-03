@@ -183,7 +183,10 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     );
 
     if !args.apply {
-        println!("-- DRY RUN: would import {} game_go_model row(s)", rows.len());
+        println!(
+            "-- DRY RUN: would import {} game_go_model row(s)",
+            rows.len()
+        );
         return Ok(());
     }
     if rows.is_empty() {
@@ -214,7 +217,11 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         };
         crate::call_reducer(args, reducer, batch)?;
     }
-    println!("go-models: applied {} row(s) across {} batch(es).", rows.len(), batches.len());
+    println!(
+        "go-models: applied {} row(s) across {} batch(es).",
+        rows.len(),
+        batches.len()
+    );
     Ok(())
 }
 
@@ -243,7 +250,11 @@ mod tests {
             (4,10,40,'Goober',0,0,0,1.0,0,0);";
         let templates = door_templates(dump);
         let entries: Vec<u64> = templates.iter().map(|t| t.entry).collect();
-        assert_eq!(entries, vec![1, 2], "only the DOOR (type 0) and BUTTON (type 1) rows survive");
+        assert_eq!(
+            entries,
+            vec![1, 2],
+            "only the DOOR (type 0) and BUTTON (type 1) rows survive"
+        );
         assert_eq!(templates[0].display_id, 10);
         assert_eq!(templates[1].display_id, 20);
     }
@@ -252,7 +263,8 @@ mod tests {
     fn door_templates_drops_a_row_with_no_classification() {
         // Real cmangos type 25 (FISHINGHOLE) collides with the synthetic GATHER marker and is
         // always dropped by `classify_go_type` — must not appear as a DOOR/BUTTON either.
-        let dump = "INSERT INTO `gameobject_template` VALUES (5,25,50,'Fishing Hole',0,0,0,1.0,0,0);";
+        let dump =
+            "INSERT INTO `gameobject_template` VALUES (5,25,50,'Fishing Hole',0,0,0,1.0,0,0);";
         assert!(door_templates(dump).is_empty());
     }
 
@@ -292,7 +304,10 @@ mod tests {
                     + (v[1] - center[1]).powi(2)
                     + (v[2] - center[2]).powi(2))
                 .sqrt();
-                assert!(d <= radius + 1e-4, "vertex {v:?} lies outside radius {radius}");
+                assert!(
+                    d <= radius + 1e-4,
+                    "vertex {v:?} lies outside radius {radius}"
+                );
             }
         }
         assert!(radius > 0.0);

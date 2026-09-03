@@ -717,7 +717,10 @@ fn aura_moves_sheet_gate() {
     // A combat aura on a field the sheet doesn't render (e.g. hit rating) must NOT trip it.
     assert!(!aura_moves_sheet(A_MOD_COMBAT, COMBAT_HIT as i32));
     // A different aura kind with an AP-looking p0 still must NOT trip (the kind gate is first).
-    assert!(!aura_moves_sheet(A_PERIODIC_DAMAGE, COMBAT_ATTACK_POWER as i32));
+    assert!(!aura_moves_sheet(
+        A_PERIODIC_DAMAGE,
+        COMBAT_ATTACK_POWER as i32
+    ));
 }
 
 /// Cast interrupt-on-damage / CC-break flag decode: `break_auras_on_damage` (which also folds in the

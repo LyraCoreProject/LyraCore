@@ -12,7 +12,7 @@
 //! `apply_enchant_item`/`entry_is_beast` call sites (debug.rs's twins) keep compiling unchanged —
 //! `loot.rs` re-exports this module's public surface.
 
-use spacetimedb::{ReducerContext};
+use spacetimedb::ReducerContext;
 
 use crate::game_creature_template;
 use crate::game_fishing_loot;

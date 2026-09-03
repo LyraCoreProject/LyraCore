@@ -167,6 +167,7 @@ use wow_world_messages::vanilla::{
     ItemQuality,
     Language,
     Level,
+    MSG_AUCTION_HELLO_Client,
     Map,
     Object,
     Race,
@@ -179,13 +180,14 @@ use wow_world_messages::vanilla::{
     TrainingFailureReason,
     WeatherType,
     WorldResult,
+    CMSG_ACTIVATETAXI,
     CMSG_ADD_FRIEND,
     CMSG_ADD_IGNORE,
+    CMSG_ATTACKSTOP,
+    CMSG_ATTACKSWING,
     CMSG_AUCTION_LIST_BIDDER_ITEMS,
     CMSG_AUCTION_LIST_ITEMS,
     CMSG_AUCTION_LIST_OWNER_ITEMS,
-    CMSG_ATTACKSTOP,
-    CMSG_ATTACKSWING,
     CMSG_AUTH_SESSION,
     CMSG_AUTOBANK_ITEM,
     CMSG_AUTOEQUIP_ITEM,
@@ -233,13 +235,11 @@ use wow_world_messages::vanilla::{
     CMSG_SETSHEATHED,
     CMSG_SET_SELECTION,
     CMSG_SPIRIT_HEALER_ACTIVATE,
-    CMSG_ACTIVATETAXI,
     CMSG_TAXINODE_STATUS_QUERY,
     CMSG_TAXIQUERYAVAILABLENODES,
     CMSG_TRAINER_BUY_SPELL,
     CMSG_TRAINER_LIST,
     CMSG_WHO,
-    MSG_AUCTION_HELLO_Client,
     // Cross-map teleport: the client's world-port-finished ack.
     MSG_MOVE_WORLDPORT_ACK,
     SMSG_WEATHER,
@@ -2906,11 +2906,7 @@ impl TaxiActionStore for InMemoryStore {
         Ok(self.taxi_status)
     }
 
-    fn open_taxi(
-        &self,
-        character_guid: u64,
-        npc_guid: u64,
-    ) -> Result<Option<codec::TaxiMapView>> {
+    fn open_taxi(&self, character_guid: u64, npc_guid: u64) -> Result<Option<codec::TaxiMapView>> {
         self.taxi_calls
             .lock()
             .unwrap()
@@ -5488,7 +5484,10 @@ fn item_query_preserves_imported_eligibility_through_the_encrypted_world_session
 
     assert_eq!(found.allowed_class.as_int(), template.allowed_class);
     assert_eq!(found.allowed_race.as_int(), template.allowed_race);
-    assert_eq!(u32::from(found.required_skill.as_int()), template.required_skill);
+    assert_eq!(
+        u32::from(found.required_skill.as_int()),
+        template.required_skill
+    );
     assert_eq!(found.required_skill_rank, template.required_skill_rank);
     assert_eq!(
         u32::from(found.required_faction.as_int()),
@@ -8006,7 +8005,10 @@ fn trainer_buy_rank_upgrade_supersedes_the_previous_rank_spell() {
                 m.new_spell_id, 1233,
                 "first wire slot carries the OLD rank (cmangos order)"
             );
-            assert_eq!(m.old_spell_id, 1234, "second wire slot carries the NEW rank");
+            assert_eq!(
+                m.old_spell_id, 1234,
+                "second wire slot carries the NEW rank"
+            );
         }
         other => panic!("expected SMSG_SUPERCEDED_SPELL, got {other}"),
     }
@@ -8345,10 +8347,7 @@ fn taxi_status_query_returns_the_persisted_bit_without_opening() {
         }
         other => panic!("expected SMSG_TAXINODE_STATUS, got {other}"),
     }
-    assert_eq!(
-        *store.taxi_calls.lock().unwrap(),
-        vec![("status", 1, 90)]
-    );
+    assert_eq!(*store.taxi_calls.lock().unwrap(), vec![("status", 1, 90)]);
     drop(client);
     server.join().unwrap();
 }

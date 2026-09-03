@@ -10,8 +10,8 @@ use super::*;
 // a player context, decides refusal-versus-fatal itself, and returns the outbound batch for the
 // world session to send, so the family can be tested without a socket.
 
-mod bank;
 mod auction;
+mod bank;
 mod cast;
 mod char;
 mod combat;
@@ -28,16 +28,15 @@ mod trainer;
 mod vendor;
 mod weather;
 
-pub(crate) use bank::handle_bank;
 pub(crate) use auction::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action,
     AuctionActionOutcome, AuctionActionPlayer, AuctionActionStore, AuctionBrowseRequest,
     AuctionPage, AuctionQuery, CreateAuctionOutcome, CreateAuctionRequest, PlaceBidOutcome,
-    PlaceBidRequest,
-    CMSG_AUCTION_LIST_ITEMS_OPCODE,
+    PlaceBidRequest, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 #[cfg(test)]
 pub(crate) use auction::{AuctionEntity, AuctionHousePolicy, AuctionInteraction};
+pub(crate) use bank::handle_bank;
 pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use char::handle_char;
 pub(crate) use combat::handle_combat;
@@ -55,10 +54,12 @@ pub(crate) use melee::{
 };
 pub(crate) use query::handle_query;
 pub(crate) use quest::{
-    dispatch_quest_action, quest_giver_menu, QuestActionOutcome, QuestActionPlayer, QuestActionStore,
+    dispatch_quest_action, quest_giver_menu, QuestActionOutcome, QuestActionPlayer,
+    QuestActionStore,
 };
 pub(crate) use taxi::{
-    dispatch_taxi_action, queue_reply_then_arm, TaxiActionOutcome, TaxiActionPlayer, TaxiActionStore,
+    dispatch_taxi_action, queue_reply_then_arm, TaxiActionOutcome, TaxiActionPlayer,
+    TaxiActionStore,
 };
 pub(crate) use trade::handle_trade;
 pub(crate) use trainer::{handle_trainer, TrainerBuyOutcome};

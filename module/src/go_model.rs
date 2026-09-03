@@ -48,9 +48,15 @@ fn parse_row(row: &str) -> Result<(u32, f32, f32, Vec<u8>), String> {
     if f.len() != 4 {
         return Err(format!("go_model row needs 4 fields, got {}", f.len()));
     }
-    let entry = f[0].parse::<u32>().map_err(|_| format!("bad entry: {}", f[0]))?;
-    let scale = f[1].parse::<f32>().map_err(|_| format!("bad scale: {}", f[1]))?;
-    let radius = f[2].parse::<f32>().map_err(|_| format!("bad radius: {}", f[2]))?;
+    let entry = f[0]
+        .parse::<u32>()
+        .map_err(|_| format!("bad entry: {}", f[0]))?;
+    let scale = f[1]
+        .parse::<f32>()
+        .map_err(|_| format!("bad scale: {}", f[1]))?;
+    let radius = f[2]
+        .parse::<f32>()
+        .map_err(|_| format!("bad radius: {}", f[2]))?;
     let blob = hex_decode(f[3])?;
     lyracore_shared::vmap::decode(&blob)
         .map_err(|err| format!("invalid go_model blob: {err:?}"))?;
@@ -171,7 +177,11 @@ mod tests {
         h.import(&batch).unwrap();
         let after_second: Vec<_> = h.rows.keys().copied().collect();
         assert_eq!(after_first, after_second);
-        assert_eq!(h.rows.len(), 2, "re-importing the same batch must not duplicate rows");
+        assert_eq!(
+            h.rows.len(),
+            2,
+            "re-importing the same batch must not duplicate rows"
+        );
     }
 
     #[test]
@@ -180,7 +190,10 @@ mod tests {
         h.import(&packed_row(1, 1.0, 2.0)).unwrap();
         h.append(&packed_row(1, 1.0, 5.0)).unwrap(); // corrected re-extract, same entry
         assert_eq!(h.rows.len(), 1);
-        assert_eq!(h.rows[&1].1, 5.0, "the newer radius must win, not error or duplicate");
+        assert_eq!(
+            h.rows[&1].1, 5.0,
+            "the newer radius must win, not error or duplicate"
+        );
     }
 
     #[test]
@@ -188,7 +201,11 @@ mod tests {
         let mut h = GoModelHarness::default();
         h.import(&packed_row(1, 1.0, 2.0)).unwrap();
         h.import(&packed_row(2, 1.0, 3.0)).unwrap();
-        assert_eq!(h.rows.len(), 1, "import (not append) must clear the prior batch");
+        assert_eq!(
+            h.rows.len(),
+            1,
+            "import (not append) must clear the prior batch"
+        );
         assert!(h.rows.contains_key(&2));
         assert!(!h.rows.contains_key(&1));
     }

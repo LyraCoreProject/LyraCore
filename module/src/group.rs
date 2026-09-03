@@ -489,10 +489,7 @@ fn checked_group_membership(
 /// all; [`GroupRefusal::NotLeader`] if it does but isn't the leader. `invite_core_on` treats
 /// `NotInGroup` as an ALLOWED case rather than propagating it — starting a brand-new group (where
 /// the inviter becomes leader) is fine; see its call site.
-fn led_group_of(
-    ctx: &ReducerContext,
-    guid: u64,
-) -> Result<(GroupMember, Group), GroupOpError> {
+fn led_group_of(ctx: &ReducerContext, guid: u64) -> Result<(GroupMember, Group), GroupOpError> {
     let (m, group) = checked_group_membership(ctx, guid)?.ok_or(GroupRefusal::NotInGroup)?;
     if group.leader_guid != guid {
         return Err(GroupRefusal::NotLeader.into());
@@ -546,13 +543,12 @@ pub(crate) fn invite_core(
     inviter_guid: u64,
     target_guid: u64,
 ) -> Result<(), String> {
-    invite_core_on(ctx, Plane::Shard, inviter_guid, target_guid)
-        .map_err(|error| {
-            group_op_error(
-                error,
-                &format!("{inviter_guid} could not invite {target_guid}"),
-            )
-        })
+    invite_core_on(ctx, Plane::Shard, inviter_guid, target_guid).map_err(|error| {
+        group_op_error(
+            error,
+            &format!("{inviter_guid} could not invite {target_guid}"),
+        )
+    })
 }
 
 fn invite_core_on(
@@ -646,13 +642,12 @@ fn invite_core_on(
 /// The identity-free accept core: shared by `gw::gw_accept_group_invite` and any server-driven
 /// acceptor (a playerbot's auto-accept hook calls this with the bot's guid).
 pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Result<(), String> {
-    accept_invite_on(ctx, Plane::Shard, acceptor_guid)
-        .map_err(|error| {
-            group_op_error(
-                error,
-                &format!("{acceptor_guid} could not accept its invite"),
-            )
-        })
+    accept_invite_on(ctx, Plane::Shard, acceptor_guid).map_err(|error| {
+        group_op_error(
+            error,
+            &format!("{acceptor_guid} could not accept its invite"),
+        )
+    })
 }
 
 fn accept_invite_on(
@@ -775,12 +770,8 @@ fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), Gro
 
 /// The identity-free leave core — the body `group_leave` used to inline.
 pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), String> {
-    leave_group_on(ctx, leaver_guid).map_err(|error| {
-        group_op_error(
-            error,
-            &format!("{leaver_guid} could not leave its party"),
-        )
-    })
+    leave_group_on(ctx, leaver_guid)
+        .map_err(|error| group_op_error(error, &format!("{leaver_guid} could not leave its party")))
 }
 
 fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), GroupOpError> {
@@ -811,8 +802,8 @@ fn uninvite_on(
     target_guid: u64,
 ) -> Result<(), GroupOpError> {
     let (m, _group) = led_group_of(ctx, leader_guid)?;
-    let (target, _target_group) = checked_group_membership(ctx, target_guid)?
-        .ok_or(GroupRefusal::TargetNotInGroup)?;
+    let (target, _target_group) =
+        checked_group_membership(ctx, target_guid)?.ok_or(GroupRefusal::TargetNotInGroup)?;
     if target.group_id != m.group_id {
         return Err(GroupRefusal::TargetNotInGroup.into());
     }
@@ -853,8 +844,8 @@ fn set_loot_method_on(
         return Err(GroupRefusal::InvalidLootRules.into());
     }
     let resolved_master = if loot_setting == loot_method::MASTER {
-        let (target, _target_group) = checked_group_membership(ctx, master_guid)?
-            .ok_or(GroupRefusal::TargetNotInGroup)?;
+        let (target, _target_group) =
+            checked_group_membership(ctx, master_guid)?.ok_or(GroupRefusal::TargetNotInGroup)?;
         if target.group_id != m.group_id {
             return Err(GroupRefusal::TargetNotInGroup.into());
         }
@@ -1037,9 +1028,7 @@ pub fn realm_group_op(
         realm_op::LOOT_METHOD => set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b),
         other => return Err(format!("unknown realm group op {other}")),
     };
-    ran.map_err(|error| {
-        group_op_error(error, &format!("realm group op {op} for {actor_guid}"))
-    })
+    ran.map_err(|error| group_op_error(error, &format!("realm group op {op} for {actor_guid}")))
 }
 
 /// Replace this database's MIRROR of one party with realm-core's authoritative roster.
