@@ -3711,8 +3711,6 @@ fn template_is_importable(row: &[String]) -> bool {
     field(row, ct::UNIT_FLAGS).parse::<u32>().unwrap_or(0) & UNIT_FLAG_NOT_SELECTABLE == 0
 }
 
-// ETL row shape: one `game_creature_spawn` row per tuple, in the packed-payload column order.
-#[allow(clippy::type_complexity)]
 /// Build the full `--dump` ETL plan (work-item 216's `--family` split lives entirely in here, via
 /// `family_active` gates around each family's DELETE+INSERT block): parses the cmangos dump, filters
 /// the content slice, maps every family's rows, and returns the ready-to-apply plan. Pure w.r.t. the
@@ -3740,6 +3738,256 @@ fn build_dump_plan(
         eprintln!("  whole map: {map}");
     }
 
+    let spawns = collect_creature_spawns(dump, &scope);
+    let ScopeEntries {
+        entries,
+        eventai,
+        eventai_manifest,
+    } = resolve_scope_entries(dump, args, &scope, &spawns)?;
+    let CreatureTemplates {
+        templates,
+        creature_loot_ids,
+        creature_pickpocket_ids,
+        creature_skin_ids,
+        excluded_entries,
+        class_trainer_count,
+    } = build_creature_templates(dump, &entries, display_scales);
+    let (creature_casts, creature_rotation_rows) = build_creature_cast_rows(dump, &entries);
+    let SpawnPayload {
+        guid_of,
+        packed_spawns,
+        excluded_count,
+    } = build_packed_spawn_payload(&spawns, &excluded_entries);
+    let waypoints = build_waypoint_rows(dump, &spawns, &guid_of);
+
+    eprintln!(
+        "mapped: {} templates ({class_trainer_count} class-gated trainers), {} spawns ({} excluded), {} waypoints",
+        templates.len(),
+        spawns.len() - excluded_count,
+        excluded_count,
+        waypoints.len()
+    );
+
+    let go_spawns = collect_gameobject_spawns(dump, &scope);
+    let (go_template_rows, go_trap_rows, chest_loot_ids_used) =
+        gameobject_template_rows(&go_spawns);
+    let trainer_rows = build_trainer_spell_rows(dump, &entries, profession_tier_values);
+
+    // Quests: map quest_template + the giver-relation tables (creature AND gameobject) for quests given
+    // by an in-slice giver. Built BEFORE the item ETL so the reward item entries can be folded into the
+    // item-template load (a turn-in's reward grant joins game_item_template).
+    // Obtainability gate (ZERO-STUCK-QUESTS): the set of items that drop from in-slice creatures, so
+    // build_quests only emits a COLLECT objective for a ReqItem that is obtainable (drops OR is the
+    // quest's SrcItem) — else the quest auto-completes instead of soft-locking.
+    // 042: obtainable = creature drops ∪ in-slice GO (chest) loot ∪ in-slice vendor stock. The old
+    // creature-drops-only gate skipped GO/vendor-sourced ReqItems entirely → an EMPTY objective set →
+    // quest_is_complete() == true on accept → free turn-in reward (q3904 grapes / q5545 wood via GO
+    // loot, q3861 kodo feed via vendor — all three obtainable in-slice now, verified live).
+    let mut obtainable_items = creature_drop_item_set(dump, &creature_loot_ids);
+    obtainable_items.extend(gameobject_loot_item_set(dump, &go_spawns.used_go));
+    obtainable_items.extend(vendor_stock_item_set(dump, &entries));
+    let quests = build_quests(
+        dump,
+        &entries,
+        &go_spawns.used_go,
+        &go_spawns.goober_entries,
+        &obtainable_items,
+    );
+    eprintln!(
+        "mapped: {} quests, {} text, {} objectives, {} cast objectives, {} reward items, {} choice rewards, \
+         {} creature giver relations, {} gameobject giver relations, {} chained (next_quest_id>0) [V], \
+         {} timed (limit_time>0) [V]",
+        quests.templates.len(), quests.texts.len(), quests.objectives.len(),
+        quests.cast_objectives.len(), quests.reward_items.len(), quests.reward_choices.len(), quests.relations.len(),
+        quests.go_relations.len(), quests.chained_count, quests.timed_count,
+    );
+
+    // P4: real item templates + creature loot for the imported creatures (clear+reload, like above).
+    // game_item_template is wiped+reloaded with the loot-referenced set ∪ the starter loadout ∪ quest
+    // reward items ∪ quest COLLECT (ReqItem) items (so the login grant keeps a real weapon, turn-ins can
+    // deliver, AND every collect-quest item has a template); game_creature_loot is fully importer-owned.
+    let extra_item_entries: std::collections::HashSet<u64> = quests
+        .reward_item_entries
+        .iter()
+        .chain(quests.req_item_entries.iter())
+        .copied()
+        .collect();
+    let (item_rows, loot_rows, vendor_rows) =
+        build_items_and_loot(dump, &creature_loot_ids, &entries, &extra_item_entries);
+    eprintln!(
+        "mapped: {} item_templates, {} creature_loot rows, {} npc_vendor rows ({} creatures with loot)",
+        item_rows.len(), loot_rows.len(), vendor_rows.len(), creature_loot_ids.len()
+    );
+    let LootFamilyRows {
+        pickpocket_rows,
+        skinning_rows,
+        gameobject_loot_rows,
+        fishing_rows,
+    } = build_loot_family_rows(
+        dump,
+        &creature_pickpocket_ids,
+        &creature_skin_ids,
+        &chest_loot_ids_used,
+    );
+    // Gossip menus + NPC text + menu options (work-item 217): map each in-box gossip NPC's
+    // creature_entry to the npc_text id shown in SMSG_GOSSIP_MESSAGE, import the resolved greeting
+    // strings (all 8 weighted slots, not just the first), and import its clickable menu options
+    // (vendor/innkeeper/trainer/plain-gossip, quest-status conditions folded). Four-table clear+reload.
+    let gossip = build_gossip_sql(dump, &entries);
+
+    let content = MappedContent {
+        templates: &templates,
+        waypoints: &waypoints,
+        item_rows: &item_rows,
+        loot_rows: &loot_rows,
+        vendor_rows: &vendor_rows,
+        pickpocket_rows: &pickpocket_rows,
+        skinning_rows: &skinning_rows,
+        gameobject_loot_rows: &gameobject_loot_rows,
+        fishing_rows: &fishing_rows,
+        gossip: &gossip,
+        quests: &quests,
+        go_template_rows: &go_template_rows,
+        go_trap_rows: &go_trap_rows,
+        trainer_rows: &trainer_rows,
+        creature_casts: &creature_casts,
+        creature_rotation_rows: &creature_rotation_rows,
+        eventai: &eventai,
+    };
+    // 5) static content (no Timestamp columns) → plain SQL clear+reload, family by family, in the
+    //    order the tables must land. The spawns + live-entity reset are NOT here — they go through
+    //    the `import_creature_spawns` reducer (step 6), which clears every CREATURE entity + spawn
+    //    and loads the new spawns with a valid `ctx.timestamp`.
+    let mut stmts: Vec<String> = Vec::new();
+    push_world_content_statements(args, content, &mut stmts);
+    push_quest_and_gameobject_statements(args, content, &mut stmts);
+    push_creature_behaviour_statements(args, content, &mut stmts);
+    let (globals_row_count, spellmeta_row_count) = push_global_statements(args, dump, &mut stmts)?;
+
+    // The spawn payload can hold ~2k rows for a full zone — more than one `spacetime call` string arg
+    // takes — so split it into batches. Batch 0 goes to `import_creature_spawns` (clears the live
+    // roster + threat ONCE, then loads); every later batch goes to `import_creature_spawns_append`
+    // (load only), so the clear happens exactly once and every batch survives.
+    let spawn_rows: Vec<&str> = packed_spawns.split(';').filter(|r| !r.is_empty()).collect();
+    let batches: Vec<String> = spawn_rows
+        .chunks(SPAWN_BATCH)
+        .map(|c| c.join(";"))
+        .collect();
+    let go_batches: Vec<String> = go_spawns
+        .go_packed_rows
+        .chunks(SPAWN_BATCH)
+        .map(|c| c.join(";"))
+        .collect();
+
+    let stamps = family_stamps(args, content, globals_row_count, spellmeta_row_count);
+
+    let eventai_definition_count = eventai.definition_count();
+    let eventai_instruction_count = eventai.instruction_count();
+    let eventai_definition_batches = eventai.definition_batches;
+    let eventai_relay_definition_count = eventai.relay_definition_rows.len() as u64;
+    let eventai_relay_definition_batches = eventai.relay_definition_batches;
+
+    Ok(DumpPlan {
+        stmts,
+        spawn_row_count: spawn_rows.len(),
+        go_row_count: go_spawns.go_packed_rows.len(),
+        spawn_batches: batches,
+        go_batches,
+        eventai_definition_batches,
+        eventai_relay_definition_batches,
+        eventai_definition_count,
+        eventai_relay_definition_count,
+        eventai_instruction_count,
+        eventai_manifest,
+        stamps,
+    })
+}
+
+/// ETL row shape: one `game_creature_spawn` row per tuple, in the packed-payload column order —
+/// db_guid, entry, x, y, z, orientation, movement_type, respawn_secs, map.
+type CreatureSpawnRow = (u64, u64, f64, f64, f64, f64, u8, u32, i64);
+
+/// The creature template entries this run imports, with the EventAI plan that grew them.
+struct ScopeEntries {
+    entries: std::collections::HashSet<u64>,
+    eventai: eventai::EventAiPlan,
+    /// The rendered Compatibility Manifest — `None` when the creature-ai family is not part of the run.
+    eventai_manifest: Option<String>,
+}
+
+/// The `game_creature_template` rows plus the per-entry loot ids and exclusions every later family reads.
+struct CreatureTemplates {
+    templates: Vec<String>,
+    creature_loot_ids: std::collections::HashMap<u64, u64>,
+    creature_pickpocket_ids: std::collections::HashMap<u64, u64>,
+    creature_skin_ids: std::collections::HashMap<u64, u64>,
+    excluded_entries: std::collections::HashSet<u64>,
+    class_trainer_count: usize,
+}
+
+/// The packed `import_creature_spawns` payload and the db_guid → world guid map the waypoints need.
+struct SpawnPayload {
+    guid_of: std::collections::HashMap<u64, u64>,
+    packed_spawns: String,
+    excluded_count: usize,
+}
+
+/// One imported `gameobject_template`, reduced to the columns the per-type row builder needs.
+struct GoMeta {
+    stored_type: u8,
+    disp: u32,
+    name: String,
+    data0: u32,
+    data1: u32,
+    trap_spell_id: u32,
+    trap_cooldown_secs: u32,
+    size: f32,
+}
+
+/// The gameobject spawns the World Import Scope keeps, with the template metadata they resolved against.
+struct GameobjectSpawns {
+    go_meta: std::collections::HashMap<u64, GoMeta>,
+    dropped_type25: Vec<u64>,
+    goober_entries: std::collections::HashSet<u64>,
+    go_packed_rows: Vec<String>,
+    used_go: std::collections::HashSet<u64>,
+}
+
+/// The four loot families that hang off an imported creature or chest.
+struct LootFamilyRows {
+    pickpocket_rows: Vec<String>,
+    skinning_rows: Vec<String>,
+    gameobject_loot_rows: Vec<String>,
+    fishing_rows: Vec<String>,
+}
+
+/// Every mapped row set the static-content SQL blocks and the provenance stamps read. Borrowed, so
+/// the push helpers below stay a view over `build_dump_plan`'s own values.
+#[derive(Clone, Copy)]
+struct MappedContent<'a> {
+    templates: &'a [String],
+    waypoints: &'a [String],
+    item_rows: &'a [String],
+    loot_rows: &'a [String],
+    vendor_rows: &'a [String],
+    pickpocket_rows: &'a [String],
+    skinning_rows: &'a [String],
+    gameobject_loot_rows: &'a [String],
+    fishing_rows: &'a [String],
+    gossip: &'a GossipEtl,
+    quests: &'a QuestEtl,
+    go_template_rows: &'a [String],
+    go_trap_rows: &'a [String],
+    trainer_rows: &'a [String],
+    creature_casts: &'a [String],
+    creature_rotation_rows: &'a [String],
+    eventai: &'a eventai::EventAiPlan,
+}
+
+/// Every creature spawn the World Import Scope keeps: the cmangos `creature` rows inside the scope,
+/// with id=0 pool slots resolved through `creature_spawn_entry` and `spawn_group` MaxCount caps
+/// applied.
+fn collect_creature_spawns(dump: &str, scope: &WorldImportScope) -> Vec<CreatureSpawnRow> {
     // 0b) creature_spawn_entry: resolves id=0 pool slots to concrete creature_template entries.
     // cmangos places id=0 in `creature` for spawn-pool points; the real entry is in creature_spawn_entry.
     // Each guid may map to multiple entries (random pick at runtime). We pick the first for determinism.
@@ -3772,7 +4020,7 @@ fn build_dump_plan(
         let raw_entry: u64 = field(&row, cr::ID).parse().unwrap_or(0);
         // A forced entry bypasses bounded geometry but not the scope's map fence. Keeping the spawn
         // makes its entry flow into every creature-scoped family below.
-        if !creature_row_kept_in_scope(&scope, map, x, y, z, raw_entry) {
+        if !creature_row_kept_in_scope(scope, map, x, y, z, raw_entry) {
             continue;
         }
         // cmangos uses id=0 for random spawn-POOL slots; the concrete entry is in creature_spawn_entry.
@@ -3871,6 +4119,18 @@ fn build_dump_plan(
         }
     }
 
+    spawns
+}
+
+/// The creature template entries this run imports, and the EventAI plan built against them. Accepted
+/// EventAI summons force their summoned templates into the entry set, to a fixpoint, so a summoned-only
+/// creature still gets a template.
+fn resolve_scope_entries(
+    dump: &str,
+    args: &Args,
+    scope: &WorldImportScope,
+    spawns: &[CreatureSpawnRow],
+) -> Result<ScopeEntries> {
     let mut entries: std::collections::HashSet<u64> = spawns.iter().map(|s| s.1).collect();
     // PET/SUMMON templates (Tier 3b): a summoned pet (Warlock's Imp = entry 416) has NO world spawn, so it
     // is never in the geographic slice above — yet its game_creature_template row MUST exist for the
@@ -3953,6 +4213,20 @@ fn build_dump_plan(
         entries.len()
     );
 
+    Ok(ScopeEntries {
+        entries,
+        eventai,
+        eventai_manifest,
+    })
+}
+
+/// The `game_creature_template` rows for the scope's entries. Also collects the loot ids and the
+/// excluded (`UNIT_FLAG_NOT_SELECTABLE`) entries the spawn payload and the loot families read.
+fn build_creature_templates(
+    dump: &str,
+    entries: &std::collections::HashSet<u64>,
+    display_scales: &Option<std::collections::HashMap<u32, f32>>,
+) -> CreatureTemplates {
     // 2) templates for those entries.
     let mut templates: Vec<String> = Vec::new();
     // entry → LootId for the imported creatures; drives the item + loot ETL below (0 = no loot table).
@@ -4021,7 +4295,7 @@ fn build_dump_plan(
             }
         };
         let faction_template: u32 = field(&row, ct::FACTION).parse().unwrap_or(0);
-        // Per-creature melee damage (parity #7): cmangos MinMeleeDmg/MaxMeleeDmg are floats; round to int
+        // Per-creature melee damage: cmangos MinMeleeDmg/MaxMeleeDmg are floats; round to int
         // (vanilla creature swings are whole-number ranges in practice). 0 stays 0 → the module's
         // swing_range_ctx falls back to the flat CREATURE_MELEE range for that creature.
         let dmg_min: u32 = field(&row, ct::MIN_MELEE_DMG)
@@ -4075,6 +4349,21 @@ fn build_dump_plan(
         ));
     }
 
+    CreatureTemplates {
+        templates,
+        creature_loot_ids,
+        creature_pickpocket_ids,
+        creature_skin_ids,
+        excluded_entries,
+        class_trainer_count,
+    }
+}
+
+/// The legacy single-spell cast rows and the multi-spell rotation rows for the scope's casters.
+fn build_creature_cast_rows(
+    dump: &str,
+    entries: &std::collections::HashSet<u64>,
+) -> (Vec<String>, Vec<String>) {
     // 2b) caster-mob cast rows (game_creature_cast, LEGACY) + rotation rows (game_creature_spell, rank 20).
     //
     //   LEGACY (game_creature_cast): one spell per entry (spell1), used by pass_cast as a fallback ONLY when
@@ -4161,6 +4450,14 @@ fn build_dump_plan(
             .count(),
     );
 
+    (creature_casts, creature_rotation_rows)
+}
+
+/// The packed spawn payload the `import_creature_spawns` reducer loads.
+fn build_packed_spawn_payload(
+    spawns: &[CreatureSpawnRow],
+    excluded_entries: &std::collections::HashSet<u64>,
+) -> SpawnPayload {
     // 3) spawn payload for the `import_creature_spawns` reducer — NOT SQL. `game_creature_spawn` has
     //    Timestamp columns (respawn_at/despawn_at) and SpacetimeDB 2.5 SQL has no Timestamp literal,
     //    so spawns load through a reducer (which stamps `ctx.timestamp`). Rows `;`-separated, fields
@@ -4200,6 +4497,20 @@ fn build_dump_plan(
         .collect::<Vec<_>>()
         .join(";");
 
+    SpawnPayload {
+        guid_of,
+        packed_spawns,
+        excluded_count,
+    }
+}
+
+/// The `game_creature_waypoint` rows for the imported spawns: guid-keyed routes first, then the
+/// entry-keyed template routes expanded onto every waypoint-typed spawn without one.
+fn build_waypoint_rows(
+    dump: &str,
+    spawns: &[CreatureSpawnRow],
+    guid_of: &std::collections::HashMap<u64, u64>,
+) -> Vec<String> {
     // 4) waypoints for the imported spawns (id assigned by a counter — clear+reload is idempotent).
     let mut waypoints: Vec<String> = Vec::new();
     let mut wp_id: u64 = 1;
@@ -4255,7 +4566,7 @@ fn build_dump_plan(
         }
         let mut tmpl_spawns = 0usize;
         if !tmpl_paths.is_empty() {
-            for (db_guid, entry, _x, _y, _z, _o, mt, _rs, _map) in &spawns {
+            for (db_guid, entry, _x, _y, _z, _o, mt, _rs, _map) in spawns {
                 if *mt != 2 || direct_wp_guids.contains(db_guid) {
                     continue; // not waypoint-typed, or already routed by direct rows
                 }
@@ -4278,35 +4589,12 @@ fn build_dump_plan(
         }
     }
 
-    eprintln!(
-        "mapped: {} templates ({class_trainer_count} class-gated trainers), {} spawns ({} excluded), {} waypoints",
-        templates.len(),
-        spawns.len() - excluded_count,
-        excluded_count,
-        waypoints.len()
-    );
+    waypoints
+}
 
-    // 5) static content (no Timestamp columns) → plain SQL clear+reload. The spawns + live-entity
-    //    reset are NOT here — they go through the `import_creature_spawns` reducer (step 6), which
-    //    clears every CREATURE entity + spawn and loads the new spawns with a valid `ctx.timestamp`.
-    //    So we only clear/reload templates + waypoints; the reducer owns the rest.
-    // family gate (work-item 216): `--family creatures` reloads this block (+ the spawn/waypoint
-    // reducer batches below) alone; every other family's block skips it. `--family` absent → every
-    // `family_active` call below is unconditionally true, so the full run is byte-identical to
-    // pre-216 behavior — see the full-run parity fixture test.
-    let mut stmts: Vec<String> = Vec::new();
-    if family_active(args, "creatures") {
-        stmts.push("DELETE FROM game_creature_waypoint WHERE id > 0".into());
-        stmts.push("DELETE FROM game_creature_template WHERE entry > 0".into());
-        push_insert(&mut stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", &templates);
-        push_insert(
-            &mut stmts,
-            "game_creature_waypoint",
-            "id,creature_guid,x,y,z",
-            &waypoints,
-        );
-    }
-
+/// The gameobject spawns the World Import Scope keeps, packed for the `import_gameobjects` reducer,
+/// with the classified template metadata they resolved against.
+fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> GameobjectSpawns {
     // Gameobjects (work-item 211 widened import): EVERY in-scope cmangos `gameobject_template` type
     // now imports (template + spawn) — previously only an allowlisted subset (GOOBER/curated GATHER/
     // curated CHEST/QUESTGIVER) did. `classify_go_type` decides the stored `type_id` (or drops the row
@@ -4314,16 +4602,6 @@ fn build_dump_plan(
     // load via the import_gameobjects reducer (game_gameobject has a Timestamp); the packed spawn row
     // carries an `initial_state` field (work-item 211) so a DOOR/BUTTON can spawn already-open.
     let go_tmpls = parse_table(dump, "gameobject_template");
-    struct GoMeta {
-        stored_type: u8,
-        disp: u32,
-        name: String,
-        data0: u32,
-        data1: u32,
-        trap_spell_id: u32,
-        trap_cooldown_secs: u32,
-        size: f32,
-    }
     let mut dropped_type25: Vec<u64> = Vec::new();
     let go_meta: std::collections::HashMap<u64, GoMeta> = go_tmpls
         .iter()
@@ -4400,7 +4678,7 @@ fn build_dump_plan(
         }
         let db_guid: u64 = field(&row, go::GUID).parse().unwrap_or(0);
         let o: f64 = field(&row, go::O).parse().unwrap_or(0.0);
-        // The spawn quaternion (#515) — carried verbatim; 0,0,0,0 (a row with no rotation columns,
+        // The spawn quaternion — carried verbatim; 0,0,0,0 (a row with no rotation columns,
         // or a genuinely-identity spawn) is a valid packed value, not a parse failure, so the
         // fallback is `0.0` exactly like every other numeric field this loop parses.
         let rot0: f64 = field(&row, go::ROT0).parse().unwrap_or(0.0);
@@ -4434,6 +4712,26 @@ fn build_dump_plan(
         let count = go_whole_map_counts.get(&map).copied().unwrap_or(0);
         eprintln!("filter: whole map {map} → {count} gameobject spawns");
     }
+
+    GameobjectSpawns {
+        go_meta,
+        dropped_type25,
+        goober_entries,
+        go_packed_rows,
+        used_go,
+    }
+}
+
+/// The `game_gameobject_template` + `game_gameobject_trap` rows for the spawned gameobjects, and the
+/// CHEST loot ids they reference.
+fn gameobject_template_rows(spawns: &GameobjectSpawns) -> (Vec<String>, Vec<String>, Vec<u32>) {
+    let GameobjectSpawns {
+        go_meta,
+        dropped_type25,
+        go_packed_rows,
+        used_go,
+        ..
+    } = spawns;
     // Template rows for the GOs actually spawned, split by type (`go_template_row`) — a SQL INSERT must
     // name EVERY column (#[default] is NOT applied on INSERT, only on migration — slice-5 data-loss
     // lesson). Also builds the per-type coverage histogram + the CHEST lootId set (widened to EVERY
@@ -4508,6 +4806,16 @@ fn build_dump_plan(
         );
     }
 
+    (go_template_rows, go_trap_rows, chest_loot_ids_used)
+}
+
+/// The `game_trainer_spell` rows for the scope's trainers: every cmangos offering, plus the
+/// synthesized profession learn-rows.
+fn build_trainer_spell_rows(
+    dump: &str,
+    entries: &std::collections::HashSet<u64>,
+    profession_tier_values: &Option<std::collections::HashMap<u32, [u16; 4]>>,
+) -> Vec<String> {
     // Trainer spell lists: npc_trainer rows for the SPAWNED trainer creatures → game_trainer_spell
     // (cmangos npc_trainer is all DIRECT entries — no template indirection). Lights up the trainer system.
     // Two kinds of row are emitted:
@@ -4583,64 +4891,17 @@ fn build_dump_plan(
         trainer_rows.len(), trainer_lines.len(),
     );
 
-    // Quests: map quest_template + the giver-relation tables (creature AND gameobject) for quests given
-    // by an in-slice giver. Built BEFORE the item ETL so the reward item entries can be folded into the
-    // item-template load (a turn-in's reward grant joins game_item_template).
-    // Obtainability gate (ZERO-STUCK-QUESTS): the set of items that drop from in-slice creatures, so
-    // build_quests only emits a COLLECT objective for a ReqItem that is obtainable (drops OR is the
-    // quest's SrcItem) — else the quest auto-completes instead of soft-locking.
-    // 042: obtainable = creature drops ∪ in-slice GO (chest) loot ∪ in-slice vendor stock. The old
-    // creature-drops-only gate skipped GO/vendor-sourced ReqItems entirely → an EMPTY objective set →
-    // quest_is_complete() == true on accept → free turn-in reward (q3904 grapes / q5545 wood via GO
-    // loot, q3861 kodo feed via vendor — all three obtainable in-slice now, verified live).
-    let mut obtainable_items = creature_drop_item_set(dump, &creature_loot_ids);
-    obtainable_items.extend(gameobject_loot_item_set(dump, &used_go));
-    obtainable_items.extend(vendor_stock_item_set(dump, &entries));
-    let quests = build_quests(dump, &entries, &used_go, &goober_entries, &obtainable_items);
-    eprintln!(
-        "mapped: {} quests, {} text, {} objectives, {} cast objectives, {} reward items, {} choice rewards, \
-         {} creature giver relations, {} gameobject giver relations, {} chained (next_quest_id>0) [V], \
-         {} timed (limit_time>0) [V]",
-        quests.templates.len(), quests.texts.len(), quests.objectives.len(),
-        quests.cast_objectives.len(), quests.reward_items.len(), quests.reward_choices.len(), quests.relations.len(),
-        quests.go_relations.len(), quests.chained_count, quests.timed_count,
-    );
+    trainer_rows
+}
 
-    // P4: real item templates + creature loot for the imported creatures (clear+reload, like above).
-    // game_item_template is wiped+reloaded with the loot-referenced set ∪ the starter loadout ∪ quest
-    // reward items ∪ quest COLLECT (ReqItem) items (so the login grant keeps a real weapon, turn-ins can
-    // deliver, AND every collect-quest item has a template); game_creature_loot is fully importer-owned.
-    let extra_item_entries: std::collections::HashSet<u64> = quests
-        .reward_item_entries
-        .iter()
-        .chain(quests.req_item_entries.iter())
-        .copied()
-        .collect();
-    let (item_rows, loot_rows, vendor_rows) =
-        build_items_and_loot(dump, &creature_loot_ids, &entries, &extra_item_entries);
-    eprintln!(
-        "mapped: {} item_templates, {} creature_loot rows, {} npc_vendor rows ({} creatures with loot)",
-        item_rows.len(), loot_rows.len(), vendor_rows.len(), creature_loot_ids.len()
-    );
-    if family_active(args, "items") {
-        stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
-        stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
-        stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
-        push_insert(&mut stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race", &item_rows);
-        push_insert(
-            &mut stmts,
-            "game_creature_loot",
-            "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
-            &loot_rows,
-        );
-        push_insert(
-            &mut stmts,
-            "game_npc_vendor",
-            "id,creature_entry,item_entry,slot,max_count",
-            &vendor_rows,
-        );
-    }
-
+/// The pickpocket / skinning / gameobject(chest) / fishing loot rows, all off one parse of the
+/// shared reference-pool table.
+fn build_loot_family_rows(
+    dump: &str,
+    creature_pickpocket_ids: &std::collections::HashMap<u64, u64>,
+    creature_skin_ids: &std::collections::HashMap<u64, u64>,
+    chest_loot_ids_used: &[u32],
+) -> LootFamilyRows {
     // Loot-family completeness (work-item 210): pickpocket / skinning / gameobject(chest) / fishing.
     // `refs` (the reference_loot_template pool map) is parsed ONCE here and shared by all four —
     // `parse_creature_drops` above already parsed its own copy for the creature family; a second parse
@@ -4691,7 +4952,7 @@ fn build_dump_plan(
     // above). Scoped to the lootIds actually used by CHESTs spawned in this box (`chest_loot_ids_used`)
     // — GATHER nodes never touch this table (they stay on the hardcoded GATHER_NODES grant).
     let drops_by_goloot = parse_loot_family(dump, "gameobject_loot_template", &refs);
-    let mut go_loot_ids_used: Vec<u32> = chest_loot_ids_used.clone();
+    let mut go_loot_ids_used: Vec<u32> = chest_loot_ids_used.to_vec();
     go_loot_ids_used.sort_unstable();
     go_loot_ids_used.dedup();
     let mut gameobject_loot_rows: Vec<String> = Vec::new();
@@ -4743,42 +5004,92 @@ fn build_dump_plan(
         fishing_rows.len(),
         drops_by_zone.len(),
     );
+
+    LootFamilyRows {
+        pickpocket_rows,
+        skinning_rows,
+        gameobject_loot_rows,
+        fishing_rows,
+    }
+}
+
+/// The creature / item / loot / gossip clear+reload blocks, each behind its own family gate.
+fn push_world_content_statements(args: &Args, content: MappedContent, stmts: &mut Vec<String>) {
+    let MappedContent {
+        templates,
+        waypoints,
+        item_rows,
+        loot_rows,
+        vendor_rows,
+        pickpocket_rows,
+        skinning_rows,
+        gameobject_loot_rows,
+        fishing_rows,
+        gossip,
+        ..
+    } = content;
+    if family_active(args, "creatures") {
+        stmts.push("DELETE FROM game_creature_waypoint WHERE id > 0".into());
+        stmts.push("DELETE FROM game_creature_template WHERE entry > 0".into());
+        push_insert(stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", &templates);
+        push_insert(
+            stmts,
+            "game_creature_waypoint",
+            "id,creature_guid,x,y,z",
+            &waypoints,
+        );
+    }
+
+    if family_active(args, "items") {
+        stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
+        stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
+        stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
+        push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race", &item_rows);
+        push_insert(
+            stmts,
+            "game_creature_loot",
+            "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
+            &loot_rows,
+        );
+        push_insert(
+            stmts,
+            "game_npc_vendor",
+            "id,creature_entry,item_entry,slot,max_count",
+            &vendor_rows,
+        );
+    }
+
     if family_active(args, "loot") {
         stmts.push("DELETE FROM game_pickpocket_loot WHERE id > 0".into());
         stmts.push("DELETE FROM game_skinning_loot WHERE id > 0".into());
         stmts.push("DELETE FROM game_gameobject_loot WHERE id > 0".into());
         stmts.push("DELETE FROM game_fishing_loot WHERE id > 0".into());
         push_insert(
-            &mut stmts,
+            stmts,
             "game_pickpocket_loot",
             "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
             &pickpocket_rows,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_skinning_loot",
             "id,skin_loot_id,item_entry,chance_bp,count,group_id",
             &skinning_rows,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_gameobject_loot",
             "id,loot_id,item_entry,chance_bp,count,group_id,quest_only",
             &gameobject_loot_rows,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_fishing_loot",
             "id,zone_id,item_entry,chance_bp,count,group_id",
             &fishing_rows,
         );
     }
 
-    // Gossip menus + NPC text + menu options (work-item 217): map each in-box gossip NPC's
-    // creature_entry to the npc_text id shown in SMSG_GOSSIP_MESSAGE, import the resolved greeting
-    // strings (all 8 weighted slots, not just the first), and import its clickable menu options
-    // (vendor/innkeeper/trainer/plain-gossip, quest-status conditions folded). Four-table clear+reload.
-    let gossip = build_gossip_sql(dump, &entries);
     if family_active(args, "gossip") {
         // RESERVED RANGES (283): the ETL owns only the low id bands (it emits dense low ids); a
         // PACKAGE that mints its own gossip (e.g. the dynamic-events guard) uses the high bands —
@@ -4791,38 +5102,52 @@ fn build_dump_plan(
         stmts.push("DELETE FROM game_npc_text_slot WHERE id >= 0 AND id < 50000".into());
         stmts.push("DELETE FROM game_gossip_option WHERE row_id >= 0 AND row_id < 50000".into());
         push_insert(
-            &mut stmts,
+            stmts,
             "game_gossip_menu",
             "entry,text_id",
             &gossip.menu_rows,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_npc_text",
             "text_id,text",
             &gossip.npc_text_rows,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_npc_text_slot",
             "id,text_id,slot_index,text_male,text_female,probability",
             &gossip.npc_text_slot_rows,
         );
-        push_insert(&mut stmts, "game_gossip_option", "row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2", &gossip.option_rows);
+        push_insert(stmts, "game_gossip_option", "row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2", &gossip.option_rows);
         push_insert(
-            &mut stmts,
+            stmts,
             "game_gossip_menu_profile",
             "menu_id,text_id",
             &gossip.profile_rows,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_gossip_menu_profile_option",
             "row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2",
             &gossip.profile_option_rows,
         );
     }
+}
 
+/// The quest / gameobject-template / trainer clear+reload blocks, each behind its own family gate.
+fn push_quest_and_gameobject_statements(
+    args: &Args,
+    content: MappedContent,
+    stmts: &mut Vec<String>,
+) {
+    let MappedContent {
+        quests,
+        go_template_rows,
+        go_trap_rows,
+        trainer_rows,
+        ..
+    } = content;
     // Quests: clear+reload the static quest tables (header / body text / objectives / cast objectives /
     // reward items / creature giver relations / gameobject giver relations). game_character_quest
     // (per-player progress) is born in the accept reducer, never here.
@@ -4835,45 +5160,45 @@ fn build_dump_plan(
         stmts.push("DELETE FROM game_quest_reward_choice WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_quest WHERE id > 0".into());
         stmts.push("DELETE FROM game_gameobject_quest WHERE id > 0".into());
-        push_insert(&mut stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level", &quests.templates);
+        push_insert(stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level", &quests.templates);
         push_insert(
-            &mut stmts,
+            stmts,
             "game_quest_text",
             "quest_entry,details,objectives,offer_reward_text,request_items_text",
             &quests.texts,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_quest_objective",
             "id,quest_entry,obj_index,kind,target_entry,required_count",
             &quests.objectives,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_quest_cast_objective",
             "id,quest_entry,obj_index,spell_id",
             &quests.cast_objectives,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_quest_reward_item",
             "id,quest_entry,item_entry,count",
             &quests.reward_items,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_quest_reward_choice",
             "id,quest_entry,choice_index,item_entry,count",
             &quests.reward_choices,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_creature_quest",
             "id,creature_entry,quest_entry,role",
             &quests.relations,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_gameobject_quest",
             "id,go_entry,quest_entry,role",
             &quests.go_relations,
@@ -4885,9 +5210,9 @@ fn build_dump_plan(
     if family_active(args, "gameobjects") {
         stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
         stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
-        push_insert(&mut stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", &go_template_rows);
+        push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", &go_template_rows);
         push_insert(
-            &mut stmts,
+            stmts,
             "game_gameobject_trap",
             "entry,spell_id,cooldown_secs",
             &go_trap_rows,
@@ -4897,19 +5222,32 @@ fn build_dump_plan(
     if family_active(args, "trainers") {
         stmts.push("DELETE FROM game_trainer_spell WHERE id > 0".into());
         push_insert(
-            &mut stmts,
+            stmts,
             "game_trainer_spell",
             "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap",
             &trainer_rows,
         );
     }
+}
 
+/// The caster-mob rotation and EventAI clear+reload blocks, each behind its own family gate.
+fn push_creature_behaviour_statements(
+    args: &Args,
+    content: MappedContent,
+    stmts: &mut Vec<String>,
+) {
+    let MappedContent {
+        creature_casts,
+        creature_rotation_rows,
+        eventai,
+        ..
+    } = content;
     // Caster-mob cast + rotation rows (family "casts"). The primary-key is creature_entry, so clear ALL
     // rows then reload the in-box set (importer-owned).
     if family_active(args, "casts") {
         stmts.push("DELETE FROM game_creature_cast WHERE creature_entry > 0".into());
         push_insert(
-            &mut stmts,
+            stmts,
             "game_creature_cast",
             "creature_entry,spell_id",
             &creature_casts,
@@ -4920,7 +5258,7 @@ fn build_dump_plan(
         // creature_rotation_rows assembled above.
         stmts.push("DELETE FROM game_creature_spell WHERE id > 0".into());
         push_insert(
-            &mut stmts,
+            stmts,
             "game_creature_spell",
             "id,creature_entry,spell_id,priority,condition,condition_value",
             &creature_rotation_rows,
@@ -4932,25 +5270,28 @@ fn build_dump_plan(
         stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0".into());
         stmts.push("DELETE FROM game_quest_event_requirement WHERE id > 0".into());
         push_insert(
-            &mut stmts,
+            stmts,
             "game_creature_ai_broadcast_text",
             "id,male_text,female_text,chat_type,language_id,emote_delay_1_ms,emote_id_1,emote_delay_2_ms,emote_id_2,emote_delay_3_ms,emote_id_3",
             &eventai.broadcast_rows,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_creature_ai_summon",
             "id,x,y,z,orientation,lifetime_ms",
             &eventai.summon_rows,
         );
         push_insert(
-            &mut stmts,
+            stmts,
             "game_quest_event_requirement",
             "id,quest_entry",
             &eventai.quest_event_requirement_rows(),
         );
     }
+}
 
+/// The two global (not box-scoped) families. Returns their row counts for the provenance stamps.
+fn push_global_statements(args: &Args, dump: &str, stmts: &mut Vec<String>) -> Result<(u64, u64)> {
     // P3: the class/level stat curve + P1: all-(race,class) start positions + 209: graveyard-zone
     // links (all global, plain SQL — not box-scoped) + work-item 212's createinfo spells/actions/items
     // + work-item 225's areatrigger-teleport dungeon portals.
@@ -5014,20 +5355,34 @@ fn build_dump_plan(
         stmts.extend(spell_proc_event_sql);
     }
 
-    // The spawn payload can hold ~2k rows for a full zone — more than one `spacetime call` string arg
-    // takes — so split it into batches. Batch 0 goes to `import_creature_spawns` (clears the live
-    // roster + threat ONCE, then loads); every later batch goes to `import_creature_spawns_append`
-    // (load only), so the clear happens exactly once and every batch survives.
-    let spawn_rows: Vec<&str> = packed_spawns.split(';').filter(|r| !r.is_empty()).collect();
-    let batches: Vec<String> = spawn_rows
-        .chunks(SPAWN_BATCH)
-        .map(|c| c.join(";"))
-        .collect();
-    let go_batches: Vec<String> = go_packed_rows
-        .chunks(SPAWN_BATCH)
-        .map(|c| c.join(";"))
-        .collect();
+    Ok((globals_row_count, spellmeta_row_count))
+}
 
+/// One provenance stamp per family that actually had its block pushed — mirroring exactly the
+/// `family_active` gates the push helpers used.
+fn family_stamps(
+    args: &Args,
+    content: MappedContent,
+    globals_row_count: u64,
+    spellmeta_row_count: u64,
+) -> Vec<(&'static str, u64)> {
+    let MappedContent {
+        templates,
+        item_rows,
+        pickpocket_rows,
+        skinning_rows,
+        gameobject_loot_rows,
+        fishing_rows,
+        gossip,
+        quests,
+        go_template_rows,
+        go_trap_rows,
+        trainer_rows,
+        creature_casts,
+        creature_rotation_rows,
+        eventai,
+        ..
+    } = content;
     // Provenance stamps (work-item 216): one entry per family that ACTUALLY had its block pushed
     // above — mirrors exactly the `family_active` gates this function used, so a stamp only ever
     // corresponds to data this run's plan actually carries.
@@ -5086,26 +5441,7 @@ fn build_dump_plan(
         stamps.push(("spellmeta", spellmeta_row_count));
     }
 
-    let eventai_definition_count = eventai.definition_count();
-    let eventai_instruction_count = eventai.instruction_count();
-    let eventai_definition_batches = eventai.definition_batches;
-    let eventai_relay_definition_count = eventai.relay_definition_rows.len() as u64;
-    let eventai_relay_definition_batches = eventai.relay_definition_batches;
-
-    Ok(DumpPlan {
-        stmts,
-        spawn_row_count: spawn_rows.len(),
-        go_row_count: go_packed_rows.len(),
-        spawn_batches: batches,
-        go_batches,
-        eventai_definition_batches,
-        eventai_relay_definition_batches,
-        eventai_definition_count,
-        eventai_relay_definition_count,
-        eventai_instruction_count,
-        eventai_manifest,
-        stamps,
-    })
+    stamps
 }
 
 fn main() -> Result<()> {

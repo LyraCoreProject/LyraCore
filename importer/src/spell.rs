@@ -1101,35 +1101,8 @@ fn build_spell_rows(
     trainers: &[(u32, Vec<u32>)],
 ) -> Result<(SpellRows, Coverage, Vec<String>)> {
     let allow: std::collections::HashSet<u32> = only.iter().copied().collect();
-    // spell_id → its DBC-derived spell_level, captured during the header build so the trainer rows below
-    // get a required_level straight from Spell.dbc (the single firewall-clean source — no cmangos value).
-    let mut spell_levels: BTreeMap<u32, u8> = BTreeMap::new();
-    // wrapper spell_id -> its trigger RANK id (first nonzero trigger_spell). A LearnSpell wrapper's own
-    // spell_level is 0; its real level/cost live on the rank it teaches — used by the trainer offerings.
-    let mut wrapper_to_rank: BTreeMap<u32, u32> = BTreeMap::new();
-    let mut chain = open_chain(data_dir)?;
-    eprintln!("spells: opened MPQ chain from {}", data_dir.display());
-
-    let spells: DbcSpell = read_table(&mut chain)?;
-    let cast_times: SpellCastTimes = read_table(&mut chain)?;
-    let ranges: SpellRange = read_table(&mut chain)?;
-    let durations: SpellDuration = read_table(&mut chain)?;
-    let radii: SpellRadius = read_table(&mut chain)?;
-    eprintln!(
-        "spells: parsed Spell({}) + SpellCastTimes({}) + SpellRange({}) + SpellDuration({}) + SpellRadius({})",
-        spells.rows().len(),
-        cast_times.rows().len(),
-        ranges.rows().len(),
-        durations.rows().len(),
-        radii.rows().len(),
-    );
-
-    let mut cov = Coverage::default();
-    let mut spell_rows: Vec<SpellHeaderRow> = Vec::new();
-    let mut effect_rows: Vec<SpellEffectRow> = Vec::new();
-    let mut reagent_rows: Vec<String> = Vec::new();
-    let mut eventai_metadata_rows: Vec<String> = Vec::new();
-    let mut samples: Vec<String> = Vec::new();
+    let dbc = open_spell_tables(data_dir)?;
+    let mut acc = SpellAccumulator::default();
     // Mount creature-template display resolution (entry → display id): the `--dbc --spells` CLI path
     // is DBC-only (no cmangos creature_template dump is loaded alongside it), so this is empty today —
     // every real classic mount spell resolves correctly regardless (see `mount_display_p0`), since its
@@ -1137,7 +1110,7 @@ fn build_spell_rows(
     // this map later is then a one-line change here, not a rewrite of the resolution logic itself.
     let creature_displays: BTreeMap<u32, u32> = BTreeMap::new();
 
-    for s in spells.rows() {
+    for s in dbc.spells.rows() {
         let spell_id = s.id.id;
         if spell_id == 0 {
             continue; // the 0 placeholder
@@ -1158,585 +1131,784 @@ fn build_spell_rows(
                 continue;
             }
             let id = ((spell_id as u64) << 3) | slot as u64;
-            reagent_rows.push(format!("({id},{spell_id},{item},{count})"));
+            acc.reagent_rows
+                .push(format!("({id},{spell_id},{item},{count})"));
         }
 
-        // --- header (game_spell) ---
-        //
-        // ⚠ wow_dbc 0.3 vanilla `Spell` SCHEMA BUG — off-by-one field NAMES from column 21 on.
-        // The crate's vanilla `SpellRow` is missing the `InterruptFlags` column (real col 21), so from
-        // there every field is NAMED as the NEXT real column. The BYTES are read sequentially and are
-        // correct (read position N == real column N); only the wow_dbc field *name* on each is wrong.
-        // It resyncs before the effect arrays (those read correctly). So to get a logically-correct
-        // value we read the wow_dbc field whose READ POSITION matches the real column:
-        //   real powerType    = s.mana_cost                 (col 31)
-        //   real manaCost     = s.mana_cost_per_level       (col 32)
-        //   real DurationIdx  = s.power_type                (col 30)
-        //   real spellLevel   = s.duration.id               (col 29)
-        //   real maxLevel     = s.base_level                (col 27)
-        //   real rangeIndex   = s.speed (int bytes read as f32 → recover via .to_bits()) (col 36)
-        //   real stackAmount  = s.totem[0]                  (col 39)
-        //   real AuraIntFlags = s.channel_interrupt_flags   (col 22)
-        //   real procFlags    = s.proc_chance               (col 24)
-        //   real procChance   = s.proc_charges               (col 25)
-        //   real procCharges  = s.max_level                  (col 26)
-        // VERIFIED by `--only` dry-run against known values: Fireball powerType=0(mana)/30 mana/4s DoT/
-        // 35yd; Battle Shout rage/10/120s; Slam rage/15/L30/instant; Sunder rage/15/L10/30s/STACK=5;
-        // Frost Armor (168) procFlags=0x28/procChance=100/procCharges=0; Lightning Shield (324)
-        // procChance=100/procCharges=3 (its real procFlags is a richer taken-hit mask, not 0x28 — every
-        // "taken" bit, matching its real behavior of zapping back at any attack, not just melee).
-        // (cast_time/cooldown/gcd/school/dispel/mechanic/attributes/effects are pre-col-21 or post-resync
-        // → read directly.) Rage costs are stored ×10 in BOTH the DBC and our power bar, mana ×1 in both,
-        // so `manaCost` imports with no scaling.
-        let name = s.name.en_gb.clone();
-        let power_type = s.mana_cost as u8; // real PowerType: 0 mana / 1 rage / 3 energy / 255 health
-        let cost = s.mana_cost_per_level.max(0) as u32; // real ManaCost (rage already ×10)
-        let cast_time_ms = cast_times
-            .get(s.casting_time_index)
-            .map(|r| r.base.max(0) as u32)
-            .unwrap_or(0);
-        // RecoveryTime is the spell-specific cooldown; CategoryRecoveryTime is the CATEGORY cooldown
-        // (e.g. Hammer of Justice 853 = 60s, Divine Protection 498 = 5min). Both may carry the real
-        // per-spell cooldown depending on how the DBC authored the spell, so take the max of both so
-        // neither path is silently dropped.  gcd_ms is computed below after `attributes` is known.
-        let cooldown_ms = s.recovery_time.max(0).max(s.category_recovery_time.max(0)) as u32;
-        let range_yd = ranges
-            .get(SpellRangeKey::new(s.speed.to_bits())) // real rangeIndex (see schema-bug note)
-            .map(|r| r.range_max.max(0.0) as u32)
-            .unwrap_or(0);
-        // DBC duration -1 means INFINITE (toggle auras like Devotion Aura 465, Battle Stance, etc.).
-        // Collapse to u32::MAX as a sentinel; cast.rs converts that to Timestamp(i64::MAX) so the
-        // reaper's `expires_at <= now` filter never matches (i64::MAX ≈ 9.2e18 µs >> 2026 epoch).
-        // Any non-negative duration value is taken as-is (milliseconds). A missing DurationIndex
-        // entry falls back to 0, which expires immediately (fine — those spells have no aura effect).
-        let duration_ms = durations
-            .get(SpellDurationKey::new(s.power_type.max(0) as u32)) // real DurationIndex
-            .map(|r| {
-                if r.duration == -1 {
-                    u32::MAX
-                } else {
-                    r.duration.max(0) as u32
-                }
-            })
-            .unwrap_or(0);
-        // Spell.dbc `school` is a Resistances.dbc INDEX (0=phys,1=holy,2=fire,3=nature,4=frost,
-        // 5=shadow,6=arcane), NOT a bitmask — our `school_mask` is the bitmask (1<<index, so phys=1,
-        // fire=4, frost=16…). Convert; clamp the index to the 7 real schools so the shift can't overflow.
-        let school_mask = 1u8 << (s.school.id.min(6) as u8);
-        let dispel_type = s.dispel_type.id as u8;
-        let mechanic = s.mechanic.id as u8;
-        let real_stack = s.totem[0]; // real StackAmount (see schema-bug note)
-        let max_stacks = if real_stack <= 1 {
-            0u8
-        } else {
-            real_stack.min(255) as u8
-        };
-        // real AuraInterruptFlags (see the schema-bug note above); `aura_interrupt_bits` keeps only our
-        // bit0 (break-on-damage) / bit1 (break-on-move) and additionally forces bit0 on for the
-        // incapacitate spells. Sap (6770) gets it from the DBC already, but a SYNTHETIC incapacitate
-        // (Gouge 1776 — its CC isn't a DBC effect, so the DBC flag may be absent) needs it forced so its
-        // A_CONTROL aura is breakable by later damage. Polymorph 118 has DBC AuraInterruptFlags=0x2
-        // (DAMAGE bit), but the importer reads channel_interrupt_flags&0x3 instead of AuraInterruptFlags,
-        // so the bit never lands in our aura_interrupt; force it here.
-        //
-        // Land mount: a real mount spell's vanilla AuraInterruptFlags is the
-        // underwater-cancel bit (0x80, NOT-ABOVEWATER), which sits well outside the `& 0x0003` mask
-        // below — it never reaches `aura_interrupt`, and mount spells are absent from the
-        // force-break-on-damage id list. So imported mount spells carry aura_interrupt=0
-        // (`breaks_on_damage` reads false): "ordinary damage does not dismount" holds as a DATA fact,
-        // with zero mount-specific code here.
-        let aura_interrupt = aura_interrupt_bits(s.channel_interrupt_flags as u16, spell_id);
-        let attributes = s.attributes.as_int(); // raw vanilla Spell.dbc Attributes subset (unchanged)
-                                                // GCD: flat 1500ms for all active spells.  Two vanilla Attributes bits suppress the GCD:
-                                                //   0x40 SPELL_ATTR_PASSIVE  — passive auras applied at login, never directly cast by the player.
-                                                //   0x04 SPELL_ATTR_ON_NEXT_SWING — queued-swing spells (Heroic Strike, Cleave) use the swing
-                                                //        timer, not the GCD; queuing one must not lock the rest of the spellbook.
-                                                // All other spells get the standard 1500ms GCD so the server gate mirrors the client.
-        let gcd_ms: u32 = if (attributes & 0x40) != 0 || (attributes & 0x4) != 0 {
-            0
-        } else {
-            1500
-        };
-        // CHANNELED detection rides AttributesEx1 (field 1 — read at its correct position, well BEFORE the
-        // col-21 schema bug), bit 0x44. Computed once; drives BOTH the cast_flags bit AND the per-effect
-        // A_PERIODIC_TRIGGER reclassify below, so the channel header + its tick effect stay consistent.
-        let channeled = is_channeled(s.attributes_ex1.as_int(), &name);
-        if excludes_eventai_caster(s.attributes_ex1.as_int()) {
-            eventai_metadata_rows.push(format!("({spell_id},true)"));
-        }
-        // OUR OWN cast-gate flags (REQ_BEHIND / REQ_STEALTH / STEALTH_SAFE / CHANNELED …), set BY NAME or from
-        // a dedicated DBC bit — emitted into the DEDICATED `cast_flags` column (NOT folded into `attributes`,
-        // whose vanilla bits would collide).
-        let mut cast_flags = spell_flag_attributes(&name);
-        if channeled {
-            cast_flags |= SPELL_ATTR_CHANNELED;
-        }
-        if is_ranged_auto_repeat(s.attributes_ex2.as_int(), &name) {
-            cast_flags |= SPELL_ATTR_RANGED_AUTO_REPEAT;
-        }
-        // Warrior STANCE usability mask (Spell.dbc `Stances`/ShapeshiftMask, real col 11 — well BEFORE the
-        // col-21 wow_dbc schema bug, so reachable directly with no workaround). `shapeshift_mask.id` is the
-        // raw vanilla form-bit mask; `translate_stance_mask` folds it onto our 0-based stance bits for the
-        // `stances` column the cast gate reads. 0 (the common case) = usable in any stance (every non-warrior
-        // spell, every unrestricted warrior ability, the stance-switch spells themselves) → the gate no-ops.
-        let stances = translate_stance_mask(s.shapeshift_mask.id);
-        let spell_level = s.duration.id.clamp(0, 255) as u8; // real SpellLevel
-        spell_levels.insert(spell_id, spell_level); // for the trainer-offering required_level (firewall-clean)
-        let max_level = s.base_level.clamp(0, 255) as u8; // real MaxLevel
-                                                          // Polarity: ATTR bit PASSIVE-or-not isn't a buff/debuff flag; vanilla marks debuffs with
-                                                          // AttributesEx? Negative/CANT_CANCEL flags that we don't model — derive heuristically from the
-                                                          // FIRST effect's target/aura (a CC/damage-on-enemy effect ⇒ negative). Refined below per-effect.
-        let mut is_negative = false;
-        for i in 0..3 {
-            let eff = s.effect[i];
-            if eff == 0 {
-                continue;
-            }
-            let aura = s.effect_aura[i];
-            // damage / DoT / CC / a debuff-shaped aura on a non-self target ⇒ negative
-            if matches!(eff, 2 | 17 | 58 | 121 | 31) {
-                is_negative = true;
-            }
-            if matches!(
-                aura,
-                AuraMod::PeriodicDamage
-                    | AuraMod::PeriodicLeech
-                    | AuraMod::ModStun
-                    | AuraMod::ModRoot
-                    | AuraMod::ModFear
-                    | AuraMod::ModConfuse
-                    | AuraMod::ModDecreaseSpeed
-                    | AuraMod::ModSilence
-                    | AuraMod::ModDamageTaken
-            ) {
-                is_negative = true;
-            }
-            // A modifier aura that REDUCES a stat / resistance / combat field (negative base points) is a
-            // DEBUFF — e.g. Sunder Armor (−armor via ModResistance), Demoralizing Shout (−AP via
-            // ModAttackPower). The variant alone can't tell buff from debuff (the SAME AuraMod does both;
-            // the sign of the magnitude decides), so the earlier variant-only list misses these and they'd
-            // wrongly resolve onto an ALLY (see `is_reducing_modifier_aura`).
-            if is_reducing_modifier_aura(eff, aura, s.effect_base_points[i]) {
-                is_negative = true;
-            }
-        }
+        let header = push_spell_header_row(s, &dbc, &allow, &mut acc);
+        push_spell_effect_rows(s, &header, &dbc, &creature_displays, &allow, &mut acc);
+    }
 
-        // 264: the spell's own family identity (SpellFamilyName + the low-32 SpellFamilyFlags) — what
-        // a modifier aura's mask matches against at fold time. These sit AFTER the effect arrays, so
-        // the col-21 off-by-one has already resynced (verified via the Fireball dry-run: family 3=MAGE,
-        // nonzero mask). Vanilla family masks are 32-bit; the u64 column carries headroom.
-        let family_name = s.spell_class_set.id as u8;
-        let family_flags = s.spell_class_mask[0] as u32 as u64;
-        // See the SCHEMA BUG comment above the header: the real procFlags/procChance/procCharges land
-        // in the wow_dbc fields named proc_chance/proc_charges/max_level.
-        let (proc_flags, proc_chance, proc_charges) =
-            proc_header_fields(s.proc_chance, s.proc_charges, s.max_level);
-        spell_rows.push(SpellHeaderRow {
-            spell_id,
-            name: name.clone(),
-            power_type,
-            cost,
-            cast_time_ms,
-            gcd_ms,
-            cooldown_ms,
-            range_yd,
-            duration_ms,
-            school_mask,
-            dispel_type,
-            mechanic,
-            max_stacks,
-            aura_interrupt,
-            attributes,
-            spell_level,
-            max_level,
-            is_negative,
-            cast_flags,
-            stances,
-            family_name,
-            family_flags,
-            proc_flags,
-            proc_chance,
-            proc_charges,
-        });
-        cov.spells += 1;
+    let trainer_rows = trainer_offering_rows(trainers, &acc.spell_levels, &acc.wrapper_to_rank);
 
-        // Allowlist diagnostics: one header line per requested spell so the operator sees the full
-        // resolved header (the per-effect lines follow in the effect loop below).
-        if !allow.is_empty() {
-            samples.push(format!(
+    Ok((
+        SpellRows {
+            headers: acc.spell_rows,
+            effects: acc.effect_rows,
+            fishing: fishing_marker_rows(),
+            reagents: acc.reagent_rows,
+            eventai_metadata: acc.eventai_metadata_rows,
+            trainers: trainer_rows,
+        },
+        acc.cov,
+        acc.samples,
+    ))
+}
+
+/// The client tables the spell rows derive from, read once per import.
+struct SpellDbc {
+    spells: DbcSpell,
+    cast_times: SpellCastTimes,
+    ranges: SpellRange,
+    durations: SpellDuration,
+    radii: SpellRadius,
+}
+
+/// Open the operator's MPQ chain and read every table the spell import needs.
+fn open_spell_tables(data_dir: &Path) -> Result<SpellDbc> {
+    let mut chain = open_chain(data_dir)?;
+    eprintln!("spells: opened MPQ chain from {}", data_dir.display());
+
+    let spells: DbcSpell = read_table(&mut chain)?;
+    let cast_times: SpellCastTimes = read_table(&mut chain)?;
+    let ranges: SpellRange = read_table(&mut chain)?;
+    let durations: SpellDuration = read_table(&mut chain)?;
+    let radii: SpellRadius = read_table(&mut chain)?;
+    eprintln!(
+        "spells: parsed Spell({}) + SpellCastTimes({}) + SpellRange({}) + SpellDuration({}) + SpellRadius({})",
+        spells.rows().len(),
+        cast_times.rows().len(),
+        ranges.rows().len(),
+        durations.rows().len(),
+        radii.rows().len(),
+    );
+
+    Ok(SpellDbc {
+        spells,
+        cast_times,
+        ranges,
+        durations,
+        radii,
+    })
+}
+
+/// The row sets and diagnostics one DBC sweep accumulates.
+#[derive(Default)]
+struct SpellAccumulator {
+    cov: Coverage,
+    spell_rows: Vec<SpellHeaderRow>,
+    effect_rows: Vec<SpellEffectRow>,
+    reagent_rows: Vec<String>,
+    eventai_metadata_rows: Vec<String>,
+    samples: Vec<String>,
+    /// spell_id → its DBC-derived spell_level, for the trainer offerings' required_level.
+    spell_levels: BTreeMap<u32, u8>,
+    /// wrapper spell_id → the trigger RANK it teaches; the rank carries the real level and cost.
+    wrapper_to_rank: BTreeMap<u32, u32>,
+}
+
+/// The header values the effect mapping below reads back off the spell it belongs to.
+struct SpellHeader {
+    name: String,
+    school_mask: u8,
+    is_negative: bool,
+    channeled: bool,
+}
+
+/// One effect's resolved kind and magnitudes, after every curated reclassify and p0 fix-up.
+struct ResolvedEffect {
+    kind: u8,
+    p0: i32,
+    p0_kind: u8,
+    base_points: i32,
+    die_sides: i32,
+    per_level: f32,
+    period_ms: u32,
+}
+
+/// Derive one spell's `game_spell` header row and push it, returning the values the effect mapping
+/// reads back.
+fn push_spell_header_row(
+    s: &wow_dbc::vanilla_tables::spell::SpellRow,
+    dbc: &SpellDbc,
+    allow: &std::collections::HashSet<u32>,
+    acc: &mut SpellAccumulator,
+) -> SpellHeader {
+    let SpellAccumulator {
+        cov,
+        spell_rows,
+        eventai_metadata_rows,
+        samples,
+        spell_levels,
+        ..
+    } = acc;
+    let spell_id = s.id.id;
+    // --- header (game_spell) ---
+    //
+    // ⚠ wow_dbc 0.3 vanilla `Spell` SCHEMA BUG — off-by-one field NAMES from column 21 on.
+    // The crate's vanilla `SpellRow` is missing the `InterruptFlags` column (real col 21), so from
+    // there every field is NAMED as the NEXT real column. The BYTES are read sequentially and are
+    // correct (read position N == real column N); only the wow_dbc field *name* on each is wrong.
+    // It resyncs before the effect arrays (those read correctly). So to get a logically-correct
+    // value we read the wow_dbc field whose READ POSITION matches the real column:
+    //   real powerType    = s.mana_cost                 (col 31)
+    //   real manaCost     = s.mana_cost_per_level       (col 32)
+    //   real DurationIdx  = s.power_type                (col 30)
+    //   real spellLevel   = s.duration.id               (col 29)
+    //   real maxLevel     = s.base_level                (col 27)
+    //   real rangeIndex   = s.speed (int bytes read as f32 → recover via .to_bits()) (col 36)
+    //   real stackAmount  = s.totem[0]                  (col 39)
+    //   real AuraIntFlags = s.channel_interrupt_flags   (col 22)
+    //   real procFlags    = s.proc_chance               (col 24)
+    //   real procChance   = s.proc_charges               (col 25)
+    //   real procCharges  = s.max_level                  (col 26)
+    // VERIFIED by `--only` dry-run against known values: Fireball powerType=0(mana)/30 mana/4s DoT/
+    // 35yd; Battle Shout rage/10/120s; Slam rage/15/L30/instant; Sunder rage/15/L10/30s/STACK=5;
+    // Frost Armor (168) procFlags=0x28/procChance=100/procCharges=0; Lightning Shield (324)
+    // procChance=100/procCharges=3 (its real procFlags is a richer taken-hit mask, not 0x28 — every
+    // "taken" bit, matching its real behavior of zapping back at any attack, not just melee).
+    // (cast_time/cooldown/gcd/school/dispel/mechanic/attributes/effects are pre-col-21 or post-resync
+    // → read directly.) Rage costs are stored ×10 in BOTH the DBC and our power bar, mana ×1 in both,
+    // so `manaCost` imports with no scaling.
+    let name = s.name.en_gb.clone();
+    let power_type = s.mana_cost as u8; // real PowerType: 0 mana / 1 rage / 3 energy / 255 health
+    let cost = s.mana_cost_per_level.max(0) as u32; // real ManaCost (rage already ×10)
+    let cast_time_ms = dbc
+        .cast_times
+        .get(s.casting_time_index)
+        .map(|r| r.base.max(0) as u32)
+        .unwrap_or(0);
+    // RecoveryTime is the spell-specific cooldown; CategoryRecoveryTime is the CATEGORY cooldown
+    // (e.g. Hammer of Justice 853 = 60s, Divine Protection 498 = 5min). Both may carry the real
+    // per-spell cooldown depending on how the DBC authored the spell, so take the max of both so
+    // neither path is silently dropped.  gcd_ms is computed below after `attributes` is known.
+    let cooldown_ms = s.recovery_time.max(0).max(s.category_recovery_time.max(0)) as u32;
+    let range_yd = dbc
+        .ranges
+        .get(SpellRangeKey::new(s.speed.to_bits())) // real rangeIndex (see schema-bug note)
+        .map(|r| r.range_max.max(0.0) as u32)
+        .unwrap_or(0);
+    // DBC duration -1 means INFINITE (toggle auras like Devotion Aura 465, Battle Stance, etc.).
+    // Collapse to u32::MAX as a sentinel; cast.rs converts that to Timestamp(i64::MAX) so the
+    // reaper's `expires_at <= now` filter never matches (i64::MAX ≈ 9.2e18 µs >> 2026 epoch).
+    // Any non-negative duration value is taken as-is (milliseconds). A missing DurationIndex
+    // entry falls back to 0, which expires immediately (fine — those spells have no aura effect).
+    let duration_ms = dbc
+        .durations
+        .get(SpellDurationKey::new(s.power_type.max(0) as u32)) // real DurationIndex
+        .map(|r| {
+            if r.duration == -1 {
+                u32::MAX
+            } else {
+                r.duration.max(0) as u32
+            }
+        })
+        .unwrap_or(0);
+    // Spell.dbc `school` is a Resistances.dbc INDEX (0=phys,1=holy,2=fire,3=nature,4=frost,
+    // 5=shadow,6=arcane), NOT a bitmask — our `school_mask` is the bitmask (1<<index, so phys=1,
+    // fire=4, frost=16…). Convert; clamp the index to the 7 real schools so the shift can't overflow.
+    let school_mask = 1u8 << (s.school.id.min(6) as u8);
+    let dispel_type = s.dispel_type.id as u8;
+    let mechanic = s.mechanic.id as u8;
+    let real_stack = s.totem[0]; // real StackAmount (see schema-bug note)
+    let max_stacks = if real_stack <= 1 {
+        0u8
+    } else {
+        real_stack.min(255) as u8
+    };
+    // real AuraInterruptFlags (see the schema-bug note above); `aura_interrupt_bits` keeps only our
+    // bit0 (break-on-damage) / bit1 (break-on-move) and additionally forces bit0 on for the
+    // incapacitate spells. Sap (6770) gets it from the DBC already, but a SYNTHETIC incapacitate
+    // (Gouge 1776 — its CC isn't a DBC effect, so the DBC flag may be absent) needs it forced so its
+    // A_CONTROL aura is breakable by later damage. Polymorph 118 has DBC AuraInterruptFlags=0x2
+    // (DAMAGE bit), but the importer reads channel_interrupt_flags&0x3 instead of AuraInterruptFlags,
+    // so the bit never lands in our aura_interrupt; force it here.
+    //
+    // Land mount: a real mount spell's vanilla AuraInterruptFlags is the
+    // underwater-cancel bit (0x80, NOT-ABOVEWATER), which sits well outside the `& 0x0003` mask
+    // below — it never reaches `aura_interrupt`, and mount spells are absent from the
+    // force-break-on-damage id list. So imported mount spells carry aura_interrupt=0
+    // (`breaks_on_damage` reads false): "ordinary damage does not dismount" holds as a DATA fact,
+    // with zero mount-specific code here.
+    let aura_interrupt = aura_interrupt_bits(s.channel_interrupt_flags as u16, spell_id);
+    let attributes = s.attributes.as_int(); // raw vanilla Spell.dbc Attributes subset (unchanged)
+                                            // GCD: flat 1500ms for all active spells.  Two vanilla Attributes bits suppress the GCD:
+                                            //   0x40 SPELL_ATTR_PASSIVE  — passive auras applied at login, never directly cast by the player.
+                                            //   0x04 SPELL_ATTR_ON_NEXT_SWING — queued-swing spells (Heroic Strike, Cleave) use the swing
+                                            //        timer, not the GCD; queuing one must not lock the rest of the spellbook.
+                                            // All other spells get the standard 1500ms GCD so the server gate mirrors the client.
+    let gcd_ms: u32 = if (attributes & 0x40) != 0 || (attributes & 0x4) != 0 {
+        0
+    } else {
+        1500
+    };
+    // CHANNELED detection rides AttributesEx1 (field 1 — read at its correct position, well BEFORE the
+    // col-21 schema bug), bit 0x44. Computed once; drives BOTH the cast_flags bit AND the per-effect
+    // A_PERIODIC_TRIGGER reclassify below, so the channel header + its tick effect stay consistent.
+    let channeled = is_channeled(s.attributes_ex1.as_int(), &name);
+    if excludes_eventai_caster(s.attributes_ex1.as_int()) {
+        eventai_metadata_rows.push(format!("({spell_id},true)"));
+    }
+    // OUR OWN cast-gate flags (REQ_BEHIND / REQ_STEALTH / STEALTH_SAFE / CHANNELED …), set BY NAME or from
+    // a dedicated DBC bit — emitted into the DEDICATED `cast_flags` column (NOT folded into `attributes`,
+    // whose vanilla bits would collide).
+    let mut cast_flags = spell_flag_attributes(&name);
+    if channeled {
+        cast_flags |= SPELL_ATTR_CHANNELED;
+    }
+    if is_ranged_auto_repeat(s.attributes_ex2.as_int(), &name) {
+        cast_flags |= SPELL_ATTR_RANGED_AUTO_REPEAT;
+    }
+    // Warrior STANCE usability mask (Spell.dbc `Stances`/ShapeshiftMask, real col 11 — well BEFORE the
+    // col-21 wow_dbc schema bug, so reachable directly with no workaround). `shapeshift_mask.id` is the
+    // raw vanilla form-bit mask; `translate_stance_mask` folds it onto our 0-based stance bits for the
+    // `stances` column the cast gate reads. 0 (the common case) = usable in any stance (every non-warrior
+    // spell, every unrestricted warrior ability, the stance-switch spells themselves) → the gate no-ops.
+    let stances = translate_stance_mask(s.shapeshift_mask.id);
+    let spell_level = s.duration.id.clamp(0, 255) as u8; // real SpellLevel
+    spell_levels.insert(spell_id, spell_level); // for the trainer-offering required_level (firewall-clean)
+    let max_level = s.base_level.clamp(0, 255) as u8; // real MaxLevel
+    let is_negative = spell_is_negative(s);
+
+    // 264: the spell's own family identity (SpellFamilyName + the low-32 SpellFamilyFlags) — what
+    // a modifier aura's mask matches against at fold time. These sit AFTER the effect arrays, so
+    // the col-21 off-by-one has already resynced (verified via the Fireball dry-run: family 3=MAGE,
+    // nonzero mask). Vanilla family masks are 32-bit; the u64 column carries headroom.
+    let family_name = s.spell_class_set.id as u8;
+    let family_flags = s.spell_class_mask[0] as u32 as u64;
+    // See the SCHEMA BUG comment above the header: the real procFlags/procChance/procCharges land
+    // in the wow_dbc fields named proc_chance/proc_charges/max_level.
+    let (proc_flags, proc_chance, proc_charges) =
+        proc_header_fields(s.proc_chance, s.proc_charges, s.max_level);
+    spell_rows.push(SpellHeaderRow {
+        spell_id,
+        name: name.clone(),
+        power_type,
+        cost,
+        cast_time_ms,
+        gcd_ms,
+        cooldown_ms,
+        range_yd,
+        duration_ms,
+        school_mask,
+        dispel_type,
+        mechanic,
+        max_stacks,
+        aura_interrupt,
+        attributes,
+        spell_level,
+        max_level,
+        is_negative,
+        cast_flags,
+        stances,
+        family_name,
+        family_flags,
+        proc_flags,
+        proc_chance,
+        proc_charges,
+    });
+    cov.spells += 1;
+
+    // Allowlist diagnostics: one header line per requested spell so the operator sees the full
+    // resolved header (the per-effect lines follow in the effect loop below).
+    if !allow.is_empty() {
+        samples.push(format!(
                 "spell {spell_id} '{title}': school_mask={school_mask} power_type={power_type} cost={cost} cast_ms={cast_time_ms} gcd_ms={gcd_ms} cd_ms={cooldown_ms} range={range_yd}yd dur_ms={duration_ms} spell_level={spell_level} max_stacks={max_stacks} negative={is_negative} attributes=0x{attributes:X} cast_flags=0x{cast_flags:X} stances=0x{stances:X} aura_interrupt=0x{aura_interrupt:X} proc_flags=0x{proc_flags:X} proc_chance={proc_chance} proc_charges={proc_charges}",
                 title = name.chars().take(40).collect::<String>(),
             ));
+    }
+
+    SpellHeader {
+        name,
+        school_mask,
+        is_negative,
+        channeled,
+    }
+}
+
+/// Whether a spell reads as a debuff. Vanilla has no buff/debuff flag, so derive it from the
+/// effects: damage, a DoT, CC, or a stat-reducing modifier aura on a non-self target.
+fn spell_is_negative(s: &wow_dbc::vanilla_tables::spell::SpellRow) -> bool {
+    // Polarity: ATTR bit PASSIVE-or-not isn't a buff/debuff flag; vanilla marks debuffs with
+    // AttributesEx? Negative/CANT_CANCEL flags that we don't model — derive heuristically from the
+    // FIRST effect's target/aura (a CC/damage-on-enemy effect ⇒ negative). Refined below per-effect.
+    let mut is_negative = false;
+    for i in 0..3 {
+        let eff = s.effect[i];
+        if eff == 0 {
+            continue;
+        }
+        let aura = s.effect_aura[i];
+        // damage / DoT / CC / a debuff-shaped aura on a non-self target ⇒ negative
+        if matches!(eff, 2 | 17 | 58 | 121 | 31) {
+            is_negative = true;
+        }
+        if matches!(
+            aura,
+            AuraMod::PeriodicDamage
+                | AuraMod::PeriodicLeech
+                | AuraMod::ModStun
+                | AuraMod::ModRoot
+                | AuraMod::ModFear
+                | AuraMod::ModConfuse
+                | AuraMod::ModDecreaseSpeed
+                | AuraMod::ModSilence
+                | AuraMod::ModDamageTaken
+        ) {
+            is_negative = true;
+        }
+        // A modifier aura that REDUCES a stat / resistance / combat field (negative base points) is a
+        // DEBUFF — e.g. Sunder Armor (−armor via ModResistance), Demoralizing Shout (−AP via
+        // ModAttackPower). The variant alone can't tell buff from debuff (the SAME AuraMod does both;
+        // the sign of the magnitude decides), so the earlier variant-only list misses these and they'd
+        // wrongly resolve onto an ALLY (see `is_reducing_modifier_aura`).
+        if is_reducing_modifier_aura(eff, aura, s.effect_base_points[i]) {
+            is_negative = true;
+        }
+    }
+    is_negative
+}
+
+/// Derive and push one spell's `game_spell_effect` rows, including the synthetic additions that
+/// cover CC/speed/seal data the DBC lacks.
+fn push_spell_effect_rows(
+    s: &wow_dbc::vanilla_tables::spell::SpellRow,
+    header: &SpellHeader,
+    dbc: &SpellDbc,
+    creature_displays: &BTreeMap<u32, u32>,
+    allow: &std::collections::HashSet<u32>,
+    acc: &mut SpellAccumulator,
+) {
+    let SpellAccumulator {
+        cov,
+        effect_rows,
+        samples,
+        wrapper_to_rank,
+        ..
+    } = acc;
+    let spell_id = s.id.id;
+    let name = header.name.as_str();
+    // --- effects (game_spell_effect) ---
+    // Track which effect_index slots the DBC populates, so a SYNTHETIC effect (an ADDED A_CONTROL /
+    // A_MOD_SPEED) can take the first FREE slot — keeping the deterministic id `(spell_id<<2)|index`
+    // unique and within the 2-bit (0..3) effect-index space.
+    let mut used_slots = [false; 4];
+    // `i` is the DBC EFFECT INDEX, not merely a position in `used_slots`: it addresses four
+    // parallel DBC arrays (`effect`, `effect_aura`, `effect_mechanic`, `effect_item_type`) AND
+    // is packed into the deterministic row id `(spell_id << 2) | index`. Iterating one of those
+    // arrays instead (what `clippy::needless_range_loop` asks for) would hide that.
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..3 {
+        let effect_id = s.effect[i];
+        if effect_id == 0 {
+            continue; // sparse effect slots are common
+        }
+        used_slots[i] = true;
+        let effect_index = i as u8;
+        let ResolvedEffect {
+            kind,
+            p0,
+            p0_kind,
+            base_points,
+            die_sides,
+            per_level,
+            period_ms,
+        } = resolve_effect_kind(s, i, header, creature_displays, cov);
+        let target = resolve_effect_target(s, i, kind, header);
+        // Evocation (12051): a channeled 8s self-buff that restores a PERCENT of max mana every 2s
+        // (~60% over the channel). Its DBC effects are inert markers (a +1500% ModPowerRegenPercent →
+        // A_FLAG, and a second no-op) that restore no real number. Reclassify the FIRST effect
+        // (effect_index 1) to a GENERIC A_PERIODIC_ENERGIZE self-tick: period 2000ms, amount 15 (a
+        // PERCENT — p0_kind P_PCT_MAX_POWER makes aura_apply convert it to an absolute per-tick off the
+        // caster's max mana), MANA power type (p0=0), self-targeted. The header's CHANNELED flag
+        // (is_channeled by name) holds the caster 8s; break_channel tears this aura down on move/cast/CC
+        // (the widened periodic-energize filter). The second no-op effect stays inert. Keyed on name +
+        // effect index, never engine code. (Mirrors the Consecration/Human-Spirit by-name effect fixes.)
+        let (kind, period_ms, base_points, target, p0, p0_kind) =
+            if name == "Evocation" && effect_index == 1 {
+                (
+                    A_PERIODIC_ENERGIZE,
+                    2000u32,
+                    15i32,
+                    T_SELF,
+                    0i32,
+                    P_PCT_MAX_POWER,
+                )
+            } else {
+                (kind, period_ms, base_points, target, p0, p0_kind)
+            };
+        let radius_yd = if s.effect_radius[i] > 0 {
+            dbc.radii
+                .get(SpellRadiusKey::new(s.effect_radius[i]))
+                .map(|r| r.radius)
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let chain_targets = s.effect_chain_target[i].clamp(0, 255) as u8;
+        let trigger_spell = s.effect_trigger_spell[i];
+        // Record wrapper -> rank: a LearnSpell wrapper's first nonzero trigger is the castable rank it
+        // teaches (resolves the wrapper's trainer-offering level/cost to the rank, below).
+        // `is_wrapper_rank_trigger` excludes every OTHER kind that rides the same `trigger_spell`
+        // column for a non-rank payload (a channel's missile, a Proc's trigger, a plain instant
+        // trigger) — see its own doc comment. This list must stay in lockstep with
+        // `resolve_learn_target` (module/src/trainer.rs).
+        if trigger_spell != 0 && is_wrapper_rank_trigger(kind) {
+            wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
+        }
+        let effect_mechanic = s.effect_mechanic[i] as u8;
+        let p1 = if kind == E_POWER_BURN {
+            power_burn_ratio_bp(s.effect_multiple_values[i])
+        } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
+            // 264: the affected-spell FAMILY MASK (DBC EffectItemType) — matched at fold time
+            // against the cast header's family_flags.
+            s.effect_item_type[i]
+        } else {
+            power_word_shield_p1_override(spell_id, &name, kind, 0i32)
+        };
+        let script_id = 0u32;
+        // [093] data-driven "this energize enters/holds combat": set on Bloodrage (cast 2687 + trickle
+        // 29131, BOTH named "Bloodrage") so the E_ENERGIZE / A_PERIODIC_ENERGIZE arms read the flag, not
+        // a spell id. Any energize can opt in by adding the name.
+        let enters_combat = name == "Bloodrage";
+
+        effect_rows.push(SpellEffectRow {
+            spell_id,
+            effect_index,
+            kind,
+            base_points,
+            die_sides,
+            per_level,
+            period_ms,
+            target,
+            radius_yd,
+            chain_targets,
+            trigger_spell,
+            effect_mechanic,
+            p0,
+            p0_kind,
+            p1,
+            script_id,
+            enters_combat,
+        });
+
+        cov.effects += 1;
+        *cov.by_kind.entry(kind).or_default() += 1;
+        if kind == E_SCRIPTED {
+            cov.scripted += 1;
+        } else {
+            cov.real += 1;
         }
 
-        // --- effects (game_spell_effect) ---
-        // Track which effect_index slots the DBC populates, so a SYNTHETIC effect (an ADDED A_CONTROL /
-        // A_MOD_SPEED) can take the first FREE slot — keeping the deterministic id `(spell_id<<2)|index`
-        // unique and within the 2-bit (0..3) effect-index space.
-        let mut used_slots = [false; 4];
-        // `i` is the DBC EFFECT INDEX, not merely a position in `used_slots`: it addresses four
-        // parallel DBC arrays (`effect`, `effect_aura`, `effect_mechanic`, `effect_item_type`) AND
-        // is packed into the deterministic row id `(spell_id << 2) | index`. Iterating one of those
-        // arrays instead (what `clippy::needless_range_loop` asks for) would hide that.
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..3 {
-            let effect_id = s.effect[i];
-            if effect_id == 0 {
-                continue; // sparse effect slots are common
-            }
-            used_slots[i] = true;
-            let effect_index = i as u8;
-            let aura = s.effect_aura[i];
-
-            let (kind, (p0, p0_kind)) = if is_aura_effect(effect_id) || aura != AuraMod::None {
-                let k = aura_mod_to_kind(aura);
-                if k == E_SCRIPTED {
-                    *cov.unmapped_aura.entry(format!("{aura:?}")).or_default() += 1;
-                }
-                (k, resolve_aura_params(k, aura, s.effect_misc_value[i]))
-            } else {
-                let k = instant_effect_to_kind(effect_id);
-                if k == E_SCRIPTED {
-                    *cov.unmapped_effect.entry(effect_id).or_default() += 1;
-                }
-                (
-                    k,
-                    resolve_instant_params(k, s.effect_misc_value[i], s.effect_item_type[i]),
-                )
-            };
-            // Curated correction (Spell.sql analog): reclassify the known script-effect-as-generic spells.
-            let kind = correct_script_effect_kind(&name, kind);
-
-            // DISMOUNT reclassify (data-driven, never by name/id): a raw DISPEL_MECHANIC effect whose
-            // misc value names the mount mechanic becomes E_DISMOUNT. Runs on the RAW effect id (not
-            // the resolved kind), so it fires regardless of what instant_effect_to_kind mapped 108 to.
-            let kind = dismount_effect_kind(effect_id, s.effect_misc_value[i]).unwrap_or(kind);
-
-            // STANCE p0 remap: a reclassified E_SET_STANCE effect arrives with p0 = the vanilla form id
-            // (from the ModShapeshift misc value). Remap it to our 0-based stance id via `form_to_stance`
-            // (Battle 17→0 / Defensive 18→1 / Berserker 19→2 / Bear 5→3 / Cat 1→4 / Dire Bear 8→5) so the
-            // cast handler writes the right WorldEntity.stance. Mirrors the COMBAT_DODGE ×100 base-point
-            // rescale below — a kind-keyed p0 fix-up after the reclassify, never a spell id. Non-stance
-            // effects keep their resolved p0.
-            let p0 = stance_p0(kind, p0);
-
-            // MOUNT DISPLAY resolution: an A_MOUNTED effect's p0 already defaults to the raw misc value
-            // (resolve_aura_params) — resolve the rarer creature-template indirection here, mirroring
-            // the stance/CREATE_ITEM kind-keyed p0 fix-ups above.
-            let p0 = mount_display_p0(kind, p0, &creature_displays);
-
-            // PROC_DAMAGE school: an A_PROC_DAMAGE effect deals its frozen amount as damage of the
-            // proc spell's own school — mirrors the mount/stance p0 fix-ups above.
-            let (p0, p0_kind) = proc_damage_school_p0(kind, p0, p0_kind, school_mask);
-
-            // CREATE_ITEM p0 injection (Healthstone): the by-name reclassify above made these E_CREATE_ITEM,
-            // but their DBC effect_item_type is 0 (the mangos script hardcodes the item), so the resolved p0
-            // is 0 (and p0_kind is P_NONE, since the kind was E_SCRIPTED when resolve_instant_params ran).
-            // Inject the per-rank Healthstone item template entry + P_ITEM_ENTRY here — the same kind-keyed,
-            // name-keyed p0 fix-up as the E_SET_STANCE remap above, never disturbing a real effect_item_type
-            // p0 (the arm only fires for these names, whose native p0 is already 0). count=1 rides base_points.
-            // The module's E_CREATE_ITEM handler reads only p0; the p0_kind set is for data parity with
-            // natively-mapped Conjure Water/Food (which carry P_ITEM_ENTRY).
-            let (p0, p0_kind) = if kind == E_CREATE_ITEM {
-                let item = match name.as_str() {
-                    "Create Healthstone (Minor)" => Some(5512),
-                    "Create Healthstone (Lesser)" => Some(5511),
-                    "Create Healthstone" => Some(5509),
-                    "Create Healthstone (Greater)" => Some(5510),
-                    "Create Healthstone (Major)" => Some(9421),
-                    _ => None, // a native CreateItem (Conjure Water/Food) keeps its effect_item_type (p0, p0_kind)
-                };
-                match item {
-                    Some(entry) => (entry, P_ITEM_ENTRY),
-                    None => (p0, p0_kind),
-                }
-            } else {
-                (p0, p0_kind)
-            };
-
-            let base_points = dbc_flat_amount(s.effect_base_points[i]); // DBC +1 convention (mounted-speed 59/99 → 60/100 falls out of this for free)
-                                                                        // Avoidance-chance combat fields are basis-points in our engine but PERCENT in the DBC, so
-                                                                        // scale ×100 (Evasion's +50% dodge → +5000 bp). COMBAT_THREAT is a signed percent in both
-                                                                        // (the threat fold divides by 100), so it is NOT scaled.
-            let base_points = if kind == A_MOD_COMBAT && p0 == COMBAT_DODGE {
-                base_points * 100
-            } else {
-                base_points
-            };
-            let die_sides = s.effect_die_sides[i];
-            let per_level = s.effect_real_points_per_level[i];
-            // EffectAmplitude is an INTEGER ms in the real DBC, but wow_dbc 0.3 vanilla mis-declares it as
-            // f32 — so a value like 3000 arrives as the denormal 4.204e-42 and `as u32` would truncate to
-            // 0 (silently making EVERY imported DoT/HoT never tick). Recover the integer via `.to_bits()`,
-            // the SAME float-misdeclaration workaround the importer already uses for rangeIndex. Without
-            // this, Garrote's bleed (and Rend/SW:Pain/Corruption/Curse of Agony) sit dormant and expire.
-            let period_ms = s.effect_amplitude[i].to_bits(); // amplitude is an INTEGER ms misdeclared as f32 by wow_dbc
-                                                             // ModRegen (Demon Skin/Armor's health-per-5, work-item 024) is force-ticked every 5000ms by
-                                                             // vanilla regardless of the DBC's own EffectAmplitude (a behaviour the reference cores show too) — apply that
-                                                             // override here so the reclassified A_PERIODIC_HEAL effect actually schedules a tick even if
-                                                             // Spell.dbc carries 0/garbage amplitude for this aura kind.
-            let period_ms = if kind == A_PERIODIC_HEAL && aura == AuraMod::ModRegen {
-                5000
-            } else {
-                period_ms
-            };
-            // CHANNEL reclassify: on a channeled spell, the periodic-trigger effect (a PeriodicTriggerSpell /
-            // raw TriggerSpell mapped to E_TRIGGER, with a tick period) IS the channel tick — reclassify it to
-            // A_PERIODIC_TRIGGER so `tick_auras` fires its `trigger_spell` (the missile) each period at the
-            // channel target. Gated on the channeled header bit + a real period, so a non-channel periodic
-            // trigger (a proc) is untouched. Keyed on the kind + period, never a spell id; the channel target
-            // + the trigger spell id are frozen onto the aura at cast (aura_apply). [import]
-            let kind = if channeled && kind == E_TRIGGER && period_ms > 0 {
-                A_PERIODIC_TRIGGER
-            } else {
-                kind
-            };
-            // GROUND-AoE (118): a ground-persistent A_PERIODIC_DAMAGE is a FIXED-POSITION area, not a unit
-            // DoT. The DBC encodes it as A_PERIODIC_DAMAGE with a dynobj/self target that resolves WRONG —
-            // Consecration → T_SELF would DoT the paladin himself. Reclassify BY NAME to E_PERSISTENT_AREA
-            // (the Charge/Blink name-rescue precedent) so it spawns a game_ground_area whose own
-            // tick_ground_areas damages hostiles inside. Consecration is caster-anchored; Flamestrike (262)
-            // is the first CLICKED-GROUND one — the 118 phase-2 dest plumbing (6067df1) anchors the area at
-            // the click when the cast carries a DEST_LOCATION block, so the same kind serves both.
-            // Blizzard/Rain of Fire remain un-rescued (channeled patches — their channel/tick interplay is
-            // its own follow-up; leaving them A_PERIODIC_DAMAGE keeps them out of the curated kit).
-            let kind = if kind == A_PERIODIC_DAMAGE
-                && matches!(name.as_str(), "Consecration" | "Flamestrike")
-            {
-                E_PERSISTENT_AREA
-            } else {
-                kind
-            };
-            // The Human Spirit: wow_dbc mis-decodes this racial's effect as a FLAT all-stat ModStat, but
-            // Classic's actual effect is "Mod Stat - %" = +5% SPIRIT (verified vs
-            // wowhead.com/classic/spell=20598). Force the percent kind + the Spirit stat by name; the
-            // decoded base_points (5) already carries the 5%. The A_MOD_STAT_PCT recompute fold then makes
-            // Spirit = round(base * 1.05), Spirit-only. [104]
-            let (kind, p0, p0_kind) = if name == "The Human Spirit" {
-                (A_MOD_STAT_PCT, 4, P_STAT_ID) // 4 = Spirit (UNIT_FIELD_STAT4)
-            } else {
-                (kind, p0, p0_kind)
-            };
-            let target = resolve_target(s.implicit_target_a[i], is_negative);
-            // Charge/Judgement/Pick Pocket are inherently ENEMY-targeted; Resurrection is inherently
-            // ALLY-targeted (a dead friend) — the raw DBC implicit target reads wrong for all of these.
-            // E_TAUNT joined 2026-07-19 (266): Taunt/Growl carry implicit target 6|25 whose polarity
-            // fallback read ALLY (they're not is_negative), so the faction gate refused every yank.
-            let target = match kind {
-                E_CHARGE | E_JUDGEMENT | E_PICKPOCKET | E_INTERRUPT | E_NEXT_SWING | E_TAUNT => {
-                    T_TARGET_ENEMY
-                }
-                E_RESURRECT => T_TARGET_ALLY,
-                // Feint's threat drop acts on the CASTER as source — force T_SELF so it self-targets
-                // (the handler reads caster_guid) and the faction gate never trips (self-cast bypass).
-                E_REDUCE_THREAT => T_SELF,
-                // Blink (116): a self-cast forward teleport — the handler reads caster_guid only and
-                // ignores any resolved target, so force T_SELF (fires once, bypasses the faction gate).
-                E_BLINK => T_SELF,
-                // Ground-AoE (118): anchor at the CASTER (Consecration is caster-centered) — force T_SELF so
-                // select_targets yields the caster once (the handler stamps the area at that position) and the
-                // faction gate is bypassed. A clicked-ground variant anchors at the dest coords instead.
-                E_PERSISTENT_AREA => T_SELF,
-                // Summon (Summon Imp): the pet is summoned at the CASTER — the handler reads caster_guid and
-                // ignores the resolved target. Force T_SELF so `select_targets` yields the caster (the
-                // summon fires exactly once) AND the faction gate is bypassed (a self-cast imposes no
-                // faction constraint), so casting it while an enemy is selected still summons the pet.
-                E_SUMMON_PET => T_SELF,
-                E_DUEL => T_TARGET_ANY,
-                E_TAME_CREATURE => T_TARGET_ENEMY,
-                _ => target,
-            };
-            // Slice and Dice (a combo FINISHER) is cast AT the enemy you built combo on (to read + spend
-            // it); its inert marker effect reads ally-typed in the DBC, which makes the faction gate reject
-            // the enemy cast. Force the marker enemy-targeted — the self-haste effect (T_SELF) is untouched.
-            let target = if name == "Slice and Dice" && target == T_TARGET_ALLY {
-                T_TARGET_ENEMY
-            } else {
-                target
-            };
-            // Mind Soothe (453, reduces a hostile creature's aggro radius) and Disarm (676, strips the
-            // enemy's weapon) are ENEMY debuffs, but their DBC implicit target reads ally/self-typed
-            // (Mind Soothe → T_SELF/T_TARGET_ALLY; Disarm imports as target=2 = T_TARGET_ALLY), so the
-            // faction gate would refuse the hostile cast + `select_targets` wouldn't reach the foe. Force
-            // both onto the enemy. Keyed on name (the Slice and Dice precedent above).
-            let target = if matches!(name.as_str(), "Mind Soothe" | "Disarm") {
-                T_TARGET_ENEMY
-            } else {
-                target
-            };
-            // Thunder Clap / Frost Nova are enemy PBAoEs (negative=true) but their DBC implicit
-            // target reads as a friendly-party code -> mapped T_TARGET_ALLY, so the AoE fan-out
-            // never fires and the faction gate refuses casting them at a hostile.  Force all
-            // effects to T_AREA_ENEMY so they splash nearby hostiles.  (Frost Nova: both effects
-            // (E_DAMAGE + A_CONTROL M_ROOT) carry target=2 and radius=10 in the DBC; the
-            // PBAoE fan-out + root already exist in the engine — this is purely a data fix.)
-            let target = if name == "Thunder Clap" || name == "Frost Nova" {
-                T_AREA_ENEMY
-            } else {
-                target
-            };
-            // Flamestrike (262): the INITIAL-impact nuke (its E_DAMAGE effect) fans out around the
-            // CLICK — the 118 phase-2 select_targets anchors an area target on the cast's dest when
-            // one is present. Scoped to E_DAMAGE only: forcing all effects (the Thunder Clap shape)
-            // would drag the PATCH effect to T_AREA_ENEMY and spawn one ground area per hostile.
-            let target = if name == "Flamestrike" && kind == E_DAMAGE {
-                T_AREA_ENEMY
-            } else {
-                target
-            };
-            // Battle Shout is a party PBAoE buff (EFFECT_APPLY_AREA_AURA_PARTY in the DBC,
-            // 30yd radius) but its implicit_target_a=20 (TARGET_UNIT_PARTY_CASTER) maps to
-            // T_TARGET_ALLY (single ally), so only one party member is buffed in a group.
-            // Force T_AREA_ALLY so the fan-out engine splashes all nearby allies at the
-            // DBC-imported radius (30yd). Mirrors the Thunder Clap precedent above.
-            let target = if name == "Battle Shout" {
-                T_AREA_ALLY
-            } else {
-                target
-            };
-            // Arcane Intellect (1459) imports with implicit_target_a=0 → T_SELF, but it is
-            // a friendly single-target buff (targets yourself OR an ally).  Force T_TARGET_ALLY
-            // so the faction gate allows casting on a friendly target; the engine falls back to
-            // the caster when no friendly target is selected (same behaviour as Resurrection).
-            // Same DBC-collapse trap hits the paladin/priest friendly single-target kit — Holy
-            // Light (635/639), Lay on Hands (633), Blessing of Might (19740) and Purify (1152) all
-            // import with implicit_target_a=0 (see work-item 007, archived), so they share this override.
-            let target = friendly_self_or_ally_target_override(&name, target);
-            // CHANNEL self-marker: a channeled spell carries an inert A_FLAG "you are channeling" marker
-            // (Arcane Missiles eff2) that the DBC reads as ALLY-targeted — but the channel is cast AT an
-            // ENEMY, so an ally-typed effect would make the faction gate REJECT the enemy cast (the same
-            // trap fixed for Slice and Dice / Thunder Clap). Force the marker to T_SELF: it's a caster-side
-            // flag, so self-targeting it both lands it correctly AND removes it from the faction gate's
-            // hits_ally/hits_enemy scan (a self-cast effect imposes no faction constraint). Generic over the
-            // channeled bit + the A_FLAG kind, never a spell id; the channel's A_PERIODIC_TRIGGER tick effect
-            // is already T_SELF, so only the stray marker is corrected.
-            let target = if channeled && kind == A_FLAG {
-                T_SELF
-            } else {
-                target
-            };
-            // Evocation (12051): a channeled 8s self-buff that restores a PERCENT of max mana every 2s
-            // (~60% over the channel). Its DBC effects are inert markers (a +1500% ModPowerRegenPercent →
-            // A_FLAG, and a second no-op) that restore no real number. Reclassify the FIRST effect
-            // (effect_index 1) to a GENERIC A_PERIODIC_ENERGIZE self-tick: period 2000ms, amount 15 (a
-            // PERCENT — p0_kind P_PCT_MAX_POWER makes aura_apply convert it to an absolute per-tick off the
-            // caster's max mana), MANA power type (p0=0), self-targeted. The header's CHANNELED flag
-            // (is_channeled by name) holds the caster 8s; break_channel tears this aura down on move/cast/CC
-            // (the widened periodic-energize filter). The second no-op effect stays inert. Keyed on name +
-            // effect index, never engine code. (Mirrors the Consecration/Human-Spirit by-name effect fixes.)
-            let (kind, period_ms, base_points, target, p0, p0_kind) =
-                if name == "Evocation" && effect_index == 1 {
-                    (
-                        A_PERIODIC_ENERGIZE,
-                        2000u32,
-                        15i32,
-                        T_SELF,
-                        0i32,
-                        P_PCT_MAX_POWER,
-                    )
-                } else {
-                    (kind, period_ms, base_points, target, p0, p0_kind)
-                };
-            let radius_yd = if s.effect_radius[i] > 0 {
-                radii
-                    .get(SpellRadiusKey::new(s.effect_radius[i]))
-                    .map(|r| r.radius)
-                    .unwrap_or(0.0)
-            } else {
-                0.0
-            };
-            let chain_targets = s.effect_chain_target[i].clamp(0, 255) as u8;
-            let trigger_spell = s.effect_trigger_spell[i];
-            // Record wrapper -> rank: a LearnSpell wrapper's first nonzero trigger is the castable rank it
-            // teaches (resolves the wrapper's trainer-offering level/cost to the rank, below).
-            // `is_wrapper_rank_trigger` excludes every OTHER kind that rides the same `trigger_spell`
-            // column for a non-rank payload (a channel's missile, a Proc's trigger, a plain instant
-            // trigger) — see its own doc comment. This list must stay in lockstep with
-            // `resolve_learn_target` (module/src/trainer.rs).
-            if trigger_spell != 0 && is_wrapper_rank_trigger(kind) {
-                wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
-            }
-            let effect_mechanic = s.effect_mechanic[i] as u8;
-            let p1 = if kind == E_POWER_BURN {
-                power_burn_ratio_bp(s.effect_multiple_values[i])
-            } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
-                // 264: the affected-spell FAMILY MASK (DBC EffectItemType) — matched at fold time
-                // against the cast header's family_flags.
-                s.effect_item_type[i]
-            } else {
-                power_word_shield_p1_override(spell_id, &name, kind, 0i32)
-            };
-            let script_id = 0u32;
-            // [093] data-driven "this energize enters/holds combat": set on Bloodrage (cast 2687 + trickle
-            // 29131, BOTH named "Bloodrage") so the E_ENERGIZE / A_PERIODIC_ENERGIZE arms read the flag, not
-            // a spell id. Any energize can opt in by adding the name.
-            let enters_combat = name == "Bloodrage";
-
-            effect_rows.push(SpellEffectRow {
-                spell_id,
-                effect_index,
-                kind,
-                base_points,
-                die_sides,
-                per_level,
-                period_ms,
-                target,
-                radius_yd,
-                chain_targets,
-                trigger_spell,
-                effect_mechanic,
-                p0,
-                p0_kind,
-                p1,
-                script_id,
-                enters_combat,
-            });
-
-            cov.effects += 1;
-            *cov.by_kind.entry(kind).or_default() += 1;
-            if kind == E_SCRIPTED {
-                cov.scripted += 1;
-            } else {
-                cov.real += 1;
-            }
-
-            if !allow.is_empty() {
-                // Allowlist mode: log EVERY effect (incl. E_SCRIPTED no-ops) so an unmapped ability is
-                // visible, not silently dropped — the operator decides whether it's usable as-is.
-                samples.push(format!(
+        if !allow.is_empty() {
+            // Allowlist mode: log EVERY effect (incl. E_SCRIPTED no-ops) so an unmapped ability is
+            // visible, not silently dropped — the operator decides whether it's usable as-is.
+            samples.push(format!(
                     "    eff{effect_index}: {kn} (0x{kind:02X}) base={base_points} die={die_sides} period_ms={period_ms} target={target} p0={p0} p0_kind={p0_kind} trigger={trigger_spell}",
                     kn = kind_name(kind),
                 ));
-            } else if kind != E_SCRIPTED && samples.len() < 8 {
-                // Full-import mode: keep a few human-readable samples for the dry-run (first 8 REAL effects).
-                samples.push(format!(
+        } else if kind != E_SCRIPTED && samples.len() < 8 {
+            // Full-import mode: keep a few human-readable samples for the dry-run (first 8 REAL effects).
+            samples.push(format!(
                     "  spell {spell_id} '{}' eff{effect_index}: kind=0x{kind:02X} base={base_points} period_ms={period_ms} target={target} p0={p0} p0_kind={p0_kind}",
                     name.chars().take(28).collect::<String>(),
                 ));
-            }
-        }
-
-        // --- SYNTHETIC effect ADDITIONS (the curated correction for CC/speed/seal data the DBC lacks) ---
-        // A synthetic A_CONTROL (Gouge) / A_MOD_SPEED (Stealth) / A_SEAL (Seal of the Crusader) is ADDED at
-        // the FIRST free effect_index (the lowest open slot, keeping the deterministic id
-        // `(spell_id<<2)|index` unique + in the 0..3 range). At most ONE synthetic per spell (Gouge/Stealth/
-        // SoC are distinct ids), so a single free slot suffices. These are REAL kinds → counted toward
-        // coverage like any mapped effect.
-        let synth_slot = used_slots.iter().position(|&u| !u).unwrap_or(3) as u8;
-        if let Some(synth) = synthetic_control_effect(spell_id, &name, synth_slot)
-            .or_else(|| synthetic_stealth_slow_effect(spell_id, &name, synth_slot))
-            .or_else(|| synthetic_seal_effect(spell_id, &name, synth_slot))
-        {
-            cov.effects += 1;
-            cov.real += 1;
-            *cov.by_kind.entry(synth.kind).or_default() += 1;
-            if !allow.is_empty() {
-                samples.push(format!("    [synthetic+curated] {}", synth.sql_values()));
-            }
-            effect_rows.push(synth);
         }
     }
 
+    // --- SYNTHETIC effect ADDITIONS (the curated correction for CC/speed/seal data the DBC lacks) ---
+    // A synthetic A_CONTROL (Gouge) / A_MOD_SPEED (Stealth) / A_SEAL (Seal of the Crusader) is ADDED at
+    // the FIRST free effect_index (the lowest open slot, keeping the deterministic id
+    // `(spell_id<<2)|index` unique + in the 0..3 range). At most ONE synthetic per spell (Gouge/Stealth/
+    // SoC are distinct ids), so a single free slot suffices. These are REAL kinds → counted toward
+    // coverage like any mapped effect.
+    let synth_slot = used_slots.iter().position(|&u| !u).unwrap_or(3) as u8;
+    if let Some(synth) = synthetic_control_effect(spell_id, &name, synth_slot)
+        .or_else(|| synthetic_stealth_slow_effect(spell_id, &name, synth_slot))
+        .or_else(|| synthetic_seal_effect(spell_id, &name, synth_slot))
+    {
+        cov.effects += 1;
+        cov.real += 1;
+        *cov.by_kind.entry(synth.kind).or_default() += 1;
+        if !allow.is_empty() {
+            samples.push(format!("    [synthetic+curated] {}", synth.sql_values()));
+        }
+        effect_rows.push(synth);
+    }
+}
+
+/// Resolve one DBC effect slot to our kind + magnitudes: the aura/instant mapping, then every
+/// curated reclassify and p0 fix-up that rides on it.
+fn resolve_effect_kind(
+    s: &wow_dbc::vanilla_tables::spell::SpellRow,
+    i: usize,
+    header: &SpellHeader,
+    creature_displays: &BTreeMap<u32, u32>,
+    cov: &mut Coverage,
+) -> ResolvedEffect {
+    let effect_id = s.effect[i];
+    let aura = s.effect_aura[i];
+    let name = header.name.as_str();
+    let school_mask = header.school_mask;
+    let channeled = header.channeled;
+    let (kind, (p0, p0_kind)) = if is_aura_effect(effect_id) || aura != AuraMod::None {
+        let k = aura_mod_to_kind(aura);
+        if k == E_SCRIPTED {
+            *cov.unmapped_aura.entry(format!("{aura:?}")).or_default() += 1;
+        }
+        (k, resolve_aura_params(k, aura, s.effect_misc_value[i]))
+    } else {
+        let k = instant_effect_to_kind(effect_id);
+        if k == E_SCRIPTED {
+            *cov.unmapped_effect.entry(effect_id).or_default() += 1;
+        }
+        (
+            k,
+            resolve_instant_params(k, s.effect_misc_value[i], s.effect_item_type[i]),
+        )
+    };
+    // Curated correction (Spell.sql analog): reclassify the known script-effect-as-generic spells.
+    let kind = correct_script_effect_kind(&name, kind);
+
+    // DISMOUNT reclassify (data-driven, never by name/id): a raw DISPEL_MECHANIC effect whose
+    // misc value names the mount mechanic becomes E_DISMOUNT. Runs on the RAW effect id (not
+    // the resolved kind), so it fires regardless of what instant_effect_to_kind mapped 108 to.
+    let kind = dismount_effect_kind(effect_id, s.effect_misc_value[i]).unwrap_or(kind);
+
+    // STANCE p0 remap: a reclassified E_SET_STANCE effect arrives with p0 = the vanilla form id
+    // (from the ModShapeshift misc value). Remap it to our 0-based stance id via `form_to_stance`
+    // (Battle 17→0 / Defensive 18→1 / Berserker 19→2 / Bear 5→3 / Cat 1→4 / Dire Bear 8→5) so the
+    // cast handler writes the right WorldEntity.stance. Mirrors the COMBAT_DODGE ×100 base-point
+    // rescale below — a kind-keyed p0 fix-up after the reclassify, never a spell id. Non-stance
+    // effects keep their resolved p0.
+    let p0 = stance_p0(kind, p0);
+
+    // MOUNT DISPLAY resolution: an A_MOUNTED effect's p0 already defaults to the raw misc value
+    // (resolve_aura_params) — resolve the rarer creature-template indirection here, mirroring
+    // the stance/CREATE_ITEM kind-keyed p0 fix-ups above.
+    let p0 = mount_display_p0(kind, p0, &creature_displays);
+
+    // PROC_DAMAGE school: an A_PROC_DAMAGE effect deals its frozen amount as damage of the
+    // proc spell's own school — mirrors the mount/stance p0 fix-ups above.
+    let (p0, p0_kind) = proc_damage_school_p0(kind, p0, p0_kind, school_mask);
+
+    // CREATE_ITEM p0 injection (Healthstone): the by-name reclassify above made these E_CREATE_ITEM,
+    // but their DBC effect_item_type is 0 (the mangos script hardcodes the item), so the resolved p0
+    // is 0 (and p0_kind is P_NONE, since the kind was E_SCRIPTED when resolve_instant_params ran).
+    // Inject the per-rank Healthstone item template entry + P_ITEM_ENTRY here — the same kind-keyed,
+    // name-keyed p0 fix-up as the E_SET_STANCE remap above, never disturbing a real effect_item_type
+    // p0 (the arm only fires for these names, whose native p0 is already 0). count=1 rides base_points.
+    // The module's E_CREATE_ITEM handler reads only p0; the p0_kind set is for data parity with
+    // natively-mapped Conjure Water/Food (which carry P_ITEM_ENTRY).
+    let (p0, p0_kind) = if kind == E_CREATE_ITEM {
+        let item = match name {
+            "Create Healthstone (Minor)" => Some(5512),
+            "Create Healthstone (Lesser)" => Some(5511),
+            "Create Healthstone" => Some(5509),
+            "Create Healthstone (Greater)" => Some(5510),
+            "Create Healthstone (Major)" => Some(9421),
+            _ => None, // a native CreateItem (Conjure Water/Food) keeps its effect_item_type (p0, p0_kind)
+        };
+        match item {
+            Some(entry) => (entry, P_ITEM_ENTRY),
+            None => (p0, p0_kind),
+        }
+    } else {
+        (p0, p0_kind)
+    };
+
+    let base_points = dbc_flat_amount(s.effect_base_points[i]); // DBC +1 convention (mounted-speed 59/99 → 60/100 falls out of this for free)
+                                                                // Avoidance-chance combat fields are basis-points in our engine but PERCENT in the DBC, so
+                                                                // scale ×100 (Evasion's +50% dodge → +5000 bp). COMBAT_THREAT is a signed percent in both
+                                                                // (the threat fold divides by 100), so it is NOT scaled.
+    let base_points = if kind == A_MOD_COMBAT && p0 == COMBAT_DODGE {
+        base_points * 100
+    } else {
+        base_points
+    };
+    let die_sides = s.effect_die_sides[i];
+    let per_level = s.effect_real_points_per_level[i];
+    // EffectAmplitude is an INTEGER ms in the real DBC, but wow_dbc 0.3 vanilla mis-declares it as
+    // f32 — so a value like 3000 arrives as the denormal 4.204e-42 and `as u32` would truncate to
+    // 0 (silently making EVERY imported DoT/HoT never tick). Recover the integer via `.to_bits()`,
+    // the SAME float-misdeclaration workaround the importer already uses for rangeIndex. Without
+    // this, Garrote's bleed (and Rend/SW:Pain/Corruption/Curse of Agony) sit dormant and expire.
+    let period_ms = s.effect_amplitude[i].to_bits(); // amplitude is an INTEGER ms misdeclared as f32 by wow_dbc
+                                                     // ModRegen (Demon Skin/Armor's health-per-5, work-item 024) is force-ticked every 5000ms by
+                                                     // vanilla regardless of the DBC's own EffectAmplitude (a behaviour the reference cores show too) — apply that
+                                                     // override here so the reclassified A_PERIODIC_HEAL effect actually schedules a tick even if
+                                                     // Spell.dbc carries 0/garbage amplitude for this aura kind.
+    let period_ms = if kind == A_PERIODIC_HEAL && aura == AuraMod::ModRegen {
+        5000
+    } else {
+        period_ms
+    };
+    // CHANNEL reclassify: on a channeled spell, the periodic-trigger effect (a PeriodicTriggerSpell /
+    // raw TriggerSpell mapped to E_TRIGGER, with a tick period) IS the channel tick — reclassify it to
+    // A_PERIODIC_TRIGGER so `tick_auras` fires its `trigger_spell` (the missile) each period at the
+    // channel target. Gated on the channeled header bit + a real period, so a non-channel periodic
+    // trigger (a proc) is untouched. Keyed on the kind + period, never a spell id; the channel target
+    // + the trigger spell id are frozen onto the aura at cast (aura_apply). [import]
+    let kind = if channeled && kind == E_TRIGGER && period_ms > 0 {
+        A_PERIODIC_TRIGGER
+    } else {
+        kind
+    };
+    // GROUND-AoE (118): a ground-persistent A_PERIODIC_DAMAGE is a FIXED-POSITION area, not a unit
+    // DoT. The DBC encodes it as A_PERIODIC_DAMAGE with a dynobj/self target that resolves WRONG —
+    // Consecration → T_SELF would DoT the paladin himself. Reclassify BY NAME to E_PERSISTENT_AREA
+    // (the Charge/Blink name-rescue precedent) so it spawns a game_ground_area whose own
+    // tick_ground_areas damages hostiles inside. Consecration is caster-anchored; Flamestrike (262)
+    // is the first CLICKED-GROUND one — the 118 phase-2 dest plumbing (6067df1) anchors the area at
+    // the click when the cast carries a DEST_LOCATION block, so the same kind serves both.
+    // Blizzard/Rain of Fire remain un-rescued (channeled patches — their channel/tick interplay is
+    // its own follow-up; leaving them A_PERIODIC_DAMAGE keeps them out of the curated kit).
+    let kind = if kind == A_PERIODIC_DAMAGE && matches!(name, "Consecration" | "Flamestrike") {
+        E_PERSISTENT_AREA
+    } else {
+        kind
+    };
+    // The Human Spirit: wow_dbc mis-decodes this racial's effect as a FLAT all-stat ModStat, but
+    // Classic's actual effect is "Mod Stat - %" = +5% SPIRIT (verified vs
+    // wowhead.com/classic/spell=20598). Force the percent kind + the Spirit stat by name; the
+    // decoded base_points (5) already carries the 5%. The A_MOD_STAT_PCT recompute fold then makes
+    // Spirit = round(base * 1.05), Spirit-only. [104]
+    let (kind, p0, p0_kind) = if name == "The Human Spirit" {
+        (A_MOD_STAT_PCT, 4, P_STAT_ID) // 4 = Spirit (UNIT_FIELD_STAT4)
+    } else {
+        (kind, p0, p0_kind)
+    };
+
+    ResolvedEffect {
+        kind,
+        p0,
+        p0_kind,
+        base_points,
+        die_sides,
+        per_level,
+        period_ms,
+    }
+}
+
+/// Resolve one effect's target: the DBC implicit target, then the curated by-name overrides that
+/// correct the ones vanilla's data reads wrong.
+fn resolve_effect_target(
+    s: &wow_dbc::vanilla_tables::spell::SpellRow,
+    i: usize,
+    kind: u8,
+    header: &SpellHeader,
+) -> u8 {
+    let name = header.name.as_str();
+    let is_negative = header.is_negative;
+    let channeled = header.channeled;
+    let target = resolve_target(s.implicit_target_a[i], is_negative);
+    // Charge/Judgement/Pick Pocket are inherently ENEMY-targeted; Resurrection is inherently
+    // ALLY-targeted (a dead friend) — the raw DBC implicit target reads wrong for all of these.
+    // E_TAUNT joined 2026-07-19 (266): Taunt/Growl carry implicit target 6|25 whose polarity
+    // fallback read ALLY (they're not is_negative), so the faction gate refused every yank.
+    let target = match kind {
+        E_CHARGE | E_JUDGEMENT | E_PICKPOCKET | E_INTERRUPT | E_NEXT_SWING | E_TAUNT => {
+            T_TARGET_ENEMY
+        }
+        E_RESURRECT => T_TARGET_ALLY,
+        // Feint's threat drop acts on the CASTER as source — force T_SELF so it self-targets
+        // (the handler reads caster_guid) and the faction gate never trips (self-cast bypass).
+        E_REDUCE_THREAT => T_SELF,
+        // Blink (116): a self-cast forward teleport — the handler reads caster_guid only and
+        // ignores any resolved target, so force T_SELF (fires once, bypasses the faction gate).
+        E_BLINK => T_SELF,
+        // Ground-AoE (118): anchor at the CASTER (Consecration is caster-centered) — force T_SELF so
+        // select_targets yields the caster once (the handler stamps the area at that position) and the
+        // faction gate is bypassed. A clicked-ground variant anchors at the dest coords instead.
+        E_PERSISTENT_AREA => T_SELF,
+        // Summon (Summon Imp): the pet is summoned at the CASTER — the handler reads caster_guid and
+        // ignores the resolved target. Force T_SELF so `select_targets` yields the caster (the
+        // summon fires exactly once) AND the faction gate is bypassed (a self-cast imposes no
+        // faction constraint), so casting it while an enemy is selected still summons the pet.
+        E_SUMMON_PET => T_SELF,
+        E_DUEL => T_TARGET_ANY,
+        E_TAME_CREATURE => T_TARGET_ENEMY,
+        _ => target,
+    };
+    // Slice and Dice (a combo FINISHER) is cast AT the enemy you built combo on (to read + spend
+    // it); its inert marker effect reads ally-typed in the DBC, which makes the faction gate reject
+    // the enemy cast. Force the marker enemy-targeted — the self-haste effect (T_SELF) is untouched.
+    let target = if name == "Slice and Dice" && target == T_TARGET_ALLY {
+        T_TARGET_ENEMY
+    } else {
+        target
+    };
+    // Mind Soothe (453, reduces a hostile creature's aggro radius) and Disarm (676, strips the
+    // enemy's weapon) are ENEMY debuffs, but their DBC implicit target reads ally/self-typed
+    // (Mind Soothe → T_SELF/T_TARGET_ALLY; Disarm imports as target=2 = T_TARGET_ALLY), so the
+    // faction gate would refuse the hostile cast + `select_targets` wouldn't reach the foe. Force
+    // both onto the enemy. Keyed on name (the Slice and Dice precedent above).
+    let target = if matches!(name, "Mind Soothe" | "Disarm") {
+        T_TARGET_ENEMY
+    } else {
+        target
+    };
+    // Thunder Clap / Frost Nova are enemy PBAoEs (negative=true) but their DBC implicit
+    // target reads as a friendly-party code -> mapped T_TARGET_ALLY, so the AoE fan-out
+    // never fires and the faction gate refuses casting them at a hostile.  Force all
+    // effects to T_AREA_ENEMY so they splash nearby hostiles.  (Frost Nova: both effects
+    // (E_DAMAGE + A_CONTROL M_ROOT) carry target=2 and radius=10 in the DBC; the
+    // PBAoE fan-out + root already exist in the engine — this is purely a data fix.)
+    let target = if name == "Thunder Clap" || name == "Frost Nova" {
+        T_AREA_ENEMY
+    } else {
+        target
+    };
+    // Flamestrike (262): the INITIAL-impact nuke (its E_DAMAGE effect) fans out around the
+    // CLICK — the 118 phase-2 select_targets anchors an area target on the cast's dest when
+    // one is present. Scoped to E_DAMAGE only: forcing all effects (the Thunder Clap shape)
+    // would drag the PATCH effect to T_AREA_ENEMY and spawn one ground area per hostile.
+    let target = if name == "Flamestrike" && kind == E_DAMAGE {
+        T_AREA_ENEMY
+    } else {
+        target
+    };
+    // Battle Shout is a party PBAoE buff (EFFECT_APPLY_AREA_AURA_PARTY in the DBC,
+    // 30yd radius) but its implicit_target_a=20 (TARGET_UNIT_PARTY_CASTER) maps to
+    // T_TARGET_ALLY (single ally), so only one party member is buffed in a group.
+    // Force T_AREA_ALLY so the fan-out engine splashes all nearby allies at the
+    // DBC-imported radius (30yd). Mirrors the Thunder Clap precedent above.
+    let target = if name == "Battle Shout" {
+        T_AREA_ALLY
+    } else {
+        target
+    };
+    // Arcane Intellect (1459) imports with implicit_target_a=0 → T_SELF, but it is
+    // a friendly single-target buff (targets yourself OR an ally).  Force T_TARGET_ALLY
+    // so the faction gate allows casting on a friendly target; the engine falls back to
+    // the caster when no friendly target is selected (same behaviour as Resurrection).
+    // Same DBC-collapse trap hits the paladin/priest friendly single-target kit — Holy
+    // Light (635/639), Lay on Hands (633), Blessing of Might (19740) and Purify (1152) all
+    // import with implicit_target_a=0 (see work-item 007, archived), so they share this override.
+    let target = friendly_self_or_ally_target_override(&name, target);
+    // CHANNEL self-marker: a channeled spell carries an inert A_FLAG "you are channeling" marker
+    // (Arcane Missiles eff2) that the DBC reads as ALLY-targeted — but the channel is cast AT an
+    // ENEMY, so an ally-typed effect would make the faction gate REJECT the enemy cast (the same
+    // trap fixed for Slice and Dice / Thunder Clap). Force the marker to T_SELF: it's a caster-side
+    // flag, so self-targeting it both lands it correctly AND removes it from the faction gate's
+    // hits_ally/hits_enemy scan (a self-cast effect imposes no faction constraint). Generic over the
+    // channeled bit + the A_FLAG kind, never a spell id; the channel's A_PERIODIC_TRIGGER tick effect
+    // is already T_SELF, so only the stray marker is corrected.
+    let target = if channeled && kind == A_FLAG {
+        T_SELF
+    } else {
+        target
+    };
+
+    target
+}
+
+/// The `game_trainer_spell` rows for each `--trainer <entry>=<ids>` binding.
+fn trainer_offering_rows(
+    trainers: &[(u32, Vec<u32>)],
+    spell_levels: &BTreeMap<u32, u8>,
+    wrapper_to_rank: &BTreeMap<u32, u32>,
+) -> Vec<String> {
     // --- trainer offerings (game_trainer_spell) — FIREWALL-CLEAN ---
     // For each `--trainer <entry>=<ids>` binding, emit one row per offered spell. required_level comes
     // straight from the DBC `spell_level` captured above; cost from our own level-keyed formula
@@ -1794,18 +1966,7 @@ fn build_spell_rows(
         );
     }
 
-    Ok((
-        SpellRows {
-            headers: spell_rows,
-            effects: effect_rows,
-            fishing: fishing_marker_rows(),
-            reagents: reagent_rows,
-            eventai_metadata: eventai_metadata_rows,
-            trainers: trainer_rows,
-        },
-        cov,
-        samples,
-    ))
+    trainer_rows
 }
 
 /// Fishing (060): the E_FISH marker effect rows for the three tier ids (skill 356 — 7620/7731/7732,
