@@ -1068,6 +1068,17 @@ local roster = table.concat(shouted, ",")
 if #roster > 0 then grant_xp(event.actor, 25) end
 "#;
 
+    /// The SAME workload, as the pinned TypeScript toolchain actually emits it.
+    ///
+    /// `datascripts/runtime-scripts/fuel-workload.ts` is the source; `packages build` compiles
+    /// Package scripts with exactly this toolchain, and
+    /// `datascripts/tests/runtime-scripts.test.ts` recompiles the workload and refuses these bytes
+    /// if they have gone stale. So the budget is sized against real transpiler output — the
+    /// `____tbl` guard, the inlined lua library, the `self` conventions and all — not against a
+    /// hand-written impression of it.
+    const GENERATED_SCRIPT: &str =
+        include_str!("../../datascripts/runtime-scripts/fuel-workload.lua");
+
     const PLAYER_GUID: u64 = 7;
     const CREATURE_GUID: u64 = 9;
 
@@ -1915,6 +1926,49 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         );
     }
 
+    /// The two facts `datascripts/runtime-scripts/lua-emit.cjs` rewrites generated Lua against.
+    /// If either stops holding, that rewrite is either unnecessary or no longer sufficient, and the
+    /// Package build has to be revisited before the next Runtime Script ships.
+    #[test]
+    fn only_a_trailing_table_constructor_leaks_and_a_one_parameter_passthrough_stops_it() {
+        let mut host = RuntimeScriptHost::new();
+        let event = engagement();
+        // 1 when the second parameter arrived nil, which is what a correct call gives.
+        let preamble = "local function seen(a, b) if b == nil then return 1 end return 2 end\n";
+        for (shape, source) in [
+            (
+                "a table constructor that is not the last argument",
+                "grant_xp(event.actor, seen({7, 8, 9}, nil))",
+            ),
+            (
+                "a table constructor passed through a one-parameter function",
+                "local function pass(t) return t end\ngrant_xp(event.actor, seen(pass({7, 8, 9})))",
+            ),
+        ] {
+            assert_eq!(
+                granted_amounts(
+                    &committed(&mut host, &event, &format!("{preamble}{source}")).unwrap()
+                ),
+                [1],
+                "{shape} must not leak"
+            );
+        }
+        // Parentheses do NOT stop it: the leak is in how the call site counts its arguments, not
+        // in adjusting a multiple-value expression, so the obvious one-token fix is not one.
+        assert_eq!(
+            granted_amounts(
+                &committed(
+                    &mut host,
+                    &event,
+                    &format!("{preamble}grant_xp(event.actor, seen(({{7, 8, 9}})))")
+                )
+                .unwrap()
+            ),
+            [2],
+            "parenthesising the constructor must still leak"
+        );
+    }
+
     #[test]
     fn the_shim_supplies_the_table_concat_piccolo_lacks() {
         let mut host = RuntimeScriptHost::new();
@@ -1957,6 +2011,61 @@ if #roster > 0 then grant_xp(event.actor, 25) end
         let heavier = REPRESENTATIVE_SCRIPT.replace("1, 20 do", "1, 1000 do");
         host.invoke(script("heavier", &heavier), &event)
             .expect("fifty times the representative workload must still fit");
+    }
+
+    /// Real transpiler output runs on this Host, answers its caller, and fits the Fuel Budget.
+    ///
+    /// The three claims are one test on purpose: a chunk that compiles but cannot reach a Host Verb
+    /// is not evidence that the toolchain works, and a chunk that works but does not fit the budget
+    /// is not evidence that the budget is sized for one.
+    #[test]
+    fn the_generated_representative_script_runs_answers_and_fits_the_fuel_budget() {
+        let mut host = RuntimeScriptHost::new();
+        let event = engagement();
+
+        let invocation = host
+            .invoke(script("fire_nova.generated", GENERATED_SCRIPT), &event)
+            .expect("generated Lua must run inside the Fuel Budget");
+
+        // "UNIT1".."UNIT20" joined by 19 commas is 130 characters. The chunk's own answer proves
+        // the lua library, the string work and the join all ran, not just the Host Verb.
+        assert_eq!(invocation.answer, Some(130.0));
+        let mut sink = FakeEffects::default();
+        invocation.effects.commit(&mut sink);
+        assert_eq!(granted_amounts(&sink.committed), [25]);
+    }
+
+    /// A diagnostic's line number is a line of the GENERATED Lua — the bytes `game_script.source`
+    /// holds and an Operator can read — never a line of the TypeScript it came from. There is no
+    /// source map, and a number that pointed into a file no Shard holds would be worse than none.
+    ///
+    /// Only a syntax failure carries a line at all: the pinned interpreter reports a position for a
+    /// parse and none for a raise or a type fault, which name the script and the fault instead.
+    #[test]
+    fn a_syntax_failure_names_a_line_of_the_generated_lua_not_of_its_typescript() {
+        let mut host = RuntimeScriptHost::new();
+        let generated_lines = GENERATED_SCRIPT.lines().count();
+        let broken = format!("{GENERATED_SCRIPT}local a = 1 +\n");
+
+        let diagnostic = host
+            .invoke(
+                script("fire_nova.generated", &broken),
+                &unattended("on_login"),
+            )
+            .expect_err("the chunk does not parse");
+
+        assert_eq!(diagnostic.kind, FailureKind::Syntax);
+        assert!(
+            diagnostic
+                .message
+                .contains(&format!("line {}", generated_lines + 1)),
+            "the diagnostic must name line {} of the generated Lua: {}",
+            generated_lines + 1,
+            diagnostic.message
+        );
+        // The lua library prologue and the guard put the generated Lua well past the length of the
+        // TypeScript, so this number could not be a source-mapped one.
+        assert!(generated_lines > 25);
     }
 
     /// A Runtime Script that reaches the host again through an effect it staged must be refused,

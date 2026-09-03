@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2020",
+    "lib": ["esnext"],
+    "types": [],
+    "noEmitOnError": true
+  },
+  "tstl": {
+    "luaTarget": "5.4",
+    "luaLibImport": "inline",
+    "noHeader": true,
+    "noImplicitSelf": true,
+    "noImplicitGlobalVariables": true,
+    "sourceMapTraceback": false,
+    "luaPlugins": [{ "name": "./lua-emit.cjs" }]
+  }
+}

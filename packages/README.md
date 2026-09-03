@@ -14,7 +14,27 @@ path outside it, naming the Package, the file and the line.
 A Package may also have a DATA half: `data/.generated/*.json`, the Package Deltas a Datascript
 generates, which the importer reapplies after every base import. `fire_nova/` is the worked example;
 its Datascript lives at `datascripts/src/fire_nova/spells.ts`, because only artifacts belong inside
-a Package folder. Any one half — `src/`, `client/` or `data/` — is a valid Package on its own.
+a Package folder. Any one half — `src/`, `client/`, `scripts/` or `data/` — is a valid Package on
+its own.
+
+A Package may also ship RUNTIME SCRIPTS: `scripts/*.ts` and `scripts/*.lua`, Lua the Module runs on
+a gameplay event inside the Runtime Script Host. These sources DO live inside the Package, unlike a
+Datascript, because they are the Package's own content rather than a description of client-derived
+data. `lyracore packages build` compiles them into one Script Artifact at
+`data/.generated/<name>.script.json`. `fire_nova/scripts/ember_echo.ts` is the worked example; it
+ships switched off. Each file opens with its Script Directives:
+
+```ts
+// @event on_cast_resolved
+// @id 100200
+// @priority 10
+// @enabled false
+```
+
+`@event` and `@id` are required, `@priority` defaults to 0 and `@enabled` to true. A TypeScript
+script declares `function script(): number | void`; what it returns is the Script Answer the asking
+Package reads back. See `docs/development-cli.md` for the Host API, the identifier band and how the
+build checks an event name against the Module.
 
 A Package that must change a stock FrameXML or GlueXML file declares the edit in
 `client/ui-transforms.json` instead of shipping a whole replacement under `client/mpq/`. Each entry

@@ -2,6 +2,9 @@
   "name": "lyracore-datascripts",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "runtime-scripts"
+  ],
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit"

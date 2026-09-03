@@ -93,7 +93,7 @@ lyracore update
 | `client sync` | pack `patch-3.MPQ` and every enabled Package's addons, then install them into the configured client |
 | `client pack` | build the Client Artifact a player installs: package-authored content only, into a directory of your choosing |
 | `packages add` | install a Package from a folder on this machine, from a Git URL, or by bare name from the Official Package Collection, after a trust review and a confirmation |
-| `packages build` | regenerate the Module schema typings, typecheck every Datascript against them, then emit and validate each enabled Package's Datascript-generated Package Delta |
+| `packages build` | regenerate the Module schema typings, typecheck every Datascript against them, then emit and validate each enabled Package's Package Delta and Script Artifact |
 | `packages check` | verify every enabled Package's generated artifact against its recorded Build Identity, regenerating the Module typings fresh |
 | `packages config` | read a Package's key-values, or write one to every Shard of the fixture topology |
 | `packages disable` | move an enabled Package out of the build's sight, keeping it on disk |
@@ -226,11 +226,11 @@ than the folder name — `my-package` and `my_package` fold onto the same module
 Then it prints a **Trust Review** and asks. The review is a deterministic, read-only scan of the
 candidate folder using a port of the build's own marker scan, so a commented-out or quoted marker
 registers nothing here either. It reports tables, reducers, hooks, tick passes, character-owned
-sweeps, addons and client overrides. A Package cannot yet ship a Datascript of its own — the
-authoring toolchain lives in `datascripts/` and is described under `packages build` below — so
-Datascripts and Runtime Scripts get an explicit "none detected" row rather than silence. The review states
-plainly that everything else in the Package's Rust is trusted code and that it is an inventory, not
-a security guarantee.
+sweeps, addons, client overrides and Runtime Script sources. Runtime Scripts are named because they
+run on the realm once the Package is built. A Package cannot ship a Datascript of its own — the
+authoring toolchain lives in `datascripts/`, outside any Package folder — so that row is an explicit
+"none detected" rather than silence. The review states plainly that everything else in the Package's
+Rust is trusted code and that it is an inventory, not a security guarantee.
 
 On confirmation the folder is **copied, never symlinked**: a linked Package would compile from a
 folder outside the checkout, so `preflight`, `publish` and `client sync` would each read whatever
@@ -394,7 +394,7 @@ claim the Operator, so the local realm has to be up and claimed.
 was written, what stopped it, and what was never touched. Re-running the same command after the
 cause is fixed rewrites the Shards that already took the value, which changes nothing on them.
 
-## `packages build` — Datascript typings, the typecheck gate, and Package Delta emission
+## `packages build` — Datascript typings, the typecheck gate, and artifact emission
 
 ```bash
 ./lyracore packages build
@@ -402,8 +402,9 @@ cause is fixed rewrites the Shards that already took the value, which changes no
 
 A **Datascript** is author-time TypeScript that describes game data. It is written against the
 Module's own schema, so the names and types in it cannot drift from the Module. `packages build`
-enforces that and, once a Package has a Datascript, turns it into a validated Package Delta. A
-version gate, then up to seven steps, in this order:
+enforces that and, once a Package has a Datascript, turns it into a validated Package Delta. The
+same command compiles a Package's **Runtime Scripts** into its Script Artifact. A version gate,
+then up to eight steps, in this order:
 
 0. `bun --version` must match the checkout's pin. A hard failure, not a warning: the next two steps
    run `bun install` and the locked `tsc` for real, against whatever Bun is on `PATH`.
@@ -414,22 +415,29 @@ version gate, then up to seven steps, in this order:
    a build never silently resolves a newer dependency than the next author will get.
 3. `tsc --noEmit` is the typecheck gate. Nothing is emitted; the answer is the exit code.
 
-Steps 4 to 7 run only when an enabled Package carries a Datascript. A checkout with none builds
-exactly as it did before those steps existed:
+Steps 4 to 8 run only when an enabled Package carries a Datascript or a Runtime Script. A checkout
+with neither builds exactly as it did before those steps existed:
 
 4. The Base Snapshot must already exist at `datascripts/generated/base-snapshot.json`, or the build
    fails fast with the exact `lyracore-importer --spell-snapshot` command to build one, once, rather
-   than letting every Datascript fail with the same "cannot read" error in turn.
+   than letting every Datascript fail with the same "cannot read" error in turn. Skipped when no
+   Package has a Datascript: a Runtime Script reads no base data.
 5. Every enabled Package's Datascripts run, one `bun run` subprocess per file, in name order. The
    first script to throw stops the build; later scripts and later Packages never run.
-6. `lyracore-delta-check` traces every enabled Package's generated artifacts together, in one
-   invocation. This is the same authoritative Rust-side check `packages replay` runs before it
-   writes to a Shard, so a Claim Conflict between two Packages is caught by the one implementation
-   that also decides whether it may apply, not by a second, looser one.
-7. A **Build Identity** sidecar is written next to each artifact that just validated: the hashes
+6. Every enabled Package with a `scripts/` folder compiles its Runtime Scripts into one Script
+   Artifact, one `bun run` subprocess per Package, in folder-name order. The builder is handed the
+   Module's Event Binding catalogue, read from `lyracore-delta-check --print-events`, so a mistyped
+   `@event` fails with the file that holds it. Fail-fast, the same way step 5 is.
+7. `lyracore-delta-check` traces every enabled Package's generated artifacts together, in one
+   invocation, Package Deltas and Script Artifacts alike. This is the same authoritative Rust-side
+   check `packages replay` runs before it writes to a Shard, so a Claim Conflict or a Runtime Script
+   collision between two Packages is caught by the one implementation that also decides whether it
+   may apply, not by a second, looser one.
+8. A **Build Identity** sidecar is written next to each artifact that just validated: the hashes
    `packages check` and preflight later recompute to tell whether the artifact is still current.
-   Written only after step 6 succeeds, so a sidecar never describes an artifact this build itself
-   would have refused.
+   Written only after step 7 succeeds, so a sidecar never describes an artifact this build itself
+   would have refused. Each kind records its own inputs — a Script Artifact's are its `scripts/`
+   sources and the Runtime Script Toolchain, not the Module typings or the Base Snapshot.
 
 A Package Delta this command emits is never committed: it is regenerated author-side on every
 build and installed from source, the same way `datascripts/generated/` itself is git-ignored. A
@@ -457,6 +465,7 @@ datascripts/
   tsconfig.json    strict, noEmit
   src/             the Datascripts. `src/reference.ts` is the maintained reference Datascript
   generated/       written by step 1. NOT committed
+  runtime-scripts/ the Runtime Script Toolchain — a Bun workspace, so one `bun install` covers both
 ```
 
 `generated/` is git-ignored on purpose. It is a ~400-file, 2 MB projection of the module wasm that
@@ -480,6 +489,85 @@ Install the pinned version with
 Datascripts are **trusted author-time code**, run from this checkout by the person who wrote them.
 They are not sandboxed and are not described as sandboxed. `packages build` above is what turns one
 into a Package Delta; `packages replay`, below, is what applies it to a Shard.
+
+### Runtime Scripts — `packages/<name>/scripts/`
+
+A **Runtime Script** is the opposite kind of code: Lua the Module runs *on the realm*, inside the
+Runtime Script Host, with a Fuel Budget and no access to anything the Host did not hand it. Write
+one in TypeScript or in Lua:
+
+```text
+packages/fire_nova/
+  scripts/
+    ember_echo.ts    compiled by the Runtime Script Toolchain
+    bonus.lua        shipped unchanged, for the author who would rather write Lua
+  data/.generated/
+    fire_nova.script.json   the Script Artifact. Committed in the Official Package Collection
+```
+
+The sources live **inside** the Package, unlike a Datascript. A Datascript sits outside because only
+artifacts belong in a Package folder; a Runtime Script is the Package's own content.
+
+Every file opens with its **Script Directives**, `//` in TypeScript and `--` in Lua:
+
+```ts
+// @event on_cast_resolved
+// @id 100200
+// @priority 10
+// @enabled false
+```
+
+`@event` and `@id` are required. `@priority` defaults to 0 and `@enabled` to true. The directives
+stop at the first line that is neither blank nor a comment, so ordinary comments below them are just
+comments. `@event` must name an event this build dispatches, or a Package Event of the shipping
+Package. `@id` must sit in the Package Script Range, 100,000 to 999,999.
+
+The identifier is **written down, not derived**. It is durable: `game_script` keys on it. Deriving
+it from a sorted file index would renumber every later script the moment an author added one
+alphabetically earlier, and two Packages would both start at the bottom of the band. The script
+*name* is derived, because there is one obvious answer: `<package>.<file stem>`.
+
+A TypeScript script declares its entry point and returns its Script Answer from it:
+
+```ts
+function script(): number | void {
+  const caster = event.actor;
+  if (!caster) return;
+  send_chat(caster, "the embers answer");
+  return caster.level;
+}
+```
+
+The emitted Lua ends with `return script()`, because TypeScript has no top-level return and a Script
+Answer is the chunk's return value. A file without a `script` function is refused by name. Each file
+compiles as its own program, so two scripts in one Package may both declare `script`.
+
+`datascripts/runtime-scripts/runtime-script.d.ts` is the hand-maintained Host API: the event, the
+Entity Handles it carries, and the Host Operations. A name outside that file is nil inside an
+Invocation. The event catalogue is deliberately **not** in it — the Module owns it, and a copy would
+drift; the build reads it from `lyracore-delta-check --print-events` instead.
+
+The emitter rewrites one call shape. piccolo 0.3.3 passes an inline table constructor's element
+count as an extra argument when the constructor is the last argument of a call, so `f({7, 8, 9})`
+arrives as `f(table, 3)`. Transpiler output meets that shape constantly. Every emitted file
+therefore opens with `local function ____tbl(t) return t end` and a trailing constructor is passed
+through it. `module/src/runtime_script.rs` pins both the fault and the fix. A hand-written `.lua`
+script ships unchanged, so its author avoids that call shape themselves.
+
+Diagnostics name a line of the **generated** Lua, the bytes the Shard holds, never a line of the
+TypeScript. There is no source map, and a number pointing into a file no Shard holds would be worse
+than no number.
+
+Build one Package's scripts by hand the way `packages build` does:
+
+```bash
+bun run datascripts/runtime-scripts/build-scripts.ts fire_nova
+```
+
+Script Artifacts are **committed** in the Official Package Collection, so an Operator installs
+prebuilt Lua and needs no Bun. In this checkout they are git-ignored output: the sources next to
+them are the repository content, and a committed copy would go stale the moment the Module schema or
+the pinned toolchain moved.
 
 ## `packages replay` — reapply a Package's artifacts across the Realm
 
@@ -536,7 +624,7 @@ The other claim families a Package may claim in (items, quests, loot, casts and 
 replayed here. Their base import is the world dump rather than a DBC, which is a much larger and
 more destructive reload than this verb owns. Reapply those with the importer's own dump modes.
 
-## `packages check` — is every Package Delta still current?
+## `packages check` — is every generated artifact still current?
 
 ```bash
 ./lyracore packages check
@@ -547,11 +635,16 @@ recomputes every recorded input from the checkout on disk right now and refuses,
 specific input, the moment one no longer matches. `preflight` folds the same report into its own
 gate on `publish`'s behalf, so a stale artifact never reaches a Shard.
 
+Both kinds are checked, each against its own sidecar. A Package Delta's inputs are its Datascript,
+the authoring library, the Module typings, the Base Snapshot and the pinned Bun toolchain. A Script
+Artifact's are its `scripts/` sources, the Runtime Script Toolchain and the same Bun pin.
+
 `datascripts/generated/` is regenerated fresh, every run, with the same `spacetime generate`
 invocation `packages build`'s typegen step uses, so a Module schema change makes a committed
-artifact stale even on a clean checkout that never ran `packages build` itself. Nothing else is
-regenerated: this command never runs Bun and never re-emits a Datascript, so it needs neither Bun
-nor a Base Snapshot to do its job.
+artifact stale even on a clean checkout that never ran `packages build` itself. The typings are an
+input of a Package Delta alone, so a checkout shipping only Runtime Scripts skips that step and
+builds no module wasm. Nothing else is regenerated: this command never runs Bun and never re-emits
+anything, so it needs neither Bun nor a Base Snapshot to do its job.
 
 A missing Base Snapshot is reported and does not fail the check: the snapshot is the Operator's own
 client-derived data, and a CI machine holding none cannot regenerate one to compare against. A Base
