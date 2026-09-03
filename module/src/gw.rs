@@ -1449,7 +1449,7 @@ mod tests {
         assert!(!lease_expired(1_000_000, 1_000_000, LEASE_TTL_MICROS));
         assert!(!lease_expired(LEASE_TTL_MICROS, 0, LEASE_TTL_MICROS));
         assert!(lease_expired(LEASE_TTL_MICROS + 1, 0, LEASE_TTL_MICROS));
-        assert!(
+        const _: () = assert!(
             LEASE_TTL_MICROS >= 3 * LEASE_REAP_MICROS,
             "TTL must tolerate at least two missed heartbeats plus a reap interval"
         );

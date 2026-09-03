@@ -8,6 +8,7 @@
 use super::super::*;
 use wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailResultTwo;
 
+#[allow(clippy::too_many_lines)] // One arm per mail opcode.
 pub(crate) fn handle_mail<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,

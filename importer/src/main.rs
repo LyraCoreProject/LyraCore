@@ -1047,6 +1047,7 @@ fn parse_args() -> Result<Args> {
     parse_args_from(std::env::args().skip(1))
 }
 
+#[allow(clippy::too_many_lines)] // One arm per CLI flag.
 fn parse_args_from<I, S>(args: I) -> Result<Args>
 where
     I: IntoIterator<Item = S>,
@@ -2754,6 +2755,7 @@ fn vendor_stock_item_set(
 /// have templates. Auto-inc ids are counter-assigned over deterministic (sorted) orders so clear+reload
 /// is idempotent. Only KILL objectives (positive `ReqCreatureOrGOId`) + guaranteed reward items
 /// (`RewItemId`) are mapped; gameobject objectives, choice rewards, item/source objectives are later slices.
+#[allow(clippy::too_many_lines)] // Column-by-column mapping of one imported dump family.
 fn build_quests(
     dump: &str,
     local_creatures: &std::collections::HashSet<u64>,
@@ -3089,6 +3091,7 @@ fn build_quests(
 /// chance) are skipped until a quest system exists. Loot ids are counter-assigned over a sorted
 /// creature order so clear+reload stays idempotent. `extra_item_entries` (e.g. quest reward items) are
 /// force-included in the item-template load so every referenced item gets a template.
+#[allow(clippy::too_many_lines)] // Column-by-column mapping of one imported dump family.
 fn build_items_and_loot(
     dump: &str,
     creature_loot_ids: &std::collections::HashMap<u64, u64>,

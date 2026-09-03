@@ -4116,7 +4116,7 @@ mod tests {
             let out = trade_event_outbound(&event(k));
             assert_eq!(out.len(), 1, "kind {k} must decode to exactly one packet");
             match &out[0] {
-                Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(s)) => (**s).clone(),
+                Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(s)) => **s,
                 Outbound::One(other) => panic!("kind {k}: expected SMSG_TRADE_STATUS, got {other}"),
                 _ => panic!("kind {k}: expected a single SMSG_TRADE_STATUS packet"),
             }
@@ -4254,9 +4254,7 @@ mod tests {
         let extended = |k: u8| -> SMSG_TRADE_STATUS_EXTENDED {
             let out = trade_event_outbound(&event(k, &payload));
             match out.first() {
-                Some(Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(m))) => {
-                    (**m).clone()
-                }
+                Some(Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(m))) => **m,
                 _ => panic!("kind {k}: expected one SMSG_TRADE_STATUS_EXTENDED"),
             }
         };

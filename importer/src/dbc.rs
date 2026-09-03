@@ -868,6 +868,7 @@ struct TaxiCatalogueSql {
 /// costs/indices must be non-negative, and the operator's data may not enter the reserved fixture
 /// namespace. A point for an absent path or a path without geometry is omitted with a stable warning.
 /// Any other malformed client extract fails before `run_sql_statements` can execute the first DELETE.
+#[allow(clippy::too_many_lines)] // One validated statement per taxi table.
 fn taxi_catalogue_sql(
     nodes: &DbcTaxiNodes,
     paths: &DbcTaxiPath,

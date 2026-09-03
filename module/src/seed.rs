@@ -243,6 +243,7 @@ fn seed_production_core(ctx: &ReducerContext) {
 /// `importer --apply` run lands for map 0 (or fenced off entirely for any other continent). This is
 /// a DIFFERENT fixture family from `seed/fixtures.rs`'s synthetic engine-mechanic fixtures (5xxxx
 /// ids, no map content) — see that file's header.
+#[allow(clippy::too_many_lines)] // A seed data table written as code.
 fn seed_map0_demo_content(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
 
@@ -803,6 +804,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
 /// Stratum 3 — the hand-authored spell/item registry: `game_spell`/`game_spell_effect` rows, the
 /// crafted-consumable on-use spells, 1-10-alpha consumable breadth, the mock-seed fixture kits
 /// (`seed/fixtures.rs`), enchant/disenchant, talents, and the stacking-group starter set.
+#[allow(clippy::too_many_lines)] // A seed data table written as code.
 fn seed_spell_registry(ctx: &ReducerContext) {
     // --- Spell registry: hand-authored `game_spell` headers + `game_spell_effect` rows (the
     // data-driven effect-row engine). Each spell = a header + 1..3 effect rows; effect.id is the

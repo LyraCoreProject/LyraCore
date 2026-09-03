@@ -336,6 +336,7 @@ pub(crate) fn is_due_for_expiry(eff_kind: u8, expires_at: Timestamp, now: Timest
 /// auras) — it scales with buffs/DoTs in flight, NOT with instance count. Per-instance aura cadence
 /// would also change DoT/HoT tick RATES (a gameplay change, not smoothing) — out of scope.
 #[reducer]
+#[allow(clippy::too_many_lines)] // One pass per aura family the tick settles.
 pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;

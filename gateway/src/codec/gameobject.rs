@@ -199,6 +199,7 @@ pub fn build_dynamicobject_create_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::FRAC_1_SQRT_2;
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
     #[test]
@@ -311,14 +312,14 @@ mod tests {
             display_id: 259,
             rotation_0: 0.1,
             rotation_1: 0.2,
-            rotation_2: 0.70710678,
-            rotation_3: 0.70710678,
+            rotation_2: FRAC_1_SQRT_2,
+            rotation_3: FRAC_1_SQRT_2,
             size: 0.0,
         };
         let (opcode, body) = build_gameobject_rotation_values(&go);
         assert_eq!(opcode, 0x00A9, "SMSG_UPDATE_OBJECT opcode");
         let floats = decode_rotation_floats(go.guid, &body);
-        assert_eq!(floats, [0.1, 0.2, 0.70710678, 0.70710678]);
+        assert_eq!(floats, [0.1, 0.2, FRAC_1_SQRT_2, FRAC_1_SQRT_2]);
     }
 
     #[test]

@@ -1170,6 +1170,7 @@ fn apply_cast_transition(conn: &mut WorldConn, transition: CastTransition) {
 
 /// Route one decrypted client message through the per-family handlers. Each stage either consumes
 /// its opcode or passes it onward, so the disjoint-family chain ends in the movement-relay catch-all.
+#[allow(clippy::too_many_lines)] // One stage per opcode family.
 fn dispatch<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,

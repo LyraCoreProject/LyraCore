@@ -147,7 +147,7 @@ async fn run() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
         logon.abort();
         world.abort();
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(feature = "dhat-heap"))]
     {

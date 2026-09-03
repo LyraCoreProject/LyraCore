@@ -515,6 +515,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     })
 }
 
+#[allow(clippy::too_many_lines)] // One callback registration per relayed shard table.
 fn register_shard_callbacks(
     view: Arc<WorldView>,
     coord: Coordinator,
@@ -2328,6 +2329,9 @@ fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: 
     viewer_guid != 0 && viewer_guid != initiator_guid && viewer_guid != challenged_guid
 }
 
+// The relay-order tests below scan this file's own source, so the production items that follow
+// them must stay where they are.
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod cell_audience_tests;
 

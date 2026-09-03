@@ -962,9 +962,8 @@ mod tests {
         ));
 
         let duplicate = [(binding, handler as EncounterPackageHandler); 2];
-        let duplicate = package_handler_for(binding, &duplicate)
-            .err()
-            .expect("duplicate authority must refuse");
+        let duplicate =
+            package_handler_for(binding, &duplicate).expect_err("duplicate authority must refuse");
         assert!(duplicate.contains("more than one installed package authority"));
     }
 
