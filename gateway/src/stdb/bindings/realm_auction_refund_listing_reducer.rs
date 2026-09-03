@@ -55,7 +55,16 @@ impl __sdk::InModule for RealmAuctionRefundListingArgs {
 }
 
 #[allow(non_camel_case_types)]
+/// Extension trait for access to the reducer `realm_auction_refund_listing`.
+///
+/// Implemented for [`super::RemoteReducers`].
 pub trait realm_auction_refund_listing {
+    /// Request that the remote module invoke the reducer `realm_auction_refund_listing` to run as soon as possible.
+    ///
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and this method provides no way to listen for its completion status.
+    /// /// Use [`realm_auction_refund_listing:realm_auction_refund_listing_then`] to run a callback after the reducer completes.
     fn realm_auction_refund_listing(
         &self,
         operation_id: u64,
@@ -77,13 +86,33 @@ pub trait realm_auction_refund_listing {
         expires_micros: i64,
     ) -> __sdk::Result<()> {
         self.realm_auction_refund_listing_then(
-            operation_id, seller_guid, item_guid, item_entry, item_stack_count, item_durability,
-            item_enchant_id, item_soulbound, house, deposit_rate, consignment_rate, start_bid,
-            buyout, duration_minutes, deposit, created_micros, expires_micros, |_, _| {},
+            operation_id,
+            seller_guid,
+            item_guid,
+            item_entry,
+            item_stack_count,
+            item_durability,
+            item_enchant_id,
+            item_soulbound,
+            house,
+            deposit_rate,
+            consignment_rate,
+            start_bid,
+            buyout,
+            duration_minutes,
+            deposit,
+            created_micros,
+            expires_micros,
+            |_, _| {},
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Request that the remote module invoke the reducer `realm_auction_refund_listing` to run as soon as possible,
+    /// registering `callback` to run when we are notified that the reducer completed.
+    ///
+    /// This method returns immediately, and errors only if we are unable to send the request.
+    /// The reducer will run asynchronously in the future,
+    ///  and its status can be observed with the `callback`.
     fn realm_auction_refund_listing_then(
         &self,
         operation_id: u64,
@@ -103,6 +132,7 @@ pub trait realm_auction_refund_listing {
         deposit: u32,
         created_micros: i64,
         expires_micros: i64,
+
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
@@ -110,7 +140,6 @@ pub trait realm_auction_refund_listing {
 }
 
 impl realm_auction_refund_listing for super::RemoteReducers {
-    #[allow(clippy::too_many_arguments)]
     fn realm_auction_refund_listing_then(
         &self,
         operation_id: u64,
@@ -130,6 +159,7 @@ impl realm_auction_refund_listing for super::RemoteReducers {
         deposit: u32,
         created_micros: i64,
         expires_micros: i64,
+
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,

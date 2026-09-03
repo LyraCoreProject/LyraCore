@@ -3289,6 +3289,18 @@ mod auction_reducer_tests {
     }
 
     #[test]
+    fn refused_listing_binding_matches_the_generated_commit_listing_shape() {
+        let expected = include_str!("bindings/realm_auction_commit_listing_reducer.rs")
+            .replace("RealmAuctionCommitListing", "RealmAuctionRefundListing")
+            .replace("realm_auction_commit_listing", "realm_auction_refund_listing");
+        assert_eq!(
+            include_str!("bindings/realm_auction_refund_listing_reducer.rs"),
+            expected,
+            "the hand-added reducer binding must remain generator-identical"
+        );
+    }
+
+    #[test]
     fn normalized_buyout_price_drives_the_exact_success_command_value() {
         let hold = AuctionBidHold {
             operation_id: 7,
