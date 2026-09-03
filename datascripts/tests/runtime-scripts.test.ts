@@ -203,16 +203,25 @@ test("the entry point takes no parameters and returns only a number or nothing",
       "string.ts": `${directives()}function script(): string { return "wrong"; }\n`,
     }),
   ).rejects.toThrow(/typescript-to-lua refused/);
+});
+
+test("an optional entry-point parameter is refused", async () => {
   expect(
     build({
       "optional.ts": `${directives()}function script(value?: number): void {}\n`,
     }),
   ).rejects.toThrow(/typescript-to-lua refused/);
+});
+
+test("a rest entry-point parameter is refused", async () => {
   expect(
     build({
       "rest.ts": `${directives()}function script(...values: number[]): void {}\n`,
     }),
   ).rejects.toThrow(/typescript-to-lua refused/);
+});
+
+test("an overload cannot hide an invalid concrete entry point", async () => {
   expect(
     build({
       "overload.ts":
