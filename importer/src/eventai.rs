@@ -4571,6 +4571,135 @@ fn map_action(
         });
     }
     match kind {
+        ACTION_TEXT | ACTION_TEXT_NEW => {
+            map_speech_action(action, kind, rule_id, slot, broadcasts, relays)
+        }
+        ACTION_EMOTE => Ok(NativeAction {
+            encoded: format!("emote:{}:self", action[1]),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            threat_percent: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_RANDOM_EMOTE => Ok(NativeAction {
+            encoded: format!(
+                "random-emote:{}.{}.{}",
+                action[1] as i32, action[2] as i32, action[3] as i32
+            ),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            threat_percent: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_CAST | ACTION_THREAT_SINGLE | ACTION_THREAT_ALL_PCT | ACTION_REMOVE_AURA => {
+            map_combat_action(action, kind, rule_id, slot, relays)
+        }
+        ACTION_SET_PHASE
+        | ACTION_INCREMENT_PHASE
+        | ACTION_RANDOM_PHASE
+        | ACTION_RANDOM_PHASE_RANGE => map_phase_action(action, kind),
+        ACTION_FLEE_FOR_ASSIST => Ok(NativeAction {
+            encoded: "flee".to_string(),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            threat_percent: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_CALL_FOR_HELP => Ok(NativeAction {
+            encoded: format!("help:{}", action[1]),
+            raw_kind: kind,
+            raw_target: None,
+            raw_cast_flags: None,
+            threat_percent: None,
+            dependencies: Vec::new(),
+            texts: Vec::new(),
+            summon_entry: None,
+            summon_location: None,
+            normalizations: Vec::new(),
+        }),
+        ACTION_SPAWN | ACTION_SUMMON_ID => map_summon_action(
+            action,
+            kind,
+            rule_id,
+            slot,
+            summon_locations,
+            importable_templates,
+        ),
+        ACTION_COMBAT_MOVEMENT
+        | ACTION_EVADE
+        | ACTION_RANGED_MOVEMENT
+        | ACTION_CHANGE_MOVEMENT
+        | ACTION_PAUSE_WAYPOINTS
+        | ACTION_SET_RANGED_MODE
+        | ACTION_SET_WALK
+        | ACTION_SET_FACING
+        | ACTION_SET_IMMOBILIZED
+        | ACTION_SET_FOLLOW_MOVEMENT
+        | ACTION_RETREAT => map_movement_action(action, kind),
+        ACTION_DIE
+        | ACTION_FORCE_DESPAWN
+        | ACTION_THROW_AI_EVENT
+        | ACTION_SET_STAND_STATE
+        | ACTION_SET_REACT_STATE
+        | ACTION_DESPAWN_GUARDIANS
+        | ACTION_SET_DEATH_PREVENTION => {
+            map_state_action(action, kind, rule_id, slot, importable_templates)
+        }
+        ACTION_SET_INSTANCE_DATA | ACTION_START_RELAY => map_encounter_action(
+            action,
+            kind,
+            raw_subject,
+            rule_id,
+            slot,
+            source_maps,
+            relays,
+        ),
+        ACTION_QUEST_EVENT | ACTION_KILLED_MONSTER => map_quest_action(
+            action,
+            kind,
+            rule_id,
+            slot,
+            quest_entries,
+            importable_templates,
+        ),
+        value => unsupported_action(value),
+    }
+}
+
+/// The source action fell through every parameter shape this loader accepts.
+fn unsupported_action(kind: u32) -> Result<NativeAction, Vec<MappingFailure>> {
+    Err(vec![MappingFailure::source(
+        "action",
+        u64::from(kind),
+        "unsupported_action",
+    )])
+}
+
+/// Speech: the legacy multi-text action and its newer single-text/template twin.
+fn map_speech_action(
+    action: [u32; 4],
+    kind: u32,
+    rule_id: u64,
+    slot: usize,
+    broadcasts: &BTreeMap<u32, Broadcast>,
+    relays: &RelaySource,
+) -> Result<NativeAction, Vec<MappingFailure>> {
+    match kind {
         ACTION_TEXT => {
             let texts = action[1..]
                 .iter()
@@ -4729,33 +4858,19 @@ fn map_action(
                 normalizations: Vec::new(),
             })
         }
-        ACTION_EMOTE => Ok(NativeAction {
-            encoded: format!("emote:{}:self", action[1]),
-            raw_kind: kind,
-            raw_target: None,
-            raw_cast_flags: None,
-            threat_percent: None,
-            dependencies: Vec::new(),
-            texts: Vec::new(),
-            summon_entry: None,
-            summon_location: None,
-            normalizations: Vec::new(),
-        }),
-        ACTION_RANDOM_EMOTE => Ok(NativeAction {
-            encoded: format!(
-                "random-emote:{}.{}.{}",
-                action[1] as i32, action[2] as i32, action[3] as i32
-            ),
-            raw_kind: kind,
-            raw_target: None,
-            raw_cast_flags: None,
-            threat_percent: None,
-            dependencies: Vec::new(),
-            texts: Vec::new(),
-            summon_entry: None,
-            summon_location: None,
-            normalizations: Vec::new(),
-        }),
+        value => unsupported_action(value),
+    }
+}
+
+/// Combat: casting a spell, moving threat, and stripping an aura.
+fn map_combat_action(
+    action: [u32; 4],
+    kind: u32,
+    rule_id: u64,
+    slot: usize,
+    relays: &RelaySource,
+) -> Result<NativeAction, Vec<MappingFailure>> {
+    match kind {
         ACTION_CAST => {
             if action[1] == 0 {
                 return Err(vec![MappingFailure::source(
@@ -4832,6 +4947,45 @@ fn map_action(
                 normalizations: Vec::new(),
             })
         }
+        ACTION_REMOVE_AURA if action[2] != 0 && action[3] == 0 => {
+            let target = map_target(action[1]).map_err(|failure| vec![failure])?;
+            if !relays.spell_ids.contains(&action[2]) {
+                return Err(vec![MappingFailure::dependency(
+                    "spell_template",
+                    u64::from(action[2]),
+                    "missing",
+                    format!(
+                        "rule:{rule_id} -> action:{slot} -> spell_template:{}",
+                        action[2]
+                    ),
+                )]);
+            }
+            Ok(NativeAction {
+                encoded: format!("remove-aura:{}:{target}", action[2]),
+                raw_kind: kind,
+                raw_target: Some(action[1]),
+                raw_cast_flags: None,
+                threat_percent: None,
+                dependencies: vec![Dependency {
+                    kind: "spell_template",
+                    path: format!(
+                        "rule:{rule_id} -> action:{slot} -> spell_template:{}",
+                        action[2]
+                    ),
+                }],
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
+        value => unsupported_action(value),
+    }
+}
+
+/// Phase: the four ways a rule moves its subject's phase mask.
+fn map_phase_action(action: [u32; 4], kind: u32) -> Result<NativeAction, Vec<MappingFailure>> {
+    match kind {
         ACTION_SET_PHASE if action[1] < 32 => Ok(NativeAction {
             encoded: format!("phase:{}", action[1]),
             raw_kind: kind,
@@ -4895,30 +5049,28 @@ fn map_action(
                 normalizations,
             })
         }
-        ACTION_FLEE_FOR_ASSIST => Ok(NativeAction {
-            encoded: "flee".to_string(),
-            raw_kind: kind,
-            raw_target: None,
-            raw_cast_flags: None,
-            threat_percent: None,
-            dependencies: Vec::new(),
-            texts: Vec::new(),
-            summon_entry: None,
-            summon_location: None,
-            normalizations: Vec::new(),
-        }),
-        ACTION_CALL_FOR_HELP => Ok(NativeAction {
-            encoded: format!("help:{}", action[1]),
-            raw_kind: kind,
-            raw_target: None,
-            raw_cast_flags: None,
-            threat_percent: None,
-            dependencies: Vec::new(),
-            texts: Vec::new(),
-            summon_entry: None,
-            summon_location: None,
-            normalizations: Vec::new(),
-        }),
+        ACTION_SET_PHASE
+        | ACTION_INCREMENT_PHASE
+        | ACTION_RANDOM_PHASE
+        | ACTION_RANDOM_PHASE_RANGE => Err(vec![MappingFailure::source(
+            "action",
+            u64::from(action[1]),
+            format!("invalid_phase_{}", action[1]),
+        )]),
+        value => unsupported_action(value),
+    }
+}
+
+/// Summons: the placement-free spawn and the `creature_ai_summons` location-keyed summon.
+fn map_summon_action(
+    action: [u32; 4],
+    kind: u32,
+    rule_id: u64,
+    slot: usize,
+    summon_locations: &BTreeMap<u32, SummonLocation>,
+    importable_templates: &HashSet<u64>,
+) -> Result<NativeAction, Vec<MappingFailure>> {
+    match kind {
         ACTION_SPAWN => {
             let entry = u64::from(action[1]);
             let mut failures = Vec::new();
@@ -4968,38 +5120,77 @@ fn map_action(
                 normalizations: Vec::new(),
             })
         }
-        ACTION_REMOVE_AURA if action[2] != 0 && action[3] == 0 => {
-            let target = map_target(action[1]).map_err(|failure| vec![failure])?;
-            if !relays.spell_ids.contains(&action[2]) {
-                return Err(vec![MappingFailure::dependency(
-                    "spell_template",
-                    u64::from(action[2]),
+        ACTION_SUMMON_ID => {
+            let entry = action[1] as u64;
+            let mut failures = Vec::new();
+            if !importable_templates.contains(&entry) {
+                failures.push(MappingFailure::dependency(
+                    "summon_creature",
+                    entry,
+                    "missing",
+                    format!("rule:{rule_id} -> action:{slot} -> creature_template:{entry}"),
+                ));
+            }
+            if !summon_locations.contains_key(&action[3]) {
+                failures.push(MappingFailure::dependency(
+                    "summon_location",
+                    u64::from(action[3]),
                     "missing",
                     format!(
-                        "rule:{rule_id} -> action:{slot} -> spell_template:{}",
-                        action[2]
+                        "rule:{rule_id} -> action:{slot} -> creature_ai_summons:{}",
+                        action[3]
                     ),
-                )]);
+                ));
+            }
+            let target = match map_target(action[2]) {
+                Ok(target) => Some(target),
+                Err(failure) => {
+                    failures.push(failure);
+                    None
+                }
+            };
+            if !failures.is_empty() {
+                return Err(failures);
             }
             Ok(NativeAction {
-                encoded: format!("remove-aura:{}:{target}", action[2]),
+                encoded: format!(
+                    "summon:{}:{}:{}",
+                    action[1],
+                    action[3],
+                    target.expect("a summon without mapping failures has a target")
+                ),
                 raw_kind: kind,
-                raw_target: Some(action[1]),
+                raw_target: Some(action[2]),
                 raw_cast_flags: None,
                 threat_percent: None,
-                dependencies: vec![Dependency {
-                    kind: "spell_template",
-                    path: format!(
-                        "rule:{rule_id} -> action:{slot} -> spell_template:{}",
-                        action[2]
-                    ),
-                }],
                 texts: Vec::new(),
-                summon_entry: None,
-                summon_location: None,
+                summon_entry: Some(entry),
+                summon_location: Some(action[3]),
+                dependencies: vec![
+                    Dependency {
+                        kind: "summon_creature",
+                        path: format!(
+                            "rule:{rule_id} -> action:{slot} -> creature_template:{entry}"
+                        ),
+                    },
+                    Dependency {
+                        kind: "summon_location",
+                        path: format!(
+                            "rule:{rule_id} -> action:{slot} -> creature_ai_summons:{}",
+                            action[3]
+                        ),
+                    },
+                ],
                 normalizations: Vec::new(),
             })
         }
+        value => unsupported_action(value),
+    }
+}
+
+/// Movement: every action that changes how the subject moves or faces.
+fn map_movement_action(action: [u32; 4], kind: u32) -> Result<NativeAction, Vec<MappingFailure>> {
+    match kind {
         ACTION_COMBAT_MOVEMENT if action[2] == 0 && action[3] == 0 => Ok(movement_action(
             kind,
             format!("combat-movement:{}", action[1] != 0),
@@ -5095,70 +5286,19 @@ fn map_action(
             u64::from(kind),
             "unsupported_retreat",
         )]),
-        ACTION_SUMMON_ID => {
-            let entry = action[1] as u64;
-            let mut failures = Vec::new();
-            if !importable_templates.contains(&entry) {
-                failures.push(MappingFailure::dependency(
-                    "summon_creature",
-                    entry,
-                    "missing",
-                    format!("rule:{rule_id} -> action:{slot} -> creature_template:{entry}"),
-                ));
-            }
-            if !summon_locations.contains_key(&action[3]) {
-                failures.push(MappingFailure::dependency(
-                    "summon_location",
-                    u64::from(action[3]),
-                    "missing",
-                    format!(
-                        "rule:{rule_id} -> action:{slot} -> creature_ai_summons:{}",
-                        action[3]
-                    ),
-                ));
-            }
-            let target = match map_target(action[2]) {
-                Ok(target) => Some(target),
-                Err(failure) => {
-                    failures.push(failure);
-                    None
-                }
-            };
-            if !failures.is_empty() {
-                return Err(failures);
-            }
-            Ok(NativeAction {
-                encoded: format!(
-                    "summon:{}:{}:{}",
-                    action[1],
-                    action[3],
-                    target.expect("a summon without mapping failures has a target")
-                ),
-                raw_kind: kind,
-                raw_target: Some(action[2]),
-                raw_cast_flags: None,
-                threat_percent: None,
-                texts: Vec::new(),
-                summon_entry: Some(entry),
-                summon_location: Some(action[3]),
-                dependencies: vec![
-                    Dependency {
-                        kind: "summon_creature",
-                        path: format!(
-                            "rule:{rule_id} -> action:{slot} -> creature_template:{entry}"
-                        ),
-                    },
-                    Dependency {
-                        kind: "summon_location",
-                        path: format!(
-                            "rule:{rule_id} -> action:{slot} -> creature_ai_summons:{}",
-                            action[3]
-                        ),
-                    },
-                ],
-                normalizations: Vec::new(),
-            })
-        }
+        value => unsupported_action(value),
+    }
+}
+
+/// Unit state: dying, despawning, stand/react state, and the AI event throw.
+fn map_state_action(
+    action: [u32; 4],
+    kind: u32,
+    rule_id: u64,
+    slot: usize,
+    importable_templates: &HashSet<u64>,
+) -> Result<NativeAction, Vec<MappingFailure>> {
+    match kind {
         ACTION_DIE if action[1..] == [0, 0, 0] => Ok(NativeAction {
             encoded: "force-death".to_string(),
             raw_kind: kind,
@@ -5281,6 +5421,31 @@ fn map_action(
                 normalizations: Vec::new(),
             })
         }
+        ACTION_DIE => Err(vec![MappingFailure::source(
+            "action",
+            ACTION_DIE as u64,
+            "invalid_force_death_parameters",
+        )]),
+        ACTION_SET_DEATH_PREVENTION => Err(vec![MappingFailure::source(
+            "death_prevention_state",
+            u64::from(action[1]),
+            "invalid_death_prevention_state",
+        )]),
+        value => unsupported_action(value),
+    }
+}
+
+/// Encounter Signals and Relay Definitions: the two actions that cross an Encounter Binding.
+fn map_encounter_action(
+    action: [u32; 4],
+    kind: u32,
+    raw_subject: i32,
+    rule_id: u64,
+    slot: usize,
+    source_maps: &HashMap<u32, BTreeSet<u32>>,
+    relays: &RelaySource,
+) -> Result<NativeAction, Vec<MappingFailure>> {
+    match kind {
         ACTION_SET_INSTANCE_DATA => {
             let entry = u32::try_from(raw_subject).map_err(|_| {
                 vec![MappingFailure::dependency(
@@ -5384,16 +5549,20 @@ fn map_action(
                 normalizations,
             })
         }
-        ACTION_DIE => Err(vec![MappingFailure::source(
-            "action",
-            ACTION_DIE as u64,
-            "invalid_force_death_parameters",
-        )]),
-        ACTION_SET_DEATH_PREVENTION => Err(vec![MappingFailure::source(
-            "death_prevention_state",
-            u64::from(action[1]),
-            "invalid_death_prevention_state",
-        )]),
+        value => unsupported_action(value),
+    }
+}
+
+/// Quest credit: the explicit quest event and the kill credit that stands in for one.
+fn map_quest_action(
+    action: [u32; 4],
+    kind: u32,
+    rule_id: u64,
+    slot: usize,
+    quest_entries: &HashSet<u32>,
+    importable_templates: &HashSet<u64>,
+) -> Result<NativeAction, Vec<MappingFailure>> {
+    match kind {
         ACTION_QUEST_EVENT => {
             let recipient: &'static str = match (action[2], action[3]) {
                 (TARGET_ACTION_INVOKER, 0) => Ok("selected-character"),
@@ -5454,19 +5623,7 @@ fn map_action(
             }
             kill_credit_action(action, rule_id, slot, importable_templates)
         }
-        ACTION_SET_PHASE
-        | ACTION_INCREMENT_PHASE
-        | ACTION_RANDOM_PHASE
-        | ACTION_RANDOM_PHASE_RANGE => Err(vec![MappingFailure::source(
-            "action",
-            u64::from(action[1]),
-            format!("invalid_phase_{}", action[1]),
-        )]),
-        value => Err(vec![MappingFailure::source(
-            "action",
-            value as u64,
-            "unsupported_action",
-        )]),
+        value => unsupported_action(value),
     }
 }
 

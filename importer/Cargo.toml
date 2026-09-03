@@ -39,3 +39,6 @@ wow_dbc = { version = "0.3", features = ["vanilla"] }
 # Those types live in wow_world_base; wow_dbc 0.3 pins it to =0.2.0, so we depend on the SAME version
 # (same type instance) to name the variants by hand. Pure parser, ships ZERO Blizzard data.
 wow_world_base = { version = "=0.2.0", features = ["vanilla"] }
+
+[lints]
+workspace = true

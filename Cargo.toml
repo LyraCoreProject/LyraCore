@@ -29,6 +29,12 @@ homepage = "https://github.com/LyraCoreProject/LyraCore"
 # crates.io, so the whole workspace is publish-gated once rather than crate by crate.
 publish = false
 
+# A function above the threshold in `clippy.toml` no longer fits in one head. Existing warnings
+# mark untouched long functions; changed code stays below the 200-line ceiling. Lower it as those
+# functions shrink.
+[workspace.lints.clippy]
+too_many_lines = "warn"
+
 [workspace.dependencies]
 lyracore-shared = { path = "crates/lyracore-shared" }
 lyracore-package-delta = { path = "crates/lyracore-package-delta" }

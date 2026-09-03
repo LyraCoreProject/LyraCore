@@ -766,19 +766,6 @@ pub(crate) fn apply_effect(
     // never start a proc.
     triggered: bool,
 ) -> EffectHit {
-    // The hit a damage arm below hands to the shared pipeline: this spell, and the proc event its
-    // source raises — or Triggered, raising nothing, when the whole cast was one.
-    let hit_of = |source: crate::combat::HitSource, crit: bool| {
-        crate::combat::Hit::spell(
-            if triggered {
-                crate::combat::HitSource::Triggered
-            } else {
-                source
-            },
-            hdr.spell_id,
-            crit,
-        )
-    };
     if e.kind & KIND_AURA_BIT != 0 {
         // CC IMMUNITY: an `A_CONTROL` crowd-control effect (a stun/root/…) is REFUSED if the target is
         // immune to that mechanic (an active `A_IMMUNITY(mechanic)` aura). The effect simply doesn't land
@@ -809,7 +796,7 @@ pub(crate) fn apply_effect(
             level,
             points,
         );
-        // Linked-debuff APPLY (Weakened Soul, #013): the twin of the refusal gate in `resolve_cast_at` — a
+        // Linked-debuff APPLY (Weakened Soul): the twin of the refusal gate in `resolve_cast_at` — a
         // nonzero `e.p1` names a SEPARATE spell to also apply on `target_guid` right after this aura lands
         // (PW:Shield's absorb effect names Weakened Soul). Generic over the kind/spell id: any aura effect
         // can opt in via its `p1`, the engine never names one. No-op if the linked spell/effect isn't loaded
@@ -837,6 +824,94 @@ pub(crate) fn apply_effect(
             }
             EffectHit::none()
         }
+        E_DAMAGE | E_WEAPON_STRIKE | E_JUDGEMENT | E_FINISHER_DAMAGE => apply_damage_effect(
+            ctx,
+            e,
+            hdr,
+            caster_guid,
+            target_guid,
+            level,
+            points,
+            triggered,
+        ),
+        E_HEAL | E_HEAL_MAX_HEALTH | E_ENERGIZE | E_CONVERT_RESOURCE | E_POWER_BURN
+        | E_ADD_COMBO => {
+            apply_restore_effect(ctx, e, hdr, caster_guid, target_guid, points, triggered)
+        }
+        E_TAUNT | E_INTERRUPT | E_REDUCE_THREAT | E_NEXT_SWING => {
+            apply_threat_effect(ctx, e, hdr, caster_guid, target_guid, points)
+        }
+        E_CHARGE | E_BLINK | E_RECALL_HOME | E_DISMOUNT | E_PERSISTENT_AREA => {
+            apply_reposition_effect(ctx, e, hdr, caster_guid, target_guid, points, dest)
+        }
+        E_CREATE_ITEM | E_PICKPOCKET => {
+            apply_inventory_effect(ctx, e, caster_guid, target_guid, points)
+        }
+        E_RESURRECT | E_SUMMON_PET | E_TAME_CREATURE | E_SET_STANCE => {
+            apply_character_effect(ctx, e, caster_guid, target_guid, points)
+        }
+        E_TRIGGER | E_SCRIPTED => apply_delegating_effect(ctx, e, caster_guid, target_guid, level),
+        E_DISPEL => {
+            // The dispelled CATEGORY: the effect's `p0` (the authored override) if set, else the
+            // dispelling spell's header `dispel_type`. 0 = strip every foreign aura (the baseline —
+            // Dispel Magic 527 has p0=0 + dispel_type=0, so it strips everything).
+            let category = if e.p0 != 0 {
+                e.p0 as u8
+            } else {
+                hdr.dispel_type
+            };
+            let removed = dispel_target(ctx, target_guid, category);
+            log::info!("dispel (cat {category}) on {target_guid} removed {removed} debuff(s)");
+            EffectHit::none()
+        }
+        other => {
+            // Unmapped residue: a graceful no-op + log (the import safety net — casts and does
+            // nothing, vs doing the wrong thing). Spells that LOOK scripted in the raw DBC but are
+            // really a known effect (Holy Light → a heal, Life Tap → a resource convert, Charge → a rush)
+            // are reclassified to a generic kind at IMPORT time (the importer's curated correction), so
+            // they arrive here as E_HEAL / E_CONVERT_RESOURCE / E_CHARGE and never reach this arm.
+            log::info!(
+                "spell {} effect kind 0x{other:02x} not implemented (graceful no-op)",
+                e.spell_id
+            );
+            EffectHit::none()
+        }
+    }
+}
+
+/// The hit a damage arm hands to the shared pipeline: this spell, and the proc event its source
+/// raises — or Triggered, raising nothing, when the whole cast was one.
+fn hit_of(
+    hdr: &Spell,
+    triggered: bool,
+    source: crate::combat::HitSource,
+    crit: bool,
+) -> crate::combat::Hit {
+    crate::combat::Hit::spell(
+        if triggered {
+            crate::combat::HitSource::Triggered
+        } else {
+            source
+        },
+        hdr.spell_id,
+        crit,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+/// The damaging effects: the spell nuke, the weapon-derived strike, the judgement, and the
+/// combo-point finisher. Each returns the post-mitigation figures the caller relays.
+fn apply_damage_effect(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+    level: u8,
+    points: i32,
+    triggered: bool,
+) -> EffectHit {
+    match e.kind {
         E_DAMAGE => {
             // Binary spell MISS: a level-derived chance the spell fully misses (4% vs equal, up to
             // 17% vs +3) — a clean 0-damage outcome with NO threat/scaling. Rolled BEFORE everything else,
@@ -928,7 +1003,7 @@ pub(crate) fn apply_effect(
                 target_guid,
                 caster_guid,
                 after_resist,
-                hit_of(crate::combat::HitSource::Spell, is_crit),
+                hit_of(hdr, triggered, crate::combat::HitSource::Spell, is_crit),
             );
             EffectHit {
                 dealt,
@@ -960,13 +1035,68 @@ pub(crate) fn apply_effect(
                     target_guid,
                     caster_guid,
                     dmg as i32,
-                    hit_of(crate::combat::HitSource::MeleeSpell, crit),
+                    hit_of(hdr, triggered, crate::combat::HitSource::MeleeSpell, crit),
                 );
                 EffectHit::dmg(dealt, absorbed)
             } else {
                 EffectHit::none()
             }
         }
+        E_JUDGEMENT => {
+            // Unleash the caster's active SEAL: a one-time holy hit on the target derived from the seal
+            // value, then consume the seal. Generic — reads the A_SEAL aura, never a spell id. No seal →
+            // no-op. (Damage = the seal coefficient; the exact vanilla Judgement-of-Righteousness formula
+            // is a tuning refinement.)
+            let seal = seal_amount(ctx, caster_guid);
+            if seal > 0 {
+                let (dealt, absorbed) = apply_target_damage(
+                    ctx,
+                    target_guid,
+                    caster_guid,
+                    seal,
+                    hit_of(hdr, triggered, crate::combat::HitSource::Spell, false),
+                );
+                remove_seal_auras(ctx, caster_guid);
+                EffectHit::dmg(dealt, absorbed)
+            } else {
+                EffectHit::none()
+            }
+        }
+        E_FINISHER_DAMAGE => {
+            // Rogue FINISHER: damage scales with the combo points built on this target (base_points is the
+            // PER-POINT damage), then spend them. Generic — reads game_combo_point, never a spell id.
+            let combo = crate::combo::combo_points(ctx, caster_guid, target_guid);
+            let dmg = crate::combo::finisher_damage(points, combo);
+            let hit = if dmg > 0 {
+                let (dealt, absorbed) = apply_target_damage(
+                    ctx,
+                    target_guid,
+                    caster_guid,
+                    dmg,
+                    hit_of(hdr, triggered, crate::combat::HitSource::MeleeSpell, false),
+                );
+                EffectHit::dmg(dealt, absorbed)
+            } else {
+                EffectHit::none()
+            };
+            crate::combo::spend_combo(ctx, caster_guid, target_guid);
+            hit
+        }
+        _ => EffectHit::none(),
+    }
+}
+
+/// The restoring effects: heals, energize, the resource convert, the power burn, and combo points.
+fn apply_restore_effect(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+    points: i32,
+    triggered: bool,
+) -> EffectHit {
+    match e.kind {
         E_HEAL => EffectHit::heal(apply_heal(ctx, hdr, caster_guid, target_guid, points)),
         E_HEAL_MAX_HEALTH => {
             // Lay on Hands: heal the target to FULL max health regardless of `points` (the DBC
@@ -983,19 +1113,6 @@ pub(crate) fn apply_effect(
             }
             EffectHit::none()
         }
-        E_DISPEL => {
-            // The dispelled CATEGORY: the effect's `p0` (the authored override) if set, else the
-            // dispelling spell's header `dispel_type`. 0 = strip every foreign aura (the baseline —
-            // Dispel Magic 527 has p0=0 + dispel_type=0, so it strips everything).
-            let category = if e.p0 != 0 {
-                e.p0 as u8
-            } else {
-                hdr.dispel_type
-            };
-            let removed = dispel_target(ctx, target_guid, category);
-            log::info!("dispel (cat {category}) on {target_guid} removed {removed} debuff(s)");
-            EffectHit::none()
-        }
         E_ENERGIZE => {
             if let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) {
                 t.power = energized_value(t.power, t.max_power, points);
@@ -1006,123 +1123,6 @@ pub(crate) fn apply_effect(
             if e.enters_combat {
                 crate::combat::enter_combat(ctx, caster_guid);
             }
-            EffectHit::none()
-        }
-        E_TAUNT => {
-            // Taunt: top the caster's threat on the target CREATURE so the retarget pass switches it to
-            // the caster (the threat-yank). Only meaningful on a creature target — a no-op against a
-            // player (players choose their own target; they carry no threat table). `points` is unused.
-            if ctx
-                .db
-                .game_world_entity()
-                .guid()
-                .find(target_guid)
-                .map(|t| !t.is_player())
-                .unwrap_or(false)
-            {
-                crate::threat::taunt(ctx, target_guid, caster_guid);
-            }
-            EffectHit::none()
-        }
-        E_CREATE_ITEM => {
-            // Conjure / quest item: create `points` of item `e.p0` (a game_item_template entry) in the
-            // CASTER's inventory — vanilla CreateItem always gives to the caster, not the explicit target.
-            // Reuses the shared `items::grant_item` (free backpack slot, one stack). A failure (inventory
-            // full, or the item template not loaded — the importer P4 dependency) is logged, NOT
-            // propagated: the cast still completes (graceful, like the other handlers). `points` is the
-            // DBC count (already +1-adjusted at import), floored at 1.
-            let entry = e.p0.max(0) as u32;
-            let count = points.max(1) as u32;
-            if entry == 0 {
-                log::info!(
-                    "spell {} E_CREATE_ITEM with no item entry (p0=0) — skipped",
-                    e.spell_id
-                );
-            } else if let Err(err) = crate::items::grant_item(ctx, caster_guid, entry, count) {
-                log::info!(
-                    "spell {} E_CREATE_ITEM: could not grant {count}x item {entry} to {caster_guid}: {err}",
-                    e.spell_id
-                );
-                // CRAFT (282): the reagents were already consumed (the gate in resolve_cast_at), so a
-                // failed product grant (full bag) must NOT eat them — refund EVERY reagent (vanilla refunds
-                // an unstorable craft). A conjure/quest CreateItem has no reagents → this loop is empty.
-                for (item, cnt) in recipe_reagents(ctx, e.spell_id) {
-                    let _ = crate::items::grant_item(ctx, caster_guid, item, cnt);
-                }
-            } else if let Some((line, green, gray)) = recipe_skill(ctx, e.spell_id) {
-                // CRAFT skill-up (282) — the profession-loop's third leg, co-located with the product grant.
-                // Reaching here means the craft fully succeeded → climb the recipe's OWN profession line one
-                // step toward its cap, with the REAL difficulty band (green floor .. gray ceiling) from
-                // game_skill_ability. A no-op if the line isn't learned or is at cap; a degenerate/zero band
-                // ⇒ always +1 (skillup_chance_bp). Non-craft E_CREATE_ITEM (conjure) has no profession
-                // ability → None → skipped.
-                crate::skill::gain_profession_skill(ctx, caster_guid, line, green, gray);
-            }
-            EffectHit::none()
-        }
-        E_TRIGGER => {
-            // Cast the linked spell NOW at the SAME target, routed through the shared cast core so the
-            // triggered spell runs its OWN effect list (a proc / "cast X which casts Y" chain). Guards:
-            // `trigger_spell == 0` is no-op (unset link); a spell triggering ITSELF (`trigger_spell ==
-            // e.spell_id`) is skipped to avoid unbounded recursion. The trigger reuses the caster +
-            // level; its own GCD/cost/range gates apply — a rejected trigger is logged, never panics.
-            // The triggered spell routes through its OWN resolve_cast_at, which emits its OWN cast-GO event
-            // (with its OWN damage log) — so its damage is NOT folded into this parent cast's row (no
-            // double-count / double-log). Return 0 here.
-            if e.trigger_spell != 0 && e.trigger_spell != e.spell_id {
-                if let Err(err) = resolve_cast_at(
-                    ctx,
-                    caster_guid,
-                    e.trigger_spell,
-                    level,
-                    target_guid,
-                    false,
-                    false,
-                    None,
-                ) {
-                    log::info!(
-                        "spell {} triggered {} which did not resolve: {}",
-                        e.spell_id,
-                        e.trigger_spell,
-                        err
-                    );
-                }
-            }
-            EffectHit::none()
-        }
-        E_CHARGE => {
-            charge_to_target(ctx, caster_guid, target_guid);
-            EffectHit::none()
-        }
-        E_BLINK => {
-            // Distance is DATA-DRIVEN: the effect's DBC radius (SpellRadius.dbc via the importer's
-            // `radius_yd`) — Blink carries 20yd. Fall back to BLINK_YD only for unauthored (0) data.
-            blink_forward(ctx, caster_guid, e.radius_yd);
-            EffectHit::none()
-        }
-        E_RECALL_HOME => {
-            // Hearthstone (#387): recall the caster to its bound home, always into instance 0 (the open
-            // world) even from inside a dungeon — `recall_to_home` resolves the durable char row's
-            // home_map/x/y/z itself, so no target/effect params are read here.
-            crate::world::recall_to_home(ctx, caster_guid);
-            EffectHit::none()
-        }
-        E_DISMOUNT => {
-            // Dazed's mount-removal half: run the shared land-dismount on the resolved target. An
-            // instant effect like any other, so an unlanded cast (resisted, immune, no target) never
-            // reaches here and the target stays mounted (story 27). Silent no-op on an unmounted
-            // target, and idempotent if two dismount sources land on the same tick.
-            crate::mount::dismount(ctx, target_guid);
-            EffectHit::none()
-        }
-        E_PERSISTENT_AREA => {
-            // GROUND-AoE (118): spawn a fixed-position damage area at the resolved target's position
-            // (T_SELF/target-0 → the caster; a future clicked-ground variant anchors at the dest coords).
-            // `tick_ground_areas` re-scans + damages from here on; this cast effect just STAMPS the row.
-            // `points` is the per-tick magnitude. resolve_cast_at already rejected a 0-radius area.
-            // `dest` Some → the patch anchors at the clicked ground point; None → the resolved entity
-            // (Consecration's T_SELF paladin).
-            create_ground_area(ctx, e, hdr, caster_guid, target_guid, points, dest);
             EffectHit::none()
         }
         E_CONVERT_RESOURCE => {
@@ -1151,29 +1151,9 @@ pub(crate) fn apply_effect(
                 target_guid,
                 caster_guid,
                 damage as i32,
-                hit_of(crate::combat::HitSource::Spell, false),
+                hit_of(hdr, triggered, crate::combat::HitSource::Spell, false),
             );
             EffectHit::dmg(dealt, absorbed)
-        }
-        E_JUDGEMENT => {
-            // Unleash the caster's active SEAL: a one-time holy hit on the target derived from the seal
-            // value, then consume the seal. Generic — reads the A_SEAL aura, never a spell id. No seal →
-            // no-op. (Damage = the seal coefficient; the exact vanilla Judgement-of-Righteousness formula
-            // is a tuning refinement.)
-            let seal = seal_amount(ctx, caster_guid);
-            if seal > 0 {
-                let (dealt, absorbed) = apply_target_damage(
-                    ctx,
-                    target_guid,
-                    caster_guid,
-                    seal,
-                    hit_of(crate::combat::HitSource::Spell, false),
-                );
-                remove_seal_auras(ctx, caster_guid);
-                EffectHit::dmg(dealt, absorbed)
-            } else {
-                EffectHit::none()
-            }
         }
         E_ADD_COMBO => {
             // Rogue GENERATOR: +1 combo point on the target (capped at 5); the finisher reads it. Generic
@@ -1181,92 +1161,33 @@ pub(crate) fn apply_effect(
             crate::combo::add_combo_point(ctx, caster_guid, target_guid);
             EffectHit::none()
         }
-        E_FINISHER_DAMAGE => {
-            // Rogue FINISHER: damage scales with the combo points built on this target (base_points is the
-            // PER-POINT damage), then spend them. Generic — reads game_combo_point, never a spell id.
-            let combo = crate::combo::combo_points(ctx, caster_guid, target_guid);
-            let dmg = crate::combo::finisher_damage(points, combo);
-            let hit = if dmg > 0 {
-                let (dealt, absorbed) = apply_target_damage(
-                    ctx,
-                    target_guid,
-                    caster_guid,
-                    dmg,
-                    hit_of(crate::combat::HitSource::MeleeSpell, false),
-                );
-                EffectHit::dmg(dealt, absorbed)
-            } else {
-                EffectHit::none()
-            };
-            crate::combo::spend_combo(ctx, caster_guid, target_guid);
-            hit
-        }
-        E_RESURRECT => {
-            // Offer a revive to a DEAD ally: emit SMSG_RESURRECT_REQUEST and wait for the target's
-            // CMSG_RESURRECT_RESPONSE accept — vanilla never revives a player without their consent.
-            // No-op on a living target (nothing to offer) and on a non-player target (creatures have no
-            // client to prompt; a future "always accept" NPC-rez path is out of scope). The actual revive
-            // (restore `points`% of max hp/power + clear the death/ghost state, mirroring corpse.rs
-            // `reclaim_corpse`) lives in `resurrect_response`, gated on accept.
-            if let Some(t) = ctx.db.game_world_entity().guid().find(target_guid) {
-                if t.dead && t.is_player() {
-                    let caster_name = ctx
-                        .db
-                        .game_character()
-                        .guid()
-                        .find(caster_guid)
-                        .map(|c| c.name)
-                        .unwrap_or_default();
-                    ctx.db
-                        .game_resurrect_request()
-                        .target_guid()
-                        .delete(target_guid);
-                    ctx.db.game_resurrect_request().insert(ResurrectRequest {
-                        target_guid,
-                        target_identity: t.owner_identity,
-                        caster_guid,
-                        caster_name,
-                        points,
-                        created_at: ctx.timestamp,
-                    });
-                }
-            }
-            EffectHit::none()
-        }
-        E_PICKPOCKET => {
-            // Grant the rogue copper from the CREATURE target WITHOUT engaging (no combat, no aggro, no
-            // melee row — distinct from kill loot). ONCE PER SPAWN: a creature already pickpocketed this
-            // life is rejected (the `pickpocketed` marker), so the same spawn can't be drained twice. Money
-            // is the creature's TEMPLATE range (`money_min`/`money_max` — the SAME source the kill path
-            // uses, reused via `roll_money`), falling back to the level heuristic for un-imported creatures
-            // (`money_max == 0`). NOT rank-scaled (vanilla pickpocket isn't). Item rows (work-item 210):
-            // `roll_pickpocket_loot` rolls the creature's `game_pickpocket_loot` table into
-            // `game_corpse_loot` keyed on the TARGET's (still-alive) guid, inside this SAME once-gate, so
-            // items can never be drained twice per life either. Never on players (no pockets / not a
-            // creature). [entity]
-            let entities = ctx.db.game_world_entity();
-            if let Some(mut target) = entities.guid().find(target_guid) {
-                if !target.is_player() && !target.dead && !target.pickpocketed {
-                    let copper = ctx
-                        .db
-                        .game_creature_template()
-                        .entry()
-                        .find(target.entry)
-                        .filter(|t| t.money_max > 0)
-                        .map(|t| crate::combat::roll_money(ctx, t.money_min, t.money_max))
-                        .unwrap_or_else(|| pickpocket_copper(target.level));
-                    if let Some(mut rogue) = entities.guid().find(caster_guid) {
-                        rogue.money = rogue.money.saturating_add(copper);
-                        entities.guid().update(rogue);
-                    }
-                    // Mark picked BEFORE rolling: roll_pickpocket_loot's refresh_lootable does its
-                    // own fetch+write of this row (LOOTABLE flag), and writing our pre-roll snapshot
-                    // AFTERWARDS clobbered that flag — the rolled items were unreachable (review catch).
-                    let target_entry = target.entry;
-                    target.pickpocketed = true; // a re-pickpocket this life is rejected
-                    entities.guid().update(target);
-                    crate::loot::roll_pickpocket_loot(ctx, target_entry, target_guid);
-                }
+        _ => EffectHit::none(),
+    }
+}
+
+/// The threat-table effects: taunt, interrupt, the threat wipe, and the queued next swing.
+fn apply_threat_effect(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+    points: i32,
+) -> EffectHit {
+    match e.kind {
+        E_TAUNT => {
+            // Taunt: top the caster's threat on the target CREATURE so the retarget pass switches it to
+            // the caster (the threat-yank). Only meaningful on a creature target — a no-op against a
+            // player (players choose their own target; they carry no threat table). `points` is unused.
+            if ctx
+                .db
+                .game_world_entity()
+                .guid()
+                .find(target_guid)
+                .map(|t| !t.is_player())
+                .unwrap_or(false)
+            {
+                crate::threat::taunt(ctx, target_guid, caster_guid);
             }
             EffectHit::none()
         }
@@ -1314,6 +1235,265 @@ pub(crate) fn apply_effect(
             if let Some(mut c) = ctx.db.game_world_entity().guid().find(caster_guid) {
                 c.next_swing_spell = e.spell_id;
                 ctx.db.game_world_entity().guid().update(c);
+            }
+            EffectHit::none()
+        }
+        _ => EffectHit::none(),
+    }
+}
+
+/// The effects that move a unit or anchor a patch of ground.
+fn apply_reposition_effect(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    hdr: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+    points: i32,
+    dest: Option<(f32, f32, f32)>,
+) -> EffectHit {
+    match e.kind {
+        E_CHARGE => {
+            charge_to_target(ctx, caster_guid, target_guid);
+            EffectHit::none()
+        }
+        E_BLINK => {
+            // Distance is DATA-DRIVEN: the effect's DBC radius (SpellRadius.dbc via the importer's
+            // `radius_yd`) — Blink carries 20yd. Fall back to BLINK_YD only for unauthored (0) data.
+            blink_forward(ctx, caster_guid, e.radius_yd);
+            EffectHit::none()
+        }
+        E_RECALL_HOME => {
+            // Hearthstone: recall the caster to its bound home, always into instance 0 (the open
+            // world) even from inside a dungeon — `recall_to_home` resolves the durable char row's
+            // home_map/x/y/z itself, so no target/effect params are read here.
+            crate::world::recall_to_home(ctx, caster_guid);
+            EffectHit::none()
+        }
+        E_DISMOUNT => {
+            // Dazed's mount-removal half: run the shared land-dismount on the resolved target. An
+            // instant effect like any other, so an unlanded cast (resisted, immune, no target) never
+            // reaches here and the target stays mounted (story 27). Silent no-op on an unmounted
+            // target, and idempotent if two dismount sources land on the same tick.
+            crate::mount::dismount(ctx, target_guid);
+            EffectHit::none()
+        }
+        E_PERSISTENT_AREA => {
+            // GROUND-AoE (118): spawn a fixed-position damage area at the resolved target's position
+            // (T_SELF/target-0 → the caster; a future clicked-ground variant anchors at the dest coords).
+            // `tick_ground_areas` re-scans + damages from here on; this cast effect just STAMPS the row.
+            // `points` is the per-tick magnitude. resolve_cast_at already rejected a 0-radius area.
+            // `dest` Some → the patch anchors at the clicked ground point; None → the resolved entity
+            // (Consecration's T_SELF paladin).
+            create_ground_area(ctx, e, hdr, caster_guid, target_guid, points, dest);
+            EffectHit::none()
+        }
+        _ => EffectHit::none(),
+    }
+}
+
+/// The inventory effects: conjuring an item and pickpocketing one.
+fn apply_inventory_effect(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    caster_guid: u64,
+    target_guid: u64,
+    points: i32,
+) -> EffectHit {
+    match e.kind {
+        E_CREATE_ITEM => {
+            // Conjure / quest item: create `points` of item `e.p0` (a game_item_template entry) in the
+            // CASTER's inventory — vanilla CreateItem always gives to the caster, not the explicit target.
+            // Reuses the shared `items::grant_item` (free backpack slot, one stack). A failure (inventory
+            // full, or the item template not loaded — the importer P4 dependency) is logged, NOT
+            // propagated: the cast still completes (graceful, like the other handlers). `points` is the
+            // DBC count (already +1-adjusted at import), floored at 1.
+            let entry = e.p0.max(0) as u32;
+            let count = points.max(1) as u32;
+            if entry == 0 {
+                log::info!(
+                    "spell {} E_CREATE_ITEM with no item entry (p0=0) — skipped",
+                    e.spell_id
+                );
+            } else if let Err(err) = crate::items::grant_item(ctx, caster_guid, entry, count) {
+                log::info!(
+                    "spell {} E_CREATE_ITEM: could not grant {count}x item {entry} to {caster_guid}: {err}",
+                    e.spell_id
+                );
+                // CRAFT (282): the reagents were already consumed (the gate in resolve_cast_at), so a
+                // failed product grant (full bag) must NOT eat them — refund EVERY reagent (vanilla refunds
+                // an unstorable craft). A conjure/quest CreateItem has no reagents → this loop is empty.
+                for (item, cnt) in recipe_reagents(ctx, e.spell_id) {
+                    let _ = crate::items::grant_item(ctx, caster_guid, item, cnt);
+                }
+            } else if let Some((line, green, gray)) = recipe_skill(ctx, e.spell_id) {
+                // CRAFT skill-up (282) — the profession-loop's third leg, co-located with the product grant.
+                // Reaching here means the craft fully succeeded → climb the recipe's OWN profession line one
+                // step toward its cap, with the REAL difficulty band (green floor .. gray ceiling) from
+                // game_skill_ability. A no-op if the line isn't learned or is at cap; a degenerate/zero band
+                // ⇒ always +1 (skillup_chance_bp). Non-craft E_CREATE_ITEM (conjure) has no profession
+                // ability → None → skipped.
+                crate::skill::gain_profession_skill(ctx, caster_guid, line, green, gray);
+            }
+            EffectHit::none()
+        }
+        E_PICKPOCKET => {
+            // Grant the rogue copper from the CREATURE target WITHOUT engaging (no combat, no aggro, no
+            // melee row — distinct from kill loot). ONCE PER SPAWN: a creature already pickpocketed this
+            // life is rejected (the `pickpocketed` marker), so the same spawn can't be drained twice. Money
+            // is the creature's TEMPLATE range (`money_min`/`money_max` — the SAME source the kill path
+            // uses, reused via `roll_money`), falling back to the level heuristic for un-imported creatures
+            // (`money_max == 0`). NOT rank-scaled (vanilla pickpocket isn't). Item rows (work-item 210):
+            // `roll_pickpocket_loot` rolls the creature's `game_pickpocket_loot` table into
+            // `game_corpse_loot` keyed on the TARGET's (still-alive) guid, inside this SAME once-gate, so
+            // items can never be drained twice per life either. Never on players (no pockets / not a
+            // creature). [entity]
+            let entities = ctx.db.game_world_entity();
+            if let Some(mut target) = entities.guid().find(target_guid) {
+                if !target.is_player() && !target.dead && !target.pickpocketed {
+                    let copper = ctx
+                        .db
+                        .game_creature_template()
+                        .entry()
+                        .find(target.entry)
+                        .filter(|t| t.money_max > 0)
+                        .map(|t| crate::combat::roll_money(ctx, t.money_min, t.money_max))
+                        .unwrap_or_else(|| pickpocket_copper(target.level));
+                    if let Some(mut rogue) = entities.guid().find(caster_guid) {
+                        rogue.money = rogue.money.saturating_add(copper);
+                        entities.guid().update(rogue);
+                    }
+                    // Mark picked BEFORE rolling: roll_pickpocket_loot's refresh_lootable does its
+                    // own fetch+write of this row (LOOTABLE flag), and writing our pre-roll snapshot
+                    // AFTERWARDS clobbered that flag — the rolled items were unreachable (review catch).
+                    let target_entry = target.entry;
+                    target.pickpocketed = true; // a re-pickpocket this life is rejected
+                    entities.guid().update(target);
+                    crate::loot::roll_pickpocket_loot(ctx, target_entry, target_guid);
+                }
+            }
+            EffectHit::none()
+        }
+        _ => EffectHit::none(),
+    }
+}
+
+/// The effects that hand the work to another engine path: a triggered cast, and a Runtime Script.
+fn apply_delegating_effect(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    caster_guid: u64,
+    target_guid: u64,
+    level: u8,
+) -> EffectHit {
+    match e.kind {
+        E_TRIGGER => {
+            // Cast the linked spell NOW at the SAME target, routed through the shared cast core so the
+            // triggered spell runs its OWN effect list (a proc / "cast X which casts Y" chain). Guards:
+            // `trigger_spell == 0` is no-op (unset link); a spell triggering ITSELF (`trigger_spell ==
+            // e.spell_id`) is skipped to avoid unbounded recursion. The trigger reuses the caster +
+            // level; its own GCD/cost/range gates apply — a rejected trigger is logged, never panics.
+            // The triggered spell routes through its OWN resolve_cast_at, which emits its OWN cast-GO event
+            // (with its OWN damage log) — so its damage is NOT folded into this parent cast's row (no
+            // double-count / double-log). Return 0 here.
+            if e.trigger_spell != 0 && e.trigger_spell != e.spell_id {
+                if let Err(err) = resolve_cast_at(
+                    ctx,
+                    caster_guid,
+                    e.trigger_spell,
+                    level,
+                    target_guid,
+                    false,
+                    false,
+                    None,
+                ) {
+                    log::info!(
+                        "spell {} triggered {} which did not resolve: {}",
+                        e.spell_id,
+                        e.trigger_spell,
+                        err
+                    );
+                }
+            }
+            EffectHit::none()
+        }
+        E_SCRIPTED => {
+            // script_id == 0 is the vanilla no-op — every seed/imported spell (including the
+            // importer's fallback for a raw effect it cannot map to a known kind) carries it, and
+            // this arm changes nothing for them.
+            if e.script_id != 0 {
+                // The precast gate (`check_cast_gate_suffix`) already refused the whole cast if
+                // this script was missing or disabled — this is the SAME lookup, re-run because
+                // the row can change between the gate and here (an Operator disables it mid-cast,
+                // or an earlier effect in this same cast removed it). A miss here fails only THIS
+                // effect: no panic, no late refusal — the cost is already spent and the cast's
+                // other effects still apply.
+                if let Some(script) = ctx.db.game_script().script_id().find(e.script_id) {
+                    if script.enabled {
+                        // Label carries the spell + effect identity a Script Diagnostic names on
+                        // failure, and what `event.name` reads as inside the script. Distinct from
+                        // an Event Binding's event name (there is no binding here — script_id
+                        // names the script outright).
+                        let event = crate::runtime_script::ScriptEvent {
+                            name: format!("spell_effect:{}:{}", e.spell_id, e.effect_index),
+                            actor: crate::runtime_script::EntityView::read(ctx, caster_guid),
+                            target: crate::runtime_script::EntityView::read(ctx, target_guid),
+                        };
+                        crate::runtime_script::invoke_by_identity(
+                            ctx,
+                            crate::runtime_script::RuntimeScript {
+                                name: &script.name,
+                                source: &script.source,
+                            },
+                            &event,
+                        );
+                    }
+                }
+            }
+            EffectHit::none()
+        }
+        _ => EffectHit::none(),
+    }
+}
+
+/// The effects that change what a character IS: resurrected, accompanied by a pet, or in a stance.
+fn apply_character_effect(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    caster_guid: u64,
+    target_guid: u64,
+    points: i32,
+) -> EffectHit {
+    match e.kind {
+        E_RESURRECT => {
+            // Offer a revive to a DEAD ally: emit SMSG_RESURRECT_REQUEST and wait for the target's
+            // CMSG_RESURRECT_RESPONSE accept — vanilla never revives a player without their consent.
+            // No-op on a living target (nothing to offer) and on a non-player target (creatures have no
+            // client to prompt; a future "always accept" NPC-rez path is out of scope). The actual revive
+            // (restore `points`% of max hp/power + clear the death/ghost state, mirroring corpse.rs
+            // `reclaim_corpse`) lives in `resurrect_response`, gated on accept.
+            if let Some(t) = ctx.db.game_world_entity().guid().find(target_guid) {
+                if t.dead && t.is_player() {
+                    let caster_name = ctx
+                        .db
+                        .game_character()
+                        .guid()
+                        .find(caster_guid)
+                        .map(|c| c.name)
+                        .unwrap_or_default();
+                    ctx.db
+                        .game_resurrect_request()
+                        .target_guid()
+                        .delete(target_guid);
+                    ctx.db.game_resurrect_request().insert(ResurrectRequest {
+                        target_guid,
+                        target_identity: t.owner_identity,
+                        caster_guid,
+                        caster_name,
+                        points,
+                        created_at: ctx.timestamp,
+                    });
+                }
             }
             EffectHit::none()
         }
@@ -1381,53 +1561,7 @@ pub(crate) fn apply_effect(
             }
             EffectHit::none()
         }
-        E_SCRIPTED => {
-            // script_id == 0 is the vanilla no-op — every seed/imported spell (including the
-            // importer's fallback for a raw effect it cannot map to a known kind) carries it, and
-            // this arm changes nothing for them.
-            if e.script_id != 0 {
-                // The precast gate (`check_cast_gate_suffix`) already refused the whole cast if
-                // this script was missing or disabled — this is the SAME lookup, re-run because
-                // the row can change between the gate and here (an Operator disables it mid-cast,
-                // or an earlier effect in this same cast removed it). A miss here fails only THIS
-                // effect: no panic, no late refusal — the cost is already spent and the cast's
-                // other effects still apply.
-                if let Some(script) = ctx.db.game_script().script_id().find(e.script_id) {
-                    if script.enabled {
-                        // Label carries the spell + effect identity a Script Diagnostic names on
-                        // failure, and what `event.name` reads as inside the script. Distinct from
-                        // an Event Binding's event name (there is no binding here — script_id
-                        // names the script outright).
-                        let event = crate::runtime_script::ScriptEvent {
-                            name: format!("spell_effect:{}:{}", e.spell_id, e.effect_index),
-                            actor: crate::runtime_script::EntityView::read(ctx, caster_guid),
-                            target: crate::runtime_script::EntityView::read(ctx, target_guid),
-                        };
-                        crate::runtime_script::invoke_by_identity(
-                            ctx,
-                            crate::runtime_script::RuntimeScript {
-                                name: &script.name,
-                                source: &script.source,
-                            },
-                            &event,
-                        );
-                    }
-                }
-            }
-            EffectHit::none()
-        }
-        other => {
-            // Unmapped residue: a graceful no-op + log (the import safety net — casts and does
-            // nothing, vs doing the wrong thing). Spells that LOOK scripted in the raw DBC but are
-            // really a known effect (Holy Light → a heal, Life Tap → a resource convert, Charge → a rush)
-            // are reclassified to a generic kind at IMPORT time (the importer's curated correction), so
-            // they arrive here as E_HEAL / E_CONVERT_RESOURCE / E_CHARGE and never reach this arm.
-            log::info!(
-                "spell {} effect kind 0x{other:02x} not implemented (graceful no-op)",
-                e.spell_id
-            );
-            EffectHit::none()
-        }
+        _ => EffectHit::none(),
     }
 }
 
@@ -1997,7 +2131,10 @@ mod effect_handler_tests {
     fn thirty_two_buffs_full_refuses_the_thirty_third_leaving_the_thirty_two_untouched() {
         let buffs_full: Vec<(u8, u32)> = (0u8..32).map(|slot| (slot, slot as u32 + 2000)).collect();
         assert_eq!(buffs_full.len(), 32);
-        assert_eq!(super::pick_aura_slot(&buffs_full, 8888, false, 32, 48), None);
+        assert_eq!(
+            super::pick_aura_slot(&buffs_full, 8888, false, 32, 48),
+            None
+        );
         for &(slot, spell_id) in &buffs_full {
             assert_eq!(
                 super::pick_aura_slot(&buffs_full, spell_id, false, 32, 48),
@@ -2028,7 +2165,11 @@ mod effect_handler_tests {
         // Both ranges full simultaneously: a fresh debuff is refused (debuff range is what's full for
         // it) and a fresh buff is refused (buff range is what's full for it) — each by its OWN range,
         // not by the other polarity's occupancy.
-        let both_full: Vec<(u8, u32)> = buffs_full.iter().chain(debuffs_full.iter()).copied().collect();
+        let both_full: Vec<(u8, u32)> = buffs_full
+            .iter()
+            .chain(debuffs_full.iter())
+            .copied()
+            .collect();
         assert_eq!(super::pick_aura_slot(&both_full, 9999, true, 32, 48), None);
         assert_eq!(super::pick_aura_slot(&both_full, 8888, false, 32, 48), None);
     }
