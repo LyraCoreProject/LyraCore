@@ -494,11 +494,13 @@ records where a Package was installed from.
 _Avoid_: apply log, history, audit trail
 
 **Build Identity**:
-The recorded inputs `packages build` writes next to a Package's generated artifact, in a sibling
-file rather than inside it: hashes of the Package's Datascript source tree, the generated Module
-typings, the Base Snapshot, the authoring library, and the pinned Datascript toolchain files, plus
-the pinned Bun version and the artifact's own hash. `lyracore packages check` and preflight
-recompute it against the checkout on disk and refuse, naming the input that changed.
+The recorded inputs `packages build` writes next to a source-built artifact, in a sibling file
+rather than inside it. A Package Delta records its Datascript source tree, generated Module
+typings, Base Snapshot, authoring library, and pinned Datascript toolchain. A source-built Script
+Artifact records its `scripts/` sources, Runtime Script Toolchain, Bun pin, and artifact hash. A
+source-free prebuilt Script Artifact has no local author inputs or Build Identity; the authoritative
+checker still parses and traces it. `lyracore packages check` and preflight recompute a present
+identity against the checkout on disk and refuse, naming the input that changed.
 _Avoid_: identity file, build fingerprint, artifact metadata
 
 **Claim**:

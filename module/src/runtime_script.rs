@@ -1336,6 +1336,10 @@ if #roster > 0 then grant_xp(event.actor, 25) end
     }
 
     #[test]
+    /// Piccolo gives a caller frame only to an active callback. After `Executor::step` returns,
+    /// its public API exposes no native-fault or fuel-exhaustion frame. Keep the stable context
+    /// rather than inventing a line or instrumenting generated Lua, which would move its Fuel
+    /// Budget measurement.
     fn native_vm_and_fuel_diagnostics_keep_the_stable_invocation_context() {
         let mut host = RuntimeScriptHost::new();
         for (name, source, kind) in [

@@ -433,11 +433,12 @@ with neither builds exactly as it did before those steps existed:
    check `packages replay` runs before it writes to a Shard, so a Claim Conflict or a Runtime Script
    collision between two Packages is caught by the one implementation that also decides whether it
    may apply, not by a second, looser one.
-8. A **Build Identity** sidecar is written next to each artifact that just validated: the hashes
-   `packages check` and preflight later recompute to tell whether the artifact is still current.
-   Written only after step 7 succeeds, so a sidecar never describes an artifact this build itself
-   would have refused. Each kind records its own inputs — a Script Artifact's are its `scripts/`
-   sources and the Runtime Script Toolchain, not the Module typings or the Base Snapshot.
+8. A **Build Identity** sidecar is written next to each source-built artifact that just validated:
+   the hashes `packages check` and preflight later recompute to tell whether it is still current.
+   A source-free prebuilt Script Artifact has no local author inputs or sidecar; the authoritative
+   checker still parses and traces it. Each kind records its own inputs — a Script Artifact's are
+   its `scripts/` sources and the Runtime Script Toolchain, not the Module typings or the Base
+   Snapshot.
 
 A Package Delta this command emits is never committed: it is regenerated author-side on every
 build and installed from source, the same way `datascripts/generated/` itself is git-ignored. A
@@ -554,9 +555,13 @@ therefore opens with `local function ____tbl(t) return t end` and a trailing con
 through it. `module/src/runtime_script.rs` pins both the fault and the fix. A hand-written `.lua`
 script ships unchanged, so its author avoids that call shape themselves.
 
-Diagnostics name a line of the **generated** Lua, the bytes the Shard holds, never a line of the
-TypeScript. There is no source map, and a number pointing into a file no Shard holds would be worse
-than no number.
+Syntax errors and failures raised through `error`, `assert`, or a Host Operation name a line of the
+**generated** Lua, the bytes the Shard holds, never a line of the TypeScript. There is no source
+map, and a number pointing into a file no Shard holds would be worse than no number. Piccolo 0.3.3
+does not expose a frame after a native VM fault unwinds or when the Host stops an unfinished fuel
+step. Those diagnostics name the Runtime Script, Event Binding, failure kind, and interpreter
+message, but no line. Adding generated-code instrumentation would change emitted Lua and Fuel
+Budget accounting, so this Host does not guess.
 
 Build one Package's scripts by hand the way `packages build` does:
 
@@ -630,14 +635,15 @@ more destructive reload than this verb owns. Reapply those with the importer's o
 ./lyracore packages check
 ```
 
-`packages build` writes a Build Identity next to each artifact it emits. `packages check`
+`packages build` writes a Build Identity next to each source-built artifact. `packages check`
 recomputes every recorded input from the checkout on disk right now and refuses, naming the
 specific input, the moment one no longer matches. `preflight` folds the same report into its own
 gate on `publish`'s behalf, so a stale artifact never reaches a Shard.
 
-Both kinds are checked, each against its own sidecar. A Package Delta's inputs are its Datascript,
-the authoring library, the Module typings, the Base Snapshot and the pinned Bun toolchain. A Script
-Artifact's are its `scripts/` sources, the Runtime Script Toolchain and the same Bun pin.
+A Package Delta always has a sidecar. A source-built Script Artifact has one for its `scripts/`
+sources, Runtime Script Toolchain, and Bun pin. A source-free prebuilt Script Artifact has no local
+author inputs or sidecar. `packages check` still sends every Script Artifact through the
+authoritative parser and tracer, so a malformed or conflicting prebuilt artifact never passes.
 
 `datascripts/generated/` is regenerated fresh, every run, with the same `spacetime generate`
 invocation `packages build`'s typegen step uses, so a Module schema change makes a committed
@@ -649,8 +655,8 @@ anything, so it needs neither Bun nor a Base Snapshot to do its job.
 A missing Base Snapshot is reported and does not fail the check: the snapshot is the Operator's own
 client-derived data, and a CI machine holding none cannot regenerate one to compare against. A Base
 Snapshot that is present and no longer matches its recorded hash is a real mismatch and fails like
-any other input. A missing sidecar is treated as stale; it predates identity tracking, so there is
-nothing to compare against.
+any other input. A missing sidecar is stale for a Package Delta or a Script Artifact with sources.
+For a source-free Script Artifact it is the prebuilt contract, not a skipped parser check.
 
 A checkout with no Packages at all, or none carrying a generated artifact, is a clean no-op.
 
