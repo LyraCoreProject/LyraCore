@@ -382,6 +382,15 @@ A drop-in folder under `packages/<name>/` that adds content to the realm with no
 Its data changes ship as Package Deltas rather than as edits to the base data.
 _Avoid_: plugin, addon (when meaning the whole folder), mod, extension
 
+**Package API**:
+The part of the Module a Package may name, versioned and written down at `docs/package-api.md`: the
+marker macros, the hook catalogue, the encounter kernel, the actor verbs and helpers, the Package
+Config seam, the Package Event seam, the table accessor conventions, and the list of module roots
+everything else hangs under. The build lints every Package file against it and fails on a path
+outside it, so a core refactor breaks a Package at compile time rather than on a live realm. It is a
+compatibility contract, never a sandbox: compiled Package code is trusted either way.
+_Avoid_: SDK, plugin API, public API, allowlist
+
 **Package Config**:
 A row of `game_package_config`, keyed by `(package_name, key)`: one durable value a Package reads
 and the Operator edits. A Package seeds its own defaults idempotently, from its own ensure/init

@@ -7,6 +7,10 @@ directory listing is the enabled set.
 `example/` is the maintained reference Package. `lyracore packages new <name>` copies and renames it
 to scaffold a new one; read its `src/mod.rs` for the structure a Package's Rust half follows.
 
+`docs/package-api.md` is the Package API: the versioned list of what a Package's Rust half may call,
+and what core promises about it. The build lints every file here against that list and fails on a
+path outside it, naming the Package, the file and the line.
+
 A Package may also have a DATA half: `data/.generated/*.json`, the Package Deltas a Datascript
 generates, which the importer reapplies after every base import. `fire_nova/` is the worked example;
 its Datascript lives at `datascripts/src/fire_nova/spells.ts`, because only artifacts belong inside

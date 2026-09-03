@@ -11,7 +11,13 @@ and is not reconstructed here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **The Package API, version 1** — [`docs/package-api.md`](./docs/package-api.md) names what a
+  Package's Rust half may call and what core promises about it. The module build lints every file
+  under `packages/*/src/` against that list and fails on a path outside it, naming the Package, the
+  file, the line and the path. A Package that needs a path off the surface writes
+  `// package-api: exempt <reason>` on the line that names it.
 
 ## [0.1.0-alpha.1] — unreleased
 
