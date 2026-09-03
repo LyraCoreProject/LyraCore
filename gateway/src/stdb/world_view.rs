@@ -2020,6 +2020,9 @@ fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: 
 }
 
 #[cfg(test)]
+mod relay_bench;
+
+#[cfg(test)]
 mod family_audience_tests {
     use super::{
         addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
