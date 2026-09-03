@@ -786,6 +786,7 @@ pub mod realm_auction_commit_listing_reducer;
 pub mod realm_auction_confirm_listing_reducer;
 pub mod realm_auction_decide_bid_reducer;
 pub mod realm_auction_refund_bid_reducer;
+pub mod realm_auction_refund_listing_reducer;
 pub mod realm_auction_settle_listing_reducer;
 pub mod realm_group_op_reducer;
 pub mod realm_loot_op_reducer;
@@ -1748,6 +1749,7 @@ pub use realm_auction_commit_listing_reducer::realm_auction_commit_listing;
 pub use realm_auction_confirm_listing_reducer::realm_auction_confirm_listing;
 pub use realm_auction_decide_bid_reducer::realm_auction_decide_bid;
 pub use realm_auction_refund_bid_reducer::realm_auction_refund_bid;
+pub use realm_auction_refund_listing_reducer::realm_auction_refund_listing;
 pub use realm_auction_settle_listing_reducer::realm_auction_settle_listing;
 pub use realm_group_op_reducer::realm_group_op;
 pub use realm_loot_op_reducer::realm_loot_op;
@@ -3264,6 +3266,25 @@ pub enum Reducer {
         offer: u32,
         deferred_refund: u32,
     },
+    RealmAuctionRefundListing {
+        operation_id: u64,
+        seller_guid: u64,
+        item_guid: u64,
+        item_entry: u32,
+        item_stack_count: u32,
+        item_durability: u32,
+        item_enchant_id: u32,
+        item_soulbound: bool,
+        house: u32,
+        deposit_rate: u32,
+        consignment_rate: u32,
+        start_bid: u32,
+        buyout: u32,
+        duration_minutes: u32,
+        deposit: u32,
+        created_micros: i64,
+        expires_micros: i64,
+    },
     RealmAuctionSettleListing {
         operation_id: u64,
     },
@@ -3860,6 +3881,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RealmAuctionConfirmListing { .. } => "realm_auction_confirm_listing",
             Reducer::RealmAuctionDecideBid { .. } => "realm_auction_decide_bid",
             Reducer::RealmAuctionRefundBid { .. } => "realm_auction_refund_bid",
+            Reducer::RealmAuctionRefundListing { .. } => "realm_auction_refund_listing",
             Reducer::RealmAuctionSettleListing { .. } => "realm_auction_settle_listing",
             Reducer::RealmGroupOp { .. } => "realm_group_op",
             Reducer::RealmLootOp { .. } => "realm_loot_op",
@@ -6284,6 +6306,43 @@ Reducer::PrepareVmapNavCoverage{
                 house: house.clone(),
                 offer: offer.clone(),
                 deferred_refund: deferred_refund.clone(),
+}),
+            Reducer::RealmAuctionRefundListing{
+                operation_id,
+                seller_guid,
+                item_guid,
+                item_entry,
+                item_stack_count,
+                item_durability,
+                item_enchant_id,
+                item_soulbound,
+                house,
+                deposit_rate,
+                consignment_rate,
+                start_bid,
+                buyout,
+                duration_minutes,
+                deposit,
+                created_micros,
+                expires_micros,
+}             => __sats::bsatn::to_vec(&realm_auction_refund_listing_reducer::RealmAuctionRefundListingArgs {
+                operation_id: operation_id.clone(),
+                seller_guid: seller_guid.clone(),
+                item_guid: item_guid.clone(),
+                item_entry: item_entry.clone(),
+                item_stack_count: item_stack_count.clone(),
+                item_durability: item_durability.clone(),
+                item_enchant_id: item_enchant_id.clone(),
+                item_soulbound: item_soulbound.clone(),
+                house: house.clone(),
+                deposit_rate: deposit_rate.clone(),
+                consignment_rate: consignment_rate.clone(),
+                start_bid: start_bid.clone(),
+                buyout: buyout.clone(),
+                duration_minutes: duration_minutes.clone(),
+                deposit: deposit.clone(),
+                created_micros: created_micros.clone(),
+                expires_micros: expires_micros.clone(),
 }),
             Reducer::RealmAuctionSettleListing{
                 operation_id,

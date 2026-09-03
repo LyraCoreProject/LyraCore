@@ -298,6 +298,11 @@ impl Coordinator {
             if reducer_refusal_reason(&error).is_some()
                 && !realm.auction_receipt_is_visible(operation_id)
             {
+                // Mail is authoritative on Realm-core. Commit its idempotent refund receipt and
+                // the exact returned value there before deleting the source Hold. If either call
+                // is interrupted, the Hold remains recovery evidence and the next replay resumes
+                // from the same operation id.
+                realm.auction_refund_listing(&hold)?;
                 self.auction_release_listing_hold(&hold)?;
             }
             return Err(error);
@@ -393,6 +398,32 @@ impl Coordinator {
         )
     }
 
+    fn auction_refund_listing(&self, hold: &AuctionHold) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_auction_refund_listing",
+            realm_auction_refund_listing_then(
+                hold.operation_id,
+                hold.seller_guid,
+                hold.item_guid,
+                hold.item_entry,
+                hold.item_stack_count,
+                hold.item_durability,
+                hold.item_enchant_id,
+                hold.item_soulbound,
+                hold.house,
+                hold.deposit_rate,
+                hold.consignment_rate,
+                hold.start_bid,
+                hold.buyout,
+                hold.duration_minutes,
+                hold.deposit,
+                hold.created_micros,
+                hold.expires_micros
+            )
+        )
+    }
+
     fn auction_release_listing_hold(&self, hold: &AuctionHold) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -409,7 +440,7 @@ impl Coordinator {
             .game_auction_operation_receipt()
             .operation_id()
             .find(&operation_id)
-            .is_some()
+            .is_some_and(|receipt| receipt.auction_id != 0)
     }
 
     fn matching_auction_hold(
@@ -482,6 +513,7 @@ impl Coordinator {
                 .game_auction_operation_receipt()
                 .operation_id()
                 .find(&operation_id)
+                .filter(|receipt| receipt.auction_id != 0)
         })
     }
 
@@ -3209,6 +3241,42 @@ mod auction_reducer_tests {
             },
             bidder_guid
         ));
+    }
+
+    #[test]
+    fn refused_listing_refund_commits_on_realm_core_before_the_home_hold_is_deleted() {
+        let drive = crate::test_scan::code_of(
+            include_str!("reducers.rs"),
+            "fn drive_sharded_auction_listing(",
+        );
+        let refund = "realm.auction_refund_listing(&hold)?;";
+        let release = "self.auction_release_listing_hold(&hold)?;";
+        let refund_at = drive
+            .find(refund)
+            .expect("the Realm-core handle must commit the refused listing Mail");
+        let release_at = drive
+            .find(release)
+            .expect("the Home Shard must delete the Hold after that commit");
+        assert!(
+            refund_at < release_at,
+            "a source-Hold delete before Realm-core Mail commit loses the only listing value"
+        );
+        assert!(
+            !drive.contains("self.auction_refund_listing(&hold)?;"),
+            "the Home Shard does not own Mail in a sharded realm"
+        );
+    }
+
+    #[test]
+    fn refused_listing_binding_matches_the_generated_commit_listing_shape() {
+        let expected = include_str!("bindings/realm_auction_commit_listing_reducer.rs")
+            .replace("RealmAuctionCommitListing", "RealmAuctionRefundListing")
+            .replace("realm_auction_commit_listing", "realm_auction_refund_listing");
+        assert_eq!(
+            include_str!("bindings/realm_auction_refund_listing_reducer.rs"),
+            expected,
+            "the hand-added reducer binding must remain generator-identical"
+        );
     }
 
     #[test]

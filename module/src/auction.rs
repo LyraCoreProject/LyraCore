@@ -56,9 +56,10 @@ pub struct Auction {
     pub consignment_rate: u32,
 }
 
-/// Source-shard value reserved by a sharded listing operation. A matching operation receipt makes
+/// Source-shard value reserved by a sharded listing operation. An active operation receipt makes
 /// the row recovery evidence rather than spendable value; it is deleted only after that evidence
-/// is durably copied back to the source.
+/// is durably copied back to the source. A refused listing instead keeps this Hold until
+/// Realm-core durably commits its refund Mail and zero-id receipt.
 #[table(
     accessor = game_auction_hold,
     index(accessor = by_seller, btree(columns = [seller_guid]))
@@ -85,7 +86,8 @@ pub struct AuctionHold {
 }
 
 /// Durable idempotency receipt. The full listing payload makes identical replay distinguishable
-/// from conflicting reuse even after the source Hold has been deleted.
+/// from conflicting reuse even after the source Hold has been deleted. Realm-core alone uses
+/// `auction_id == 0` as a refused-listing refund receipt; that sentinel never reaches the source.
 #[table(
     accessor = game_auction_operation_receipt,
     index(accessor = by_actor, btree(columns = [actor_guid]))
@@ -349,6 +351,12 @@ struct ListingReceipt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ListingHold {
     listing: PreparedListing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ListingRefund {
+    listing: PreparedListing,
+    mail: AuctionMail,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -870,7 +878,7 @@ trait LocalListingSink: ListingSource {
 fn operation_match<S: LocalListingSink>(sink: &S, request: ListingRequest) -> OperationMatch {
     match sink.receipt(request.operation_id) {
         None => OperationMatch::Fresh,
-        Some(receipt) if receipt.listing.request == request => {
+        Some(receipt) if receipt.auction_id != 0 && receipt.listing.request == request => {
             OperationMatch::Replay(receipt.auction_id)
         }
         Some(_) => OperationMatch::Conflict,
@@ -928,7 +936,11 @@ trait HoldSink: ListingSource {
     fn commit_hold(&mut self, hold: ListingHold);
     fn confirm_hold(&mut self, receipt: ListingReceipt);
     fn delete_hold(&mut self, operation_id: u64);
-    fn release_hold(&mut self, operation_id: u64, mail: AuctionMail);
+}
+
+trait ListingRefundSink {
+    fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, AuctionRefusal>;
+    fn commit_refund(&mut self, refund: ListingRefund);
 }
 
 trait MarketSink {
@@ -938,7 +950,7 @@ trait MarketSink {
 
 fn fence_listing<S: HoldSink>(sink: &mut S, request: ListingRequest) -> Result<(), AuctionRefusal> {
     if let Some(receipt) = sink.receipt(request.operation_id) {
-        return if receipt.listing.request == request {
+        return if receipt.auction_id != 0 && receipt.listing.request == request {
             Ok(())
         } else {
             Err(AuctionRefusal::InvalidTerms)
@@ -962,7 +974,11 @@ fn commit_held_listing<S: MarketSink>(
 ) -> Result<u32, AuctionRefusal> {
     if let Some(receipt) = sink.receipt(listing.request.operation_id) {
         return if receipt.listing == listing {
-            Ok(receipt.auction_id)
+            if receipt.auction_id == 0 {
+                Err(AuctionRefusal::InvalidTerms)
+            } else {
+                Ok(receipt.auction_id)
+            }
         } else {
             Err(AuctionRefusal::InvalidTerms)
         };
@@ -974,6 +990,9 @@ fn confirm_listing<S: HoldSink>(
     sink: &mut S,
     receipt: ListingReceipt,
 ) -> Result<(), AuctionRefusal> {
+    if receipt.auction_id == 0 {
+        return Err(AuctionRefusal::InvalidTerms);
+    }
     if let Some(existing) = sink.receipt(receipt.listing.request.operation_id) {
         return if existing == receipt {
             Ok(())
@@ -995,6 +1014,9 @@ fn settle_listing<S: HoldSink>(sink: &mut S, operation_id: u64) -> Result<(), Au
     let receipt = sink
         .receipt(operation_id)
         .ok_or(AuctionRefusal::InvalidTerms)?;
+    if receipt.auction_id == 0 {
+        return Err(AuctionRefusal::InvalidTerms);
+    }
     match sink.hold(operation_id) {
         None => Ok(()),
         Some(hold) if hold.listing == receipt.listing => {
@@ -1017,6 +1039,27 @@ fn listing_release_mail(listing: &PreparedListing) -> AuctionMail {
     }
 }
 
+fn listing_refund(listing: &PreparedListing) -> ListingRefund {
+    ListingRefund {
+        listing: listing.clone(),
+        mail: listing_release_mail(listing),
+    }
+}
+
+fn refund_listing<S: ListingRefundSink>(
+    sink: &mut S,
+    refund: ListingRefund,
+) -> Result<(), AuctionRefusal> {
+    match sink.refund(refund.listing.request.operation_id)? {
+        Some(existing) if existing == refund => Ok(()),
+        Some(_) => Err(AuctionRefusal::InvalidTerms),
+        None => {
+            sink.commit_refund(refund);
+            Ok(())
+        }
+    }
+}
+
 /// Give a Hold's value back after realm-core refused its listing. A Hold with a matching receipt
 /// backs a live Auction and is never released; a missing Hold is a replay.
 fn release_listing<S: HoldSink>(
@@ -1033,7 +1076,7 @@ fn release_listing<S: HoldSink>(
     if hold.listing.request.seller_guid != seller_guid {
         return Err(AuctionRefusal::InvalidTerms);
     }
-    sink.release_hold(operation_id, listing_release_mail(&hold.listing));
+    sink.delete_hold(operation_id);
     Ok(())
 }
 
@@ -1339,15 +1382,40 @@ impl HoldSink for CtxSource<'_> {
             .operation_id()
             .delete(operation_id);
     }
-
-    fn release_hold(&mut self, operation_id: u64, mail: AuctionMail) {
-        insert_auction_mail(self.ctx, mail);
-        self.delete_hold(operation_id);
-    }
 }
 
 struct CtxMarket<'a> {
     ctx: &'a ReducerContext,
+}
+
+struct CtxListingRefund<'a> {
+    ctx: &'a ReducerContext,
+}
+
+impl ListingRefundSink for CtxListingRefund<'_> {
+    fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, AuctionRefusal> {
+        let row = self
+            .ctx
+            .db
+            .game_auction_operation_receipt()
+            .operation_id()
+            .find(operation_id);
+        match row {
+            None => Ok(None),
+            Some(row) if row.auction_id == 0 => {
+                Ok(Some(listing_refund(&listing_from_receipt(row).listing)))
+            }
+            Some(_) => Err(AuctionRefusal::InvalidTerms),
+        }
+    }
+
+    fn commit_refund(&mut self, refund: ListingRefund) {
+        insert_auction_mail(self.ctx, refund.mail.clone());
+        self.ctx
+            .db
+            .game_auction_operation_receipt()
+            .insert(receipt_from_listing(refund.listing, 0));
+    }
 }
 
 impl MarketSink for CtxMarket<'_> {
@@ -2023,8 +2091,59 @@ pub fn realm_auction_settle_listing(ctx: &ReducerContext, operation_id: u64) -> 
         .map_err(|refusal| refused(refusal, "listing Hold is not confirmed"))
 }
 
+/// Sharded listing abort phase 3: Realm-core commits the seller's exact return Mail and durable
+/// refund receipt together. Replays with the same payload do not create a second Mail.
+#[reducer]
+#[allow(clippy::too_many_arguments)] // The persisted refund receipt's value columns.
+pub fn realm_auction_refund_listing(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    seller_guid: u64,
+    item_guid: u64,
+    item_entry: u32,
+    item_stack_count: u32,
+    item_durability: u32,
+    item_enchant_id: u32,
+    item_soulbound: bool,
+    house: u32,
+    deposit_rate: u32,
+    consignment_rate: u32,
+    start_bid: u32,
+    buyout: u32,
+    duration_minutes: u32,
+    deposit: u32,
+    created_micros: i64,
+    expires_micros: i64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    refund_listing(
+        &mut CtxListingRefund { ctx },
+        listing_refund(&listing_from_hold(AuctionHold {
+            operation_id,
+            seller_guid,
+            item_guid,
+            item_entry,
+            item_stack_count,
+            item_durability,
+            item_enchant_id,
+            item_soulbound,
+            house,
+            deposit_rate,
+            consignment_rate,
+            start_bid,
+            buyout,
+            duration_minutes,
+            deposit,
+            created_micros,
+            expires_micros,
+        })),
+    )
+    .map_err(|refusal| refused(refusal, "listing refund conflict"))
+}
+
 /// Sharded listing abort: after realm-core refuses phase 2, mail the held item and deposit back
-/// to the seller and delete the Hold. Refused once the Hold has a receipt.
+/// to the seller and delete the Hold. The gateway calls this only after Realm-core has committed
+/// the matching refund receipt and Mail. Refused once the Hold has a receipt.
 #[reducer]
 pub fn gw_auction_release_listing_hold(
     ctx: &ReducerContext,
@@ -2943,7 +3062,6 @@ mod tests {
         now_micros: i64,
         hold: Option<ListingHold>,
         receipt: Option<ListingReceipt>,
-        returned_mail: Vec<AuctionMail>,
     }
 
     impl ListingSource for FakeSource {
@@ -2994,10 +3112,26 @@ mod tests {
                 self.hold = None;
             }
         }
+    }
 
-        fn release_hold(&mut self, operation_id: u64, mail: AuctionMail) {
-            self.returned_mail.push(mail);
-            self.delete_hold(operation_id);
+    #[derive(Clone, Default)]
+    struct FakeRefundCore {
+        refund: Option<ListingRefund>,
+        mails: Vec<AuctionMail>,
+    }
+
+    impl ListingRefundSink for FakeRefundCore {
+        fn refund(&self, operation_id: u64) -> Result<Option<ListingRefund>, AuctionRefusal> {
+            Ok(self
+                .refund
+                .as_ref()
+                .filter(|refund| refund.listing.request.operation_id == operation_id)
+                .cloned())
+        }
+
+        fn commit_refund(&mut self, refund: ListingRefund) {
+            self.mails.push(refund.mail.clone());
+            self.refund = Some(refund);
         }
     }
 
@@ -3035,7 +3169,6 @@ mod tests {
             now_micros: 1_000,
             hold: None,
             receipt: None,
-            returned_mail: Vec::new(),
         }
     }
 
@@ -3246,7 +3379,7 @@ mod tests {
     #[test]
     fn realm_refusal_releases_the_hold_and_mails_the_item_and_deposit_back() {
         let mut source = source();
-        let market = market();
+        let mut realm = FakeRefundCore::default();
         let request = request();
         fence_listing(&mut source, request).unwrap();
         assert_eq!(source.money, Some(40));
@@ -3254,7 +3387,19 @@ mod tests {
 
         // Realm-core refused phase 2 (for example, its item catalogue lacks the template), so
         // the market never took the listing and the source Hold is the only copy of the value.
-        assert!(market.receipt.is_none());
+        // The refund Mail and its receipt are written on Realm-core before its source Hold moves.
+        let refund = listing_refund(&source.hold(request.operation_id).unwrap().listing);
+        assert_eq!(refund_listing(&mut realm, refund.clone()), Ok(()));
+        assert_eq!(realm.mails, vec![refund.mail]);
+        assert!(source.hold.is_some());
+        let mut changed_refund = refund.clone();
+        changed_refund.listing.snapshot.durability += 1;
+        assert_eq!(
+            refund_listing(&mut realm, changed_refund),
+            Err(AuctionRefusal::InvalidTerms),
+            "the durable refund receipt refuses conflicting operation-id reuse"
+        );
+        assert_eq!(realm.mails.len(), 1);
         assert_eq!(
             release_listing(&mut source, request.operation_id, request.seller_guid + 1),
             Err(AuctionRefusal::InvalidTerms),
@@ -3266,24 +3411,69 @@ mod tests {
             Ok(())
         );
         assert!(source.hold.is_none());
-        assert_eq!(
-            source.returned_mail,
-            vec![AuctionMail {
-                recipient_guid: 7,
-                sender_guid: 0,
-                subject: "Auction listing refused",
-                money: 10,
-                item: item(23).snapshot,
-            }]
-        );
 
+        // A gateway crash after Realm-core commits but before source cleanup replays one Mail.
+        assert_eq!(refund_listing(&mut realm, refund), Ok(()));
+        assert_eq!(realm.mails.len(), 1);
         assert_eq!(
             release_listing(&mut source, request.operation_id, request.seller_guid),
             Ok(()),
             "a replayed release finds no Hold and returns nothing twice"
         );
-        assert_eq!(source.returned_mail.len(), 1);
-        assert_eq!(market.auction_count, 0);
+        assert_eq!(realm.mails.len(), 1);
+    }
+
+    #[test]
+    fn refund_receipt_replays_as_a_refusal_and_never_confirms_the_source_hold() {
+        let mut source = source();
+        let mut realm = market();
+        let request = request();
+        fence_listing(&mut source, request).unwrap();
+        let listing = source.hold(request.operation_id).unwrap().listing;
+        realm.receipt = Some(ListingReceipt {
+            listing: listing.clone(),
+            auction_id: 0,
+        });
+
+        assert_eq!(
+            commit_held_listing(&mut realm, listing.clone()),
+            Err(AuctionRefusal::InvalidTerms),
+            "a Realm-core refund receipt is not an Auction"
+        );
+        let mut local = local();
+        local.committed = Some((listing.clone(), 0));
+        assert_eq!(
+            operation_match(&local, listing.request),
+            OperationMatch::Conflict,
+            "a sentinel is never a local-listing replay"
+        );
+        source.receipt = Some(ListingReceipt {
+            listing: listing.clone(),
+            auction_id: 0,
+        });
+        assert_eq!(
+            fence_listing(&mut source, listing.request),
+            Err(AuctionRefusal::InvalidTerms),
+            "a misrouted sentinel must fail closed on the source"
+        );
+        assert_eq!(
+            confirm_listing(
+                &mut source,
+                ListingReceipt {
+                    listing,
+                    auction_id: 0,
+                },
+            ),
+            Err(AuctionRefusal::InvalidTerms),
+            "the sentinel must never cross back to the source"
+        );
+        assert_eq!(
+            settle_listing(&mut source, request.operation_id),
+            Err(AuctionRefusal::InvalidTerms),
+            "source cleanup may not treat a sentinel as receipt evidence"
+        );
+        assert!(source.hold.is_some());
+        assert_eq!(source.receipt.as_ref().map(|receipt| receipt.auction_id), Some(0));
     }
 
     #[test]
@@ -3308,8 +3498,6 @@ mod tests {
             Err(AuctionRefusal::InvalidTerms)
         );
         assert!(source.hold.is_some());
-        assert!(source.returned_mail.is_empty());
-
         assert_eq!(drive_sharded(&mut source, &mut market, request), Ok(41));
         assert!(source.hold.is_none());
         assert_eq!(market.auction_count, 1);
