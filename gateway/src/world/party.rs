@@ -42,7 +42,7 @@ use anyhow::Result;
 
 use super::{send, Outbound, SessionTx, WorldStore};
 use crate::codec;
-use lyracore_shared::group::{bot_op, realm_op};
+use lyracore_shared::group::{bot_op, realm_op, GroupRefusal};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
 /// One party, as the database that holds it sees it. Read from realm-core it is the authority; read
@@ -93,6 +93,21 @@ pub enum Op {
         master: u64,
         threshold: u8,
     },
+}
+
+/// What one party op answered. A [`GroupRefusal`] is a gameplay answer the client renders, so it
+/// arrives as `Ok`; a timeout, transport failure, or untagged reducer error stays `Err` and ends the
+/// session, because the durable outcome is then unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PartyOutcome {
+    Ran,
+    Refused(GroupRefusal),
+}
+
+impl From<GroupRefusal> for PartyOutcome {
+    fn from(refusal: GroupRefusal) -> Self {
+        Self::Refused(refusal)
+    }
 }
 
 /// Resolve a typed player name to a guid ACROSS every connected shard.
@@ -279,8 +294,9 @@ pub(crate) fn session_less_in_world<St: WorldStore + ?Sized>(store: &St, guid: u
 /// The bot acts as ITSELF: `realm_group_op`'s `actor` slot carries the bot's own guid for both the
 /// accept and the decline, never the inviter's — the impersonation hazard this slice already hit once.
 ///
-/// A refusal DECLINES rather than walking away. Every accept gate in the module (`already in a group`,
-/// `group full`, `inviter no longer leads`) returns `Err`, which rolls its transaction back and leaves
+/// A refusal DECLINES rather than walking away. Every accept gate in the module
+/// ([`GroupRefusal::AlreadyInGroup`], [`GroupRefusal::GroupFull`],
+/// [`GroupRefusal::InviterUnavailable`]) rolls its transaction back and leaves
 /// the invite row standing — so ignoring the refusal would leave the dialog hanging, which is
 /// indistinguishable from the bug this fixes. The decline consumes the invite and pushes
 /// `SMSG_GROUP_DECLINE` at the inviter.
@@ -295,17 +311,21 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
     if !session_less_in_world(store, guid) {
         return; // a real player's own client answers its own dialog
     }
-    match realm.realm_group_op(realm_op::ACCEPT, guid, 0, 0, 0) {
-        Ok(()) => log::info!("party: session-less {guid} accepted its group invite"),
-        Err(e) => {
-            log::info!("party: session-less {guid} cannot join ({e:#}) — declining explicitly");
-            if let Err(e) = realm.realm_group_op(realm_op::DECLINE, guid, 0, 0, 0) {
-                log::warn!(
-                    "party: session-less {guid} could neither join nor decline ({e:#}) — the \
-                     inviter's dialog stands until realm-core's invite GC reaps it"
-                );
-            }
+    let joined = match realm.realm_group_op(realm_op::ACCEPT, guid, 0, 0, 0) {
+        Ok(PartyOutcome::Ran) => {
+            log::info!("party: session-less {guid} accepted its group invite");
+            return;
         }
+        Ok(PartyOutcome::Refused(refusal)) => format!("{refusal:?}"),
+        Err(e) => format!("{e:#}"),
+    };
+    log::info!("party: session-less {guid} cannot join ({joined}) — declining explicitly");
+    match realm.realm_group_op(realm_op::DECLINE, guid, 0, 0, 0) {
+        Ok(PartyOutcome::Ran) => {}
+        outcome => log::warn!(
+            "party: session-less {guid} could neither join nor decline ({outcome:?}) — the \
+             inviter's dialog stands until realm-core's invite GC reaps it"
+        ),
     }
 }
 
@@ -321,7 +341,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     account_id: u64,
     self_guid: u64,
     op: Op,
-) -> Result<()> {
+) -> Result<PartyOutcome> {
     let Some(realm) = store.realm_store() else {
         return match op {
             Op::Invite(target) => store.group_invite(account_id, self_guid, target),
@@ -339,18 +359,14 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     // The two gates realm-core cannot run for itself, because the directory database holds neither
     // characters nor live entities: does the target EXIST, and is it ONLINE. The gateway is the only
     // party that can answer them across a boundary — which is precisely the bug being fixed — and it
-    // answers with the module's own error strings so the gateway's `PartyResult` classifier maps
-    // them exactly as it maps the shard plane's.
+    // answers with the module's own Refusals, so the client-facing code is the same on both planes.
     //
     // Each gate is the module's own read, unioned across the shards — EXISTS is a `game_character`
     // row ([`presence`]), ONLINE is a `game_world_entity` row ([`live_anywhere`]). Reading the
     // session flag for the second would silently refuse every playerbot; see [`live_anywhere`].
     if let Op::Invite(target) = op {
-        if presence(store, target)?.is_none() {
-            anyhow::bail!("no such player");
-        }
-        if !live_anywhere(store, target) {
-            anyhow::bail!("player not online");
+        if let Some(refusal) = invite_gate(store, target)? {
+            return Ok(refusal.into());
         }
     }
     // The group this character was in BEFORE the op — the only way to reach the party they may have
@@ -381,7 +397,11 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
             threshold,
         } => (realm_op::LOOT_METHOD, master, setting, threshold),
     };
-    realm.realm_group_op(code, self_guid, target, arg_a, arg_b)?;
+    if let PartyOutcome::Refused(refusal) =
+        realm.realm_group_op(code, self_guid, target, arg_a, arg_b)?
+    {
+        return Ok(PartyOutcome::Refused(refusal));
+    }
     // Nobody is at the keyboard of a playerbot, so nobody answers its dialog. Done
     // BEFORE the mirror push, so the ONE push that follows already carries the bot as a member —
     // which is what the shard's own party reads (kill-XP split, `/p`, follow-the-leader) need.
@@ -389,7 +409,19 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
         answer_for_session_less(store, realm.as_ref(), target);
     }
     sync_mirrors(store, realm.as_ref(), self_guid, before);
-    Ok(())
+    Ok(PartyOutcome::Ran)
+}
+
+/// The invite gates realm-core cannot run for itself: does the target exist anywhere, and is it in
+/// the world anywhere. `None` means the invite may proceed.
+fn invite_gate<St: WorldStore + ?Sized>(store: &St, target: u64) -> Result<Option<GroupRefusal>> {
+    if presence(store, target)?.is_none() {
+        return Ok(Some(GroupRefusal::NoSuchPlayer));
+    }
+    if !live_anywhere(store, target) {
+        return Ok(Some(GroupRefusal::TargetOffline));
+    }
+    Ok(None)
 }
 
 /// Claim one subscribed intent on its World Shard, then execute it only for the winning Gateway.
@@ -403,9 +435,9 @@ pub(crate) fn run_bot_invite_intent<St: WorldStore>(
     op: u8,
     inviter_guid: u64,
     target_guid: u64,
-) -> Result<()> {
+) -> Result<PartyOutcome> {
     if !store.claim_bot_invite_intent(intent_id)? {
-        return Ok(());
+        return Ok(PartyOutcome::Ran);
     }
     match op {
         bot_op::INVITE => run_bot_invite(store, inviter_guid, target_guid),
@@ -435,7 +467,7 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
     store: &St,
     inviter_guid: u64,
     target_guid: u64,
-) -> Result<()> {
+) -> Result<PartyOutcome> {
     let owned_realm;
     let realm: &dyn WorldStore = match store.realm_store() {
         Some(r) => {
@@ -444,17 +476,18 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
         }
         None => store,
     };
-    if presence(store, target_guid)?.is_none() {
-        anyhow::bail!("no such player");
-    }
-    if !live_anywhere(store, target_guid) {
-        anyhow::bail!("player not online");
+    if let Some(refusal) = invite_gate(store, target_guid)? {
+        return Ok(refusal.into());
     }
     let before = realm.group_roster(inviter_guid)?.map(|r| r.group_id);
-    realm.realm_group_op(realm_op::INVITE, inviter_guid, target_guid, 0, 0)?;
+    if let PartyOutcome::Refused(refusal) =
+        realm.realm_group_op(realm_op::INVITE, inviter_guid, target_guid, 0, 0)?
+    {
+        return Ok(PartyOutcome::Refused(refusal));
+    }
     answer_for_session_less(store, realm, target_guid);
     sync_mirrors(store, realm, inviter_guid, before);
-    Ok(())
+    Ok(PartyOutcome::Ran)
 }
 
 /// Run a SERVER-DRIVEN leave with no client behind it — a bot leader whose party has run out of
@@ -471,7 +504,7 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
 /// The pending-roll flush is [`run`]'s, verbatim, and belongs here for the reason it gives: a LEAVE
 /// can shrink a group below two members and reach realm-core's disband branch, which force-resolves
 /// live loot rolls that the periodic relay may not have promoted yet.
-pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Result<()> {
+pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Result<PartyOutcome> {
     let owned_realm;
     let realm: &dyn WorldStore = match store.realm_store() {
         Some(r) => {
@@ -482,9 +515,13 @@ pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Res
     };
     let before = realm.group_roster(leaver_guid)?.map(|r| r.group_id);
     crate::world::loot::flush_pending_promotions(store, realm);
-    realm.realm_group_op(realm_op::LEAVE, leaver_guid, 0, 0, 0)?;
+    if let PartyOutcome::Refused(refusal) =
+        realm.realm_group_op(realm_op::LEAVE, leaver_guid, 0, 0, 0)?
+    {
+        return Ok(PartyOutcome::Refused(refusal));
+    }
     sync_mirrors(store, realm, leaver_guid, before);
-    Ok(())
+    Ok(PartyOutcome::Ran)
 }
 
 /// Push realm-core's roster for every party this op could have touched onto every connected world

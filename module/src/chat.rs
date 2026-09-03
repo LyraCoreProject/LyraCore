@@ -10,7 +10,8 @@
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_character;
-use lyracore_shared::group::{err as group_err, event_kind as group_event_kind};
+use lyracore_shared::group::{event_kind as group_event_kind, GroupRefusal};
+use lyracore_shared::social::ContactRefusal;
 
 // `game_character_contact` is defined further down in THIS module — its `#[table]` accessor
 // (`game_character_contact`) is generated there, so it's in scope for `add_friend`/etc. without a
@@ -570,9 +571,9 @@ fn push_whisper(
 /// already carries (INVITE/LIST/DECLINE/DESTROYED, the work-item 187 roll/master-loot/money-share
 /// kinds). Bounds-checked identically to `send_chat` (trim + [`MAX_CHAT_LEN`]-cap, empty rejected).
 /// The caller must currently be in a group — `send_whisper`'s "no such/offline target" analog here
-/// is simply "not in a group" ([`lyracore_shared::group::err::NOT_IN_GROUP`], the SAME shared-contract
-/// string `group_leave`/`group_uninvite` already return for this exact condition), which the gateway
-/// maps to `SMSG_PARTY_COMMAND_RESULT(NotInGroup)` — the standard "You aren't in a party" line.
+/// is [`GroupRefusal::NotInGroup`], the SAME shared-contract Refusal `group_leave`/`group_uninvite`
+/// already return for this exact condition, which the gateway maps to
+/// `SMSG_PARTY_COMMAND_RESULT(NotInGroup)` — the standard "You aren't in a party" line.
 /// Unlike `send_chat`, this core takes no `language` argument: like whispers, party lines aren't
 /// language-filtered (always Universal on the wire), so there is nothing to thread through.
 ///
@@ -583,8 +584,12 @@ pub(crate) fn apply_party_chat(
     text: String,
 ) -> Result<(), String> {
     let message = normalized_message(&text).ok_or_else(|| "empty message".to_string())?;
-    let membership = crate::group::group_of(ctx, sender.guid)
-        .ok_or_else(|| group_err::NOT_IN_GROUP.to_string())?;
+    let membership = crate::group::group_of(ctx, sender.guid).ok_or_else(|| {
+        crate::group::refused(
+            GroupRefusal::NotInGroup,
+            &format!("{} spoke on /p from no party", sender.guid),
+        )
+    })?;
     let payload = lyracore_shared::group::encode_party_chat(&message);
     let member_guids: Vec<u64> = crate::group::members_of(ctx, membership.group_id)
         .into_iter()
@@ -682,20 +687,44 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_contact(ctx, ch
     }
 });
 
-/// Shared add path for `add_friend`/`add_ignore`: `target_guid` is resolved by the GATEWAY (name →
-/// guid, same lookup `/who` uses) before the reducer is called, so this only re-validates
-/// server-side (never trusts the caller) — reject self, an unknown guid, a duplicate, or a full list.
+/// Reducer edge for the contact list: only the tag crosses to the gateway, the detail stays here.
+fn refused_contact(refusal: ContactRefusal, detail: &str) -> String {
+    let tag = refusal.as_tag();
+    spacetimedb::log::info!("contact refused {tag}: {detail}");
+    tag.to_string()
+}
+
+/// Shared add path for `add_friend`/`add_ignore`, at the reducer edge: the core's typed Refusal
+/// becomes its stable tag.
 pub(crate) fn add_contact(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
     target_guid: u64,
     is_ignore: bool,
 ) -> Result<(), String> {
+    let owner_guid = sender.guid;
+    add_contact_core(ctx, sender, target_guid, is_ignore).map_err(|refusal| {
+        refused_contact(
+            refusal,
+            &format!("{owner_guid} could not add {target_guid}"),
+        )
+    })
+}
+
+/// `target_guid` is resolved by the GATEWAY (name → guid, same lookup `/who` uses) before the
+/// reducer is called, so this only re-validates server-side (never trusts the caller) — reject
+/// self, an unknown guid, a duplicate, or a full list.
+fn add_contact_core(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    target_guid: u64,
+    is_ignore: bool,
+) -> Result<(), ContactRefusal> {
     if target_guid == sender.guid {
-        return Err("cannot add yourself".to_string());
+        return Err(ContactRefusal::AddSelf);
     }
     if ctx.db.game_character().guid().find(target_guid).is_none() {
-        return Err("no such player".to_string());
+        return Err(ContactRefusal::NoSuchPlayer);
     }
     let contacts = ctx.db.game_character_contact();
     let existing: Vec<_> = contacts.by_owner().filter(&sender.guid).collect();
@@ -703,11 +732,11 @@ pub(crate) fn add_contact(
         .iter()
         .any(|c| c.target_guid == target_guid && c.is_ignore == is_ignore)
     {
-        return Err("already added".to_string());
+        return Err(ContactRefusal::AlreadyOnList);
     }
     let cap = if is_ignore { MAX_IGNORED } else { MAX_FRIENDS };
     if existing.iter().filter(|c| c.is_ignore == is_ignore).count() >= cap {
-        return Err("list full".to_string());
+        return Err(ContactRefusal::ListFull);
     }
     contacts.insert(ContactEntry {
         id: 0,
@@ -722,7 +751,8 @@ pub(crate) fn add_contact(
 }
 
 /// Shared remove path for `del_friend`/`del_ignore`: deletes the caller's own row for `target_guid`
-/// in the given list, or a clean `Err` if it isn't there (idempotent double-remove from the client).
+/// in the given list, or [`ContactRefusal::NotOnList`] if it isn't there (idempotent double-remove
+/// from the client).
 pub(crate) fn remove_contact(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -730,11 +760,16 @@ pub(crate) fn remove_contact(
     is_ignore: bool,
 ) -> Result<(), String> {
     let contacts = ctx.db.game_character_contact();
-    let row = contacts
+    let Some(row) = contacts
         .by_owner()
         .filter(&sender.guid)
         .find(|c| c.target_guid == target_guid && c.is_ignore == is_ignore)
-        .ok_or_else(|| "not on that list".to_string())?;
+    else {
+        return Err(refused_contact(
+            ContactRefusal::NotOnList,
+            &format!("{} does not hold {target_guid}", sender.guid),
+        ));
+    };
     contacts.id().delete(row.id);
     Ok(())
 }

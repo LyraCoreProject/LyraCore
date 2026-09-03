@@ -1,6 +1,6 @@
 //! The module↔gateway GROUP wire contract — event-kind codes, the roster-payload grammar, and the
-//! reducer error strings the gateway classifies into `PARTY_COMMAND_RESULT`. Cross-boundary constants
-//! live HERE, both crates import: a module-side renumber, delimiter change, or reworded `Err` becomes
+//! typed [`GroupRefusal`] the gateway turns into `PARTY_COMMAND_RESULT`. Cross-boundary constants
+//! live HERE, both crates import: a module-side renumber, delimiter change, or new refusal becomes
 //! a compile error on the gateway side instead of a runtime mismatch. Same precedent as
 //! `type_mask`/`npc_flags`.
 
@@ -105,15 +105,83 @@ pub mod bot_op {
     pub const LEAVE: u8 = 1;
 }
 
-/// The group reducers' stable `Err` strings. Most map to `PartyResult` variants. The intent claim
-/// result instead tells a losing Gateway callback to stop. Exact matches keep both crates in sync.
-pub mod err {
-    pub const ALREADY_IN_GROUP: &str = "already in a group";
-    pub const BOT_INVITE_INTENT_ALREADY_CLAIMED: &str = "bot invite intent already claimed";
-    pub const GROUP_FULL: &str = "group is full";
-    pub const NOT_LEADER: &str = "not the leader";
-    pub const NOT_IN_GROUP: &str = "not in a group";
-    pub const TARGET_NOT_IN_GROUP: &str = "not in your group";
+/// Why the Module refused a party Durable Request. The tag is the whole reducer error text, so
+/// neither tier matches on human prose. Most variants become a `PartyResult` the client renders;
+/// [`GroupRefusal::IntentAlreadyClaimed`] instead tells a losing Gateway callback to stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupRefusal {
+    /// A Character may not invite itself.
+    InviteSelf,
+    /// No Character row holds a guid the op named.
+    NoSuchPlayer,
+    /// The invited Character has no live entity.
+    TargetOffline,
+    /// The invited Character is already in a party.
+    AlreadyInGroup,
+    /// The party is at its member cap.
+    GroupFull,
+    /// The actor is in a party but does not lead it.
+    NotLeader,
+    /// The actor is in no party.
+    NotInGroup,
+    /// The named target is in no party, or in a different one.
+    TargetNotInGroup,
+    /// Accept or decline ran with no invite standing.
+    NoPendingInvite,
+    /// The inviter is gone, or no longer leads the party the invite named.
+    InviterUnavailable,
+    /// A leader tried to kick itself; leaving is the op for that.
+    KickSelf,
+    /// The loot method, threshold, or master looter is not a legal setting.
+    InvalidLootRules,
+    /// Another Gateway already claimed this bot invite intent.
+    IntentAlreadyClaimed,
+    /// A durable row the party rules require is missing.
+    Database,
+}
+
+impl GroupRefusal {
+    pub const ALL: [Self; 14] = [
+        Self::InviteSelf,
+        Self::NoSuchPlayer,
+        Self::TargetOffline,
+        Self::AlreadyInGroup,
+        Self::GroupFull,
+        Self::NotLeader,
+        Self::NotInGroup,
+        Self::TargetNotInGroup,
+        Self::NoPendingInvite,
+        Self::InviterUnavailable,
+        Self::KickSelf,
+        Self::InvalidLootRules,
+        Self::IntentAlreadyClaimed,
+        Self::Database,
+    ];
+
+    pub fn as_tag(self) -> &'static str {
+        match self {
+            Self::InviteSelf => "group:invite_self",
+            Self::NoSuchPlayer => "group:no_such_player",
+            Self::TargetOffline => "group:target_offline",
+            Self::AlreadyInGroup => "group:already_in_group",
+            Self::GroupFull => "group:group_full",
+            Self::NotLeader => "group:not_leader",
+            Self::NotInGroup => "group:not_in_group",
+            Self::TargetNotInGroup => "group:target_not_in_group",
+            Self::NoPendingInvite => "group:no_pending_invite",
+            Self::InviterUnavailable => "group:inviter_unavailable",
+            Self::KickSelf => "group:kick_self",
+            Self::InvalidLootRules => "group:invalid_loot_rules",
+            Self::IntentAlreadyClaimed => "group:intent_already_claimed",
+            Self::Database => "group:database",
+        }
+    }
+
+    pub fn parse_tag(tag: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|refusal| refusal.as_tag() == tag)
+    }
 }
 
 /// Encode the LIST payload: `leader,loot_method,loot_threshold,master_looter_guid|guid,name,online;...`.
@@ -175,6 +243,18 @@ pub fn decode_roster(payload: &str) -> Option<(u64, u8, u8, u64, Vec<(u64, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_group_refusal_tag_round_trips() {
+        for refusal in GroupRefusal::ALL {
+            assert_eq!(GroupRefusal::parse_tag(refusal.as_tag()), Some(refusal));
+        }
+        assert_eq!(GroupRefusal::parse_tag("group:"), None);
+        assert_eq!(
+            GroupRefusal::parse_tag("gw_group_invite reducer timed out after 10s"),
+            None
+        );
+    }
 
     #[test]
     fn roster_round_trips_including_the_delimiter_defense() {

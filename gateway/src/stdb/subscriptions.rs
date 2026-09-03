@@ -3457,17 +3457,18 @@ impl Coordinator {
                 let spawned = std::thread::Builder::new()
                     .name("bot-invite-intent".into())
                     .spawn(move || {
-                        if let Err(e) = crate::world::party::run_bot_invite_intent(
+                        match crate::world::party::run_bot_invite_intent(
                             &store,
                             intent_id,
                             op,
                             inviter_guid,
                             target_guid,
                         ) {
-                            log::debug!(
+                            Ok(crate::world::party::PartyOutcome::Ran) => {}
+                            outcome => log::debug!(
                                 "playerbots: group intent {intent_id} op {op} ({inviter_guid} -> \
-                                 {target_guid}) did not execute: {e:#}"
-                            );
+                                 {target_guid}) did not execute: {outcome:?}"
+                            ),
                         }
                     });
                 if let Err(error) = spawned {
@@ -3551,13 +3552,13 @@ impl Coordinator {
                     0,
                     0,
                 ) {
-                    Ok(()) => log::info!(
+                    Ok(crate::world::party::PartyOutcome::Ran) => log::info!(
                         "party: character {} exists on no Shard and left its realm-core party",
                         row.guid
                     ),
-                    Err(e) => log::debug!(
+                    outcome => log::debug!(
                         "party: character {} exists on no Shard; realm-core had no party to leave \
-                         ({e:#})",
+                         ({outcome:?})",
                         row.guid
                     ),
                 }

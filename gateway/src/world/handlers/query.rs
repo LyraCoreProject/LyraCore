@@ -370,21 +370,23 @@ pub(crate) fn handle_query<St: WorldStore + ?Sized>(
                 // needle list). Any OTHER rejection (not in world / empty message) is silently
                 // dropped, matching say/yell — the client never sends an empty line anyway.
                 CMSG_MESSAGECHAT_ChatType::Party => {
-                    if let Err(e) = store.party_chat(conn.account_id, self_guid, message) {
-                        if e.to_string()
-                            .contains(lyracore_shared::group::err::NOT_IN_GROUP)
-                        {
-                            send(
-                                tx,
-                                Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(
-                                    Box::new(codec::build_party_command_result(
-                                        PartyOperation::Leave,
-                                        String::new(),
-                                        PartyResult::NotInGroup,
-                                    )),
+                    // Speaking from no party is the one refusal vanilla answers. Every other
+                    // refusal, and a failed call, drop like a rejected say or yell line.
+                    match store.party_chat(conn.account_id, self_guid, message) {
+                        Ok(crate::world::party::PartyOutcome::Refused(
+                            lyracore_shared::group::GroupRefusal::NotInGroup,
+                        )) => send(
+                            tx,
+                            Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(
+                                Box::new(codec::build_party_command_result(
+                                    PartyOperation::Leave,
+                                    String::new(),
+                                    PartyResult::NotInGroup,
                                 )),
-                            )?;
-                        }
+                            )),
+                        )?,
+                        Ok(_) => {}
+                        Err(e) => log::debug!("world: party chat dropped: {e:#}"),
                     }
                 }
                 _ => {} // guild/channel/etc. need systems that don't exist yet

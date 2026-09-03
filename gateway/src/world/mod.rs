@@ -67,6 +67,7 @@ pub(crate) use handlers::{
     PlaceBidOutcome, PlaceBidRequest, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
+pub(crate) use social::ContactOutcome;
 use social::handle_social;
 pub use store::WorldStore;
 use transfer::{EscrowedTransfer, TransferPlan};
