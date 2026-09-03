@@ -61,7 +61,7 @@ pub(crate) use taxi::{
     dispatch_taxi_action, queue_reply_then_arm, TaxiActionOutcome, TaxiActionPlayer, TaxiActionStore,
 };
 pub(crate) use trade::handle_trade;
-pub(crate) use trainer::handle_trainer;
+pub(crate) use trainer::{handle_trainer, TrainerBuyOutcome};
 pub(crate) use vendor::{
     dispatch_vendor_action, VendorActionOutcome, VendorActionPlayer, VendorActionStore,
 };

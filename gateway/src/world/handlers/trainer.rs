@@ -2,13 +2,38 @@
 //! `world/mod.rs`.
 
 use super::super::*;
+use lyracore_shared::trainer::TrainerRefusal;
+use wow_world_messages::vanilla::TrainingFailureReason;
+
+/// How the Module answered a trainer purchase. A Refusal is a gameplay answer the client can render;
+/// a failed Durable Request is not, so it never reaches here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrainerBuyOutcome {
+    Learned,
+    Refused(TrainingFailureReason),
+}
+
+// gtker vanilla carries three failure reasons, so several gameplay Refusals share one. The client
+// pre-gates the Learn button on the list's Green state, which is what keeps the collapse cosmetic.
+impl From<TrainerRefusal> for TrainerBuyOutcome {
+    fn from(refusal: TrainerRefusal) -> Self {
+        Self::Refused(match refusal {
+            TrainerRefusal::NotEnoughMoney => TrainingFailureReason::NotEnoughMoney,
+            TrainerRefusal::LevelTooLow | TrainerRefusal::PreviousRankMissing => {
+                TrainingFailureReason::NotEnoughSkill
+            }
+            TrainerRefusal::Unavailable
+            | TrainerRefusal::NotOffered
+            | TrainerRefusal::AlreadyKnown => TrainingFailureReason::Unavailable,
+        })
+    }
+}
 
 /// Class-trainer family: open the trainer window (`CMSG_TRAINER_LIST` → `SMSG_TRAINER_LIST`, each spell
 /// Green/Red/Gray) and learn a spell (`CMSG_TRAINER_BUY_SPELL` → the module buy →
 /// `SMSG_TRAINER_BUY_*` + a live `SMSG_LEARNED_SPELL` so it hits the action bar without a relog).
 /// Needs the in-world player guid (a trainer is only clicked in-world); in CharSelect the opcodes
-/// pass through. A buy rejection is per-action — surfaced as `SMSG_TRAINER_BUY_FAILED` (reason
-/// parsed from the module's `[N]` tag).
+/// pass through. A buy Refusal is per-action — surfaced as `SMSG_TRAINER_BUY_FAILED`.
 pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
@@ -50,8 +75,10 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
         ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(c) => {
             let trainer_guid = c.guid.guid();
             let spell_id = c.id;
-            match store.buy_trainer_spell(conn.account_id, self_guid, trainer_guid, spell_id) {
-                Ok(()) => {
+            // A Refusal arrives as an outcome. An error leaves the durable result unknown, so it
+            // ends the session instead of posing as a gameplay answer.
+            match store.buy_trainer_spell(conn.account_id, self_guid, trainer_guid, spell_id)? {
+                TrainerBuyOutcome::Learned => {
                     // Confirm + push the spell live so it appears on the action bar without a relog.
                     send(
                         tx,
@@ -110,18 +137,9 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
                         send_armor_proficiency(tx, store, self_guid)?;
                     }
                 }
-                Err(e) => {
-                    // The module tags its Err with a [N] gtker failure-reason; 1=money, 2=level/req, else generic.
-                    let es = e.to_string();
-                    let reason = if es.contains("[1]") {
-                        1
-                    } else if es.contains("[2]") {
-                        2
-                    } else {
-                        0
-                    };
+                TrainerBuyOutcome::Refused(reason) => {
                     log::debug!(
-                        "world: buy_trainer_spell failed (account {}): {es}",
+                        "world: trainer buy refused (account {}): {reason:?}",
                         conn.account_id
                     );
                     send(
@@ -160,7 +178,9 @@ pub(crate) fn handle_trainer<St: WorldStore + ?Sized>(
         ClientOpcodeMessage::CMSG_SET_FACTION_ATWAR(c) => {
             let reputation_index = c.faction.as_int() as u32;
             let at_war = c.flags.is_at_war();
-            if let Err(e) = store.set_faction_at_war(conn.account_id, self_guid, reputation_index, at_war) {
+            if let Err(e) =
+                store.set_faction_at_war(conn.account_id, self_guid, reputation_index, at_war)
+            {
                 log::debug!(
                     "world: set_faction_at_war ignored (account {}): {e}",
                     conn.account_id

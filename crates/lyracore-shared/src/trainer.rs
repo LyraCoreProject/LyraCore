@@ -27,6 +27,50 @@ pub mod trainer_type {
 /// it does not echo the offering's marker id back as a learned spell.
 pub const RIDING_SKILL_LINE: u32 = 762;
 
+/// Why the Module refused a trainer Durable Request. The tag is the whole reducer error text, so
+/// neither tier matches on human prose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrainerRefusal {
+    /// The trainer will not serve this interaction at all: missing, not a trainer, on another map,
+    /// out of range, refusing the buyer's class, or asked for riding while teaching something else.
+    Unavailable,
+    /// The trainer's offering list does not carry that spell.
+    NotOffered,
+    AlreadyKnown,
+    LevelTooLow,
+    /// A rank purchase whose `game_spell_chain` predecessor is not known yet.
+    PreviousRankMissing,
+    NotEnoughMoney,
+}
+
+impl TrainerRefusal {
+    pub const ALL: [Self; 6] = [
+        Self::Unavailable,
+        Self::NotOffered,
+        Self::AlreadyKnown,
+        Self::LevelTooLow,
+        Self::PreviousRankMissing,
+        Self::NotEnoughMoney,
+    ];
+
+    pub fn as_tag(self) -> &'static str {
+        match self {
+            Self::Unavailable => "trainer:unavailable",
+            Self::NotOffered => "trainer:not_offered",
+            Self::AlreadyKnown => "trainer:already_known",
+            Self::LevelTooLow => "trainer:level_too_low",
+            Self::PreviousRankMissing => "trainer:previous_rank_missing",
+            Self::NotEnoughMoney => "trainer:not_enough_money",
+        }
+    }
+
+    pub fn parse_tag(tag: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|refusal| refusal.as_tag() == tag)
+    }
+}
+
 /// Will this trainer serve a character of `player_class`?
 ///
 /// Refuses only when all three hold: the trainer is a `CLASS` trainer, its `trainer_class` is
@@ -46,6 +90,18 @@ mod tests {
 
     /// Every class the 1.12 client can create. 6 and 10 do not exist in vanilla.
     const CLASSES: [u8; 9] = [1, 2, 3, 4, 5, 7, 8, 9, 11];
+
+    #[test]
+    fn every_refusal_tag_round_trips() {
+        for refusal in TrainerRefusal::ALL {
+            assert_eq!(TrainerRefusal::parse_tag(refusal.as_tag()), Some(refusal));
+        }
+        assert_eq!(TrainerRefusal::parse_tag("trainer:"), None);
+        assert_eq!(
+            TrainerRefusal::parse_tag("gw_trainer_buy reducer timed out after 10s"),
+            None
+        );
+    }
 
     #[test]
     fn a_class_trainer_serves_its_own_class_and_refuses_every_other() {

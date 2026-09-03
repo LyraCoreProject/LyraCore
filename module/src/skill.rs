@@ -888,8 +888,8 @@ const LEARN_POLEARM_SPELL_ID: u32 = 50131; // -> learn_skill_line = POLEARM (229
 /// trainer's own guid is a u64 > 2^53 the CLI `spacetime call` mangles), then funnels through the SAME
 /// `trainer::apply_trainer_buy` — exercising the identical range/flag gate, `trainer_buy_check`, and (via
 /// `is_combat_skill_line`) the WEAPON fork's level-derived cap + row-presence known-check the CMSG-routed
-/// buy would. The trainer must offer that marker (the seeded fixture SQL) or the buy returns "[0] trainer
-/// does not teach that spell".
+/// buy would. The trainer must offer that marker (the seeded fixture SQL) or the buy is refused as
+/// `trainer:not_offered`.
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
 pub fn debug_learn_weapon_from_trainer(
@@ -962,7 +962,7 @@ pub fn debug_learn_riding(
 /// `spacetime call` mangles), then funnels through the SAME `trainer::apply_trainer_buy` — exercising the
 /// identical range/flag gate, the MOUNTS-trainer check, `trainer_buy_check`, and the `learn_riding` grant
 /// the CMSG-routed buy would. The trainer must offer that marker (the seeded riding-trainer fixture) or
-/// the buy returns "[0] trainer does not teach that spell".
+/// the buy is refused as `trainer:not_offered`.
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
 pub fn debug_learn_riding_from_trainer(

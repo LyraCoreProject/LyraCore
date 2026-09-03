@@ -428,14 +428,15 @@ pub trait WorldStore:
     ) -> Result<Vec<codec::TrainerSpellView>>;
 
     /// Buy/learn `spell_id` from trainer `trainer_guid` (`CMSG_TRAINER_BUY_SPELL`). The module gates it
-    /// (range / level / cost / not-already-known); `Err` carries a `[N]` gtker failure-reason tag.
+    /// (range / level / cost / not-already-known) and a Refusal comes back as an outcome; `Err` means
+    /// the durable result is unknown.
     fn buy_trainer_spell(
         &self,
         account_id: u64,
         self_guid: u64,
         trainer_guid: u64,
         spell_id: u32,
-    ) -> Result<()>;
+    ) -> Result<TrainerBuyOutcome>;
 
     /// The skill line a trainer offering teaches (`game_trainer_spell.learn_skill_line`), or 0 for an
     /// ordinary spell offering. The buy path reads it to tell a SKILL purchase from a SPELL purchase:

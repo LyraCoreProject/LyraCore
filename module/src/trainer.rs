@@ -8,11 +8,11 @@
 //!
 //! Deliberate simplification: the `game_trainer_spell` row carries only spell_id/cost/required_level —
 //! class spells need no required_skill / prerequisite-spell chain (those are the profession/talent
-//! cases; add the columns when professions land). The SMSG_TRAINER_BUY_FAILED reason is best-effort:
-//! gtker vanilla's `TrainingFailureReason` has only Unavailable(0)/NotEnoughMoney(1)/NotEnoughSkill(2), so "already
-//! known" maps to Unavailable and "level too low" to NotEnoughSkill (cosmetic — the client pre-gates the
-//! Learn button on the Green state from the list). [entity]
+//! cases; add the columns when professions land). A refused buy names its reason with a
+//! [`TrainerRefusal`]; the Gateway owns the mapping onto gtker vanilla's three
+//! `TrainingFailureReason` codes. [entity]
 
+use lyracore_shared::trainer::TrainerRefusal;
 use spacetimedb::{table, ReducerContext};
 
 use crate::{
@@ -26,11 +26,12 @@ use crate::{
 /// constant rather than forking a second magic number that could drift from this one.
 pub(crate) const TRAINER_RANGE_SQ: f32 = 100.0;
 
-// Failure codes — chosen to equal gtker `TrainingFailureReason::as_int` so the gateway can forward them
-// verbatim into `SMSG_TRAINER_BUY_FAILED.error` (Unavailable=0, NotEnoughMoney=1, NotEnoughSkill=2).
-const FAIL_ALREADY_KNOWN: u32 = 0; // Unavailable — gtker has no AlreadyKnown variant
-const FAIL_NOT_ENOUGH_MONEY: u32 = 1;
-const FAIL_LEVEL_TOO_LOW: u32 = 2; // NotEnoughSkill — gtker has no LevelTooLow variant (closest "req not met")
+/// Reducer edge: only the tag crosses to the gateway; the detail stays in module logs.
+fn refused(refusal: TrainerRefusal, detail: &str) -> String {
+    let tag = refusal.as_tag();
+    spacetimedb::log::info!("trainer refused {tag}: {detail}");
+    tag.to_string()
+}
 
 /// One spell a trainer teaches. Static, public, SQL-loadable (no Timestamp), keyed by the trainer's
 /// CREATURE TEMPLATE entry (every spawned trainer of that entry offers the same list — like vendors).
@@ -104,24 +105,23 @@ pub(crate) fn rank_prereq_met(prev_spell: u32, knows_prev: bool) -> bool {
 }
 
 /// Pure purchase gate — decides whether `level`/`money` may learn a spell costing `cost` at `required_level`.
-/// `Ok(())` to allow; `Err(code)` with the gtker `TrainingFailureReason` int to reject. Checked in priority
-/// order (already-known first, then level, then money) so the player gets the most relevant message. Pure →
-/// unit-tested.
+/// Checked in priority order (already-known first, then level, then money) so the player gets the most
+/// relevant message. Pure → unit-tested.
 pub(crate) fn trainer_buy_check(
     known: bool,
     level: u32,
     required_level: u32,
     money: u32,
     cost: u32,
-) -> Result<(), u32> {
+) -> Result<(), TrainerRefusal> {
     if known {
-        return Err(FAIL_ALREADY_KNOWN);
+        return Err(TrainerRefusal::AlreadyKnown);
     }
     if level < required_level {
-        return Err(FAIL_LEVEL_TOO_LOW);
+        return Err(TrainerRefusal::LevelTooLow);
     }
     if money < cost {
-        return Err(FAIL_NOT_ENOUGH_MONEY);
+        return Err(TrainerRefusal::NotEnoughMoney);
     }
     Ok(())
 }
@@ -165,9 +165,9 @@ pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
 /// which is trainer-gated identically — its own comment used to read "Same gates as apply_trainer_buy").
 /// Returns the resolved trainer entity.
 ///
-/// Bare error strings (no gtker `[N]` tag): `apply_trainer_buy` prefixes its own `"[0] "` tag on top so
-/// its wire-visible `SMSG_TRAINER_BUY_FAILED` text is unchanged; `do_reset_talents` is untagged (its
-/// respec path isn't wired to a gtker failure-reason opcode), also unchanged.
+/// The `Err` is a bare human detail, not a Refusal tag: `apply_trainer_buy` turns it into a
+/// [`TrainerRefusal::Unavailable`] and logs the detail, while `do_reset_talents` keeps the plain
+/// text its respec path already returns.
 pub(crate) fn validate_trainer_interaction(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -185,7 +185,7 @@ pub(crate) fn validate_trainer_interaction(
     if trainer.map_id != caster.map_id || trainer.instance_id != caster.instance_id {
         return Err("trainer on another map".to_string());
     }
-    if crate::helpers::dist_sq(&caster, &trainer) > TRAINER_RANGE_SQ {
+    if crate::helpers::dist_sq(caster, &trainer) > TRAINER_RANGE_SQ {
         return Err("trainer out of range".to_string());
     }
     // The class gate sits at this shared chokepoint so one guard closes both wrong-class training
@@ -206,10 +206,8 @@ pub(crate) fn validate_trainer_interaction(
 }
 
 /// Shared buy logic for the player + debug paths: validate `trainer` is a real in-range trainer, that it
-/// teaches `spell_id`, run [`trainer_buy_check`], then charge copper + learn the spell. `Err(String)` names
-/// the reason; the leading "[N] " tag is the gtker failure code the gateway forwards into
-/// `SMSG_TRAINER_BUY_FAILED`. Range/flag failures are not a TrainerSpell-list state (the client wouldn't
-/// have shown the trainer), so they tag Unavailable(0). [entity]
+/// teaches `spell_id`, run [`trainer_buy_check`], then charge copper + learn the spell. This is the
+/// reducer edge, so a Refusal leaves only its [`TrainerRefusal`] tag in the `Err`. [entity]
 pub(crate) fn apply_trainer_buy(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -220,9 +218,9 @@ pub(crate) fn apply_trainer_buy(
     let mut caster = entities
         .guid()
         .find(caster_guid)
-        .ok_or_else(|| "[0] buyer not in world".to_string())?;
-    let trainer =
-        validate_trainer_interaction(ctx, &caster, trainer_guid).map_err(|e| format!("[0] {e}"))?;
+        .ok_or_else(|| refused(TrainerRefusal::Unavailable, "buyer not in world"))?;
+    let trainer = validate_trainer_interaction(ctx, &caster, trainer_guid)
+        .map_err(|detail| refused(TrainerRefusal::Unavailable, &detail))?;
     // The trainer must actually teach this spell (its template's list). The spawned trainer carries its
     // creature-template `entry`; the list is keyed by that.
     let offered = ctx
@@ -231,12 +229,17 @@ pub(crate) fn apply_trainer_buy(
         .by_trainer()
         .filter(&trainer.entry)
         .find(|s| s.spell_id == spell_id)
-        .ok_or_else(|| "[0] trainer does not teach that spell".to_string())?;
+        .ok_or_else(|| {
+            refused(
+                TrainerRefusal::NotOffered,
+                "trainer does not teach that spell",
+            )
+        })?;
 
     // PROFESSION-LEARN BRANCH (professions slice 3): a flagged offering teaches a SKILL, not a spell —
     // it never resolves a wrapper/rank, never casts, never touches `game_player_spell`. `known` mirrors
     // `learn_profession`'s presence check (a `game_player_skill` row for that line → a re-buy is the
-    // idempotent FAIL_ALREADY_KNOWN no-op), and on Ok it grants the skill at 1/75. The `learn_skill_line == 0`
+    // idempotent already-known no-op), and on Ok it grants the skill at 1/75. The `learn_skill_line == 0`
     // arm below is the EXISTING spell path verbatim (byte-identical → no class-spell regression).
     //
     // WEAPON-MASTER FORK (work-item 202): the SAME `learn_skill_line` column shape also carries weapon
@@ -271,7 +274,10 @@ pub(crate) fn apply_trainer_buy(
             .find(trainer.entry)
             .is_some_and(|t| t.trainer_type != lyracore_shared::trainer::trainer_type::MOUNTS)
         {
-            return Err("[0] that trainer does not teach riding".to_string());
+            return Err(refused(
+                TrainerRefusal::Unavailable,
+                "that trainer does not teach riding",
+            ));
         }
         // "Known" is the same TIER comparison a profession uses: Apprentice-75 has not met Journeyman-150,
         // so the second tier is buyable exactly once and a re-buy of the tier you hold is refused.
@@ -328,19 +334,19 @@ pub(crate) fn apply_trainer_buy(
     // `game_spell_chain` row must have the PREVIOUS rank already known (vanilla refuses training
     // "Fireball Rank 3" while only Rank 1 is known). NO chain row (an un-imported spell, or a rank with
     // nothing before it) → the gate passes, BYTE-IDENTICAL to before this work item (the 178/212
-    // precedent: missing imported data never blocks a purchase that used to succeed). Reuses
-    // FAIL_LEVEL_TOO_LOW — there is no dedicated "prerequisite not met" code in gtker's 3-value
-    // `TrainingFailureReason`, and its own doc already calls it the closest "req not met" fit (see the
-    // const above). Skipped when the spell is ALREADY KNOWN so `trainer_buy_check`'s "already-known
-    // first" message-priority contract (see its doc) holds even for a rank granted out of order by a
-    // debug lever or bot kit — the buy is rejected either way; only the message differs (102 review
-    // finding).
+    // precedent: missing imported data never blocks a purchase that used to succeed). Skipped when the
+    // spell is ALREADY KNOWN so `trainer_buy_check`'s "already-known first" message-priority contract
+    // (see its doc) holds even for a rank granted out of order by a debug lever or bot kit — the buy is
+    // rejected either way; only the message differs (102 review finding).
     if !known {
         if let BuyGrant::Spell(to_learn) = grant {
             if let Some(chain) = ctx.db.game_spell_chain().spell_id().find(to_learn) {
                 let knows_prev = crate::spell::knows_spell(ctx, caster_guid, chain.prev_spell);
                 if !rank_prereq_met(chain.prev_spell, knows_prev) {
-                    return Err(format!("[{FAIL_LEVEL_TOO_LOW}] requires the previous rank"));
+                    return Err(refused(
+                        TrainerRefusal::PreviousRankMissing,
+                        "requires the previous rank",
+                    ));
                 }
             }
         }
@@ -373,12 +379,19 @@ pub(crate) fn apply_trainer_buy(
             }
             Ok(())
         }
-        Err(FAIL_ALREADY_KNOWN) => Err(format!("[{FAIL_ALREADY_KNOWN}] already known")),
-        Err(FAIL_LEVEL_TOO_LOW) => Err(format!(
-            "[{FAIL_LEVEL_TOO_LOW}] requires level {}",
-            offered.required_level
+        Err(TrainerRefusal::AlreadyKnown) => {
+            Err(refused(TrainerRefusal::AlreadyKnown, "already known"))
+        }
+        Err(TrainerRefusal::LevelTooLow) => Err(refused(
+            TrainerRefusal::LevelTooLow,
+            &format!("requires level {}", offered.required_level),
         )),
-        Err(code) => Err(format!("[{code}] not enough money (need {})", offered.cost)),
+        Err(TrainerRefusal::NotEnoughMoney) => Err(refused(
+            TrainerRefusal::NotEnoughMoney,
+            &format!("not enough money (need {})", offered.cost),
+        )),
+        // `trainer_buy_check` returns no other Refusal; the arm keeps the match exhaustive.
+        Err(refusal) => Err(refused(refusal, "purchase gate refused the buy")),
     }
 }
 
@@ -413,20 +426,20 @@ mod tests {
 
     #[test]
     fn trainer_buy_check_gates_in_priority_order() {
-        // already known → Unavailable(0), even if everything else is fine
+        // already known wins even when everything else is fine
         assert_eq!(
             trainer_buy_check(true, 10, 1, 1000, 10),
-            Err(FAIL_ALREADY_KNOWN)
+            Err(TrainerRefusal::AlreadyKnown)
         );
-        // level too low → NotEnoughSkill(2)
+        // then the level gate
         assert_eq!(
             trainer_buy_check(false, 2, 6, 1000, 10),
-            Err(FAIL_LEVEL_TOO_LOW)
+            Err(TrainerRefusal::LevelTooLow)
         );
-        // not enough money → NotEnoughMoney(1)
+        // then the money gate
         assert_eq!(
             trainer_buy_check(false, 10, 1, 5, 10),
-            Err(FAIL_NOT_ENOUGH_MONEY)
+            Err(TrainerRefusal::NotEnoughMoney)
         );
         // all good → Ok
         assert_eq!(trainer_buy_check(false, 10, 6, 100, 10), Ok(()));
@@ -471,7 +484,7 @@ mod tests {
         // Present (seeded by ensure_player_skills at character creation) -> already-known, rejected.
         assert_eq!(
             trainer_buy_check(true, 40, 1, 1000, 100),
-            Err(FAIL_ALREADY_KNOWN)
+            Err(TrainerRefusal::AlreadyKnown)
         );
         // Absent (never seeded/learned) -> proceeds regardless of what a stale cap column might say.
         assert_eq!(trainer_buy_check(false, 40, 1, 1000, 100), Ok(()));
@@ -530,13 +543,16 @@ mod tests {
     /// THE IDEMPOTENT RE-LEARN (professions slice 3): the profession buy keys its already-known gate on the
     /// PRESENCE of a `game_player_skill` row for the line (the `known` flag the buy path derives), and feeds
     /// it through the SAME `trainer_buy_check`. So a re-buy of an already-learned profession is rejected with
-    /// FAIL_ALREADY_KNOWN (no re-charge, no duplicate/reset row) — identical to a re-bought known spell.
+    /// `TrainerRefusal::AlreadyKnown` (no re-charge, no duplicate/reset row) — identical to a re-bought known spell.
     #[test]
     fn profession_rebuy_is_rejected_as_already_known() {
         // First learn: no skill row yet (known=false), cost 0, level 1 → the gate ALLOWS the grant.
         assert_eq!(trainer_buy_check(false, 1, 1, 0, 0), Ok(()));
         // Re-buy: the skill row now exists (known=true) → rejected as already-known, even though cost is 0
         // and the level is fine (the idempotent no-op — the row is never reset or duplicated).
-        assert_eq!(trainer_buy_check(true, 1, 1, 0, 0), Err(FAIL_ALREADY_KNOWN));
+        assert_eq!(
+            trainer_buy_check(true, 1, 1, 0, 0),
+            Err(TrainerRefusal::AlreadyKnown)
+        );
     }
 }

@@ -76,20 +76,14 @@ pub fn build_trainer_buy_succeeded(trainer_guid: u64, spell_id: u32) -> SMSG_TRA
     }
 }
 
-/// Build `SMSG_TRAINER_BUY_FAILED`. `reason` is the gtker `TrainingFailureReason` int the module tagged
-/// onto its `Err` ([1]=money, [2]=level/req, else generic). gtker vanilla has only 3 reasons, so
-/// already-known/range/flag failures fall to Unavailable — cosmetic, since the client gates the Learn
-/// button on the Green state from the list.
+/// Build `SMSG_TRAINER_BUY_FAILED`. The caller picks `error` from the Module's typed Refusal; gtker
+/// vanilla carries only 3 reasons, so several Refusals share Unavailable — cosmetic, since the client
+/// gates the Learn button on the Green state from the list.
 pub fn build_trainer_buy_failed(
     trainer_guid: u64,
     spell_id: u32,
-    reason: u32,
+    error: TrainingFailureReason,
 ) -> SMSG_TRAINER_BUY_FAILED {
-    let error = match reason {
-        1 => TrainingFailureReason::NotEnoughMoney,
-        2 => TrainingFailureReason::NotEnoughSkill,
-        _ => TrainingFailureReason::Unavailable,
-    };
     SMSG_TRAINER_BUY_FAILED {
         guid: Guid::new(trainer_guid),
         id: spell_id,
@@ -157,23 +151,10 @@ mod tests {
     }
 
     #[test]
-    fn trainer_buy_failed_maps_reason_code_to_the_closest_failure_reason() {
-        let money = build_trainer_buy_failed(42, 100, 1);
-        assert_eq!(money.error, TrainingFailureReason::NotEnoughMoney);
-        assert_eq!(money.guid, Guid::new(42));
-        assert_eq!(money.id, 100);
-        let skill = build_trainer_buy_failed(42, 100, 2);
-        assert_eq!(skill.error, TrainingFailureReason::NotEnoughSkill);
-        // gtker vanilla has only 3 reasons; any other code (already-known/range/flag failures)
-        // degrades to Unavailable — cosmetic, since the client gates the Learn button on the list's
-        // Green state anyway.
-        for other in [0u32, 3, 99] {
-            let msg = build_trainer_buy_failed(42, 100, other);
-            assert_eq!(
-                msg.error,
-                TrainingFailureReason::Unavailable,
-                "reason {other} must degrade to Unavailable"
-            );
-        }
+    fn trainer_buy_failed_addresses_the_trainer_and_the_offering() {
+        let msg = build_trainer_buy_failed(42, 100, TrainingFailureReason::NotEnoughMoney);
+        assert_eq!(msg.guid, Guid::new(42));
+        assert_eq!(msg.id, 100);
+        assert_eq!(msg.error, TrainingFailureReason::NotEnoughMoney);
     }
 }

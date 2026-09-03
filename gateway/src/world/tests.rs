@@ -292,6 +292,8 @@ struct InMemoryStore {
     trainer_refuses_class: bool,
     /// When set, buy/sell return this error (a gameplay failure) instead of `Ok`.
     trade_error: Option<String>,
+    /// When set, the trainer buy answers this Refusal instead of learning the spell.
+    trainer_buy_refusal: Option<lyracore_shared::trainer::TrainerRefusal>,
     /// Quest-giver evals returned by `giver_quest_evals` (the menu/status input).
     quest_evals: Vec<codec::GiverQuestEval>,
     /// Quest details `quest_detail_view(id)` resolves from (matched by `quest_id`).
@@ -1836,10 +1838,13 @@ impl WorldStore for InMemoryStore {
         _self_guid: u64,
         _trainer_guid: u64,
         _spell_id: u32,
-    ) -> Result<()> {
+    ) -> Result<crate::world::TrainerBuyOutcome> {
+        if let Some(refusal) = self.trainer_buy_refusal {
+            return Ok(refusal.into());
+        }
         match &self.trade_error {
             Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+            None => Ok(crate::world::TrainerBuyOutcome::Learned),
         }
     }
     fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
@@ -7611,15 +7616,20 @@ fn trainer_buy_rank_upgrade_supersedes_the_previous_rank_spell() {
 }
 
 #[test]
-fn trainer_buy_failure_parses_the_reason_tag_into_the_failure_code() {
-    // The module tags its Err with gtker's `[N]` reason: [1]=money, [2]=level/req, else generic.
-    for (err, want) in [
-        ("too poor [1]", TrainingFailureReason::NotEnoughMoney),
-        ("level too low [2]", TrainingFailureReason::NotEnoughSkill),
-        ("some other rejection", TrainingFailureReason::Unavailable),
-    ] {
+fn every_module_refusal_has_one_client_failure_reason() {
+    use lyracore_shared::trainer::TrainerRefusal;
+    let expected = |refusal| match refusal {
+        TrainerRefusal::NotEnoughMoney => TrainingFailureReason::NotEnoughMoney,
+        TrainerRefusal::LevelTooLow | TrainerRefusal::PreviousRankMissing => {
+            TrainingFailureReason::NotEnoughSkill
+        }
+        TrainerRefusal::Unavailable | TrainerRefusal::NotOffered | TrainerRefusal::AlreadyKnown => {
+            TrainingFailureReason::Unavailable
+        }
+    };
+    for refusal in TrainerRefusal::ALL {
         let mut s = quest_store();
-        s.trade_error = Some(err.into());
+        s.trainer_buy_refusal = Some(refusal);
         let store = std::sync::Arc::new(s);
         let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
         CMSG_TRAINER_BUY_SPELL {
@@ -7630,7 +7640,7 @@ fn trainer_buy_failure_parses_the_reason_tag_into_the_failure_code() {
         .unwrap();
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(m) => {
-                assert_eq!(m.error, want, "store error {err:?} must map to {want:?}");
+                assert_eq!(m.error, expected(refusal), "{refusal:?}");
                 assert_eq!(m.id, 1234);
             }
             other => panic!("expected SMSG_TRAINER_BUY_FAILED, got {other}"),
@@ -7638,6 +7648,49 @@ fn trainer_buy_failure_parses_the_reason_tag_into_the_failure_code() {
         drop(client);
         server.join().unwrap();
     }
+}
+
+/// A reducer timeout leaves the durable result unknown, so it must not reach the client as a
+/// gameplay Refusal that says the purchase did not happen.
+#[test]
+fn a_trainer_reducer_timeout_is_not_answered_as_a_refusal() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        trade_error: Some("gw_trainer_buy reducer timed out after 10s".into()),
+        ..tester_store(7)
+    });
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        result_tx
+            .send(run_world_session(server_end, server_store.as_ref()))
+            .unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+
+    CMSG_TRAINER_BUY_SPELL {
+        guid: Guid::new(70),
+        id: 1234,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+
+    let error = result_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("an unknown buy outcome must end the session promptly")
+        .expect_err("a timed-out trainer reducer must be session-fatal");
+    assert!(format!("{error:#}").contains("timed out"));
+    assert!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
+        "the socket closes instead of claiming the purchase failed"
+    );
 }
 
 #[test]
