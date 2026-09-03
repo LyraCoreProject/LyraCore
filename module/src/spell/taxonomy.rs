@@ -234,8 +234,7 @@ pub(crate) const SPELLMOD_OP_CASTING_TIME: i32 = 10;
 // Slot 11 of the p0_kind taxonomy. Not read by any engine seam yet (the spell-mod fold reaches the
 // op through `A_SPELLMOD_*`'s own `p0`), but the NUMBER is a stored data contract: the importer
 // writes p0_kind values into `game_spell_effect`, so deleting the name would leave 11 undocumented
-// and free for a future kind to collide with. Named here, deliberately unused.
-#[allow(dead_code)]
+// and free for a future kind to collide with.
 pub(crate) const P_SPELLMOD_OP: u8 = 11; // p0 is a SpellModOp (A_SPELLMOD_*: 0=damage, 7=crit, 10=cast time, 14=cost); p1 carries the 32-bit affected-spell family mask
 /// The effect's `amount` is a PERCENT of the caster's MAX power, not an absolute figure (Mage Evocation's
 /// A_PERIODIC_ENERGIZE restores 15% of max mana per tick). `aura_apply` reads this tag and converts the
@@ -451,8 +450,8 @@ pub(crate) const ALL_AURA_KINDS: &[u8] = &[
 // drifted the way the two lists above did — so it does not need a canonical, loop-tested slice of its
 // own. A subset of it has no OTHER production call site yet though (only a test-only reference, same as
 // every `E_*`/`A_*` kind before `ALL_INSTANT_KINDS`/`ALL_AURA_KINDS` existed), so it still needs SOME
-// scaffold to keep `dead_code` from tripping on the non-test `lib` build — this is that scaffold, sized
-// to just the residue (down from `_TAXONOMY`'s ~100 entries to these 16).
+// aggregate to keep `dead_code` from tripping on the non-test `lib` build. It holds just the residue,
+// down from `_TAXONOMY`'s ~100 entries to these 18.
 #[allow(dead_code)]
 const _RESERVED_NON_KIND_TAXONOMY: &[u8] = &[
     P_NONE,
@@ -465,6 +464,7 @@ const _RESERVED_NON_KIND_TAXONOMY: &[u8] = &[
     P_ITEM_ENTRY,
     P_ENTRY,
     P_ENCHANT_ID,
+    P_SPELLMOD_OP,
     P_DISPLAY_ID,
     P_RAW,
     T_SCRIPTED,

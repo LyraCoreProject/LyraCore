@@ -1291,37 +1291,172 @@ pub(crate) mod grid_cell_tripwire {
 
 /// ENFORCEMENT tripwire: a comment must stay understandable without tracker history, so no comment
 /// under `module/src` may carry an issue reference (a hash sign followed by 2..=4 digits). The
-/// allow-list below is a RATCHET of MAXIMUMS: cleaning a file up lowers its number, and a file that
-/// reaches zero drops off the list entirely.
+/// allow-list below records exact counts. Cleanup updates the count, and a file at zero leaves the
+/// list entirely.
 #[cfg(test)]
 pub(crate) mod issue_reference_tripwire {
     /// `(path under `module/src`, tracker references still tolerated there)`.
     const RATCHET: &[(&str, usize)] = &[("spell/cast/targeting.rs", 6)];
 
-    /// Lines whose comment carries a tracker reference: a hash sign opening a 2..=4 digit token
-    /// after a space or an opening bracket. A build, opcode, patch or revision number is not one.
+    /// Returns one line number for each tracker reference in a comment. A reference is a hash sign
+    /// opening a 2..=4 digit token; a build, opcode, patch or revision number is not one.
     fn tracker_refs(content: &str) -> Vec<usize> {
         let bytes = content.as_bytes();
         let mut out = Vec::new();
-        for (i, _) in content.match_indices('#') {
-            let digits = bytes[i + 1..]
-                .iter()
-                .take_while(|c| c.is_ascii_digit())
-                .count();
-            if !(2..=4).contains(&digits) || i == 0 || !matches!(bytes[i - 1], b' ' | b'(' | b'[') {
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if let Some(end) = raw_string_end(bytes, i) {
+                i = end;
                 continue;
             }
-            if !crate::test_scan::on_comment_line(content, i) {
-                continue;
+
+            match bytes[i] {
+                b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                    let end = bytes[i + 2..]
+                        .iter()
+                        .position(|byte| *byte == b'\n')
+                        .map_or(bytes.len(), |offset| i + 2 + offset);
+                    comment_refs(content, i + 2, end, &mut out);
+                    i = end;
+                }
+                b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                    i = block_comment_refs(content, i + 2, &mut out);
+                }
+                b'"' => i = quoted_end(bytes, i, b'"'),
+                b'\'' => i = char_literal_end(bytes, i).unwrap_or(i + 1),
+                _ => i += 1,
             }
-            let head = content[..i - 1].trim_end();
-            let word = &head[head.rfind(char::is_whitespace).map_or(0, |j| j + 1)..];
-            if matches!(word, "build" | "opcode" | "patch" | "rev") {
-                continue;
-            }
-            out.push(crate::test_scan::line_of(content, i));
         }
         out
+    }
+
+    fn comment_refs(content: &str, start: usize, end: usize, out: &mut Vec<usize>) {
+        for (offset, byte) in content.as_bytes()[start..end].iter().enumerate() {
+            let index = start + offset;
+            if *byte == b'#' && is_tracker_ref(content, index) {
+                out.push(crate::test_scan::line_of(content, index));
+            }
+        }
+    }
+
+    fn block_comment_refs(content: &str, mut i: usize, out: &mut Vec<usize>) -> usize {
+        let bytes = content.as_bytes();
+        let mut depth = 1;
+        while i < bytes.len() && depth > 0 {
+            if bytes.get(i..i + 2) == Some(b"/*") {
+                depth += 1;
+                i += 2;
+            } else if bytes.get(i..i + 2) == Some(b"*/") {
+                depth -= 1;
+                i += 2;
+            } else {
+                if bytes[i] == b'#' && is_tracker_ref(content, i) {
+                    out.push(crate::test_scan::line_of(content, i));
+                }
+                i += 1;
+            }
+        }
+        i
+    }
+
+    fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
+        let mut quote = start;
+        if bytes.get(quote) == Some(&b'b') {
+            quote += 1;
+        }
+        if bytes.get(quote) != Some(&b'r') {
+            return None;
+        }
+        quote += 1;
+        let hashes = bytes[quote..]
+            .iter()
+            .take_while(|byte| **byte == b'#')
+            .count();
+        quote += hashes;
+        if bytes.get(quote) != Some(&b'"') {
+            return None;
+        }
+
+        let mut i = quote + 1;
+        while i < bytes.len() {
+            if bytes[i] == b'"'
+                && bytes.get(i + 1..i + 1 + hashes) == Some(&bytes[quote - hashes..quote])
+            {
+                return Some(i + 1 + hashes);
+            }
+            i += 1;
+        }
+        Some(bytes.len())
+    }
+
+    fn quoted_end(bytes: &[u8], mut i: usize, quote: u8) -> usize {
+        i += 1;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                i += 2;
+            } else if bytes[i] == quote {
+                return i + 1;
+            } else {
+                i += 1;
+            }
+        }
+        bytes.len()
+    }
+
+    fn char_literal_end(bytes: &[u8], start: usize) -> Option<usize> {
+        if bytes
+            .get(start + 1)
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+            && bytes.get(start + 2) != Some(&b'\'')
+        {
+            return None;
+        }
+
+        let end = (start + 9).min(bytes.len());
+        let mut i = start + 1;
+        while i < end {
+            if bytes[i] == b'\\' {
+                i += 2;
+            } else if bytes[i] == b'\'' {
+                return Some(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+        None
+    }
+
+    fn is_tracker_ref(content: &str, index: usize) -> bool {
+        let bytes = content.as_bytes();
+        let digits = bytes[index + 1..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if !(2..=4).contains(&digits)
+            || bytes
+                .get(index + 1 + digits)
+                .is_some_and(u8::is_ascii_digit)
+        {
+            return false;
+        }
+
+        let before = content[..index].trim_end_matches(|character: char| {
+            character.is_ascii_whitespace() || character == '(' || character == '['
+        });
+        let word = before
+            .rsplit(|character: char| !character.is_ascii_alphabetic())
+            .next()
+            .unwrap_or_default();
+        !matches!(word, "build" | "opcode" | "patch" | "rev" | "revision")
+    }
+
+    fn ratchet_mismatch(path: &str, found: usize, budget: usize) -> Option<String> {
+        (found != budget).then(|| format!("{path}: {found} refs (ratchet {budget})"))
+    }
+
+    fn ratchet_file_is_missing(path: &str, seen: &[String]) -> bool {
+        !seen.iter().any(|seen_path| seen_path == path)
     }
 
     #[test]
@@ -1330,6 +1465,7 @@ pub(crate) mod issue_reference_tripwire {
         let mut files = Vec::new();
         super::character_owned_tripwire::collect_rs_files(&root, &mut files);
         let mut violations = Vec::new();
+        let mut seen = Vec::new();
         for file in files {
             let rel = file
                 .strip_prefix(&root)
@@ -1338,15 +1474,21 @@ pub(crate) mod issue_reference_tripwire {
                 .replace('\\', "/");
             let content = std::fs::read_to_string(&file).expect("readable module source");
             let lines = tracker_refs(&content);
-            let budget = RATCHET
-                .iter()
-                .find(|(p, _)| *p == rel)
-                .map_or(0, |(_, n)| *n);
-            if lines.len() > budget {
-                let found = lines.len();
+            seen.push(rel.clone());
+            if let Some((_, budget)) = RATCHET.iter().find(|(path, _)| *path == rel) {
+                if let Some(mismatch) = ratchet_mismatch(&rel, lines.len(), *budget) {
+                    violations.push(format!("{mismatch}, lines {lines:?}"));
+                }
+            } else if !lines.is_empty() {
                 violations.push(format!(
-                    "{rel}: {found} refs (budget {budget}), lines {lines:?}"
+                    "{rel}: {} refs (ratchet 0), lines {lines:?}",
+                    lines.len()
                 ));
+            }
+        }
+        for (path, _) in RATCHET {
+            if ratchet_file_is_missing(path, &seen) {
+                violations.push(format!("{path}: ratchet file is missing"));
             }
         }
         assert!(
@@ -1358,14 +1500,29 @@ pub(crate) mod issue_reference_tripwire {
         );
     }
 
-    /// The scan catches a reference and leaves a build number, an opcode id and live code alone.
+    /// The scan covers line, trailing and nested block comments, while leaving literals alone.
     #[test]
-    fn the_scan_separates_a_tracker_reference_from_an_ordinary_number() {
+    fn the_scan_covers_comments_without_reading_literals() {
         let h = '#';
-        assert_eq!(tracker_refs(&format!("// a note ({h}119)\n")), vec![1]);
-        assert_eq!(tracker_refs(&format!("/// see {h}42 for why\n")), vec![1]);
-        assert!(tracker_refs(&format!("// build {h}5875 ships it\n")).is_empty());
-        assert!(tracker_refs(&format!("// opcode {h}117 is CMSG\n")).is_empty());
-        assert!(tracker_refs(&format!("let s = \"({h}119)\";\n")).is_empty());
+        let source = format!(
+            "// full {h}119\nlet x = 0; // pre-{h}22\n/* outer {h}23 /* nested {h}24 */ tail {h}25 */\nfn f<'a /* issue {h}22 */>() {{}}\nlet normal = \"{h}26\";\nlet escaped = \"\\\\\"{h}27\";\nlet raw = r###\"{h}28\"###;\nlet byte_raw = br#\"{h}29\"#;\nlet character = '{h}';\n// build {h}5875 and opcode {h}117\n// build ({h}5875) and opcode [{h}117]\n"
+        );
+        assert_eq!(tracker_refs(&source), vec![1, 2, 3, 3, 3, 4]);
+    }
+
+    #[test]
+    fn the_ratchet_rejects_stale_counts() {
+        assert!(ratchet_mismatch("fixture.rs", 1, 1).is_none());
+        assert!(ratchet_mismatch("fixture.rs", 0, 1).is_some());
+        assert!(ratchet_mismatch("fixture.rs", 2, 1).is_some());
+    }
+
+    #[test]
+    fn the_ratchet_rejects_a_missing_allow_listed_file() {
+        assert!(!ratchet_file_is_missing(
+            "fixture.rs",
+            &["fixture.rs".to_owned()]
+        ));
+        assert!(ratchet_file_is_missing("fixture.rs", &[]));
     }
 }
