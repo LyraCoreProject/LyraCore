@@ -143,18 +143,22 @@ reaches a crate root outside the list above. The failure names the Package, file
 `src/` is never linted because the Package API is a promise core makes to Packages, not to itself.
 
 The scanner recognizes `crate::`, `$crate::`, and a `super::` chain that leaves the Package module.
-It also follows an unqualified crate-root alias declared in the same file. It recognizes
-`use crate as name`. Grouped `self as name` uses and `extern crate self as name` also work.
+Raw identifiers have their ordinary meaning, so `crate::r#helpers` names the documented `helpers`
+root.
 
 The scanner uses the file path and inline modules to distinguish a crate-root escape from a
 Package's own sibling or submodule. A crate-root glob such as `use crate::*` also fails because it
 imports roots that the Package API does not name.
 
+Whole-crate aliases such as `use crate as core`, `use crate::{self as core}`, and
+`extern crate self as core` fail at their declaration. Spell every core dependency as
+`crate::<Package API root>` so the lint can check it where it appears. `#[path]` and a `cfg_attr`
+that supplies `path` also fail. Package modules use Rust's normal `mod.rs`, `<name>.rs`, or
+`<name>/mod.rs` layout, which keeps filesystem depth and `super` depth equal.
+
 This remains a lexical compatibility check, not Rust name resolution. It does not expand macros or
-follow an alias or re-export declared in another file. A Package should use the normal file module
-layout rather than `#[path]` when it uses relative imports, because the scanner derives module depth
-from that layout. Rust still compiles every Package after this check; these limits do not turn the
-Package API into a sandbox.
+follow a re-export declared in another file. Rust still compiles every Package after this check;
+these limits do not turn the Package API into a sandbox.
 
 Comments and string literals are stripped before the scan, so a path quoted in a doc example is
 inert.
@@ -168,3 +172,6 @@ crate::auth::create_character(ctx, ..) // package-api: exempt a bot Character is
 The marker clears that line and no other. There is no global toggle, and the reason is required — a
 bare marker does not clear. Every exemption is a gap in this document; raise it with the maintainers
 so the surface can grow or the Package can move off it.
+
+An exemption cannot enable a whole-crate alias or `#[path]`. Either spelling can hide dependencies
+on other lines or in files the lint cannot locate, so the build always refuses it.

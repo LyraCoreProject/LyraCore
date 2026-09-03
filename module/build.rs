@@ -699,23 +699,46 @@ fn core_module_path(src_root: &Path, file: &Path) -> String {
     format!("crate::{top}")
 }
 
+struct StrippedSource {
+    code: String,
+    package_api_exempt_lines: Vec<usize>,
+}
+
 /// Blank out comments (line + nested block), string literals (plain, byte, raw), and char
 /// literals, PRESERVING newlines and byte-for-char positions — so the marker scan sees only real
 /// code and panic line numbers stay true. Lifetimes (`'a`) are left intact (only a real char
 /// literal — quote, optional escape, closing quote — is blanked). This is what makes a
 /// commented-out marker inert and lets doc comments show real marker syntax.
-fn strip_comments_and_strings(src: &str) -> String {
+///
+/// Package API exemptions are collected while the scanner knows it is inside a real line comment.
+/// Marker text inside a string cannot clear a finding.
+fn strip_source(src: &str) -> StrippedSource {
     let b: Vec<char> = src.chars().collect();
     let mut out: Vec<char> = Vec::with_capacity(b.len());
+    let mut package_api_exempt_lines = Vec::new();
     let blank = |c: char| if c == '\n' { '\n' } else { ' ' };
     let mut i = 0usize;
     while i < b.len() {
         let c = b[i];
         // Line comment (also covers /// and //!): blank to end of line.
         if c == '/' && b.get(i + 1) == Some(&'/') {
+            let comment_start = i;
             while i < b.len() && b[i] != '\n' {
                 out.push(' ');
                 i += 1;
+            }
+            let comment: String = b[comment_start..i].iter().collect();
+            if comment
+                .split_once(PACKAGE_API_EXEMPT)
+                .is_some_and(|(_, reason)| !reason.trim().is_empty())
+            {
+                package_api_exempt_lines.push(
+                    b[..comment_start]
+                        .iter()
+                        .filter(|character| **character == '\n')
+                        .count()
+                        + 1,
+                );
             }
             continue;
         }
@@ -847,7 +870,14 @@ fn strip_comments_and_strings(src: &str) -> String {
         out.push(c);
         i += 1;
     }
-    out.into_iter().collect()
+    StrippedSource {
+        code: out.into_iter().collect(),
+        package_api_exempt_lines,
+    }
+}
+
+fn strip_comments_and_strings(src: &str) -> String {
+    strip_source(src).code
 }
 
 /// Verify that a marker registered in nested submodule `file` (e.g. `src/spell/spellbook.rs`) is
@@ -1171,7 +1201,17 @@ fn source_tokens(source: &str) -> Vec<SourceToken<'_>> {
             continue;
         }
         let start = at;
-        if bytes[at].is_ascii_alphabetic() || bytes[at] == b'_' {
+        if bytes[at] == b'r'
+            && bytes.get(at + 1) == Some(&b'#')
+            && bytes
+                .get(at + 2)
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        {
+            at += 3;
+            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                at += 1;
+            }
+        } else if bytes[at].is_ascii_alphabetic() || bytes[at] == b'_' {
             at += 1;
             while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
                 at += 1;
@@ -1199,6 +1239,10 @@ fn is_ident(token: SourceToken<'_>) -> bool {
         .as_bytes()
         .first()
         .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
+}
+
+fn ident_name(token: SourceToken<'_>) -> Option<&str> {
+    is_ident(token).then(|| token.text.strip_prefix("r#").unwrap_or(token.text))
 }
 
 /// Every matched brace pair in the stripped source, as byte positions of the braces.
@@ -1264,34 +1308,19 @@ fn package_file_module_depth(package_src: &Path, file: &Path) -> usize {
     }
 }
 
-#[derive(Clone)]
-struct CrateAlias {
-    name: String,
-    scope: (usize, usize),
-    module_stack: Vec<usize>,
-}
-
-fn enclosing_scope(pairs: &[(usize, usize)], at: usize, source_len: usize) -> (usize, usize) {
-    pairs
-        .iter()
-        .filter(|(open, close)| *open < at && at < *close)
-        .max_by_key(|(open, _)| *open)
-        .map_or((0, source_len), |(open, close)| (open + 1, *close))
-}
-
-/// Aliases of the root represented by one use-tree root. The direct form is `crate as core`; the
-/// grouped form is `crate::{self as core}`.
-fn aliases_after_use_root<'a>(
-    tokens: &[SourceToken<'a>],
+/// Alias names introduced for the whole crate by one `crate` use-tree root. The direct form is
+/// `crate as core`; the grouped form is `crate::{self as core}`.
+fn aliases_after_use_root(
+    tokens: &[SourceToken<'_>],
     root: usize,
     statement_end: usize,
-) -> Vec<&'a str> {
+) -> Vec<usize> {
     if root + 2 < statement_end
         && tokens[root + 1].text == "as"
         && is_ident(tokens[root + 2])
         && tokens[root + 2].text != "_"
     {
-        return vec![tokens[root + 2].text];
+        return vec![root + 2];
     }
     if root + 2 >= statement_end || tokens[root + 1].text != "::" || tokens[root + 2].text != "{" {
         return Vec::new();
@@ -1313,7 +1342,7 @@ fn aliases_after_use_root<'a>(
                     && is_ident(tokens[index + 2])
                     && tokens[index + 2].text != "_"
                 {
-                    aliases.push(tokens[index + 2].text);
+                    aliases.push(index + 2);
                 }
                 at_entry = false;
             }
@@ -1325,15 +1354,19 @@ fn aliases_after_use_root<'a>(
     aliases
 }
 
-/// File-local names introduced for the crate root. Their brace scope and inline-module position
-/// keep an alias in one function or module from changing an unrelated `name::path` elsewhere.
-fn crate_aliases(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnsupportedPackageSyntax {
+    WholeCrateAlias,
+    PathAttribute,
+}
+
+/// Syntax whose meaning the Package API lint cannot track reliably. Refuse it where it is
+/// declared instead of guessing at Rust name resolution or filesystem-to-module mapping.
+fn unsupported_package_syntax(
     tokens: &[SourceToken<'_>],
-    pairs: &[(usize, usize)],
-    modules: &[(usize, usize)],
-    source_len: usize,
-) -> Vec<CrateAlias> {
-    let mut aliases = Vec::new();
+    stripped: &str,
+) -> Vec<(usize, usize, UnsupportedPackageSyntax, String)> {
+    let mut found = Vec::new();
     for (use_index, token) in tokens.iter().enumerate() {
         if token.text != "use" {
             continue;
@@ -1342,24 +1375,17 @@ fn crate_aliases(
             .iter()
             .position(|token| token.text == ";")
             .map_or(tokens.len(), |offset| use_index + 1 + offset);
-        let scope = enclosing_scope(pairs, token.start, source_len);
-        let stack = inline_module_stack(modules, token.start);
         let mut index = use_index + 1;
         while index < statement_end {
             if tokens[index].text == "crate" {
-                for name in aliases_after_use_root(tokens, index, statement_end) {
-                    let alias = CrateAlias {
-                        name: name.to_string(),
-                        scope,
-                        module_stack: stack.clone(),
-                    };
-                    if !aliases.iter().any(|known: &CrateAlias| {
-                        known.name == alias.name
-                            && known.scope == alias.scope
-                            && known.module_stack == alias.module_stack
-                    }) {
-                        aliases.push(alias);
-                    }
+                for name_index in aliases_after_use_root(tokens, index, statement_end) {
+                    let offset = tokens[index].start;
+                    found.push((
+                        offset,
+                        0,
+                        UnsupportedPackageSyntax::WholeCrateAlias,
+                        format!("crate alias `{}`", tokens[name_index].text),
+                    ));
                 }
             }
             index += 1;
@@ -1375,14 +1401,57 @@ fn crate_aliases(
             && is_ident(window[4])
             && window[4].text != "_"
         {
-            aliases.push(CrateAlias {
-                name: window[4].text.to_string(),
-                scope: enclosing_scope(pairs, window[0].start, source_len),
-                module_stack: inline_module_stack(modules, window[0].start),
-            });
+            found.push((
+                window[0].start,
+                0,
+                UnsupportedPackageSyntax::WholeCrateAlias,
+                format!("crate alias `{}`", window[4].text),
+            ));
         }
     }
-    aliases
+
+    for (index, window) in tokens.windows(3).enumerate() {
+        if window[0].text != "#" || window[1].text != "[" {
+            continue;
+        }
+        let Some(attribute_end) = tokens[index + 2..]
+            .iter()
+            .position(|token| token.text == "]")
+            .map(|offset| index + 2 + offset)
+        else {
+            continue;
+        };
+        let attribute = &tokens[index + 2..attribute_end];
+        let is_path = attribute.first().is_some_and(|token| {
+            ident_name(*token) == Some("path")
+                && attribute.get(1).is_some_and(|token| token.text == "=")
+        });
+        let is_conditional_path = attribute.first().is_some_and(|token| {
+            ident_name(*token) == Some("cfg_attr")
+                && attribute
+                    .windows(2)
+                    .any(|pair| ident_name(pair[0]) == Some("path") && pair[1].text == "=")
+        });
+        if is_path || is_conditional_path {
+            found.push((
+                window[0].start,
+                0,
+                UnsupportedPackageSyntax::PathAttribute,
+                if is_path {
+                    "`#[path]`".to_string()
+                } else {
+                    "`#[cfg_attr(..., path = ...)]`".to_string()
+                },
+            ));
+        }
+    }
+
+    for finding in &mut found {
+        finding.1 = stripped[..finding.0].matches('\n').count() + 1;
+    }
+    found.sort_by_key(|finding| finding.0);
+    found.dedup_by(|left, right| left.0 == right.0 && left.2 == right.2);
+    found
 }
 
 /// The root and diagnostic spelling of every path introduced after one `::`. A braced group emits
@@ -1467,20 +1536,17 @@ fn record_rooted_paths(
     separator: usize,
     prefix: &str,
     stripped: &str,
-    raw_lines: &[&str],
+    exempt_lines: &[usize],
     found: &mut Vec<(usize, usize, String)>,
 ) {
     for (root_index, root, written) in roots_after_separator(tokens, separator, prefix) {
-        if root == "self" || on_package_api(&root) {
+        let normalized_root = root.strip_prefix("r#").unwrap_or(&root);
+        if normalized_root == "self" || on_package_api(normalized_root) {
             continue;
         }
         let offset = tokens[root_index].start;
         let line = stripped[..offset].matches('\n').count() + 1;
-        let exempt = raw_lines.get(line - 1).is_some_and(|raw| {
-            raw.split_once(PACKAGE_API_EXEMPT)
-                .is_some_and(|(_, reason)| !reason.trim().is_empty())
-        });
-        if !exempt {
+        if !exempt_lines.contains(&line) {
             found.push((offset, line, written));
         }
     }
@@ -1490,16 +1556,15 @@ fn record_rooted_paths(
 /// (1-based line, path as written). `file_depth` is zero for `src/mod.rs`, one for `src/foo.rs` or
 /// `src/foo/mod.rs`, and so on. Inline modules add to it at the occurrence.
 ///
-/// The scan runs on the comment- and string-stripped copy. It recognizes `crate`, `$crate`, enough
-/// leading `super` segments to leave the Package, and crate-root aliases declared in the same file.
-/// The exemption is read from the raw root line, where stripping removed the comment.
+/// The scan runs on the comment- and string-stripped copy. It recognizes `crate`, `$crate`, and
+/// enough leading `super` segments to leave the Package. The exemption lines come from real line
+/// comments recorded while stripping source.
 fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)> {
-    let stripped = strip_comments_and_strings(source);
-    let raw_lines: Vec<&str> = source.lines().collect();
+    let stripped_source = strip_source(source);
+    let stripped = stripped_source.code;
     let tokens = source_tokens(&stripped);
     let pairs = brace_pairs(&tokens);
     let modules = inline_modules(&tokens, &pairs);
-    let aliases = crate_aliases(&tokens, &pairs, &modules, stripped.len());
     let mut found = Vec::new();
 
     let mut index = 0usize;
@@ -1517,7 +1582,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                 index + 2,
                 "$crate",
                 &stripped,
-                &raw_lines,
+                &stripped_source.package_api_exempt_lines,
                 &mut found,
             );
             index += 3;
@@ -1534,7 +1599,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                 index + 1,
                 "crate",
                 &stripped,
-                &raw_lines,
+                &stripped_source.package_api_exempt_lines,
                 &mut found,
             );
         } else if tokens[index].text == "super" && (index == 0 || tokens[index - 1].text != "::") {
@@ -1563,40 +1628,13 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                     root_end + 1,
                     &prefix,
                     &stripped,
-                    &raw_lines,
+                    &stripped_source.package_api_exempt_lines,
                     &mut found,
                 );
             }
             index = root_end;
         }
         index += 1;
-    }
-
-    for (index, token) in tokens.iter().enumerate() {
-        // An alias must start this path. A preceding `::` means it is a segment of a path the
-        // direct scanners above already resolved, not the file-local alias binding.
-        if index > 0 && tokens[index - 1].text == "::" {
-            continue;
-        }
-        if tokens.get(index + 1).is_none_or(|token| token.text != "::") {
-            continue;
-        }
-        let stack = inline_module_stack(&modules, token.start);
-        for alias in aliases.iter().filter(|alias| {
-            alias.name == token.text
-                && alias.scope.0 <= token.start
-                && token.start < alias.scope.1
-                && alias.module_stack == stack
-        }) {
-            record_rooted_paths(
-                &tokens,
-                index + 1,
-                &alias.name,
-                &stripped,
-                &raw_lines,
-                &mut found,
-            );
-        }
     }
 
     found.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.2.cmp(&right.2)));
@@ -1618,11 +1656,43 @@ fn out_of_surface_message(package: &str, file: &Path, line: usize, path: &str) -
     )
 }
 
+fn unsupported_package_syntax_message(
+    package: &str,
+    file: &Path,
+    line: usize,
+    kind: UnsupportedPackageSyntax,
+    written: &str,
+) -> String {
+    let instruction = match kind {
+        UnsupportedPackageSyntax::WholeCrateAlias => {
+            "Whole-crate aliases can hide core paths across Rust scopes. Spell each core path as \
+             `crate::<Package API root>` instead."
+        }
+        UnsupportedPackageSyntax::PathAttribute => {
+            "Path attributes break Package source discovery and module-depth checks. Use Rust's \
+             normal `mod.rs`, `<name>.rs`, or `<name>/mod.rs` layout instead."
+        }
+    };
+    format!(
+        "build.rs: Package `{package}` uses unsupported Package API syntax {written} at \
+         {}:{line}. {instruction}",
+        file.display()
+    )
+}
+
 /// Fail the build for the first out-of-surface path in one Package file. Core `src/` is never
 /// linted: the surface is a promise core makes to Packages, not to itself.
 fn lint_package_api(package: &str, package_src: &Path, file: &Path) {
     let source = fs::read_to_string(file)
         .unwrap_or_else(|e| panic!("build.rs: cannot read {}: {e}", file.display()));
+    let stripped = strip_comments_and_strings(&source);
+    let tokens = source_tokens(&stripped);
+    if let Some((_, line, kind, written)) = unsupported_package_syntax(&tokens, &stripped).first() {
+        panic!(
+            "{}",
+            unsupported_package_syntax_message(package, file, *line, *kind, written)
+        );
+    }
     let file_depth = package_file_module_depth(package_src, file);
     if let Some((line, path)) = out_of_surface_paths(&source, file_depth).first() {
         panic!("{}", out_of_surface_message(package, file, *line, path));
@@ -1655,6 +1725,15 @@ mod package_api_lint_tests {
         out_of_surface_paths(source, file_depth)
             .into_iter()
             .map(|(line, path)| format!("{line}:{path}"))
+            .collect()
+    }
+
+    fn unsupported(source: &str) -> Vec<String> {
+        let stripped = strip_comments_and_strings(source);
+        let tokens = source_tokens(&stripped);
+        unsupported_package_syntax(&tokens, &stripped)
+            .into_iter()
+            .map(|(_, line, _, written)| format!("{line}:{written}"))
             .collect()
     }
 
@@ -1751,37 +1830,45 @@ mod package_api_lint_tests {
     }
 
     #[test]
-    fn a_crate_alias_cannot_hide_an_undocumented_root() {
-        let source =
-            "use crate as core;\nuse core::helpers::live_entity;\nuse core::auth::Account;\n";
-        assert_eq!(reported(source), vec!["3:core::auth::Account"]);
-    }
-
-    #[test]
-    fn a_block_local_alias_does_not_reclassify_a_package_submodule_elsewhere() {
-        let source = "mod local { pub mod auth {} }\nfn alias_scope() { use crate as local; use local::helpers; }\nfn package_scope() { use local::auth; }\n";
+    fn a_whole_crate_alias_is_unsupported_before_it_can_hide_a_path() {
+        let source = "use crate as core;\nuse core::auth::Account;\n";
+        assert_eq!(unsupported(source), vec!["1:crate alias `core`"]);
         assert!(reported(source).is_empty(), "{:?}", reported(source));
     }
 
     #[test]
-    fn grouped_crate_aliases_and_alias_imports_are_linted() {
-        let source = "use crate::{self as core, helpers};\nuse core::{\n    hooks,\n    auth::Account,\n};\n";
-        assert_eq!(reported(source), vec!["4:core::auth"]);
+    fn a_package_alias_named_core_is_not_reclassified_as_the_crate() {
+        let source =
+            "mod owned { pub mod auth {} }\nfn f() { use self::owned as core; use core::auth; }\n";
+        assert!(unsupported(source).is_empty(), "{:?}", unsupported(source));
+        assert!(reported(source).is_empty(), "{:?}", reported(source));
     }
 
     #[test]
-    fn outer_group_and_self_forms_can_alias_the_crate_root() {
-        let source = "use {crate as first};\nuse crate::{self as second};\nuse first::auth;\nuse second::test_scan;\n";
+    fn grouped_whole_crate_aliases_are_unsupported() {
+        let source = "use crate::{self as core, helpers};\nuse core::auth;\n";
+        assert_eq!(unsupported(source), vec!["1:crate alias `core`"]);
+    }
+
+    #[test]
+    fn every_whole_crate_alias_spelling_is_unsupported() {
+        let source =
+            "use {crate as first};\nuse crate::{self as second};\nextern crate self as third;\n";
         assert_eq!(
-            reported(source),
-            vec!["3:first::auth", "4:second::test_scan"]
+            unsupported(source),
+            vec![
+                "1:crate alias `first`",
+                "2:crate alias `second`",
+                "3:crate alias `third`"
+            ]
         );
     }
 
     #[test]
-    fn the_older_extern_crate_self_alias_is_linted_too() {
-        let source = "extern crate self as core;\nuse core::auth;\n";
-        assert_eq!(reported(source), vec!["2:core::auth"]);
+    fn raw_whole_crate_aliases_are_unsupported() {
+        let source = "use crate as r#core;\nuse r#core::auth;\n";
+        assert_eq!(unsupported(source), vec!["1:crate alias `r#core`"]);
+        assert!(reported(source).is_empty(), "{:?}", reported(source));
     }
 
     #[test]
@@ -1800,8 +1887,66 @@ mod package_api_lint_tests {
     }
 
     #[test]
-    fn an_exemption_remains_line_local_for_relative_and_aliased_paths() {
-        let source = "use crate as core;\nuse super::auth; // package-api: exempt Package setup needs Accounts\nuse core::test_scan;\n";
-        assert_eq!(reported(source), vec!["3:core::test_scan"]);
+    fn an_exemption_remains_line_local_for_relative_and_direct_paths() {
+        let source = "use super::auth; // package-api: exempt Package setup needs Accounts\nuse crate::test_scan;\n";
+        assert_eq!(reported(source), vec!["2:crate::test_scan"]);
+    }
+
+    #[test]
+    fn an_exemption_cannot_enable_a_whole_crate_alias() {
+        let source = "use crate as core; // package-api: exempt legacy spelling\n";
+        assert_eq!(unsupported(source), vec!["1:crate alias `core`"]);
+    }
+
+    #[test]
+    fn marker_text_inside_a_string_is_not_an_exemption() {
+        let source = "let note = \"// package-api: exempt not a comment\"; crate::auth::Account;\n";
+        assert_eq!(reported(source), vec!["1:crate::auth::Account"]);
+    }
+
+    #[test]
+    fn raw_identifiers_are_normalized_for_the_package_api() {
+        let source = "use crate::r#helpers::live_entity;\nuse crate::r#auth::Account;\n";
+        assert_eq!(reported(source), vec!["2:crate::r#auth::Account"]);
+    }
+
+    #[test]
+    fn a_raw_inline_module_counts_toward_relative_depth() {
+        let source = "mod r#nested { use super::package_item; use super::super::auth::Account; }\n";
+        assert_eq!(reported(source), vec!["1:super::super::auth::Account"]);
+    }
+
+    #[test]
+    fn path_attributes_are_unsupported_even_when_conditional_or_exempted() {
+        let source = "#[path = \"layout/hidden.rs\"] // package-api: exempt legacy layout\nmod hidden;\n#[cfg_attr(unix, path = \"unix.rs\")]\nmod platform;\n";
+        assert_eq!(
+            unsupported(source),
+            vec!["1:`#[path]`", "3:`#[cfg_attr(..., path = ...)]`"]
+        );
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostics_tell_the_author_what_to_write() {
+        let alias = unsupported_package_syntax_message(
+            "bots",
+            Path::new("packages/bots/src/mod.rs"),
+            3,
+            UnsupportedPackageSyntax::WholeCrateAlias,
+            "crate alias `core`",
+        );
+        assert!(alias.contains("packages/bots/src/mod.rs:3"), "{alias}");
+        assert!(alias.contains("`crate::<Package API root>`"), "{alias}");
+        assert!(!alias.contains(PACKAGE_API_EXEMPT), "{alias}");
+
+        let path = unsupported_package_syntax_message(
+            "bots",
+            Path::new("packages/bots/src/mod.rs"),
+            5,
+            UnsupportedPackageSyntax::PathAttribute,
+            "`#[path]`",
+        );
+        assert!(path.contains("packages/bots/src/mod.rs:5"), "{path}");
+        assert!(path.contains("normal `mod.rs`"), "{path}");
+        assert!(!path.contains(PACKAGE_API_EXEMPT), "{path}");
     }
 }
