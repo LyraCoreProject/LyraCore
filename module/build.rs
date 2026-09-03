@@ -1358,6 +1358,7 @@ fn aliases_after_use_root(
 enum UnsupportedPackageSyntax {
     WholeCrateAlias,
     PathAttribute,
+    IncludeMacro,
 }
 
 /// Syntax whose meaning the Package API lint cannot track reliably. Refuse it where it is
@@ -1442,6 +1443,20 @@ fn unsupported_package_syntax(
                 } else {
                     "`#[cfg_attr(..., path = ...)]`".to_string()
                 },
+            ));
+        }
+    }
+
+    // `include!` parses another file as Rust in this module. The lint only discovers `.rs` files,
+    // so following it would require a second source-discovery rule. Refuse code inclusion while
+    // keeping data inclusion (`include_str!` and `include_bytes!`) available to Packages.
+    for window in tokens.windows(2) {
+        if ident_name(window[0]) == Some("include") && window[1].text == "!" {
+            found.push((
+                window[0].start,
+                0,
+                UnsupportedPackageSyntax::IncludeMacro,
+                "`include!`".to_string(),
             ));
         }
     }
@@ -1671,6 +1686,10 @@ fn unsupported_package_syntax_message(
         UnsupportedPackageSyntax::PathAttribute => {
             "Path attributes break Package source discovery and module-depth checks. Use Rust's \
              normal `mod.rs`, `<name>.rs`, or `<name>/mod.rs` layout instead."
+        }
+        UnsupportedPackageSyntax::IncludeMacro => {
+            "`include!` can add Rust source that the Package API lint cannot discover. Put Package \
+             Rust in a normal `.rs` source file instead."
         }
     };
     format!(
@@ -1926,6 +1945,57 @@ mod package_api_lint_tests {
     }
 
     #[test]
+    fn include_cannot_inject_an_unblessed_path_from_a_non_rust_file() {
+        let package_src = std::env::temp_dir().join(format!(
+            "lyracore-package-api-include-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("the system clock is after the Unix epoch")
+                .as_nanos(),
+        ));
+        fs::create_dir_all(&package_src).expect("create temporary Package source");
+        let module = package_src.join("mod.rs");
+        fs::write(
+            &module,
+            "include /* whitespace is allowed */ ! (\"private.inc\");\n",
+        )
+        .expect("write Package module");
+        fs::write(
+            package_src.join("private.inc"),
+            "crate::auth::Account::default();\n",
+        )
+        .expect("write included Package source");
+
+        let failure = std::panic::catch_unwind(|| lint_package_api("bots", &package_src, &module))
+            .expect_err("include! must fail before a non-.rs file can add a core path");
+        let _ = fs::remove_dir_all(&package_src);
+        let message = failure
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| failure.downcast_ref::<&str>().copied())
+            .expect("lint panic has a message");
+        assert!(message.contains("`include!`"), "{message}");
+        assert!(message.contains("Package `bots`"), "{message}");
+    }
+
+    #[test]
+    fn raw_or_spaced_include_names_cannot_bypass_the_refusal() {
+        assert_eq!(
+            unsupported("r#include ! (\"private.inc\");\ninclude /* gap */ ! (\"hidden.inc\");"),
+            vec!["1:`include!`", "2:`include!`"]
+        );
+    }
+
+    #[test]
+    fn data_include_macros_remain_available() {
+        assert!(
+            unsupported("let text = include_str!(\"fixture.txt\");\nlet bytes = include_bytes!(\"fixture.bin\");")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn unsupported_syntax_diagnostics_tell_the_author_what_to_write() {
         let alias = unsupported_package_syntax_message(
             "bots",
@@ -1948,5 +2018,16 @@ mod package_api_lint_tests {
         assert!(path.contains("packages/bots/src/mod.rs:5"), "{path}");
         assert!(path.contains("normal `mod.rs`"), "{path}");
         assert!(!path.contains(PACKAGE_API_EXEMPT), "{path}");
+
+        let include = unsupported_package_syntax_message(
+            "bots",
+            Path::new("packages/bots/src/mod.rs"),
+            7,
+            UnsupportedPackageSyntax::IncludeMacro,
+            "`include!`",
+        );
+        assert!(include.contains("packages/bots/src/mod.rs:7"), "{include}");
+        assert!(include.contains("normal `.rs` source file"), "{include}");
+        assert!(!include.contains(PACKAGE_API_EXEMPT), "{include}");
     }
 }

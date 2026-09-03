@@ -153,8 +153,10 @@ imports roots that the Package API does not name.
 Whole-crate aliases such as `use crate as core`, `use crate::{self as core}`, and
 `extern crate self as core` fail at their declaration. Spell every core dependency as
 `crate::<Package API root>` so the lint can check it where it appears. `#[path]` and a `cfg_attr`
-that supplies `path` also fail. Package modules use Rust's normal `mod.rs`, `<name>.rs`, or
-`<name>/mod.rs` layout, which keeps filesystem depth and `super` depth equal.
+that supplies `path` also fail. `include!` fails because it can add unscanned Rust source;
+`include_str!` and `include_bytes!` remain available for data. Package modules use Rust's normal
+`mod.rs`, `<name>.rs`, or `<name>/mod.rs` layout, which keeps filesystem depth and `super` depth
+equal.
 
 This remains a lexical compatibility check, not Rust name resolution. It does not expand macros or
 follow a re-export declared in another file. Rust still compiles every Package after this check;
