@@ -60,24 +60,42 @@ pub(crate) struct LiveConn {
     pub(crate) reducer_completion: Arc<ReducerCompletion>,
     /// Keeps the SDK message-pump thread alive for the connection's lifetime.
     _pump: Option<std::thread::JoinHandle<()>>,
-    pump_work: tokio::sync::mpsc::UnboundedSender<PumpWork>,
+    pump_commands: tokio::sync::mpsc::UnboundedSender<PumpCommand>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
 
 type PumpWork<C = DbConnection> = Box<dyn FnOnce(&C) + Send>;
 
+enum PumpCommand<C = DbConnection> {
+    Run(PumpWork<C>),
+    Park(std::sync::mpsc::Sender<std::result::Result<(), String>>),
+    Resume,
+    Stop,
+}
+
 /// Run setup and SDK advancement on the same thread. SDK advancement is the external edge;
 /// its cache update and row callbacks complete in one poll after the incoming message arrives.
 async fn pump_messages<C, E, F: std::future::Future<Output = std::result::Result<(), E>>>(
     conn: &C,
-    mut work: tokio::sync::mpsc::UnboundedReceiver<PumpWork<C>>,
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<PumpCommand<C>>,
     advance: impl Fn() -> F,
 ) -> std::result::Result<(), E> {
+    let mut parked = false;
     loop {
         tokio::select! {
-            Some(work) = work.recv() => work(conn),
-            result = advance() => result?,
+            // SubscribeApplied queues Park before returning; consume it before another SDK message.
+            biased;
+            command = commands.recv() => match command {
+                Some(PumpCommand::Run(work)) => work(conn),
+                Some(PumpCommand::Park(applied)) => {
+                    parked = true;
+                    let _ = applied.send(Ok(()));
+                }
+                Some(PumpCommand::Resume) => parked = false,
+                Some(PumpCommand::Stop) | None => return Ok(()),
+            },
+            result = advance(), if !parked => result?,
         }
     }
 }
@@ -90,12 +108,12 @@ fn start_pump(
     role: &str,
 ) -> Result<(
     std::thread::JoinHandle<()>,
-    tokio::sync::mpsc::UnboundedSender<PumpWork>,
+    tokio::sync::mpsc::UnboundedSender<PumpCommand>,
 )> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<PumpWork>();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<PumpCommand>();
     let conn = conn.clone();
     let role = role.to_owned();
     let thread = std::thread::Builder::new()
@@ -154,22 +172,28 @@ fn replace_live_conn(
     role_label: &str,
     post_install: impl FnOnce(),
 ) {
+    let fresh_commands = fresh.pump_commands.clone();
     replace_slot_ordered(
         slot,
         fresh,
         role_label,
         |slot| {
-            let (conn, pump) = {
+            let (conn, pump, commands) = {
                 let mut live = slot
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                (live.conn.clone(), live._pump.take())
+                (
+                    live.conn.clone(),
+                    live._pump.take(),
+                    live.pump_commands.clone(),
+                )
             };
             if let Err(error) = conn.disconnect() {
                 if !matches!(error, spacetimedb_sdk::Error::Disconnected) {
                     log::warn!("{role_label} old connection disconnect failed: {error}");
                 }
             }
+            let _ = commands.send(PumpCommand::Resume);
             if let Some(pump) = pump {
                 if let Err(error) = pump.join() {
                     log::warn!("{role_label} old pump thread panicked: {error:?}");
@@ -179,6 +203,7 @@ fn replace_live_conn(
         || {
             log::info!("{role_label} replacement installed");
             post_install();
+            let _ = fresh_commands.send(PumpCommand::Resume);
         },
         drop,
     );
@@ -412,12 +437,12 @@ impl CoordinatorInner {
 
     /// Complete Relay setup on the current connection's pump, without retaining its slot lock.
     pub(crate) fn on_pump(&self, work: impl FnOnce(&DbConnection) + Send + 'static) -> Result<()> {
-        let pump = self.coord().pump_work.clone();
+        let pump = self.coord().pump_commands.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        pump.send(Box::new(move |conn| {
+        pump.send(PumpCommand::Run(Box::new(move |conn| {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(conn)));
             let _ = tx.send(outcome.map_err(|_| "Relay setup panicked"));
-        }))
+        })))
         .map_err(|_| anyhow!("{} Coordinator pump is stopped", self.db_name))?;
         rx.recv_timeout(Duration::from_secs(15))
             .map_err(|error| anyhow!("{} Relay setup did not complete: {error}", self.db_name))?
@@ -491,7 +516,7 @@ fn call_pipe_role_label(db_name: &str, index: usize) -> String {
 }
 
 /// Build one SDK connection generation, start its pump, and wait for the caller's exact
-/// subscription policy to apply.
+/// subscription policy to apply. Reconnect Coordinators park at apply until their Relays are armed.
 fn connect_subscribed(
     uri: String,
     db_name: String,
@@ -499,6 +524,7 @@ fn connect_subscribed(
     queries: Vec<&'static str>,
     role_label: String,
     subscription_timeout_hint: Option<&'static str>,
+    park_for_relays: bool,
 ) -> Result<LiveConn> {
     let reducer_completion = Arc::new(ReducerCompletion::connected());
     let disconnected = reducer_completion.clone();
@@ -523,13 +549,18 @@ fn connect_subscribed(
         .map_err(|error| anyhow!("{role_label} build/connect failed: {error}"))?;
 
     let conn = Arc::new(conn);
-    let (pump, pump_work) = start_pump(&conn, &role_label)?;
+    let (pump, pump_commands) = start_pump(&conn, &role_label)?;
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
+    let applied_commands = pump_commands.clone();
     let sub = conn
         .subscription_builder()
         .on_applied(move |_ctx| {
-            let _ = tx.send(Ok(()));
+            if park_for_relays {
+                let _ = applied_commands.send(PumpCommand::Park(tx));
+            } else {
+                let _ = tx.send(Ok(()));
+            }
         })
         .on_error(move |_ctx, err| {
             let _ = tx_err.send(Err(format!("{err}")));
@@ -550,6 +581,8 @@ fn connect_subscribed(
     };
     if let Err(error) = applied {
         let _ = conn.disconnect();
+        // A late apply can race this timeout and park the unpublished pump. Stop works in either state.
+        let _ = pump_commands.send(PumpCommand::Stop);
         if let Err(panic) = pump.join() {
             log::warn!("{role_label} failed subscription pump panicked: {panic:?}");
         }
@@ -561,7 +594,7 @@ fn connect_subscribed(
         conn,
         reducer_completion,
         _pump: Some(pump),
-        pump_work,
+        pump_commands,
         _sub: sub,
     })
 }
@@ -574,7 +607,15 @@ fn connect_call_pipe(
     index: usize,
 ) -> Result<LiveConn> {
     let role_label = call_pipe_role_label(&db_name, index);
-    connect_subscribed(uri, db_name, token, call_pipe_queries(), role_label, None)
+    connect_subscribed(
+        uri,
+        db_name,
+        token,
+        call_pipe_queries(),
+        role_label,
+        None,
+        false,
+    )
 }
 
 /// Start at most one reconnect for each failed call pipe. The coordinator watchdog owns this
@@ -982,6 +1023,7 @@ fn connect_blocking(
     db_name: String,
     token: Option<String>,
     sharded_tables: bool,
+    park_for_relays: bool,
 ) -> Result<LiveConn> {
     let queries = coordinator_queries(sharded_tables);
     let role_label = coordinator_role_label(&db_name);
@@ -992,6 +1034,7 @@ fn connect_blocking(
         queries,
         role_label,
         Some("node down, or token lacks access to the private game_account/game_session tables?"),
+        park_for_relays,
     )
 }
 
@@ -1000,7 +1043,7 @@ const COORDINATOR_WATCHDOG_POLL: Duration = Duration::from_secs(3);
 
 /// Rebuild a Coordinator when its transport, subscription, or pump stops. A Module migration
 /// can invalidate the subscription while the socket remains connected.
-/// Build and subscribe off-lock, drain the old pump, then publish and arm the fresh connection.
+/// Subscribe and park off-lock, drain the old pump, then publish, arm, and resume the fresh connection.
 /// Readers retain the old cache during recovery; failed connections retry on the next poll.
 fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
@@ -1026,6 +1069,7 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
                 inner.db_name.clone(),
                 inner.token.clone(),
                 inner.sharded_tables,
+                true,
             ) {
                 Ok(fresh) => {
                     // Re-arm any relay with no per-login point to self-heal through — MUST run
@@ -1600,9 +1644,12 @@ mod live_replacement_tests {
 
 #[cfg(test)]
 mod pump_tests {
-    use super::{pump_messages, PumpWork};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use super::{pump_messages, replace_slot_ordered, PumpCommand};
+    use std::cell::RefCell;
+    use std::future::Future;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::task::{Context, Poll, Waker};
     use std::time::Duration;
     use tokio::sync::mpsc;
 
@@ -1616,12 +1663,12 @@ mod pump_tests {
 
     #[tokio::test]
     async fn a_quiet_pump_runs_setup_without_waiting_for_an_incoming_message() {
-        let (tx, rx) = mpsc::unbounded_channel::<PumpWork<ExternalCache>>();
+        let (tx, rx) = mpsc::unbounded_channel::<PumpCommand<ExternalCache>>();
         let cache = ExternalCache::default();
         let (done, finished) = tokio::sync::oneshot::channel();
-        tx.send(Box::new(move |_| {
+        tx.send(PumpCommand::Run(Box::new(move |_| {
             let _ = done.send(());
-        }))
+        })))
         .unwrap();
         let pumping = pump_messages(&cache, rx, std::future::pending::<Result<(), ()>>);
         tokio::pin!(pumping);
@@ -1638,17 +1685,17 @@ mod pump_tests {
         for (snapshot, delta) in [(None, Some(2)), (Some(1), Some(2)), (Some(1), None)] {
             let cache = ExternalCache::default();
             *cache.row.lock().unwrap() = snapshot;
-            let (setup, work) = mpsc::unbounded_channel::<PumpWork<ExternalCache>>();
+            let (setup, work) = mpsc::unbounded_channel::<PumpCommand<ExternalCache>>();
             let (incoming, messages) = mpsc::unbounded_channel::<Result<Option<u64>, ()>>();
             let messages = tokio::sync::Mutex::new(messages);
             setup
-                .send(Box::new(move |cache| {
+                .send(PumpCommand::Run(Box::new(move |cache| {
                     cache.pending_registration.store(true, Ordering::Relaxed);
                     let snapshot = *cache.row.lock().unwrap();
                     incoming.send(Ok(delta)).unwrap();
                     incoming.send(Err(())).unwrap();
                     *cache.projected.lock().unwrap() = snapshot;
-                }))
+                })))
                 .unwrap();
 
             let result = pump_messages(&cache, work, || async {
@@ -1670,6 +1717,120 @@ mod pump_tests {
 
             assert_eq!(result, Err(()));
             assert_eq!(*cache.projected.lock().unwrap(), delta);
+        }
+    }
+
+    #[tokio::test]
+    async fn fresh_deltas_during_retirement_wait_for_registered_relays() {
+        let cache = ExternalCache::default();
+        let relayed = AtomicUsize::new(0);
+        let (commands, work) = mpsc::unbounded_channel();
+        let (incoming, messages) = mpsc::unbounded_channel::<Option<u64>>();
+        let messages = tokio::sync::Mutex::new(messages);
+        let (applied, parked) = std::sync::mpsc::channel();
+        let applied = Mutex::new(Some(applied));
+        incoming.send(None).unwrap();
+        let pump = RefCell::new(Box::pin(pump_messages(&cache, work, || async {
+            if cache.pending_registration.swap(false, Ordering::Relaxed) {
+                cache.registered.store(true, Ordering::Relaxed);
+                return Ok::<(), ()>(());
+            }
+            match messages.lock().await.recv().await.unwrap() {
+                None => {
+                    *cache.row.lock().unwrap() = Some(1);
+                    commands
+                        .send(PumpCommand::Park(applied.lock().unwrap().take().unwrap()))
+                        .unwrap();
+                }
+                Some(row) => {
+                    *cache.row.lock().unwrap() = Some(row);
+                    if cache.registered.load(Ordering::Relaxed) {
+                        *cache.projected.lock().unwrap() = Some(row);
+                        relayed.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            Ok(())
+        })));
+        let poll = || {
+            pump.borrow_mut()
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+        };
+        assert_eq!(poll(), Poll::Pending);
+        assert_eq!(parked.try_recv().unwrap(), Ok(()));
+
+        let slot = std::sync::RwLock::new("old");
+        replace_slot_ordered(
+            &slot,
+            "fresh",
+            "source Shard",
+            |_| {
+                incoming.send(Some(2)).unwrap();
+                assert_eq!(poll(), Poll::Pending);
+                assert_eq!(*cache.row.lock().unwrap(), Some(1));
+                assert_eq!(relayed.load(Ordering::Relaxed), 0);
+            },
+            || {
+                assert_eq!(*slot.read().unwrap(), "fresh");
+                commands
+                    .send(PumpCommand::Run(Box::new(|cache| {
+                        cache.pending_registration.store(true, Ordering::Relaxed);
+                    })))
+                    .unwrap();
+                assert_eq!(poll(), Poll::Pending);
+                assert_eq!(*cache.row.lock().unwrap(), Some(1));
+                assert_eq!(relayed.load(Ordering::Relaxed), 0);
+                commands.send(PumpCommand::Resume).unwrap();
+                assert_eq!(poll(), Poll::Pending);
+            },
+            drop,
+        );
+
+        assert_eq!(*cache.row.lock().unwrap(), Some(2));
+        assert_eq!(*cache.projected.lock().unwrap(), Some(2));
+        assert_eq!(relayed.load(Ordering::Relaxed), 1);
+        commands.send(PumpCommand::Stop).unwrap();
+        assert_eq!(poll(), Poll::Ready(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn a_quiet_parked_pump_resumes_without_an_incoming_message() {
+        let (commands, work) = mpsc::unbounded_channel();
+        let (applied, parked) = std::sync::mpsc::channel();
+        commands.send(PumpCommand::Park(applied)).unwrap();
+        let advances = AtomicUsize::new(0);
+        let mut pump = Box::pin(pump_messages(&(), work, || async {
+            advances.fetch_add(1, Ordering::Relaxed);
+            std::future::pending::<Result<(), ()>>().await
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(parked.try_recv().unwrap(), Ok(()));
+        assert_eq!(advances.load(Ordering::Relaxed), 0);
+        commands.send(PumpCommand::Resume).unwrap();
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(advances.load(Ordering::Relaxed), 1);
+        commands.send(PumpCommand::Stop).unwrap();
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn failed_subscription_cleanup_stops_before_or_after_a_late_apply() {
+        for stop_first in [true, false] {
+            let (commands, work) = mpsc::unbounded_channel();
+            let (applied, _parked) = std::sync::mpsc::channel();
+            if stop_first {
+                commands.send(PumpCommand::Stop).unwrap();
+                commands.send(PumpCommand::Park(applied)).unwrap();
+            } else {
+                commands.send(PumpCommand::Park(applied)).unwrap();
+                commands.send(PumpCommand::Stop).unwrap();
+            }
+            assert_eq!(
+                pump_messages(&(), work, std::future::pending::<Result<(), ()>>).await,
+                Ok(())
+            );
         }
     }
 }
@@ -1914,7 +2075,7 @@ impl Coordinator {
         // Build on a dedicated OS thread (no tokio context), join it off the reactor.
         let build_thread = std::thread::Builder::new()
             .name("stdb-coordinator-connect".into())
-            .spawn(move || connect_blocking(uri, db, token, sharded_tables))
+            .spawn(move || connect_blocking(uri, db, token, sharded_tables, false))
             .context(format!("spawn {role_label} connect thread"))?;
         let live = tokio::task::spawn_blocking(move || -> Result<LiveConn> {
             build_thread
