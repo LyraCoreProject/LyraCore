@@ -1320,6 +1320,13 @@ mod lethality_tests {
     }
 
     #[test]
+    fn a_capped_warlock_can_still_earn_a_soul_shard_from_a_non_grey_kill() {
+        assert!(crate::xp::xp_for_kill(60, 60) > 0);
+        let body = crate::test_scan::code_of(include_str!("death.rs"), "fn award_tag_rewards(");
+        assert!(body.contains("xp_for_kill(target.level, reward_level) > 0"));
+    }
+
+    #[test]
     fn active_duel_lethal_hits_bypass_the_player_death_chokepoint() {
         let body = crate::test_scan::code_of(include_str!("death.rs"), "pub(crate) fn apply_hit(");
         let duel_floor = body
