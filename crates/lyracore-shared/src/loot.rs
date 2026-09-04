@@ -50,9 +50,35 @@ impl LootRefusal {
     }
 }
 
+/// A failure in the trusted Gateway entry before a loot core can answer the request. These tags
+/// cross the reducer boundary so legacy untagged gameplay compatibility cannot hide a broken
+/// Operator or Actor invariant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LootBoundaryFailure {
+    OperatorRejected,
+    MissingActor,
+}
+
+impl LootBoundaryFailure {
+    pub const ALL: [Self; 2] = [Self::OperatorRejected, Self::MissingActor];
+
+    pub fn as_tag(self) -> &'static str {
+        match self {
+            Self::OperatorRejected => "loot:boundary_operator_rejected",
+            Self::MissingActor => "loot:boundary_missing_actor",
+        }
+    }
+
+    pub fn parse_tag(tag: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|failure| failure.as_tag() == tag)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::LootRefusal;
+    use super::{LootBoundaryFailure, LootRefusal};
 
     #[test]
     fn every_refusal_tag_round_trips() {
@@ -68,5 +94,16 @@ mod tests {
             LootRefusal::parse_tag("gw_take_loot reducer timed out after 10s"),
             None
         );
+    }
+
+    #[test]
+    fn every_boundary_failure_tag_round_trips() {
+        for failure in LootBoundaryFailure::ALL {
+            assert_eq!(
+                LootBoundaryFailure::parse_tag(failure.as_tag()),
+                Some(failure)
+            );
+            assert_eq!(LootRefusal::parse_tag(failure.as_tag()), None);
+        }
     }
 }

@@ -16,7 +16,7 @@ use crate::world::{
 };
 use lyracore_shared::auction::AuctionRefusal;
 use lyracore_shared::item::ItemRefusal;
-use lyracore_shared::loot::LootRefusal;
+use lyracore_shared::loot::{LootBoundaryFailure, LootRefusal};
 use lyracore_shared::trainer::TrainerRefusal;
 
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -1060,7 +1060,7 @@ impl Coordinator {
             return Err(anyhow!("use_gameobject: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        loot_request_status(call_reducer!(
+        legacy_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_use_gameobject",
             gw_use_gameobject_then(actor_guid, go_guid)
@@ -1838,7 +1838,7 @@ impl Coordinator {
             return Err(anyhow!("loot_money: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        loot_request_status(call_reducer!(
+        strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_money",
             gw_loot_money_then(actor_guid, target_guid)
@@ -1856,7 +1856,7 @@ impl Coordinator {
             return Err(anyhow!("open_creature_loot: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        loot_request_status(call_reducer!(
+        strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_open_creature_loot",
             gw_open_creature_loot_then(actor_guid, corpse_guid)
@@ -1878,7 +1878,7 @@ impl Coordinator {
             return Err(anyhow!("take_loot: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        loot_request_status(call_reducer!(
+        strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_take_loot",
             gw_take_loot_then(actor_guid, corpse_guid, loot_slot)
@@ -1895,7 +1895,7 @@ impl Coordinator {
             return Err(anyhow!("skin_corpse: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        loot_request_status(call_reducer!(
+        legacy_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_skin",
             gw_skin_then(actor_guid, corpse_guid)
@@ -3158,19 +3158,50 @@ fn next_auction_operation_id() -> Result<u64> {
     }
 }
 
-/// A loot Durable Request the Module rejected is a Refusal outcome; a timeout, transport, or SDK
-/// failure stays an error with an unknown durable result and ends the session. Module cores outside
-/// the loot family still refuse with untagged prose, so an untagged Rejection is unanswered.
-fn loot_request_status(result: Result<()>) -> Result<LootWindowRequestStatus> {
+#[derive(Clone, Copy)]
+enum UntaggedLootRejection {
+    Fatal,
+    LegacyUnanswered,
+}
+
+/// Classify a Durable Request from a core whose gameplay refusals all have loot tags.
+fn strict_loot_request_status(result: Result<()>) -> Result<LootWindowRequestStatus> {
+    loot_request_status(result, UntaggedLootRejection::Fatal)
+}
+
+/// Preserve silent gameplay refusals from the legacy GameObject and skinning cores. Boundary
+/// failures and every tagged result remain explicit, so this compatibility cannot hide them.
+fn legacy_loot_request_status(result: Result<()>) -> Result<LootWindowRequestStatus> {
+    loot_request_status(result, UntaggedLootRejection::LegacyUnanswered)
+}
+
+fn loot_request_status(
+    result: Result<()>,
+    untagged: UntaggedLootRejection,
+) -> Result<LootWindowRequestStatus> {
     match result {
         Ok(()) => Ok(LootWindowRequestStatus::Applied),
         Err(error) => match reducer_refusal_reason(&error) {
             Some(reason) => {
-                log::debug!("stdb: loot Durable Request refused: {error:#}");
-                Ok(LootWindowRequestStatus::Refused(
-                    LootRefusal::parse_tag(reason)
-                        .map_or(LootWindowRefusal::Unanswered, Into::into),
-                ))
+                if LootBoundaryFailure::parse_tag(reason).is_some() {
+                    return Err(error);
+                }
+                if let Some(refusal) = LootRefusal::parse_tag(reason) {
+                    log::debug!("stdb: loot Durable Request refused: {error:#}");
+                    return Ok(LootWindowRequestStatus::Refused(refusal.into()));
+                }
+                if reason.starts_with("loot:") {
+                    return Err(error);
+                }
+                match untagged {
+                    UntaggedLootRejection::LegacyUnanswered => {
+                        log::debug!("stdb: legacy loot Durable Request refused: {error:#}");
+                        Ok(LootWindowRequestStatus::Refused(
+                            LootWindowRefusal::Unanswered,
+                        ))
+                    }
+                    UntaggedLootRejection::Fatal => Err(error),
+                }
             }
             None => Err(error),
         },
@@ -3325,8 +3356,11 @@ mod loot_reducer_tests {
     use super::*;
     use crate::stdb::connection::ReducerCallError;
 
-    fn refusal_of(result: Result<()>) -> LootWindowRefusal {
-        match loot_request_status(result) {
+    fn refusal_of(
+        result: Result<()>,
+        classify: fn(Result<()>) -> Result<LootWindowRequestStatus>,
+    ) -> LootWindowRefusal {
+        match classify(result) {
             Ok(LootWindowRequestStatus::Refused(refusal)) => refusal,
             Ok(LootWindowRequestStatus::Applied) => panic!("a Refusal was applied"),
             Err(error) => panic!("a Refusal ended the session: {error:#}"),
@@ -3344,17 +3378,51 @@ mod loot_reducer_tests {
     #[test]
     fn every_module_refusal_tag_becomes_one_client_answer() {
         for refusal in LootRefusal::ALL {
+            for classify in [
+                strict_loot_request_status as fn(Result<()>) -> Result<LootWindowRequestStatus>,
+                legacy_loot_request_status,
+            ] {
+                assert_eq!(
+                    refusal_of(rejected(refusal.as_tag()), classify),
+                    LootWindowRefusal::from(refusal),
+                    "{refusal:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_legacy_cores_keep_untagged_gameplay_refusals_unanswered() {
+        for reason in ["it is locked", "not a beast", "inventory is full"] {
             assert_eq!(
-                refusal_of(rejected(refusal.as_tag())),
-                LootWindowRefusal::from(refusal),
-                "{refusal:?}"
+                refusal_of(rejected(reason), legacy_loot_request_status),
+                LootWindowRefusal::Unanswered,
+                "{reason}"
+            );
+            assert!(
+                strict_loot_request_status(rejected(reason)).is_err(),
+                "{reason}"
             );
         }
-        // A Module core outside the loot family still refuses with prose.
-        assert_eq!(
-            refusal_of(rejected("inventory is full")),
-            LootWindowRefusal::Unanswered
-        );
+    }
+
+    #[test]
+    fn boundary_failures_and_unknown_loot_tags_are_fatal() {
+        let reasons = LootBoundaryFailure::ALL
+            .into_iter()
+            .map(LootBoundaryFailure::as_tag)
+            .chain(["loot:newer_module_refusal"]);
+
+        for reason in reasons {
+            assert!(
+                strict_loot_request_status(rejected(reason)).is_err(),
+                "{reason}"
+            );
+            assert!(
+                legacy_loot_request_status(rejected(reason)).is_err(),
+                "{reason}"
+            );
+        }
     }
 
     #[test]
@@ -3373,7 +3441,7 @@ mod loot_reducer_tests {
         ];
         for error in not_refusals {
             let text = format!("{error:#}");
-            assert!(loot_request_status(Err(error)).is_err(), "{text}");
+            assert!(strict_loot_request_status(Err(error)).is_err(), "{text}");
         }
     }
 

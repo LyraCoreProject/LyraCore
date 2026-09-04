@@ -948,6 +948,33 @@ mod tests {
     }
 
     #[test]
+    fn missing_actor_chest_failure_propagates_without_reading_loot() {
+        let failure = lyracore_shared::loot::LootBoundaryFailure::MissingActor.as_tag();
+        let store = InMemoryLootWindow {
+            use_fatal_error: Some(failure.into()),
+            ..Default::default()
+        };
+
+        let error = dispatch_loot_window(
+            &store,
+            player(),
+            OpenLootState {
+                target_guid: Some(11),
+            },
+            open_chest(90),
+        )
+        .err()
+        .expect("missing Actor failure was handled");
+
+        assert_eq!(error.to_string(), failure);
+        assert_eq!(
+            store.operations.lock().unwrap().as_slice(),
+            &["use gameobject"]
+        );
+        assert!(store.item_reads.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn creature_open_ownership_refusal_closes_the_window_without_loot_reads() {
         let store = InMemoryLootWindow {
             open_refusal: Some(LootWindowRefusal::LootTagIneligible),
