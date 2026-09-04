@@ -192,7 +192,7 @@ fn failed_text(reducer: &str, output: Output) -> String {
 fn build_module_bytes() -> Vec<u8> {
     let module_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace = module_dir.parent().unwrap();
-    let status = Command::new("cargo")
+    let output = Command::new("cargo")
         .current_dir(workspace)
         .args([
             "build",
@@ -203,23 +203,28 @@ fn build_module_bytes() -> Vec<u8> {
             "-p",
             "lyracore-module",
             "--features=debug_reducers",
+            "--message-format=json-render-diagnostics",
         ])
-        .status()
+        .output()
         .expect("failed to run the Wasm preflight build");
-    assert!(status.success(), "the Wasm preflight build failed");
+    assert!(
+        output.status.success(),
+        "the Wasm preflight build failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
-    let target = match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(path) => {
-            let path = PathBuf::from(path);
-            if path.is_absolute() {
-                path
-            } else {
-                workspace.join(path)
-            }
-        }
-        None => workspace.join("target"),
-    };
-    let wasm = target.join("wasm32-unknown-unknown/release/lyracore_module.wasm");
+    let wasm = String::from_utf8(output.stdout)
+        .expect("Cargo artifact output was not UTF-8")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-artifact")
+        .filter(|message| message["target"]["name"] == "lyracore_module")
+        .filter_map(|message| message["filenames"].as_array().cloned())
+        .flatten()
+        .filter_map(|filename| filename.as_str().map(PathBuf::from))
+        .find(|path| path.extension().is_some_and(|extension| extension == "wasm"))
+        .expect("Cargo did not report the built Module Wasm artifact");
     let bytes = std::fs::read(&wasm).expect("the Wasm preflight output is missing");
     assert!(bytes.starts_with(b"\0asm"), "the built module is not Wasm");
     bytes
