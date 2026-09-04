@@ -6231,7 +6231,7 @@ mod tests {
     fn the_10s_task_prints_the_delivery_instrument_287() {
         let body = crate::test_scan::code_of(
             include_str!("../world/mod.rs"),
-            "pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {",
+            "pub async fn run(",
         );
         assert!(
             body.contains("crate::stdb::subscriptions::MOTION_DROPPED.load(Relaxed)")
@@ -6253,7 +6253,7 @@ mod tests {
     fn the_10s_task_warns_on_a_fanout_collapse_b1() {
         let body = crate::test_scan::code_of(
             include_str!("../world/mod.rs"),
-            "pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {",
+            "pub async fn run(",
         );
         assert!(
             body.contains("crate::stdb::subscriptions::fanout_health_step(fan, fanout, submitted_delta)"),

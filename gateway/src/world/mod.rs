@@ -1564,15 +1564,15 @@ fn send(tx: &SessionTx, out: Outbound) -> Result<()> {
 //  Async listener (bridges accepted sockets to the blocking handler)
 // ===========================================================================================
 
-pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {
+pub async fn run(
+    cfg: GatewayConfig,
+    coordinator: Coordinator,
+    login_queue: Arc<LoginQueue>,
+) -> Result<()> {
     let listener = TcpListener::bind(&cfg.world_bind).await?;
     log::info!("world listening on {}", cfg.world_bind);
 
-    // One process-wide admission gate shared by every accepted connection (`Arc` so each
-    // `spawn_blocking` task below can hold its own clone across the blocking call). Unconfigured
-    // (`LYRACORE_MAX_SESSIONS` unset) is `LoginQueue::unlimited()` — logged plainly so "why is nobody
-    // queuing" is answerable from the startup log alone.
-    let login_queue = Arc::new(LoginQueue::from_env());
+    // gateway::run validates admission limits before the Coordinator connects or either listener starts.
     if login_queue.max_sessions() > 0 {
         log::info!(
             "world: login queue ARMED — max_sessions={} admit_concurrency={}",
