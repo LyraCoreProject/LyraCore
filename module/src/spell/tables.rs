@@ -186,6 +186,9 @@ pub struct SpellProcEvent {
     public,
     index(accessor = by_target, btree(columns = [target_guid])),
     index(accessor = by_expiry, btree(columns = [expires_at])),
+    // Creature fear movement runs every firing. This exact pair finds its sparse candidates without
+    // reading unrelated buffs, passive effects, periodic effects, or Procs.
+    index(accessor = by_kind_param, btree(columns = [eff_kind, eff_p0])),
     // Perf catalog 1.9: the same recipe as `by_expiry`, for the PERIODIC pass. `next_tick_micros == 0`
     // is the non-periodic sentinel, so a `1..=now` range skips every buff/passive for free.
     index(accessor = by_next_tick, btree(columns = [next_tick_micros]))

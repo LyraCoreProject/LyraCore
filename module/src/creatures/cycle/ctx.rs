@@ -857,18 +857,16 @@ impl RoutSink for CtxWorld<'_> {
 }
 
 impl FearSink for CtxWorld<'_> {
-    // KNOWN DEBT, inherited verbatim with the pass: `game_aura` carries no by-mechanic index, so the
-    // fear rows are found by scanning the aura table, which is itself small — fear uptime is rare.
-    // ponytail: one row per AURA, not per feared creature, so a doubly-feared creature is resolved
-    // twice and the phase collapses it. Ceiling: a second `fear_source` scan for a rare case.
+    // One row per aura, not per feared creature, so a doubly-feared creature is resolved twice and
+    // the phase collapses it. A second `fear_source` probe preserves the first-caster tie break.
     fn panicked(&self, scope: &TickScope) -> Vec<Panicked> {
         let entities = self.ctx.db.game_world_entity();
         let melee = self.ctx.db.game_melee_attack();
         self.ctx
             .db
             .game_aura()
-            .iter()
-            .filter(|a| a.eff_kind == crate::spell::A_CONTROL && a.eff_p0 == crate::spell::M_FEAR)
+            .by_kind_param()
+            .filter((crate::spell::A_CONTROL, crate::spell::M_FEAR))
             .filter_map(|a| {
                 let c = tick::movable_creature(self.ctx, a.target_guid, scope)?;
                 // Re-resolved rather than read off the row above, so which caster wins when a
