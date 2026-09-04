@@ -3,7 +3,7 @@
 
 use super::*;
 
-use lyracore_shared::item::{item_class, weapon_subclass, Proficiency};
+use lyracore_shared::item::{item_class, weapon_subclass, ItemRefusal, Proficiency};
 
 /// An item-template row as the gateway reads it from `game_item_template`, flattened for the
 /// `CMSG_ITEM_QUERY_SINGLE` reply + the item CREATE (items slice-1). Decoupled from the SDK row
@@ -257,6 +257,77 @@ pub fn build_inventory_change_failure() -> SMSG_INVENTORY_CHANGE_FAILURE {
         item1: Guid::new(0),
         item2: Guid::new(0),
         bag_type_subclass: 0,
+    }
+}
+
+/// Build `SMSG_INVENTORY_CHANGE_FAILURE` for one typed item Refusal — the vanilla result code the
+/// 1.12 client turns into its own error line. The item guids stay zero: the module names the reason,
+/// not the rows. `Internal` has no gameplay meaning, so it reads as the client's internal bag error.
+/// A required level has no payload-free code (vanilla's level result carries the level itself), so it
+/// falls back to the generic equip and use failures.
+pub fn build_inventory_refusal(refusal: ItemRefusal) -> SMSG_INVENTORY_CHANGE_FAILURE {
+    let (item1, item2, bag_type_subclass) = (Guid::new(0), Guid::new(0), 0);
+    match refusal {
+        ItemRefusal::ItemNotFound => SMSG_INVENTORY_CHANGE_FAILURE::ItemNotFound {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::InventoryFull => SMSG_INVENTORY_CHANGE_FAILURE::InventoryFull {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::WrongSlot => SMSG_INVENTORY_CHANGE_FAILURE::ItemDoesntGoToSlot {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::CannotEquip => SMSG_INVENTORY_CHANGE_FAILURE::ItemCantBeEquipped {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::NoProficiency => SMSG_INVENTORY_CHANGE_FAILURE::NoRequiredProficiency {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::RequiredSkill => SMSG_INVENTORY_CHANGE_FAILURE::CantEquipSkill {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::RequiredReputation => SMSG_INVENTORY_CHANGE_FAILURE::CantEquipReputation {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::PlayerDead => SMSG_INVENTORY_CHANGE_FAILURE::YouAreDead {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::BankUnavailable => SMSG_INVENTORY_CHANGE_FAILURE::TooFarAwayFromBank {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::ItemNotUsable => SMSG_INVENTORY_CHANGE_FAILURE::YouCanNeverUseThatItem {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::NotRightNow => SMSG_INVENTORY_CHANGE_FAILURE::CantDoRightNow {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::Internal => SMSG_INVENTORY_CHANGE_FAILURE::IntBagError {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
     }
 }
 

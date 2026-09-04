@@ -6,6 +6,9 @@
 use spacetimedb::{ReducerContext, Table};
 
 use lyracore_shared::constants::starter_item;
+use lyracore_shared::item::ItemRefusal;
+
+use super::{refuse, refused};
 
 use super::rules::{
     binds_on_equip, can_equip_into, eligibility_mask_allows, equip_slot, invtype,
@@ -37,18 +40,18 @@ pub(crate) fn apply_item_split(
     slot: u8,
     count: u32,
     to_slot: u8,
-) -> Result<(), String> {
+) -> Result<(), ItemRefusal> {
     // The bank is a place, not a portable bag: either endpoint in bank space needs an open bank.
     if is_bank_slot(slot) || is_bank_slot(to_slot) {
-        super::economy::bank_access_gate(ctx, player_guid)?;
+        bank_access(ctx, player_guid)?;
     }
     let instances = ctx.db.game_item_instance();
-    let mut inst =
-        item_in_slot(ctx, player_guid, slot).ok_or_else(|| format!("no item in slot {slot}"))?;
+    let mut inst = item_in_slot(ctx, player_guid, slot)
+        .ok_or_else(|| refuse(ItemRefusal::ItemNotFound, format!("no item in slot {slot}")))?;
     // A split must leave at least one unit in BOTH slots — splitting off none or the whole stack isn't
     // a split (the latter is a move).
     if !valid_split_count(count, inst.stack_count) {
-        return Err("invalid split count".to_string());
+        return Err(refuse(ItemRefusal::WrongSlot, "invalid split count"));
     }
     // Reject an out-of-range destination (anti-overflow; same phantom-slot dupe vector as apply_item_move)
     // AND reject an equipment-region destination (0..=18): a split can never legitimately target the
@@ -56,14 +59,17 @@ pub(crate) fn apply_item_split(
     // admitting 0..=18 here let a modified client CMSG_SPLIT_ITEM a stack straight into an empty head or
     // off-hand slot, bypassing every gate the move path enforces for that region.
     if !valid_split_dest_slot(to_slot) {
-        return Err(format!("invalid destination slot {to_slot}"));
+        return Err(refuse(
+            ItemRefusal::WrongSlot,
+            format!("invalid destination slot {to_slot}"),
+        ));
     }
     // Bag-content destination: validate that the corresponding bag is equipped and the slot is
     // within its capacity — same phantom-slot dupe vector as apply_item_move.
     validate_bag_dest_slot(ctx, player_guid, to_slot)?;
     // The destination slot must be free; we never merge/swap on a split.
     if slot_occupied(ctx, player_guid, to_slot) {
-        return Err("destination slot occupied".to_string());
+        return Err(refuse(ItemRefusal::WrongSlot, "destination slot occupied"));
     }
     inst.stack_count -= count;
     let entry = inst.entry;
@@ -102,23 +108,30 @@ pub(crate) fn apply_item_move(
     player_guid: u64,
     from_slot: u8,
     to_slot: u8,
-) -> Result<(), String> {
+) -> Result<(), ItemRefusal> {
     if from_slot == to_slot {
         return Ok(());
     }
     // The bank is a place, not a portable bag: either endpoint in bank space needs an open bank.
     if is_bank_slot(from_slot) || is_bank_slot(to_slot) {
-        super::economy::bank_access_gate(ctx, player_guid)?;
+        bank_access(ctx, player_guid)?;
     }
     let instances = ctx.db.game_item_instance();
-    let mut src = item_in_slot(ctx, player_guid, from_slot)
-        .ok_or_else(|| format!("no item in slot {from_slot}"))?;
+    let mut src = item_in_slot(ctx, player_guid, from_slot).ok_or_else(|| {
+        refuse(
+            ItemRefusal::ItemNotFound,
+            format!("no item in slot {from_slot}"),
+        )
+    })?;
     // Reject an out-of-range destination. Valid slots: equipment 0..=18, bag-equip 19..=22,
     // backpack 23..=38, or a bag-content slot (120..=191) for items landing inside an equipped bag.
     // Anything outside these ranges (e.g. 39..=119 = bank/keyring we don't model, or 192..255) is
     // an inventory-overflow dupe vector from a modified client and is rejected.
     if !valid_dest_slot(to_slot) {
-        return Err(format!("invalid destination slot {to_slot}"));
+        return Err(refuse(
+            ItemRefusal::WrongSlot,
+            format!("invalid destination slot {to_slot}"),
+        ));
     }
     // If the destination is in the bag-content region, validate that the corresponding bag is
     // equipped and the slot is within its capacity (prevents stashing items in unequipped bags).
@@ -142,29 +155,41 @@ pub(crate) fn apply_item_move(
             {
                 tmpl
             }
-            _ => return Err(format!("cannot equip that item in slot {to_slot}")),
+            _ => {
+                return Err(refuse(
+                    ItemRefusal::CannotEquip,
+                    format!("cannot equip that item in slot {to_slot}"),
+                ))
+            }
         };
         // Required-level gate: you can carry a too-high item in the bag, but can't EQUIP it. Read the
         // player entity just for its level here (the move path doesn't otherwise need it); a missing
         // entity fails closed. Seeded items are required_level 1, so this never trips for the loadout.
         let player = crate::helpers::live_entity(ctx, player_guid)
-            .map_err(|_| "user not in world".to_string())?;
+            .map_err(|_| refuse(ItemRefusal::Internal, "user not in world"))?;
+        // Vanilla's level result carries the required level in the packet, and a Refusal tag has no
+        // payload, so a level Gate reads as the generic equip failure.
         if !meets_required_level(player.level, tmpl.required_level) {
-            return Err(format!("requires level {}", tmpl.required_level));
+            return Err(refuse(
+                ItemRefusal::CannotEquip,
+                format!("requires level {}", tmpl.required_level),
+            ));
         }
         // Proficiency gate: enforce class armor/weapon restrictions (e.g. a Mage can't equip
         // plate). The class is byte 1 of unit_bytes_0 (race | class<<8 | gender<<16 | power<<24).
         // Creatures (class 0) never call equip_item; fail closed for unknown classes.
         let player_class = player.class();
         if !eligibility_mask_allows(tmpl.allowed_class, player_class) {
-            return Err(format!(
-                "class {player_class} is not allowed to equip this item"
+            return Err(refuse(
+                ItemRefusal::NoProficiency,
+                format!("class {player_class} is not allowed to equip this item"),
             ));
         }
         let player_race = player.race();
         if !eligibility_mask_allows(tmpl.allowed_race, player_race) {
-            return Err(format!(
-                "race {player_race} is not allowed to equip this item"
+            return Err(refuse(
+                ItemRefusal::NoProficiency,
+                format!("race {player_race} is not allowed to equip this item"),
             ));
         }
         let current_skill = ctx
@@ -175,9 +200,12 @@ pub(crate) fn apply_item_move(
             .find(|skill| skill.skill_line == tmpl.required_skill)
             .map(|skill| skill.current);
         if !meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill) {
-            return Err(format!(
-                "requires skill {} at rank {}",
-                tmpl.required_skill, tmpl.required_skill_rank
+            return Err(refuse(
+                ItemRefusal::RequiredSkill,
+                format!(
+                    "requires skill {} at rank {}",
+                    tmpl.required_skill, tmpl.required_skill_rank
+                ),
             ));
         }
         let reputation_standing = ctx
@@ -192,9 +220,12 @@ pub(crate) fn apply_item_move(
             tmpl.required_reputation_rank,
             reputation_standing,
         ) {
-            return Err(format!(
-                "requires reputation faction {} at rank {}",
-                tmpl.required_reputation_faction, tmpl.required_reputation_rank
+            return Err(refuse(
+                ItemRefusal::RequiredReputation,
+                format!(
+                    "requires reputation faction {} at rank {}",
+                    tmpl.required_reputation_faction, tmpl.required_reputation_rank
+                ),
             ));
         }
         // Armor proficiency is class base set PLUS the two upgrades a class trainer teaches at 40:
@@ -205,9 +236,12 @@ pub(crate) fn apply_item_move(
             crate::spell::knows_spell(ctx, player_guid, spell_id)
         });
         if !proficiency.can_equip(tmpl.class, tmpl.subclass) {
-            return Err(format!(
-                "class {} lacks proficiency for item class {}/subclass {}",
-                player_class, tmpl.class, tmpl.subclass
+            return Err(refuse(
+                ItemRefusal::NoProficiency,
+                format!(
+                    "class {} lacks proficiency for item class {}/subclass {}",
+                    player_class, tmpl.class, tmpl.subclass
+                ),
             ));
         }
         // BoE: a Bind-on-Equip item binds the FIRST time it lands on the body — not on pickup. Every
@@ -275,21 +309,30 @@ pub(crate) fn apply_equip_item(
     ctx: &ReducerContext,
     player_guid: u64,
     from_slot: u8,
-) -> Result<(), String> {
-    let src = item_in_slot(ctx, player_guid, from_slot)
-        .ok_or_else(|| format!("no item in slot {from_slot}"))?;
+) -> Result<(), ItemRefusal> {
+    let src = item_in_slot(ctx, player_guid, from_slot).ok_or_else(|| {
+        refuse(
+            ItemRefusal::ItemNotFound,
+            format!("no item in slot {from_slot}"),
+        )
+    })?;
     let tmpl = ctx
         .db
         .game_item_template()
         .entry()
         .find(src.entry)
-        .ok_or_else(|| format!("no template for item entry {}", src.entry))?;
+        .ok_or_else(|| {
+            refuse(
+                ItemRefusal::ItemNotFound,
+                format!("no template for item entry {}", src.entry),
+            )
+        })?;
     // Bags (INVTYPE_BAG) equip into bag-equip slots 19..=22, not the equipment region 0..=18.
     // Route them separately: find the first free bag-equip slot and move the bag there. A bag
     // already in the bag slots (dragged manually) won't come through here, but autoequip does.
     if tmpl.inventory_type == invtype::BAG {
         let to_slot = first_free_bag_equip_slot(ctx, player_guid)
-            .ok_or_else(|| "all four bag slots are full".to_string())?;
+            .ok_or_else(|| refuse(ItemRefusal::InventoryFull, "all four bag slots are full"))?;
         return apply_item_move(ctx, player_guid, from_slot, to_slot);
     }
     // Dual Wield: redirect a second one-hander to OFFHAND (instead of swapping MAINHAND) when the
@@ -303,7 +346,12 @@ pub(crate) fn apply_equip_item(
     let to_slot = resolve_equip_slot(tmpl.inventory_type, can_dual_wield, |s| {
         slot_occupied(ctx, player_guid, s)
     })
-    .ok_or_else(|| format!("item {} is not equippable", src.entry))?;
+    .ok_or_else(|| {
+        refuse(
+            ItemRefusal::CannotEquip,
+            format!("item {} is not equippable", src.entry),
+        )
+    })?;
     // Equip == a validated move into the resolved equip slot (reuses the equip-validation + swap there).
     apply_item_move(ctx, player_guid, from_slot, to_slot)
 }
@@ -316,16 +364,22 @@ pub(crate) fn apply_unequip_item(
     ctx: &ReducerContext,
     player_guid: u64,
     from_slot: u8,
-) -> Result<(), String> {
+) -> Result<(), ItemRefusal> {
     if from_slot > equip_slot::END {
-        return Err(format!("slot {from_slot} is not an equipment slot"));
+        return Err(refuse(
+            ItemRefusal::WrongSlot,
+            format!("slot {from_slot} is not an equipment slot"),
+        ));
     }
     // Must actually hold an equipped item to unequip.
     if !slot_occupied(ctx, player_guid, from_slot) {
-        return Err(format!("no item equipped in slot {from_slot}"));
+        return Err(refuse(
+            ItemRefusal::ItemNotFound,
+            format!("no item equipped in slot {from_slot}"),
+        ));
     }
-    let free =
-        first_free_backpack_slot(ctx, player_guid).ok_or_else(|| "inventory full".to_string())?;
+    let free = first_free_backpack_slot(ctx, player_guid)
+        .ok_or_else(|| refuse(ItemRefusal::InventoryFull, "inventory full"))?;
     apply_item_move(ctx, player_guid, from_slot, free)
 }
 
@@ -419,27 +473,40 @@ pub(crate) fn validate_bag_dest_slot(
     ctx: &ReducerContext,
     player_guid: u64,
     to_slot: u8,
-) -> Result<(), String> {
+) -> Result<(), ItemRefusal> {
     if to_slot < BAG_CONTENT_OFFSET {
         return Ok(());
     }
     let (bag_idx, slot_in_bag) = bag_content_decompose(to_slot);
     let bag_equip_slot = BAG_SLOT_START + bag_idx;
-    let bag_inst = item_in_slot(ctx, player_guid, bag_equip_slot)
-        .ok_or_else(|| format!("no bag equipped in slot {bag_equip_slot}"))?;
+    let bag_inst = item_in_slot(ctx, player_guid, bag_equip_slot).ok_or_else(|| {
+        refuse(
+            ItemRefusal::WrongSlot,
+            format!("no bag equipped in slot {bag_equip_slot}"),
+        )
+    })?;
     let bag_tmpl = ctx
         .db
         .game_item_template()
         .entry()
         .find(bag_inst.entry)
-        .ok_or_else(|| "equipped bag has no template".to_string())?;
+        .ok_or_else(|| refuse(ItemRefusal::WrongSlot, "equipped bag has no template"))?;
     if slot_in_bag >= bag_tmpl.container_slots.min(MAX_BAG_SIZE) {
-        return Err(format!(
-            "slot {} out of range for bag with {} slots",
-            slot_in_bag, bag_tmpl.container_slots
+        return Err(refuse(
+            ItemRefusal::WrongSlot,
+            format!(
+                "slot {} out of range for bag with {} slots",
+                slot_in_bag, bag_tmpl.container_slots
+            ),
         ));
     }
     Ok(())
+}
+
+/// The banker-proximity Gate as an item Refusal: its own prose stays in the Module log.
+fn bank_access(ctx: &ReducerContext, player_guid: u64) -> Result<(), ItemRefusal> {
+    super::economy::bank_access_gate(ctx, player_guid)
+        .map_err(|detail| refuse(ItemRefusal::BankUnavailable, detail))
 }
 
 // Live only under `debug_reducers`: `apply_item_split` is its sole caller.
@@ -575,11 +642,12 @@ pub(crate) fn apply_auto_bank_item(
     let to_slot = if is_bank_slot(slot) {
         first_free_backpack_slot(ctx, player_guid)
             .or_else(|| first_free_bag_slot(ctx, player_guid))
-            .ok_or_else(|| "inventory full".to_string())?
+            .ok_or_else(|| refused(refuse(ItemRefusal::InventoryFull, "inventory full")))?
     } else {
-        first_free_bank_slot(ctx, player_guid).ok_or_else(|| "bank full".to_string())?
+        first_free_bank_slot(ctx, player_guid)
+            .ok_or_else(|| refused(refuse(ItemRefusal::InventoryFull, "bank full")))?
     };
-    apply_item_move(ctx, player_guid, slot, to_slot)
+    apply_item_move(ctx, player_guid, slot, to_slot).map_err(refused)
 }
 
 #[cfg(test)]
@@ -602,7 +670,7 @@ mod tests {
         }
     }
 
-    /// BANK ACCESS GATE WIRING: both mutation paths must consult `bank_access_gate` when either
+    /// BANK ACCESS GATE WIRING: both mutation paths must consult `bank_access` when either
     /// endpoint is a bank slot, or the bank becomes a portable 24-slot bag. There is no
     /// `ReducerContext` harness in this crate, so the call's PRESENCE is pinned by a source scan; the
     /// gate's own decision is asserted directly on `economy::banker_in_reach`.
@@ -615,7 +683,7 @@ mod tests {
         ] {
             let body = code_of(src, signature);
             assert!(
-                body.contains("bank_access_gate(ctx, player_guid)?"),
+                body.contains("bank_access(ctx, player_guid)?"),
                 "`{signature}` must refuse a bank endpoint without an open bank"
             );
             assert!(

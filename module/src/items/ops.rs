@@ -7,7 +7,9 @@
 use spacetimedb::{Identity, ReducerContext, Table};
 
 use lyracore_shared::constants::starter_item;
+use lyracore_shared::item::ItemRefusal;
 
+use super::refuse;
 use crate::game_character; // the durable char holds `class` (the live WorldEntity does not)
 use crate::game_corpse_loot; // the loot.rs accessor trait — re-exported at crate root (`pub use loot::*`)
 use crate::game_gameobject;
@@ -454,36 +456,56 @@ pub(crate) fn apply_item_use(
     ctx: &ReducerContext,
     player_guid: u64,
     slot: u8,
-) -> Result<(), String> {
+) -> Result<(), ItemRefusal> {
     let entities = ctx.db.game_world_entity();
     let player = entities
         .guid()
         .find(player_guid)
-        .ok_or_else(|| "user not in world".to_string())?;
+        .ok_or_else(|| refuse(ItemRefusal::Internal, "user not in world"))?;
     if player.dead {
-        return Err("dead players cannot use items".to_string());
+        return Err(refuse(
+            ItemRefusal::PlayerDead,
+            "dead players cannot use items",
+        ));
     }
     let instances = ctx.db.game_item_instance();
-    let mut inst =
-        item_in_slot(ctx, player_guid, slot).ok_or_else(|| format!("no item in slot {slot}"))?;
+    let mut inst = item_in_slot(ctx, player_guid, slot)
+        .ok_or_else(|| refuse(ItemRefusal::ItemNotFound, format!("no item in slot {slot}")))?;
     // A banked item must be taken out before it can be used — the bank is not a second action bar.
     if !is_carried_slot(inst.slot) {
-        return Err("cannot use a banked item".to_string());
+        return Err(refuse(
+            ItemRefusal::ItemNotUsable,
+            "cannot use a banked item",
+        ));
     }
     let tmpl = ctx
         .db
         .game_item_template()
         .entry()
         .find(inst.entry)
-        .ok_or_else(|| format!("no template for item entry {}", inst.entry))?;
+        .ok_or_else(|| {
+            refuse(
+                ItemRefusal::ItemNotFound,
+                format!("no template for item entry {}", inst.entry),
+            )
+        })?;
     // spellid_1 (trigger 0) is the item's on-use spell — the single authority now. No mapped
     // spell means nothing to "use" (a plain reagent, a piece of gear, an un-migrated item).
-    let spell_id =
-        use_spell_for(&tmpl).ok_or_else(|| format!("item {} is not consumable", inst.entry))?;
+    let spell_id = use_spell_for(&tmpl).ok_or_else(|| {
+        refuse(
+            ItemRefusal::ItemNotUsable,
+            format!("item {} is not consumable", inst.entry),
+        )
+    })?;
     // Required-level gate: a too-high item can sit in the bag, but can't be USED. Seeded items are
     // required_level 1, so this never trips for the loadout.
+    // Vanilla's level result carries the required level in the packet, and a Refusal tag has no
+    // payload, so a level Gate reads as the generic "can never use that item".
     if !meets_required_level(player.level, tmpl.required_level) {
-        return Err(format!("requires level {}", tmpl.required_level));
+        return Err(refuse(
+            ItemRefusal::ItemNotUsable,
+            format!("requires level {}", tmpl.required_level),
+        ));
     }
     // RE-BANDAGE GATE (vanilla "Recently Bandaged"): refuse the BANDAGE while its cooldown debuff is
     // live — BEFORE consuming the item or casting, so a blocked re-bandage costs nothing. `has_aura`
@@ -493,7 +515,7 @@ pub(crate) fn apply_item_use(
         inst.entry,
         crate::spell::has_aura(ctx, player_guid, RECENTLY_BANDAGED_SPELL),
     ) {
-        return Err("Recently Bandaged".to_string());
+        return Err(refuse(ItemRefusal::NotRightNow, "Recently Bandaged"));
     }
     // GATE A (the one surviving mana-class gate, retired its legacy-branch duplicate): a mana potion
     // / drink restores POWER through E_ENERGIZE / A_PERIODIC_ENERGIZE — for a non-mana class that is
@@ -502,7 +524,10 @@ pub(crate) fn apply_item_use(
     // class. Only energize spells are gated (`spell_restores_power`); a heal/HoT/food/buff/recall is
     // class-agnostic (Warriors can quaff a healing potion / eat / hearth).
     if spell_restores_power(ctx, spell_id) && !is_mana_class(ctx, player_guid) {
-        return Err("only mana users can use that".to_string());
+        return Err(refuse(
+            ItemRefusal::ItemNotUsable,
+            "only mana users can use that",
+        ));
     }
     // Consume one unit FIRST — UNLESS the on-use spell is one of the permanent kinds (a recall trinket,
     // a mount): `spell_keeps_item` is the data-driven exception to "using an item consumes it", keyed on
@@ -530,6 +555,7 @@ pub(crate) fn apply_item_use(
         false,
         None,
     )
+    .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail))
 }
 
 /// The total `which` bonus from every piece of gear `owner_guid` has EQUIPPED — the sum of

@@ -5,6 +5,7 @@ use super::handlers::{
 };
 use super::*;
 use crate::read_deadline::{DeadlineClock, PreAuthDeadline};
+use lyracore_shared::item::ItemRefusal;
 use std::cell::Cell;
 use std::io::Cursor;
 use std::os::unix::net::UnixStream;
@@ -3101,19 +3102,36 @@ impl VendorActionStore for InMemoryStore {
     }
 }
 
-impl ItemActionStore for InMemoryStore {
-    fn equip_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8) -> Result<()> {
+impl InMemoryStore {
+    /// The Coordinator answers a Refusal tag as an outcome and anything else as a failure with an
+    /// unknown durable result, so `trade_error` reaches the item family the same way.
+    fn canned_item_action(&self) -> Result<ItemActionResult> {
         match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+            None => Ok(ItemActionResult::Done),
+            Some(e) => ItemRefusal::parse_tag(e)
+                .map(ItemActionResult::from)
+                .ok_or_else(|| anyhow!("{e}")),
         }
     }
+}
 
-    fn unequip_item(&self, _account_id: u64, _self_guid: u64, _from_slot: u8) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
+impl ItemActionStore for InMemoryStore {
+    fn equip_item(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _from_slot: u8,
+    ) -> Result<ItemActionResult> {
+        self.canned_item_action()
+    }
+
+    fn unequip_item(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _from_slot: u8,
+    ) -> Result<ItemActionResult> {
+        self.canned_item_action()
     }
 
     fn move_item(
@@ -3122,19 +3140,13 @@ impl ItemActionStore for InMemoryStore {
         _self_guid: u64,
         _from_slot: u8,
         _to_slot: u8,
-    ) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
+    ) -> Result<ItemActionResult> {
+        self.canned_item_action()
     }
 
-    fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+    fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<ItemActionResult> {
         self.used_items.lock().unwrap().push(slot);
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
+        self.canned_item_action()
     }
 }
 
@@ -6159,7 +6171,7 @@ fn equip_item_err_sends_smsg_inventory_change_failure() {
     // SMSG_INVENTORY_CHANGE_FAILURE frame and the session keeps serving the next action.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
-        trade_error: Some("required level not met".into()),
+        trade_error: Some(ItemRefusal::CannotEquip.as_tag().into()),
         ..tester_store(7)
     });
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);

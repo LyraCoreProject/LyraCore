@@ -550,7 +550,7 @@ pub fn debug_spawn_ground_area(
 /// without the mouse-only inventory UI. Delegates to the SAME `apply_item_use` the player reducer uses.
 #[reducer]
 pub fn debug_use_item(ctx: &ReducerContext, character_guid: u64, slot: u8) -> Result<(), String> {
-    crate::actor::use_item(ctx, character_guid, slot)
+    crate::actor::use_item(ctx, character_guid, slot).map_err(crate::items::refused)
 }
 
 /// Grant `count`x item `entry` into `character_guid`'s bags — the test lever for item-dependent flows
@@ -592,6 +592,7 @@ pub fn debug_move_item(
     to_slot: u8,
 ) -> Result<(), String> {
     crate::items::apply_item_move(ctx, character_guid, from_slot, to_slot)
+        .map_err(crate::items::refused)
 }
 
 /// Equip `character_guid`'s item in inventory `from_slot` into its matching `EQUIPMENT_SLOT_*` (auto-
@@ -604,7 +605,7 @@ pub fn debug_equip_item(
     character_guid: u64,
     from_slot: u8,
 ) -> Result<(), String> {
-    crate::actor::equip_item(ctx, character_guid, from_slot)
+    crate::actor::equip_item(ctx, character_guid, from_slot).map_err(crate::items::refused)
 }
 
 /// Unequip `character_guid`'s item in equipment `from_slot` (0..=18) into the first free backpack slot —
@@ -615,7 +616,7 @@ pub fn debug_unequip_item(
     character_guid: u64,
     from_slot: u8,
 ) -> Result<(), String> {
-    crate::items::apply_unequip_item(ctx, character_guid, from_slot)
+    crate::items::apply_unequip_item(ctx, character_guid, from_slot).map_err(crate::items::refused)
 }
 
 /// Auto-bank/auto-store-bank `character_guid`'s item in `slot` — drives the right-click-to-bank and
@@ -982,6 +983,7 @@ pub fn debug_split_item(
     to_slot: u8,
 ) -> Result<(), String> {
     crate::items::apply_item_split(ctx, character_guid, slot, count, to_slot)
+        .map_err(crate::items::refused)
 }
 
 /// Arm a melee engagement `attacker_guid` → `target_guid` directly (insert/retarget a `game_melee_attack`

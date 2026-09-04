@@ -2,24 +2,64 @@
 
 use super::super::*;
 use super::quest::{item_started_quest, QuestActionPlayer, QuestActionStore};
+use lyracore_shared::item::ItemRefusal;
 
 const MAIN_BAG: u8 = 255; // INVENTORY_SLOT_BAG_0 — backpack + equipped slots share this pseudo-bag
 const EQUIP_SLOT_END: u8 = 18; // EQUIPMENT_SLOT_END — last equipment slot (main-hand=15, off=16…)
 
+/// How the Module answered one item Durable Request. A Refusal is an outcome; a timeout, transport,
+/// or SDK failure stays an `Err` with an unknown durable result and ends the session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ItemActionResult {
+    Done,
+    Refused(ItemRefusal),
+}
+
+impl From<ItemRefusal> for ItemActionResult {
+    fn from(refusal: ItemRefusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
 pub(crate) trait ItemActionStore: Send + Sync {
-    fn equip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()>;
-    fn unequip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()>;
-    fn move_item(&self, account_id: u64, actor_guid: u64, from_slot: u8, to_slot: u8)
-        -> Result<()>;
-    fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()>;
+    fn equip_item(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+    ) -> Result<ItemActionResult>;
+    fn unequip_item(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+    ) -> Result<ItemActionResult>;
+    fn move_item(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+        to_slot: u8,
+    ) -> Result<ItemActionResult>;
+    fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<ItemActionResult>;
 }
 
 impl ItemActionStore for crate::stdb::Coordinator {
-    fn equip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+    fn equip_item(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+    ) -> Result<ItemActionResult> {
         crate::stdb::Coordinator::equip_item(self, account_id, actor_guid, from_slot)
     }
 
-    fn unequip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+    fn unequip_item(
+        &self,
+        account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+    ) -> Result<ItemActionResult> {
         crate::stdb::Coordinator::unequip_item(self, account_id, actor_guid, from_slot)
     }
 
@@ -29,11 +69,11 @@ impl ItemActionStore for crate::stdb::Coordinator {
         actor_guid: u64,
         from_slot: u8,
         to_slot: u8,
-    ) -> Result<()> {
+    ) -> Result<ItemActionResult> {
         crate::stdb::Coordinator::move_item(self, account_id, actor_guid, from_slot, to_slot)
     }
 
-    fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+    fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<ItemActionResult> {
         crate::stdb::Coordinator::use_item(self, account_id, actor_guid, slot)
     }
 }
@@ -49,39 +89,25 @@ pub(crate) enum ItemActionOutcome {
     PassThrough(ClientOpcodeMessage),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ItemActionErrorClass {
-    GameplayRefusal,
-    Fatal,
-}
-
-fn classify_item_action_error(error: &anyhow::Error) -> ItemActionErrorClass {
-    if error
-        .chain()
-        .any(|cause| cause.to_string().contains("reducer transport disconnected"))
-    {
-        ItemActionErrorClass::Fatal
-    } else {
-        ItemActionErrorClass::GameplayRefusal
-    }
-}
-
+/// A Refusal answers the client with its own result code; a completed action answers nothing.
 fn inventory_action_outbound(
     account_id: u64,
     operation: &str,
-    result: Result<()>,
-) -> Result<Vec<Outbound>> {
+    result: ItemActionResult,
+) -> Vec<Outbound> {
     match result {
-        Ok(()) => Ok(Vec::new()),
-        Err(e) if classify_item_action_error(&e) == ItemActionErrorClass::GameplayRefusal => {
-            log::debug!("world: {operation} rejected (account {account_id}): {e}");
-            Ok(vec![Outbound::One(
+        ItemActionResult::Done => Vec::new(),
+        ItemActionResult::Refused(refusal) => {
+            log::debug!(
+                "world: {operation} refused (account {account_id}): {}",
+                refusal.as_tag()
+            );
+            vec![Outbound::One(
                 ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
-                    codec::build_inventory_change_failure(),
+                    codec::build_inventory_refusal(refusal),
                 )),
-            )])
+            )]
         }
-        Err(e) => Err(e),
     }
 }
 
@@ -101,8 +127,8 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Siz
                     player.account_id,
                     player.self_guid.unwrap_or(0),
                     c.source_slot,
-                ),
-            )?;
+                )?,
+            );
             Ok(ItemActionOutcome::Handled { outbound })
         }
         ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(c) => {
@@ -127,8 +153,8 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Siz
                     player.account_id,
                     player.self_guid.unwrap_or(0),
                     c.source_slot,
-                ),
-            )?;
+                )?,
+            );
             Ok(ItemActionOutcome::Handled { outbound })
         }
         ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(c) => {
@@ -151,8 +177,8 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Siz
                     player.self_guid.unwrap_or(0),
                     c.source_slot.as_int(),
                     c.destination_slot.as_int(),
-                ),
-            )?;
+                )?,
+            );
             Ok(ItemActionOutcome::Handled { outbound })
         }
         ClientOpcodeMessage::CMSG_SWAP_ITEM(c)
@@ -166,8 +192,8 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Siz
                     player.self_guid.unwrap_or(0),
                     c.source_slot,
                     c.destionation_slot,
-                ),
-            )?;
+                )?,
+            );
             Ok(ItemActionOutcome::Handled { outbound })
         }
         ClientOpcodeMessage::CMSG_SWAP_ITEM(_) => {
@@ -191,8 +217,8 @@ pub(crate) fn dispatch_item_action<St: ItemActionStore + QuestActionStore + ?Siz
                 None => inventory_action_outbound(
                     player.account_id,
                     "use_item",
-                    store.use_item(player.account_id, player.self_guid.unwrap_or(0), c.bag_slot),
-                )?,
+                    store.use_item(player.account_id, player.self_guid.unwrap_or(0), c.bag_slot)?,
+                ),
             };
             Ok(ItemActionOutcome::Handled { outbound })
         }
@@ -225,33 +251,49 @@ mod tests {
         unequip_requests: Mutex<Vec<(u64, u64, u8)>>,
         move_requests: Mutex<Vec<(u64, u64, u8, u8)>>,
         use_requests: Mutex<Vec<(u64, u64, u8)>>,
-        equip_error: Option<String>,
-        unequip_error: Option<String>,
-        move_error: Option<String>,
-        use_error: Option<String>,
+        equip_result: Option<Result<ItemActionResult, String>>,
+        unequip_result: Option<Result<ItemActionResult, String>>,
+        move_result: Option<Result<ItemActionResult, String>>,
+        use_result: Option<Result<ItemActionResult, String>>,
         start_quest: Option<(u64, u32)>,
         quest_detail: Option<codec::QuestDetailView>,
     }
 
+    /// The Coordinator answers either a typed Refusal or a failure with an unknown durable outcome,
+    /// so the Fake answers in exactly those two shapes.
+    fn answer(canned: &Option<Result<ItemActionResult, String>>) -> Result<ItemActionResult> {
+        match canned {
+            None => Ok(ItemActionResult::Done),
+            Some(Ok(result)) => Ok(*result),
+            Some(Err(failure)) => Err(anyhow::anyhow!("{failure}")),
+        }
+    }
+
     impl ItemActionStore for InMemoryItemActions {
-        fn equip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+        fn equip_item(
+            &self,
+            account_id: u64,
+            actor_guid: u64,
+            from_slot: u8,
+        ) -> Result<ItemActionResult> {
             self.equip_requests
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, from_slot));
-            self.equip_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+            answer(&self.equip_result)
         }
 
-        fn unequip_item(&self, account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
+        fn unequip_item(
+            &self,
+            account_id: u64,
+            actor_guid: u64,
+            from_slot: u8,
+        ) -> Result<ItemActionResult> {
             self.unequip_requests
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, from_slot));
-            self.unequip_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+            answer(&self.unequip_result)
         }
 
         fn move_item(
@@ -260,24 +302,20 @@ mod tests {
             actor_guid: u64,
             from_slot: u8,
             to_slot: u8,
-        ) -> Result<()> {
+        ) -> Result<ItemActionResult> {
             self.move_requests
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, from_slot, to_slot));
-            self.move_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+            answer(&self.move_result)
         }
 
-        fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
+        fn use_item(&self, account_id: u64, actor_guid: u64, slot: u8) -> Result<ItemActionResult> {
             self.use_requests
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, slot));
-            self.use_error
-                .as_ref()
-                .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!("{error}")))
+            answer(&self.use_result)
         }
     }
 
@@ -421,6 +459,13 @@ mod tests {
         ));
     }
 
+    fn handled_outbound(outcome: ItemActionOutcome) -> Vec<Outbound> {
+        match outcome {
+            ItemActionOutcome::Handled { outbound } => outbound,
+            ItemActionOutcome::PassThrough(_) => panic!("an item action must be handled here"),
+        }
+    }
+
     fn assert_no_durable_requests(actions: &InMemoryItemActions) {
         assert!(actions.equip_requests.lock().unwrap().is_empty());
         assert!(actions.unequip_requests.lock().unwrap().is_empty());
@@ -446,7 +491,7 @@ mod tests {
     #[test]
     fn equip_refusal_returns_inventory_failure_without_ending_the_session() {
         let actions = InMemoryItemActions {
-            equip_error: Some("required level not met".into()),
+            equip_result: Some(Ok(ItemRefusal::CannotEquip.into())),
             ..Default::default()
         };
 
@@ -480,7 +525,7 @@ mod tests {
     #[test]
     fn unequip_refusal_returns_inventory_failure_without_ending_the_session() {
         let actions = InMemoryItemActions {
-            unequip_error: Some("backpack full".into()),
+            unequip_result: Some(Ok(ItemRefusal::InventoryFull.into())),
             ..Default::default()
         };
 
@@ -560,7 +605,7 @@ mod tests {
     #[test]
     fn move_refusal_returns_inventory_failure_without_ending_the_session() {
         let actions = InMemoryItemActions {
-            move_error: Some("cannot equip that there".into()),
+            move_result: Some(Ok(ItemRefusal::WrongSlot.into())),
             ..Default::default()
         };
 
@@ -595,7 +640,7 @@ mod tests {
     #[test]
     fn swap_refusal_returns_inventory_failure_without_ending_the_session() {
         let actions = InMemoryItemActions {
-            move_error: Some("cannot equip that there".into()),
+            move_result: Some(Ok(ItemRefusal::WrongSlot.into())),
             ..Default::default()
         };
 
@@ -629,7 +674,7 @@ mod tests {
     #[test]
     fn use_refusal_returns_inventory_failure_without_ending_the_session() {
         let actions = InMemoryItemActions {
-            use_error: Some("item is not usable".into()),
+            use_result: Some(Ok(ItemRefusal::ItemNotUsable.into())),
             ..Default::default()
         };
 
@@ -751,9 +796,115 @@ mod tests {
     }
 
     #[test]
+    fn every_module_refusal_has_one_client_result_code() {
+        use wow_world_messages::vanilla::SMSG_INVENTORY_CHANGE_FAILURE as Failure;
+        use wow_world_messages::Guid;
+        let (item1, item2, bag_type_subclass) = (Guid::new(0), Guid::new(0), 0u8);
+        // The vanilla 1.12 result each Refusal must reach the client as.
+        let expected = |refusal| match refusal {
+            ItemRefusal::ItemNotFound => Failure::ItemNotFound {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::InventoryFull => Failure::InventoryFull {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::WrongSlot => Failure::ItemDoesntGoToSlot {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::CannotEquip => Failure::ItemCantBeEquipped {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::NoProficiency => Failure::NoRequiredProficiency {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::RequiredSkill => Failure::CantEquipSkill {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::RequiredReputation => Failure::CantEquipReputation {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::PlayerDead => Failure::YouAreDead {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::BankUnavailable => Failure::TooFarAwayFromBank {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::ItemNotUsable => Failure::YouCanNeverUseThatItem {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::NotRightNow => Failure::CantDoRightNow {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+            ItemRefusal::Internal => Failure::IntBagError {
+                item1,
+                item2,
+                bag_type_subclass,
+            },
+        };
+        for refusal in ItemRefusal::ALL {
+            let actions = InMemoryItemActions {
+                equip_result: Some(Ok(refusal.into())),
+                ..Default::default()
+            };
+
+            let outbound = handled_outbound(
+                dispatch_item_action(&actions, player(), equip(MAIN_BAG)).unwrap(),
+            );
+
+            assert!(
+                matches!(
+                    outbound.as_slice(),
+                    [Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(failure))]
+                        if **failure == expected(refusal)
+                ),
+                "{refusal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reducer_timeout_is_not_answered_as_a_refusal() {
+        let actions = InMemoryItemActions {
+            move_result: Some(Err("gw_move_item reducer timed out after 10s".into())),
+            ..Default::default()
+        };
+
+        let error = match dispatch_item_action(&actions, player(), swap(MAIN_BAG)) {
+            Err(error) => error,
+            Ok(_) => panic!("an unknown move outcome must end the session"),
+        };
+
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
     fn reducer_transport_failure_is_session_fatal() {
         let actions = InMemoryItemActions {
-            equip_error: Some("equip_item reducer transport disconnected: channel closed".into()),
+            equip_result: Some(Err(
+                "equip_item reducer transport disconnected: channel closed".into(),
+            )),
             ..Default::default()
         };
 

@@ -1,5 +1,76 @@
 //! Item rules shared by the module and gateway.
 
+/// Why the Module refused an item Durable Request. The tag is the whole reducer error text, so
+/// neither tier matches on human prose; the detail stays in the Module log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemRefusal {
+    /// The named slot holds no item, or the item has no template.
+    ItemNotFound,
+    /// No free backpack, bag, or bag-equip slot is left to receive the item.
+    InventoryFull,
+    /// The destination slot is out of range, is not an equipment slot, or is already taken.
+    WrongSlot,
+    /// The item cannot go on the body: the wrong slot family for its type, or a required level
+    /// the Character has not reached.
+    CannotEquip,
+    /// The Character's class, race, or armor and weapon proficiency does not cover the item.
+    NoProficiency,
+    /// The item needs a trained skill rank the Character does not hold.
+    RequiredSkill,
+    /// The item needs a reputation standing the Character has not earned.
+    RequiredReputation,
+    /// A dead Character cannot act on its inventory.
+    PlayerDead,
+    /// The action reaches bank space with no banker in range.
+    BankUnavailable,
+    /// The item carries no on-use spell, sits in the bank, or restores a power the class lacks.
+    ItemNotUsable,
+    /// The action is blocked for now: a live bandage cooldown, or a cast Gate.
+    NotRightNow,
+    /// The Module could not act and has no gameplay reason to name.
+    Internal,
+}
+
+impl ItemRefusal {
+    pub const ALL: [Self; 12] = [
+        Self::ItemNotFound,
+        Self::InventoryFull,
+        Self::WrongSlot,
+        Self::CannotEquip,
+        Self::NoProficiency,
+        Self::RequiredSkill,
+        Self::RequiredReputation,
+        Self::PlayerDead,
+        Self::BankUnavailable,
+        Self::ItemNotUsable,
+        Self::NotRightNow,
+        Self::Internal,
+    ];
+
+    pub fn as_tag(self) -> &'static str {
+        match self {
+            Self::ItemNotFound => "item:item_not_found",
+            Self::InventoryFull => "item:inventory_full",
+            Self::WrongSlot => "item:wrong_slot",
+            Self::CannotEquip => "item:cannot_equip",
+            Self::NoProficiency => "item:no_proficiency",
+            Self::RequiredSkill => "item:required_skill",
+            Self::RequiredReputation => "item:required_reputation",
+            Self::PlayerDead => "item:player_dead",
+            Self::BankUnavailable => "item:bank_unavailable",
+            Self::ItemNotUsable => "item:item_not_usable",
+            Self::NotRightNow => "item:not_right_now",
+            Self::Internal => "item:internal",
+        }
+    }
+
+    pub fn parse_tag(tag: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|refusal| refusal.as_tag() == tag)
+    }
+}
+
 pub mod armor_subclass {
     pub const MISC: u8 = 0;
     pub const CLOTH: u8 = 1;
@@ -171,6 +242,18 @@ mod tests {
 
     /// The nine playable classes (6 and 10 are unused in 1.12).
     const PLAYABLE: [u8; 9] = [1, 2, 3, 4, 5, 7, 8, 9, 11];
+
+    #[test]
+    fn every_refusal_tag_round_trips() {
+        for refusal in ItemRefusal::ALL {
+            assert_eq!(ItemRefusal::parse_tag(refusal.as_tag()), Some(refusal));
+        }
+        assert_eq!(ItemRefusal::parse_tag("item:"), None);
+        assert_eq!(
+            ItemRefusal::parse_tag("gw_move_item reducer timed out after 10s"),
+            None
+        );
+    }
 
     /// What a class can equip with both level-40 upgrades trained — the auction "usable" filter's
     /// question, and the shape the pre-training class table was written in.

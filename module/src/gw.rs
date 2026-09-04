@@ -392,12 +392,26 @@ pub fn gw_turn_in_quest(
     crate::actor::turn_in_quest(ctx, actor_guid, giver_guid, quest_entry, reward_index)
 }
 
+/// Taxi flight is an expected item Refusal. Missing actors still carry the generic actor error,
+/// which the Gateway treats as a failure with an unknown result.
+fn item_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
+    let actor = acting_entity_by_guid(ctx, actor_guid)
+        .ok_or_else(|| "mover not in world".to_string())?;
+    if crate::taxi::is_in_flight(ctx, actor_guid) {
+        return Err(crate::items::refused(crate::items::refuse(
+            lyracore_shared::item::ItemRefusal::NotRightNow,
+            "Character is in taxi flight",
+        )));
+    }
+    Ok(actor)
+}
+
 /// [`crate::actor::use_item`] behind the gateway gate.
 #[reducer]
 pub fn gw_use_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
-    crate::actor::use_item(ctx, actor_guid, slot)
+    item_actor(ctx, actor_guid)?;
+    crate::actor::use_item(ctx, actor_guid, slot).map_err(crate::items::refused)
 }
 
 /// Resolve a spell whose explicit target is an owned inventory item. The effect kind selects the
@@ -453,8 +467,8 @@ pub fn gw_sell_item(
 #[reducer]
 pub fn gw_equip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
-    crate::actor::equip_item(ctx, actor_guid, from_slot)
+    item_actor(ctx, actor_guid)?;
+    crate::actor::equip_item(ctx, actor_guid, from_slot).map_err(crate::items::refused)
 }
 
 /// [`crate::actor::use_gameobject`] behind the gateway gate.
@@ -951,16 +965,17 @@ pub fn gw_move_item(
     to_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    item_actor(ctx, actor_guid)?;
     crate::items::apply_item_move(ctx, actor_guid, from_slot, to_slot)
+        .map_err(crate::items::refused)
 }
 
 /// [`crate::items::apply_unequip_item`] with the owner named by guid.
 #[reducer]
 pub fn gw_unequip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
-    crate::items::apply_unequip_item(ctx, actor_guid, from_slot)
+    item_actor(ctx, actor_guid)?;
+    crate::items::apply_unequip_item(ctx, actor_guid, from_slot).map_err(crate::items::refused)
 }
 
 /// [`crate::items::apply_auto_bank_item`] with the owner named by guid — right-click to bank / right-

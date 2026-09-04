@@ -11,7 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::bindings::*;
 use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
+use crate::world::ItemActionResult;
 use lyracore_shared::auction::AuctionRefusal;
+use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::trainer::TrainerRefusal;
 
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -2183,45 +2185,60 @@ impl Coordinator {
     /// Equip the item in main-inventory `from_slot` (`CMSG_AUTOEQUIP_ITEM`) over the coordinator
     /// connection. The module resolves the matching equipment slot and gates the required level.
     /// Rides the coordinator connection as `gw_equip_item`.
-    pub fn equip_item(&self, _account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("equip_item: actor_guid unresolved"));
-        }
+    pub fn equip_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+    ) -> Result<ItemActionResult> {
+        let Some(actor_guid) = resolved_item_actor("equip_item", actor_guid) else {
+            return Ok(ItemRefusal::Internal.into());
+        };
         let coord = self.0.call_pipe();
-        call_reducer!(
+        item_action(call_reducer!(
             coord.conn.reducers,
             "gw_equip_item",
             gw_equip_item_then(actor_guid, from_slot)
-        )
+        ))
     }
 
     /// Unequip the item in equipment `from_slot` to a free backpack slot (`CMSG_AUTOSTORE_BAG_ITEM`)
     /// over the coordinator connection. The module gates "is equipped" + "backpack has room".
-    pub fn unequip_item(&self, _account_id: u64, actor_guid: u64, from_slot: u8) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("unequip_item: actor_guid unresolved"));
-        }
+    pub fn unequip_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        from_slot: u8,
+    ) -> Result<ItemActionResult> {
+        let Some(actor_guid) = resolved_item_actor("unequip_item", actor_guid) else {
+            return Ok(ItemRefusal::Internal.into());
+        };
         let coord = self.0.call_pipe();
-        call_reducer!(
+        item_action(call_reducer!(
             coord.conn.reducers,
             "gw_unequip_item",
             gw_unequip_item_then(actor_guid, from_slot)
-        )
+        ))
     }
 
     /// Use the consumable in main-inventory `slot` (`CMSG_USE_ITEM`) over the coordinator connection —
     /// eat/drink/potion/bandage. The module applies the on-use effect (flat heal for slice food) and
     /// decrements the stack; a gameplay `Err` (no item / not usable) is per-action.
-    pub fn use_item(&self, _account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("use_item: actor_guid unresolved"));
-        }
+    pub fn use_item(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        slot: u8,
+    ) -> Result<ItemActionResult> {
+        let Some(actor_guid) = resolved_item_actor("use_item", actor_guid) else {
+            return Ok(ItemRefusal::Internal.into());
+        };
         let coord = self.0.call_pipe();
-        call_reducer!(
+        item_action(call_reducer!(
             coord.conn.reducers,
             "gw_use_item",
             gw_use_item_then(actor_guid, slot)
-        )
+        ))
     }
 
     /// Bind the caller's hearthstone home to their current position (`CMSG_GOSSIP_SELECT_OPTION` on an
@@ -2247,16 +2264,16 @@ impl Coordinator {
         actor_guid: u64,
         from_slot: u8,
         to_slot: u8,
-    ) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("move_item: actor_guid unresolved"));
-        }
+    ) -> Result<ItemActionResult> {
+        let Some(actor_guid) = resolved_item_actor("move_item", actor_guid) else {
+            return Ok(ItemRefusal::Internal.into());
+        };
         let coord = self.0.call_pipe();
-        call_reducer!(
+        item_action(call_reducer!(
             coord.conn.reducers,
             "gw_move_item",
             gw_move_item_then(actor_guid, from_slot, to_slot)
-        )
+        ))
     }
 
     /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`)
@@ -3111,6 +3128,28 @@ fn trainer_refusal(error: &anyhow::Error) -> Option<TrainerRefusal> {
     reducer_refusal_reason(error).and_then(TrainerRefusal::parse_tag)
 }
 
+/// The Module's typed item Refusal, on the same rule as the auction family: only a reducer the
+/// Module rejected carries a tag, so a timeout or transport failure keeps its unknown outcome.
+fn item_action(result: Result<()>) -> Result<ItemActionResult> {
+    match result {
+        Ok(()) => Ok(ItemActionResult::Done),
+        Err(error) => match reducer_refusal_reason(&error).and_then(ItemRefusal::parse_tag) {
+            Some(refusal) => Ok(refusal.into()),
+            None => Err(error),
+        },
+    }
+}
+
+/// An item action needs the caller's own entity. Without one there is nothing to request, so the
+/// client gets a Refusal rather than a dead session.
+fn resolved_item_actor(operation: &str, actor_guid: u64) -> Option<u64> {
+    if actor_guid == 0 {
+        log::warn!("stdb: {operation} has no resolved actor");
+        return None;
+    }
+    Some(actor_guid)
+}
+
 fn bid_payload_matches(hold: &AuctionBidHold, decision: &AuctionBidDecision) -> bool {
     hold.operation_id == decision.operation_id
         && hold.bidder_guid == decision.bidder_guid
@@ -3159,6 +3198,50 @@ fn bid_outcome(hold: &AuctionBidHold) -> Result<crate::world::PlaceBidOutcome> {
             ))
         }
     })
+}
+
+#[cfg(test)]
+mod item_reducer_tests {
+    use super::*;
+    use crate::stdb::connection::ReducerCallError;
+
+    #[test]
+    fn only_a_rejected_reducer_carries_a_typed_refusal() {
+        for refusal in ItemRefusal::ALL {
+            let rejected = Err(anyhow::Error::from(ReducerCallError::Rejected {
+                operation: "gw_move_item".to_string(),
+                reason: refusal.as_tag().to_string(),
+            })
+            .context("move phase"));
+            assert_eq!(
+                item_action(rejected).unwrap(),
+                ItemActionResult::Refused(refusal)
+            );
+        }
+
+        assert_eq!(item_action(Ok(())).unwrap(), ItemActionResult::Done);
+
+        let not_refusals = [
+            anyhow::Error::from(ReducerCallError::fatal(
+                "gw_move_item reducer timed out after 10s".to_string(),
+            )),
+            anyhow::Error::from(ReducerCallError::fatal(
+                "gw_use_item reducer failed: transport disconnected".to_string(),
+            )),
+            anyhow::Error::from(ReducerCallError::Rejected {
+                operation: "gw_equip_item".to_string(),
+                reason: "operator only".to_string(),
+            }),
+            anyhow!(
+                "wrapped text that mentions {}",
+                ItemRefusal::Internal.as_tag()
+            ),
+        ];
+        for error in not_refusals {
+            let text = format!("{error:#}");
+            assert!(item_action(Err(error)).is_err(), "{text}");
+        }
+    }
 }
 
 #[cfg(test)]
