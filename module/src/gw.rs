@@ -309,6 +309,20 @@ pub fn gw_cast_spell_at(
     crate::spell::apply_cast_spell_at(ctx, &caster, spell_id, target_guid, x, y, z)
 }
 
+/// Taxi flight is an expected loot Refusal. Missing actors still carry the generic actor error,
+/// which the Gateway treats as a failure with an unknown result.
+fn loot_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
+    let actor = acting_entity_by_guid(ctx, actor_guid)
+        .ok_or_else(|| "mover not in world".to_string())?;
+    if crate::taxi::is_in_flight(ctx, actor_guid) {
+        return Err(crate::loot::refused(
+            lyracore_shared::loot::LootRefusal::LooterUnavailable,
+            "looter is in taxi flight",
+        ));
+    }
+    Ok(actor)
+}
+
 /// [`crate::actor::take_loot`] behind the gateway gate — one loot slot off a corpse/GO.
 #[reducer]
 pub fn gw_take_loot(
@@ -318,7 +332,7 @@ pub fn gw_take_loot(
     loot_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    loot_actor(ctx, actor_guid)?;
     crate::actor::take_loot(ctx, actor_guid, corpse_guid, loot_slot)
 }
 
@@ -331,7 +345,7 @@ pub fn gw_open_creature_loot(
     corpse_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    loot_actor(ctx, actor_guid)?;
     crate::actor::open_creature_loot(ctx, actor_guid, corpse_guid)
 }
 
@@ -432,7 +446,7 @@ pub fn gw_cast_item_target(
 #[reducer]
 pub fn gw_loot_money(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    loot_actor(ctx, actor_guid)?;
     crate::actor::loot_money(ctx, actor_guid, target_guid)
 }
 
@@ -479,7 +493,7 @@ pub fn gw_use_gameobject(
     go_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    loot_actor(ctx, actor_guid)?;
     crate::actor::use_gameobject(ctx, actor_guid, go_guid)
 }
 
@@ -1079,7 +1093,7 @@ pub fn gw_bind_home(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String>
 #[reducer]
 pub fn gw_skin(ctx: &ReducerContext, actor_guid: u64, corpse_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    loot_actor(ctx, actor_guid)?;
     crate::professions::skin_corpse(ctx, actor_guid, corpse_guid)
 }
 
@@ -1093,7 +1107,7 @@ pub fn gw_loot_roll(
     vote: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    loot_actor(ctx, actor_guid)?;
     crate::loot::cast_vote_on(ctx, corpse_guid, loot_slot as u8, actor_guid, vote)
 }
 
@@ -1107,7 +1121,7 @@ pub fn gw_loot_master_give(
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    loot_actor(ctx, actor_guid)?;
     crate::loot::apply_master_give(ctx, actor_guid, corpse_guid, loot_slot, target_guid)
 }
 

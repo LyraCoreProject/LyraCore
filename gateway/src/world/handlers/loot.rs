@@ -52,6 +52,13 @@ pub(crate) enum LootWindowRequestStatus {
     Refused(LootWindowRefusal),
 }
 
+/// How the Module answered a Loot Roll or master-loot Durable Request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LootActionStatus {
+    Applied,
+    Refused(LootRefusal),
+}
+
 /// A loot Refusal as the vanilla client can hear it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LootWindowRefusal {
@@ -205,6 +212,12 @@ fn refusal_transition(
     (next_state, refusal_outbound(refusal, target_guid))
 }
 
+fn finish_loot_action(status: LootActionStatus) {
+    if let LootActionStatus::Refused(refusal) = status {
+        log::debug!("world: loot action refused: {}", refusal.as_tag());
+    }
+}
+
 /// A handled loot request returns all session state and client traffic to apply in order.
 pub(crate) enum LootWindowOutcome {
     Handled {
@@ -236,10 +249,12 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
             if let LootWindowRequestStatus::Refused(refusal) =
                 store.use_gameobject(player.account_id, actor_guid, target_guid)?
             {
+                let (next_state, outbound) =
+                    refusal_transition(refusal, current_state, target_guid);
                 return Ok(LootWindowOutcome::Handled {
-                    next_state: current_state,
+                    next_state,
                     durable_request,
-                    outbound: refusal_outbound(refusal, target_guid),
+                    outbound,
                 });
             }
             let items = store.loot_target_items(target_guid, actor_guid)?;
@@ -398,35 +413,25 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                 WorldState::InWorld(iw) => iw.self_guid,
                 WorldState::CharSelect => 0,
             };
-            if let Err(e) = loot::run_vote(
+            finish_loot_action(loot::run_vote(
                 store,
                 conn.account_id,
                 self_guid,
                 corpse_guid,
                 c.item_slot,
                 vote,
-            ) {
-                log::debug!(
-                    "world: loot_roll ignored (account {}): {e}",
-                    conn.account_id
-                );
-            }
+            )?);
         }
         ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(c) => {
             let corpse_guid = c.loot.guid();
             let target_guid = c.player.guid();
-            if let Err(e) = store.loot_master_give(
+            finish_loot_action(store.loot_master_give(
                 conn.account_id,
                 social::self_guid(conn).unwrap_or(0),
                 corpse_guid,
                 c.slot_id,
                 target_guid,
-            ) {
-                log::debug!(
-                    "world: loot_master_give ignored (account {}): {e}",
-                    conn.account_id
-                );
-            }
+            )?);
         }
         ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) => {
             let Some(actor_guid) = social::self_guid(conn).filter(|guid| *guid != 0) else {
@@ -447,6 +452,11 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                     }
                 }
                 LootWindowRequestStatus::Refused(refusal) => {
+                    if refusal.loot_error().is_some() {
+                        if let WorldState::InWorld(iw) = &mut conn.state {
+                            iw.open_loot = OpenLootState::default();
+                        }
+                    }
                     for outbound in refusal_outbound(refusal, target_guid) {
                         send(tx, outbound)?;
                     }
@@ -1142,6 +1152,13 @@ mod tests {
                     open_creature(60),
                     InMemoryLootWindow {
                         open_refusal: Some(refusal.into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    open_chest(60),
+                    InMemoryLootWindow {
+                        use_refusal: Some(refusal.into()),
                         ..Default::default()
                     },
                 ),

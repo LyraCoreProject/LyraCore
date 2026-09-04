@@ -46,8 +46,8 @@ pub(crate) use item::{
     dispatch_item_action, ItemActionOutcome, ItemActionPlayer, ItemActionResult, ItemActionStore,
 };
 pub(crate) use loot::{
-    dispatch_loot_window, handle_loot, LootWindowOutcome, LootWindowPlayer, LootWindowRefusal,
-    LootWindowRequestStatus, LootWindowStore, OpenLootState,
+    dispatch_loot_window, handle_loot, LootActionStatus, LootWindowOutcome, LootWindowPlayer,
+    LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, OpenLootState,
 };
 pub(crate) use mail::handle_mail;
 pub(crate) use melee::{

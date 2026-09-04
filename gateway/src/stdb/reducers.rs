@@ -11,7 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::bindings::*;
 use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
-use crate::world::{ItemActionResult, LootWindowRefusal, LootWindowRequestStatus};
+use crate::world::{
+    ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
+};
 use lyracore_shared::auction::AuctionRefusal;
 use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot::LootRefusal;
@@ -1910,16 +1912,16 @@ impl Coordinator {
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
-    ) -> Result<()> {
+    ) -> Result<LootActionStatus> {
         if actor_guid == 0 {
             return Err(anyhow!("loot_roll: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        loot_action_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_roll",
             gw_loot_roll_then(actor_guid, corpse_guid, loot_slot, vote)
-        )
+        ))
     }
 
     /// `CMSG_LOOT_MASTER_GIVE` — the master looter assigns an above-
@@ -1931,16 +1933,16 @@ impl Coordinator {
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
-    ) -> Result<()> {
+    ) -> Result<LootActionStatus> {
         if actor_guid == 0 {
             return Err(anyhow!("loot_master_give: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        loot_action_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_master_give",
             gw_loot_master_give_then(actor_guid, corpse_guid, loot_slot, target_guid)
-        )
+        ))
     }
 
     pub fn disenchant_item(&self, _account_id: u64, actor_guid: u64, slot: u8) -> Result<()> {
@@ -2913,6 +2915,30 @@ impl Coordinator {
         )
     }
 
+    /// Cast a realm-core Loot Roll vote and classify only a known typed Refusal as an answer.
+    pub fn realm_loot_vote(
+        &self,
+        corpse_guid: u64,
+        slot: u8,
+        actor_guid: u64,
+        vote: u8,
+    ) -> Result<LootActionStatus> {
+        loot_action_status(call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "realm_loot_op",
+            realm_loot_op_then(
+                lyracore_shared::loot_roll::loot_op::VOTE,
+                corpse_guid,
+                slot,
+                0,
+                actor_guid,
+                vote,
+                0,
+                Vec::new()
+            )
+        ))
+    }
+
     /// `settle_loot_roll` — grant a resolved roll's item on THIS world shard, if it holds the
     /// matching corpse row. Operator-gated, coordinator connection; the loot-roll relay calls
     /// it on every connected world shard after observing realm-core's `ROLL_WON` event — the
@@ -3151,6 +3177,21 @@ fn loot_request_status(result: Result<()>) -> Result<LootWindowRequestStatus> {
     }
 }
 
+/// The typed answer for Loot Roll and master-loot requests. An unknown rejection or transport
+/// failure stays an error with an unknown durable result.
+fn loot_action_status(result: Result<()>) -> Result<LootActionStatus> {
+    match result {
+        Ok(()) => Ok(LootActionStatus::Applied),
+        Err(error) => match reducer_refusal_reason(&error).and_then(LootRefusal::parse_tag) {
+            Some(refusal) => {
+                log::debug!("stdb: loot action refused: {error:#}");
+                Ok(LootActionStatus::Refused(refusal))
+            }
+            None => Err(error),
+        },
+    }
+}
+
 /// The Module's typed auction Refusal. Only a reducer the Module rejected carries a tag; a timeout,
 /// transport, or SDK failure stays an error with an unknown outcome.
 fn auction_refusal(error: &anyhow::Error) -> Option<AuctionRefusal> {
@@ -3333,6 +3374,28 @@ mod loot_reducer_tests {
         for error in not_refusals {
             let text = format!("{error:#}");
             assert!(loot_request_status(Err(error)).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn loot_action_status_keeps_unknown_results_as_errors() {
+        for refusal in [LootRefusal::RollUnavailable, LootRefusal::NotMasterLooter] {
+            assert_eq!(
+                loot_action_status(rejected(refusal.as_tag())).unwrap(),
+                LootActionStatus::Refused(refusal)
+            );
+        }
+
+        for error in [
+            anyhow::Error::from(ReducerCallError::Rejected {
+                operation: "gw_loot_roll".to_string(),
+                reason: "loot:newer_module_refusal".to_string(),
+            }),
+            anyhow::Error::from(ReducerCallError::fatal(
+                "gw_loot_roll reducer timed out after 10s".to_string(),
+            )),
+        ] {
+            assert!(loot_action_status(Err(error)).is_err());
         }
     }
 }

@@ -89,7 +89,7 @@
 
 use anyhow::Result;
 
-use super::WorldStore;
+use super::{LootActionStatus, WorldStore};
 use lyracore_shared::loot_roll::loot_op;
 
 /// One unresolved loot roll a world shard has created but not yet had promoted onto realm-core —
@@ -120,20 +120,11 @@ pub(crate) fn run_vote<St: WorldStore + ?Sized>(
     corpse_guid: u64,
     slot: u32,
     vote: u8,
-) -> Result<()> {
+) -> Result<LootActionStatus> {
     let Some(realm) = store.realm_store() else {
         return store.loot_roll(account_id, self_guid, corpse_guid, slot, vote);
     };
-    realm.realm_loot_op(
-        loot_op::VOTE,
-        corpse_guid,
-        slot as u8,
-        0,
-        self_guid,
-        vote,
-        0,
-        Vec::new(),
-    )
+    realm.realm_loot_vote(corpse_guid, slot as u8, self_guid, vote)
 }
 
 /// Promote ONE world shard's staging roll onto realm-core, then clear the staging copy — the shared

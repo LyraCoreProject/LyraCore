@@ -264,6 +264,28 @@ pub trait WorldStore:
         Err(anyhow!("this store does not host realm-wide loot rolls"))
     }
 
+    /// Cast one player vote on realm-core. The Store returns a typed gameplay answer while keeping
+    /// failures with an unknown durable result as `Err`.
+    fn realm_loot_vote(
+        &self,
+        corpse_guid: u64,
+        slot: u8,
+        actor_guid: u64,
+        vote: u8,
+    ) -> Result<LootActionStatus> {
+        self.realm_loot_op(
+            lyracore_shared::loot_roll::loot_op::VOTE,
+            corpse_guid,
+            slot,
+            0,
+            actor_guid,
+            vote,
+            0,
+            Vec::new(),
+        )?;
+        Ok(LootActionStatus::Applied)
+    }
+
     /// Every UNRESOLVED loot roll this WORLD SHARD has created but not yet had promoted onto
     /// realm-core — the relay's promotion queue. Empty by default, which is what makes the
     /// relay a no-op on an unsharded store and on realm-core's own handle (nothing is ever created
@@ -988,7 +1010,7 @@ pub trait WorldStore:
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
-    ) -> Result<()>;
+    ) -> Result<LootActionStatus>;
     /// `CMSG_LOOT_MASTER_GIVE` — the master looter assigns an above-
     /// threshold row to `target_guid`.
     fn loot_master_give(
@@ -998,7 +1020,7 @@ pub trait WorldStore:
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
-    ) -> Result<()>;
+    ) -> Result<LootActionStatus>;
     /// NOTIFY-ONLY module chokepoint for a gossip-option click — fired best-effort
     /// before the gateway's own gossip handling; failure never blocks the gossip reply.
     fn gossip_select(
