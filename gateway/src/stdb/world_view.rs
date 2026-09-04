@@ -230,23 +230,25 @@ impl AuraIndex {
         }
     }
 
-    /// Called on the shard's pump between messages, after its callbacks are registered.
+    /// Replace the Shard snapshot and return previous auras grouped by every old or current target.
+    /// A newly present target has an empty previous set. Each target needs one snapshot Relay.
     pub(crate) fn replace_shard(
         &self,
         shard: ShardId,
         rows: impl IntoIterator<Item = Aura>,
-    ) -> Vec<Aura> {
+    ) -> HashMap<u64, Vec<Aura>> {
         let mut by_target = self.lock();
         let targets: Vec<_> = by_target
             .keys()
             .filter(|(owner, _)| *owner == shard)
             .copied()
             .collect();
-        let old = targets
+        let mut old: HashMap<_, _> = targets
             .into_iter()
-            .flat_map(|target| by_target.remove(&target).unwrap_or_default())
+            .map(|target| (target.1, by_target.remove(&target).unwrap_or_default()))
             .collect();
         for row in rows {
+            old.entry(row.target_guid).or_default();
             by_target
                 .entry((shard, row.target_guid))
                 .or_default()
@@ -353,6 +355,18 @@ impl WorldView {
         (registered.shard == shard).then(|| registered.viewer.clone())
     }
 
+    fn viewer_of_identity_on_shard(
+        &self,
+        shard: ShardId,
+        identity: BoundIdentity,
+    ) -> Option<Arc<Viewer>> {
+        let registry = self.viewers.read().unwrap();
+        let session = registry.session_of_identity.get(&identity.0)?;
+        let registered = registry.by_session.get(session)?;
+        (registered.shard == shard).then(|| registered.viewer.clone())
+    }
+
+    #[cfg(test)]
     pub(crate) fn viewer_of_identity(&self, identity: BoundIdentity) -> Option<Arc<Viewer>> {
         let registry = self.viewers.read().unwrap();
         let session = registry.session_of_identity.get(&identity.0)?;
@@ -566,21 +580,21 @@ fn register_shard_callbacks(
         "game_addon_message.insert",
         &view,
         Some(&generation),
-        |v, row| addon_message_appeared(v, row),
+        move |v, row| addon_message_appeared(v, shard, row),
     );
     wire_insert_live(
         db.game_xp_event(),
         "game_xp_event.insert",
         &view,
         Some(&generation),
-        |v, row| xp_appeared(v, row),
+        move |v, row| xp_appeared(v, shard, row),
     );
     wire_insert_live(
         db.game_levelup_event(),
         "game_levelup_event.insert",
         &view,
         Some(&generation),
-        |v, row| levelup_appeared(v, row),
+        move |v, row| levelup_appeared(v, shard, row),
     );
     let quest_insert_coord = coord.clone();
     wire_insert(
@@ -765,14 +779,14 @@ fn register_shard_callbacks(
         "game_entity_motion.insert",
         &view,
         Some(&generation),
-        |v, row| motion(v, row),
+        move |v, row| motion(v, shard, row),
     );
     wire_update(
         db.game_entity_motion(),
         "game_entity_motion.update",
         &view,
         Some(&generation),
-        |v, _old, row| motion(v, row),
+        move |v, _old, row| motion(v, shard, row),
     );
 
     // ---- game_creature_spline (creature legs) ----------------------------------------------
@@ -781,14 +795,14 @@ fn register_shard_callbacks(
         "game_creature_spline.insert",
         &view,
         Some(&generation),
-        |v, row| creature_leg(v, row),
+        move |v, row| creature_leg(v, shard, row),
     );
     wire_update(
         db.game_creature_spline(),
         "game_creature_spline.update",
         &view,
         Some(&generation),
-        |v, _old, row| creature_leg(v, row),
+        move |v, _old, row| creature_leg(v, shard, row),
     );
 
     // ---- game_taxi_passenger_spline (server-owned player routes) ---------------------------
@@ -797,14 +811,14 @@ fn register_shard_callbacks(
         "game_taxi_passenger_spline.insert",
         &view,
         Some(&generation),
-        |v, row| taxi_spline(v, row),
+        move |v, row| taxi_spline(v, shard, row),
     );
     wire_update(
         db.game_taxi_passenger_spline(),
         "game_taxi_passenger_spline.update",
         &view,
         Some(&generation),
-        |v, _old, row| taxi_spline(v, row),
+        move |v, _old, row| taxi_spline(v, shard, row),
     );
 
     // ---- game_roll_event -------------------------------------------------------------------
@@ -1111,14 +1125,14 @@ fn register_shard_callbacks(
         "game_player_skill.insert",
         &view,
         Some(&generation),
-        |v, row| skill_changed(v, row),
+        move |v, row| skill_changed(v, shard, row),
     );
     wire_update(
         db.game_player_skill(),
         "game_player_skill.update",
         &view,
         Some(&generation),
-        |v, _old, row| skill_changed(v, row),
+        move |v, _old, row| skill_changed(v, shard, row),
     );
 }
 
@@ -1315,9 +1329,9 @@ fn entity_changed(view: &Arc<WorldView>, shard: ShardId, old: &WorldEntity, new:
     if let Some(old_key) = previous {
         if old_key != key {
             let still: HashSet<SessionId> = new_recipients.iter().copied().collect();
-            for session in view.spatial.viewers_of(EntityLayer::WorldEntity, old_key) {
-                if !still.contains(&session) {
-                    destroy_job(view, session, new.guid, new.owner_guid);
+            for viewer in view.cell_audience(shard, Some(old_key), BOX_HALF_SPAN, &[]) {
+                if !still.contains(&viewer.session) {
+                    destroy_job(view, viewer.session, new.guid, new.owner_guid);
                 }
             }
         }
@@ -1478,17 +1492,14 @@ fn gameobject_vanished(view: &WorldView, shard: ShardId, guid: u64) {
 //  Motion + creature legs — no index of their own: the row carries its own cell.
 // ===============================================================================================
 
-fn motion(view: &WorldView, row: &EntityMotion) {
+fn motion(view: &WorldView, shard: ShardId, row: &EntityMotion) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let row = Arc::new(row.clone());
     // The MOVER is deliberately not a recipient (`world_entity_recipients`' self leg is skipped
     // here): a
     // player must never receive their own movement echoed back, or they fight the server for
     // authority over their position. `relay_entity_motion` re-checks it anyway.
-    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
         if viewer.self_guid == row.guid {
             continue;
         }
@@ -1505,13 +1516,10 @@ fn motion(view: &WorldView, row: &EntityMotion) {
     }
 }
 
-fn creature_leg(view: &WorldView, row: &CreatureSpline) {
+fn creature_leg(view: &WorldView, shard: ShardId, row: &CreatureSpline) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let row = Arc::new(row.clone());
-    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
         // Same supersession as player motion — latest leg per creature wins.
         viewer
             .motion_pending
@@ -1625,26 +1633,14 @@ fn dynobj_vanished(view: &WorldView, shard: ShardId, row: &DynamicObject) {
 
 /// A passenger spline is always sent to its owner. Nearby sessions receive it only after the
 /// outbound visibility check confirms that the passenger already exists in their client world.
-fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
+fn taxi_spline(view: &WorldView, shard: ShardId, row: &TaxiPassengerSpline) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
-    let mut sessions: std::collections::HashSet<_> =
-        view.spatial.viewers_of(EntityLayer::WorldEntity, key).into_iter().collect();
-    if let Some(owner) = view.session_of_owner(row.character_guid) {
-        sessions.insert(owner);
-    }
     let row = row.clone();
-    for session in sessions {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[row.character_guid]) {
         let row = row.clone();
         let tx = viewer.tx.clone();
         enqueue(&tx, move || {
-            super::subscriptions::taxi_spline_outbound(
-                &viewer.created,
-                viewer.self_guid,
-                &row,
-            )
+            super::subscriptions::taxi_spline_outbound(&viewer.created, viewer.self_guid, &row)
         });
     }
 }
@@ -1663,8 +1659,10 @@ fn teleport_appeared(view: &WorldView, shard: ShardId, row: &TeleportEvent) {
 }
 
 /// Addon messages are identity-addressed, with the addressed viewer as the wire sender.
-fn addon_message_appeared(view: &WorldView, row: &AddonMessage) {
-    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+fn addon_message_appeared(view: &WorldView, shard: ShardId, row: &AddonMessage) {
+    let Some(viewer) =
+        view.viewer_of_identity_on_shard(shard, BoundIdentity(row.recipient_identity))
+    else {
         return;
     };
     let row = row.clone();
@@ -1675,8 +1673,10 @@ fn addon_message_appeared(view: &WorldView, row: &AddonMessage) {
 }
 
 /// XP rows are delivered to the one viewer bound to their recipient identity.
-fn xp_appeared(view: &WorldView, row: &XpEvent) {
-    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+fn xp_appeared(view: &WorldView, shard: ShardId, row: &XpEvent) {
+    let Some(viewer) =
+        view.viewer_of_identity_on_shard(shard, BoundIdentity(row.recipient_identity))
+    else {
         return;
     };
     let row = row.clone();
@@ -1685,8 +1685,10 @@ fn xp_appeared(view: &WorldView, row: &XpEvent) {
 }
 
 /// Level-up rows are delivered to the one viewer bound to their recipient identity.
-fn levelup_appeared(view: &WorldView, row: &LevelupEvent) {
-    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+fn levelup_appeared(view: &WorldView, shard: ShardId, row: &LevelupEvent) {
+    let Some(viewer) =
+        view.viewer_of_identity_on_shard(shard, BoundIdentity(row.recipient_identity))
+    else {
         return;
     };
     let row = row.clone();
@@ -1934,11 +1936,8 @@ fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
 /// A skill row changed (line learned / skill-up). Self-only family, same owner-session-lookup
 /// audience as [`rest_state_appeared`] — the slot allocation runs in the job on the owner's own
 /// writer thread, against the viewer's `skill_slots` (the same map the per-player leg uses).
-fn skill_changed(view: &WorldView, row: &PlayerSkill) {
-    let Some(session) = view.session_of_owner(row.character_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+fn skill_changed(view: &WorldView, shard: ShardId, row: &PlayerSkill) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
     let (line, cur, max) = (row.skill_line, row.current, row.max_rank);
@@ -2899,7 +2898,7 @@ mod family_audience_tests {
         // Removing one table's row cannot erase the equal-valued GUID in the other table.
         assert_eq!(
             view.spatial.remove_entity(EntityLayer::WorldEntity, 77, 0),
-            Some(entering)
+            Some((entering, 0))
         );
         assert!(view
             .spatial
@@ -3125,62 +3124,81 @@ mod family_audience_tests {
         view.add_viewer_on_shard(owner.clone(), anchor, 0);
         view.add_viewer_on_shard(other, anchor, 0);
 
-        xp_appeared(
-            &view,
-            &XpEvent {
-                id: 1,
-                recipient_identity: owner.bound_identity,
-                killed_guid: 77,
-                total_exp: 123,
-                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
-                is_kill: true,
-            },
-        );
-        levelup_appeared(
-            &view,
-            &LevelupEvent {
-                id: 2,
-                recipient_identity: owner.bound_identity,
-                new_level: 10,
-                health_gained: 20,
-                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
-                mana_gained: 15,
-                strength_gained: 1,
-                agility_gained: 2,
-                stamina_gained: 3,
-                intellect_gained: 4,
-                spirit_gained: 5,
-            },
-        );
-        addon_message_appeared(
-            &view,
-            &AddonMessage {
-                id: 3,
-                recipient_identity: owner.bound_identity,
-                cmd: "progress".to_string(),
-                payload: "ready".to_string(),
-                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
-            },
-        );
+        for shard in [1, 0] {
+            xp_appeared(
+                &view,
+                shard,
+                &XpEvent {
+                    id: 1,
+                    recipient_identity: owner.bound_identity,
+                    killed_guid: 77,
+                    total_exp: 123,
+                    created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+                    is_kill: true,
+                },
+            );
+            levelup_appeared(
+                &view,
+                shard,
+                &LevelupEvent {
+                    id: 2,
+                    recipient_identity: owner.bound_identity,
+                    new_level: 10,
+                    health_gained: 20,
+                    created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+                    mana_gained: 15,
+                    strength_gained: 1,
+                    agility_gained: 2,
+                    stamina_gained: 3,
+                    intellect_gained: 4,
+                    spirit_gained: 5,
+                },
+            );
+            addon_message_appeared(
+                &view,
+                shard,
+                &AddonMessage {
+                    id: 3,
+                    recipient_identity: owner.bound_identity,
+                    cmd: "progress".to_string(),
+                    payload: "ready".to_string(),
+                    created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+                },
+            );
 
-        assert!(other_rx.try_recv().is_err(), "an unrelated identity receives nothing");
-        assert!(matches!(
-            queued_job(&owner_rx).as_slice(),
-            [Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(_))]
-        ));
-        assert!(matches!(
-            queued_job(&owner_rx).as_slice(),
-            [Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(_))]
-        ));
-        match queued_job(&owner_rx).as_slice() {
-            [Outbound::Raw { body, .. }] => assert_eq!(
-                &body[5..13],
-                &owner.self_guid.to_le_bytes(),
-                "the addon sender is the addressed viewer"
-            ),
-            _ => panic!("addon event must produce one raw SMSG_MESSAGECHAT"),
+            if shard == 1 {
+                assert!(
+                    owner_rx.try_recv().is_err(),
+                    "source Shard events cannot reach a destination owner"
+                );
+                assert!(other_rx.try_recv().is_err());
+                continue;
+            }
+            assert!(
+                other_rx.try_recv().is_err(),
+                "an unrelated identity receives nothing"
+            );
+            assert!(matches!(
+                queued_job(&owner_rx).as_slice(),
+                [Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(_))]
+            ));
+            assert!(matches!(
+                queued_job(&owner_rx).as_slice(),
+                [Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(_))]
+            ));
+            match queued_job(&owner_rx).as_slice() {
+                [Outbound::Raw { body, .. }] => assert_eq!(
+                    &body[5..13],
+                    &owner.self_guid.to_le_bytes(),
+                    "the addon sender is the addressed viewer"
+                ),
+                _ => panic!("addon event must produce one raw SMSG_MESSAGECHAT"),
+            }
+            assert!(
+                owner_rx.try_recv().is_err(),
+                "each identity row queues exactly once"
+            );
         }
-        assert!(owner_rx.try_recv().is_err(), "each identity row queues exactly once");
     }
 
     #[test]
@@ -3669,7 +3687,7 @@ fn reconcile_shard(
     objects: Vec<GameObject>,
     auras: Vec<Aura>,
 ) {
-    let old_auras = view.auras.replace_shard(shard, auras.iter().cloned());
+    let aura_targets = view.auras.replace_shard(shard, auras);
     let removed_entities = view.spatial.replace_shard(
         EntityLayer::WorldEntity,
         shard,
@@ -3710,13 +3728,25 @@ fn reconcile_shard(
         }
     }
     if let Some(coord) = view.shard(shard) {
-        for row in old_auras {
-            let count = view.auras.stealth_count(shard, row.target_guid);
-            aura_removed(view, &coord, shard, &row, count);
-        }
-        for row in auras {
-            let count = view.auras.stealth_count(shard, row.target_guid);
-            aura_applied(view, &coord, shard, &row, count);
+        for (target_guid, previous) in aura_targets {
+            let previous = Arc::new(previous);
+            let key =
+                view.spatial
+                    .entity_cell_on_shard(EntityLayer::WorldEntity, target_guid, shard);
+            for viewer in view.cell_audience(shard, key, BOX_HALF_SPAN, &[target_guid]) {
+                let (coord, view, previous) = (coord.clone(), view.clone(), previous.clone());
+                let tx = viewer.tx.clone();
+                enqueue(&tx, move || {
+                    super::subscriptions::aura_snapshot_outbound(
+                        &coord,
+                        &view,
+                        shard,
+                        &viewer,
+                        target_guid,
+                        &previous,
+                    )
+                });
+            }
         }
     }
     // Existing viewers keep their CREATE dedup state. Newly resident rows are offered normally.
@@ -3726,6 +3756,12 @@ fn reconcile_shard(
         }
         let row = Arc::new(row);
         for session in view.world_entity_recipients(shard, row.guid, entity_key(&row)) {
+            if view
+                .viewer(session)
+                .is_some_and(|v| v.created.lock().unwrap().contains(&row.guid))
+            {
+                continue;
+            }
             offer_create_job(view, shard, session, &row);
         }
     }

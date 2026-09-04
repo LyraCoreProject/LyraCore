@@ -298,6 +298,7 @@ impl WorldIndex {
     /// Where the index believes `guid` is: the anchor of a relay driven by a table with no cell of
     /// its own (an aura names its target, a chat line its speaker). `None` for a guid it has never
     /// seen (a row on a table it does not index, or one deleted already).
+    #[cfg(test)]
     pub fn entity_cell(&self, layer: EntityLayer, guid: u64) -> Option<CellKey> {
         let inner = self.lock();
         Self::layer(&inner, layer)
@@ -555,6 +556,7 @@ impl WorldIndex {
     }
 
     /// Live sizes, for the periodic ops log line: `(entities, viewers, occupied entity cells)`.
+    #[cfg(test)]
     pub fn stats(&self, layer: EntityLayer) -> (usize, usize, usize) {
         let inner = self.lock();
         let entities = Self::layer(&inner, layer);

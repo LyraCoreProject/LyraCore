@@ -641,6 +641,116 @@ fn a_transfer_keeps_each_shards_auras_independent() {
 }
 
 #[test]
+fn a_reconnect_groups_aura_refreshes_by_target() {
+    let index = AuraIndex::default();
+    for id in 0..32 {
+        index.upsert(0, &aura(id, PLAYER_BASE, 0xA0));
+    }
+    index.upsert(0, &aura(32, PLAYER_BASE + 1, A_STEALTH));
+    let mut current: Vec<_> = (0..32).map(|id| aura(id, PLAYER_BASE, 0xA0)).collect();
+    current.push(aura(33, PLAYER_BASE + 2, 0xA0));
+
+    let refreshes = index.replace_shard(0, current);
+    assert_eq!(refreshes.len(), 3, "32 buffs need one target refresh");
+    assert_eq!(refreshes[&PLAYER_BASE].len(), 32);
+    assert_eq!(refreshes[&(PLAYER_BASE + 1)].len(), 1);
+    assert!(refreshes[&(PLAYER_BASE + 2)].is_empty());
+    assert!(index.on_target(0, PLAYER_BASE + 1).is_empty());
+}
+
+#[test]
+fn an_old_shard_cannot_move_or_change_skills_on_a_destination_viewer() {
+    let view = WorldView::new(true);
+    let (tx, rx) = SessionTx::with_depth(0);
+    let destination = viewer(1, PLAYER_BASE, tx);
+    destination.created.lock().unwrap().insert(CREATURE_BASE);
+    view.add_viewer_on_shard(destination.clone(), CellKey::at(0, 0, 0, 0), 1);
+    motion(
+        &view,
+        0,
+        &EntityMotion {
+            guid: CREATURE_BASE,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            opcode: 0,
+            movement_info: vec![],
+            seq: 1,
+            cell: 0,
+        },
+    );
+    creature_leg(
+        &view,
+        0,
+        &CreatureSpline {
+            guid: CREATURE_BASE,
+            start_micros: 0,
+            dur_ms: 100,
+            sx: 0.0,
+            sy: 0.0,
+            sz: 0.0,
+            dx: 1.0,
+            dy: 0.0,
+            dz: 0.0,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            spline_id: 1,
+            run: true,
+            cell: 0,
+            facing: false,
+            facing_angle: 0.0,
+        },
+    );
+    skill_changed(
+        &view,
+        0,
+        &PlayerSkill {
+            id: 1,
+            character_guid: PLAYER_BASE,
+            owner_identity: destination.bound_identity,
+            skill_line: 43,
+            current: 10,
+            max_rank: 50,
+        },
+    );
+    let spline = TaxiPassengerSpline {
+        character_guid: PLAYER_BASE,
+        map_id: 0,
+        instance_id: 0,
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
+        start_x: 0.0,
+        start_y: 0.0,
+        start_z: 0.0,
+        points: vec![1.0, 0.0, 0.0],
+        duration_ms: 100,
+        spline_id: 1,
+    };
+    taxi_spline(&view, 0, &spline);
+    assert!(rx.try_recv().is_err());
+    assert!(destination.motion_pending.entity.lock().unwrap().is_empty());
+    assert!(destination
+        .motion_pending
+        .creature
+        .lock()
+        .unwrap()
+        .is_empty());
+    taxi_spline(&view, 1, &spline);
+    let Outbound::Job(job) = rx.try_recv().unwrap() else {
+        panic!("expected the current Shard's taxi Relay");
+    };
+    assert_eq!(
+        job().len(),
+        1,
+        "the passenger still receives its own current spline"
+    );
+}
+
+#[test]
 fn old_shard_combat_cannot_address_a_transferred_character() {
     let mut rng = Rng::new(74);
     let realm = spread_realm(&mut rng);

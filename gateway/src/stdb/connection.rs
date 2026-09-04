@@ -1503,6 +1503,7 @@ mod pump_tests {
         row: Mutex<Option<u64>>,
         projected: Mutex<Option<u64>>,
         registered: AtomicBool,
+        pending_registration: AtomicBool,
     }
 
     #[tokio::test]
@@ -1526,35 +1527,42 @@ mod pump_tests {
 
     #[tokio::test]
     async fn a_delta_arriving_during_snapshot_setup_is_applied_after_the_snapshot() {
-        let cache = ExternalCache::default();
-        *cache.row.lock().unwrap() = Some(1);
-        let (setup, work) = mpsc::unbounded_channel::<PumpWork<ExternalCache>>();
-        let (incoming, messages) = mpsc::unbounded_channel();
-        let messages = tokio::sync::Mutex::new(messages);
-        setup
-            .send(Box::new(move |cache| {
-                cache.registered.store(true, Ordering::Relaxed);
-                let snapshot = *cache.row.lock().unwrap();
-                incoming.send(Some(2)).unwrap();
-                incoming.send(None).unwrap();
-                *cache.projected.lock().unwrap() = snapshot;
-            }))
-            .unwrap();
+        for (snapshot, delta) in [(None, Some(2)), (Some(1), Some(2)), (Some(1), None)] {
+            let cache = ExternalCache::default();
+            *cache.row.lock().unwrap() = snapshot;
+            let (setup, work) = mpsc::unbounded_channel::<PumpWork<ExternalCache>>();
+            let (incoming, messages) = mpsc::unbounded_channel::<Result<Option<u64>, ()>>();
+            let messages = tokio::sync::Mutex::new(messages);
+            setup
+                .send(Box::new(move |cache| {
+                    cache.pending_registration.store(true, Ordering::Relaxed);
+                    let snapshot = *cache.row.lock().unwrap();
+                    incoming.send(Ok(delta)).unwrap();
+                    incoming.send(Err(())).unwrap();
+                    *cache.projected.lock().unwrap() = snapshot;
+                }))
+                .unwrap();
 
-        let result = pump_messages(&cache, work, || async {
-            let Some(Some(row)) = messages.lock().await.recv().await else {
-                return Err(());
-            };
-            *cache.row.lock().unwrap() = Some(row);
-            if cache.registered.load(Ordering::Relaxed) {
-                *cache.projected.lock().unwrap() = Some(row);
-            }
-            Ok(())
-        })
-        .await;
+            let result = pump_messages(&cache, work, || async {
+                // SDK 2.7.1 applies queued registrations before any waiting remote delta.
+                if cache.pending_registration.swap(false, Ordering::Relaxed) {
+                    cache.registered.store(true, Ordering::Relaxed);
+                    return Ok(());
+                }
+                let Some(Ok(row)) = messages.lock().await.recv().await else {
+                    return Err(());
+                };
+                *cache.row.lock().unwrap() = row;
+                if cache.registered.load(Ordering::Relaxed) {
+                    *cache.projected.lock().unwrap() = row;
+                }
+                Ok(())
+            })
+            .await;
 
-        assert_eq!(result, Err(()));
-        assert_eq!(*cache.projected.lock().unwrap(), Some(2));
+            assert_eq!(result, Err(()));
+            assert_eq!(*cache.projected.lock().unwrap(), delta);
+        }
     }
 }
 

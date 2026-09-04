@@ -1753,6 +1753,71 @@ pub(crate) fn aura_delete_outbound(
     out
 }
 
+/// Reconnect sends one current aura array per target and observer. Owner timers remain per aura,
+/// while speed, armor, and sheet values refresh once even when several auras changed offline.
+pub(crate) fn aura_snapshot_outbound(
+    coord: &Coordinator,
+    view: &WorldView,
+    shard: super::world_index::ShardId,
+    viewer: &Viewer,
+    target_guid: u64,
+    previous: &[Aura],
+) -> Vec<Outbound> {
+    let current = view.auras.on_target(shard, target_guid);
+    let stealth_count = current
+        .iter()
+        .filter(|row| row.eff_kind == A_STEALTH)
+        .count();
+    let mut out = Vec::new();
+    if let Some(stealth) = current
+        .iter()
+        .chain(previous)
+        .find(|row| row.eff_kind == A_STEALTH)
+    {
+        out.extend(stealth_visibility(
+            stealth_count,
+            view,
+            viewer.session,
+            coord,
+            &viewer.created,
+            stealth,
+            viewer.self_guid,
+            stealth_count > 0,
+        ));
+    }
+    if target_guid != viewer.self_guid && !viewer.created.lock().unwrap().contains(&target_guid) {
+        return out;
+    }
+    out.push(aura_sync(current.iter().cloned(), target_guid));
+    if target_guid != viewer.self_guid {
+        return out;
+    }
+    out.extend(
+        current
+            .iter()
+            .filter_map(|row| aura_duration_packet(row, viewer.self_guid)),
+    );
+    out.extend(
+        current
+            .iter()
+            .chain(previous)
+            .find_map(|row| run_speed_packet(current.iter().cloned(), row, viewer.self_guid)),
+    );
+    out.extend(
+        current
+            .iter()
+            .chain(previous)
+            .find_map(|row| armor_packet(coord, row, viewer.self_guid)),
+    );
+    out.extend(
+        current
+            .iter()
+            .chain(previous)
+            .find_map(|row| sheet_packet(coord, row, viewer.self_guid)),
+    );
+    out
+}
+
 /// Trade-status relay (#120): `game_trade_event.kind` → the `SMSG_TRADE_STATUS` variant, to the
 /// row's recipient and nobody else (audience resolved by the caller, the `whisper_event_outbound`
 /// shape). The kind byte is `lyracore_shared::trade::event_kind` — NOT the vanilla discriminant;
@@ -5473,12 +5538,13 @@ mod tests {
     #[test]
     fn the_realm_private_relays_ride_the_recipient_keyed_dispatchers() {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
+        let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            body.contains("wire_insert_live(db.game_whisper_event(), \"realm.game_whisper_event.insert\", &view, |v, row| { whisper_appeared(v, row) });"),
+            compact.contains("wire_insert_live(db.game_whisper_event(),\"realm.game_whisper_event.insert\",&view,None,|v,row|whisper_appeared(v,row),);"),
             "arm_realm_private no longer relays realm-core whispers through `whisper_appeared`"
         );
         assert!(
-            body.contains("wire_insert_live(db.game_group_event(), \"realm.game_group_event.insert\", &view, move |v, row| { group_event_appeared(v, &coord, row) });"),
+            compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,None,move|v,row|group_event_appeared(v,&coord,row),);"),
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
@@ -6204,7 +6270,7 @@ mod tests {
     /// freeze after their first step, or never move at all. Same for the creature-leg twin.
     #[test]
     fn both_halves_of_the_motion_and_spline_relays_are_registered_286() {
-        let arm = decommented(top_level_fn_body_of("world_view.rs", "register_shard_callbacks"));
+        let arm: String = decommented(top_level_fn_body_of("world_view.rs", "register_shard_callbacks")).chars().filter(|c| !c.is_whitespace()).collect();
         // #490 factored every registration through `wire_insert`/`wire_update` (world_view.rs),
         // so the literal `.on_insert(`/`.on_update(` chain off the table handle is gone from
         // `arm_shard`'s own body — what's left to scan for is the (helper, table, label) triple
@@ -6224,7 +6290,7 @@ mod tests {
         // And the dispatch routes them through the cell index rather than broadcasting.
         let m = decommented(top_level_fn_body_of("world_view.rs", "motion"));
         assert!(
-            m.contains("view.spatial.viewers_of(EntityLayer::WorldEntity, key)"),
+            m.contains("view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[])"),
             "peer motion no longer asks the cell index who can see the mover — either every session \
              gets every mover (the fan-out this issue removed) or none do"
         );
