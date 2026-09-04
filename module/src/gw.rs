@@ -469,8 +469,6 @@ pub fn gw_use_gameobject(
     crate::actor::use_gameobject(ctx, actor_guid, go_guid)
 }
 
-/// [`crate::actor::trainer_buy`] behind the gateway gate.
-///
 /// Taxi flight is an expected trainer Refusal. Missing actors still carry the generic actor error,
 /// which the Gateway treats as a failure with an unknown result.
 fn trainer_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
@@ -485,6 +483,7 @@ fn trainer_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
     Ok(actor)
 }
 
+/// [`crate::actor::trainer_buy`] behind the gateway gate.
 #[reducer]
 pub fn gw_trainer_buy(
     ctx: &ReducerContext,
