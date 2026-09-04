@@ -27,7 +27,7 @@ use crate::{
 pub(crate) const TRAINER_RANGE_SQ: f32 = 100.0;
 
 /// Reducer edge: only the tag crosses to the gateway; the detail stays in module logs.
-fn refused(refusal: TrainerRefusal, detail: &str) -> String {
+pub(crate) fn refused(refusal: TrainerRefusal, detail: &str) -> String {
     let tag = refusal.as_tag();
     spacetimedb::log::info!("trainer refused {tag}: {detail}");
     tag.to_string()
