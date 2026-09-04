@@ -64,6 +64,7 @@ impl PlayerSubscriptions {
         let mut identity = [0; 32];
         identity[..8].copy_from_slice(&self_guid.to_le_bytes());
         let viewer = Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session: view.next_session_id(),
             self_guid,
             bound_identity: spacetimedb_sdk::Identity::from_byte_array(identity),
@@ -95,6 +96,9 @@ impl PlayerSubscriptions {
     /// remain idempotent.
     pub(crate) fn unregister_viewer(&mut self) {
         if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
+            viewer
+                .active
+                .store(false, std::sync::atomic::Ordering::Release);
             view.remove_viewer(viewer.session);
         }
     }
@@ -704,10 +708,25 @@ fn peer_create_gate(
 /// expects of its callers). Module-level (not local to `on_chat`) so the range constants live
 /// beside the discriminant they gate.
 const CHAT_YELL: u8 = 1;
-/// SAY proximity range, squared (vanilla ~25yd). See [`chat_in_range`].
-const SAY_RANGE_SQ: f32 = 25.0 * 25.0; // 625.0 yd²
-/// YELL proximity range, squared (vanilla ~300yd). Same rationale as `SAY_RANGE_SQ`.
-const YELL_RANGE_SQ: f32 = 300.0 * 300.0; // 90_000.0 yd²
+/// SAY proximity range (vanilla ~25yd). See [`chat_in_range`].
+const SAY_RANGE_YD: f32 = 25.0;
+/// YELL proximity range (vanilla ~300yd). Same rationale as `SAY_RANGE_YD`.
+const YELL_RANGE_YD: f32 = 300.0;
+#[cfg(test)]
+const SAY_RANGE_SQ: f32 = SAY_RANGE_YD * SAY_RANGE_YD; // 625.0 yd²
+#[cfg(test)]
+const YELL_RANGE_SQ: f32 = YELL_RANGE_YD * YELL_RANGE_YD; // 90_000.0 yd²
+
+/// How far a `game_chat_event` line of this kind carries. Every kind on that table is
+/// range-bound: SAY and text emotes at SAY range, YELL at its own; party, guild and whispers
+/// ride other tables.
+pub(crate) fn chat_range_yd(chat_type: u8) -> f32 {
+    if chat_type == CHAT_YELL {
+        YELL_RANGE_YD
+    } else {
+        SAY_RANGE_YD
+    }
+}
 
 // ==================================================================================================
 //  The SHARED-dispatch relay bodies.
@@ -738,6 +757,8 @@ const YELL_RANGE_SQ: f32 = 300.0 * 300.0; // 90_000.0 yd²
               shared-dispatch path's differential test exists to prevent"]
 pub(crate) fn offer_peer_create_for(
     coord: &Coordinator,
+    view: &WorldView,
+    shard: super::world_index::ShardId,
     viewer: &Viewer,
     row: &WorldEntity,
 ) -> Vec<Outbound> {
@@ -746,18 +767,13 @@ pub(crate) fn offer_peer_create_for(
         return Vec::new();
     }
     let viewer_is_ghost = viewer.gates.is_ghost();
-    // Short-circuit BEFORE the aura scan: a spirit healer viewed by a living player is refused
-    // regardless of stealth, and the code before the shared-connection model returned here without
-    // ever touching game_aura.
+    // A spirit healer viewed by a living player is refused regardless of stealth.
     if row.npc_flags & SPIRITHEALER_NPC_FLAG != 0 && !viewer_is_ghost {
         return Vec::new();
     }
+    let row_is_stealthed = view.auras.is_stealthed(shard, row.guid);
     let guard = coord.0.coord();
     let db = &guard.conn.db;
-    let row_is_stealthed = db
-        .game_aura()
-        .iter()
-        .any(|a| a.target_guid == row.guid && a.eff_kind == A_STEALTH);
     if !peer_create_gate(
         row.guid,
         viewer.self_guid,
@@ -861,6 +877,8 @@ fn append_encounter_equip_after_create(
               shared-dispatch path's differential test exists to prevent"]
 pub(crate) fn relay_entity_update(
     coord: &Coordinator,
+    view: &WorldView,
+    shard: super::world_index::ShardId,
     viewer: &Viewer,
     old: &WorldEntity,
     new: &WorldEntity,
@@ -870,7 +888,7 @@ pub(crate) fn relay_entity_update(
     if new.guid != viewer.self_guid {
         let shown = viewer.created.lock().unwrap().contains(&new.guid);
         if is_update_reentry(new.guid, viewer.self_guid, shown) {
-            return offer_peer_create_for(coord, viewer, new);
+            return offer_peer_create_for(coord, view, shard, viewer, new);
         }
     }
     let dynamic_flags = {
@@ -906,7 +924,7 @@ pub(crate) fn relay_entity_update(
             drop(guard);
             for h in healers {
                 if is_ghost {
-                    out.extend(offer_peer_create_for(coord, viewer, &h));
+                    out.extend(offer_peer_create_for(coord, view, shard, viewer, &h));
                 } else if viewer.created.lock().unwrap().remove(&h.guid) {
                     out.push(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
                         codec::build_destroy_object(h.guid),
@@ -1100,15 +1118,10 @@ pub(crate) fn relay_breath_event(
 /// viewer's `created` set (no point animating an invisible attacker's swing — the victim's health
 /// still moves via the entity VALUES relay if the victim is in scope).
 ///
-/// `tx` is used ONLY for the delayed ranged-impact damage log (auto-shot: the number arrives WITH the
-/// arrow, via a thread per landed shot — a shared timer wheel if archer armies happen); every
-/// immediate packet is RETURNED so the shared path writes it at the job's queue position.
-pub(crate) fn combat_event_outbound(
-    tx: &SessionTx,
-    created: &Mutex<HashSet<u64>>,
-    row: &CombatEvent,
-) -> Vec<Outbound> {
-    if !created.lock().unwrap().contains(&row.attacker_guid) {
+/// Immediate packets return to the writer at this job's queue position. A delayed damage
+/// log returns through the same World Session lifetime check after its delay.
+pub(crate) fn combat_event_outbound(viewer: &Arc<Viewer>, row: &CombatEvent) -> Vec<Outbound> {
+    if !viewer.created.lock().unwrap().contains(&row.attacker_guid) {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -1156,11 +1169,11 @@ pub(crate) fn combat_event_outbound(
             // the health there) — hold the LOG to the same moment so the number arrives
             // WITH the arrow, not at the muzzle.
             if row.impact_delay_ms > 0 {
-                let tx_late = tx.clone();
+                let viewer = viewer.clone();
                 let delay = std::time::Duration::from_millis(row.impact_delay_ms as u64);
                 std::thread::spawn(move || {
                     std::thread::sleep(delay);
-                    let _ = tx_late.send(msg);
+                    super::world_view::enqueue(viewer, move |_| vec![msg]);
                 });
             } else {
                 out.push(msg);
@@ -1178,9 +1191,9 @@ pub(crate) fn combat_event_outbound(
             row.blocked_amount,
             0,
         );
-        out.push(Outbound::One(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(
-            Box::new(m),
-        )));
+        out.push(Outbound::One(
+            ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(m)),
+        ));
     }
     // C2: on a MELEE killing blow, tell the attacker to leave combat stance. The target itself
     // vanishes via the game_world_entity on_delete → SMSG_DESTROY_OBJECT relay. A RANGED kill
@@ -1445,6 +1458,9 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
     out
 }
 
+/// The full aura-array VALUES block for `target_guid`. `auras` is that unit's current aura set
+/// ([`crate::stdb::world_view::AuraIndex::on_target`]); the filter only guards a caller that
+/// hands over a wider set.
 pub(crate) fn aura_sync(
     auras: impl Iterator<Item = crate::stdb::bindings::Aura>,
     target_guid: u64,
@@ -1525,10 +1541,10 @@ pub(crate) fn sheet_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) 
 }
 // Stealth peer-visibility: when a NON-self peer's A_STEALTH presence crosses the 0↔1 boundary,
 // HIDE it from this viewer (SMSG_DESTROY_OBJECT + evict from `created`) on the gain, REVEAL it
-// (re-CREATE + re-insert into `created`) on the loss. The recipient set is implicit — every
-// viewer's own connection drains the broadcast `game_aura` table and runs THIS closure, so each
-// in-scope client hides/reveals on its own `tx`. Self is excluded (`changed.target_guid !=
-// self_guid`) so a stealther never hides from itself. Idempotency is the `created` set: HIDE only
+// (re-CREATE + re-insert into `created`) on the loss. The dispatch runs this once per viewer
+// whose box covers the stealther, so each in-scope client hides/reveals on its own `tx`. Self is
+// excluded (`changed.target_guid != self_guid`) so a stealther never hides from itself.
+// Idempotency is the `created` set: HIDE only
 // fires (and DESTROYs) if the guid was created; REVEAL only fires (and CREATEs) if it wasn't —
 // re-hiding a hidden peer or re-revealing a visible one is a no-op. The stealther's entity row is
 // read from the firing connection's cache (`ctx.db`); a guid the viewer can't see in scope has no
@@ -1610,15 +1626,14 @@ pub(crate) fn stealth_visibility(
     }
 }
 
-/// Aura insert leg — the shared-dispatch twin of the per-player
-/// `on_aura_insert` closure. Same helper stack (`aura_sync`/`aura_duration_packet`/
-/// `run_speed_packet`/`armor_packet`/`stealth_visibility`); the aura iterators read the
-/// COORDINATOR cache (identical rows — both subscriptions were `SELECT *`), and
-/// `stealth_count` was computed on the coordinator pump, where that cache is exactly post-change.
+/// Aura insert leg: array sync, self-only duration/run-speed/armor/sheet packets, and the
+/// stealth HIDE transition. The target's current aura set comes from the gateway's aura index,
+/// post-change like the cache it mirrors; `stealth_count` was taken on the pump.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn aura_insert_outbound(
     coord: &Coordinator,
     view: &WorldView,
+    shard: super::world_index::ShardId,
     session: u64,
     created: &Arc<Mutex<HashSet<u64>>>,
     self_guid: u64,
@@ -1626,22 +1641,19 @@ pub(crate) fn aura_insert_outbound(
     stealth_count: usize,
 ) -> Vec<Outbound> {
     let mut out = Vec::new();
-    // See the per-player twin: a stealth-hidden peer (not in `created`) must get NO per-peer
-    // relay — a partial VALUES on a DESTROYed object is a client crash/desync vector.
+    // A stealth-hidden peer (not in `created`) must get NO per-peer relay: a partial VALUES on
+    // a DESTROYed object is a client crash/desync vector.
     let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
-    if visible {
-        let guard = coord.0.coord();
-        out.push(aura_sync(guard.conn.db.game_aura().iter(), row.target_guid));
+    let current = visible.then(|| view.auras.on_target(shard, row.target_guid));
+    if let Some(current) = &current {
+        out.push(aura_sync(current.iter().cloned(), row.target_guid));
     }
     if let Some(o) = aura_duration_packet(row, self_guid) {
         out.push(o);
     }
-    if visible {
-        {
-            let guard = coord.0.coord();
-            if let Some(o) = run_speed_packet(guard.conn.db.game_aura().iter(), row, self_guid) {
-                out.push(o);
-            }
+    if let Some(current) = current {
+        if let Some(o) = run_speed_packet(current.into_iter(), row, self_guid) {
+            out.push(o);
         }
         if let Some(o) = armor_packet(coord, row, self_guid) {
             out.push(o);
@@ -1663,9 +1675,11 @@ pub(crate) fn aura_insert_outbound(
     out
 }
 
-/// Aura update leg — twin of `on_aura_update` (no stealth transition on an update).
+/// Aura update leg (no stealth transition on an update).
 pub(crate) fn aura_update_outbound(
     coord: &Coordinator,
+    view: &WorldView,
+    shard: super::world_index::ShardId,
     created: &Arc<Mutex<HashSet<u64>>>,
     self_guid: u64,
     row: &Aura,
@@ -1673,9 +1687,9 @@ pub(crate) fn aura_update_outbound(
 ) -> Vec<Outbound> {
     let mut out = Vec::new();
     let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
-    if visible {
-        let guard = coord.0.coord();
-        out.push(aura_sync(guard.conn.db.game_aura().iter(), row.target_guid));
+    let current = visible.then(|| view.auras.on_target(shard, row.target_guid));
+    if let Some(current) = &current {
+        out.push(aura_sync(current.iter().cloned(), row.target_guid));
     }
     // Re-send the timer only when the duration window actually changed (a refresh).
     if expires_changed {
@@ -1683,12 +1697,9 @@ pub(crate) fn aura_update_outbound(
             out.push(o);
         }
     }
-    if visible {
-        {
-            let guard = coord.0.coord();
-            if let Some(o) = run_speed_packet(guard.conn.db.game_aura().iter(), row, self_guid) {
-                out.push(o);
-            }
+    if let Some(current) = current {
+        if let Some(o) = run_speed_packet(current.into_iter(), row, self_guid) {
+            out.push(o);
         }
         if let Some(o) = armor_packet(coord, row, self_guid) {
             out.push(o);
@@ -1700,12 +1711,13 @@ pub(crate) fn aura_update_outbound(
     out
 }
 
-/// Aura delete leg — twin of `on_aura_delete` (the REVEAL half of stealth). The coordinator
-/// cache is post-delete by callback contract, so the sync/speed/armor folds read the remaining set.
+/// Aura delete leg (the REVEAL half of stealth). The aura index is post-delete, so the
+/// sync/speed folds read the remaining set.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn aura_delete_outbound(
     coord: &Coordinator,
     view: &WorldView,
+    shard: super::world_index::ShardId,
     session: u64,
     created: &Arc<Mutex<HashSet<u64>>>,
     self_guid: u64,
@@ -1715,12 +1727,10 @@ pub(crate) fn aura_delete_outbound(
     let mut out = Vec::new();
     let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
     if visible {
-        {
-            let guard = coord.0.coord();
-            out.push(aura_sync(guard.conn.db.game_aura().iter(), row.target_guid));
-            if let Some(o) = run_speed_packet(guard.conn.db.game_aura().iter(), row, self_guid) {
-                out.push(o);
-            }
+        let current = view.auras.on_target(shard, row.target_guid);
+        out.push(aura_sync(current.iter().cloned(), row.target_guid));
+        if let Some(o) = run_speed_packet(current.into_iter(), row, self_guid) {
+            out.push(o);
         }
         if let Some(o) = armor_packet(coord, row, self_guid) {
             out.push(o);
@@ -1739,6 +1749,71 @@ pub(crate) fn aura_delete_outbound(
         self_guid,
         false,
     ));
+    out
+}
+
+/// Reconnect sends one current aura array per target and observer. Owner timers remain per aura,
+/// while speed, armor, and sheet values refresh once even when several auras changed offline.
+pub(crate) fn aura_snapshot_outbound(
+    coord: &Coordinator,
+    view: &WorldView,
+    shard: super::world_index::ShardId,
+    viewer: &Viewer,
+    target_guid: u64,
+    previous: &[Aura],
+) -> Vec<Outbound> {
+    let current = view.auras.on_target(shard, target_guid);
+    let stealth_count = current
+        .iter()
+        .filter(|row| row.eff_kind == A_STEALTH)
+        .count();
+    let mut out = Vec::new();
+    if let Some(stealth) = current
+        .iter()
+        .chain(previous)
+        .find(|row| row.eff_kind == A_STEALTH)
+    {
+        out.extend(stealth_visibility(
+            stealth_count,
+            view,
+            viewer.session,
+            coord,
+            &viewer.created,
+            stealth,
+            viewer.self_guid,
+            stealth_count > 0,
+        ));
+    }
+    if target_guid != viewer.self_guid && !viewer.created.lock().unwrap().contains(&target_guid) {
+        return out;
+    }
+    out.push(aura_sync(current.iter().cloned(), target_guid));
+    if target_guid != viewer.self_guid {
+        return out;
+    }
+    out.extend(
+        current
+            .iter()
+            .filter_map(|row| aura_duration_packet(row, viewer.self_guid)),
+    );
+    out.extend(
+        current
+            .iter()
+            .chain(previous)
+            .find_map(|row| run_speed_packet(current.iter().cloned(), row, viewer.self_guid)),
+    );
+    out.extend(
+        current
+            .iter()
+            .chain(previous)
+            .find_map(|row| armor_packet(coord, row, viewer.self_guid)),
+    );
+    out.extend(
+        current
+            .iter()
+            .chain(previous)
+            .find_map(|row| sheet_packet(coord, row, viewer.self_guid)),
+    );
     out
 }
 
@@ -2238,11 +2313,8 @@ pub(crate) fn chat_event_outbound(
     row: &ChatEvent,
 ) -> Vec<Outbound> {
     if row.sender_guid != self_guid {
-        let range_sq = if row.chat_type == CHAT_YELL {
-            YELL_RANGE_SQ
-        } else {
-            SAY_RANGE_SQ // SAY and any future proximity type default to SAY range
-        };
+        let range_yd = chat_range_yd(row.chat_type);
+        let range_sq = range_yd * range_yd;
         let guard = coord.0.coord();
         let speaker = match guard
             .conn
@@ -3287,6 +3359,7 @@ impl Coordinator {
                 .store(is_ghost, std::sync::atomic::Ordering::Relaxed);
         }
         let viewer = Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session,
             self_guid,
             bound_identity: self_identity,
@@ -3595,6 +3668,7 @@ mod tests {
     fn viewer_with_created(creature_guid: u64) -> Viewer {
         let (tx, _rx) = SessionTx::with_depth(0);
         Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session: 1,
             self_guid: 7,
             bound_identity: spacetimedb_sdk::Identity::from_byte_array([0; 32]),
@@ -5465,12 +5539,13 @@ mod tests {
     #[test]
     fn the_realm_private_relays_ride_the_recipient_keyed_dispatchers() {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
+        let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            body.contains("wire_insert_live(db.game_whisper_event(), \"realm.game_whisper_event.insert\", &view, |v, row| { whisper_appeared(v, row) });"),
+            compact.contains("wire_insert_live(db.game_whisper_event(),\"realm.game_whisper_event.insert\",&view,|v,row|whisper_appeared(v,row),);"),
             "arm_realm_private no longer relays realm-core whispers through `whisper_appeared`"
         );
         assert!(
-            body.contains("wire_insert_live(db.game_group_event(), \"realm.game_group_event.insert\", &view, move |v, row| { group_event_appeared(v, &coord, row) });"),
+            compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,move|v,row|group_event_appeared(v,&coord,row),);"),
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
@@ -6196,7 +6271,13 @@ mod tests {
     /// freeze after their first step, or never move at all. Same for the creature-leg twin.
     #[test]
     fn both_halves_of_the_motion_and_spline_relays_are_registered_286() {
-        let arm = decommented(top_level_fn_body_of("world_view.rs", "arm_shard"));
+        let arm: String = decommented(top_level_fn_body_of(
+            "world_view.rs",
+            "register_shard_callbacks",
+        ))
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
         // #490 factored every registration through `wire_insert`/`wire_update` (world_view.rs),
         // so the literal `.on_insert(`/`.on_update(` chain off the table handle is gone from
         // `arm_shard`'s own body — what's left to scan for is the (helper, table, label) triple
@@ -6216,7 +6297,7 @@ mod tests {
         // And the dispatch routes them through the cell index rather than broadcasting.
         let m = decommented(top_level_fn_body_of("world_view.rs", "motion"));
         assert!(
-            m.contains("view.spatial.viewers_of(EntityLayer::WorldEntity, key)"),
+            m.contains("view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[])"),
             "peer motion no longer asks the cell index who can see the mover — either every session \
              gets every mover (the fan-out this issue removed) or none do"
         );

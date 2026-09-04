@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, Result};
+use lyracore_shared::spatial::{BOX_HALF_SPAN, GRID_CELL_SIZE};
 use spacetimedb_sdk::{Table, TableWithPrimaryKey};
 use wow_world_messages::vanilla::WeatherChangeType;
 
@@ -56,6 +57,8 @@ use crate::world::{Outbound, SessionTx};
 ///
 /// Every field here is session relay state used by the shared callbacks' writer jobs.
 pub(crate) struct Viewer {
+    /// Cleared when this World Session leaves. Queued Relays must not reach its replacement.
+    pub(crate) active: std::sync::atomic::AtomicBool,
     pub(crate) session: SessionId,
     pub(crate) self_guid: u64,
     /// The account identity stamped on identity-addressed event rows.
@@ -77,7 +80,7 @@ pub(crate) struct Viewer {
     /// weather for, so the first stored value is never a phantom crossing.
     pub(crate) zone_id: AtomicU32,
     pub(crate) tx: SessionTx,
-    /// The per-viewer "already shown" dedup set — the exactly-once guarantee behind every CREATE.
+    /// WorldEntity GUIDs already shown to this viewer.
     pub(crate) created: Arc<Mutex<HashSet<u64>>>,
     pub(crate) gates: Arc<ViewerGates>,
     /// PLAYER_SKILL_INFO slot map `(skill_line → slot, next_free)` — seeded at login from the same
@@ -160,6 +163,7 @@ impl ViewerRegistry {
     fn register(&mut self, viewer: Arc<Viewer>, shard: ShardId) {
         let session = viewer.session;
         if let Some(previous) = self.by_session.remove(&session) {
+            previous.viewer.active.store(false, Ordering::Release);
             self.remove_indexes(session, &previous);
         }
         self.session_of_owner.insert(viewer.self_guid, session);
@@ -177,6 +181,7 @@ impl ViewerRegistry {
         let Some(registered) = self.by_session.remove(&session) else {
             return;
         };
+        registered.viewer.active.store(false, Ordering::Release);
         self.remove_indexes(session, &registered);
     }
 
@@ -198,11 +203,98 @@ impl ViewerRegistry {
     }
 }
 
-/// The gateway-wide shared view: one layered spatial index, the live viewer registry, and the
-/// shard table the index's [`ShardId`]s point into.
+/// Auras indexed by shard and target. Transfer copies on different shards remain independent.
+#[derive(Default)]
+pub(crate) struct AuraIndex {
+    by_target: Mutex<HashMap<(ShardId, u64), Vec<Aura>>>,
+}
+
+impl AuraIndex {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(ShardId, u64), Vec<Aura>>> {
+        self.by_target.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub(crate) fn upsert(&self, shard: ShardId, row: &Aura) {
+        let mut by_target = self.lock();
+        let rows = by_target.entry((shard, row.target_guid)).or_default();
+        match rows.iter_mut().find(|a| a.id == row.id) {
+            Some(slot) => *slot = row.clone(),
+            None => rows.push(row.clone()),
+        }
+    }
+
+    pub(crate) fn remove(&self, shard: ShardId, row: &Aura) {
+        let mut by_target = self.lock();
+        let key = (shard, row.target_guid);
+        if let Some(rows) = by_target.get_mut(&key) {
+            rows.retain(|a| a.id != row.id);
+            if rows.is_empty() {
+                by_target.remove(&key);
+            }
+        }
+    }
+
+    /// Replace the Shard snapshot and return previous auras grouped by every old or current target.
+    /// A newly present target has an empty previous set. Each target needs one snapshot Relay.
+    pub(crate) fn replace_shard(
+        &self,
+        shard: ShardId,
+        rows: impl IntoIterator<Item = Aura>,
+    ) -> HashMap<u64, Vec<Aura>> {
+        let mut by_target = self.lock();
+        let targets: Vec<_> = by_target
+            .keys()
+            .filter(|(owner, _)| *owner == shard)
+            .copied()
+            .collect();
+        let mut old: HashMap<_, _> = targets
+            .into_iter()
+            .map(|target| (target.1, by_target.remove(&target).unwrap_or_default()))
+            .collect();
+        for row in rows {
+            old.entry(row.target_guid).or_default();
+            by_target
+                .entry((shard, row.target_guid))
+                .or_default()
+                .push(row);
+        }
+        old
+    }
+
+    pub(crate) fn on_target(&self, shard: ShardId, target_guid: u64) -> Vec<Aura> {
+        self.lock()
+            .get(&(shard, target_guid))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn stealth_count(&self, shard: ShardId, target_guid: u64) -> usize {
+        self.lock()
+            .get(&(shard, target_guid))
+            .map(|rows| {
+                rows.iter()
+                    .filter(|a| a.eff_kind == super::subscriptions::A_STEALTH)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn is_stealthed(&self, shard: ShardId, target_guid: u64) -> bool {
+        self.stealth_count(shard, target_guid) > 0
+    }
+
+    pub(crate) fn stats(&self) -> (usize, usize) {
+        let by_target = self.lock();
+        (by_target.values().map(Vec::len).sum(), by_target.len())
+    }
+}
+
+/// The gateway-wide shared view: one layered spatial index, the aura index, the live viewer
+/// registry, and the shard table the index's [`ShardId`]s point into.
 pub(crate) struct WorldView {
     /// One authoritative viewer anchor with independent world-entity and game-object layers.
     pub(crate) spatial: WorldIndex,
+    pub(crate) auras: AuraIndex,
     viewers: RwLock<ViewerRegistry>,
     /// [`ShardId`] → that shard's coordinator handle. Written once at startup, read on every
     /// dispatch; the order fixes the ids, so it must never be reordered after arming.
@@ -214,6 +306,7 @@ impl WorldView {
     pub(crate) fn new(cell_scoped: bool) -> Self {
         Self {
             spatial: WorldIndex::new(cell_scoped),
+            auras: AuraIndex::default(),
             viewers: RwLock::new(ViewerRegistry::default()),
             shards: RwLock::new(Vec::new()),
             next_session: AtomicU64::new(1),
@@ -264,6 +357,18 @@ impl WorldView {
         (registered.shard == shard).then(|| registered.viewer.clone())
     }
 
+    fn viewer_of_identity_on_shard(
+        &self,
+        shard: ShardId,
+        identity: BoundIdentity,
+    ) -> Option<Arc<Viewer>> {
+        let registry = self.viewers.read().unwrap();
+        let session = registry.session_of_identity.get(&identity.0)?;
+        let registered = registry.by_session.get(session)?;
+        (registered.shard == shard).then(|| registered.viewer.clone())
+    }
+
+    #[cfg(test)]
     pub(crate) fn viewer_of_identity(&self, identity: BoundIdentity) -> Option<Arc<Viewer>> {
         let registry = self.viewers.read().unwrap();
         let session = registry.session_of_identity.get(&identity.0)?;
@@ -332,20 +437,62 @@ impl WorldView {
 
     pub(crate) fn remove_viewer(&self, session: SessionId) {
         let mut registry = self.viewers.write().unwrap();
-        self.spatial.remove_viewer(session);
         registry.remove(session);
+        self.spatial.remove_viewer(session);
     }
 
     /// Geometric recipients plus the row owner's session. The owner lookup lives in the viewer
     /// registry because it is session identity, not spatial state.
-    fn world_entity_recipients(&self, guid: u64, key: CellKey) -> Vec<SessionId> {
+    fn world_entity_recipients(&self, shard: ShardId, guid: u64, key: CellKey) -> Vec<SessionId> {
         let mut recipients = self.spatial.viewers_of(EntityLayer::WorldEntity, key);
         if let Some(owner) = self.session_of_owner(guid) {
             if !recipients.contains(&owner) {
                 recipients.push(owner);
             }
         }
+        let registry = self.viewers.read().unwrap();
+        recipients.retain(|session| {
+            registry
+                .by_session
+                .get(session)
+                .is_some_and(|v| v.shard == shard)
+        });
         recipients
+    }
+
+    /// The viewers a cell-anchored event reaches: every session anchored within `half_span` cells
+    /// of `key`, plus the sessions of the characters the row names. The owner leg keeps a
+    /// self-addressed packet (the attacker's ATTACKSTOP, the caster's cast result, a player's own
+    /// aura timer) reaching its owner while the owner's anchor and the row's cell disagree by a
+    /// heartbeat. When the source Shard has no anchor, only its owners receive the event.
+    /// Every recipient must still belong to that Shard after a transfer.
+    ///
+    /// The per-viewer gate the job runs is the final filter, unchanged; this only stops the pump
+    /// enqueueing a job for every viewer on the shard so it can reject the row later.
+    fn cell_audience(
+        &self,
+        shard: ShardId,
+        key: Option<CellKey>,
+        half_span: i32,
+        owners: &[u64],
+    ) -> Vec<Arc<Viewer>> {
+        let mut sessions = key
+            .map(|key| self.spatial.viewers_within(key, half_span))
+            .unwrap_or_default();
+        let registry = self.viewers.read().unwrap();
+        for owner in owners {
+            if let Some(session) = registry.session_of_owner.get(owner) {
+                if !sessions.contains(session) {
+                    sessions.push(*session);
+                }
+            }
+        }
+        sessions
+            .into_iter()
+            .filter_map(|session| registry.by_session.get(&session))
+            .filter(|registered| registered.shard == shard)
+            .map(|registered| registered.viewer.clone())
+            .collect()
     }
 
     // ===========================================================================================
@@ -356,22 +503,24 @@ impl WorldView {
     pub(crate) fn set_shards(&self, shards: Vec<Coordinator>) {
         *self.shards.write().unwrap() = shards;
     }
-
-    /// The number of shards registered — used by the ops log line and by the arming loop.
-    pub(crate) fn shard_count(&self) -> usize {
-        self.shards.read().unwrap().len()
-    }
 }
 
-/// Register the shared AOI relays on ONE shard's coordinator connection.
-///
-/// Re-reads `coord.0.coord()` on every call, which is what makes it correct as the watchdog's
-/// post-reconnect re-arm hook too: called again, it registers on the FRESH `LiveConn`. The old
-/// connection's callbacks die with it, so nothing needs removing.
-pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId) {
-    let guard = coord.0.coord();
-    let db = &guard.conn.db;
+/// Register Relays and reconcile the snapshot between messages on this Shard's pump.
+/// Connection replacement joins the old pump before this connection becomes readable.
+pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId) -> Result<()> {
+    let owner = coord.clone();
+    coord.0.on_pump(move |conn| {
+        register_shard_callbacks(view.clone(), owner, shard, &conn.db);
+        seed_shard_from_cache(&view, shard, &conn.db);
+    })
+}
 
+fn register_shard_callbacks(
+    view: Arc<WorldView>,
+    coord: Coordinator,
+    shard: ShardId,
+    db: &RemoteTables,
+) {
     // ---- owner-scoped events ---------------------------------------------------------------
     // These callbacks address one viewer directly and survive coordinator reconnects because
     // `arm_shard` is re-run on the replacement connection. Every table here holds SHARD rows,
@@ -386,15 +535,24 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         &view,
         move |v, row| teleport_appeared(v, shard, row),
     );
-    wire_insert_live(db.game_addon_message(), "game_addon_message.insert", &view, |v, row| {
-        addon_message_appeared(v, row)
-    });
-    wire_insert_live(db.game_xp_event(), "game_xp_event.insert", &view, |v, row| {
-        xp_appeared(v, row)
-    });
-    wire_insert_live(db.game_levelup_event(), "game_levelup_event.insert", &view, |v, row| {
-        levelup_appeared(v, row)
-    });
+    wire_insert_live(
+        db.game_addon_message(),
+        "game_addon_message.insert",
+        &view,
+        move |v, row| addon_message_appeared(v, shard, row),
+    );
+    wire_insert_live(
+        db.game_xp_event(),
+        "game_xp_event.insert",
+        &view,
+        move |v, row| xp_appeared(v, shard, row),
+    );
+    wire_insert_live(
+        db.game_levelup_event(),
+        "game_levelup_event.insert",
+        &view,
+        move |v, row| levelup_appeared(v, shard, row),
+    );
     let quest_insert_coord = coord.clone();
     wire_insert(
         db.game_character_quest(),
@@ -482,22 +640,33 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     }
 
     // ---- game_world_entity -----------------------------------------------------------------
-    wire_insert(db.game_world_entity(), "game_world_entity.insert", &view, move |v, row| {
-        entity_appeared(v, shard, row)
-    });
+    wire_insert(
+        db.game_world_entity(),
+        "game_world_entity.insert",
+        &view,
+        move |v, row| entity_appeared(v, shard, row),
+    );
     {
         // The update leg carries the live zone as well as the position: the Module re-stamps
         // `zone_id` on the same grid-crossing that moves the row, so a viewer's own row is the
         // gateway's only zone signal (`CMSG_ZONEUPDATE` is deliberately unhandled).
         let coord = coord.clone();
-        wire_update(db.game_world_entity(), "game_world_entity.update", &view, move |v, old, new| {
-            entity_changed(v, shard, old, new);
-            zone_crossed(v, &coord, shard, new.guid, old.zone_id, new.zone_id);
-        });
+        wire_update(
+            db.game_world_entity(),
+            "game_world_entity.update",
+            &view,
+            move |v, old, new| {
+                entity_changed(v, shard, old, new);
+                zone_crossed(v, &coord, shard, new.guid, old.zone_id, new.zone_id);
+            },
+        );
     }
-    wire_delete(db.game_world_entity(), "game_world_entity.delete", &view, |v, row| {
-        entity_vanished(v, row)
-    });
+    wire_delete(
+        db.game_world_entity(),
+        "game_world_entity.delete",
+        &view,
+        move |v, row| entity_vanished(v, shard, row.guid, row.owner_guid),
+    );
 
     // ---- game_encounter_equip ---------------------------------------------------------------
     // Creature virtual-item displays. The durable row feeds a late observer's peer CREATE path;
@@ -522,102 +691,157 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     );
 
     // ---- game_gameobject -------------------------------------------------------------------
-    wire_insert(db.game_gameobject(), "game_gameobject.insert", &view, move |v, row| {
-        gameobject_appeared(v, shard, row)
-    });
-    wire_update(db.game_gameobject(), "game_gameobject.update", &view, move |v, _old, row| {
-        gameobject_appeared(v, shard, row)
-    });
-    wire_delete(db.game_gameobject(), "game_gameobject.delete", &view, |v, row| {
-        gameobject_vanished(v, row)
-    });
+    wire_insert(
+        db.game_gameobject(),
+        "game_gameobject.insert",
+        &view,
+        move |v, row| gameobject_appeared(v, shard, row),
+    );
+    wire_update(
+        db.game_gameobject(),
+        "game_gameobject.update",
+        &view,
+        move |v, _old, row| gameobject_appeared(v, shard, row),
+    );
+    wire_delete(
+        db.game_gameobject(),
+        "game_gameobject.delete",
+        &view,
+        move |v, row| gameobject_vanished(v, shard, row.guid),
+    );
 
     // ---- game_entity_motion (peer movement) ------------------------------------------------
-    wire_insert(db.game_entity_motion(), "game_entity_motion.insert", &view, |v, row| {
-        motion(v, row)
-    });
-    wire_update(db.game_entity_motion(), "game_entity_motion.update", &view, |v, _old, row| {
-        motion(v, row)
-    });
+    wire_insert(
+        db.game_entity_motion(),
+        "game_entity_motion.insert",
+        &view,
+        move |v, row| motion(v, shard, row),
+    );
+    wire_update(
+        db.game_entity_motion(),
+        "game_entity_motion.update",
+        &view,
+        move |v, _old, row| motion(v, shard, row),
+    );
 
     // ---- game_creature_spline (creature legs) ----------------------------------------------
-    wire_insert(db.game_creature_spline(), "game_creature_spline.insert", &view, |v, row| {
-        creature_leg(v, row)
-    });
-    wire_update(db.game_creature_spline(), "game_creature_spline.update", &view, |v, _old, row| {
-        creature_leg(v, row)
-    });
+    wire_insert(
+        db.game_creature_spline(),
+        "game_creature_spline.insert",
+        &view,
+        move |v, row| creature_leg(v, shard, row),
+    );
+    wire_update(
+        db.game_creature_spline(),
+        "game_creature_spline.update",
+        &view,
+        move |v, _old, row| creature_leg(v, shard, row),
+    );
 
     // ---- game_taxi_passenger_spline (server-owned player routes) ---------------------------
     wire_insert(
         db.game_taxi_passenger_spline(),
         "game_taxi_passenger_spline.insert",
         &view,
-        |v, row| taxi_spline(v, row),
+        move |v, row| taxi_spline(v, shard, row),
     );
     wire_update(
         db.game_taxi_passenger_spline(),
         "game_taxi_passenger_spline.update",
         &view,
-        |v, _old, row| taxi_spline(v, row),
+        move |v, _old, row| taxi_spline(v, shard, row),
     );
 
     // ---- game_roll_event -------------------------------------------------------------------
     // /roll broadcast.
-    wire_insert(db.game_roll_event(), "game_roll_event.insert", &view, move |v, row| {
-        roll_appeared(v, shard, row)
-    });
+    wire_insert(
+        db.game_roll_event(),
+        "game_roll_event.insert",
+        &view,
+        move |v, row| roll_appeared(v, shard, row),
+    );
 
     // ---- game_rest_state_event --------------------------------------------------------------
     // Rest-state flips (zzz + blue XP bar). Self-only relay.
-    wire_insert(db.game_rest_state_event(), "game_rest_state_event.insert", &view, |v, row| {
-        rest_state_appeared(v, row)
-    });
+    wire_insert(
+        db.game_rest_state_event(),
+        "game_rest_state_event.insert",
+        &view,
+        move |v, row| rest_state_appeared(v, shard, row),
+    );
 
     // ---- game_breath_relay_event ------------------------------------------------------------
     // Breath start/stop edges + server-resolved drowning combat log. Self-only relay.
-    wire_insert(db.game_breath_relay_event(), "game_breath_relay_event.insert", &view, |v, row| {
-        breath_relay_appeared(v, row)
-    });
+    wire_insert(
+        db.game_breath_relay_event(),
+        "game_breath_relay_event.insert",
+        &view,
+        move |v, row| breath_relay_appeared(v, shard, row),
+    );
 
     // ---- game_dynamic_object -----------------------------------------------------------------
     // Ground-area spell visuals. Shard broadcast, instance-gated per viewer on insert; the
     // delete leg is ungated, matching the per-player relay byte for byte.
-    wire_insert(db.game_dynamic_object(), "game_dynamic_object.insert", &view, move |v, row| {
-        dynobj_appeared(v, shard, row)
-    });
-    wire_delete(db.game_dynamic_object(), "game_dynamic_object.delete", &view, move |v, row| {
-        dynobj_vanished(v, shard, row)
-    });
+    wire_insert(
+        db.game_dynamic_object(),
+        "game_dynamic_object.insert",
+        &view,
+        move |v, row| dynobj_appeared(v, shard, row),
+    );
+    wire_delete(
+        db.game_dynamic_object(),
+        "game_dynamic_object.delete",
+        &view,
+        move |v, row| dynobj_vanished(v, shard, row),
+    );
 
     // ---- game_corpse --------------------------------------------------------------------------
     // Player corpses. Shard broadcast, instance-gated per viewer on insert/update (the
     // body→bones re-CREATE); the delete leg is ungated, matching the per-player relay.
-    wire_insert(db.game_corpse(), "game_corpse.insert", &view, move |v, row| {
-        corpse_appeared(v, shard, row)
-    });
-    wire_update(db.game_corpse(), "game_corpse.update", &view, move |v, _old, row| {
-        corpse_changed(v, shard, row)
-    });
-    wire_delete(db.game_corpse(), "game_corpse.delete", &view, move |v, row| {
-        corpse_vanished(v, shard, row)
-    });
+    wire_insert(
+        db.game_corpse(),
+        "game_corpse.insert",
+        &view,
+        move |v, row| corpse_appeared(v, shard, row),
+    );
+    wire_update(
+        db.game_corpse(),
+        "game_corpse.update",
+        &view,
+        move |v, _old, row| corpse_changed(v, shard, row),
+    );
+    wire_delete(
+        db.game_corpse(),
+        "game_corpse.delete",
+        &view,
+        move |v, row| corpse_vanished(v, shard, row),
+    );
 
     // ---- game_combat_event --------------------------------------------------------------------
-    // Melee/ranged swing log. Shard broadcast; the created-set visibility gate runs inside the
-    // job (`combat_event_outbound`), per viewer.
-    wire_insert(db.game_combat_event(), "game_combat_event.insert", &view, move |v, row| {
-        combat_event_appeared(v, shard, row)
-    });
+    // Melee/ranged swing log, anchored on the attacker's cell; the created-set visibility gate
+    // runs inside the job (`combat_event_outbound`), per viewer.
+    wire_insert(
+        db.game_combat_event(),
+        "game_combat_event.insert",
+        &view,
+        move |v, row| combat_event_appeared(v, shard, row),
+    );
 
     // ---- game_melee_attack --------------------------------------------------------------------
-    // Combat stance (ATTACKSTART/STOP + the owner-only ranged CANCEL_AUTO_REPEAT).
-    wire_insert(db.game_melee_attack(), "game_melee_attack.insert", &view, move |v, row| {
-        melee_engaged(v, shard, row)
-    });
-    wire_delete(db.game_melee_attack(), "game_melee_attack.delete", &view, move |v, row| {
-        melee_disengaged(v, shard, row)
-    });
+    // Combat stance (ATTACKSTART/STOP + the owner-only ranged CANCEL_AUTO_REPEAT), anchored on
+    // the attacker's indexed cell.
+    wire_insert(
+        db.game_melee_attack(),
+        "game_melee_attack.insert",
+        &view,
+        move |v, row| melee_engaged(v, shard, row),
+    );
+    wire_delete(
+        db.game_melee_attack(),
+        "game_melee_attack.delete",
+        &view,
+        move |v, row| melee_disengaged(v, shard, row),
+    );
 
     // ---- recipient-keyed private event relays -----------------------------------------------
     // The PRIVATE tier: every row is addressed to exactly one recipient, and on this feed the
@@ -625,12 +849,18 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     // lookup) + the explicit `private_recipient_audience` predicate — never a viewer fan.
     // (The realm-core whisper/group twins for CROSS-shard delivery ride the same dispatchers,
     // armed once per realm-core connection by `arm_realm_private` below.)
-    wire_insert_live(db.game_resurrect_request(), "game_resurrect_request.insert", &view, |v, row| {
-        resurrect_offered(v, row)
-    });
-    wire_insert_live(db.game_whisper_event(), "game_whisper_event.insert", &view, |v, row| {
-        whisper_appeared(v, row)
-    });
+    wire_insert_live(
+        db.game_resurrect_request(),
+        "game_resurrect_request.insert",
+        &view,
+        move |v, row| resurrect_offered(v, shard, row),
+    );
+    wire_insert_live(
+        db.game_whisper_event(),
+        "game_whisper_event.insert",
+        &view,
+        |v, row| whisper_appeared(v, row),
+    );
     wire_insert_live(
         db.game_system_message_event(),
         "game_system_message_event.insert",
@@ -639,9 +869,12 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     );
     {
         let coord = coord.clone();
-        wire_insert_live(db.game_group_event(), "game_group_event.insert", &view, move |v, row| {
-            group_event_appeared(v, &coord, row)
-        });
+        wire_insert_live(
+            db.game_group_event(),
+            "game_group_event.insert",
+            &view,
+            move |v, row| group_event_appeared(v, &coord, row),
+        );
     }
     {
         let insert_coord = coord.clone();
@@ -649,44 +882,47 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
             db.game_group_member(),
             "game_group_member.insert",
             &view,
-            move |v, row| group_member_mirror_changed(v, &insert_coord, row),
+            move |v, row| group_member_mirror_changed(v, &insert_coord, shard, row),
         );
         let delete_coord = coord.clone();
         wire_delete(
             db.game_group_member(),
             "game_group_member.delete",
             &view,
-            move |v, row| group_member_mirror_changed(v, &delete_coord, row),
+            move |v, row| group_member_mirror_changed(v, &delete_coord, shard, row),
         );
     }
-    wire_insert_live(db.game_trade_event(), "game_trade_event.insert", &view, |v, row| {
-        trade_event_appeared(v, row)
-    });
+    wire_insert_live(
+        db.game_trade_event(),
+        "game_trade_event.insert",
+        &view,
+        move |v, row| trade_event_appeared(v, shard, row),
+    );
     {
         let coord = coord.clone();
-        wire_insert_live(db.game_duel_event(), "game_duel_event.insert", &view, move |v, row| {
-            duel_event_appeared(v, &coord, row)
-        });
+        wire_insert_live(
+            db.game_duel_event(),
+            "game_duel_event.insert",
+            &view,
+            move |v, row| duel_event_appeared(v, &coord, shard, row),
+        );
     }
 
     // ---- game_aura ------------------------------------------------------------------------------
     // The aura composite: array sync (visibility-gated), self-only duration/run-speed/armor,
-    // and the stealth HIDE/REVEAL transitions. The A_STEALTH count is computed HERE on the pump,
-    // where this connection's cache is exactly post-change; everything else runs in the job.
+    // and the stealth HIDE/REVEAL transitions. The pump keeps the aura index current and takes
+    // the A_STEALTH count from it, row by row in callback order: a Stealth cast's two inserts
+    // count 1 then 2 (both hide), its two deletes count 1 then 0 (the second reveals).
+    // Everything else runs in the job.
     {
         let view = view.clone();
         let coord = coord.clone();
-        db.game_aura().on_insert(move |ctx, row| {
-            let n = ctx
-                .db
-                .game_aura()
-                .iter()
-                .filter(|a| {
-                    a.target_guid == row.target_guid
-                        && a.eff_kind == super::subscriptions::A_STEALTH
-                })
-                .count();
-            guarded("game_aura.insert", || aura_applied(&view, &coord, shard, row, n));
+        db.game_aura().on_insert(move |_ctx, row| {
+            guarded("game_aura.insert", || {
+                view.auras.upsert(shard, row);
+                let n = view.auras.stealth_count(shard, row.target_guid);
+                aura_applied(&view, &coord, shard, row, n)
+            });
         });
     }
     {
@@ -695,6 +931,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
         db.game_aura().on_update(move |_ctx, old, row| {
             let expires_changed = old.expires_at != row.expires_at;
             guarded("game_aura.update", || {
+                view.auras.upsert(shard, row);
                 aura_updated(&view, &coord, shard, row, expires_changed)
             });
         });
@@ -702,73 +939,95 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     {
         let view = view.clone();
         let coord = coord.clone();
-        db.game_aura().on_delete(move |ctx, row| {
-            let n = ctx
-                .db
-                .game_aura()
-                .iter()
-                .filter(|a| {
-                    a.target_guid == row.target_guid
-                        && a.eff_kind == super::subscriptions::A_STEALTH
-                })
-                .count();
-            guarded("game_aura.delete", || aura_removed(&view, &coord, shard, row, n));
+        db.game_aura().on_delete(move |_ctx, row| {
+            guarded("game_aura.delete", || {
+                view.auras.remove(shard, row);
+                let n = view.auras.stealth_count(shard, row.target_guid);
+                aura_removed(&view, &coord, shard, row, n)
+            });
         });
     }
 
     // ---- game_spell_cast_event / game_spell_impact_event --------------------------------------
-    // Cast visuals (the full cast-lock contract, per viewer) + deferred projectile impact logs.
-    wire_insert(db.game_spell_cast_event(), "game_spell_cast_event.insert", &view, move |v, row| {
-        cast_event_appeared(v, shard, row)
-    });
-    wire_insert(db.game_spell_impact_event(), "game_spell_impact_event.insert", &view, move |v, row| {
-        impact_appeared(v, shard, row)
-    });
+    // Cast visuals (the full cast-lock contract, per viewer) + deferred projectile impact logs,
+    // both anchored on the caster's cell.
+    wire_insert(
+        db.game_spell_cast_event(),
+        "game_spell_cast_event.insert",
+        &view,
+        move |v, row| cast_event_appeared(v, shard, row),
+    );
+    wire_insert(
+        db.game_spell_impact_event(),
+        "game_spell_impact_event.insert",
+        &view,
+        move |v, row| impact_appeared(v, shard, row),
+    );
 
     // ---- game_emote_event / game_chat_event / game_channel_event ------------------------------
-    // The social tier. Emotes broadcast; say/yell range-gate per viewer; channel lines
-    // membership-gate per viewer — each inside the job, via the shared bodies.
+    // The social tier. Emotes and say/yell are range-bound, so both are anchored on the sender's
+    // cell (say/yell keep their yard-range gate inside the job); channel lines membership-gate
+    // per viewer inside the job.
     {
         let coord = coord.clone();
-        wire_insert(db.game_emote_event(), "game_emote_event.insert", &view, move |v, row| {
-            emote_appeared(v, &coord, shard, row)
-        });
+        wire_insert(
+            db.game_emote_event(),
+            "game_emote_event.insert",
+            &view,
+            move |v, row| emote_appeared(v, &coord, shard, row),
+        );
     }
     {
         let coord = coord.clone();
-        wire_insert(db.game_chat_event(), "game_chat_event.insert", &view, move |v, row| {
-            chat_appeared(v, &coord, shard, row)
-        });
+        wire_insert(
+            db.game_chat_event(),
+            "game_chat_event.insert",
+            &view,
+            move |v, row| chat_appeared(v, &coord, shard, row),
+        );
     }
     {
         let coord = coord.clone();
-        wire_insert(db.game_channel_event(), "game_channel_event.insert", &view, move |v, row| {
-            channel_appeared(v, &coord, shard, row)
-        });
+        wire_insert(
+            db.game_channel_event(),
+            "game_channel_event.insert",
+            &view,
+            move |v, row| channel_appeared(v, &coord, shard, row),
+        );
     }
 
     // ---- game_zone_weather -----------------------------------------------------------------------
     // The live sky. ONE callback per shard, routed by the viewer's stored zone — there are no
     // per-character weather subscriptions. Insert and update run the same body: the first row a
     // zone ever gets is as much a visible change as every later one.
-    wire_insert(db.game_zone_weather(), "game_zone_weather.insert", &view, move |v, row| {
-        weather_changed(v, shard, row)
-    });
-    wire_update(db.game_zone_weather(), "game_zone_weather.update", &view, move |v, _old, row| {
-        weather_changed(v, shard, row)
-    });
+    wire_insert(
+        db.game_zone_weather(),
+        "game_zone_weather.insert",
+        &view,
+        move |v, row| weather_changed(v, shard, row),
+    );
+    wire_update(
+        db.game_zone_weather(),
+        "game_zone_weather.update",
+        &view,
+        move |v, _old, row| weather_changed(v, shard, row),
+    );
 
     // ---- game_player_skill ----------------------------------------------------------------------
     // Live skill pane. Self-only relay; insert (line learned) and update (skill-up) run the same
     // body against the viewer's own slot map.
-    wire_insert(db.game_player_skill(), "game_player_skill.insert", &view, |v, row| {
-        skill_changed(v, row)
-    });
-    wire_update(db.game_player_skill(), "game_player_skill.update", &view, |v, _old, row| {
-        skill_changed(v, row)
-    });
-
-    drop(guard);
+    wire_insert(
+        db.game_player_skill(),
+        "game_player_skill.insert",
+        &view,
+        move |v, row| skill_changed(v, shard, row),
+    );
+    wire_update(
+        db.game_player_skill(),
+        "game_player_skill.update",
+        &view,
+        move |v, _old, row| skill_changed(v, shard, row),
+    );
 }
 
 /// Register the cross-shard PRIVATE-tier twins (#22 → #483) on the REALM-CORE connection: whisper
@@ -788,12 +1047,18 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
 pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord: Coordinator) {
     let guard = realm.0.coord();
     let db = &guard.conn.db;
-    wire_insert_live(db.game_whisper_event(), "realm.game_whisper_event.insert", &view, |v, row| {
-        whisper_appeared(v, row)
-    });
-    wire_insert_live(db.game_group_event(), "realm.game_group_event.insert", &view, move |v, row| {
-        group_event_appeared(v, &coord, row)
-    });
+    wire_insert_live(
+        db.game_whisper_event(),
+        "realm.game_whisper_event.insert",
+        &view,
+        |v, row| whisper_appeared(v, row),
+    );
+    wire_insert_live(
+        db.game_group_event(),
+        "realm.game_group_event.insert",
+        &view,
+        move |v, row| group_event_appeared(v, &coord, row),
+    );
 }
 
 /// Run one shared-connection callback body with a panic firewall. On a per-player connection a
@@ -905,12 +1170,17 @@ fn entity_key(row: &WorldEntity) -> CellKey {
 
 /// A row entered the world (or this shard). Index it, then offer a CREATE to everyone who can see
 /// its cell.
-fn entity_appeared(view: &WorldView, shard: ShardId, row: &WorldEntity) {
+fn entity_appeared(view: &Arc<WorldView>, shard: ShardId, row: &WorldEntity) {
     let key = entity_key(row);
-    view.spatial
-        .upsert_entity(EntityLayer::WorldEntity, row.guid, key, shard);
+    view.spatial.upsert_entity(
+        EntityLayer::WorldEntity,
+        row.guid,
+        key,
+        shard,
+        row.owner_guid,
+    );
     let row = Arc::new(row.clone());
-    for session in view.world_entity_recipients(row.guid, key) {
+    for session in view.world_entity_recipients(shard, row.guid, key) {
         offer_create_job(view, shard, session, &row);
     }
 }
@@ -922,18 +1192,22 @@ fn entity_appeared(view: &WorldView, shard: ShardId, row: &WorldEntity) {
 /// * sessions that could see the OLD cell but not the new one get a DESTROY — the packet the SDK
 ///   used to produce as an `on_delete` when a row left a box;
 /// * nobody else is touched.
-fn entity_changed(view: &WorldView, shard: ShardId, old: &WorldEntity, new: &WorldEntity) {
+fn entity_changed(view: &Arc<WorldView>, shard: ShardId, old: &WorldEntity, new: &WorldEntity) {
     let key = entity_key(new);
-    let previous = view
-        .spatial
-        .upsert_entity(EntityLayer::WorldEntity, new.guid, key, shard);
-    let new_recipients = view.world_entity_recipients(new.guid, key);
+    let previous = view.spatial.upsert_entity(
+        EntityLayer::WorldEntity,
+        new.guid,
+        key,
+        shard,
+        new.owner_guid,
+    );
+    let new_recipients = view.world_entity_recipients(shard, new.guid, key);
     if let Some(old_key) = previous {
         if old_key != key {
             let still: HashSet<SessionId> = new_recipients.iter().copied().collect();
-            for session in view.spatial.viewers_of(EntityLayer::WorldEntity, old_key) {
-                if !still.contains(&session) {
-                    destroy_job(view, session, new.guid, new.owner_guid);
+            for viewer in view.cell_audience(shard, Some(old_key), BOX_HALF_SPAN, &[]) {
+                if !still.contains(&viewer.session) {
+                    destroy_job(view, viewer.session, new.guid, new.owner_guid);
                 }
             }
         }
@@ -946,16 +1220,15 @@ fn entity_changed(view: &WorldView, shard: ShardId, old: &WorldEntity, new: &Wor
 }
 
 /// The row is gone from the database. Everyone who could see it gets a DESTROY.
-fn entity_vanished(view: &WorldView, row: &WorldEntity) {
-    // Take the cell the index remembers rather than recomputing from the row: a delete's payload is
-    // the LAST known row, and if a move and a delete land in the same transaction the index is the
-    // one that knows where the viewers were told it was.
-    let key = view
+fn entity_vanished(view: &WorldView, shard: ShardId, guid: u64, owner_guid: u64) {
+    let Some((key, _)) = view
         .spatial
-        .remove_entity(EntityLayer::WorldEntity, row.guid)
-        .unwrap_or_else(|| entity_key(row));
-    for session in view.world_entity_recipients(row.guid, key) {
-        destroy_job(view, session, row.guid, row.owner_guid);
+        .remove_entity(EntityLayer::WorldEntity, guid, shard)
+    else {
+        return;
+    };
+    for session in view.world_entity_recipients(shard, guid, key) {
+        destroy_job(view, session, guid, owner_guid);
     }
 }
 
@@ -976,34 +1249,37 @@ fn encounter_equip_changed(view: &WorldView, shard: ShardId, row: &EncounterEqui
     };
     let key = entity_key(&entity);
     let row = Arc::new(row.clone());
-    for session in view.world_entity_recipients(row.creature_guid, key) {
+    for session in view.world_entity_recipients(shard, row.creature_guid, key) {
         let Some(viewer) = view.viewer(session) else {
             continue;
         };
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::encounter_equip_outbound(&viewer, &row, cleared)
         });
     }
 }
 
-fn offer_create_job(view: &WorldView, shard: ShardId, session: SessionId, row: &Arc<WorldEntity>) {
+fn offer_create_job(
+    view: &Arc<WorldView>,
+    shard: ShardId,
+    session: SessionId,
+    row: &Arc<WorldEntity>,
+) {
     let Some(viewer) = view.viewer(session) else {
         return;
     };
     let Some(coord) = view.shard(shard) else {
         return;
     };
-    let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
-        super::subscriptions::offer_peer_create_for(&coord, &viewer, &row)
+    let (view, row) = (view.clone(), row.clone());
+    enqueue(viewer.clone(), move |viewer| {
+        super::subscriptions::offer_peer_create_for(&coord, &view, shard, &viewer, &row)
     });
 }
 
 fn update_job(
-    view: &WorldView,
+    view: &Arc<WorldView>,
     shard: ShardId,
     session: SessionId,
     old: &Arc<WorldEntity>,
@@ -1015,10 +1291,9 @@ fn update_job(
     let Some(coord) = view.shard(shard) else {
         return;
     };
-    let (old, new) = (old.clone(), new.clone());
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
-        super::subscriptions::relay_entity_update(&coord, &viewer, &old, &new)
+    let (view, old, new) = (view.clone(), old.clone(), new.clone());
+    enqueue(viewer.clone(), move |viewer| {
+        super::subscriptions::relay_entity_update(&coord, &view, shard, &viewer, &old, &new)
     });
 }
 
@@ -1026,8 +1301,7 @@ fn destroy_job(view: &WorldView, session: SessionId, guid: u64, owner_guid: u64)
     let Some(viewer) = view.viewer(session) else {
         return;
     };
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::relay_peer_destroy(&viewer, guid, owner_guid)
     });
 }
@@ -1040,20 +1314,17 @@ fn gameobject_appeared(view: &WorldView, shard: ShardId, row: &GameObject) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let previous = view
         .spatial
-        .upsert_entity(EntityLayer::GameObject, row.guid, key, shard);
-    let recipients = view.spatial.viewers_of(EntityLayer::GameObject, key);
+        .upsert_entity(EntityLayer::GameObject, row.guid, key, shard, 0);
+    let recipients = view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]);
     if let Some(old_key) = previous {
         if old_key != key {
-            let still: HashSet<SessionId> = recipients.iter().copied().collect();
-            for session in view.spatial.viewers_of(EntityLayer::GameObject, old_key) {
-                if !still.contains(&session) {
-                    if let Some(viewer) = view.viewer(session) {
-                        let tx = viewer.tx.clone();
-                        let guid = row.guid;
-                        enqueue(&tx, move || {
-                            super::subscriptions::relay_peer_destroy(&viewer, guid, 0)
-                        });
-                    }
+            let still: HashSet<SessionId> = recipients.iter().map(|v| v.session).collect();
+            for viewer in view.cell_audience(shard, Some(old_key), BOX_HALF_SPAN, &[]) {
+                if !still.contains(&viewer.session) {
+                    let guid = row.guid;
+                    enqueue(viewer.clone(), move |viewer| {
+                        super::subscriptions::relay_gameobject_destroy(&viewer, guid)
+                    });
                 }
             }
         }
@@ -1062,32 +1333,25 @@ fn gameobject_appeared(view: &WorldView, shard: ShardId, row: &GameObject) {
         return;
     };
     let row = Arc::new(row.clone());
-    for session in recipients {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in recipients {
         let (coord, row) = (coord.clone(), row.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::relay_gameobject_create(&coord, &viewer, &row)
         });
     }
 }
 
-fn gameobject_vanished(view: &WorldView, row: &GameObject) {
-    let key = view
+fn gameobject_vanished(view: &WorldView, shard: ShardId, guid: u64) {
+    let Some((key, _)) = view
         .spatial
-        .remove_entity(EntityLayer::GameObject, row.guid)
-        .unwrap_or_else(|| CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y));
-    for session in view.spatial.viewers_of(EntityLayer::GameObject, key) {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
-        let tx = viewer.tx.clone();
-        let guid = row.guid;
+        .remove_entity(EntityLayer::GameObject, guid, shard)
+    else {
+        return;
+    };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
         // DESTROY stays ungated (the `on_melee_delete` precedent): SMSG_DESTROY_OBJECT for a guid
         // the client never created is a client no-op, and gating it risks a stale object.
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::relay_gameobject_destroy(&viewer, guid)
         });
     }
@@ -1097,17 +1361,14 @@ fn gameobject_vanished(view: &WorldView, row: &GameObject) {
 //  Motion + creature legs — no index of their own: the row carries its own cell.
 // ===============================================================================================
 
-fn motion(view: &WorldView, row: &EntityMotion) {
+fn motion(view: &WorldView, shard: ShardId, row: &EntityMotion) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let row = Arc::new(row.clone());
     // The MOVER is deliberately not a recipient (`world_entity_recipients`' self leg is skipped
     // here): a
     // player must never receive their own movement echoed back, or they fight the server for
     // authority over their position. `relay_entity_motion` re-checks it anyway.
-    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
         if viewer.self_guid == row.guid {
             continue;
         }
@@ -1124,13 +1385,10 @@ fn motion(view: &WorldView, row: &EntityMotion) {
     }
 }
 
-fn creature_leg(view: &WorldView, row: &CreatureSpline) {
+fn creature_leg(view: &WorldView, shard: ShardId, row: &CreatureSpline) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let row = Arc::new(row.clone());
-    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
         // Same supersession as player motion — latest leg per creature wins.
         viewer
             .motion_pending
@@ -1151,14 +1409,16 @@ fn maybe_queue_motion_flush(_view: &WorldView, viewer: &Arc<Viewer>) {
     if viewer.motion_pending.flush_queued.swap(true, AtOrd::AcqRel) {
         return; // a queued flush will carry the upsert that just landed
     }
-    let tx = viewer.tx.clone();
-    if super::subscriptions::shed_motion_at_depth(tx.depth()) {
+    if super::subscriptions::shed_motion_at_depth(viewer.tx.depth()) {
         super::subscriptions::MOTION_DROPPED.fetch_add(1, Ordering::Relaxed);
-        viewer.motion_pending.flush_queued.store(false, AtOrd::Release);
+        viewer
+            .motion_pending
+            .flush_queued
+            .store(false, AtOrd::Release);
         return;
     }
     let viewer = viewer.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         // Clear BEFORE draining: an upsert racing the drain re-queues a follow-up flush (possibly
         // empty — harmless) instead of being stranded behind a still-set flag.
         viewer
@@ -1210,8 +1470,9 @@ fn roll_appeared(view: &WorldView, shard: ShardId, row: &RollEvent) {
     let row = Arc::new(row.clone());
     for viewer in viewers_on_shard(view, shard) {
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_roll(&row));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_roll(&row)
+        });
     }
 }
 
@@ -1226,8 +1487,9 @@ fn dynobj_appeared(view: &WorldView, shard: ShardId, row: &DynamicObject) {
             continue;
         }
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_dynobj_create(&row));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_dynobj_create(&row)
+        });
     }
 }
 
@@ -1237,33 +1499,21 @@ fn dynobj_appeared(view: &WorldView, shard: ShardId, row: &DynamicObject) {
 fn dynobj_vanished(view: &WorldView, shard: ShardId, row: &DynamicObject) {
     let guid = row.guid;
     for viewer in viewers_on_shard(view, shard) {
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_destroy_object(guid));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_destroy_object(guid)
+        });
     }
 }
 
 /// A passenger spline is always sent to its owner. Nearby sessions receive it only after the
 /// outbound visibility check confirms that the passenger already exists in their client world.
-fn taxi_spline(view: &WorldView, row: &TaxiPassengerSpline) {
+fn taxi_spline(view: &WorldView, shard: ShardId, row: &TaxiPassengerSpline) {
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
-    let mut sessions: std::collections::HashSet<_> =
-        view.spatial.viewers_of(EntityLayer::WorldEntity, key).into_iter().collect();
-    if let Some(owner) = view.session_of_owner(row.character_guid) {
-        sessions.insert(owner);
-    }
     let row = row.clone();
-    for session in sessions {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[row.character_guid]) {
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
-            super::subscriptions::taxi_spline_outbound(
-                &viewer.created,
-                viewer.self_guid,
-                &row,
-            )
+        enqueue(viewer.clone(), move |viewer| {
+            super::subscriptions::taxi_spline_outbound(&viewer.created, viewer.self_guid, &row)
         });
     }
 }
@@ -1275,42 +1525,46 @@ fn teleport_appeared(view: &WorldView, shard: ShardId, row: &TeleportEvent) {
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::teleport_event_outbound(&row)
     });
 }
 
 /// Addon messages are identity-addressed, with the addressed viewer as the wire sender.
-fn addon_message_appeared(view: &WorldView, row: &AddonMessage) {
-    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+fn addon_message_appeared(view: &WorldView, shard: ShardId, row: &AddonMessage) {
+    let Some(viewer) =
+        view.viewer_of_identity_on_shard(shard, BoundIdentity(row.recipient_identity))
+    else {
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::addon_message_outbound(viewer.self_guid, &row)
     });
 }
 
 /// XP rows are delivered to the one viewer bound to their recipient identity.
-fn xp_appeared(view: &WorldView, row: &XpEvent) {
-    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+fn xp_appeared(view: &WorldView, shard: ShardId, row: &XpEvent) {
+    let Some(viewer) =
+        view.viewer_of_identity_on_shard(shard, BoundIdentity(row.recipient_identity))
+    else {
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || super::subscriptions::xp_event_outbound(&row));
+    enqueue(viewer.clone(), move |_| {
+        super::subscriptions::xp_event_outbound(&row)
+    });
 }
 
 /// Level-up rows are delivered to the one viewer bound to their recipient identity.
-fn levelup_appeared(view: &WorldView, row: &LevelupEvent) {
-    let Some(viewer) = view.viewer_of_identity(BoundIdentity(row.recipient_identity)) else {
+fn levelup_appeared(view: &WorldView, shard: ShardId, row: &LevelupEvent) {
+    let Some(viewer) =
+        view.viewer_of_identity_on_shard(shard, BoundIdentity(row.recipient_identity))
+    else {
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::levelup_event_outbound(&row)
     });
 }
@@ -1320,8 +1574,8 @@ fn quest_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &C
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
-    let (coord, self_guid, tx) = (coord.clone(), viewer.self_guid, viewer.tx.clone());
-    enqueue(&tx, move || {
+    let (coord, self_guid) = (coord.clone(), viewer.self_guid);
+    enqueue(viewer.clone(), move |_| {
         let guard = coord.0.coord();
         super::subscriptions::quest_log_outbound(&guard.conn.db, self_guid)
             .into_iter()
@@ -1340,14 +1594,8 @@ fn quest_updated(
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
-    let (coord, self_guid, old, row, tx) = (
-        coord.clone(),
-        viewer.self_guid,
-        old.clone(),
-        row.clone(),
-        viewer.tx.clone(),
-    );
-    enqueue(&tx, move || {
+    let (coord, self_guid, old, row) = (coord.clone(), viewer.self_guid, old.clone(), row.clone());
+    enqueue(viewer.clone(), move |_| {
         let guard = coord.0.coord();
         super::subscriptions::quest_update_outbound(&guard.conn.db, self_guid, &old, &row)
     });
@@ -1358,8 +1606,8 @@ fn quest_deleted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &Ch
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
-    let (coord, self_guid, tx) = (coord.clone(), viewer.self_guid, viewer.tx.clone());
-    enqueue(&tx, move || {
+    let (coord, self_guid) = (coord.clone(), viewer.self_guid);
+    enqueue(viewer.clone(), move |_| {
         let guard = coord.0.coord();
         super::subscriptions::quest_log_outbound(&guard.conn.db, self_guid)
             .into_iter()
@@ -1379,8 +1627,9 @@ fn exploration_appeared(
         return;
     };
     let (row, coord) = (row.clone(), coord.clone());
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || exploration_outbound(&coord, &viewer, &row));
+    enqueue(viewer.clone(), move |viewer| {
+        exploration_outbound(&coord, &viewer, &row)
+    });
 }
 
 fn exploration_outbound(
@@ -1436,8 +1685,7 @@ fn reputation_appeared(view: &WorldView, shard: ShardId, row: &PlayerReputation)
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || reputation_outbound(&row));
+    enqueue(viewer.clone(), move |_| reputation_outbound(&row));
 }
 
 /// Hunter pet descriptors are idempotent VALUES, so replay re-sends are state-sync, not toasts.
@@ -1446,8 +1694,9 @@ fn hunter_pet_appeared(view: &WorldView, shard: ShardId, row: &HunterPetProtocol
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || super::subscriptions::hunter_pet_outbound(&row));
+    enqueue(viewer.clone(), move |_| {
+        super::subscriptions::hunter_pet_outbound(&row)
+    });
 }
 
 fn reputation_outbound(row: &PlayerReputation) -> Vec<Outbound> {
@@ -1470,8 +1719,7 @@ fn item_owner_job(
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(owner_guid)) else {
         return;
     };
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || job(viewer));
+    enqueue(viewer, job);
 }
 
 fn item_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &ItemInstance) {
@@ -1509,33 +1757,20 @@ fn item_deleted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &Ite
     });
 }
 
-/// A rest-state flip landed on a shard's coordinator feed. Self-only family: the row names its
-/// owner and the owner is the ONLY lawful recipient, so the audience predicate IS the
-/// owner-session lookup — there is no candidate set to filter,
-/// and a row whose owner has no live session here is dropped.
-///
-/// This family needs no replay state: nothing re-subscribes per session on this path, so rows
-/// arriving after arming are live flips. A coordinator watchdog re-arm can replay rows still
-/// inside their GC TTL, which idempotently re-sends the current rest byte.
-fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
-    let Some(session) = view.session_of_owner(row.character_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+/// Send a rest-state change to its owner on the callback's Shard.
+fn rest_state_appeared(view: &WorldView, shard: ShardId, row: &RestStateEvent) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
     let (self_guid, bytes) = (row.character_guid, row.player_bytes_2);
-    enqueue(&viewer.tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::relay_rest_state(self_guid, bytes)
     });
 }
 
-/// Breath relay events are delivered only to their owner.
-fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
-    let Some(session) = view.session_of_owner(row.character_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+/// Send breath events to their owner on the callback's Shard.
+fn breath_relay_appeared(view: &WorldView, shard: ShardId, row: &BreathRelayEvent) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
     let (guid, kind, remaining, duration, damage) = (
@@ -1545,7 +1780,7 @@ fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
         row.duration_ms,
         row.damage,
     );
-    enqueue(&viewer.tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::relay_breath_event(guid, kind, remaining, duration, damage)
     });
 }
@@ -1553,16 +1788,12 @@ fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
 /// A skill row changed (line learned / skill-up). Self-only family, same owner-session-lookup
 /// audience as [`rest_state_appeared`] — the slot allocation runs in the job on the owner's own
 /// writer thread, against the viewer's `skill_slots` (the same map the per-player leg uses).
-fn skill_changed(view: &WorldView, row: &PlayerSkill) {
-    let Some(session) = view.session_of_owner(row.character_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+fn skill_changed(view: &WorldView, shard: ShardId, row: &PlayerSkill) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
     let (line, cur, max) = (row.skill_line, row.current, row.max_rank);
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::relay_skill(&viewer, line, cur, max)
     });
 }
@@ -1578,8 +1809,7 @@ fn corpse_appeared(view: &WorldView, shard: ShardId, row: &Corpse) {
         }
         let row = row.clone();
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::corpse_create_outbound(self_guid, &row)
         });
     }
@@ -1594,8 +1824,9 @@ fn corpse_changed(view: &WorldView, shard: ShardId, row: &Corpse) {
             continue;
         }
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_corpse_update(&row));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_corpse_update(&row)
+        });
     }
 }
 
@@ -1604,9 +1835,33 @@ fn corpse_changed(view: &WorldView, shard: ShardId, row: &Corpse) {
 fn corpse_vanished(view: &WorldView, shard: ShardId, row: &Corpse) {
     let guid = row.guid;
     for viewer in viewers_on_shard(view, shard) {
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_destroy_object(guid));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_destroy_object(guid)
+        });
     }
+}
+
+// ===============================================================================================
+//  Cell-anchored event dispatch. The Module stamps the actor's cell on the event row (or the
+//  actor's own row is in the index), so the audience is the actor's box rather than the shard;
+//  each job's per-viewer gate stays the final filter.
+// ===============================================================================================
+
+/// Cells a yard range can reach from an anchor cell: the range in cells, rounded up, plus one
+/// because the listener's anchor is its client position while the gate reads its last durable
+/// row, and the two can sit one cell apart.
+fn cells_within(range_yd: f32) -> i32 {
+    (range_yd / GRID_CELL_SIZE).ceil() as i32 + 1
+}
+
+fn combat_audience(view: &WorldView, shard: ShardId, row: &CombatEvent) -> Vec<Arc<Viewer>> {
+    let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
+    view.cell_audience(
+        shard,
+        Some(key),
+        BOX_HALF_SPAN,
+        &[row.attacker_guid, row.target_guid],
+    )
 }
 
 /// A swing landed → the full 097 packet fork (`combat_event_outbound`: ranged GO + delayed damage
@@ -1614,24 +1869,35 @@ fn corpse_vanished(view: &WorldView, shard: ShardId, row: &Corpse) {
 /// `created` set inside the job.
 fn combat_event_appeared(view: &WorldView, shard: ShardId, row: &CombatEvent) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in combat_audience(view, shard, &row) {
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
-            super::subscriptions::combat_event_outbound(&viewer.tx, &viewer.created, &row)
+        enqueue(viewer.clone(), move |viewer| {
+            super::subscriptions::combat_event_outbound(&viewer, &row)
         });
     }
+}
+
+/// An engagement row names no cell; the attacker's indexed cell anchors it.
+fn melee_audience(view: &WorldView, shard: ShardId, row: &MeleeAttack) -> Vec<Arc<Viewer>> {
+    let key = view
+        .spatial
+        .entity_cell_on_shard(EntityLayer::WorldEntity, row.attacker_guid, shard);
+    view.cell_audience(
+        shard,
+        key,
+        BOX_HALF_SPAN,
+        &[row.attacker_guid, row.target_guid],
+    )
 }
 
 /// A melee/ranged engagement began → SMSG_ATTACKSTART per viewer (`melee_engage_outbound` runs
 /// the ranged skip + created gate in the job).
 fn melee_engaged(view: &WorldView, shard: ShardId, row: &MeleeAttack) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in melee_audience(view, shard, &row) {
         let row = row.clone();
         let created = viewer.created.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::melee_engage_outbound(&created, &row)
         });
     }
@@ -1641,30 +1907,25 @@ fn melee_engaged(view: &WorldView, shard: ShardId, row: &MeleeAttack) {
 /// (`melee_disengage_outbound`, keyed on each viewer's own guid).
 fn melee_disengaged(view: &WorldView, shard: ShardId, row: &MeleeAttack) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in melee_audience(view, shard, &row) {
         let row = row.clone();
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::melee_disengage_outbound(self_guid, &row)
         });
     }
 }
 
 /// A resurrect offer landed → SMSG_RESURRECT_REQUEST to the offer's TARGET and nobody else.
-fn resurrect_offered(view: &WorldView, row: &ResurrectRequest) {
-    let Some(session) = view.session_of_owner(row.target_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+fn resurrect_offered(view: &WorldView, shard: ShardId, row: &ResurrectRequest) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.target_guid)) else {
         return;
     };
     if !super::subscriptions::private_recipient_audience(row.target_guid, viewer.self_guid) {
         return;
     }
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::resurrect_request_outbound(&row)
     });
 }
@@ -1683,8 +1944,7 @@ fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
         return;
     }
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::whisper_event_outbound(&row)
     });
 }
@@ -1701,45 +1961,38 @@ fn system_message_appeared(view: &WorldView, row: &SystemMessageEvent) {
         return;
     }
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::system_message_event_outbound(&row)
     });
 }
 
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
 /// else (same shape as [`whisper_appeared`]) (#120).
-fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
-    let Some(session) = view.session_of_owner(row.recipient_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+fn trade_event_appeared(view: &WorldView, shard: ShardId, row: &TradeEvent) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.recipient_guid)) else {
         return;
     };
     if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
         return;
     }
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::trade_event_outbound(&row)
     });
 }
 
 /// A Duel lifecycle edge landed for one participant. Private packets go only to that participant;
 /// the initiator-addressed completion row also drives the one nearby winner announcement.
-fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
+fn duel_event_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &DuelEvent) {
     if let Some(viewer) = view
-        .session_of_owner(row.recipient_guid)
-        .and_then(|session| view.viewer(session))
+        .viewer_of_owner_on_shard(shard, OwnerGuid(row.recipient_guid))
         .filter(|viewer| {
             super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid)
         })
     {
         let row = row.clone();
         let coord = coord.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             let template = (row.kind == lyracore_shared::duel::event_kind::REQUESTED)
                 .then(|| coord.gameobject_template(row.flag_entry).ok().flatten())
                 .flatten();
@@ -1757,16 +2010,12 @@ fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
     }
     let key = CellKey::of_position(row.map_id, row.instance_id, row.flag_x, row.flag_y);
     let row = Arc::new(row.clone());
-    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
         if !duel_winner_audience(viewer.self_guid, row.initiator_guid, row.challenged_guid) {
             continue;
         }
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::duel_winner_outbound(&row)
         });
     }
@@ -1787,39 +2036,55 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
     }
     let (row, coord) = (row.clone(), coord.clone());
     let self_guid = viewer.self_guid;
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::group_event_outbound(&coord, self_guid, &row)
     });
 }
 
 /// A shard mirror delta is the point at which viewer-relative Loot Tag flags can be projected from
 /// current membership without racing the realm event that requested the mirror write.
-fn group_member_mirror_changed(view: &WorldView, coord: &Coordinator, row: &GroupMember) {
-    let Some(session) = view.session_of_owner(row.character_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+fn group_member_mirror_changed(
+    view: &WorldView,
+    coord: &Coordinator,
+    shard: ShardId,
+    row: &GroupMember,
+) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
     let coord = coord.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::loot_tag_flags_after_membership_change(&coord, &viewer)
     });
 }
 
+/// An aura names its target and nothing else; the target's indexed cell anchors it. A target
+/// with no row (a unit already gone) leaves the owner leg as the only recipient, and the owner
+/// is the only viewer whose gate could still pass.
+fn aura_audience(view: &WorldView, shard: ShardId, row: &Aura) -> Vec<Arc<Viewer>> {
+    let key = view
+        .spatial
+        .entity_cell_on_shard(EntityLayer::WorldEntity, row.target_guid, shard);
+    view.cell_audience(shard, key, BOX_HALF_SPAN, &[row.target_guid])
+}
+
 /// An aura appeared → per viewer: array sync + self-only packets + the stealth HIDE transition
 /// (`aura_insert_outbound`, all gates inside the job against that viewer's own state).
-fn aura_applied(view: &Arc<WorldView>, coord: &Coordinator, shard: ShardId, row: &Aura, stealth_count: usize) {
+fn aura_applied(
+    view: &Arc<WorldView>,
+    coord: &Coordinator,
+    shard: ShardId,
+    row: &Aura,
+    stealth_count: usize,
+) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in aura_audience(view, shard, &row) {
         let (row, coord, view) = (row.clone(), coord.clone(), view.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::aura_insert_outbound(
                 &coord,
                 &view,
+                shard,
                 viewer.session,
                 &viewer.created,
                 viewer.self_guid,
@@ -1831,14 +2096,21 @@ fn aura_applied(view: &Arc<WorldView>, coord: &Coordinator, shard: ShardId, row:
 }
 
 /// An aura changed → per viewer: array sync + refresh-only duration + self-only packets.
-fn aura_updated(view: &Arc<WorldView>, coord: &Coordinator, shard: ShardId, row: &Aura, expires_changed: bool) {
+fn aura_updated(
+    view: &Arc<WorldView>,
+    coord: &Coordinator,
+    shard: ShardId,
+    row: &Aura,
+    expires_changed: bool,
+) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
-        let (row, coord) = (row.clone(), coord.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+    for viewer in aura_audience(view, shard, &row) {
+        let (row, coord, view) = (row.clone(), coord.clone(), view.clone());
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::aura_update_outbound(
                 &coord,
+                &view,
+                shard,
                 &viewer.created,
                 viewer.self_guid,
                 &row,
@@ -1850,15 +2122,21 @@ fn aura_updated(view: &Arc<WorldView>, coord: &Coordinator, shard: ShardId, row:
 
 /// An aura expired/was removed → per viewer: array sync + self-only packets + the stealth REVEAL
 /// transition.
-fn aura_removed(view: &Arc<WorldView>, coord: &Coordinator, shard: ShardId, row: &Aura, stealth_count: usize) {
+fn aura_removed(
+    view: &Arc<WorldView>,
+    coord: &Coordinator,
+    shard: ShardId,
+    row: &Aura,
+    stealth_count: usize,
+) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in aura_audience(view, shard, &row) {
         let (row, coord, view) = (row.clone(), coord.clone(), view.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::aura_delete_outbound(
                 &coord,
                 &view,
+                shard,
                 viewer.session,
                 &viewer.created,
                 viewer.self_guid,
@@ -1869,44 +2147,80 @@ fn aura_removed(view: &Arc<WorldView>, coord: &Coordinator, shard: ShardId, row:
     }
 }
 
+fn cast_audience(view: &WorldView, shard: ShardId, row: &SpellCastEvent) -> Vec<Arc<Viewer>> {
+    let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
+    view.cell_audience(
+        shard,
+        Some(key),
+        BOX_HALF_SPAN,
+        &[row.caster_guid, row.target_guid],
+    )
+}
+
 /// A cast event landed → the full cast-lock sequence per viewer (`cast_event_outbound`: the
 /// caster-private branches key on each viewer's own guid inside the job).
 fn cast_event_appeared(view: &WorldView, shard: ShardId, row: &SpellCastEvent) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in cast_audience(view, shard, &row) {
         let row = row.clone();
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::cast_event_outbound(self_guid, &row)
         });
     }
 }
 
-/// A projectile impact landed → the floating damage number per viewer (broadcast, like the
-/// per-player leg).
+fn impact_audience(view: &WorldView, shard: ShardId, row: &SpellImpactEvent) -> Vec<Arc<Viewer>> {
+    let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
+    view.cell_audience(
+        shard,
+        Some(key),
+        BOX_HALF_SPAN,
+        &[row.caster_guid, row.target_guid],
+    )
+}
+
+/// A projectile impact landed → the floating damage number per viewer that can see the caster.
 fn impact_appeared(view: &WorldView, shard: ShardId, row: &SpellImpactEvent) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in impact_audience(view, shard, &row) {
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::impact_event_outbound(&row)
         });
     }
 }
 
-/// An emote landed → SMSG_TEXT_EMOTE + SMSG_EMOTE per viewer on the shard (broadcast, no range
-/// gate — parity with the per-player leg). Name resolve runs in the job against `coord`'s cache.
+fn emote_audience(view: &WorldView, shard: ShardId, row: &EmoteEvent) -> Vec<Arc<Viewer>> {
+    let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
+    view.cell_audience(
+        shard,
+        Some(key),
+        BOX_HALF_SPAN,
+        &[row.sender_guid, row.target_guid],
+    )
+}
+
+/// An emote landed → SMSG_TEXT_EMOTE + SMSG_EMOTE per viewer that can see the sender. Name
+/// resolve runs in the job against `coord`'s cache.
 fn emote_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &EmoteEvent) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in emote_audience(view, shard, &row) {
         let (row, coord) = (row.clone(), coord.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::emote_event_outbound(&coord, &row)
         });
     }
+}
+
+/// A chat line names its speaker and nothing else; the speaker's indexed cell anchors it, widened
+/// to the kind's yard range (a yell carries 300 yd, four cells past the box).
+fn chat_audience(view: &WorldView, shard: ShardId, row: &ChatEvent) -> Vec<Arc<Viewer>> {
+    let key = view
+        .spatial
+        .entity_cell_on_shard(EntityLayer::WorldEntity, row.sender_guid, shard);
+    let span = cells_within(super::subscriptions::chat_range_yd(row.chat_type));
+    view.cell_audience(shard, key, span, &[row.sender_guid, row.target_guid])
 }
 
 /// A say/yell line landed → SMSG_MESSAGECHAT per viewer, `chat_in_range`-gated inside the job
@@ -1914,11 +2228,10 @@ fn emote_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &E
 /// endpoint lookups).
 fn chat_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &ChatEvent) {
     let row = Arc::new(row.clone());
-    for viewer in viewers_on_shard(view, shard) {
+    for viewer in chat_audience(view, shard, &row) {
         let (row, coord) = (row.clone(), coord.clone());
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::chat_event_outbound(&coord, self_guid, &row)
         });
     }
@@ -1931,8 +2244,7 @@ fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: 
     for viewer in viewers_on_shard(view, shard) {
         let (row, coord) = (row.clone(), coord.clone());
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::channel_event_outbound(&coord, self_guid, &row)
         });
     }
@@ -1957,8 +2269,7 @@ fn weather_changed(view: &WorldView, shard: ShardId, row: &ZoneWeather) {
         if viewer.zone_id.load(Ordering::Relaxed) != zone_id {
             continue;
         }
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::weather_outbound(view_of_row, WeatherChangeType::Smooth)
         });
     }
@@ -2007,8 +2318,8 @@ fn zone_crossed<St>(
     if !viewer.enter_zone(zone_id) {
         return;
     }
-    let (store, tx) = (store.clone(), viewer.tx.clone());
-    enqueue(&tx, move || {
+    let store = store.clone();
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::zone_weather_outbound(&store, zone_id, WeatherChangeType::Instant)
     });
 }
@@ -2018,6 +2329,12 @@ fn zone_crossed<St>(
 fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: u64) -> bool {
     viewer_guid != 0 && viewer_guid != initiator_guid && viewer_guid != challenged_guid
 }
+
+#[cfg(test)]
+mod cell_audience_tests;
+
+#[cfg(test)]
+mod relay_bench;
 
 #[cfg(test)]
 mod family_audience_tests {
@@ -2048,7 +2365,7 @@ mod family_audience_tests {
     #[test]
     fn membership_mirror_drives_viewer_relative_loot_tag_flags() {
         let source = include_str!("world_view.rs");
-        let arm = crate::test_scan::code_of(source, "pub(crate) fn arm_shard");
+        let arm = crate::test_scan::code_of(source, "fn register_shard_callbacks");
         let arm: String = arm.split_whitespace().collect();
         assert!(arm.contains("wire_insert(db.game_group_member()"));
         assert!(arm.contains("wire_delete(db.game_group_member()"));
@@ -2081,6 +2398,7 @@ mod family_audience_tests {
         tx: SessionTx,
     ) -> Arc<Viewer> {
         Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session,
             self_guid,
             bound_identity,
@@ -2374,23 +2692,8 @@ mod family_audience_tests {
         let source = include_str!("world_view.rs");
         let body = crate::test_scan::code_of(source, "fn duel_event_appeared(");
         assert!(body.contains("CellKey::of_position"));
-        assert!(body.contains("view.spatial.viewers_of(EntityLayer::WorldEntity, key)"));
+        assert!(body.contains("view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[])"));
         assert!(body.contains("duel_winner_outbound"));
-    }
-
-    #[test]
-    fn breath_relay_owner_lookup_selects_only_its_own_session() {
-        let view = WorldView::new(true);
-        // No owner session on this gateway: the relay must be dropped.
-        assert_eq!(view.session_of_owner(41), None);
-        // The registry tests pin the registration mechanics; the callback source scan below
-        // pins that breath events actually take this exact lookup rather than an AOI broadcast.
-        let source = include_str!("world_view.rs");
-        let start = source.find("fn breath_relay_appeared").unwrap();
-        let body = &source[start..];
-        assert!(body.contains("view.session_of_owner(row.character_guid)"));
-        assert!(!body[..body.find("fn skill_changed").unwrap()]
-            .contains("viewers_on_shard"), "breath rows must never broadcast to shard viewers");
     }
 
     #[test]
@@ -2403,9 +2706,9 @@ mod family_audience_tests {
         // both row tables must appear once in each independent layer delta.
         let entering = CellKey::at(0, 0, 3, 0);
         view.spatial
-            .upsert_entity(EntityLayer::WorldEntity, 77, entering, 0);
+            .upsert_entity(EntityLayer::WorldEntity, 77, entering, 0, 0);
         view.spatial
-            .upsert_entity(EntityLayer::GameObject, 77, entering, 1);
+            .upsert_entity(EntityLayer::GameObject, 77, entering, 1, 0);
         let delta = view
             .spatial
             .move_viewer_delta(viewer.session, CellKey::at(0, 0, 1, 0))
@@ -2415,8 +2718,8 @@ mod family_audience_tests {
 
         // Removing one table's row cannot erase the equal-valued GUID in the other table.
         assert_eq!(
-            view.spatial.remove_entity(EntityLayer::WorldEntity, 77),
-            Some(entering)
+            view.spatial.remove_entity(EntityLayer::WorldEntity, 77, 0),
+            Some((entering, 0))
         );
         assert!(view
             .spatial
@@ -2520,6 +2823,7 @@ mod family_audience_tests {
         let view = WorldView::new(true);
         let old = viewer(7, 9001);
         let replacement = Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session: old.session,
             self_guid: 9002,
             bound_identity: identity(99),
@@ -2642,62 +2946,81 @@ mod family_audience_tests {
         view.add_viewer_on_shard(owner.clone(), anchor, 0);
         view.add_viewer_on_shard(other, anchor, 0);
 
-        xp_appeared(
-            &view,
-            &XpEvent {
-                id: 1,
-                recipient_identity: owner.bound_identity,
-                killed_guid: 77,
-                total_exp: 123,
-                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
-                is_kill: true,
-            },
-        );
-        levelup_appeared(
-            &view,
-            &LevelupEvent {
-                id: 2,
-                recipient_identity: owner.bound_identity,
-                new_level: 10,
-                health_gained: 20,
-                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
-                mana_gained: 15,
-                strength_gained: 1,
-                agility_gained: 2,
-                stamina_gained: 3,
-                intellect_gained: 4,
-                spirit_gained: 5,
-            },
-        );
-        addon_message_appeared(
-            &view,
-            &AddonMessage {
-                id: 3,
-                recipient_identity: owner.bound_identity,
-                cmd: "progress".to_string(),
-                payload: "ready".to_string(),
-                created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
-            },
-        );
+        for shard in [1, 0] {
+            xp_appeared(
+                &view,
+                shard,
+                &XpEvent {
+                    id: 1,
+                    recipient_identity: owner.bound_identity,
+                    killed_guid: 77,
+                    total_exp: 123,
+                    created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+                    is_kill: true,
+                },
+            );
+            levelup_appeared(
+                &view,
+                shard,
+                &LevelupEvent {
+                    id: 2,
+                    recipient_identity: owner.bound_identity,
+                    new_level: 10,
+                    health_gained: 20,
+                    created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+                    mana_gained: 15,
+                    strength_gained: 1,
+                    agility_gained: 2,
+                    stamina_gained: 3,
+                    intellect_gained: 4,
+                    spirit_gained: 5,
+                },
+            );
+            addon_message_appeared(
+                &view,
+                shard,
+                &AddonMessage {
+                    id: 3,
+                    recipient_identity: owner.bound_identity,
+                    cmd: "progress".to_string(),
+                    payload: "ready".to_string(),
+                    created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+                },
+            );
 
-        assert!(other_rx.try_recv().is_err(), "an unrelated identity receives nothing");
-        assert!(matches!(
-            queued_job(&owner_rx).as_slice(),
-            [Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(_))]
-        ));
-        assert!(matches!(
-            queued_job(&owner_rx).as_slice(),
-            [Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(_))]
-        ));
-        match queued_job(&owner_rx).as_slice() {
-            [Outbound::Raw { body, .. }] => assert_eq!(
-                &body[5..13],
-                &owner.self_guid.to_le_bytes(),
-                "the addon sender is the addressed viewer"
-            ),
-            _ => panic!("addon event must produce one raw SMSG_MESSAGECHAT"),
+            if shard == 1 {
+                assert!(
+                    owner_rx.try_recv().is_err(),
+                    "source Shard events cannot reach a destination owner"
+                );
+                assert!(other_rx.try_recv().is_err());
+                continue;
+            }
+            assert!(
+                other_rx.try_recv().is_err(),
+                "an unrelated identity receives nothing"
+            );
+            assert!(matches!(
+                queued_job(&owner_rx).as_slice(),
+                [Outbound::One(ServerOpcodeMessage::SMSG_LOG_XPGAIN(_))]
+            ));
+            assert!(matches!(
+                queued_job(&owner_rx).as_slice(),
+                [Outbound::One(ServerOpcodeMessage::SMSG_LEVELUP_INFO(_))]
+            ));
+            match queued_job(&owner_rx).as_slice() {
+                [Outbound::Raw { body, .. }] => assert_eq!(
+                    &body[5..13],
+                    &owner.self_guid.to_le_bytes(),
+                    "the addon sender is the addressed viewer"
+                ),
+                _ => panic!("addon event must produce one raw SMSG_MESSAGECHAT"),
+            }
+            assert!(
+                owner_rx.try_recv().is_err(),
+                "each identity row queues exactly once"
+            );
         }
-        assert!(owner_rx.try_recv().is_err(), "each identity row queues exactly once");
     }
 
     #[test]
@@ -2837,7 +3160,7 @@ mod family_audience_tests {
             .expect("the exploration owner relay");
         assert!(
             exploration.contains("viewer_of_owner_on_shard(shard,OwnerGuid(row.character_guid))")
-                && exploration.contains("enqueue(&tx,move||exploration_outbound"),
+                && exploration.contains("enqueue(viewer.clone(),move|viewer|{exploration_outbound"),
             "exploration must select its owner then defer all work to that viewer's writer"
         );
         assert!(
@@ -2859,7 +3182,7 @@ mod family_audience_tests {
             let body = no_ws(&source[start..]);
             assert!(
                 body.contains("view.viewer_of_owner_on_shard(shard,OwnerGuid(row.character_guid))")
-                    && body.contains("enqueue(&tx,move||")
+                    && body.contains("enqueue(viewer.clone(),move|viewer|")
                     && body.contains("coord.0.coord()"),
                 "{handler} must select one shard-scoped owner and defer cache reads and packet construction to its writer job"
             );
@@ -2982,16 +3305,16 @@ mod family_audience_tests {
             .viewers_of(EntityLayer::WorldEntity, far)
             .is_empty());
         assert_eq!(
-            view.world_entity_recipients(viewer.self_guid, far),
+            view.world_entity_recipients(0, viewer.self_guid, far),
             vec![viewer.session]
         );
         assert_eq!(
-            view.world_entity_recipients(viewer.self_guid, anchor),
+            view.world_entity_recipients(0, viewer.self_guid, anchor),
             vec![viewer.session]
         );
         view.remove_viewer(viewer.session);
         assert!(view
-            .world_entity_recipients(viewer.self_guid, far)
+            .world_entity_recipients(0, viewer.self_guid, far)
             .is_empty());
     }
 
@@ -3007,7 +3330,7 @@ mod family_audience_tests {
             "a recenter must enqueue world-entity visibility work before game-object work"
         );
 
-        let seed_start = source.rfind("pub(crate) fn seed_from_caches(view:").unwrap();
+        let seed_start = source.rfind("fn seed_shard_from_cache(view:").unwrap();
         let sweep = &source[sweep_start..seed_start];
         assert!(
             sweep.find("EntityLayer::WorldEntity").unwrap()
@@ -3021,14 +3344,20 @@ mod family_audience_tests {
 //  The pump→writer hand-off
 // ===============================================================================================
 
-/// Push one unit of deferred relay work onto a session's writer queue.
-///
-/// This is the ONLY thing the shared pump does per recipient — a boxed closure and a channel send.
-/// Everything the closure does (gates, cache reads, encoding) happens on that session's own writer
-/// thread, so a slow or panicking relay costs exactly one session, which is the property the
-/// per-player connections used to give us for free.
-fn enqueue(tx: &SessionTx, job: impl FnOnce() -> Vec<Outbound> + Send + 'static) {
-    let _ = tx.send(Outbound::Job(Box::new(job)));
+/// Queue work for one World Session. The socket writer checks its lifetime before running it.
+/// Jobs already running finish before the destination entry batch on the same FIFO writer;
+/// jobs selected by an old callback but enqueued after that batch are discarded here.
+pub(super) fn enqueue(
+    viewer: Arc<Viewer>,
+    job: impl FnOnce(Arc<Viewer>) -> Vec<Outbound> + Send + 'static,
+) {
+    let tx = viewer.tx.clone();
+    let _ = tx.send(Outbound::Job(Box::new(move || {
+        if !viewer.active.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        job(viewer)
+    })));
 }
 
 // ===============================================================================================
@@ -3041,7 +3370,7 @@ fn enqueue(tx: &SessionTx, job: impl FnOnce() -> Vec<Outbound> + Send + 'static)
 /// The subscription engine used to produce these as `on_insert`/`on_delete` when a box was
 /// re-subscribed. Runs on the session's OWN movement thread — never on a pump — and does no I/O:
 /// the entering rows are read out of the shard coordinator caches already in memory.
-pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f32, y: f32) {
+pub(crate) fn recenter(view: &Arc<WorldView>, viewer: &Arc<Viewer>, map_id: u32, x: f32, y: f32) {
     let key = CellKey::of_position(map_id, viewer.instance_id, x, y);
     let Some(delta) = view.spatial.move_viewer_delta(viewer.session, key) else {
         return; // no crossing: the by-far-most-common per-heartbeat call, and it allocates nothing
@@ -3063,7 +3392,7 @@ pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f
                 })
                 .unwrap_or(0);
             let viewer = viewer.clone();
-            enqueue(&viewer.tx.clone(), move || {
+            enqueue(viewer.clone(), move |viewer| {
                 super::subscriptions::relay_peer_destroy(&viewer, guid, owner_guid)
             });
         }
@@ -3082,16 +3411,16 @@ pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f
             else {
                 continue;
             };
-            let (viewer, row) = (viewer.clone(), Arc::new(row));
-            enqueue(&viewer.tx.clone(), move || {
-                super::subscriptions::offer_peer_create_for(&coord, &viewer, &row)
+            let (view, viewer, row) = (view.clone(), viewer.clone(), Arc::new(row));
+            enqueue(viewer.clone(), move |viewer| {
+                super::subscriptions::offer_peer_create_for(&coord, &view, shard, &viewer, &row)
             });
         }
     }
     {
         for (guid, _) in delta.game_objects.left {
             let viewer = viewer.clone();
-            enqueue(&viewer.tx.clone(), move || {
+            enqueue(viewer.clone(), move |viewer| {
                 super::subscriptions::relay_gameobject_destroy(&viewer, guid)
             });
         }
@@ -3103,7 +3432,7 @@ pub(crate) fn recenter(view: &WorldView, viewer: &Arc<Viewer>, map_id: u32, x: f
                 continue;
             };
             let (viewer, row) = (viewer.clone(), Arc::new(row));
-            enqueue(&viewer.tx.clone(), move || {
+            enqueue(viewer.clone(), move |viewer| {
                 super::subscriptions::relay_gameobject_create(&coord, &viewer, &row)
             });
         }
@@ -3135,7 +3464,7 @@ pub(crate) fn sweep_into_view(view: &WorldView, viewer: &Arc<Viewer>) {
         else {
             continue;
         };
-        for o in super::subscriptions::offer_peer_create_for(&coord, viewer, &row) {
+        for o in super::subscriptions::offer_peer_create_for(&coord, view, shard, viewer, &row) {
             let _ = viewer.tx.send(o);
         }
     }
@@ -3167,31 +3496,110 @@ pub(crate) fn sweep_into_view(view: &WorldView, viewer: &Arc<Viewer>) {
     }
 }
 
-/// Seed the index from the coordinator caches at startup — the rows that were already resident when
-/// the gateway connected never fire `on_insert`, so without this the world is invisible until every
-/// entity happens to move.
-pub(crate) fn seed_from_caches(view: &WorldView) {
-    let shards = view.shards.read().unwrap().clone();
-    for (id, coord) in shards.iter().enumerate() {
-        let guard = coord.0.coord();
-        for row in guard.conn.db.game_world_entity().iter() {
-            view.spatial
-                .upsert_entity(EntityLayer::WorldEntity, row.guid, entity_key(&row), id);
-        }
-        for row in guard.conn.db.game_gameobject().iter() {
-            view.spatial.upsert_entity(
-                EntityLayer::GameObject,
+/// Replace this Shard's rows between SDK messages. Its old pump has stopped, and other
+/// Shards retain their current rows.
+fn seed_shard_from_cache(view: &Arc<WorldView>, shard: ShardId, db: &RemoteTables) {
+    reconcile_shard(
+        view,
+        shard,
+        db.game_world_entity().iter().collect(),
+        db.game_gameobject().iter().collect(),
+        db.game_aura().iter().collect(),
+    );
+}
+
+fn reconcile_shard(
+    view: &Arc<WorldView>,
+    shard: ShardId,
+    entities: Vec<WorldEntity>,
+    objects: Vec<GameObject>,
+    auras: Vec<Aura>,
+) {
+    let aura_targets = view.auras.replace_shard(shard, auras);
+    let removed_entities = view.spatial.replace_shard(
+        EntityLayer::WorldEntity,
+        shard,
+        entities
+            .iter()
+            .map(|row| (row.guid, entity_key(row), row.owner_guid)),
+    );
+    let removed_objects = view.spatial.replace_shard(
+        EntityLayer::GameObject,
+        shard,
+        objects.iter().map(|row| {
+            (
                 row.guid,
                 CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y),
-                id,
-            );
+                0,
+            )
+        }),
+    );
+    for (layer, removed) in [
+        (EntityLayer::WorldEntity, removed_entities),
+        (EntityLayer::GameObject, removed_objects),
+    ] {
+        for (guid, key, owner_guid) in removed {
+            for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
+                if view.spatial.can_see(layer, viewer.session, guid) {
+                    continue;
+                }
+                enqueue(viewer.clone(), move |viewer| match layer {
+                    EntityLayer::WorldEntity => {
+                        super::subscriptions::relay_peer_destroy(&viewer, guid, owner_guid)
+                    }
+                    EntityLayer::GameObject => {
+                        super::subscriptions::relay_gameobject_destroy(&viewer, guid)
+                    }
+                });
+            }
         }
     }
-    let (entities, _, cells) = view.spatial.stats(EntityLayer::WorldEntity);
-    let (gos, _, go_cells) = view.spatial.stats(EntityLayer::GameObject);
+    if let Some(coord) = view.shard(shard) {
+        for (target_guid, previous) in aura_targets {
+            let previous = Arc::new(previous);
+            let key =
+                view.spatial
+                    .entity_cell_on_shard(EntityLayer::WorldEntity, target_guid, shard);
+            for viewer in view.cell_audience(shard, key, BOX_HALF_SPAN, &[target_guid]) {
+                let (coord, view, previous) = (coord.clone(), view.clone(), previous.clone());
+                enqueue(viewer.clone(), move |viewer| {
+                    super::subscriptions::aura_snapshot_outbound(
+                        &coord,
+                        &view,
+                        shard,
+                        &viewer,
+                        target_guid,
+                        &previous,
+                    )
+                });
+            }
+        }
+    }
+    // Existing WorldEntity rows retain their CREATE dedup state.
+    for row in entities {
+        if view.spatial.shard_of(EntityLayer::WorldEntity, row.guid) != Some(shard) {
+            continue;
+        }
+        let row = Arc::new(row);
+        for session in view.world_entity_recipients(shard, row.guid, entity_key(&row)) {
+            if view
+                .viewer(session)
+                .is_some_and(|v| v.created.lock().unwrap().contains(&row.guid))
+            {
+                continue;
+            }
+            offer_create_job(view, shard, session, &row);
+        }
+    }
+    // Refresh resident GameObjects too: state and rotation may have changed while disconnected.
+    // Their CREATE packets do not use the WorldEntity dedup set.
+    for row in objects {
+        if view.spatial.shard_of(EntityLayer::GameObject, row.guid) == Some(shard) {
+            gameobject_appeared(view, shard, &row);
+        }
+    }
+    let (aura_rows, aura_units) = view.auras.stats();
     log::info!(
-        "shared AOI index seeded from {} shard cache(s): {entities} entities in {cells} cells, \
-         {gos} gameobjects in {go_cells} cells",
-        view.shard_count()
+        "shared AOI shard {shard} reconciled; {aura_rows} auras on {aura_units} shard-local units"
     );
 }

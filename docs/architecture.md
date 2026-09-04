@@ -358,7 +358,11 @@ Every relay hangs off a coordinator connection, in one of two shapes:
   families (entities, motion, combat, chat, auras, corpses, casts), the recipient-keyed PRIVATE
   tier (whisper/group/resurrect), and owner-addressed XP, level-up, exploration, quest, item,
   teleport, addon, and reputation rows. GUID and bound-identity indexes select one viewer directly;
-  the callback enqueues packet work on that session's FIFO writer. The cross-shard whisper/group
+  the callback enqueues packet work on that session's FIFO writer. Combat, cast, impact, and emote
+  rows carry the actor's cell. Melee stance uses the attacker's indexed cell, chat uses the sender's,
+  and auras use the target's. The shared cell index selects nearby viewers and named owners on the
+  source Shard, and the job's per-viewer gate stays the final filter. Only rolls,
+  corpses, dynamic objects, channel lines and weather still fan out per shard. The cross-shard whisper/group
   twins ride the same dispatchers on the realm-core connection (`arm_realm_private`), armed only
   when realm-core is a distinct database.
 - **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one

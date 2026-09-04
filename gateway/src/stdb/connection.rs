@@ -54,33 +54,104 @@ pub(crate) struct ShardSet {
 pub(crate) struct LiveConn {
     /// Privileged owner connection. Coordinators use its subscription cache for reads; call pipes
     /// use it only for the module's operator-gated reducer surface.
-    pub(crate) conn: DbConnection,
+    pub(crate) conn: Arc<DbConnection>,
     /// Completes reducer waits as soon as this connection's transport dies. It belongs to the
     /// connection generation, so a watchdog replacement cannot fail calls on the fresh socket.
     pub(crate) reducer_completion: Arc<ReducerCompletion>,
     /// Keeps the SDK message-pump thread alive for the connection's lifetime.
-    _pump: std::thread::JoinHandle<()>,
+    _pump: Option<std::thread::JoinHandle<()>>,
+    pump_commands: tokio::sync::mpsc::UnboundedSender<PumpCommand>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
 
-impl LiveConn {
-    /// A connection generation is usable only while both its transport and subscription
-    /// are alive. A module republish can invalidate the latter without closing the socket.
-    fn is_healthy(&self) -> bool {
-        self.conn.is_active() && self._sub.is_active()
+type PumpWork<C = DbConnection> = Box<dyn FnOnce(&C) + Send>;
+
+enum PumpCommand<C = DbConnection> {
+    Run(PumpWork<C>),
+    Park(std::sync::mpsc::Sender<std::result::Result<(), String>>),
+    Resume,
+    Stop,
+}
+
+/// Run setup and SDK advancement on the same thread. SDK advancement is the external edge;
+/// its cache update and row callbacks complete in one poll after the incoming message arrives.
+async fn pump_messages<C, E, F: std::future::Future<Output = std::result::Result<(), E>>>(
+    conn: &C,
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<PumpCommand<C>>,
+    advance: impl Fn() -> F,
+) -> std::result::Result<(), E> {
+    let mut parked = false;
+    loop {
+        tokio::select! {
+            // SubscribeApplied queues Park before returning; consume it before another SDK message.
+            biased;
+            command = commands.recv() => match command {
+                Some(PumpCommand::Run(work)) => work(conn),
+                Some(PumpCommand::Park(applied)) => {
+                    parked = true;
+                    let _ = applied.send(Ok(()));
+                }
+                Some(PumpCommand::Resume) => parked = false,
+                Some(PumpCommand::Stop) | None => return Ok(()),
+            },
+            result = advance(), if !parked => result?,
+        }
     }
 }
 
-/// Install a fresh resource before post-install work, then tear down the replaced resource. This
-/// generic seam keeps the ordering and lock lifetime deterministic without constructing SDK types.
+/// Setup runs between complete SDK messages. The SDK consumes pending callback registrations
+/// before its next incoming message, so registration and snapshot collection have no delta gap.
+/// This relies on `spacetimedb-sdk` 2.7.1 `get_message` draining pending mutations first.
+fn start_pump(
+    conn: &Arc<DbConnection>,
+    role: &str,
+) -> Result<(
+    std::thread::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedSender<PumpCommand>,
+)> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<PumpCommand>();
+    let conn = conn.clone();
+    let role = role.to_owned();
+    let thread = std::thread::Builder::new()
+        .name("stdb-pump".into())
+        .spawn(move || {
+            let result = runtime.block_on(pump_messages(conn.as_ref(), rx, || {
+                conn.advance_one_message_async()
+            }));
+            if let Err(error) = result {
+                if !matches!(error, spacetimedb_sdk::Error::Disconnected) {
+                    log::warn!("{role} pump stopped: {error}");
+                }
+            }
+        })?;
+    Ok((thread, tx))
+}
+
+impl LiveConn {
+    /// A connection needs its transport, subscription, and pump. A Module republish can
+    /// invalidate the subscription while the socket remains connected.
+    fn is_healthy(&self) -> bool {
+        self.conn.is_active()
+            && self._sub.is_active()
+            && self._pump.as_ref().is_some_and(|pump| !pump.is_finished())
+    }
+}
+
+/// Retire callbacks before publishing a fresh resource, then run setup and release the old resource.
+/// This external connection seam exposes publication order without constructing SDK types.
 fn replace_slot_ordered<T>(
     slot: &RwLock<T>,
     fresh: T,
     role_label: &str,
+    retire: impl FnOnce(&RwLock<T>),
     post_install: impl FnOnce(),
     teardown: impl FnOnce(T),
 ) {
+    retire(slot);
     let old = {
         let mut live = slot.write().unwrap_or_else(|poisoned| {
             log::error!("{role_label} live-slot lock poisoned during replacement; recovering");
@@ -92,34 +163,75 @@ fn replace_slot_ordered<T>(
     teardown(old);
 }
 
-/// Replace one live SDK generation. The fresh generation is visible before role-specific work;
-/// that work, disconnect, and pump join all run without the live-slot write lock.
+/// An unwinding hook must stop the fresh pump before partially installed Relays can run.
+fn finish_relay_setup<C>(
+    commands: &tokio::sync::mpsc::UnboundedSender<PumpCommand<C>>,
+    setup: impl FnOnce(),
+) {
+    struct Completion<'a, C> {
+        commands: &'a tokio::sync::mpsc::UnboundedSender<PumpCommand<C>>,
+        complete: bool,
+    }
+    impl<C> Drop for Completion<'_, C> {
+        fn drop(&mut self) {
+            let command = if self.complete {
+                PumpCommand::Resume
+            } else {
+                PumpCommand::Stop
+            };
+            let _ = self.commands.send(command);
+        }
+    }
+    let mut completion = Completion {
+        commands,
+        complete: false,
+    };
+    setup();
+    completion.complete = true;
+}
+
+/// Drain the old pump before exposing the fresh cache. A fresh source cache can advance a
+/// Transfer to its destination, so no old source callback may update the shared indexes afterward.
+/// The slot lock is released before disconnect or join; callbacks can finish their cache reads.
 fn replace_live_conn(
     slot: &RwLock<LiveConn>,
     fresh: LiveConn,
     role_label: &str,
     post_install: impl FnOnce(),
 ) {
+    let fresh_commands = fresh.pump_commands.clone();
     replace_slot_ordered(
         slot,
         fresh,
         role_label,
+        |slot| {
+            let (conn, pump, commands) = {
+                let mut live = slot
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                (
+                    live.conn.clone(),
+                    live._pump.take(),
+                    live.pump_commands.clone(),
+                )
+            };
+            if let Err(error) = conn.disconnect() {
+                if !matches!(error, spacetimedb_sdk::Error::Disconnected) {
+                    log::warn!("{role_label} old connection disconnect failed: {error}");
+                }
+            }
+            let _ = commands.send(PumpCommand::Resume);
+            if let Some(pump) = pump {
+                if let Err(error) = pump.join() {
+                    log::warn!("{role_label} old pump thread panicked: {error:?}");
+                }
+            }
+        },
         || {
             log::info!("{role_label} replacement installed");
-            post_install();
+            finish_relay_setup(&fresh_commands, post_install);
         },
-        |old| {
-            if let Err(error) = old.conn.disconnect() {
-                log::warn!(
-                    "{role_label} old connection disconnect failed during teardown: {error}"
-                );
-            }
-            if let Err(error) = old._pump.join() {
-                log::warn!("{role_label} old pump thread panicked during teardown: {error:?}");
-            } else {
-                log::info!("{role_label} old connection teardown complete");
-            }
-        },
+        drop,
     );
 }
 
@@ -349,6 +461,20 @@ impl CoordinatorInner {
         })
     }
 
+    /// Complete Relay setup on the current connection's pump, without retaining its slot lock.
+    pub(crate) fn on_pump(&self, work: impl FnOnce(&DbConnection) + Send + 'static) -> Result<()> {
+        let pump = self.coord().pump_commands.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        pump.send(PumpCommand::Run(Box::new(move |conn| {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(conn)));
+            let _ = tx.send(outcome.map_err(|_| "Relay setup panicked"));
+        })))
+        .map_err(|_| anyhow!("{} Coordinator pump is stopped", self.db_name))?;
+        rx.recv_timeout(Duration::from_secs(15))
+            .map_err(|error| anyhow!("{} Relay setup did not complete: {error}", self.db_name))?
+            .map_err(|error| anyhow!("{} {error}", self.db_name))
+    }
+
     /// The connection for the NEXT reducer call: round-robin over the call-pipe pool,
     /// skipping dead pipes; no pool (or every pipe dead) falls back to the watchdogged
     /// coordinator connection, which is exactly the behavior before the pool existed.
@@ -416,7 +542,7 @@ fn call_pipe_role_label(db_name: &str, index: usize) -> String {
 }
 
 /// Build one SDK connection generation, start its pump, and wait for the caller's exact
-/// subscription policy to apply.
+/// subscription policy to apply. Reconnect Coordinators park at apply until their Relays are armed.
 fn connect_subscribed(
     uri: String,
     db_name: String,
@@ -424,6 +550,7 @@ fn connect_subscribed(
     queries: Vec<&'static str>,
     role_label: String,
     subscription_timeout_hint: Option<&'static str>,
+    park_for_relays: bool,
 ) -> Result<LiveConn> {
     let reducer_completion = Arc::new(ReducerCompletion::connected());
     let disconnected = reducer_completion.clone();
@@ -447,36 +574,53 @@ fn connect_subscribed(
         .build()
         .map_err(|error| anyhow!("{role_label} build/connect failed: {error}"))?;
 
-    let pump = conn.run_threaded();
+    let conn = Arc::new(conn);
+    let (pump, pump_commands) = start_pump(&conn, &role_label)?;
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
+    let applied_commands = pump_commands.clone();
     let sub = conn
         .subscription_builder()
         .on_applied(move |_ctx| {
-            let _ = tx.send(Ok(()));
+            if park_for_relays {
+                let _ = applied_commands.send(PumpCommand::Park(tx));
+            } else {
+                let _ = tx.send(Ok(()));
+            }
         })
         .on_error(move |_ctx, err| {
             let _ = tx_err.send(Err(format!("{err}")));
         })
         .subscribe(queries);
 
-    match rx.recv_timeout(Duration::from_secs(15)) {
-        Ok(Ok(())) => log::info!("{role_label} subscriptions applied"),
-        Ok(Err(error)) => return Err(anyhow!("{role_label} subscription error: {error}")),
+    let applied = match rx.recv_timeout(Duration::from_secs(15)) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(anyhow!("{role_label} subscription error: {error}")),
         Err(_) => {
             let hint = subscription_timeout_hint
                 .map(|hint| format!(" ({hint})"))
                 .unwrap_or_default();
-            return Err(anyhow!(
+            Err(anyhow!(
                 "{role_label} subscriptions not applied within 15s{hint}"
-            ));
+            ))
         }
+    };
+    if let Err(error) = applied {
+        let _ = conn.disconnect();
+        // A late apply can race this timeout and park the unpublished pump. Stop works in either state.
+        let _ = pump_commands.send(PumpCommand::Stop);
+        if let Err(panic) = pump.join() {
+            log::warn!("{role_label} failed subscription pump panicked: {panic:?}");
+        }
+        return Err(error);
     }
+    log::info!("{role_label} subscriptions applied");
 
     Ok(LiveConn {
         conn,
         reducer_completion,
-        _pump: pump,
+        _pump: Some(pump),
+        pump_commands,
         _sub: sub,
     })
 }
@@ -489,7 +633,15 @@ fn connect_call_pipe(
     index: usize,
 ) -> Result<LiveConn> {
     let role_label = call_pipe_role_label(&db_name, index);
-    connect_subscribed(uri, db_name, token, call_pipe_queries(), role_label, None)
+    connect_subscribed(
+        uri,
+        db_name,
+        token,
+        call_pipe_queries(),
+        role_label,
+        None,
+        false,
+    )
 }
 
 /// Start at most one reconnect for each failed call pipe. The coordinator watchdog owns this
@@ -897,6 +1049,7 @@ fn connect_blocking(
     db_name: String,
     token: Option<String>,
     sharded_tables: bool,
+    park_for_relays: bool,
 ) -> Result<LiveConn> {
     let queries = coordinator_queries(sharded_tables);
     let role_label = coordinator_role_label(&db_name);
@@ -907,25 +1060,17 @@ fn connect_blocking(
         queries,
         role_label,
         Some("node down, or token lacks access to the private game_account/game_session tables?"),
+        park_for_relays,
     )
 }
 
 /// How often the coordinator watchdog polls connection liveness.
 const COORDINATOR_WATCHDOG_POLL: Duration = Duration::from_secs(3);
 
-/// Background watchdog: detect a dropped coordinator connection and rebuild it IN PLACE so the gateway
-/// self-heals across a SpacetimeDB migration / network blip — no manual restart. Each poll it checks
-/// BOTH liveness signals through [`LiveConn::is_healthy`]: the socket and the subscription.
-/// Neither subsumes the other — a migration can invalidate the SUBSCRIPTION while the socket stays up
-/// (`conn.is_active()` stays true, and the SDK's subscription `on_disconnect` is a no-op), and a raw
-/// socket drop leaves the subscription's status at `Applied` — so we heal when EITHER is down. On a drop
-/// it rebuilds a fresh connection + resubscribes OFF-LOCK (the up-to-15s apply must not block readers),
-/// swaps it in under the write lock (instant), then tears the OLD connection down off-lock (disconnect +
-/// join its pump thread, so it's reaped rather than detached-and-leaked — on the subscription-death path
-/// the old socket was still live, so its pump is still running). While rebuilding, cache reads return the
-/// stale/empty view (infallible `Option` reads → `None`/missing row, e.g. `player_login`'s "not visible"
-/// path → a clean relog, never a panic); once the swap lands, every reader picks up the fresh connection
-/// on its next access. Retries on failure; never panics.
+/// Rebuild a Coordinator when its transport, subscription, or pump stops. A Module migration
+/// can invalidate the subscription while the socket remains connected.
+/// Subscribe and park off-lock, drain the old pump, then publish, arm, and resume the fresh connection.
+/// Readers retain the old cache during recovery; failed connections retry on the next poll.
 fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("stdb-coordinator-watchdog".into())
@@ -950,12 +1095,13 @@ fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::Join
                 inner.db_name.clone(),
                 inner.token.clone(),
                 inner.sharded_tables,
+                true,
             ) {
                 Ok(fresh) => {
                     // Re-arm any relay with no per-login point to self-heal through — MUST run
                     // after the install: each hook re-reads `inner.coord()` and must see fresh.
-                    // `replace_live_conn` also guarantees hooks and teardown run without its write
-                    // guard, with teardown ordered after every hook.
+                    // The old pump has finished before publication. Hooks read the fresh cache
+                    // without holding the slot write lock.
                     replace_live_conn(&inner.live, fresh, &role_label, || {
                         let hooks = inner.on_reconnect.lock().unwrap().clone();
                         for hook in hooks {
@@ -1379,9 +1525,12 @@ mod coordinator_query_tests {
 
 #[cfg(test)]
 mod live_replacement_tests {
-    use super::replace_slot_ordered;
+    use super::{pump_messages, replace_slot_ordered};
+    use crate::stdb::world_index::{CellKey, EntityLayer, WorldIndex};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Mutex, RwLock};
+    use std::sync::{mpsc, Arc, Mutex, RwLock};
+    use std::thread::JoinHandle;
+    use std::time::Duration;
 
     #[test]
     fn replacement_installs_before_post_install_and_tears_down_unlocked() {
@@ -1393,6 +1542,7 @@ mod live_replacement_tests {
             &slot,
             "fresh",
             "test database coordinator",
+            |_| {},
             || {
                 let live = slot
                     .try_read()
@@ -1414,6 +1564,319 @@ mod live_replacement_tests {
         assert_eq!(*slot.read().unwrap(), "fresh");
         assert_eq!(post_install_calls.load(Ordering::Relaxed), 1);
         assert_eq!(*events.lock().unwrap(), ["post-install", "teardown"]);
+    }
+
+    #[test]
+    fn a_replacement_cache_cannot_advance_transfer_past_an_old_row_callback() {
+        struct ExternalConnection {
+            escrow_visible: bool,
+            pump: Option<JoinHandle<()>>,
+        }
+
+        let source = 0;
+        let destination = 1;
+        let guid = 7;
+        let source_cell = CellKey::at(0, 0, 0, 0);
+        let destination_cell = CellKey::at(1, 0, 0, 0);
+        for inserting in [true, false] {
+            let index = Arc::new(WorldIndex::new(true));
+            if !inserting {
+                index.upsert_entity(EntityLayer::WorldEntity, guid, source_cell, source, 0);
+            }
+            let slot = Arc::new(RwLock::new(ExternalConnection {
+                escrow_visible: false,
+                pump: None,
+            }));
+            let (entered, callback_entered) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let callback_slot = slot.clone();
+            let callback_index = index.clone();
+            let pump = std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .unwrap();
+                let (_setup, work) = tokio::sync::mpsc::unbounded_channel();
+                let result = runtime.block_on(pump_messages(&(), work, || async {
+                    entered.send(()).unwrap();
+                    released.recv_timeout(Duration::from_secs(5)).unwrap();
+                    assert!(
+                        !callback_slot.read().unwrap().escrow_visible,
+                        "an old callback must retain the old cache until it finishes"
+                    );
+                    callback_index.upsert_entity(
+                        EntityLayer::WorldEntity,
+                        guid,
+                        source_cell,
+                        source,
+                        0,
+                    );
+                    Err::<(), ()>(())
+                }));
+                assert_eq!(result, Err(()));
+            });
+            slot.write().unwrap().pump = Some(pump);
+            callback_entered
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+
+            let (retiring, retirement_started) = mpsc::channel();
+            let replacement_slot = slot.clone();
+            let replacement_index = index.clone();
+            let replacement = std::thread::spawn(move || {
+                replace_slot_ordered(
+                    &replacement_slot,
+                    ExternalConnection {
+                        escrow_visible: true,
+                        pump: None,
+                    },
+                    "source Shard",
+                    |slot| {
+                        let pump = slot.write().unwrap().pump.take().unwrap();
+                        retiring.send(()).unwrap();
+                        pump.join().unwrap();
+                    },
+                    || {
+                        assert!(replacement_slot.read().unwrap().escrow_visible);
+                        replacement_index.upsert_entity(
+                            EntityLayer::WorldEntity,
+                            guid,
+                            destination_cell,
+                            destination,
+                            0,
+                        );
+                    },
+                    drop,
+                );
+            });
+            retirement_started
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+            let published_before_callback_finished = slot.read().unwrap().escrow_visible;
+            release.send(()).unwrap();
+            replacement.join().unwrap();
+
+            assert!(!published_before_callback_finished);
+            assert_eq!(
+                index.shard_of(EntityLayer::WorldEntity, guid),
+                Some(destination)
+            );
+            assert_eq!(
+                index.entity_cell(EntityLayer::WorldEntity, guid),
+                Some(destination_cell)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod pump_tests {
+    use super::{finish_relay_setup, pump_messages, replace_slot_ordered, PumpCommand};
+    use std::cell::RefCell;
+    use std::future::Future;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use std::task::{Context, Poll, Waker};
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+
+    #[derive(Default)]
+    struct ExternalCache {
+        row: Mutex<Option<u64>>,
+        projected: Mutex<Option<u64>>,
+        registered: AtomicBool,
+        pending_registration: AtomicBool,
+    }
+
+    #[tokio::test]
+    async fn a_quiet_pump_runs_setup_without_waiting_for_an_incoming_message() {
+        let (tx, rx) = mpsc::unbounded_channel::<PumpCommand<ExternalCache>>();
+        let cache = ExternalCache::default();
+        let (done, finished) = tokio::sync::oneshot::channel();
+        tx.send(PumpCommand::Run(Box::new(move |_| {
+            let _ = done.send(());
+        })))
+        .unwrap();
+        let pumping = pump_messages(&cache, rx, std::future::pending::<Result<(), ()>>);
+        tokio::pin!(pumping);
+        tokio::select! {
+            _ = &mut pumping => panic!("the external connection is still open"),
+            outcome = tokio::time::timeout(Duration::from_secs(1), finished) => {
+                outcome.expect("setup must wake a quiet pump").unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delta_arriving_during_snapshot_setup_is_applied_after_the_snapshot() {
+        for (snapshot, delta) in [(None, Some(2)), (Some(1), Some(2)), (Some(1), None)] {
+            let cache = ExternalCache::default();
+            *cache.row.lock().unwrap() = snapshot;
+            let (setup, work) = mpsc::unbounded_channel::<PumpCommand<ExternalCache>>();
+            let (incoming, messages) = mpsc::unbounded_channel::<Result<Option<u64>, ()>>();
+            let messages = tokio::sync::Mutex::new(messages);
+            setup
+                .send(PumpCommand::Run(Box::new(move |cache| {
+                    cache.pending_registration.store(true, Ordering::Relaxed);
+                    let snapshot = *cache.row.lock().unwrap();
+                    incoming.send(Ok(delta)).unwrap();
+                    incoming.send(Err(())).unwrap();
+                    *cache.projected.lock().unwrap() = snapshot;
+                })))
+                .unwrap();
+
+            let result = pump_messages(&cache, work, || async {
+                // SDK 2.7.1 applies queued registrations before any waiting remote delta.
+                if cache.pending_registration.swap(false, Ordering::Relaxed) {
+                    cache.registered.store(true, Ordering::Relaxed);
+                    return Ok(());
+                }
+                let Some(Ok(row)) = messages.lock().await.recv().await else {
+                    return Err(());
+                };
+                *cache.row.lock().unwrap() = row;
+                if cache.registered.load(Ordering::Relaxed) {
+                    *cache.projected.lock().unwrap() = row;
+                }
+                Ok(())
+            })
+            .await;
+
+            assert_eq!(result, Err(()));
+            assert_eq!(*cache.projected.lock().unwrap(), delta);
+        }
+    }
+
+    #[tokio::test]
+    async fn fresh_deltas_during_retirement_wait_for_registered_relays() {
+        let cache = ExternalCache::default();
+        let relayed = AtomicUsize::new(0);
+        let (commands, work) = mpsc::unbounded_channel();
+        let (incoming, messages) = mpsc::unbounded_channel::<Option<u64>>();
+        let messages = tokio::sync::Mutex::new(messages);
+        let (applied, parked) = std::sync::mpsc::channel();
+        let applied = Mutex::new(Some(applied));
+        incoming.send(None).unwrap();
+        let pump = RefCell::new(Box::pin(pump_messages(&cache, work, || async {
+            if cache.pending_registration.swap(false, Ordering::Relaxed) {
+                cache.registered.store(true, Ordering::Relaxed);
+                return Ok::<(), ()>(());
+            }
+            match messages.lock().await.recv().await.unwrap() {
+                None => {
+                    *cache.row.lock().unwrap() = Some(1);
+                    commands
+                        .send(PumpCommand::Park(applied.lock().unwrap().take().unwrap()))
+                        .unwrap();
+                }
+                Some(row) => {
+                    *cache.row.lock().unwrap() = Some(row);
+                    if cache.registered.load(Ordering::Relaxed) {
+                        *cache.projected.lock().unwrap() = Some(row);
+                        relayed.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            Ok(())
+        })));
+        let poll = || {
+            pump.borrow_mut()
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+        };
+        assert_eq!(poll(), Poll::Pending);
+        assert_eq!(parked.try_recv().unwrap(), Ok(()));
+
+        let slot = std::sync::RwLock::new("old");
+        replace_slot_ordered(
+            &slot,
+            "fresh",
+            "source Shard",
+            |_| {
+                incoming.send(Some(2)).unwrap();
+                assert_eq!(poll(), Poll::Pending);
+                assert_eq!(*cache.row.lock().unwrap(), Some(1));
+                assert_eq!(relayed.load(Ordering::Relaxed), 0);
+            },
+            || {
+                assert_eq!(*slot.read().unwrap(), "fresh");
+                commands
+                    .send(PumpCommand::Run(Box::new(|cache| {
+                        cache.pending_registration.store(true, Ordering::Relaxed);
+                    })))
+                    .unwrap();
+                assert_eq!(poll(), Poll::Pending);
+                assert_eq!(*cache.row.lock().unwrap(), Some(1));
+                assert_eq!(relayed.load(Ordering::Relaxed), 0);
+                commands.send(PumpCommand::Resume).unwrap();
+                assert_eq!(poll(), Poll::Pending);
+            },
+            drop,
+        );
+
+        assert_eq!(*cache.row.lock().unwrap(), Some(2));
+        assert_eq!(*cache.projected.lock().unwrap(), Some(2));
+        assert_eq!(relayed.load(Ordering::Relaxed), 1);
+        commands.send(PumpCommand::Stop).unwrap();
+        assert_eq!(poll(), Poll::Ready(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn a_quiet_parked_pump_resumes_without_an_incoming_message() {
+        let (commands, work) = mpsc::unbounded_channel();
+        let (applied, parked) = std::sync::mpsc::channel();
+        commands.send(PumpCommand::Park(applied)).unwrap();
+        let advances = AtomicUsize::new(0);
+        let mut pump = Box::pin(pump_messages(&(), work, || async {
+            advances.fetch_add(1, Ordering::Relaxed);
+            std::future::pending::<Result<(), ()>>().await
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(parked.try_recv().unwrap(), Ok(()));
+        assert_eq!(advances.load(Ordering::Relaxed), 0);
+        finish_relay_setup(&commands, || {});
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(advances.load(Ordering::Relaxed), 1);
+        commands.send(PumpCommand::Stop).unwrap();
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn a_panicking_reconnect_hook_stops_its_partially_armed_pump() {
+        let (commands, work) = mpsc::unbounded_channel();
+        let (applied, _parked) = std::sync::mpsc::channel();
+        commands.send(PumpCommand::Park(applied)).unwrap();
+        let mut pump = Box::pin(pump_messages(
+            &(),
+            work,
+            std::future::pending::<Result<(), ()>>,
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Pending);
+        let outcome = std::panic::catch_unwind(|| {
+            finish_relay_setup(&commands, || panic!("hook failed"));
+        });
+        assert!(outcome.is_err(), "hook failures still propagate");
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn failed_subscription_cleanup_stops_before_or_after_a_late_apply() {
+        for stop_first in [true, false] {
+            let (commands, work) = mpsc::unbounded_channel();
+            let (applied, _parked) = std::sync::mpsc::channel();
+            if stop_first {
+                commands.send(PumpCommand::Stop).unwrap();
+                commands.send(PumpCommand::Park(applied)).unwrap();
+            } else {
+                commands.send(PumpCommand::Park(applied)).unwrap();
+                commands.send(PumpCommand::Stop).unwrap();
+            }
+            assert_eq!(
+                pump_messages(&(), work, std::future::pending::<Result<(), ()>>).await,
+                Ok(())
+            );
+        }
     }
 }
 
@@ -1657,7 +2120,7 @@ impl Coordinator {
         // Build on a dedicated OS thread (no tokio context), join it off the reactor.
         let build_thread = std::thread::Builder::new()
             .name("stdb-coordinator-connect".into())
-            .spawn(move || connect_blocking(uri, db, token, sharded_tables))
+            .spawn(move || connect_blocking(uri, db, token, sharded_tables, false))
             .context(format!("spawn {role_label} connect thread"))?;
         let live = tokio::task::spawn_blocking(move || -> Result<LiveConn> {
             build_thread
@@ -1860,7 +2323,7 @@ impl Coordinator {
         // after a coordinator reconnect (the watchdog treats a module republish as one), which is
         // what the `on_reconnect` hook below is for: the callbacks are bound to a `LiveConn` that
         // the swap replaces.
-        coordinator.arm_shared_world_view();
+        coordinator.arm_shared_world_view()?;
         // The loot-roll relay: promotes each world shard's staging loot rolls onto realm-core and settles
         // resolved winners back down. A no-op loop on an unsharded gateway (`relay_tick` returns
         // immediately when `realm_store()` is `None`), so this costs a single-database deployment
@@ -1887,19 +2350,22 @@ impl Coordinator {
     ///
     /// The shard ORDER fixes the `ShardId`s the index stores, so this runs once, before any session
     /// exists, and the vector is never reordered afterwards. The re-arm re-registers on the fresh
-    /// `LiveConn` — the index itself survives untouched, which is deliberate: a reconnect must not
-    /// blank every player's view. It does re-seed, because a fresh subscription's apply repopulates
-    /// the cache without firing per-row `on_insert`.
-    fn arm_shared_world_view(&self) {
+    /// `LiveConn`. Reconciliation replaces only that Shard's rows and keeps viewer registrations.
+    /// It removes missing rows because initial subscription apply does not replay their deletes.
+    fn arm_shared_world_view(&self) -> Result<()> {
         let view = self.world_view();
         let shards = self.all_shards();
         view.set_shards(shards.clone());
         for (id, shard) in shards.iter().enumerate() {
-            super::world_view::arm_shard(view.clone(), shard.clone(), id);
+            super::world_view::arm_shard(view.clone(), shard.clone(), id)?;
             let (hook_view, hook_shard) = (view.clone(), shard.clone());
             shard.0.on_reconnect.lock().unwrap().push(Arc::new(move || {
-                super::world_view::arm_shard(hook_view.clone(), hook_shard.clone(), id);
-                super::world_view::seed_from_caches(&hook_view);
+                if let Err(error) =
+                    super::world_view::arm_shard(hook_view.clone(), hook_shard.clone(), id)
+                {
+                    log::error!("{} Relay setup failed: {error:#}", hook_shard.shard_name());
+                    let _ = hook_shard.0.coord().conn.disconnect();
+                }
             }));
         }
         // The cross-shard whisper/group twins (#22) ride realm-core's connection — armed only
@@ -1919,7 +2385,7 @@ impl Coordinator {
                 }));
             }
         }
-        super::world_view::seed_from_caches(&view);
+        Ok(())
     }
 
     /// The database name this handle targets — the routing identity of every call made through it.
