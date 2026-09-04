@@ -369,6 +369,7 @@ cargo build
 #   importer 128 | module 603 | gateway 673 + 63 (schema parity) | lyracore-shared 75
 # These numbers drift UP as tests are added; a LOWER count is the signal worth chasing, not an exact
 # match.
+# The `#[ignore]` durable rung (`module/tests/`) now runs in CI: .github/workflows/module-durable.yml
 
 # Publish-shaped PREFLIGHT — the deploy-only break class the test suites cannot see.
 # Fully offline: no node, no database, no publish/call/sql. Three checks: the SpacetimeDB version

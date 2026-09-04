@@ -1,0 +1,69 @@
+name: Module durable tests
+
+# The durable integration rung: `module/tests/`, 37 targets marked `#[ignore]` because each one
+# starts its own SpacetimeDB standalone, publishes the module to it, and drives real reducers.
+# `rust.yml`'s `--lib` run cannot reach any of it.
+#
+# There is no shared node to start here: `module/tests/support/mod.rs` starts one standalone per
+# test on a free loopback port with `--in-memory`, publishes with `--features=debug_reducers` (the
+# feature set `lyracore publish` bakes in), and kills it on drop. This job installs the pinned CLI
+# and gets out of the way.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # docs/quickstart.md and install.sh pin this exactly; `lyracore preflight` enforces the match.
+  SPACETIME_VERSION: 2.7.1
+
+jobs:
+  durable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Not cached: the whole install measures four seconds on the runner, against a job that runs
+      # for minutes. A cache would also have to carry ~/.config/spacetime, where the CLI writes the
+      # identity it mints on the first publish.
+      - name: Install SpacetimeDB ${{ env.SPACETIME_VERSION }}
+        run: |
+          curl -sSf https://install.spacetimedb.com | sh -s -- -y
+          "$HOME/.local/bin/spacetime" version install "$SPACETIME_VERSION"
+          "$HOME/.local/bin/spacetime" version use "$SPACETIME_VERSION"
+
+      # An installer that quietly lands a different version fails here rather than inside a publish.
+      - name: Check the pinned version
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          found=$("$HOME/.local/bin/spacetime" --version | sed -n 's/.*version[ ]*\([0-9][0-9.]*\).*/\1/p' | head -n 1)
+          echo "spacetime $found"
+          [ "$found" = "$SPACETIME_VERSION" ]
+
+      # Every test publishes the same wasm. Building it once here keeps the first test off a cold
+      # compile, and a build failure reports as a build failure rather than as a publish timeout.
+      - name: Build the module wasm
+        run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
+
+      # Each test owns a whole database process, so the thread cap is a memory bound, not a CPU one.
+      #
+      # `deadmines` and `playerbots` are Packages an Operator installs (`lyracore packages add`);
+      # they are not in this repository, so their reducers do not exist in the published module.
+      # `lethal_floor`'s ranged phase races the module's own cast-event sweep and health regen, and
+      # is flaky on `main` with or without this change.
+      - name: Run the durable suite
+        run: cargo test -p lyracore-module --tests -- --ignored --test-threads=4 --skip deadmines --skip personality --skip lethal_floor
+
+      - name: Upload the standalone logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: standalone-logs
+          path: /tmp/lyracore-standalone-logs
+          if-no-files-found: ignore
