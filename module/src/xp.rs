@@ -13,6 +13,8 @@ use crate::game_config;
 use crate::game_world_entity;
 use crate::WorldEntity;
 
+const LEVEL_CAP: u32 = 60;
+
 // ===========================================================================================
 //  XP / level-up event tables [event] — public, RLS-restricted to the recipient
 // ===========================================================================================
@@ -79,7 +81,7 @@ pub fn xp_to_next_level(level: u32) -> u32 {
         101000, 106300, 111800, 117500, 123200, 129100, 135100, 141200, 147500, 153900, 160400,
         167100, 173900, 180800, 187900, 195000, 202300, 209800,
     ];
-    if level == 0 || level >= 60 {
+    if level == 0 || level >= LEVEL_CAP {
         return 0; // level 0 / at the cap → no next-level threshold
     }
     XP_PER_LEVEL[(level - 1) as usize]
@@ -106,6 +108,53 @@ pub(crate) fn xp_for_kill(mob_level: u32, player_level: u32) -> u32 {
         base * 6 / 5
     } else {
         base
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct XpProgression {
+    level: u32,
+    xp: u32,
+    next_level_xp: u32,
+}
+
+/// Spend one award across the level curve without narrowing the XP bank until it is below the next
+/// threshold. Reaching the level cap discards the remainder because a capped Character has no XP bar.
+fn progression_after_award(
+    level: u32,
+    current_xp: u32,
+    next_level_xp: u32,
+    amount: u64,
+) -> XpProgression {
+    if level >= LEVEL_CAP {
+        return XpProgression {
+            level,
+            xp: 0,
+            next_level_xp: 0,
+        };
+    }
+
+    let mut level = level;
+    let mut bank = current_xp as u64 + amount;
+    let mut next = next_level_xp;
+    while next > 0 && bank >= next as u64 {
+        bank -= next as u64;
+        level += 1;
+        if level >= LEVEL_CAP {
+            return XpProgression {
+                level,
+                xp: 0,
+                next_level_xp: 0,
+            };
+        }
+        next = xp_to_next_level(level);
+    }
+
+    XpProgression {
+        level,
+        // A valid threshold leaves less than one level. A missing threshold keeps the bank bounded.
+        xp: bank.min(u32::MAX as u64) as u32,
+        next_level_xp: next,
     }
 }
 
@@ -261,9 +310,9 @@ pub(crate) fn accrue_rested_on_login(
 
 /// Award `attacker_guid` the XP for killing `killed_guid` (a `mob_level` creature), applying any
 /// level-ups (max-health recalc + full heal) and the rested-XP bonus (double kill XP while the
-/// character's rested pool has XP, draining it). Emits a `game_xp_event` (skipped for a gray 0-XP kill —
-/// vanilla shows nothing) and one `game_levelup_event` per level gained. No-op if the attacker has left
-/// the world. Called from the combat killing-blow branch for player attackers.
+/// character's rested pool has XP, draining it). Emits a `game_xp_event` and one `game_levelup_event`
+/// per level gained. Grey kills, capped Characters and attackers who have left the world receive
+/// no award or event. Called from the combat killing-blow branch for Character attackers.
 pub(crate) fn award_xp(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -276,6 +325,12 @@ pub(crate) fn award_xp(
     let Some(mut p) = entities.guid().find(attacker_guid) else {
         return;
     };
+    // A capped Character can still make a non-grey kill for rewards which share `xp_for_kill`
+    // (Hunter pet progression and Drain Soul shards). Stop only the Character XP path here, before
+    // rested XP is drained or an XP event is emitted.
+    if p.level >= LEVEL_CAP {
+        return;
+    }
     // Elite kills pay 2× (vanilla `if IsElite() xp *= 2`), then the realm xp_rate — applied HERE, before
     // the rested bonus below, so the pool drains by the same rated amount it grants (no double-dip).
     // GROUP SPLIT: the recipient's own level-based award divided evenly by the in-range member
@@ -331,9 +386,15 @@ pub(crate) fn award_xp(
 /// `game_levelup_event` per level gained). Mutates `p` in place — the CALLER persists it (so a single
 /// `update` covers the XP write plus any dings). This is the single home of the leveling math, shared
 /// by the kill award ([`award_xp`]) and quest turn-in rewards ([`crate::quest`]) so they can never
-/// drift. No-op for `amount == 0`. Does NOT emit a `game_xp_event` (the kill path owns the
+/// drift. Capped Characters retain zero XP. Below the cap, `amount == 0` is a no-op.
+/// Does NOT emit a `game_xp_event` (the kill path owns the
 /// `SMSG_LOG_XPGAIN` source-guid line; quest XP has no killed unit). [entity]
 pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
+    if p.level >= LEVEL_CAP {
+        p.xp = 0;
+        p.next_level_xp = 0;
+        return;
+    }
     if amount == 0 {
         return;
     }
@@ -342,11 +403,14 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
     // `award_xp`, quest XP in `quest.rs`). Applied HERE, the one chokepoint both sources share, so a
     // single multiply can never drift between them. u64 math to avoid a u32*u32 overflow. Missing
     // config row ⇒ 10000 (1×) — byte-identical to before this feature existed.
-    let amount = ((amount as u64 * crate::gm::xprate_bp(ctx) as u64) / 10_000) as u32;
+    let amount = (amount as u64 * crate::gm::xprate_bp(ctx) as u64) / 10_000;
     if amount == 0 {
         return;
     }
-    p.xp += amount;
+    let progression = progression_after_award(p.level, p.xp, p.next_level_xp, amount);
+    // Keep the in-hand entity coherent while synchronous level-up hooks run. The caller persists it
+    // after the ding loop, as before.
+    p.xp = progression.xp;
     // Race/class drive the real per-level curve (importer P3); they live packed in unit_bytes_0
     // (race | class<<8 | gender<<16 | power<<24). max_health_for/max_power_for fall back to the flat
     // placeholder when the curve isn't loaded.
@@ -354,9 +418,8 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
     let class = p.class();
     let mut leveled = false;
     // Ding loop: spend XP across as many thresholds as it crosses (a big award can be 2+ levels).
-    while p.next_level_xp > 0 && p.xp >= p.next_level_xp {
+    while p.level < progression.level {
         leveled = true;
-        p.xp -= p.next_level_xp;
         p.level += 1;
         // Lift every combat (weapon + Defense) skill line's cap to the new level*5: this
         // is the ONLY place the cap moves mid-session (login reconciles pre-existing rows separately).
@@ -420,6 +483,7 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
             },
         );
     }
+    p.next_level_xp = progression.next_level_xp;
     if leveled {
         // Sheet AP/damage-range are level-derived and only ever move via `recompute_sheet`,
         // which re-fetches the row by guid — so the ding's level/stat write must be PERSISTED first
@@ -446,8 +510,8 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
 mod tests {
     use super::{
         accrue_rested_on_login, explore_base_xp, explore_xp, max_health_for_level,
-        rank_xp_multiplier, rest_bonus, rest_pool_after, split_kill_xp, xp_for_kill,
-        xp_to_next_level, REST_EIGHT_HOURS_MICROS,
+        progression_after_award, rank_xp_multiplier, rest_bonus, rest_pool_after, split_kill_xp,
+        xp_for_kill, xp_to_next_level, XpProgression, REST_EIGHT_HOURS_MICROS,
     };
 
     #[test]
@@ -471,6 +535,7 @@ mod tests {
         // Base branch (mob at or below the player's level): 5*mob + 45.
         assert_eq!(xp_for_kill(1, 1), 50);
         assert_eq!(xp_for_kill(10, 10), 95);
+        assert_eq!(xp_for_kill(60, 59), 414);
         assert_eq!(xp_for_kill(60, 60), 345);
         // GREY clamp boundary: exactly 5 levels below still pays; 6 below is grey (0).
         assert_eq!(xp_for_kill(5, 10), 70); // 5 below → 5*5+45, still pays
@@ -493,6 +558,54 @@ mod tests {
         assert_eq!(split_kill_xp(100, 0), 100);
         // Full-party split.
         assert_eq!(split_kill_xp(100, 5), 20);
+    }
+
+    #[test]
+    fn xp_progression_discards_awards_and_bank_at_the_level_cap() {
+        assert_eq!(
+            progression_after_award(60, u32::MAX, 0, u32::MAX as u64),
+            XpProgression {
+                level: 60,
+                xp: 0,
+                next_level_xp: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn xp_progression_discards_a_large_remainder_when_the_award_reaches_the_cap() {
+        assert_eq!(
+            progression_after_award(59, 209_799, 209_800, u32::MAX as u64),
+            XpProgression {
+                level: 60,
+                xp: 0,
+                next_level_xp: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn xp_progression_keeps_the_exact_remainder_across_multiple_levels() {
+        assert_eq!(
+            progression_after_award(1, 350, 400, 1_000),
+            XpProgression {
+                level: 3,
+                xp: 50,
+                next_level_xp: 1_400,
+            }
+        );
+    }
+
+    #[test]
+    fn zero_threshold_below_the_cap_remains_inert() {
+        assert_eq!(
+            progression_after_award(10, 5, 0, 10),
+            XpProgression {
+                level: 10,
+                xp: 15,
+                next_level_xp: 0,
+            }
+        );
     }
 
     #[test]
