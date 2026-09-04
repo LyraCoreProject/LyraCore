@@ -276,8 +276,8 @@ fn party_result(outcome: PartyOutcome) -> PartyResult {
 
 /// Map each [`GroupRefusal`] onto the vanilla `PartyResult` the client renders ("X is already in a
 /// group" etc.). Vanilla has no code for an offline or self-named target, a stale invite, or a
-/// broken durable row, so those read as BadPlayerName — a visible, non-crashing line. The intent
-/// claim never reaches a client; it is listed so a new Refusal cannot be forgotten here.
+/// temporarily unavailable actor, so those read as BadPlayerName — a visible, non-crashing line.
+/// The intent claim never reaches a client; it is listed so a new Refusal cannot be forgotten here.
 fn party_result_for(refusal: GroupRefusal) -> PartyResult {
     match refusal {
         GroupRefusal::AlreadyInGroup => PartyResult::AlreadyInGroup,
@@ -285,15 +285,15 @@ fn party_result_for(refusal: GroupRefusal) -> PartyResult {
         GroupRefusal::NotLeader => PartyResult::NotLeader,
         GroupRefusal::NotInGroup => PartyResult::NotInGroup,
         GroupRefusal::TargetNotInGroup => PartyResult::TargetNotInGroup,
-        GroupRefusal::InviteSelf
+        GroupRefusal::ActorUnavailable
+        | GroupRefusal::InviteSelf
         | GroupRefusal::NoSuchPlayer
         | GroupRefusal::TargetOffline
         | GroupRefusal::NoPendingInvite
         | GroupRefusal::InviterUnavailable
         | GroupRefusal::KickSelf
         | GroupRefusal::InvalidLootRules
-        | GroupRefusal::IntentAlreadyClaimed
-        | GroupRefusal::Database => PartyResult::BadPlayerName,
+        | GroupRefusal::IntentAlreadyClaimed => PartyResult::BadPlayerName,
     }
 }
 
@@ -310,7 +310,9 @@ fn friend_result_for(refusal: ContactRefusal, is_ignore: bool) -> FriendResult {
         (ContactRefusal::NotOnList, true) => FriendResult::IgnoreNotFound,
         // A guid the gateway resolved that the module cannot see, and the friend-list remove of a
         // row that is not there, both read as the one "no such entry" line vanilla has.
-        (ContactRefusal::NotOnList, false) | (ContactRefusal::NoSuchPlayer, _) => {
+        (ContactRefusal::NotOnList, false)
+        | (ContactRefusal::NoSuchPlayer, _)
+        | (ContactRefusal::ActorUnavailable, _) => {
             FriendResult::NotFound
         }
     }
@@ -409,7 +411,9 @@ mod tests {
                 }
                 ContactRefusal::ListFull => (FriendResult::ListFull, FriendResult::IgnoreFull),
                 ContactRefusal::NotOnList => (FriendResult::NotFound, FriendResult::IgnoreNotFound),
-                ContactRefusal::NoSuchPlayer => (FriendResult::NotFound, FriendResult::NotFound),
+                ContactRefusal::NoSuchPlayer | ContactRefusal::ActorUnavailable => {
+                    (FriendResult::NotFound, FriendResult::NotFound)
+                }
             };
             assert_eq!(friend_result_for(refusal, false), friend, "{refusal:?}");
             assert_eq!(friend_result_for(refusal, true), ignore, "{refusal:?}");

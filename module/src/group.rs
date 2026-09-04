@@ -308,6 +308,30 @@ pub(crate) fn refused(refusal: GroupRefusal, detail: &str) -> String {
     tag.to_string()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum GroupOpError {
+    Refused(GroupRefusal),
+    Invariant(String),
+}
+
+impl From<GroupRefusal> for GroupOpError {
+    fn from(refusal: GroupRefusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+/// Serialize a gameplay Refusal as its stable tag, while leaving broken durable relationships
+/// untagged so the Gateway treats them as session failures.
+fn group_op_error(error: GroupOpError, detail: &str) -> String {
+    match error {
+        GroupOpError::Refused(refusal) => refused(refusal, detail),
+        GroupOpError::Invariant(reason) => {
+            spacetimedb::log::error!("group invariant failed: {detail}: {reason}");
+            format!("group invariant failed: {reason}")
+        }
+    }
+}
+
 // Event kinds, roster grammar, and classified error strings are the SHARED wire contract:
 // lyracore_shared::group is the one definition both crates import — a renumber,
 // reword, or delimiter change is a cross-crate compile-visible edit, never a runtime drift.
@@ -442,19 +466,24 @@ pub(crate) fn group_of(ctx: &ReducerContext, character_guid: u64) -> Option<Grou
 /// all; [`GroupRefusal::NotLeader`] if it does but isn't the leader. `invite_core_on` treats
 /// `NotInGroup` as an ALLOWED case rather than propagating it — starting a brand-new group (where
 /// the inviter becomes leader) is fine; see its call site.
-pub(crate) fn led_group_of(
+fn led_group_of(
     ctx: &ReducerContext,
     guid: u64,
-) -> Result<(GroupMember, Group), GroupRefusal> {
+) -> Result<(GroupMember, Group), GroupOpError> {
     let m = group_of(ctx, guid).ok_or(GroupRefusal::NotInGroup)?;
     let group = ctx
         .db
         .game_group()
         .group_id()
         .find(m.group_id)
-        .ok_or(GroupRefusal::Database)?;
+        .ok_or_else(|| {
+            GroupOpError::Invariant(format!(
+                "member {guid} points to missing group {}",
+                m.group_id
+            ))
+        })?;
     if group.leader_guid != guid {
-        return Err(GroupRefusal::NotLeader);
+        return Err(GroupRefusal::NotLeader.into());
     }
     Ok((m, group))
 }
@@ -506,7 +535,12 @@ pub(crate) fn invite_core(
     target_guid: u64,
 ) -> Result<(), String> {
     invite_core_on(ctx, Plane::Shard, inviter_guid, target_guid)
-        .map_err(|r| refused(r, &format!("{inviter_guid} could not invite {target_guid}")))
+        .map_err(|error| {
+            group_op_error(
+                error,
+                &format!("{inviter_guid} could not invite {target_guid}"),
+            )
+        })
 }
 
 fn invite_core_on(
@@ -514,9 +548,9 @@ fn invite_core_on(
     plane: Plane,
     inviter_guid: u64,
     target_guid: u64,
-) -> Result<(), GroupRefusal> {
+) -> Result<(), GroupOpError> {
     if target_guid == inviter_guid {
-        return Err(GroupRefusal::InviteSelf);
+        return Err(GroupRefusal::InviteSelf.into());
     }
     // EXISTENCE + PRESENCE are the two gates that need a database holding characters and live
     // entities, so they are the two the directory plane cannot run: realm-core has
@@ -527,7 +561,7 @@ fn invite_core_on(
     // player-visible answer is unchanged.
     if plane == Plane::Shard {
         if ctx.db.game_character().guid().find(target_guid).is_none() {
-            return Err(GroupRefusal::NoSuchPlayer);
+            return Err(GroupRefusal::NoSuchPlayer.into());
         }
         // Vanilla requires the target online; a session-less playerbot's live entity counts (its
         // auto-accept rides the hook below, not a client).
@@ -538,11 +572,11 @@ fn invite_core_on(
             .find(target_guid)
             .is_none()
         {
-            return Err(GroupRefusal::TargetOffline);
+            return Err(GroupRefusal::TargetOffline.into());
         }
     }
     if group_of(ctx, target_guid).is_some() {
-        return Err(GroupRefusal::AlreadyInGroup);
+        return Err(GroupRefusal::AlreadyInGroup.into());
     }
     // The inviter having NO group yet is fine (they'll lead a brand-new one) — only propagate
     // NotLeader (inviter is in a group but isn't its leader); a led group additionally enforces the
@@ -550,11 +584,11 @@ fn invite_core_on(
     match led_group_of(ctx, inviter_guid) {
         Ok((m, _group)) => {
             if members_of(ctx, m.group_id).len() >= GROUP_MAX_MEMBERS {
-                return Err(GroupRefusal::GroupFull);
+                return Err(GroupRefusal::GroupFull.into());
             }
         }
-        Err(GroupRefusal::NotInGroup) => {}
-        Err(refusal) => return Err(refusal),
+        Err(GroupOpError::Refused(GroupRefusal::NotInGroup)) => {}
+        Err(error) => return Err(error),
     }
     let invites = ctx.db.game_group_invite();
     for stale in invites.by_target().filter(&target_guid).collect::<Vec<_>>() {
@@ -601,14 +635,19 @@ fn invite_core_on(
 /// acceptor (a playerbot's auto-accept hook calls this with the bot's guid).
 pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Result<(), String> {
     accept_invite_on(ctx, Plane::Shard, acceptor_guid)
-        .map_err(|r| refused(r, &format!("{acceptor_guid} could not accept its invite")))
+        .map_err(|error| {
+            group_op_error(
+                error,
+                &format!("{acceptor_guid} could not accept its invite"),
+            )
+        })
 }
 
 fn accept_invite_on(
     ctx: &ReducerContext,
     plane: Plane,
     acceptor_guid: u64,
-) -> Result<(), GroupRefusal> {
+) -> Result<(), GroupOpError> {
     let invites = ctx.db.game_group_invite();
     let invite = invites
         .by_target()
@@ -617,7 +656,7 @@ fn accept_invite_on(
         .ok_or(GroupRefusal::NoPendingInvite)?;
     invites.id().delete(invite.id);
     if group_of(ctx, acceptor_guid).is_some() {
-        return Err(GroupRefusal::AlreadyInGroup);
+        return Err(GroupRefusal::AlreadyInGroup.into());
     }
     let inviter_guid = invite.inviter_guid;
     // The member row's `owner_identity` is the SHARD's binding for that character. On realm-core
@@ -649,12 +688,17 @@ fn accept_invite_on(
                 .game_group()
                 .group_id()
                 .find(m.group_id)
-                .ok_or(GroupRefusal::Database)?;
+                .ok_or_else(|| {
+                    GroupOpError::Invariant(format!(
+                        "member {inviter_guid} points to missing group {}",
+                        m.group_id
+                    ))
+                })?;
             if group.leader_guid != inviter_guid {
-                return Err(GroupRefusal::InviterUnavailable);
+                return Err(GroupRefusal::InviterUnavailable.into());
             }
             if members_of(ctx, m.group_id).len() >= GROUP_MAX_MEMBERS {
-                return Err(GroupRefusal::GroupFull);
+                return Err(GroupRefusal::GroupFull.into());
             }
             m.group_id
         }
@@ -702,11 +746,15 @@ fn accept_invite_on(
 /// The identity-free decline core: the body `group_decline` used to inline, so the realm-core
 /// plane runs the SAME code rather than a second implementation of it.
 pub(crate) fn decline_invite_for(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), String> {
-    decline_invite_on(ctx, decliner_guid)
-        .map_err(|r| refused(r, &format!("{decliner_guid} could not decline an invite")))
+    decline_invite_on(ctx, decliner_guid).map_err(|error| {
+        group_op_error(
+            error,
+            &format!("{decliner_guid} could not decline an invite"),
+        )
+    })
 }
 
-fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), GroupRefusal> {
+fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), GroupOpError> {
     let invites = ctx.db.game_group_invite();
     let invite = invites
         .by_target()
@@ -726,13 +774,17 @@ fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), Gro
 
 /// The identity-free leave core — the body `group_leave` used to inline.
 pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), String> {
-    leave_group_on(ctx, leaver_guid)
-        .map_err(|r| refused(r, &format!("{leaver_guid} could not leave its party")))
+    leave_group_on(ctx, leaver_guid).map_err(|error| {
+        group_op_error(
+            error,
+            &format!("{leaver_guid} could not leave its party"),
+        )
+    })
 }
 
-fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), GroupRefusal> {
+fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), GroupOpError> {
     if group_of(ctx, leaver_guid).is_none() {
-        return Err(GroupRefusal::NotInGroup);
+        return Err(GroupRefusal::NotInGroup.into());
     }
     remove_member(ctx, leaver_guid);
     Ok(())
@@ -744,22 +796,26 @@ pub(crate) fn uninvite_from_group(
     leader_guid: u64,
     target_guid: u64,
 ) -> Result<(), String> {
-    uninvite_on(ctx, leader_guid, target_guid)
-        .map_err(|r| refused(r, &format!("{leader_guid} could not kick {target_guid}")))
+    uninvite_on(ctx, leader_guid, target_guid).map_err(|error| {
+        group_op_error(
+            error,
+            &format!("{leader_guid} could not kick {target_guid}"),
+        )
+    })
 }
 
 fn uninvite_on(
     ctx: &ReducerContext,
     leader_guid: u64,
     target_guid: u64,
-) -> Result<(), GroupRefusal> {
+) -> Result<(), GroupOpError> {
     let (m, _group) = led_group_of(ctx, leader_guid)?;
     let target = group_of(ctx, target_guid).ok_or(GroupRefusal::TargetNotInGroup)?;
     if target.group_id != m.group_id {
-        return Err(GroupRefusal::TargetNotInGroup);
+        return Err(GroupRefusal::TargetNotInGroup.into());
     }
     if target_guid == leader_guid {
-        return Err(GroupRefusal::KickSelf);
+        return Err(GroupRefusal::KickSelf.into());
     }
     remove_member(ctx, target_guid);
     Ok(())
@@ -773,12 +829,14 @@ pub(crate) fn set_loot_method_for(
     master_guid: u64,
     loot_threshold: u8,
 ) -> Result<(), String> {
-    set_loot_method_on(ctx, leader_guid, loot_setting, master_guid, loot_threshold).map_err(|r| {
-        refused(
-            r,
-            &format!("{leader_guid} could not set the party loot rules"),
-        )
-    })
+    set_loot_method_on(ctx, leader_guid, loot_setting, master_guid, loot_threshold).map_err(
+        |error| {
+            group_op_error(
+                error,
+                &format!("{leader_guid} could not set the party loot rules"),
+            )
+        },
+    )
 }
 
 fn set_loot_method_on(
@@ -787,15 +845,15 @@ fn set_loot_method_on(
     loot_setting: u8,
     master_guid: u64,
     loot_threshold: u8,
-) -> Result<(), GroupRefusal> {
+) -> Result<(), GroupOpError> {
     let (m, mut group) = led_group_of(ctx, leader_guid)?;
     if !valid_loot_method(loot_setting) || !valid_loot_threshold(loot_threshold) {
-        return Err(GroupRefusal::InvalidLootRules);
+        return Err(GroupRefusal::InvalidLootRules.into());
     }
     let resolved_master = if loot_setting == loot_method::MASTER {
         let target = group_of(ctx, master_guid).ok_or(GroupRefusal::TargetNotInGroup)?;
         if target.group_id != m.group_id {
-            return Err(GroupRefusal::TargetNotInGroup);
+            return Err(GroupRefusal::TargetNotInGroup.into());
         }
         master_guid
     } else {
@@ -976,7 +1034,9 @@ pub fn realm_group_op(
         realm_op::LOOT_METHOD => set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b),
         other => return Err(format!("unknown realm group op {other}")),
     };
-    ran.map_err(|r| refused(r, &format!("realm group op {op} for {actor_guid}")))
+    ran.map_err(|error| {
+        group_op_error(error, &format!("realm group op {op} for {actor_guid}"))
+    })
 }
 
 /// Replace this database's MIRROR of one party with realm-core's authoritative roster.
@@ -1156,6 +1216,24 @@ pub(crate) fn eligible_for_kill_reward(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broken_group_relationship_is_not_a_gameplay_refusal() {
+        let failure = group_op_error(
+            GroupOpError::Invariant("member 7 points to missing group 9".to_string()),
+            "party operation",
+        );
+
+        assert!(failure.contains("group invariant failed"));
+        assert_eq!(GroupRefusal::parse_tag(&failure), None);
+        assert_eq!(
+            group_op_error(
+                GroupOpError::Refused(GroupRefusal::NotLeader),
+                "party operation"
+            ),
+            GroupRefusal::NotLeader.as_tag()
+        );
+    }
 
     /// The share filter's range gate is the vanilla 74yd group-XP distance, squared for the
     /// comparison `kill_reward_recipients` runs — pin it so a tuning edit is a conscious act.

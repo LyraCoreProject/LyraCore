@@ -5,6 +5,8 @@
 /// so neither tier matches on human prose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContactRefusal {
+    /// The acting Character is temporarily unable to change its contact lists.
+    ActorUnavailable,
     /// A Character may not befriend or ignore itself.
     AddSelf,
     /// No Character row holds the guid the Gateway resolved.
@@ -18,7 +20,8 @@ pub enum ContactRefusal {
 }
 
 impl ContactRefusal {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
+        Self::ActorUnavailable,
         Self::AddSelf,
         Self::NoSuchPlayer,
         Self::AlreadyOnList,
@@ -28,6 +31,7 @@ impl ContactRefusal {
 
     pub fn as_tag(self) -> &'static str {
         match self {
+            Self::ActorUnavailable => "social:actor_unavailable",
             Self::AddSelf => "social:add_self",
             Self::NoSuchPlayer => "social:no_such_player",
             Self::AlreadyOnList => "social:already_on_list",

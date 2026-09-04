@@ -5859,7 +5859,9 @@ fn every_contact_refusal_reaches_the_client_as_one_friend_result() {
             ContactRefusal::AlreadyOnList => (FriendResult::Already, FriendResult::IgnoreAlready),
             ContactRefusal::ListFull => (FriendResult::ListFull, FriendResult::IgnoreFull),
             ContactRefusal::NotOnList => (FriendResult::NotFound, FriendResult::IgnoreNotFound),
-            ContactRefusal::NoSuchPlayer => (FriendResult::NotFound, FriendResult::NotFound),
+            ContactRefusal::NoSuchPlayer | ContactRefusal::ActorUnavailable => {
+                (FriendResult::NotFound, FriendResult::NotFound)
+            }
         };
         for (is_ignore, want) in [(false, friend), (true, ignore)] {
             let mut s = quest_store();

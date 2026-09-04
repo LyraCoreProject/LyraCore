@@ -110,6 +110,8 @@ pub mod bot_op {
 /// [`GroupRefusal::IntentAlreadyClaimed`] instead tells a losing Gateway callback to stop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupRefusal {
+    /// The acting Character is temporarily unable to perform a party action.
+    ActorUnavailable,
     /// A Character may not invite itself.
     InviteSelf,
     /// No Character row holds a guid the op named.
@@ -136,12 +138,11 @@ pub enum GroupRefusal {
     InvalidLootRules,
     /// Another Gateway already claimed this bot invite intent.
     IntentAlreadyClaimed,
-    /// A durable row the party rules require is missing.
-    Database,
 }
 
 impl GroupRefusal {
     pub const ALL: [Self; 14] = [
+        Self::ActorUnavailable,
         Self::InviteSelf,
         Self::NoSuchPlayer,
         Self::TargetOffline,
@@ -155,11 +156,11 @@ impl GroupRefusal {
         Self::KickSelf,
         Self::InvalidLootRules,
         Self::IntentAlreadyClaimed,
-        Self::Database,
     ];
 
     pub fn as_tag(self) -> &'static str {
         match self {
+            Self::ActorUnavailable => "group:actor_unavailable",
             Self::InviteSelf => "group:invite_self",
             Self::NoSuchPlayer => "group:no_such_player",
             Self::TargetOffline => "group:target_offline",
@@ -173,7 +174,6 @@ impl GroupRefusal {
             Self::KickSelf => "group:kick_self",
             Self::InvalidLootRules => "group:invalid_loot_rules",
             Self::IntentAlreadyClaimed => "group:intent_already_claimed",
-            Self::Database => "group:database",
         }
     }
 

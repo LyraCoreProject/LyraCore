@@ -688,7 +688,7 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_contact(ctx, ch
 });
 
 /// Reducer edge for the contact list: only the tag crosses to the gateway, the detail stays here.
-fn refused_contact(refusal: ContactRefusal, detail: &str) -> String {
+pub(crate) fn refused_contact(refusal: ContactRefusal, detail: &str) -> String {
     let tag = refusal.as_tag();
     spacetimedb::log::info!("contact refused {tag}: {detail}");
     tag.to_string()
