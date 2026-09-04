@@ -1572,7 +1572,7 @@ pub async fn run(
     let listener = TcpListener::bind(&cfg.world_bind).await?;
     log::info!("world listening on {}", cfg.world_bind);
 
-    // Startup checks the limits before connecting the Coordinator or binding either listener.
+    // gateway::run validates admission limits before the Coordinator connects or either listener starts.
     if login_queue.max_sessions() > 0 {
         log::info!(
             "world: login queue ARMED — max_sessions={} admit_concurrency={}",
