@@ -673,9 +673,9 @@ pub(crate) trait CreatureWorld:
     + PetSink
     + RegenSink
 {
-    /// The creatures near a covered player this firing, plus the pet and in-combat candidate lists
-    /// the same sweep harvests. Read ONCE per cycle and shared by every pass that scopes to it.
-    fn awake_creatures(&self, scope: &TickScope) -> TickSweep;
+    /// The creatures near a covered player this firing, plus candidate lists for passes due at this
+    /// cadence. Read once per cycle and shared by every pass that scopes to it.
+    fn awake_creatures(&self, scope: &TickScope, sense: bool) -> TickSweep;
     /// Corpse decay, creature respawn and gameobject respawn. Not behavior — the cycle only
     /// SEQUENCES them. Returns the rows each visited, for the operator log.
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)>;
@@ -713,7 +713,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         active,
         pets,
         in_combat,
-    } = w.awake_creatures(&tick.scope);
+    } = w.awake_creatures(&tick.scope, tick.sense);
     let global = tick.scope.runs_global_passes();
     let mut rows: Vec<(&'static str, u64)> = Vec::new();
 

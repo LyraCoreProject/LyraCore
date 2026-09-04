@@ -43,7 +43,7 @@ pub(crate) use loader::replace_definition_for_debug;
 pub(crate) use mobility::summon_life_seq;
 #[cfg(test)]
 pub(crate) use mobility::summon_lifetime_after;
-pub(crate) use mobility::{active_object, drop_summon_expiry, ranged_posture, react_state};
+pub(crate) use mobility::{drop_summon_expiry, ranged_posture, react_state};
 pub use mobility::{
     expire_eventai_summon, fire_eventai_forced_despawn, CreatureAiForcedDespawn,
     CreatureAiSummonExpiry, CreatureAiSummonOrigin,

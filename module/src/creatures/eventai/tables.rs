@@ -108,7 +108,10 @@ pub struct CreatureAiSpellMetadata {
 }
 
 /// Creature-wide EventAI state. Edge resets advance its lifecycle identities. Module only.
-#[table(accessor = game_creature_ai_state)]
+#[table(
+    accessor = game_creature_ai_state,
+    index(accessor = by_active_object, btree(columns = [active_object]))
+)]
 pub struct CreatureAiState {
     #[primary_key]
     pub creature_guid: u64,

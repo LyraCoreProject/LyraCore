@@ -237,14 +237,6 @@ pub(crate) fn react_state(ctx: &ReducerContext, creature_guid: u64) -> CreatureR
     }
 }
 
-pub(crate) fn active_object(ctx: &ReducerContext, creature_guid: u64) -> bool {
-    ctx.db
-        .game_creature_ai_state()
-        .creature_guid()
-        .find(creature_guid)
-        .is_some_and(|state| state.active_object)
-}
-
 pub(crate) fn force_despawn(
     ctx: &ReducerContext,
     creature_guid: u64,

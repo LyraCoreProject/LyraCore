@@ -15,7 +15,10 @@
 use lyracore_shared::spatial;
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
-use crate::{game_aura, game_entity_motion, game_melee_attack, game_world_entity, WorldEntity};
+use crate::{
+    game_aura, game_creature_ai_state, game_entity_motion, game_melee_attack, game_world_entity,
+    WorldEntity,
+};
 
 use super::*;
 
@@ -309,52 +312,63 @@ fn active_cell_radius(ctx: &ReducerContext) -> f32 {
 /// Reuses `helpers::entities_near` (the existing, already-tested `by_grid`-indexed neighborhood query
 /// from work-item 190 slice 1 — until now unused) per player, so the query is instance-isolated for
 /// free. A creature absent from this set is DORMANT this tick for every pass that consults it — see
-/// the classification in `tick_creatures`'s doc comment. With zero players online the set is empty
-/// (every creature dormant); with players online the cost scales with player density, not world size.
+/// the classification in `tick_creatures`'s doc comment. The neighborhood-query cost scales with
+/// Character density, not world size; authored active objects remain awake without a Character.
 ///
-/// NOTE on the one remaining full-table touch: locating the players themselves still needs
-/// `entities.iter().filter(is_player)` — there's no `by_type_mask` (or dedicated players-only) index
-/// in the current schema, so this reads every row once. That's the SAME pattern the cycle's aggro
-/// phase still uses to build its own player snapshot (this fn doesn't share that one — a further,
-/// independent micro-optimization) — but it's a bare bit-check per row, not the expensive per-creature
-/// template/faction/stealth logic this item exists to stop running on out-of-range creatures. The
-/// rows-visited reduction this item measures is that expensive-logic population, not this cheap scan.
+/// Character seeds come from the `entry == 0` index and retain the PLAYER-bit check, so legal type-mask
+/// variants remain eligible. Active objects come from their EventAI-state index and are point-read by
+/// guid. The residual whole-entity discovery is needed only for pets and exact IN_COMBAT bit masks;
+/// it therefore runs on sense firings rather than every movement firing.
 /// Work-item 229: seeds ONLY from players in instances THIS firing's scope covers — `entities_near`
 /// is already instance-gated (190 slice 1), so the returned set then contains only covered-instance
 /// creatures, which scopes patrol/aggro+assist/return/wander without touching their bodies. With
 /// only the seeded catch-all row, `covers()` is `true` for every player → identical set to pre-229.
-pub(crate) fn active_cell_creatures(ctx: &ReducerContext, scope: &TickScope) -> TickSweep {
+pub(crate) fn active_cell_creatures(
+    ctx: &ReducerContext,
+    scope: &TickScope,
+    sense: bool,
+) -> TickSweep {
     let entities = ctx.db.game_world_entity();
     let radius = active_cell_radius(ctx);
     let mut out = std::collections::HashSet::new();
-    // Perf catalog 1.10 + 1.7: the pet phase and the combat-exit pass each used to run their OWN full
-    // `entities.iter()` scan per sense tick — one for `owner_guid != 0`, one for the IN_COMBAT bit.
-    // This scan is already mandatory (it locates the players the active-cell set is built from) and
-    // already visits every row, so both guid lists ride along for the cost of two bit tests: no new
-    // table, no lifecycle hooks, and no index maintenance on the hottest write path in the tick (the
-    // trade the pet pass's own doc rightly rejected). Collected in table order, so both passes visit the
-    // same candidates in the same order as their old dedicated scans.
     let mut pets: Vec<u64> = Vec::new();
     let mut in_combat: Vec<u64> = Vec::new();
-    let players: Vec<WorldEntity> = entities
-        .iter()
-        .filter(|e| {
+
+    // Pet behavior consumes its candidates only on sense firings. The global combat-drop and regen
+    // passes consume IN_COMBAT candidates on global sense firings. Keep their shared table-order scan
+    // on that cadence; non-sense movement firings no longer read the world to build unused lists.
+    if sense {
+        let global = scope.runs_global_passes();
+        for e in entities.iter() {
             if e.owner_guid != 0 {
                 pets.push(e.guid);
             }
-            if e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
+            if global
+                && e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+            {
                 in_combat.push(e.guid);
             }
-            if active_object_enters_scope(
-                e.is_player(),
-                scope.covers(e.instance_id),
-                crate::creatures::active_object(ctx, e.guid),
-            ) {
-                out.insert(e.guid);
-            }
-            e.is_player() && scope.covers(e.instance_id)
-        })
+        }
+    }
+
+    let players: Vec<WorldEntity> = entities
+        .by_entry()
+        .filter(&0u32)
+        .filter(|e| e.is_player() && scope.covers(e.instance_id))
         .collect();
+    for state in ctx
+        .db
+        .game_creature_ai_state()
+        .by_active_object()
+        .filter(&true)
+    {
+        let Some(e) = entities.guid().find(state.creature_guid) else {
+            continue;
+        };
+        if active_object_enters_scope(e.is_player(), scope.covers(e.instance_id), true) {
+            out.insert(e.guid);
+        }
+    }
     for p in players {
         for c in crate::helpers::entities_near(ctx, p.map_id, p.instance_id, p.x, p.y, radius) {
             // `cell_is_active` is a belt-and-suspenders re-check of the SAME predicate `entities_near`'s
@@ -389,10 +403,7 @@ fn active_object_enters_scope(is_player: bool, partition_covered: bool, active: 
     !is_player && partition_covered && active
 }
 
-/// Everything ONE pass over `game_world_entity` yields for a firing of `tick_creatures` — the
-/// active-cell creature set plus the two small candidate lists that used to cost a dedicated full scan
-/// each (perf catalog 1.7 / 1.10). Every field is derived from the SAME row visit, so adding a
-/// consumer costs a bit test, not a scan.
+/// One firing's active-cell creature set plus the sense-cadence pet and in-combat candidate lists.
 #[derive(Default)]
 pub(crate) struct TickSweep {
     /// Creatures within `active_cell_radius` of at least one covered player (work-item 230).

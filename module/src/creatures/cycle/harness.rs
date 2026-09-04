@@ -1432,7 +1432,7 @@ fn native_test_instruction(action: &RuleAction) -> CreatureInstruction {
 }
 
 impl CreatureWorld for Scenario {
-    fn awake_creatures(&self, _scope: &TickScope) -> TickSweep {
+    fn awake_creatures(&self, _scope: &TickScope, _sense: bool) -> TickSweep {
         *self.seen_by_sweep.borrow_mut() = self.snapshot();
         let awake = self.awake.borrow();
         TickSweep {
@@ -6136,8 +6136,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
         (
             "impl CreatureWorld for CtxWorld<'_> {",
             concat!(
-                "{ fn awake_creatures(&self, scope: &TickScope) -> TickSweep { ",
-                "tick::active_cell_creatures(self.ctx, scope) } fn ",
+                "{ fn awake_creatures(&self, scope: &TickScope, sense: bool) -> TickSweep { ",
+                "tick::active_cell_creatures(self.ctx, scope, sense) } fn ",
                 "run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)> { vec![ ",
                 "(\"decay*\", tick::pass_decay(self.ctx) as u64), (\"respawn*\", ",
                 "tick::pass_respawn(self.ctx) as u64), ( \"go_respawn*\", ",
