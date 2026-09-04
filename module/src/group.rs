@@ -460,6 +460,29 @@ pub(crate) fn group_of(ctx: &ReducerContext, character_guid: u64) -> Option<Grou
         .next()
 }
 
+/// Resolve a membership and its required parent for mutation cores. `Ok(None)` means the
+/// Character has no membership; a membership without its Group is a durable invariant failure.
+fn checked_group_membership(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<Option<(GroupMember, Group)>, GroupOpError> {
+    let Some(member) = group_of(ctx, character_guid) else {
+        return Ok(None);
+    };
+    let group = ctx
+        .db
+        .game_group()
+        .group_id()
+        .find(member.group_id)
+        .ok_or_else(|| {
+            GroupOpError::Invariant(format!(
+                "member {character_guid} points to missing group {}",
+                member.group_id
+            ))
+        })?;
+    Ok(Some((member, group)))
+}
+
 /// The leader-authorization sequence shared by `invite_core_on` / `uninvite_on` /
 /// `set_loot_method_on`: resolve `guid`'s group membership, its `Group` row, and confirm
 /// `guid` actually IS that group's leader. [`GroupRefusal::NotInGroup`] if `guid` has no group at
@@ -470,18 +493,7 @@ fn led_group_of(
     ctx: &ReducerContext,
     guid: u64,
 ) -> Result<(GroupMember, Group), GroupOpError> {
-    let m = group_of(ctx, guid).ok_or(GroupRefusal::NotInGroup)?;
-    let group = ctx
-        .db
-        .game_group()
-        .group_id()
-        .find(m.group_id)
-        .ok_or_else(|| {
-            GroupOpError::Invariant(format!(
-                "member {guid} points to missing group {}",
-                m.group_id
-            ))
-        })?;
+    let (m, group) = checked_group_membership(ctx, guid)?.ok_or(GroupRefusal::NotInGroup)?;
     if group.leader_guid != guid {
         return Err(GroupRefusal::NotLeader.into());
     }
@@ -575,7 +587,7 @@ fn invite_core_on(
             return Err(GroupRefusal::TargetOffline.into());
         }
     }
-    if group_of(ctx, target_guid).is_some() {
+    if checked_group_membership(ctx, target_guid)?.is_some() {
         return Err(GroupRefusal::AlreadyInGroup.into());
     }
     // The inviter having NO group yet is fine (they'll lead a brand-new one) — only propagate
@@ -655,7 +667,7 @@ fn accept_invite_on(
         .next()
         .ok_or(GroupRefusal::NoPendingInvite)?;
     invites.id().delete(invite.id);
-    if group_of(ctx, acceptor_guid).is_some() {
+    if checked_group_membership(ctx, acceptor_guid)?.is_some() {
         return Err(GroupRefusal::AlreadyInGroup.into());
     }
     let inviter_guid = invite.inviter_guid;
@@ -677,23 +689,12 @@ fn accept_invite_on(
         Plane::RealmCore => None,
     };
     let members = ctx.db.game_group_member();
-    let group_id = match group_of(ctx, inviter_guid) {
-        Some(m) => {
+    let group_id = match checked_group_membership(ctx, inviter_guid)? {
+        Some((m, group)) => {
             // Re-run the invite-time leadership gate: the invite was issued when the inviter was
             // the leader (or ungrouped and about to lead). If they since joined a DIFFERENT group
             // as a plain member, honoring the stale invite would smuggle the acceptor into a group
             // whose leader never invited them.
-            let group = ctx
-                .db
-                .game_group()
-                .group_id()
-                .find(m.group_id)
-                .ok_or_else(|| {
-                    GroupOpError::Invariant(format!(
-                        "member {inviter_guid} points to missing group {}",
-                        m.group_id
-                    ))
-                })?;
             if group.leader_guid != inviter_guid {
                 return Err(GroupRefusal::InviterUnavailable.into());
             }
@@ -783,7 +784,7 @@ pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<
 }
 
 fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), GroupOpError> {
-    if group_of(ctx, leaver_guid).is_none() {
+    if checked_group_membership(ctx, leaver_guid)?.is_none() {
         return Err(GroupRefusal::NotInGroup.into());
     }
     remove_member(ctx, leaver_guid);
@@ -810,7 +811,8 @@ fn uninvite_on(
     target_guid: u64,
 ) -> Result<(), GroupOpError> {
     let (m, _group) = led_group_of(ctx, leader_guid)?;
-    let target = group_of(ctx, target_guid).ok_or(GroupRefusal::TargetNotInGroup)?;
+    let (target, _target_group) = checked_group_membership(ctx, target_guid)?
+        .ok_or(GroupRefusal::TargetNotInGroup)?;
     if target.group_id != m.group_id {
         return Err(GroupRefusal::TargetNotInGroup.into());
     }
@@ -851,7 +853,8 @@ fn set_loot_method_on(
         return Err(GroupRefusal::InvalidLootRules.into());
     }
     let resolved_master = if loot_setting == loot_method::MASTER {
-        let target = group_of(ctx, master_guid).ok_or(GroupRefusal::TargetNotInGroup)?;
+        let (target, _target_group) = checked_group_membership(ctx, master_guid)?
+            .ok_or(GroupRefusal::TargetNotInGroup)?;
         if target.group_id != m.group_id {
             return Err(GroupRefusal::TargetNotInGroup.into());
         }

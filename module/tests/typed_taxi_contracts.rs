@@ -46,20 +46,53 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     standalone.assert_sql("DELETE FROM game_active_taxi_flight WHERE character_guid = 1");
     standalone.assert_call("realm_group_op", &["0", "1", "2", "0", "0"]);
     standalone.assert_call("realm_group_op", &["1", "2", "0", "0", "0"]);
-    standalone.assert_sql("DELETE FROM game_group");
+    standalone.assert_call("realm_group_op", &["0", "3", "4", "0", "0"]);
+    standalone.assert_call("realm_group_op", &["1", "4", "0", "0", "0"]);
+    standalone.assert_call("realm_group_op", &["0", "3", "5", "0", "0"]);
+    standalone.assert_sql("DELETE FROM game_group WHERE leader_guid = 3");
 
-    let text = failed_text(
-        "realm_group_op",
-        standalone.call("realm_group_op", &["0", "1", "3", "0", "0"]),
+    let valid_group_before = standalone.query_rows("SELECT * FROM game_group WHERE leader_guid = 1");
+    for args in [
+        &["0", "1", "3", "0", "0"][..],
+        &["1", "5", "0", "0", "0"][..],
+        &["3", "3", "0", "0", "0"][..],
+        &["4", "1", "3", "0", "0"][..],
+        &["5", "1", "3", "2", "2"][..],
+        &["0", "3", "6", "0", "0"][..],
+    ] {
+        assert_group_invariant(&standalone, args);
+    }
+    assert_eq!(
+        standalone.query_rows("SELECT * FROM game_group WHERE leader_guid = 1"),
+        valid_group_before,
+        "failed membership checks must not change the valid Group"
     );
-    assert!(text.contains("group invariant failed"), "{text}");
-    assert!(!text.contains("group:database"), "{text}");
     assert!(
         standalone
             .query_rows("SELECT * FROM game_group_invite WHERE target_guid = 3")
             .is_empty(),
-        "the failed invariant check must not leave a partial invite"
+        "a dangling target must not receive an invite"
     );
+    assert_eq!(
+        standalone
+            .query_rows("SELECT * FROM game_group_invite WHERE target_guid = 5")
+            .len(),
+        1,
+        "a failed accept must roll its invite deletion back"
+    );
+    assert_eq!(
+        standalone
+            .query_rows("SELECT * FROM game_group_member WHERE character_guid = 3")
+            .len(),
+        1,
+        "a failed leave or kick must preserve the dangling membership for repair"
+    );
+}
+
+fn assert_group_invariant(standalone: &Standalone, args: &[&str]) {
+    let text = failed_text("realm_group_op", standalone.call("realm_group_op", args));
+    assert!(text.contains("group invariant failed"), "{args:?}: {text}");
+    assert!(!text.contains("group:"), "{args:?}: {text}");
 }
 
 fn taxi_cases() -> Vec<(&'static str, &'static [&'static str], &'static str)> {
