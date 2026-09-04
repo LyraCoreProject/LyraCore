@@ -559,7 +559,7 @@ impl WorldIndex {
         (ax - cx).abs() <= BOX_HALF_SPAN && (ay - cy).abs() <= BOX_HALF_SPAN
     }
 
-    /// Live sizes, for the periodic ops log line: `(entities, viewers, occupied entity cells)`.
+    /// Index sizes for tests: `(entities, viewers, occupied entity cells)`.
     #[cfg(test)]
     pub fn stats(&self, layer: EntityLayer) -> (usize, usize, usize) {
         let inner = self.lock();
@@ -1060,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn stats_report_what_the_ops_line_prints() {
+    fn stats_count_entities_viewers_and_occupied_cells() {
         let index = WorldIndex::new(true);
         index.upsert_entity(EntityLayer::WorldEntity, 1, CellKey::at(0, 0, 0, 0), 0, 0);
         index.upsert_entity(EntityLayer::WorldEntity, 2, CellKey::at(0, 0, 0, 0), 0, 0);

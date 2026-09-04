@@ -80,7 +80,7 @@ pub(crate) struct Viewer {
     /// weather for, so the first stored value is never a phantom crossing.
     pub(crate) zone_id: AtomicU32,
     pub(crate) tx: SessionTx,
-    /// The per-viewer "already shown" dedup set — the exactly-once guarantee behind every CREATE.
+    /// WorldEntity GUIDs already shown to this viewer.
     pub(crate) created: Arc<Mutex<HashSet<u64>>>,
     pub(crate) gates: Arc<ViewerGates>,
     /// PLAYER_SKILL_INFO slot map `(skill_line → slot, next_free)` — seeded at login from the same
@@ -3611,7 +3611,7 @@ fn reconcile_shard(
             }
         }
     }
-    // Existing viewers keep their CREATE dedup state. Newly resident rows are offered normally.
+    // Existing WorldEntity rows retain their CREATE dedup state.
     for row in entities {
         if view.spatial.shard_of(EntityLayer::WorldEntity, row.guid) != Some(shard) {
             continue;
@@ -3627,6 +3627,8 @@ fn reconcile_shard(
             offer_create_job(view, shard, session, &row);
         }
     }
+    // Refresh resident GameObjects too: state and rotation may have changed while disconnected.
+    // Their CREATE packets do not use the WorldEntity dedup set.
     for row in objects {
         if view.spatial.shard_of(EntityLayer::GameObject, row.guid) == Some(shard) {
             gameobject_appeared(view, shard, &row);

@@ -365,6 +365,7 @@ fn combat_candidates_gate_to_exactly_the_whole_shard_recipients() {
 #[test]
 fn melee_candidates_gate_to_exactly_the_whole_shard_recipients() {
     let mut rng = Rng::new(0x3E1E_E002);
+    let mut skipped_someone = false;
     for _ in 0..200 {
         let realm = spread_realm(&mut rng);
         let attacker = realm.actor(&mut rng);
@@ -384,7 +385,12 @@ fn melee_candidates_gate_to_exactly_the_whole_shard_recipients() {
             .map(|v| v.session)
             .collect();
         assert_eq!(gated, realm.shard_then_gate(gate));
+        skipped_someone |= candidates.len() < realm.viewers.len();
     }
+    assert!(
+        skipped_someone,
+        "a spread realm must leave some viewers out of the box"
+    );
 }
 
 /// An aura job passes its gate for the target itself, for a viewer showing the target, or (the
