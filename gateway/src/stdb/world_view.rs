@@ -1864,15 +1864,13 @@ fn combat_audience(view: &WorldView, shard: ShardId, row: &CombatEvent) -> Vec<A
     )
 }
 
-/// A swing landed → the full 097 packet fork (`combat_event_outbound`: ranged GO + delayed damage
-/// log / melee ATTACKERSTATEUPDATE / killing-blow ATTACKSTOP) per viewer, gated on that viewer's
-/// `created` set inside the job.
+/// Queue a ranged launch or melee swing for each viewer. The job checks its created set.
 fn combat_event_appeared(view: &WorldView, shard: ShardId, row: &CombatEvent) {
     let row = Arc::new(row.clone());
     for viewer in combat_audience(view, shard, &row) {
         let row = row.clone();
         enqueue(viewer.clone(), move |viewer| {
-            super::subscriptions::combat_event_outbound(&viewer, &row)
+            super::subscriptions::combat_event_outbound(&viewer.created, &row)
         });
     }
 }

@@ -1113,24 +1113,17 @@ pub(crate) fn relay_breath_event(
     vec![Outbound::One(msg)]
 }
 
-/// Swing log: the ONE body both legs run — the per-player `on_combat`
-/// callback sends what this returns; the shared dispatch enqueues it per viewer. Gated on the
-/// viewer's `created` set (no point animating an invisible attacker's swing — the victim's health
-/// still moves via the entity VALUES relay if the victim is in scope).
-///
-/// Immediate packets return to the writer at this job's queue position. A delayed damage
-/// log returns through the same World Session lifetime check after its delay.
-pub(crate) fn combat_event_outbound(viewer: &Arc<Viewer>, row: &CombatEvent) -> Vec<Outbound> {
-    if !viewer.created.lock().unwrap().contains(&row.attacker_guid) {
+/// Relay a visible melee swing or ranged launch. The Module emits ranged damage at impact
+/// through `SpellCastEvent`, which `cast_event_outbound` relays separately.
+pub(crate) fn combat_event_outbound(
+    created: &Mutex<HashSet<u64>>,
+    row: &CombatEvent,
+) -> Vec<Outbound> {
+    if !created.lock().unwrap().contains(&row.attacker_guid) {
         return Vec::new();
     }
     let mut out = Vec::new();
-    // Auto Shot vanilla shot shape: a RANGED shot is a SPELL on the wire — SMSG_SPELL_GO (a HIT
-    // carries the target in `hits`; a MISS in `misses` — the client renders the white "Miss"
-    // from that list) followed by SMSG_SPELLNONMELEEDAMAGELOG for a landed hit ("Your Auto
-    // Shot hits X for N"). NEVER SMSG_ATTACKERSTATEUPDATE — that is the MELEE swing packet,
-    // and sending it per shot animated a melee swing over the ranged pose (the "idle between
-    // shots" bug). Melee (ranged_spell_id 0) keeps the ATTACKERSTATEUPDATE path unchanged.
+    // A ranged launch uses SPELL_GO. ATTACKERSTATEUPDATE would animate a melee swing.
     if row.ranged_spell_id != 0 {
         // Auto Shot stamps an ammo display id → the AMMO flag fires the arrow graphic (24 =
         // INVTYPE_AMMO). Wand Shoot (ammo_display_id 0) → no flag → the bolt. Deliberate
@@ -1151,34 +1144,6 @@ pub(crate) fn combat_event_outbound(viewer: &Arc<Viewer>, row: &CombatEvent) -> 
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(
             go,
         ))));
-        if !miss && row.damage > 0 {
-            let log = codec::build_spell_non_melee_damage_log(
-                row.target_guid,
-                row.attacker_guid,
-                row.ranged_spell_id,
-                row.damage,
-                0,                 // physical
-                row.hit_info == 1, // module HIT_CRIT
-                0,
-                0,
-            );
-            let msg = Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(
-                log,
-            )));
-            // Auto Shot: the shot's damage lands at fire + travel (module ranged_impact applies
-            // the health there) — hold the LOG to the same moment so the number arrives
-            // WITH the arrow, not at the muzzle.
-            if row.impact_delay_ms > 0 {
-                let viewer = viewer.clone();
-                let delay = std::time::Duration::from_millis(row.impact_delay_ms as u64);
-                std::thread::spawn(move || {
-                    std::thread::sleep(delay);
-                    super::world_view::enqueue(viewer, move |_| vec![msg]);
-                });
-            } else {
-                out.push(msg);
-            }
-        }
     } else if !row.spell_swing {
         // A fired on-next-swing spell (Heroic Strike/Cleave) REPLACES the white hit — the
         // whole swing rides the spell's cast-event row (GO + yellow named damage log), so this
@@ -1303,9 +1268,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         )));
         return out;
     }
-    // PROC-LOG row: a swing-proc damage line (Seal of Righteousness holy riding a landed
-    // melee swing). ONLY the named yellow combat-log/floating number — never START/GO/cooldown
-    // (nothing casts; the seal aura is already up). Broadcast like the damage log below.
+    // Proc and ranged-impact rows report damage without another cast animation or cooldown.
     if row.is_proc_log {
         if row.damage > 0 {
             let log = codec::build_spell_non_melee_damage_log(
@@ -3640,6 +3603,110 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn swing_event() -> CombatEvent {
+        CombatEvent {
+            id: 1,
+            attacker_guid: 7,
+            target_guid: 11,
+            damage: 23,
+            hit_info: 0,
+            killing_blow: false,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            blocked_amount: 0,
+            ranged_spell_id: 0,
+            ammo_display_id: 0,
+            spell_swing: false,
+            impact_delay_ms: 0,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+        }
+    }
+
+    #[test]
+    fn ranged_launch_relays_one_spell_go_for_a_hit_or_miss() {
+        let created = Mutex::new(HashSet::from([7]));
+        for (hit_info, hits, misses) in [(0, 1, 0), (2, 0, 1)] {
+            let row = CombatEvent {
+                damage: 0,
+                hit_info,
+                ranged_spell_id: 75,
+                ammo_display_id: 5996,
+                impact_delay_ms: 500,
+                ..swing_event()
+            };
+            let out = combat_event_outbound(&created, &row);
+            let [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(go))] = out.as_slice()
+            else {
+                panic!("a ranged launch must emit exactly one SPELL_GO");
+            };
+            assert_eq!((go.caster.guid(), go.spell), (7, 75));
+            assert_eq!((go.hits.len(), go.misses.len()), (hits, misses));
+            assert!(combat_event_outbound(&Mutex::new(HashSet::new()), &row).is_empty());
+        }
+    }
+
+    #[test]
+    fn ranged_impact_relays_only_its_authoritative_damage() {
+        let row = SpellCastEvent {
+            id: 1,
+            caster_guid: 7,
+            spell_id: 75,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            target_guid: 11,
+            cast_time_ms: 0,
+            is_completion: false,
+            damage: 23,
+            school: 0,
+            is_crit: false,
+            resisted: 0,
+            absorbed: 0,
+            is_interrupted: false,
+            cooldown_ms: 0,
+            delay_ms: 0,
+            healed: 0,
+            is_proc_log: true,
+            swing_hit_info: 0,
+            client_initiated: false,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            failure_reason: 0,
+        };
+        let out = cast_event_outbound(7, &row);
+        let [Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(log))] = out.as_slice()
+        else {
+            panic!("an impact must emit exactly one damage log");
+        };
+        assert_eq!(
+            (log.attacker.guid(), log.target.guid(), log.spell, log.damage),
+            (7, 11, 75, 23)
+        );
+    }
+
+    #[test]
+    fn melee_swing_relays_damage_then_stops_on_a_killing_blow() {
+        let created = Mutex::new(HashSet::from([7]));
+        let mut row = swing_event();
+        let out = combat_event_outbound(&created, &row);
+        assert!(matches!(
+            out.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(_))]
+        ));
+
+        row.killing_blow = true;
+        let out = combat_event_outbound(&created, &row);
+        assert!(matches!(
+            out.as_slice(),
+            [
+                Outbound::One(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(_)),
+                Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(_))
+            ]
+        ));
+    }
 
     /// A realm-core roster arrives nameless; only the blanks are filled, and a name the cache
     /// cannot answer stays blank instead of removing the member from the frame.
