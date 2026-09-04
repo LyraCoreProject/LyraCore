@@ -93,6 +93,8 @@ async fn run() -> Result<()> {
         return provision(&cfg, &username, &password).await;
     }
 
+    let login_queue = std::sync::Arc::new(world::login_queue::LoginQueue::from_env()?);
+
     log::info!(
         "gateway starting: logon={} world={} db={}@{}",
         cfg.logon_bind,
@@ -130,7 +132,7 @@ async fn run() -> Result<()> {
 
     // Run both listeners concurrently. Each admitted socket gets its own blocking task.
     let logon = tokio::spawn(logon::run(cfg.clone(), coordinator.clone()));
-    let world = tokio::spawn(world::run(cfg.clone(), coordinator.clone()));
+    let world = tokio::spawn(world::run(cfg.clone(), coordinator.clone(), login_queue));
 
     // Heap profiling (feature-gated): a `dhat::Profiler` writes its report on DROP,
     // and a signal-killed process never drops anything. So under this feature the gateway runs for

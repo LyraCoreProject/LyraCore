@@ -376,16 +376,8 @@ mod tests {
     #[test]
     fn both_listeners_admit_before_they_spawn_a_blocking_task() {
         for (listener, source, signature) in [
-            (
-                "logon",
-                include_str!("logon/mod.rs"),
-                "pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {",
-            ),
-            (
-                "world",
-                include_str!("world/mod.rs"),
-                "pub async fn run(cfg: GatewayConfig, coordinator: Coordinator) -> Result<()> {",
-            ),
+            ("logon", include_str!("logon/mod.rs"), "pub async fn run("),
+            ("world", include_str!("world/mod.rs"), "pub async fn run("),
         ] {
             let body = crate::test_scan::code_of(source, signature);
             let admit = body

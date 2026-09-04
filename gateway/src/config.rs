@@ -745,27 +745,34 @@ pub fn writer_trace_enabled() -> bool {
     std::env::var("LYRACORE_WRITER_TRACE").is_ok_and(|v| v == "1")
 }
 
-/// The login queue's hard ceiling on concurrently ESTABLISHED world sessions (a seat is held
-/// from `AUTH_OK` until the socket closes — see `world::login_queue`). Default `0` = unlimited,
-/// i.e. today's behavior byte for byte: a single-player dev realm, or any gateway that never sets
-/// this, never queues anyone. A malformed value falls back to unlimited rather than guessing.
-pub fn max_sessions() -> usize {
-    std::env::var("LYRACORE_MAX_SESSIONS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
+/// Maximum established World Sessions. Unset or zero means unlimited; malformed values fail startup.
+pub fn max_sessions() -> anyhow::Result<usize> {
+    admission_limit("LYRACORE_MAX_SESSIONS")
 }
 
-/// The login queue additionally rate-limits how many queued sessions may be admitted per tick
-/// (`world::login_queue::LoginQueue`'s tick, 1s in production) — independent of `max_sessions`, so
-/// a burst of simultaneously freed seats (a raid wipe, a restart draining a full queue) trickles
-/// admissions instead of releasing its whole backlog into `CMSG_PLAYER_LOGIN` at once. Default `0`
-/// = unlimited: seats fill as fast as they free, subject only to `max_sessions`.
-pub fn admit_concurrency() -> usize {
-    std::env::var("LYRACORE_ADMIT_CONCURRENCY")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
+/// Queued admissions per tick. Unset or zero means unlimited; malformed values fail startup.
+pub fn admit_concurrency() -> anyhow::Result<usize> {
+    admission_limit("LYRACORE_ADMIT_CONCURRENCY")
+}
+
+fn admission_limit(name: &str) -> anyhow::Result<usize> {
+    parse_admission_limit(name, std::env::var_os(name).as_deref())
+}
+
+fn parse_admission_limit(name: &str, raw: Option<&std::ffi::OsStr>) -> anyhow::Result<usize> {
+    let Some(raw) = raw else {
+        return Ok(0);
+    };
+    raw.to_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid {name}={raw:?}: expected a decimal integer from 0 to {}, with 0 for unlimited",
+                usize::MAX
+            )
+        })
 }
 
 /// tokio's own default `max_blocking_threads`, restated here so an unset
@@ -790,9 +797,8 @@ pub const DEFAULT_MAX_BLOCKING_THREADS: usize = 512;
 /// Measured 2026-08-07 on an 8-core box: 600 clients offered seated **477** at 512 and **535** at
 /// 4096.
 ///
-/// Default 512 preserves the former pool size. A malformed or zero value falls back to the default
-/// rather than guessing — the same posture as [`max_sessions`], except that zero cannot mean
-/// "unlimited" here: zero blocking threads is a gateway that accepts sockets and serves nobody.
+/// Default 512 preserves the former pool size. A malformed or zero value falls back to this finite
+/// default. Zero blocking threads would leave the Gateway unable to serve accepted sockets.
 pub fn max_blocking_threads() -> usize {
     max_blocking_threads_from_env(
         std::env::var("LYRACORE_MAX_BLOCKING_THREADS")
@@ -844,7 +850,7 @@ mod max_blocking_threads_tests {
         );
     }
 
-    /// A malformed value falls back to the default rather than guessing (`max_sessions`'s rule).
+    /// A malformed value falls back to the finite default.
     /// `-1` matters specifically: it is the shape an operator reaches for to mean "no limit", and
     /// it does not parse as `usize`.
     #[test]
@@ -2099,5 +2105,57 @@ mod shard_map_tests {
         assert_eq!(m.resolve(0, 0), "world");
         assert_eq!(m.resolve(1, 0), "good", "the one VALID rule still applies");
         assert_eq!(m.databases(), vec!["world".to_string(), "good".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod admission_limit_tests {
+    use super::parse_admission_limit;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn absent_or_zero_limits_allow_unlimited_admission() {
+        assert_eq!(parse_admission_limit("LIMIT", None).unwrap(), 0);
+        assert_eq!(
+            parse_admission_limit("LIMIT", Some(OsStr::new("0"))).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn decimal_limits_preserve_the_configured_value() {
+        for (raw, expected) in [("1", 1), ("1000", 1000), ("  2048 ", 2048)] {
+            assert_eq!(
+                parse_admission_limit("LIMIT", Some(OsStr::new(raw))).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            parse_admission_limit("LIMIT", Some(OsStr::new(&usize::MAX.to_string()))).unwrap(),
+            usize::MAX
+        );
+    }
+
+    #[test]
+    fn malformed_limits_do_not_become_unlimited() {
+        let overflow = (usize::MAX as u128 + 1).to_string();
+        for name in ["LYRACORE_MAX_SESSIONS", "LYRACORE_ADMIT_CONCURRENCY"] {
+            for raw in [
+                "", "  ", "-1", "+1", "1,000", "1_000", "1e3", "1.5", "many", &overflow,
+            ] {
+                let error = parse_admission_limit(name, Some(OsStr::new(raw)))
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains(name), "{error}");
+                assert!(error.contains(&format!("{raw:?}")), "{error}");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_limit_is_an_error() {
+        use std::os::unix::ffi::OsStrExt;
+        assert!(parse_admission_limit("LIMIT", Some(OsStr::from_bytes(&[0xff]))).is_err());
     }
 }

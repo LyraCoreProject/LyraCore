@@ -131,13 +131,12 @@ impl LoginQueue {
         Self::new(0, 0)
     }
 
-    /// Read `LYRACORE_MAX_SESSIONS` / `LYRACORE_ADMIT_CONCURRENCY` (`config::max_sessions`/`admit_concurrency`,
-    /// both default `0` = unlimited).
-    pub fn from_env() -> Self {
-        Self::new(
-            crate::config::max_sessions(),
-            crate::config::admit_concurrency(),
-        )
+    /// Read both admission limits. Unset or zero means unlimited; malformed values fail startup.
+    pub fn from_env() -> anyhow::Result<Self> {
+        Ok(Self::new(
+            crate::config::max_sessions()?,
+            crate::config::admit_concurrency()?,
+        ))
     }
 
     /// Ask for a seat. Immediate [`Admission::Admitted`] when the queue is unlimited, or when the
