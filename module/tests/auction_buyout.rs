@@ -6,14 +6,15 @@ use support::Standalone;
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn real_realm_reducer_commits_exact_buyout_mail_before_the_next_transaction() {
-    let standalone = Standalone::start("auction-buyout");
+    let mut standalone = Standalone::start("auction-buyout");
     standalone.publish_module();
     for (reducer, args) in [
         ("claim_operator", &[][..]),
         ("debug_stage_auction_buyout_fixture", &[][..]),
         (
             "realm_auction_decide_bid",
-            &["5090050", "5090051", "5090050", "900"][..],
+            // operation_id, bidder_guid, auction_id, house, offer — the fixture lists in house 1.
+            &["5090050", "5090051", "5090050", "1", "900"][..],
         ),
         ("debug_verify_auction_buyout_fixture", &[][..]),
     ] {

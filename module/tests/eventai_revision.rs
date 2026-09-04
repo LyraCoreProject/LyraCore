@@ -1,20 +1,22 @@
 mod support;
 
-use std::thread;
 use std::time::{Duration, Instant};
 
-use support::Standalone;
+use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const PLAYER_GUID: u64 = 1;
 const WOLF_ENTRY: u32 = 51_000;
 const WOLF_GUID: u64 = (0xF130_u64 << 48) | ((WOLF_ENTRY as u64) << 24) | 1;
 const SOURCE_RULE_ID: u64 = 900_001;
+/// `tick_creatures` fires on the seeded catch-all row every 0.5 s. The module counts no scheduled
+/// visits anywhere, so the only way to span one is to hold a window this wide open.
+const WORLD_TICK: Duration = Duration::from_millis(500);
 
 /// Runs only when requested because it builds and publishes the Wasm module to its own standalone.
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn scheduled_visits_preserve_state_then_clean_a_reloaded_definition() {
-    let standalone = Standalone::start("eventai-revision");
+    let mut standalone = Standalone::start("eventai-revision");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER_GUID.to_string()]);
 
@@ -26,8 +28,9 @@ fn scheduled_visits_preserve_state_then_clean_a_reloaded_definition() {
 
     wait_for_verifier(&standalone, true);
 
-    thread::sleep(Duration::from_millis(1_200));
-    assert_verifier(&standalone, true);
+    // Every scheduled visit inside this window is checked, not just the last one, so a visit that
+    // clobbers the adopted state fails here the moment it lands.
+    hold_verifier(&standalone, true, 2 * WORLD_TICK);
 
     let changed_rules = format!("{SOURCE_RULE_ID},aggro,100,4294967295,once,all,ordinary,phase:7");
     stage_fixture(&standalone, &changed_rules);
@@ -48,19 +51,31 @@ fn stage_fixture(standalone: &Standalone, rules: &str) {
 }
 
 fn wait_for_verifier(standalone: &Standalone, expect_rule_state: bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    let mut last = None;
+    let reached = poll_until(POLL_TIMEOUT, || {
         let output = verifier(standalone, expect_rule_state);
-        if output.status.success() {
+        let ok = output.status.success();
+        last = Some(output);
+        ok
+    });
+    let last = last.expect("at least one attempt");
+    assert!(
+        reached,
+        "EventAI fixture did not reach the expected state\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&last.stdout),
+        String::from_utf8_lossy(&last.stderr),
+    );
+}
+
+/// Re-check the verifier for `window`. Each check is a reducer call, which paces the loop. The last
+/// check lands at or after the end of the window, so a visit in its final milliseconds is seen.
+fn hold_verifier(standalone: &Standalone, expect_rule_state: bool, window: Duration) {
+    let until = Instant::now() + window;
+    loop {
+        assert_verifier(standalone, expect_rule_state);
+        if Instant::now() >= until {
             return;
         }
-        assert!(
-            Instant::now() < deadline,
-            "EventAI fixture did not reach the expected state\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-        thread::sleep(Duration::from_millis(50));
     }
 }
 

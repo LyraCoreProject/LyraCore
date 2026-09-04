@@ -16,7 +16,7 @@ fn assert_call_fails(standalone: &Standalone, reducer: &str, args: &[&str]) {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn durable_choice_turn_in_grants_the_selected_item_with_all_other_rewards() {
-    let standalone = Standalone::start("quest-choice-reward");
+    let mut standalone = Standalone::start("quest-choice-reward");
     standalone.publish_module();
     for (reducer, args) in [
         ("claim_operator", &[][..]),
