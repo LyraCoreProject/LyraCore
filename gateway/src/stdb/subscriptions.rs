@@ -64,6 +64,7 @@ impl PlayerSubscriptions {
         let mut identity = [0; 32];
         identity[..8].copy_from_slice(&self_guid.to_le_bytes());
         let viewer = Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session: view.next_session_id(),
             self_guid,
             bound_identity: spacetimedb_sdk::Identity::from_byte_array(identity),
@@ -95,6 +96,9 @@ impl PlayerSubscriptions {
     /// remain idempotent.
     pub(crate) fn unregister_viewer(&mut self) {
         if let (Some(view), Some(viewer)) = (self.view.take(), self.viewer.take()) {
+            viewer
+                .active
+                .store(false, std::sync::atomic::Ordering::Release);
             view.remove_viewer(viewer.session);
         }
     }
@@ -1114,15 +1118,10 @@ pub(crate) fn relay_breath_event(
 /// viewer's `created` set (no point animating an invisible attacker's swing — the victim's health
 /// still moves via the entity VALUES relay if the victim is in scope).
 ///
-/// `tx` is used ONLY for the delayed ranged-impact damage log (auto-shot: the number arrives WITH the
-/// arrow, via a thread per landed shot — a shared timer wheel if archer armies happen); every
-/// immediate packet is RETURNED so the shared path writes it at the job's queue position.
-pub(crate) fn combat_event_outbound(
-    tx: &SessionTx,
-    created: &Mutex<HashSet<u64>>,
-    row: &CombatEvent,
-) -> Vec<Outbound> {
-    if !created.lock().unwrap().contains(&row.attacker_guid) {
+/// Immediate packets return to the writer at this job's queue position. A delayed damage
+/// log returns through the same World Session lifetime check after its delay.
+pub(crate) fn combat_event_outbound(viewer: &Arc<Viewer>, row: &CombatEvent) -> Vec<Outbound> {
+    if !viewer.created.lock().unwrap().contains(&row.attacker_guid) {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -1170,11 +1169,11 @@ pub(crate) fn combat_event_outbound(
             // the health there) — hold the LOG to the same moment so the number arrives
             // WITH the arrow, not at the muzzle.
             if row.impact_delay_ms > 0 {
-                let tx_late = tx.clone();
+                let viewer = viewer.clone();
                 let delay = std::time::Duration::from_millis(row.impact_delay_ms as u64);
                 std::thread::spawn(move || {
                     std::thread::sleep(delay);
-                    let _ = tx_late.send(msg);
+                    super::world_view::enqueue(viewer, move |_| vec![msg]);
                 });
             } else {
                 out.push(msg);
@@ -1192,9 +1191,9 @@ pub(crate) fn combat_event_outbound(
             row.blocked_amount,
             0,
         );
-        out.push(Outbound::One(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(
-            Box::new(m),
-        )));
+        out.push(Outbound::One(
+            ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(m)),
+        ));
     }
     // C2: on a MELEE killing blow, tell the attacker to leave combat stance. The target itself
     // vanishes via the game_world_entity on_delete → SMSG_DESTROY_OBJECT relay. A RANGED kill
@@ -3360,6 +3359,7 @@ impl Coordinator {
                 .store(is_ghost, std::sync::atomic::Ordering::Relaxed);
         }
         let viewer = Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session,
             self_guid,
             bound_identity: self_identity,
@@ -3668,6 +3668,7 @@ mod tests {
     fn viewer_with_created(creature_guid: u64) -> Viewer {
         let (tx, _rx) = SessionTx::with_depth(0);
         Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session: 1,
             self_guid: 7,
             bound_identity: spacetimedb_sdk::Identity::from_byte_array([0; 32]),

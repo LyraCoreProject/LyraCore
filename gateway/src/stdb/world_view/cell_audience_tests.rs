@@ -36,6 +36,7 @@ fn identity(guid: u64) -> spacetimedb_sdk::Identity {
 
 fn viewer(session: SessionId, self_guid: u64, tx: SessionTx) -> Arc<Viewer> {
     Arc::new(Viewer {
+        active: std::sync::atomic::AtomicBool::new(true),
         session,
         self_guid,
         bound_identity: identity(self_guid),
@@ -754,9 +755,11 @@ fn an_old_shard_cannot_move_or_change_skills_on_a_destination_viewer() {
 fn old_shard_combat_cannot_address_a_transferred_character() {
     let mut rng = Rng::new(74);
     let realm = spread_realm(&mut rng);
-    let transferred = &realm.viewers[0];
+    let source = &realm.viewers[0];
+    let transferred = viewer(1000, source.self_guid, source.tx.clone());
     let cast = cast(&realm, transferred.self_guid, transferred.self_guid);
     let combat = combat(&realm, transferred.self_guid, transferred.self_guid);
+    realm.view.remove_viewer(source.session);
     realm
         .view
         .add_viewer_on_shard(transferred.clone(), CellKey::at(1, 0, 4, 4), 1);
@@ -790,6 +793,66 @@ fn old_shard_combat_cannot_address_a_transferred_character() {
         [Outbound::One(
             wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_CANCEL_AUTO_REPEAT
         )]
+    ));
+}
+
+#[test]
+fn jobs_selected_before_worldport_cannot_reach_the_replacement_world_session() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+
+    let view = Arc::new(WorldView::new(true));
+    let (tx, rx) = SessionTx::with_depth(0);
+    let arrival = crate::codec::EntityView {
+        guid: PLAYER_BASE,
+        ..Default::default()
+    };
+    let old_registration = super::super::subscriptions::PlayerSubscriptions::registered_for_test(
+        view.clone(),
+        PLAYER_BASE,
+        &arrival,
+        tx.clone(),
+    );
+    let selected = view.viewer_of_owner(OwnerGuid(PLAYER_BASE)).unwrap();
+    let row = melee(PLAYER_BASE, CREATURE_BASE);
+    melee_engaged(&view, 0, &row);
+    drop(old_registration);
+
+    // WORLDPORT writes destination entry on the same socket before registering its fresh Viewer.
+    tx.send(Outbound::Raw {
+        opcode: 0xCAFE,
+        body: vec![],
+    })
+    .unwrap();
+    let _destination = super::super::subscriptions::PlayerSubscriptions::registered_for_test(
+        view.clone(),
+        PLAYER_BASE,
+        &arrival,
+        tx,
+    );
+    let delayed_row = row.clone();
+    enqueue(selected, move |viewer| {
+        super::super::subscriptions::melee_engage_outbound(&viewer.created, &delayed_row)
+    });
+    melee_engaged(&view, 0, &row);
+
+    let Outbound::Job(before_entry) = rx.try_recv().unwrap() else {
+        panic!("old Relay job");
+    };
+    assert!(before_entry().is_empty());
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        Outbound::Raw { opcode: 0xCAFE, .. }
+    ));
+    let Outbound::Job(after_entry) = rx.try_recv().unwrap() else {
+        panic!("late old Relay job");
+    };
+    assert!(after_entry().is_empty());
+    let Outbound::Job(current) = rx.try_recv().unwrap() else {
+        panic!("current Relay job");
+    };
+    assert!(matches!(
+        current().as_slice(),
+        [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(_))]
     ));
 }
 

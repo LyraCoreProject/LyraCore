@@ -39,6 +39,7 @@ fn viewer(session: SessionId, self_guid: u64, tx: SessionTx) -> Arc<Viewer> {
     let mut identity = [0u8; 32];
     identity[..8].copy_from_slice(&self_guid.to_le_bytes());
     Arc::new(Viewer {
+        active: std::sync::atomic::AtomicBool::new(true),
         session,
         self_guid,
         bound_identity: spacetimedb_sdk::Identity::from_byte_array(identity),

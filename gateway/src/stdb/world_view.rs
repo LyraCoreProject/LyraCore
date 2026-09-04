@@ -57,6 +57,8 @@ use crate::world::{Outbound, SessionTx};
 ///
 /// Every field here is session relay state used by the shared callbacks' writer jobs.
 pub(crate) struct Viewer {
+    /// Cleared when this World Session leaves. Queued Relays must not reach its replacement.
+    pub(crate) active: std::sync::atomic::AtomicBool,
     pub(crate) session: SessionId,
     pub(crate) self_guid: u64,
     /// The account identity stamped on identity-addressed event rows.
@@ -161,6 +163,7 @@ impl ViewerRegistry {
     fn register(&mut self, viewer: Arc<Viewer>, shard: ShardId) {
         let session = viewer.session;
         if let Some(previous) = self.by_session.remove(&session) {
+            previous.viewer.active.store(false, Ordering::Release);
             self.remove_indexes(session, &previous);
         }
         self.session_of_owner.insert(viewer.self_guid, session);
@@ -178,6 +181,7 @@ impl ViewerRegistry {
         let Some(registered) = self.by_session.remove(&session) else {
             return;
         };
+        registered.viewer.active.store(false, Ordering::Release);
         self.remove_indexes(session, &registered);
     }
 
@@ -435,8 +439,8 @@ impl WorldView {
 
     pub(crate) fn remove_viewer(&self, session: SessionId) {
         let mut registry = self.viewers.write().unwrap();
-        self.spatial.remove_viewer(session);
         registry.remove(session);
+        self.spatial.remove_viewer(session);
     }
 
     /// Geometric recipients plus the row owner's session. The owner lookup lives in the viewer
@@ -1378,8 +1382,7 @@ fn encounter_equip_changed(view: &WorldView, shard: ShardId, row: &EncounterEqui
             continue;
         };
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::encounter_equip_outbound(&viewer, &row, cleared)
         });
     }
@@ -1398,8 +1401,7 @@ fn offer_create_job(
         return;
     };
     let (view, row) = (view.clone(), row.clone());
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::offer_peer_create_for(&coord, &view, shard, &viewer, &row)
     });
 }
@@ -1418,8 +1420,7 @@ fn update_job(
         return;
     };
     let (view, old, new) = (view.clone(), old.clone(), new.clone());
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::relay_entity_update(&coord, &view, shard, &viewer, &old, &new)
     });
 }
@@ -1428,8 +1429,7 @@ fn destroy_job(view: &WorldView, session: SessionId, guid: u64, owner_guid: u64)
     let Some(viewer) = view.viewer(session) else {
         return;
     };
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::relay_peer_destroy(&viewer, guid, owner_guid)
     });
 }
@@ -1449,9 +1449,8 @@ fn gameobject_appeared(view: &WorldView, shard: ShardId, row: &GameObject) {
             let still: HashSet<SessionId> = recipients.iter().map(|v| v.session).collect();
             for viewer in view.cell_audience(shard, Some(old_key), BOX_HALF_SPAN, &[]) {
                 if !still.contains(&viewer.session) {
-                    let tx = viewer.tx.clone();
                     let guid = row.guid;
-                    enqueue(&tx, move || {
+                    enqueue(viewer.clone(), move |viewer| {
                         super::subscriptions::relay_gameobject_destroy(&viewer, guid)
                     });
                 }
@@ -1464,8 +1463,7 @@ fn gameobject_appeared(view: &WorldView, shard: ShardId, row: &GameObject) {
     let row = Arc::new(row.clone());
     for viewer in recipients {
         let (coord, row) = (coord.clone(), row.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::relay_gameobject_create(&coord, &viewer, &row)
         });
     }
@@ -1479,10 +1477,9 @@ fn gameobject_vanished(view: &WorldView, shard: ShardId, guid: u64) {
         return;
     };
     for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
-        let tx = viewer.tx.clone();
         // DESTROY stays ungated (the `on_melee_delete` precedent): SMSG_DESTROY_OBJECT for a guid
         // the client never created is a client no-op, and gating it risks a stale object.
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::relay_gameobject_destroy(&viewer, guid)
         });
     }
@@ -1540,14 +1537,16 @@ fn maybe_queue_motion_flush(_view: &WorldView, viewer: &Arc<Viewer>) {
     if viewer.motion_pending.flush_queued.swap(true, AtOrd::AcqRel) {
         return; // a queued flush will carry the upsert that just landed
     }
-    let tx = viewer.tx.clone();
-    if super::subscriptions::shed_motion_at_depth(tx.depth()) {
+    if super::subscriptions::shed_motion_at_depth(viewer.tx.depth()) {
         super::subscriptions::MOTION_DROPPED.fetch_add(1, Ordering::Relaxed);
-        viewer.motion_pending.flush_queued.store(false, AtOrd::Release);
+        viewer
+            .motion_pending
+            .flush_queued
+            .store(false, AtOrd::Release);
         return;
     }
     let viewer = viewer.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         // Clear BEFORE draining: an upsert racing the drain re-queues a follow-up flush (possibly
         // empty — harmless) instead of being stranded behind a still-set flag.
         viewer
@@ -1599,8 +1598,9 @@ fn roll_appeared(view: &WorldView, shard: ShardId, row: &RollEvent) {
     let row = Arc::new(row.clone());
     for viewer in viewers_on_shard(view, shard) {
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_roll(&row));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_roll(&row)
+        });
     }
 }
 
@@ -1615,8 +1615,9 @@ fn dynobj_appeared(view: &WorldView, shard: ShardId, row: &DynamicObject) {
             continue;
         }
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_dynobj_create(&row));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_dynobj_create(&row)
+        });
     }
 }
 
@@ -1626,8 +1627,9 @@ fn dynobj_appeared(view: &WorldView, shard: ShardId, row: &DynamicObject) {
 fn dynobj_vanished(view: &WorldView, shard: ShardId, row: &DynamicObject) {
     let guid = row.guid;
     for viewer in viewers_on_shard(view, shard) {
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_destroy_object(guid));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_destroy_object(guid)
+        });
     }
 }
 
@@ -1638,8 +1640,7 @@ fn taxi_spline(view: &WorldView, shard: ShardId, row: &TaxiPassengerSpline) {
     let row = row.clone();
     for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[row.character_guid]) {
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::taxi_spline_outbound(&viewer.created, viewer.self_guid, &row)
         });
     }
@@ -1652,8 +1653,7 @@ fn teleport_appeared(view: &WorldView, shard: ShardId, row: &TeleportEvent) {
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::teleport_event_outbound(&row)
     });
 }
@@ -1666,8 +1666,7 @@ fn addon_message_appeared(view: &WorldView, shard: ShardId, row: &AddonMessage) 
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::addon_message_outbound(viewer.self_guid, &row)
     });
 }
@@ -1680,8 +1679,9 @@ fn xp_appeared(view: &WorldView, shard: ShardId, row: &XpEvent) {
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || super::subscriptions::xp_event_outbound(&row));
+    enqueue(viewer.clone(), move |_| {
+        super::subscriptions::xp_event_outbound(&row)
+    });
 }
 
 /// Level-up rows are delivered to the one viewer bound to their recipient identity.
@@ -1692,8 +1692,7 @@ fn levelup_appeared(view: &WorldView, shard: ShardId, row: &LevelupEvent) {
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::levelup_event_outbound(&row)
     });
 }
@@ -1703,8 +1702,8 @@ fn quest_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &C
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
-    let (coord, self_guid, tx) = (coord.clone(), viewer.self_guid, viewer.tx.clone());
-    enqueue(&tx, move || {
+    let (coord, self_guid) = (coord.clone(), viewer.self_guid);
+    enqueue(viewer.clone(), move |_| {
         let guard = coord.0.coord();
         super::subscriptions::quest_log_outbound(&guard.conn.db, self_guid)
             .into_iter()
@@ -1723,14 +1722,8 @@ fn quest_updated(
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
-    let (coord, self_guid, old, row, tx) = (
-        coord.clone(),
-        viewer.self_guid,
-        old.clone(),
-        row.clone(),
-        viewer.tx.clone(),
-    );
-    enqueue(&tx, move || {
+    let (coord, self_guid, old, row) = (coord.clone(), viewer.self_guid, old.clone(), row.clone());
+    enqueue(viewer.clone(), move |_| {
         let guard = coord.0.coord();
         super::subscriptions::quest_update_outbound(&guard.conn.db, self_guid, &old, &row)
     });
@@ -1741,8 +1734,8 @@ fn quest_deleted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &Ch
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
-    let (coord, self_guid, tx) = (coord.clone(), viewer.self_guid, viewer.tx.clone());
-    enqueue(&tx, move || {
+    let (coord, self_guid) = (coord.clone(), viewer.self_guid);
+    enqueue(viewer.clone(), move |_| {
         let guard = coord.0.coord();
         super::subscriptions::quest_log_outbound(&guard.conn.db, self_guid)
             .into_iter()
@@ -1762,8 +1755,9 @@ fn exploration_appeared(
         return;
     };
     let (row, coord) = (row.clone(), coord.clone());
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || exploration_outbound(&coord, &viewer, &row));
+    enqueue(viewer.clone(), move |viewer| {
+        exploration_outbound(&coord, &viewer, &row)
+    });
 }
 
 fn exploration_outbound(
@@ -1819,8 +1813,7 @@ fn reputation_appeared(view: &WorldView, shard: ShardId, row: &PlayerReputation)
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || reputation_outbound(&row));
+    enqueue(viewer.clone(), move |_| reputation_outbound(&row));
 }
 
 /// Hunter pet descriptors are idempotent VALUES, so replay re-sends are state-sync, not toasts.
@@ -1829,8 +1822,9 @@ fn hunter_pet_appeared(view: &WorldView, shard: ShardId, row: &HunterPetProtocol
         return;
     };
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || super::subscriptions::hunter_pet_outbound(&row));
+    enqueue(viewer.clone(), move |_| {
+        super::subscriptions::hunter_pet_outbound(&row)
+    });
 }
 
 fn reputation_outbound(row: &PlayerReputation) -> Vec<Outbound> {
@@ -1853,8 +1847,7 @@ fn item_owner_job(
     let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(owner_guid)) else {
         return;
     };
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || job(viewer));
+    enqueue(viewer, job);
 }
 
 fn item_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &ItemInstance) {
@@ -1908,7 +1901,7 @@ fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
         return;
     };
     let (self_guid, bytes) = (row.character_guid, row.player_bytes_2);
-    enqueue(&viewer.tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::relay_rest_state(self_guid, bytes)
     });
 }
@@ -1928,7 +1921,7 @@ fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
         row.duration_ms,
         row.damage,
     );
-    enqueue(&viewer.tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::relay_breath_event(guid, kind, remaining, duration, damage)
     });
 }
@@ -1941,8 +1934,7 @@ fn skill_changed(view: &WorldView, shard: ShardId, row: &PlayerSkill) {
         return;
     };
     let (line, cur, max) = (row.skill_line, row.current, row.max_rank);
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::relay_skill(&viewer, line, cur, max)
     });
 }
@@ -1958,8 +1950,7 @@ fn corpse_appeared(view: &WorldView, shard: ShardId, row: &Corpse) {
         }
         let row = row.clone();
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::corpse_create_outbound(self_guid, &row)
         });
     }
@@ -1974,8 +1965,9 @@ fn corpse_changed(view: &WorldView, shard: ShardId, row: &Corpse) {
             continue;
         }
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_corpse_update(&row));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_corpse_update(&row)
+        });
     }
 }
 
@@ -1984,8 +1976,9 @@ fn corpse_changed(view: &WorldView, shard: ShardId, row: &Corpse) {
 fn corpse_vanished(view: &WorldView, shard: ShardId, row: &Corpse) {
     let guid = row.guid;
     for viewer in viewers_on_shard(view, shard) {
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || super::subscriptions::relay_destroy_object(guid));
+        enqueue(viewer.clone(), move |_| {
+            super::subscriptions::relay_destroy_object(guid)
+        });
     }
 }
 
@@ -2019,9 +2012,8 @@ fn combat_event_appeared(view: &WorldView, shard: ShardId, row: &CombatEvent) {
     let row = Arc::new(row.clone());
     for viewer in combat_audience(view, shard, &row) {
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
-            super::subscriptions::combat_event_outbound(&viewer.tx, &viewer.created, &row)
+        enqueue(viewer.clone(), move |viewer| {
+            super::subscriptions::combat_event_outbound(&viewer, &row)
         });
     }
 }
@@ -2041,8 +2033,7 @@ fn melee_engaged(view: &WorldView, shard: ShardId, row: &MeleeAttack) {
     for viewer in melee_audience(view, shard, &row) {
         let row = row.clone();
         let created = viewer.created.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::melee_engage_outbound(&created, &row)
         });
     }
@@ -2055,8 +2046,7 @@ fn melee_disengaged(view: &WorldView, shard: ShardId, row: &MeleeAttack) {
     for viewer in melee_audience(view, shard, &row) {
         let row = row.clone();
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::melee_disengage_outbound(self_guid, &row)
         });
     }
@@ -2074,8 +2064,7 @@ fn resurrect_offered(view: &WorldView, row: &ResurrectRequest) {
         return;
     }
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::resurrect_request_outbound(&row)
     });
 }
@@ -2094,8 +2083,7 @@ fn whisper_appeared(view: &WorldView, row: &WhisperEvent) {
         return;
     }
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::whisper_event_outbound(&row)
     });
 }
@@ -2112,8 +2100,7 @@ fn system_message_appeared(view: &WorldView, row: &SystemMessageEvent) {
         return;
     }
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::system_message_event_outbound(&row)
     });
 }
@@ -2131,8 +2118,7 @@ fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
         return;
     }
     let row = row.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::trade_event_outbound(&row)
     });
 }
@@ -2149,8 +2135,7 @@ fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
     {
         let row = row.clone();
         let coord = coord.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             let template = (row.kind == lyracore_shared::duel::event_kind::REQUESTED)
                 .then(|| coord.gameobject_template(row.flag_entry).ok().flatten())
                 .flatten();
@@ -2176,8 +2161,7 @@ fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
             continue;
         }
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::duel_winner_outbound(&row)
         });
     }
@@ -2198,8 +2182,7 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
     }
     let (row, coord) = (row.clone(), coord.clone());
     let self_guid = viewer.self_guid;
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::group_event_outbound(&coord, self_guid, &row)
     });
 }
@@ -2214,8 +2197,7 @@ fn group_member_mirror_changed(view: &WorldView, coord: &Coordinator, row: &Grou
         return;
     };
     let coord = coord.clone();
-    let tx = viewer.tx.clone();
-    enqueue(&tx, move || {
+    enqueue(viewer.clone(), move |viewer| {
         super::subscriptions::loot_tag_flags_after_membership_change(&coord, &viewer)
     });
 }
@@ -2242,8 +2224,7 @@ fn aura_applied(
     let row = Arc::new(row.clone());
     for viewer in aura_audience(view, shard, &row) {
         let (row, coord, view) = (row.clone(), coord.clone(), view.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::aura_insert_outbound(
                 &coord,
                 &view,
@@ -2259,12 +2240,17 @@ fn aura_applied(
 }
 
 /// An aura changed → per viewer: array sync + refresh-only duration + self-only packets.
-fn aura_updated(view: &Arc<WorldView>, coord: &Coordinator, shard: ShardId, row: &Aura, expires_changed: bool) {
+fn aura_updated(
+    view: &Arc<WorldView>,
+    coord: &Coordinator,
+    shard: ShardId,
+    row: &Aura,
+    expires_changed: bool,
+) {
     let row = Arc::new(row.clone());
     for viewer in aura_audience(view, shard, &row) {
         let (row, coord, view) = (row.clone(), coord.clone(), view.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::aura_update_outbound(
                 &coord,
                 &view,
@@ -2290,8 +2276,7 @@ fn aura_removed(
     let row = Arc::new(row.clone());
     for viewer in aura_audience(view, shard, &row) {
         let (row, coord, view) = (row.clone(), coord.clone(), view.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |viewer| {
             super::subscriptions::aura_delete_outbound(
                 &coord,
                 &view,
@@ -2323,8 +2308,7 @@ fn cast_event_appeared(view: &WorldView, shard: ShardId, row: &SpellCastEvent) {
     for viewer in cast_audience(view, shard, &row) {
         let row = row.clone();
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::cast_event_outbound(self_guid, &row)
         });
     }
@@ -2345,8 +2329,7 @@ fn impact_appeared(view: &WorldView, shard: ShardId, row: &SpellImpactEvent) {
     let row = Arc::new(row.clone());
     for viewer in impact_audience(view, shard, &row) {
         let row = row.clone();
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::impact_event_outbound(&row)
         });
     }
@@ -2368,8 +2351,7 @@ fn emote_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &E
     let row = Arc::new(row.clone());
     for viewer in emote_audience(view, shard, &row) {
         let (row, coord) = (row.clone(), coord.clone());
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::emote_event_outbound(&coord, &row)
         });
     }
@@ -2393,8 +2375,7 @@ fn chat_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &Ch
     for viewer in chat_audience(view, shard, &row) {
         let (row, coord) = (row.clone(), coord.clone());
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::chat_event_outbound(&coord, self_guid, &row)
         });
     }
@@ -2407,8 +2388,7 @@ fn channel_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: 
     for viewer in viewers_on_shard(view, shard) {
         let (row, coord) = (row.clone(), coord.clone());
         let self_guid = viewer.self_guid;
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::channel_event_outbound(&coord, self_guid, &row)
         });
     }
@@ -2433,8 +2413,7 @@ fn weather_changed(view: &WorldView, shard: ShardId, row: &ZoneWeather) {
         if viewer.zone_id.load(Ordering::Relaxed) != zone_id {
             continue;
         }
-        let tx = viewer.tx.clone();
-        enqueue(&tx, move || {
+        enqueue(viewer.clone(), move |_| {
             super::subscriptions::weather_outbound(view_of_row, WeatherChangeType::Smooth)
         });
     }
@@ -2483,8 +2462,8 @@ fn zone_crossed<St>(
     if !viewer.enter_zone(zone_id) {
         return;
     }
-    let (store, tx) = (store.clone(), viewer.tx.clone());
-    enqueue(&tx, move || {
+    let store = store.clone();
+    enqueue(viewer.clone(), move |_| {
         super::subscriptions::zone_weather_outbound(&store, zone_id, WeatherChangeType::Instant)
     });
 }
@@ -2563,6 +2542,7 @@ mod family_audience_tests {
         tx: SessionTx,
     ) -> Arc<Viewer> {
         Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session,
             self_guid,
             bound_identity,
@@ -3002,6 +2982,7 @@ mod family_audience_tests {
         let view = WorldView::new(true);
         let old = viewer(7, 9001);
         let replacement = Arc::new(Viewer {
+            active: std::sync::atomic::AtomicBool::new(true),
             session: old.session,
             self_guid: 9002,
             bound_identity: identity(99),
@@ -3338,7 +3319,7 @@ mod family_audience_tests {
             .expect("the exploration owner relay");
         assert!(
             exploration.contains("viewer_of_owner_on_shard(shard,OwnerGuid(row.character_guid))")
-                && exploration.contains("enqueue(&tx,move||exploration_outbound"),
+                && exploration.contains("enqueue(viewer.clone(),move|viewer|{exploration_outbound"),
             "exploration must select its owner then defer all work to that viewer's writer"
         );
         assert!(
@@ -3360,7 +3341,7 @@ mod family_audience_tests {
             let body = no_ws(&source[start..]);
             assert!(
                 body.contains("view.viewer_of_owner_on_shard(shard,OwnerGuid(row.character_guid))")
-                    && body.contains("enqueue(&tx,move||")
+                    && body.contains("enqueue(viewer.clone(),move|viewer|")
                     && body.contains("coord.0.coord()"),
                 "{handler} must select one shard-scoped owner and defer cache reads and packet construction to its writer job"
             );
@@ -3522,14 +3503,20 @@ mod family_audience_tests {
 //  The pump→writer hand-off
 // ===============================================================================================
 
-/// Push one unit of deferred relay work onto a session's writer queue.
-///
-/// This is the ONLY thing the shared pump does per recipient — a boxed closure and a channel send.
-/// Everything the closure does (gates, cache reads, encoding) happens on that session's own writer
-/// thread, so a slow or panicking relay costs exactly one session, which is the property the
-/// per-player connections used to give us for free.
-fn enqueue(tx: &SessionTx, job: impl FnOnce() -> Vec<Outbound> + Send + 'static) {
-    let _ = tx.send(Outbound::Job(Box::new(job)));
+/// Queue work for one World Session. The socket writer checks its lifetime before running it.
+/// Jobs already running finish before the destination entry batch on the same FIFO writer;
+/// jobs selected by an old callback but enqueued after that batch are discarded here.
+pub(super) fn enqueue(
+    viewer: Arc<Viewer>,
+    job: impl FnOnce(Arc<Viewer>) -> Vec<Outbound> + Send + 'static,
+) {
+    let tx = viewer.tx.clone();
+    let _ = tx.send(Outbound::Job(Box::new(move || {
+        if !viewer.active.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        job(viewer)
+    })));
 }
 
 // ===============================================================================================
@@ -3564,7 +3551,7 @@ pub(crate) fn recenter(view: &Arc<WorldView>, viewer: &Arc<Viewer>, map_id: u32,
                 })
                 .unwrap_or(0);
             let viewer = viewer.clone();
-            enqueue(&viewer.tx.clone(), move || {
+            enqueue(viewer.clone(), move |viewer| {
                 super::subscriptions::relay_peer_destroy(&viewer, guid, owner_guid)
             });
         }
@@ -3584,7 +3571,7 @@ pub(crate) fn recenter(view: &Arc<WorldView>, viewer: &Arc<Viewer>, map_id: u32,
                 continue;
             };
             let (view, viewer, row) = (view.clone(), viewer.clone(), Arc::new(row));
-            enqueue(&viewer.tx.clone(), move || {
+            enqueue(viewer.clone(), move |viewer| {
                 super::subscriptions::offer_peer_create_for(&coord, &view, shard, &viewer, &row)
             });
         }
@@ -3592,7 +3579,7 @@ pub(crate) fn recenter(view: &Arc<WorldView>, viewer: &Arc<Viewer>, map_id: u32,
     {
         for (guid, _) in delta.game_objects.left {
             let viewer = viewer.clone();
-            enqueue(&viewer.tx.clone(), move || {
+            enqueue(viewer.clone(), move |viewer| {
                 super::subscriptions::relay_gameobject_destroy(&viewer, guid)
             });
         }
@@ -3604,7 +3591,7 @@ pub(crate) fn recenter(view: &Arc<WorldView>, viewer: &Arc<Viewer>, map_id: u32,
                 continue;
             };
             let (viewer, row) = (viewer.clone(), Arc::new(row));
-            enqueue(&viewer.tx.clone(), move || {
+            enqueue(viewer.clone(), move |viewer| {
                 super::subscriptions::relay_gameobject_create(&coord, &viewer, &row)
             });
         }
@@ -3715,8 +3702,7 @@ fn reconcile_shard(
                 if view.spatial.can_see(layer, viewer.session, guid) {
                     continue;
                 }
-                let tx = viewer.tx.clone();
-                enqueue(&tx, move || match layer {
+                enqueue(viewer.clone(), move |viewer| match layer {
                     EntityLayer::WorldEntity => {
                         super::subscriptions::relay_peer_destroy(&viewer, guid, owner_guid)
                     }
@@ -3735,8 +3721,7 @@ fn reconcile_shard(
                     .entity_cell_on_shard(EntityLayer::WorldEntity, target_guid, shard);
             for viewer in view.cell_audience(shard, key, BOX_HALF_SPAN, &[target_guid]) {
                 let (coord, view, previous) = (coord.clone(), view.clone(), previous.clone());
-                let tx = viewer.tx.clone();
-                enqueue(&tx, move || {
+                enqueue(viewer.clone(), move |viewer| {
                     super::subscriptions::aura_snapshot_outbound(
                         &coord,
                         &view,
