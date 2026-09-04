@@ -627,7 +627,7 @@ impl WorldStore for Coordinator {
         self_guid: u64,
         trainer_guid: u64,
         spell_id: u32,
-    ) -> Result<()> {
+    ) -> Result<crate::world::TrainerBuyOutcome> {
         self.buy_trainer_spell(account_id, self_guid, trainer_guid, spell_id)
     }
 

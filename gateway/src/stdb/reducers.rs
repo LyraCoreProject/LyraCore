@@ -12,6 +12,7 @@ use super::bindings::*;
 use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
 use lyracore_shared::auction::AuctionRefusal;
+use lyracore_shared::trainer::TrainerRefusal;
 
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
 
@@ -1977,8 +1978,8 @@ impl Coordinator {
     }
 
     /// Learn `spell_id` from trainer `trainer_guid` (`CMSG_TRAINER_BUY_SPELL`) over the coordinator
-    /// connection. The module gates it (range / level / cost / not-already-known) and charges copper;
-    /// the `Err` message carries the module's `[N]` gtker failure-reason tag for the dispatch to forward.
+    /// connection. The module gates it (range / level / cost / not-already-known) and charges copper.
+    /// A Refusal the Module tagged comes back as an outcome; anything else stays an error.
     /// Rides the coordinator connection as `gw_trainer_buy`.
     pub fn buy_trainer_spell(
         &self,
@@ -1986,16 +1987,23 @@ impl Coordinator {
         actor_guid: u64,
         trainer_guid: u64,
         spell_id: u32,
-    ) -> Result<()> {
+    ) -> Result<crate::world::TrainerBuyOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("buy_trainer_spell: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        let result: Result<()> = call_reducer!(
             coord.conn.reducers,
             "gw_trainer_buy",
             gw_trainer_buy_then(actor_guid, trainer_guid, spell_id)
-        )
+        );
+        match result {
+            Ok(()) => Ok(crate::world::TrainerBuyOutcome::Learned),
+            Err(error) => match trainer_refusal(&error) {
+                Some(refusal) => Ok(refusal.into()),
+                None => Err(error),
+            },
+        }
     }
 
     /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`) over the coordinator
@@ -3097,6 +3105,12 @@ fn auction_refusal(error: &anyhow::Error) -> Option<AuctionRefusal> {
     reducer_refusal_reason(error).and_then(AuctionRefusal::parse_tag)
 }
 
+/// The Module's typed trainer Refusal. Only a reducer the Module rejected carries a tag; a timeout,
+/// transport, or SDK failure stays an error with an unknown outcome.
+fn trainer_refusal(error: &anyhow::Error) -> Option<TrainerRefusal> {
+    reducer_refusal_reason(error).and_then(TrainerRefusal::parse_tag)
+}
+
 fn bid_payload_matches(hold: &AuctionBidHold, decision: &AuctionBidDecision) -> bool {
     hold.operation_id == decision.operation_id
         && hold.bidder_guid == decision.bidder_guid
@@ -3271,7 +3285,10 @@ mod auction_reducer_tests {
     fn refused_listing_binding_matches_the_generated_commit_listing_shape() {
         let expected = include_str!("bindings/realm_auction_commit_listing_reducer.rs")
             .replace("RealmAuctionCommitListing", "RealmAuctionRefundListing")
-            .replace("realm_auction_commit_listing", "realm_auction_refund_listing");
+            .replace(
+                "realm_auction_commit_listing",
+                "realm_auction_refund_listing",
+            );
         assert_eq!(
             include_str!("bindings/realm_auction_refund_listing_reducer.rs"),
             expected,
@@ -3302,5 +3319,40 @@ mod auction_reducer_tests {
                 minimum_increment: 25,
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod trainer_reducer_tests {
+    use super::*;
+    use crate::stdb::connection::ReducerCallError;
+
+    #[test]
+    fn only_a_rejected_reducer_carries_a_typed_refusal() {
+        for refusal in TrainerRefusal::ALL {
+            let error = anyhow::Error::from(ReducerCallError::Rejected {
+                operation: "gw_trainer_buy".to_string(),
+                reason: refusal.as_tag().to_string(),
+            })
+            .context("trainer buy");
+            assert_eq!(trainer_refusal(&error), Some(refusal));
+        }
+
+        let not_refusals = [
+            anyhow::Error::from(ReducerCallError::fatal(
+                "gw_trainer_buy reducer timed out after 10s".to_string(),
+            )),
+            anyhow::Error::from(ReducerCallError::Rejected {
+                operation: "gw_trainer_buy".to_string(),
+                reason: "operator only".to_string(),
+            }),
+            anyhow!(
+                "wrapped text that mentions {}",
+                TrainerRefusal::AlreadyKnown.as_tag()
+            ),
+        ];
+        for error in not_refusals {
+            assert_eq!(trainer_refusal(&error), None, "{error:#}");
+        }
     }
 }
