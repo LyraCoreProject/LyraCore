@@ -251,13 +251,8 @@ pub(crate) enum StealthAction {
     None,
 }
 
-/// Decide the visibility action for an A_STEALTH aura change. `is_insert` distinguishes the insert
-/// (gain) path from the delete (loss) path; `post_change_count` is the number of A_STEALTH auras on the
-/// stealther AFTER the change. A Stealth cast applies TWO A_STEALTH auras, and the SDK applies the whole
-/// row-delta to the cache BEFORE firing per-row callbacks, so BOTH inserts fire with the count already at
-/// 2 (and both deletes with it at 0). So HIDE on ANY insert that leaves the unit stealthed (count >= 1)
-/// and REVEAL on the loss that brings the count to 0; the exactly-once guarantee is the per-viewer
-/// `created` set at the call site (a duplicate HIDE/REVEAL is a no-op there), NOT a count boundary.
+/// Hide on a stealth insert and reveal when the last marker is removed. The aura index supplies
+/// the count after this callback's change; the viewer's `created` set makes repeated actions harmless.
 pub(crate) fn stealth_action(is_insert: bool, post_change_count: usize) -> StealthAction {
     match (is_insert, post_change_count) {
         (true, n) if n >= 1 => StealthAction::Hide,
@@ -266,15 +261,15 @@ pub(crate) fn stealth_action(is_insert: bool, post_change_count: usize) -> Steal
     }
 }
 
-/// Build the peer CREATE_OBJECT2 `SMSG_UPDATE_OBJECT` for a `game_world_entity` row, reading the peer's
-/// equipped gear RLS-bypassed via the coordinator (slots 0..=18, model-visible) for a PLAYER. Shared by
-/// the AOI-entry on_insert relay and the stealth REVEAL path so a re-shown stealther renders identically
-/// (gear and all). Returns `None` only on an encode error (logged by the caller).
+/// Read a peer's equipment and current aura state for AOI entry or stealth reveal.
+/// An encoding failure leaves the caller responsible for removing its `created` entry.
 fn build_peer_create(
     coord: &Coordinator,
+    world: &WorldView,
+    shard: super::world_index::ShardId,
     viewer_guid: u64,
     row: &WorldEntity,
-) -> Option<ServerOpcodeMessage> {
+) -> Option<Vec<Outbound>> {
     let inv: Vec<(u8, u64, u32)> =
         if row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 {
             coord
@@ -289,15 +284,31 @@ fn build_peer_create(
         };
     let mut view = entity_view(row.clone(), 0);
     view.dynamic_flags = projected_dynamic_flags(&coord.0.coord().conn.db, viewer_guid, row);
-    // Peers pass no skill rows: the SkillInfo block is a self-descriptor (the client renders
-    // only its OWN skill pane); a peer CREATE ignores it.
-    match codec::build_create_object(&view, CreateKind::Peer, &inv, &[]) {
-        Ok(m) => Some(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m))),
+    let auras = world.auras.on_target(shard, row.guid);
+    match peer_create_outbound(&view, &inv, &auras) {
+        Ok(out) => Some(out),
         Err(e) => {
             log::warn!("peer create encode failed for guid {}: {e}", row.guid);
             None
         }
     }
+}
+
+/// A peer's current auras follow its CREATE. Their rows may have arrived before the viewer
+/// could see it, so another aura callback cannot be relied on to supply them.
+fn peer_create_outbound(
+    view: &codec::EntityView,
+    inventory: &[(u8, u64, u32)],
+    auras: &[Aura],
+) -> Result<Vec<Outbound>> {
+    let create = codec::build_create_object(view, CreateKind::Peer, inventory, &[])?;
+    let mut out = vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        Box::new(create),
+    ))];
+    if !auras.is_empty() {
+        out.push(aura_sync(auras.iter().cloned(), view.guid));
+    }
+    Ok(out)
 }
 
 struct LootTagProjectionRows<'a> {
@@ -788,11 +799,10 @@ pub(crate) fn offer_peer_create_for(
     if !viewer.created.lock().unwrap().insert(row.guid) {
         return Vec::new();
     }
-    let Some(m) = build_peer_create(coord, viewer.self_guid, row) else {
+    let Some(mut out) = build_peer_create(coord, view, shard, viewer.self_guid, row) else {
         viewer.created.lock().unwrap().remove(&row.guid);
         return Vec::new();
     };
-    let mut out = vec![Outbound::One(m)];
     if let Some(equipment) = db.game_encounter_equip().creature_guid().find(&row.guid) {
         append_encounter_equip_after_create(&mut out, viewer, &equipment);
     }
@@ -1502,22 +1512,13 @@ pub(crate) fn sheet_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) 
         )))
     })
 }
-// Stealth peer-visibility: when a NON-self peer's A_STEALTH presence crosses the 0↔1 boundary,
-// HIDE it from this viewer (SMSG_DESTROY_OBJECT + evict from `created`) on the gain, REVEAL it
-// (re-CREATE + re-insert into `created`) on the loss. The dispatch runs this once per viewer
-// whose box covers the stealther, so each in-scope client hides/reveals on its own `tx`. Self is
-// excluded (`changed.target_guid != self_guid`) so a stealther never hides from itself.
-// Idempotency is the `created` set: HIDE only
-// fires (and DESTROYs) if the guid was created; REVEAL only fires (and CREATEs) if it wasn't —
-// re-hiding a hidden peer or re-revealing a visible one is a no-op. The stealther's entity row is
-// read from the firing connection's cache (`ctx.db`); a guid the viewer can't see in scope has no
-// row → REVEAL self-skips. `coord` reads the peer's gear RLS-bypassed on reveal (same as insert).
-// One argument per piece of per-viewer state the decision needs; they are not grouped
-// because the caller has them as separate captures.
+/// Hide a peer on stealth gain; reveal it with current equipment and auras on stealth loss.
+/// The AOI and `created` checks prevent distant or duplicate CREATEs. Self never hides from itself.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stealth_visibility(
     post_change_stealth_count: usize,
     view: &WorldView,
+    shard: super::world_index::ShardId,
     session: u64,
     coord: &Coordinator,
     created: &Arc<Mutex<HashSet<u64>>>,
@@ -1568,8 +1569,8 @@ pub(crate) fn stealth_visibility(
                 .guid()
                 .find(&changed.target_guid)
             {
-                Some(row) => match build_peer_create(coord, self_guid, &row) {
-                    Some(m) => vec![Outbound::One(m)],
+                Some(row) => match build_peer_create(coord, view, shard, self_guid, &row) {
+                    Some(out) => out,
                     None => {
                         // Encode failure: roll the dedup entry back like `offer_peer_create`
                         // does, else this guid is permanently suppressed (marked created with
@@ -1628,6 +1629,7 @@ pub(crate) fn aura_insert_outbound(
     out.extend(stealth_visibility(
         stealth_count,
         view,
+        shard,
         session,
         coord,
         created,
@@ -1705,6 +1707,7 @@ pub(crate) fn aura_delete_outbound(
     out.extend(stealth_visibility(
         stealth_count,
         view,
+        shard,
         session,
         coord,
         created,
@@ -1739,6 +1742,7 @@ pub(crate) fn aura_snapshot_outbound(
         out.extend(stealth_visibility(
             stealth_count,
             view,
+            shard,
             viewer.session,
             coord,
             &viewer.created,
@@ -1746,6 +1750,10 @@ pub(crate) fn aura_snapshot_outbound(
             viewer.self_guid,
             stealth_count > 0,
         ));
+        // Reveal includes the aura array; hide must not send VALUES after DESTROY.
+        if !out.is_empty() {
+            return out;
+        }
     }
     if target_guid != viewer.self_guid && !viewer.created.lock().unwrap().contains(&target_guid) {
         return out;
@@ -5010,6 +5018,87 @@ mod tests {
             proc_icd_ms: 0,
             proc_ready_micros: 0,
         }
+    }
+
+    #[test]
+    fn peer_reveal_restores_remaining_auras_after_create() {
+        use codec::update_mask::idx;
+        use wow_world_messages::vanilla::{Object, UpdateMask, VisibleItemIndex};
+
+        for mut entity in [player_entity(), creature_entity()] {
+            entity.unit_bytes_0 = 0x0000_0101;
+            let mut remaining = aura(entity.guid, 0xA1, 1, 10, 0, i64::MAX);
+            remaining.spell_id = 1459;
+            remaining.level = 40;
+            remaining.flags = 9;
+            let index = world_view::AuraIndex::default();
+            index.upsert(0, &remaining);
+            let mut other_shard = remaining.clone();
+            other_shard.spell_id = 9999;
+            index.upsert(1, &other_shard);
+
+            let mut stealth = aura(entity.guid, A_STEALTH, 0, 0, 0, i64::MAX);
+            stealth.id = 2;
+            stealth.slot = 0;
+            let mut second_stealth = stealth.clone();
+            second_stealth.id = 3;
+            second_stealth.slot = 1;
+            index.upsert(0, &stealth);
+            index.upsert(0, &second_stealth);
+            index.remove(0, &stealth);
+            assert_eq!(index.stealth_count(0, entity.guid), 1);
+            index.remove(0, &second_stealth);
+            assert_eq!(index.stealth_count(0, entity.guid), 0);
+
+            let view = entity_view(entity, 0);
+            let out =
+                peer_create_outbound(&view, &[(0, 700, 1337)], &index.on_target(0, view.guid))
+                    .unwrap();
+            let [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)), Outbound::Raw { opcode, body }] =
+                out.as_slice()
+            else {
+                panic!("a peer needs CREATE followed by its remaining aura array");
+            };
+            let [Object::CreateObject2 { guid3, mask2, .. }] = create.objects.as_slice() else {
+                panic!("the first packet must create the peer");
+            };
+            assert_eq!(guid3.guid(), view.guid);
+            if let UpdateMask::Player(player) = mask2 {
+                assert_eq!(
+                    player
+                        .player_visible_item(VisibleItemIndex::Index0)
+                        .unwrap()
+                        .item,
+                    1337,
+                );
+            }
+            assert_eq!(*opcode, 0x00A9);
+            let decoded = lyracore_shared::values_mask::parse_values_updates(body);
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(decoded[0].guid, view.guid);
+            let fields: std::collections::HashMap<_, _> =
+                decoded[0].fields.iter().copied().collect();
+            for slot in 0..idx::AURA_SLOTS {
+                assert_eq!(
+                    fields[&(idx::UNIT_AURA + slot)],
+                    if slot == 3 { 1459 } else { 0 }
+                );
+            }
+            assert_eq!(fields[&idx::UNIT_AURAFLAGS], 0x9000);
+            assert_eq!(fields[&idx::UNIT_AURALEVELS], 0x2800_0000);
+            assert!(!fields.contains_key(&idx::OBJECT_TYPE));
+        }
+    }
+
+    #[test]
+    fn peer_create_without_auras_needs_no_followup() {
+        let mut entity = player_entity();
+        entity.unit_bytes_0 = 0x0000_0101;
+        let out = peer_create_outbound(&entity_view(entity, 0), &[], &[]).unwrap();
+        assert!(matches!(
+            out.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_))]
+        ));
     }
 
     #[test]
