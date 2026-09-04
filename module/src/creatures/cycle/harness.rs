@@ -6081,8 +6081,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
             concat!(
                 "{ fn panicked(&self, scope: &TickScope) -> Vec<Panicked> { let entities = ",
                 "self.ctx.db.game_world_entity(); let melee = self.ctx.db.game_melee_attack(); ",
-                "self.ctx .db .game_aura() .iter() .filter(|a| a.eff_kind == ",
-                "crate::spell::A_CONTROL && a.eff_p0 == crate::spell::M_FEAR) .filter_map(|a| { ",
+                "self.ctx .db .game_aura() .by_kind_param() .filter((crate::spell::A_CONTROL, ",
+                "crate::spell::M_FEAR)) .filter_map(|a| { ",
                 "let c = tick::movable_creature(self.ctx, a.target_guid, scope)?; let source = ",
                 "crate::spell::fear_source(self.ctx, c.guid)?; let at = ",
                 "entities.guid().find(source).or_else(|| { melee .attacker_guid() .find(c.guid) ",
