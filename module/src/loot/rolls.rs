@@ -827,15 +827,43 @@ pub(crate) fn apply_master_give(
             &format!("master-give target {target_guid} is not eligible"),
         ));
     }
-    crate::items::grant_item(ctx, target_guid, row.item_entry, row.count.max(1))?;
+    crate::helpers::live_entity(ctx, target_guid).map_err(|_| {
+        refused(
+            LootRefusal::RecipientUnavailable,
+            &format!("master-loot recipient {target_guid} is not in the world"),
+        )
+    })?;
+    crate::items::grant_item(ctx, target_guid, row.item_entry, row.count.max(1))
+        .map_err(master_delivery_error)?;
     loot.id().delete(row.id);
     super::refresh_lootable(ctx, corpse_guid);
     Ok(())
 }
 
+/// Convert the stable capacity refusal. Missing templates and other grant failures remain errors.
+fn master_delivery_error(error: String) -> String {
+    if error == lyracore_shared::mail::INVENTORY_FULL {
+        refused(LootRefusal::RecipientInventoryFull, &error)
+    } else {
+        error
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn master_delivery_classifies_only_the_stable_capacity_refusal() {
+        assert_eq!(
+            master_delivery_error(lyracore_shared::mail::INVENTORY_FULL.to_string()),
+            LootRefusal::RecipientInventoryFull.as_tag()
+        );
+        assert_eq!(
+            master_delivery_error("no such item 123".to_string()),
+            "no such item 123"
+        );
+    }
 
     /// `group_loot_decision_for_row` — the threshold-split matrix: FFA never restricts; ROUND_ROBIN
     /// always designates regardless of quality; GROUP splits on the threshold (below → designate,

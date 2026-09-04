@@ -70,8 +70,8 @@ pub(crate) enum LootWindowRefusal {
     Unanswered,
 }
 
-// Module cores outside the loot family still refuse with untagged prose, so an untyped Rejection
-// lands on `Unanswered` rather than ending the session.
+// Only recognized Module tags reach this conversion. The Coordinator maps untagged legacy
+// GameObject and skinning refusals to `Unanswered` and propagates strict-core failures.
 impl From<LootRefusal> for LootWindowRefusal {
     fn from(refusal: LootRefusal) -> Self {
         match refusal {
@@ -81,7 +81,9 @@ impl From<LootRefusal> for LootWindowRefusal {
             | LootRefusal::LooterUnavailable
             | LootRefusal::NothingToLoot
             | LootRefusal::RollUnavailable
-            | LootRefusal::NotMasterLooter => Self::Unanswered,
+            | LootRefusal::NotMasterLooter
+            | LootRefusal::RecipientUnavailable
+            | LootRefusal::RecipientInventoryFull => Self::Unanswered,
         }
     }
 }
@@ -1165,7 +1167,9 @@ mod tests {
             | LootRefusal::LooterUnavailable
             | LootRefusal::NothingToLoot
             | LootRefusal::RollUnavailable
-            | LootRefusal::NotMasterLooter => None,
+            | LootRefusal::NotMasterLooter
+            | LootRefusal::RecipientUnavailable
+            | LootRefusal::RecipientInventoryFull => None,
         };
         let open_window = OpenLootState {
             target_guid: Some(60),

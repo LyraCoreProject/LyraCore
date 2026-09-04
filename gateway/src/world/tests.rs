@@ -397,6 +397,10 @@ struct InMemoryStore {
     items_looted: std::sync::Mutex<Vec<(u64, u8)>>,
     /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
     skinned: std::sync::Mutex<Vec<u64>>,
+    /// Typed legacy skinning refusal returned by the empty-loot fallback.
+    skinning_refusal: Option<LootWindowRefusal>,
+    /// Infrastructure failure returned by the empty-loot skinning fallback.
+    skinning_failure: Option<String>,
     /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
     bought_back: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
@@ -3245,10 +3249,11 @@ impl LootWindowStore for InMemoryStore {
         _actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        if self.trade_error.is_some() {
-            return Ok(LootWindowRequestStatus::Refused(
-                LootWindowRefusal::Unanswered,
-            ));
+        if let Some(error) = &self.skinning_failure {
+            return Err(anyhow!(error.clone()));
+        }
+        if let Some(refusal) = self.skinning_refusal {
+            return Ok(LootWindowRequestStatus::Refused(refusal));
         }
         self.skinned.lock().unwrap().push(target_guid);
         Ok(LootWindowRequestStatus::Applied)
@@ -7019,6 +7024,51 @@ fn loot_with_a_zero_player_guid_is_handled_without_panicking() {
 }
 
 #[test]
+fn skinning_refusal_keeps_the_world_session_alive() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        skinning_refusal: Some(LootWindowRefusal::Unanswered),
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    for target_guid in [60, 61] {
+        CMSG_LOOT {
+            guid: Guid::new(target_guid),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+        assert_eq!(opcode, OP_LOOT_RESPONSE);
+        assert_eq!(&body[0..8], &target_guid.to_le_bytes());
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert!(store.skinned.lock().unwrap().is_empty());
+}
+
+#[test]
+fn skinning_infrastructure_failure_ends_the_world_session() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        skinning_failure: Some("gw_skin reducer timed out after 10s".to_string()),
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
+
+    CMSG_LOOT {
+        guid: Guid::new(60),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    assert!(
+        server.join().is_err(),
+        "a skinning timeout must end the World Session"
+    );
+}
+
+#[test]
 fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
     // CMSG_LOOT arms the open-loot state and replies the RAW loot window (guid + money in the body);
     // CMSG_LOOT_MONEY (which carries NO guid) must then hit the TRACKED corpse. A
@@ -7240,28 +7290,34 @@ fn loot_roll_rejection_is_logged_and_ignored_not_session_fatal() {
 }
 
 #[test]
-fn loot_master_give_refusal_keeps_the_world_session_alive() {
-    let mut s = quest_store();
-    s.loot_action_refusal = Some(LootRefusal::NotMasterLooter);
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
-    CMSG_LOOT_MASTER_GIVE {
-        loot: Guid::new(60),
-        slot_id: 3,
-        player: Guid::new(9),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
-    CMSG_LOOT {
-        guid: Guid::new(61),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
+fn loot_master_give_refusals_keep_the_world_session_alive() {
+    for refusal in [
+        LootRefusal::NotMasterLooter,
+        LootRefusal::RecipientUnavailable,
+        LootRefusal::RecipientInventoryFull,
+    ] {
+        let mut s = quest_store();
+        s.loot_action_refusal = Some(refusal);
+        let store = std::sync::Arc::new(s);
+        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+        CMSG_LOOT_MASTER_GIVE {
+            loot: Guid::new(60),
+            slot_id: 3,
+            player: Guid::new(9),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        CMSG_LOOT {
+            guid: Guid::new(61),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
 
-    let (op, _) = read_raw_frame(&mut client, &mut c_dec);
-    assert_eq!(op, OP_LOOT_RESPONSE);
-    drop(client);
-    server.join().unwrap();
+        let (op, _) = read_raw_frame(&mut client, &mut c_dec);
+        assert_eq!(op, OP_LOOT_RESPONSE, "{refusal:?}");
+        drop(client);
+        server.join().unwrap();
+    }
 }
 
 #[test]

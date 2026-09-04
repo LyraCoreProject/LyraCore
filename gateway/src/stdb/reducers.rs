@@ -3447,7 +3447,12 @@ mod loot_reducer_tests {
 
     #[test]
     fn loot_action_status_keeps_unknown_results_as_errors() {
-        for refusal in [LootRefusal::RollUnavailable, LootRefusal::NotMasterLooter] {
+        for refusal in [
+            LootRefusal::RollUnavailable,
+            LootRefusal::NotMasterLooter,
+            LootRefusal::RecipientUnavailable,
+            LootRefusal::RecipientInventoryFull,
+        ] {
             assert_eq!(
                 loot_action_status(rejected(refusal.as_tag())).unwrap(),
                 LootActionStatus::Refused(refusal)

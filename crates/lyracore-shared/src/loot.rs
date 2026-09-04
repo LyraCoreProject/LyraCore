@@ -18,10 +18,14 @@ pub enum LootRefusal {
     RollUnavailable,
     /// The Actor does not hold the master-looter right on that row.
     NotMasterLooter,
+    /// The master-loot recipient is no longer in the world.
+    RecipientUnavailable,
+    /// The master-loot recipient has no room for the item.
+    RecipientInventoryFull,
 }
 
 impl LootRefusal {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::LootTagIneligible,
         Self::OutOfRange,
         Self::NoLootSource,
@@ -29,6 +33,8 @@ impl LootRefusal {
         Self::NothingToLoot,
         Self::RollUnavailable,
         Self::NotMasterLooter,
+        Self::RecipientUnavailable,
+        Self::RecipientInventoryFull,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -40,6 +46,8 @@ impl LootRefusal {
             Self::NothingToLoot => "loot:nothing_to_loot",
             Self::RollUnavailable => "loot:roll_unavailable",
             Self::NotMasterLooter => "loot:not_master_looter",
+            Self::RecipientUnavailable => "loot:recipient_unavailable",
+            Self::RecipientInventoryFull => "loot:recipient_inventory_full",
         }
     }
 
