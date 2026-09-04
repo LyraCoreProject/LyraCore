@@ -14,6 +14,7 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     let wasm = build_module_bytes();
     let standalone = Standalone::start("typed-taxi-contracts");
     standalone.publish_module_bytes(&wasm);
+    assert_loot_boundary_failure(&standalone, ACTOR, "loot:boundary_operator_rejected");
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_spawn_player_entity", &[ACTOR]);
     standalone.assert_sql(
@@ -26,11 +27,11 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     for (reducer, args, tag) in taxi_cases() {
         assert_refusal(&standalone, reducer, args, tag);
     }
+    assert_loot_boundary_failure(&standalone, MISSING_ACTOR, "loot:boundary_missing_actor");
 
     for (reducer, args) in [
         ("gw_trainer_buy", &[MISSING_ACTOR, "0", "0"][..]),
         ("gw_use_item", &[MISSING_ACTOR, "0"][..]),
-        ("gw_take_loot", &[MISSING_ACTOR, "0", "0"][..]),
         ("gw_group_leave", &[MISSING_ACTOR][..]),
         ("gw_add_friend", &[MISSING_ACTOR, "2"][..]),
     ] {
@@ -123,6 +124,18 @@ fn taxi_cases() -> Vec<(&'static str, &'static [&'static str], &'static str)> {
         ("gw_add_ignore", &[ACTOR, "2"], "social:actor_unavailable"),
         ("gw_del_ignore", &[ACTOR, "2"], "social:actor_unavailable"),
     ]
+}
+
+fn assert_loot_boundary_failure(standalone: &Standalone, actor: &str, tag: &str) {
+    for (reducer, args, refusal) in taxi_cases() {
+        if !refusal.starts_with("loot:") {
+            continue;
+        }
+        let mut args = args.to_vec();
+        args[0] = actor;
+        let text = failed_text(reducer, standalone.call(reducer, &args));
+        assert!(text.contains(tag), "{reducer} did not return {tag}: {text}");
+    }
 }
 
 fn assert_refusal(standalone: &Standalone, reducer: &str, args: &[&str], tag: &str) {
