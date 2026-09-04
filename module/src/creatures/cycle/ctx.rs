@@ -1011,8 +1011,8 @@ impl PetSink for CtxWorld<'_> {
 }
 
 impl CreatureWorld for CtxWorld<'_> {
-    fn awake_creatures(&self, scope: &TickScope) -> TickSweep {
-        tick::active_cell_creatures(self.ctx, scope)
+    fn awake_creatures(&self, scope: &TickScope, sense: bool) -> TickSweep {
+        tick::active_cell_creatures(self.ctx, scope, sense)
     }
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)> {
         vec![

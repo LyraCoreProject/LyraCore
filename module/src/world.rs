@@ -108,7 +108,10 @@ pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instan
     // `entity_by_owner` is the auth prologue of ~77 player reducer call sites; without this it was a
     // full table scan per transaction (perf catalog 1.2). `owner_identity` never changes for a live
     // row, so maintenance is insert/delete-only.
-    index(accessor = by_owner, btree(columns = [owner_identity]))
+    index(accessor = by_owner, btree(columns = [owner_identity])),
+    // Character rows have protocol entry 0. The Creature cycle uses this as a sparse seed, then keeps
+    // the authoritative PLAYER-bit check so additional type-mask bits remain valid.
+    index(accessor = by_entry, btree(columns = [entry]))
 )]
 pub struct WorldEntity {
     #[primary_key]
