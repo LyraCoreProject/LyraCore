@@ -1,11 +1,12 @@
 use super::handlers::{
     AuctionActionStore, AuctionEntity, AuctionInteraction, CastStore, DuelActionStore,
-    ItemActionStore, LootWindowRequestStatus, LootWindowStore, MeleeActionStore, QuestActionStore,
-    TaxiActionStore, VendorActionStore, WeatherStore,
+    ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
+    QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::*;
 use crate::read_deadline::{DeadlineClock, PreAuthDeadline};
 use lyracore_shared::item::ItemRefusal;
+use lyracore_shared::loot::LootRefusal;
 use std::cell::Cell;
 use std::io::Cursor;
 use std::os::unix::net::UnixStream;
@@ -396,6 +397,10 @@ struct InMemoryStore {
     items_looted: std::sync::Mutex<Vec<(u64, u8)>>,
     /// Recorded `skin_corpse` targets (the empty-loot-window skinning fallback).
     skinned: std::sync::Mutex<Vec<u64>>,
+    /// Typed legacy skinning refusal returned by the empty-loot fallback.
+    skinning_refusal: Option<LootWindowRefusal>,
+    /// Infrastructure failure returned by the empty-loot skinning fallback.
+    skinning_failure: Option<String>,
     /// Recorded `vendor_buyback` calls: (vendor_guid, slot) — pins the 69→0 slot mapping.
     bought_back: std::sync::Mutex<Vec<(u64, u8)>>,
     /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
@@ -464,6 +469,10 @@ struct InMemoryStore {
     loot_rolls: std::sync::Mutex<Vec<(u64, u32, u8)>>,
     /// Recorded `loot_master_give` calls: (corpse_guid, loot_slot, target_guid).
     loot_master_gives: std::sync::Mutex<Vec<(u64, u8, u64)>>,
+    /// Typed gameplay Refusal returned by loot-roll and master-loot action tests.
+    loot_action_refusal: Option<LootRefusal>,
+    /// Infrastructure failure returned by loot-roll and master-loot action tests.
+    loot_action_failure: Option<String>,
     /// Recorded `use_item` slots.
     used_items: std::sync::Mutex<Vec<u8>>,
     /// Recorded `player_login` call count — the WORLDPORT_ACK test distinguishes the
@@ -2518,15 +2527,18 @@ impl WorldStore for InMemoryStore {
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+    ) -> Result<LootActionStatus> {
+        if let Some(failure) = &self.loot_action_failure {
+            return Err(anyhow!(failure.clone()));
+        }
+        if let Some(refusal) = self.loot_action_refusal {
+            return Ok(LootActionStatus::Refused(refusal));
         }
         self.loot_rolls
             .lock()
             .unwrap()
             .push((corpse_guid, loot_slot, vote));
-        Ok(())
+        Ok(LootActionStatus::Applied)
     }
     fn loot_master_give(
         &self,
@@ -2535,15 +2547,18 @@ impl WorldStore for InMemoryStore {
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
-    ) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+    ) -> Result<LootActionStatus> {
+        if let Some(failure) = &self.loot_action_failure {
+            return Err(anyhow!(failure.clone()));
+        }
+        if let Some(refusal) = self.loot_action_refusal {
+            return Ok(LootActionStatus::Refused(refusal));
         }
         self.loot_master_gives
             .lock()
             .unwrap()
             .push((corpse_guid, loot_slot, target_guid));
-        Ok(())
+        Ok(LootActionStatus::Applied)
     }
 
     // --- Realm-wide loot rolls ---
@@ -2575,6 +2590,31 @@ impl WorldStore for InMemoryStore {
             return Err(anyhow!("{e}"));
         }
         Ok(())
+    }
+
+    fn realm_loot_vote(
+        &self,
+        corpse_guid: u64,
+        slot: u8,
+        actor_guid: u64,
+        vote: u8,
+    ) -> Result<LootActionStatus> {
+        self.realm_loot_op(
+            lyracore_shared::loot_roll::loot_op::VOTE,
+            corpse_guid,
+            slot,
+            0,
+            actor_guid,
+            vote,
+            0,
+            Vec::new(),
+        )?;
+        if let Some(failure) = &self.loot_action_failure {
+            return Err(anyhow!(failure.clone()));
+        }
+        Ok(self
+            .loot_action_refusal
+            .map_or(LootActionStatus::Applied, LootActionStatus::Refused))
     }
 
     fn pending_local_rolls(&self) -> Result<Vec<super::loot::PendingLootRoll>> {
@@ -3209,8 +3249,11 @@ impl LootWindowStore for InMemoryStore {
         _actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        if let Some(error) = &self.trade_error {
-            return Ok(LootWindowRequestStatus::Refused(anyhow!(error.clone())));
+        if let Some(error) = &self.skinning_failure {
+            return Err(anyhow!(error.clone()));
+        }
+        if let Some(refusal) = self.skinning_refusal {
+            return Ok(LootWindowRequestStatus::Refused(refusal));
         }
         self.skinned.lock().unwrap().push(target_guid);
         Ok(LootWindowRequestStatus::Applied)
@@ -6981,6 +7024,51 @@ fn loot_with_a_zero_player_guid_is_handled_without_panicking() {
 }
 
 #[test]
+fn skinning_refusal_keeps_the_world_session_alive() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        skinning_refusal: Some(LootWindowRefusal::Unanswered),
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    for target_guid in [60, 61] {
+        CMSG_LOOT {
+            guid: Guid::new(target_guid),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
+        assert_eq!(opcode, OP_LOOT_RESPONSE);
+        assert_eq!(&body[0..8], &target_guid.to_le_bytes());
+    }
+
+    drop(client);
+    server.join().unwrap();
+    assert!(store.skinned.lock().unwrap().is_empty());
+}
+
+#[test]
+fn skinning_infrastructure_failure_ends_the_world_session() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        skinning_failure: Some("gw_skin reducer timed out after 10s".to_string()),
+        ..quest_store()
+    });
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
+
+    CMSG_LOOT {
+        guid: Guid::new(60),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    assert!(
+        server.join().is_err(),
+        "a skinning timeout must end the World Session"
+    );
+}
+
+#[test]
 fn loot_opens_the_window_and_loot_money_drives_the_tracked_guid() {
     // CMSG_LOOT arms the open-loot state and replies the RAW loot window (guid + money in the body);
     // CMSG_LOOT_MONEY (which carries NO guid) must then hit the TRACKED corpse. A
@@ -7176,7 +7264,7 @@ fn loot_roll_rejection_is_logged_and_ignored_not_session_fatal() {
     // A rejection (no roll open / already voted / not eligible) must not tear the connection down —
     // the SAME session keeps working afterward (mirrors take_loot's per-action ignore discipline).
     let mut s = quest_store();
-    s.trade_error = Some("no roll open on that item".to_string());
+    s.loot_action_refusal = Some(LootRefusal::RollUnavailable);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_LOOT_ROLL {
@@ -7199,6 +7287,79 @@ fn loot_roll_rejection_is_logged_and_ignored_not_session_fatal() {
     );
     drop(client);
     server.join().unwrap();
+}
+
+#[test]
+fn loot_master_give_refusals_keep_the_world_session_alive() {
+    for refusal in [
+        LootRefusal::NotMasterLooter,
+        LootRefusal::RecipientUnavailable,
+        LootRefusal::RecipientInventoryFull,
+    ] {
+        let mut s = quest_store();
+        s.loot_action_refusal = Some(refusal);
+        let store = std::sync::Arc::new(s);
+        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+        CMSG_LOOT_MASTER_GIVE {
+            loot: Guid::new(60),
+            slot_id: 3,
+            player: Guid::new(9),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        CMSG_LOOT {
+            guid: Guid::new(61),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+
+        let (op, _) = read_raw_frame(&mut client, &mut c_dec);
+        assert_eq!(op, OP_LOOT_RESPONSE, "{refusal:?}");
+        drop(client);
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn loot_roll_timeout_ends_the_world_session() {
+    let mut s = quest_store();
+    s.loot_action_failure = Some("gw_loot_roll reducer timed out after 10s".to_string());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
+    CMSG_LOOT_ROLL {
+        item: Guid::new(60),
+        item_slot: 2,
+        vote: RollVote::Greed,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    assert!(
+        server.join().is_err(),
+        "an unknown vote result must end the World Session"
+    );
+}
+
+#[test]
+fn loot_master_give_transport_failure_ends_the_world_session() {
+    let mut s = quest_store();
+    s.loot_action_failure = Some("gw_loot_master_give reducer transport disconnected".to_string());
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, _c_dec, server) = enter_world(store, 1);
+    CMSG_LOOT_MASTER_GIVE {
+        loot: Guid::new(60),
+        slot_id: 3,
+        player: Guid::new(9),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    drop(client);
+
+    assert!(
+        server.join().is_err(),
+        "an unknown master-loot result must end the World Session"
+    );
 }
 
 fn loot_item_bytes(body: &[u8], index: usize) -> (u8, u32, u32, u32) {

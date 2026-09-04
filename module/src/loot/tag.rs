@@ -9,6 +9,8 @@ use std::collections::BTreeSet;
 
 use spacetimedb::{table, ReducerContext, Table};
 
+use lyracore_shared::loot::LootRefusal;
+
 use crate::game_world_entity;
 
 use super::game_corpse_loot_eligible;
@@ -264,14 +266,6 @@ pub(crate) fn corpse_eligible_recipients(ctx: &ReducerContext, corpse_guid: u64)
         .collect()
 }
 
-/// Stable classifier for a Loot Tag Gate Refusal. The detail keeps both durable identities for
-/// logs and the Gateway's protocol mapping.
-pub(crate) const LOOT_TAG_REFUSAL_CLASS: &str = "loot_tag_ineligible";
-
-pub(crate) fn loot_tag_refusal(actor_guid: u64, corpse_guid: u64) -> String {
-    format!("{LOOT_TAG_REFUSAL_CLASS}: actor_guid={actor_guid} corpse_guid={corpse_guid}")
-}
-
 pub(crate) fn corpse_eligible_for_access(recipients: &[u64], actor_guid: u64) -> bool {
     recipients.binary_search(&actor_guid).is_ok()
 }
@@ -288,9 +282,10 @@ pub(crate) fn corpse_access_gate(
     if corpse_eligible_for_access(&eligible, actor_guid) {
         return Ok(());
     }
-
-    spacetimedb::log::info!("loot tag refusal: actor_guid={actor_guid} corpse_guid={corpse_guid}");
-    Err(loot_tag_refusal(actor_guid, corpse_guid))
+    Err(super::refused(
+        LootRefusal::LootTagIneligible,
+        &format!("actor_guid={actor_guid} corpse_guid={corpse_guid}"),
+    ))
 }
 
 /// Clear a creature's live Loot Tag at combat end or despawn. Corpse and other dynamic flags stay
@@ -598,14 +593,12 @@ fn verify_corpse_loot_gates(
 
     let empty = fixture_creature_guid(11);
     insert_fixture_corpse(ctx, origin, empty, x, 0);
-    expect_loot_tag_refusal(
-        corpse_access_gate(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, empty),
+    expect_loot_tag_refusal(corpse_access_gate(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, empty))?;
+    expect_loot_tag_refusal(crate::loot::apply_loot_money(
+        ctx,
+        LOOT_TAG_FIXTURE_CHARACTER_A,
         empty,
-    )?;
-    expect_loot_tag_refusal(
-        crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, empty),
-        empty,
-    )?;
+    ))?;
 
     let party_corpse = fixture_creature_guid(12);
     insert_fixture_corpse(ctx, origin, party_corpse, x, 9);
@@ -634,7 +627,7 @@ fn verify_corpse_loot_gates(
         crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
         crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
     ] {
-        expect_loot_tag_refusal(refusal, party_corpse)?;
+        expect_loot_tag_refusal(refusal)?;
     }
     if ctx
         .db
@@ -714,14 +707,9 @@ fn insert_fixture_skinning(ctx: &ReducerContext, character_guid: u64) {
 }
 
 #[cfg(feature = "debug_reducers")]
-fn expect_loot_tag_refusal(result: Result<(), String>, corpse_guid: u64) -> Result<(), String> {
+fn expect_loot_tag_refusal(result: Result<(), String>) -> Result<(), String> {
     match result {
-        Err(reason)
-            if reason.starts_with(LOOT_TAG_REFUSAL_CLASS)
-                && reason.contains(&corpse_guid.to_string()) =>
-        {
-            Ok(())
-        }
+        Err(reason) if reason == LootRefusal::LootTagIneligible.as_tag() => Ok(()),
         Ok(()) => Err("foreign Actor passed the Loot Tag Gate".to_string()),
         Err(reason) => Err(format!("unexpected Loot Tag Refusal: {reason}")),
     }
@@ -854,13 +842,5 @@ mod tests {
         assert!(corpse_eligible_for_access(&[7], 7));
         assert!(!corpse_eligible_for_access(&[7], 8));
         assert!(corpse_eligible_for_access(&[2, 7, 11], 7));
-    }
-
-    #[test]
-    fn loot_tag_refusal_has_one_stable_class_and_both_guids() {
-        assert_eq!(
-            loot_tag_refusal(41, 99),
-            "loot_tag_ineligible: actor_guid=41 corpse_guid=99"
-        );
     }
 }

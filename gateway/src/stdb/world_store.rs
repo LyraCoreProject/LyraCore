@@ -1029,7 +1029,7 @@ impl WorldStore for Coordinator {
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
-    ) -> Result<()> {
+    ) -> Result<crate::world::LootActionStatus> {
         self.loot_roll(account_id, self_guid, corpse_guid, loot_slot, vote)
     }
 
@@ -1058,6 +1058,16 @@ impl WorldStore for Coordinator {
         )
     }
 
+    fn realm_loot_vote(
+        &self,
+        corpse_guid: u64,
+        slot: u8,
+        actor_guid: u64,
+        vote: u8,
+    ) -> Result<crate::world::LootActionStatus> {
+        self.realm_loot_vote(corpse_guid, slot, actor_guid, vote)
+    }
+
     fn pending_local_rolls(&self) -> Result<Vec<crate::world::loot::PendingLootRoll>> {
         self.pending_local_rolls()
     }
@@ -1080,7 +1090,7 @@ impl WorldStore for Coordinator {
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
-    ) -> Result<()> {
+    ) -> Result<crate::world::LootActionStatus> {
         self.loot_master_give(account_id, self_guid, corpse_guid, loot_slot, target_guid)
     }
     fn gossip_select(

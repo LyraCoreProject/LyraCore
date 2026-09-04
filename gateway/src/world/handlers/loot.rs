@@ -1,6 +1,8 @@
 //! Loot-window action dispatch plus the remaining corpse, GameObject, and group-loot handler.
 
 use super::super::*;
+use lyracore_shared::loot::LootRefusal;
+use wow_world_messages::vanilla::LootMethodError;
 
 /// Durable reads and requests needed by the loot-window lifecycle.
 pub(crate) trait LootWindowStore: Send + Sync {
@@ -43,30 +45,57 @@ pub(crate) trait LootWindowStore: Send + Sync {
     ) -> Result<LootWindowRequestStatus>;
 }
 
-/// The durable adapter distinguishes an expected gameplay refusal from a completed request.
+/// How the Module answered a loot Durable Request. A Refusal is an outcome; a timeout or transport
+/// failure stays an error and ends the session.
 pub(crate) enum LootWindowRequestStatus {
     Applied,
-    LootTagIneligible,
-    Refused(anyhow::Error),
+    Refused(LootWindowRefusal),
 }
 
-fn coordinator_request_status(result: Result<()>) -> Result<LootWindowRequestStatus> {
-    match result {
-        Ok(()) => Ok(LootWindowRequestStatus::Applied),
-        Err(error) if is_loot_tag_refusal(&error) => Ok(LootWindowRequestStatus::LootTagIneligible),
-        Err(error) if crate::stdb::is_reducer_refusal(&error) => {
-            Ok(LootWindowRequestStatus::Refused(error))
+/// How the Module answered a Loot Roll or master-loot Durable Request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LootActionStatus {
+    Applied,
+    Refused(LootRefusal),
+}
+
+/// A loot Refusal as the vanilla client can hear it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LootWindowRefusal {
+    /// The Actor is not in the Loot Source's Loot Tag eligibility set.
+    LootTagIneligible,
+    /// The Loot Source is on another map, in another instance, or beyond loot range.
+    OutOfRange,
+    /// A Refusal vanilla has no loot-window code for. It is logged at the Store seam and dropped.
+    Unanswered,
+}
+
+// Only recognized Module tags reach this conversion. The Coordinator maps untagged legacy
+// GameObject and skinning refusals to `Unanswered` and propagates strict-core failures.
+impl From<LootRefusal> for LootWindowRefusal {
+    fn from(refusal: LootRefusal) -> Self {
+        match refusal {
+            LootRefusal::LootTagIneligible => Self::LootTagIneligible,
+            LootRefusal::OutOfRange => Self::OutOfRange,
+            LootRefusal::NoLootSource
+            | LootRefusal::LooterUnavailable
+            | LootRefusal::NothingToLoot
+            | LootRefusal::RollUnavailable
+            | LootRefusal::NotMasterLooter
+            | LootRefusal::RecipientUnavailable
+            | LootRefusal::RecipientInventoryFull => Self::Unanswered,
         }
-        Err(error) => Err(error),
     }
 }
 
-fn is_loot_tag_refusal(error: &anyhow::Error) -> bool {
-    crate::stdb::reducer_refusal_reason(error).is_some_and(is_loot_tag_refusal_reason)
-}
-
-fn is_loot_tag_refusal_reason(reason: &str) -> bool {
-    reason.starts_with("loot_tag_ineligible:")
+impl LootWindowRefusal {
+    fn loot_error(self) -> Option<LootMethodError> {
+        match self {
+            Self::LootTagIneligible => Some(LootMethodError::DidntKill),
+            Self::OutOfRange => Some(LootMethodError::TooFar),
+            Self::Unanswered => None,
+        }
+    }
 }
 
 impl LootWindowStore for crate::stdb::Coordinator {
@@ -88,12 +117,7 @@ impl LootWindowStore for crate::stdb::Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        coordinator_request_status(crate::stdb::Coordinator::use_gameobject(
-            self,
-            account_id,
-            actor_guid,
-            target_guid,
-        ))
+        crate::stdb::Coordinator::use_gameobject(self, account_id, actor_guid, target_guid)
     }
 
     fn open_creature_loot(
@@ -102,12 +126,7 @@ impl LootWindowStore for crate::stdb::Coordinator {
         actor_guid: u64,
         corpse_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        coordinator_request_status(crate::stdb::Coordinator::open_creature_loot(
-            self,
-            account_id,
-            actor_guid,
-            corpse_guid,
-        ))
+        crate::stdb::Coordinator::open_creature_loot(self, account_id, actor_guid, corpse_guid)
     }
 
     fn skin_corpse(
@@ -116,12 +135,7 @@ impl LootWindowStore for crate::stdb::Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        coordinator_request_status(crate::stdb::Coordinator::skin_corpse(
-            self,
-            account_id,
-            actor_guid,
-            target_guid,
-        ))
+        crate::stdb::Coordinator::skin_corpse(self, account_id, actor_guid, target_guid)
     }
 
     fn loot_money(
@@ -130,12 +144,7 @@ impl LootWindowStore for crate::stdb::Coordinator {
         actor_guid: u64,
         target_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        coordinator_request_status(crate::stdb::Coordinator::loot_money(
-            self,
-            account_id,
-            actor_guid,
-            target_guid,
-        ))
+        crate::stdb::Coordinator::loot_money(self, account_id, actor_guid, target_guid)
     }
 
     fn take_loot(
@@ -145,13 +154,7 @@ impl LootWindowStore for crate::stdb::Coordinator {
         target_guid: u64,
         loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
-        coordinator_request_status(crate::stdb::Coordinator::take_loot(
-            self,
-            account_id,
-            actor_guid,
-            target_guid,
-            loot_slot,
-        ))
+        crate::stdb::Coordinator::take_loot(self, account_id, actor_guid, target_guid, loot_slot)
     }
 }
 
@@ -185,10 +188,36 @@ pub(crate) enum LootWindowDurableRequest {
     TakeItem { target_guid: u64, loot_slot: u8 },
 }
 
-fn loot_tag_ineligible_outbound(corpse_guid: u64) -> Vec<Outbound> {
-    vec![Outbound::One(ServerOpcodeMessage::SMSG_LOOT_RESPONSE(
-        Box::new(codec::build_loot_didnt_kill_response(corpse_guid)),
-    ))]
+/// The client traffic a loot Refusal earns. An unanswered Refusal stays silent.
+fn refusal_outbound(refusal: LootWindowRefusal, target_guid: u64) -> Vec<Outbound> {
+    refusal
+        .loot_error()
+        .map(|loot_error| {
+            Outbound::One(ServerOpcodeMessage::SMSG_LOOT_RESPONSE(Box::new(
+                codec::build_loot_error_response(target_guid, loot_error),
+            )))
+        })
+        .into_iter()
+        .collect()
+}
+
+/// An answered Refusal invalidates the open Loot Window; an unanswered one leaves it alone.
+fn refusal_transition(
+    refusal: LootWindowRefusal,
+    current_state: OpenLootState,
+    target_guid: u64,
+) -> (OpenLootState, Vec<Outbound>) {
+    let next_state = match refusal.loot_error() {
+        Some(_) => OpenLootState::default(),
+        None => current_state,
+    };
+    (next_state, refusal_outbound(refusal, target_guid))
+}
+
+fn finish_loot_action(status: LootActionStatus) {
+    if let LootActionStatus::Refused(refusal) = status {
+        log::debug!("world: loot action refused: {}", refusal.as_tag());
+    }
 }
 
 /// A handled loot request returns all session state and client traffic to apply in order.
@@ -219,30 +248,16 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
             };
             let target_guid = request.guid.guid();
             let durable_request = Some(LootWindowDurableRequest::UseGameObject { target_guid });
-            match store.use_gameobject(player.account_id, actor_guid, target_guid)? {
-                LootWindowRequestStatus::Applied => {}
-                LootWindowRequestStatus::LootTagIneligible => {
-                    log::debug!(
-                        "world: use_gameobject returned an inapplicable loot tag refusal (account {})",
-                        player.account_id
-                    );
-                    return Ok(LootWindowOutcome::Handled {
-                        next_state: current_state,
-                        durable_request,
-                        outbound: Vec::new(),
-                    });
-                }
-                LootWindowRequestStatus::Refused(error) => {
-                    log::debug!(
-                        "world: use_gameobject rejected (account {}): {error}",
-                        player.account_id
-                    );
-                    return Ok(LootWindowOutcome::Handled {
-                        next_state: current_state,
-                        durable_request,
-                        outbound: Vec::new(),
-                    });
-                }
+            if let LootWindowRequestStatus::Refused(refusal) =
+                store.use_gameobject(player.account_id, actor_guid, target_guid)?
+            {
+                let (next_state, outbound) =
+                    refusal_transition(refusal, current_state, target_guid);
+                return Ok(LootWindowOutcome::Handled {
+                    next_state,
+                    durable_request,
+                    outbound,
+                });
             }
             let items = store.loot_target_items(target_guid, actor_guid)?;
             if items.is_empty() {
@@ -271,40 +286,22 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
             };
             let target_guid = request.guid.guid();
             let open_request = LootWindowDurableRequest::OpenCreature { target_guid };
-            match store.open_creature_loot(player.account_id, viewer_guid, target_guid)? {
-                LootWindowRequestStatus::Applied => {}
-                LootWindowRequestStatus::LootTagIneligible => {
-                    return Ok(LootWindowOutcome::Handled {
-                        next_state: OpenLootState::default(),
-                        durable_request: Some(open_request),
-                        outbound: loot_tag_ineligible_outbound(target_guid),
-                    });
-                }
-                LootWindowRequestStatus::Refused(error) => {
-                    log::debug!(
-                        "world: open_creature_loot Refusal (account {}): {error}",
-                        player.account_id
-                    );
-                    return Ok(LootWindowOutcome::Handled {
-                        next_state: current_state,
-                        durable_request: Some(open_request),
-                        outbound: Vec::new(),
-                    });
-                }
+            if let LootWindowRequestStatus::Refused(refusal) =
+                store.open_creature_loot(player.account_id, viewer_guid, target_guid)?
+            {
+                let (next_state, outbound) =
+                    refusal_transition(refusal, current_state, target_guid);
+                return Ok(LootWindowOutcome::Handled {
+                    next_state,
+                    durable_request: Some(open_request),
+                    outbound,
+                });
             }
             let money = store.loot_target_money(target_guid)?;
             let items = store.loot_target_items(target_guid, viewer_guid)?;
             let durable_request = if items.is_empty() && money == 0 {
-                match store.skin_corpse(player.account_id, viewer_guid, target_guid)? {
-                    LootWindowRequestStatus::Applied => {}
-                    LootWindowRequestStatus::LootTagIneligible => {}
-                    LootWindowRequestStatus::Refused(error) => {
-                        log::debug!(
-                            "world: skin_corpse noop (account {}): {error}",
-                            player.account_id
-                        );
-                    }
-                }
+                // Skinning an empty corpse is opportunistic: a Refusal still shows the empty window.
+                store.skin_corpse(player.account_id, viewer_guid, target_guid)?;
                 Some(LootWindowDurableRequest::SkinCreature { target_guid })
             } else {
                 Some(open_request)
@@ -335,16 +332,8 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
                         current_state,
                         vec![Outbound::One(ServerOpcodeMessage::SMSG_LOOT_CLEAR_MONEY)],
                     ),
-                    LootWindowRequestStatus::LootTagIneligible => (
-                        OpenLootState::default(),
-                        loot_tag_ineligible_outbound(target_guid),
-                    ),
-                    LootWindowRequestStatus::Refused(error) => {
-                        log::debug!(
-                            "world: loot_money Refusal (account {}): {error}",
-                            player.account_id
-                        );
-                        (current_state, Vec::new())
+                    LootWindowRequestStatus::Refused(refusal) => {
+                        refusal_transition(refusal, current_state, target_guid)
                     }
                 };
             Ok(LootWindowOutcome::Handled {
@@ -379,16 +368,8 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
                         codec::build_loot_removed(request.item_slot),
                     ))],
                 ),
-                LootWindowRequestStatus::LootTagIneligible => (
-                    OpenLootState::default(),
-                    loot_tag_ineligible_outbound(target_guid),
-                ),
-                LootWindowRequestStatus::Refused(error) => {
-                    log::debug!(
-                        "world: take_loot Refusal (account {}): {error}",
-                        player.account_id
-                    );
-                    (current_state, Vec::new())
+                LootWindowRequestStatus::Refused(refusal) => {
+                    refusal_transition(refusal, current_state, target_guid)
                 }
             };
             Ok(LootWindowOutcome::Handled {
@@ -434,35 +415,25 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                 WorldState::InWorld(iw) => iw.self_guid,
                 WorldState::CharSelect => 0,
             };
-            if let Err(e) = loot::run_vote(
+            finish_loot_action(loot::run_vote(
                 store,
                 conn.account_id,
                 self_guid,
                 corpse_guid,
                 c.item_slot,
                 vote,
-            ) {
-                log::debug!(
-                    "world: loot_roll ignored (account {}): {e}",
-                    conn.account_id
-                );
-            }
+            )?);
         }
         ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(c) => {
             let corpse_guid = c.loot.guid();
             let target_guid = c.player.guid();
-            if let Err(e) = store.loot_master_give(
+            finish_loot_action(store.loot_master_give(
                 conn.account_id,
                 social::self_guid(conn).unwrap_or(0),
                 corpse_guid,
                 c.slot_id,
                 target_guid,
-            ) {
-                log::debug!(
-                    "world: loot_master_give ignored (account {}): {e}",
-                    conn.account_id
-                );
-            }
+            )?);
         }
         ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) => {
             let Some(actor_guid) = social::self_guid(conn).filter(|guid| *guid != 0) else {
@@ -482,17 +453,15 @@ pub(crate) fn handle_loot<St: WorldStore + ?Sized>(
                         send(tx, Outbound::Raw { opcode, body })?;
                     }
                 }
-                LootWindowRequestStatus::LootTagIneligible => {
-                    log::debug!(
-                        "world: use_gameobject returned an inapplicable loot tag refusal (account {})",
-                        conn.account_id
-                    );
-                }
-                LootWindowRequestStatus::Refused(error) => {
-                    log::debug!(
-                        "world: use_gameobject ignored (account {}): {error}",
-                        conn.account_id
-                    );
+                LootWindowRequestStatus::Refused(refusal) => {
+                    if refusal.loot_error().is_some() {
+                        if let WorldState::InWorld(iw) = &mut conn.state {
+                            iw.open_loot = OpenLootState::default();
+                        }
+                    }
+                    for outbound in refusal_outbound(refusal, target_guid) {
+                        send(tx, outbound)?;
+                    }
                 }
             }
         }
@@ -638,36 +607,26 @@ mod tests {
         skin_requests: Mutex<Vec<(u64, u64, u64)>>,
         money_take_requests: Mutex<Vec<(u64, u64, u64)>>,
         item_take_requests: Mutex<Vec<(u64, u64, u64, u8)>>,
-        skin_refusal: Option<String>,
+        skin_refusal: Option<LootWindowRefusal>,
         skin_fatal_error: Option<String>,
-        use_refusal: Option<String>,
+        use_refusal: Option<LootWindowRefusal>,
         use_fatal_error: Option<String>,
-        open_refusal: Option<String>,
+        open_refusal: Option<LootWindowRefusal>,
         open_fatal_error: Option<String>,
-        open_loot_tag_ineligible: bool,
-        money_take_refusal: Option<String>,
+        money_take_refusal: Option<LootWindowRefusal>,
         money_take_fatal_error: Option<String>,
-        money_take_loot_tag_ineligible: bool,
-        item_take_refusal: Option<String>,
+        item_take_refusal: Option<LootWindowRefusal>,
         item_take_fatal_error: Option<String>,
-        item_take_loot_tag_ineligible: bool,
     }
 
     fn request_status(
-        refusal: &Option<String>,
+        refusal: Option<LootWindowRefusal>,
         fatal_error: &Option<String>,
-        loot_tag_ineligible: bool,
     ) -> Result<LootWindowRequestStatus> {
-        if let Some(error) = fatal_error {
-            Err(anyhow::anyhow!(error.clone()))
-        } else if loot_tag_ineligible {
-            Ok(LootWindowRequestStatus::LootTagIneligible)
-        } else if let Some(error) = refusal {
-            Ok(LootWindowRequestStatus::Refused(anyhow::anyhow!(
-                error.clone()
-            )))
-        } else {
-            Ok(LootWindowRequestStatus::Applied)
+        match (fatal_error, refusal) {
+            (Some(error), _) => Err(anyhow::anyhow!(error.clone())),
+            (None, Some(refusal)) => Ok(LootWindowRequestStatus::Refused(refusal)),
+            (None, None) => Ok(LootWindowRequestStatus::Applied),
         }
     }
 
@@ -705,7 +664,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, target_guid));
-            request_status(&self.use_refusal, &self.use_fatal_error, false)
+            request_status(self.use_refusal, &self.use_fatal_error)
         }
 
         fn open_creature_loot(
@@ -719,11 +678,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, corpse_guid));
-            request_status(
-                &self.open_refusal,
-                &self.open_fatal_error,
-                self.open_loot_tag_ineligible,
-            )
+            request_status(self.open_refusal, &self.open_fatal_error)
         }
 
         fn skin_corpse(
@@ -736,7 +691,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, target_guid));
-            request_status(&self.skin_refusal, &self.skin_fatal_error, false)
+            request_status(self.skin_refusal, &self.skin_fatal_error)
         }
 
         fn loot_money(
@@ -749,11 +704,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((account_id, actor_guid, target_guid));
-            request_status(
-                &self.money_take_refusal,
-                &self.money_take_fatal_error,
-                self.money_take_loot_tag_ineligible,
-            )
+            request_status(self.money_take_refusal, &self.money_take_fatal_error)
         }
 
         fn take_loot(
@@ -769,11 +720,7 @@ mod tests {
                 target_guid,
                 loot_slot,
             ));
-            request_status(
-                &self.item_take_refusal,
-                &self.item_take_fatal_error,
-                self.item_take_loot_tag_ineligible,
-            )
+            request_status(self.item_take_refusal, &self.item_take_fatal_error)
         }
     }
 
@@ -796,30 +743,23 @@ mod tests {
         })
     }
 
-    fn assert_didnt_kill(outbound: &[Outbound], corpse_guid: u64) {
+    fn assert_loot_error(outbound: &[Outbound], corpse_guid: u64, expected: LootMethodError) {
         let [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_RESPONSE(response))] = outbound else {
-            panic!("expected one DIDNT_KILL loot response")
+            panic!("expected one loot error response")
         };
         assert_eq!(response.guid.guid(), corpse_guid);
-        assert!(matches!(
-            &response.loot_method,
+        assert_eq!(
+            response.loot_method,
             SMSG_LOOT_RESPONSE_LootMethod::ErrorX {
-                loot_error: LootMethodError::DidntKill,
+                loot_error: expected,
             }
-        ));
+        );
         assert_eq!(response.gold.as_int(), 0);
         assert!(response.items.is_empty());
     }
 
-    #[test]
-    fn loot_tag_refusal_class_requires_the_module_reason_prefix() {
-        assert!(is_loot_tag_refusal_reason(
-            "loot_tag_ineligible: actor_guid=7 corpse_guid=11"
-        ));
-        assert!(!is_loot_tag_refusal_reason(
-            "other refusal mentions loot_tag_ineligible: later"
-        ));
-        assert!(!is_loot_tag_refusal_reason("loot_tag_ineligible"));
+    fn assert_didnt_kill(outbound: &[Outbound], corpse_guid: u64) {
+        assert_loot_error(outbound, corpse_guid, LootMethodError::DidntKill);
     }
 
     #[test]
@@ -960,7 +900,7 @@ mod tests {
     #[test]
     fn refused_chest_use_does_not_read_loot_or_change_window_state() {
         let store = InMemoryLootWindow {
-            use_refusal: Some("out of range".into()),
+            use_refusal: Some(LootWindowRefusal::Unanswered),
             ..Default::default()
         };
         let current_state = OpenLootState {
@@ -1010,9 +950,36 @@ mod tests {
     }
 
     #[test]
+    fn missing_actor_chest_failure_propagates_without_reading_loot() {
+        let failure = lyracore_shared::loot::LootBoundaryFailure::MissingActor.as_tag();
+        let store = InMemoryLootWindow {
+            use_fatal_error: Some(failure.into()),
+            ..Default::default()
+        };
+
+        let error = dispatch_loot_window(
+            &store,
+            player(),
+            OpenLootState {
+                target_guid: Some(11),
+            },
+            open_chest(90),
+        )
+        .err()
+        .expect("missing Actor failure was handled");
+
+        assert_eq!(error.to_string(), failure);
+        assert_eq!(
+            store.operations.lock().unwrap().as_slice(),
+            &["use gameobject"]
+        );
+        assert!(store.item_reads.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn creature_open_ownership_refusal_closes_the_window_without_loot_reads() {
         let store = InMemoryLootWindow {
-            open_loot_tag_ineligible: true,
+            open_refusal: Some(LootWindowRefusal::LootTagIneligible),
             ..Default::default()
         };
 
@@ -1073,7 +1040,7 @@ mod tests {
     #[test]
     fn unrelated_creature_open_refusal_keeps_the_window_without_loot_reads() {
         let store = InMemoryLootWindow {
-            open_refusal: Some("out of range".into()),
+            open_refusal: Some(LootWindowRefusal::Unanswered),
             ..Default::default()
         };
         let current_state = OpenLootState {
@@ -1160,7 +1127,7 @@ mod tests {
     #[test]
     fn money_take_refusal_keeps_the_window_without_a_false_clear() {
         let store = InMemoryLootWindow {
-            money_take_refusal: Some("corpse has no money".into()),
+            money_take_refusal: Some(LootWindowRefusal::Unanswered),
             ..Default::default()
         };
         let current_state = OpenLootState {
@@ -1192,9 +1159,85 @@ mod tests {
     }
 
     #[test]
+    fn every_module_refusal_has_one_client_result_code() {
+        let expected = |refusal| match refusal {
+            LootRefusal::LootTagIneligible => Some(LootMethodError::DidntKill),
+            LootRefusal::OutOfRange => Some(LootMethodError::TooFar),
+            LootRefusal::NoLootSource
+            | LootRefusal::LooterUnavailable
+            | LootRefusal::NothingToLoot
+            | LootRefusal::RollUnavailable
+            | LootRefusal::NotMasterLooter
+            | LootRefusal::RecipientUnavailable
+            | LootRefusal::RecipientInventoryFull => None,
+        };
+        let open_window = OpenLootState {
+            target_guid: Some(60),
+        };
+
+        for refusal in LootRefusal::ALL {
+            let loot_error = expected(refusal);
+
+            for (message, store) in [
+                (
+                    open_creature(60),
+                    InMemoryLootWindow {
+                        open_refusal: Some(refusal.into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    open_chest(60),
+                    InMemoryLootWindow {
+                        use_refusal: Some(refusal.into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    ClientOpcodeMessage::CMSG_LOOT_MONEY,
+                    InMemoryLootWindow {
+                        money_take_refusal: Some(refusal.into()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(CMSG_AUTOSTORE_LOOT_ITEM {
+                        item_slot: 3,
+                    }),
+                    InMemoryLootWindow {
+                        item_take_refusal: Some(refusal.into()),
+                        ..Default::default()
+                    },
+                ),
+            ] {
+                let outcome = dispatch_loot_window(&store, player(), open_window, message).unwrap();
+                let LootWindowOutcome::Handled {
+                    next_state,
+                    outbound,
+                    ..
+                } = outcome
+                else {
+                    panic!("{refusal:?} passed through")
+                };
+                match loot_error {
+                    // An answered Refusal invalidates the Loot Window the client is showing.
+                    Some(loot_error) => {
+                        assert_loot_error(&outbound, 60, loot_error);
+                        assert_eq!(next_state, OpenLootState::default(), "{refusal:?}");
+                    }
+                    None => {
+                        assert!(outbound.is_empty(), "{refusal:?}");
+                        assert_eq!(next_state, open_window, "{refusal:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn money_take_ownership_refusal_closes_the_window_and_returns_didnt_kill() {
         let store = InMemoryLootWindow {
-            money_take_loot_tag_ineligible: true,
+            money_take_refusal: Some(LootWindowRefusal::LootTagIneligible),
             ..Default::default()
         };
 
@@ -1287,7 +1330,7 @@ mod tests {
     #[test]
     fn item_take_refusal_keeps_the_window_without_a_false_slot_removal() {
         let store = InMemoryLootWindow {
-            item_take_refusal: Some("inventory full".into()),
+            item_take_refusal: Some(LootWindowRefusal::Unanswered),
             ..Default::default()
         };
         let current_state = OpenLootState {
@@ -1323,7 +1366,7 @@ mod tests {
     #[test]
     fn item_take_ownership_refusal_closes_the_window_and_returns_didnt_kill() {
         let store = InMemoryLootWindow {
-            item_take_loot_tag_ineligible: true,
+            item_take_refusal: Some(LootWindowRefusal::LootTagIneligible),
             ..Default::default()
         };
 
@@ -1629,7 +1672,7 @@ mod tests {
     #[test]
     fn skinning_refusal_is_a_handled_empty_window() {
         let store = InMemoryLootWindow {
-            skin_refusal: Some("target is not skinnable".into()),
+            skin_refusal: Some(LootWindowRefusal::Unanswered),
             ..Default::default()
         };
 

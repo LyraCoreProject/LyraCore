@@ -17,6 +17,7 @@ pub mod faction;
 pub mod group;
 pub mod instance;
 pub mod item;
+pub mod loot;
 pub mod loot_roll;
 pub mod mail;
 pub mod nav;
