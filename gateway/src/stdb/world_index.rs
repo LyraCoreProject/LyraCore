@@ -479,7 +479,11 @@ impl WorldIndex {
             for cell in cells.difference(other) {
                 if let Some(guids) = entities.cell_entities.get(cell) {
                     for guid in guids {
-                        let shard = entities.entity_cell.get(guid).map(|(_, s, _)| *s).unwrap_or(0);
+                        let shard = entities
+                            .entity_cell
+                            .get(guid)
+                            .map(|(_, s, _)| *s)
+                            .unwrap_or(0);
                         out.push((*guid, shard));
                     }
                 }
@@ -909,16 +913,29 @@ mod tests {
         let b = CellKey::at(0, 0, 40, 40); // far outside a's box
         index.upsert_entity(EntityLayer::WorldEntity, 5, a, 0, 0);
         index.add_viewer(1, a);
-        assert_eq!(index_visible(&index, EntityLayer::WorldEntity, 1), HashSet::from([5]));
-        assert_eq!(index.upsert_entity(EntityLayer::WorldEntity, 5, b, 0, 0), Some(a));
+        assert_eq!(
+            index_visible(&index, EntityLayer::WorldEntity, 1),
+            HashSet::from([5])
+        );
+        assert_eq!(
+            index.upsert_entity(EntityLayer::WorldEntity, 5, b, 0, 0),
+            Some(a)
+        );
         assert!(
             index_visible(&index, EntityLayer::WorldEntity, 1).is_empty(),
             "stale cell membership"
         );
         assert_eq!(index.entity_cell(EntityLayer::WorldEntity, 5), Some(b));
-        assert_eq!(index.remove_entity(EntityLayer::WorldEntity, 5, 0), Some((b, 0)));
+        assert_eq!(
+            index.remove_entity(EntityLayer::WorldEntity, 5, 0),
+            Some((b, 0))
+        );
         assert_eq!(index.entity_cell(EntityLayer::WorldEntity, 5), None);
-        assert_eq!(index.remove_entity(EntityLayer::WorldEntity, 5, 0), None, "removal is idempotent");
+        assert_eq!(
+            index.remove_entity(EntityLayer::WorldEntity, 5, 0),
+            None,
+            "removal is idempotent"
+        );
     }
 
     #[test]
@@ -980,7 +997,13 @@ mod tests {
     fn the_aoi_off_hatch_sees_the_whole_partition_and_nothing_outside_it() {
         let index = WorldIndex::new(false);
         index.upsert_entity(EntityLayer::WorldEntity, 1, CellKey::at(0, 0, 0, 0), 0, 0);
-        index.upsert_entity(EntityLayer::WorldEntity, 2, CellKey::at(0, 0, 500, 500), 0, 0);
+        index.upsert_entity(
+            EntityLayer::WorldEntity,
+            2,
+            CellKey::at(0, 0, 500, 500),
+            0,
+            0,
+        );
         index.upsert_entity(EntityLayer::WorldEntity, 3, CellKey::at(0, 77, 0, 0), 0, 0); // another instance
         index.upsert_entity(EntityLayer::WorldEntity, 4, CellKey::at(1, 0, 0, 0), 0, 0); // another map
         index.add_viewer(1, CellKey::at(0, 0, 0, 0));

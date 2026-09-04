@@ -5541,11 +5541,11 @@ mod tests {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
         let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            compact.contains("wire_insert_live(db.game_whisper_event(),\"realm.game_whisper_event.insert\",&view,None,|v,row|whisper_appeared(v,row),);"),
+            compact.contains("wire_insert_live(db.game_whisper_event(),\"realm.game_whisper_event.insert\",&view,|v,row|whisper_appeared(v,row),);"),
             "arm_realm_private no longer relays realm-core whispers through `whisper_appeared`"
         );
         assert!(
-            compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,None,move|v,row|group_event_appeared(v,&coord,row),);"),
+            compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,move|v,row|group_event_appeared(v,&coord,row),);"),
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
@@ -6271,7 +6271,13 @@ mod tests {
     /// freeze after their first step, or never move at all. Same for the creature-leg twin.
     #[test]
     fn both_halves_of_the_motion_and_spline_relays_are_registered_286() {
-        let arm: String = decommented(top_level_fn_body_of("world_view.rs", "register_shard_callbacks")).chars().filter(|c| !c.is_whitespace()).collect();
+        let arm: String = decommented(top_level_fn_body_of(
+            "world_view.rs",
+            "register_shard_callbacks",
+        ))
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
         // #490 factored every registration through `wire_insert`/`wire_update` (world_view.rs),
         // so the literal `.on_insert(`/`.on_update(` chain off the table handle is gone from
         // `arm_shard`'s own body — what's left to scan for is the (helper, table, label) triple

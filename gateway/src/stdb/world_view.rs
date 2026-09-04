@@ -300,7 +300,6 @@ pub(crate) struct WorldView {
     /// dispatch; the order fixes the ids, so it must never be reordered after arming.
     shards: RwLock<Vec<Coordinator>>,
     next_session: AtomicU64,
-    generations: Mutex<HashMap<ShardId, Arc<Mutex<u64>>>>,
 }
 
 impl WorldView {
@@ -311,7 +310,6 @@ impl WorldView {
             viewers: RwLock::new(ViewerRegistry::default()),
             shards: RwLock::new(Vec::new()),
             next_session: AtomicU64::new(1),
-            generations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -505,55 +503,15 @@ impl WorldView {
     pub(crate) fn set_shards(&self, shards: Vec<Coordinator>) {
         *self.shards.write().unwrap() = shards;
     }
-
-    fn with_new_generation(&self, shard: ShardId, body: impl FnOnce(ShardGeneration)) {
-        let current = self
-            .generations
-            .lock()
-            .unwrap()
-            .entry(shard)
-            .or_default()
-            .clone();
-        let mut number = current.lock().unwrap_or_else(|p| p.into_inner());
-        *number += 1;
-        body(ShardGeneration {
-            current: current.clone(),
-            number: *number,
-        });
-    }
-
 }
 
-#[derive(Clone)]
-struct ShardGeneration {
-    current: Arc<Mutex<u64>>,
-    number: u64,
-}
-
-impl ShardGeneration {
-    /// The lock also waits for an old callback already in progress before snapshot replacement.
-    fn run(generation: Option<&Self>, body: impl FnOnce()) {
-        if let Some(generation) = generation {
-            let current = generation.current.lock().unwrap_or_else(|p| p.into_inner());
-            if *current != generation.number {
-                return;
-            }
-            body();
-        } else {
-            body();
-        }
-    }
-}
-
-/// Register Relays and reconcile the cache snapshot between messages on this Shard's pump.
-/// The generation lock finishes any old callback first and rejects its later callbacks.
+/// Register Relays and reconcile the snapshot between messages on this Shard's pump.
+/// Connection replacement joins the old pump before this connection becomes readable.
 pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId) -> Result<()> {
     let owner = coord.clone();
     coord.0.on_pump(move |conn| {
-        view.with_new_generation(shard, |generation| {
-            register_shard_callbacks(view.clone(), owner, shard, &conn.db, generation);
-            seed_shard_from_cache(&view, shard, &conn.db);
-        });
+        register_shard_callbacks(view.clone(), owner, shard, &conn.db);
+        seed_shard_from_cache(&view, shard, &conn.db);
     })
 }
 
@@ -562,7 +520,6 @@ fn register_shard_callbacks(
     coord: Coordinator,
     shard: ShardId,
     db: &RemoteTables,
-    generation: ShardGeneration,
 ) {
     // ---- owner-scoped events ---------------------------------------------------------------
     // These callbacks address one viewer directly and survive coordinator reconnects because
@@ -576,28 +533,24 @@ fn register_shard_callbacks(
         db.game_teleport_event(),
         "game_teleport_event.insert",
         &view,
-        Some(&generation),
         move |v, row| teleport_appeared(v, shard, row),
     );
     wire_insert_live(
         db.game_addon_message(),
         "game_addon_message.insert",
         &view,
-        Some(&generation),
         move |v, row| addon_message_appeared(v, shard, row),
     );
     wire_insert_live(
         db.game_xp_event(),
         "game_xp_event.insert",
         &view,
-        Some(&generation),
         move |v, row| xp_appeared(v, shard, row),
     );
     wire_insert_live(
         db.game_levelup_event(),
         "game_levelup_event.insert",
         &view,
-        Some(&generation),
         move |v, row| levelup_appeared(v, shard, row),
     );
     let quest_insert_coord = coord.clone();
@@ -605,7 +558,6 @@ fn register_shard_callbacks(
         db.game_character_quest(),
         "game_character_quest.insert",
         &view,
-        Some(&generation),
         move |v, row| quest_inserted(v, &quest_insert_coord, shard, row),
     );
     let quest_update_coord = coord.clone();
@@ -613,7 +565,6 @@ fn register_shard_callbacks(
         db.game_character_quest(),
         "game_character_quest.update",
         &view,
-        Some(&generation),
         move |v, old, row| quest_updated(v, &quest_update_coord, shard, old, row),
     );
     let quest_delete_coord = coord.clone();
@@ -621,7 +572,6 @@ fn register_shard_callbacks(
         db.game_character_quest(),
         "game_character_quest.delete",
         &view,
-        Some(&generation),
         move |v, row| quest_deleted(v, &quest_delete_coord, shard, row),
     );
     {
@@ -630,7 +580,6 @@ fn register_shard_callbacks(
             db.game_character_explored(),
             "game_character_explored.insert",
             &view,
-            Some(&generation),
             move |v, row| exploration_appeared(v, &coord, shard, row),
         );
     }
@@ -638,28 +587,24 @@ fn register_shard_callbacks(
         db.game_player_reputation(),
         "game_player_reputation.insert",
         &view,
-        Some(&generation),
         move |v, row| reputation_appeared(v, shard, row),
     );
     wire_update(
         db.game_player_reputation(),
         "game_player_reputation.update",
         &view,
-        Some(&generation),
         move |v, _old, row| reputation_appeared(v, shard, row),
     );
     wire_insert(
         db.game_hunter_pet_protocol(),
         "game_hunter_pet_protocol.insert",
         &view,
-        Some(&generation),
         move |v, row| hunter_pet_appeared(v, shard, row),
     );
     wire_update(
         db.game_hunter_pet_protocol(),
         "game_hunter_pet_protocol.update",
         &view,
-        Some(&generation),
         move |v, old, row| {
             if old != row {
                 hunter_pet_appeared(v, shard, row)
@@ -672,7 +617,6 @@ fn register_shard_callbacks(
             db.game_item_instance(),
             "game_item_instance.insert",
             &view,
-            Some(&generation),
             move |v, row| item_inserted(v, &coord, shard, row),
         );
     }
@@ -682,7 +626,6 @@ fn register_shard_callbacks(
             db.game_item_instance(),
             "game_item_instance.update",
             &view,
-            Some(&generation),
             move |v, old, row| item_updated(v, &coord, shard, old, row),
         );
     }
@@ -692,7 +635,6 @@ fn register_shard_callbacks(
             db.game_item_instance(),
             "game_item_instance.delete",
             &view,
-            Some(&generation),
             move |v, row| item_deleted(v, &coord, shard, row),
         );
     }
@@ -702,7 +644,6 @@ fn register_shard_callbacks(
         db.game_world_entity(),
         "game_world_entity.insert",
         &view,
-        Some(&generation),
         move |v, row| entity_appeared(v, shard, row),
     );
     {
@@ -714,7 +655,6 @@ fn register_shard_callbacks(
             db.game_world_entity(),
             "game_world_entity.update",
             &view,
-            Some(&generation),
             move |v, old, new| {
                 entity_changed(v, shard, old, new);
                 zone_crossed(v, &coord, shard, new.guid, old.zone_id, new.zone_id);
@@ -725,7 +665,6 @@ fn register_shard_callbacks(
         db.game_world_entity(),
         "game_world_entity.delete",
         &view,
-        Some(&generation),
         move |v, row| entity_vanished(v, shard, row.guid, row.owner_guid),
     );
 
@@ -736,21 +675,18 @@ fn register_shard_callbacks(
         db.game_encounter_equip(),
         "game_encounter_equip.insert",
         &view,
-        Some(&generation),
         move |v, row| encounter_equip_changed(v, shard, row, false),
     );
     wire_update(
         db.game_encounter_equip(),
         "game_encounter_equip.update",
         &view,
-        Some(&generation),
         move |v, _old, row| encounter_equip_changed(v, shard, row, false),
     );
     wire_delete(
         db.game_encounter_equip(),
         "game_encounter_equip.delete",
         &view,
-        Some(&generation),
         move |v, row| encounter_equip_changed(v, shard, row, true),
     );
 
@@ -759,21 +695,18 @@ fn register_shard_callbacks(
         db.game_gameobject(),
         "game_gameobject.insert",
         &view,
-        Some(&generation),
         move |v, row| gameobject_appeared(v, shard, row),
     );
     wire_update(
         db.game_gameobject(),
         "game_gameobject.update",
         &view,
-        Some(&generation),
         move |v, _old, row| gameobject_appeared(v, shard, row),
     );
     wire_delete(
         db.game_gameobject(),
         "game_gameobject.delete",
         &view,
-        Some(&generation),
         move |v, row| gameobject_vanished(v, shard, row.guid),
     );
 
@@ -782,14 +715,12 @@ fn register_shard_callbacks(
         db.game_entity_motion(),
         "game_entity_motion.insert",
         &view,
-        Some(&generation),
         move |v, row| motion(v, shard, row),
     );
     wire_update(
         db.game_entity_motion(),
         "game_entity_motion.update",
         &view,
-        Some(&generation),
         move |v, _old, row| motion(v, shard, row),
     );
 
@@ -798,14 +729,12 @@ fn register_shard_callbacks(
         db.game_creature_spline(),
         "game_creature_spline.insert",
         &view,
-        Some(&generation),
         move |v, row| creature_leg(v, shard, row),
     );
     wire_update(
         db.game_creature_spline(),
         "game_creature_spline.update",
         &view,
-        Some(&generation),
         move |v, _old, row| creature_leg(v, shard, row),
     );
 
@@ -814,14 +743,12 @@ fn register_shard_callbacks(
         db.game_taxi_passenger_spline(),
         "game_taxi_passenger_spline.insert",
         &view,
-        Some(&generation),
         move |v, row| taxi_spline(v, shard, row),
     );
     wire_update(
         db.game_taxi_passenger_spline(),
         "game_taxi_passenger_spline.update",
         &view,
-        Some(&generation),
         move |v, _old, row| taxi_spline(v, shard, row),
     );
 
@@ -831,7 +758,6 @@ fn register_shard_callbacks(
         db.game_roll_event(),
         "game_roll_event.insert",
         &view,
-        Some(&generation),
         move |v, row| roll_appeared(v, shard, row),
     );
 
@@ -841,7 +767,6 @@ fn register_shard_callbacks(
         db.game_rest_state_event(),
         "game_rest_state_event.insert",
         &view,
-        Some(&generation),
         |v, row| rest_state_appeared(v, row),
     );
 
@@ -851,7 +776,6 @@ fn register_shard_callbacks(
         db.game_breath_relay_event(),
         "game_breath_relay_event.insert",
         &view,
-        Some(&generation),
         |v, row| breath_relay_appeared(v, row),
     );
 
@@ -862,14 +786,12 @@ fn register_shard_callbacks(
         db.game_dynamic_object(),
         "game_dynamic_object.insert",
         &view,
-        Some(&generation),
         move |v, row| dynobj_appeared(v, shard, row),
     );
     wire_delete(
         db.game_dynamic_object(),
         "game_dynamic_object.delete",
         &view,
-        Some(&generation),
         move |v, row| dynobj_vanished(v, shard, row),
     );
 
@@ -880,21 +802,18 @@ fn register_shard_callbacks(
         db.game_corpse(),
         "game_corpse.insert",
         &view,
-        Some(&generation),
         move |v, row| corpse_appeared(v, shard, row),
     );
     wire_update(
         db.game_corpse(),
         "game_corpse.update",
         &view,
-        Some(&generation),
         move |v, _old, row| corpse_changed(v, shard, row),
     );
     wire_delete(
         db.game_corpse(),
         "game_corpse.delete",
         &view,
-        Some(&generation),
         move |v, row| corpse_vanished(v, shard, row),
     );
 
@@ -905,7 +824,6 @@ fn register_shard_callbacks(
         db.game_combat_event(),
         "game_combat_event.insert",
         &view,
-        Some(&generation),
         move |v, row| combat_event_appeared(v, shard, row),
     );
 
@@ -916,14 +834,12 @@ fn register_shard_callbacks(
         db.game_melee_attack(),
         "game_melee_attack.insert",
         &view,
-        Some(&generation),
         move |v, row| melee_engaged(v, shard, row),
     );
     wire_delete(
         db.game_melee_attack(),
         "game_melee_attack.delete",
         &view,
-        Some(&generation),
         move |v, row| melee_disengaged(v, shard, row),
     );
 
@@ -937,21 +853,18 @@ fn register_shard_callbacks(
         db.game_resurrect_request(),
         "game_resurrect_request.insert",
         &view,
-        Some(&generation),
         |v, row| resurrect_offered(v, row),
     );
     wire_insert_live(
         db.game_whisper_event(),
         "game_whisper_event.insert",
         &view,
-        Some(&generation),
         |v, row| whisper_appeared(v, row),
     );
     wire_insert_live(
         db.game_system_message_event(),
         "game_system_message_event.insert",
         &view,
-        Some(&generation),
         |v, row| system_message_appeared(v, row),
     );
     {
@@ -960,7 +873,6 @@ fn register_shard_callbacks(
             db.game_group_event(),
             "game_group_event.insert",
             &view,
-            Some(&generation),
             move |v, row| group_event_appeared(v, &coord, row),
         );
     }
@@ -970,7 +882,6 @@ fn register_shard_callbacks(
             db.game_group_member(),
             "game_group_member.insert",
             &view,
-            Some(&generation),
             move |v, row| group_member_mirror_changed(v, &insert_coord, row),
         );
         let delete_coord = coord.clone();
@@ -978,7 +889,6 @@ fn register_shard_callbacks(
             db.game_group_member(),
             "game_group_member.delete",
             &view,
-            Some(&generation),
             move |v, row| group_member_mirror_changed(v, &delete_coord, row),
         );
     }
@@ -986,7 +896,6 @@ fn register_shard_callbacks(
         db.game_trade_event(),
         "game_trade_event.insert",
         &view,
-        Some(&generation),
         |v, row| trade_event_appeared(v, row),
     );
     {
@@ -995,7 +904,6 @@ fn register_shard_callbacks(
             db.game_duel_event(),
             "game_duel_event.insert",
             &view,
-            Some(&generation),
             move |v, row| duel_event_appeared(v, &coord, row),
         );
     }
@@ -1009,42 +917,33 @@ fn register_shard_callbacks(
     {
         let view = view.clone();
         let coord = coord.clone();
-        let generation = generation.clone();
         db.game_aura().on_insert(move |_ctx, row| {
             guarded("game_aura.insert", || {
-                ShardGeneration::run(Some(&generation), || {
-                    view.auras.upsert(shard, row);
-                    let n = view.auras.stealth_count(shard, row.target_guid);
-                    aura_applied(&view, &coord, shard, row, n)
-                })
+                view.auras.upsert(shard, row);
+                let n = view.auras.stealth_count(shard, row.target_guid);
+                aura_applied(&view, &coord, shard, row, n)
             });
         });
     }
     {
         let view = view.clone();
         let coord = coord.clone();
-        let generation = generation.clone();
         db.game_aura().on_update(move |_ctx, old, row| {
             let expires_changed = old.expires_at != row.expires_at;
             guarded("game_aura.update", || {
-                ShardGeneration::run(Some(&generation), || {
-                    view.auras.upsert(shard, row);
-                    aura_updated(&view, &coord, shard, row, expires_changed)
-                })
+                view.auras.upsert(shard, row);
+                aura_updated(&view, &coord, shard, row, expires_changed)
             });
         });
     }
     {
         let view = view.clone();
         let coord = coord.clone();
-        let generation = generation.clone();
         db.game_aura().on_delete(move |_ctx, row| {
             guarded("game_aura.delete", || {
-                ShardGeneration::run(Some(&generation), || {
-                    view.auras.remove(shard, row);
-                    let n = view.auras.stealth_count(shard, row.target_guid);
-                    aura_removed(&view, &coord, shard, row, n)
-                })
+                view.auras.remove(shard, row);
+                let n = view.auras.stealth_count(shard, row.target_guid);
+                aura_removed(&view, &coord, shard, row, n)
             });
         });
     }
@@ -1056,14 +955,12 @@ fn register_shard_callbacks(
         db.game_spell_cast_event(),
         "game_spell_cast_event.insert",
         &view,
-        Some(&generation),
         move |v, row| cast_event_appeared(v, shard, row),
     );
     wire_insert(
         db.game_spell_impact_event(),
         "game_spell_impact_event.insert",
         &view,
-        Some(&generation),
         move |v, row| impact_appeared(v, shard, row),
     );
 
@@ -1077,7 +974,6 @@ fn register_shard_callbacks(
             db.game_emote_event(),
             "game_emote_event.insert",
             &view,
-            Some(&generation),
             move |v, row| emote_appeared(v, &coord, shard, row),
         );
     }
@@ -1087,7 +983,6 @@ fn register_shard_callbacks(
             db.game_chat_event(),
             "game_chat_event.insert",
             &view,
-            Some(&generation),
             move |v, row| chat_appeared(v, &coord, shard, row),
         );
     }
@@ -1097,7 +992,6 @@ fn register_shard_callbacks(
             db.game_channel_event(),
             "game_channel_event.insert",
             &view,
-            Some(&generation),
             move |v, row| channel_appeared(v, &coord, shard, row),
         );
     }
@@ -1110,14 +1004,12 @@ fn register_shard_callbacks(
         db.game_zone_weather(),
         "game_zone_weather.insert",
         &view,
-        Some(&generation),
         move |v, row| weather_changed(v, shard, row),
     );
     wire_update(
         db.game_zone_weather(),
         "game_zone_weather.update",
         &view,
-        Some(&generation),
         move |v, _old, row| weather_changed(v, shard, row),
     );
 
@@ -1128,14 +1020,12 @@ fn register_shard_callbacks(
         db.game_player_skill(),
         "game_player_skill.insert",
         &view,
-        Some(&generation),
         move |v, row| skill_changed(v, shard, row),
     );
     wire_update(
         db.game_player_skill(),
         "game_player_skill.update",
         &view,
-        Some(&generation),
         move |v, _old, row| skill_changed(v, shard, row),
     );
 }
@@ -1161,14 +1051,12 @@ pub(crate) fn arm_realm_private(view: Arc<WorldView>, realm: Coordinator, coord:
         db.game_whisper_event(),
         "realm.game_whisper_event.insert",
         &view,
-        None,
         |v, row| whisper_appeared(v, row),
     );
     wire_insert_live(
         db.game_group_event(),
         "realm.game_group_event.insert",
         &view,
-        None,
         move |v, row| group_event_appeared(v, &coord, row),
     );
 }
@@ -1200,17 +1088,13 @@ fn wire_insert<T>(
     table: T,
     label: &'static str,
     view: &Arc<WorldView>,
-    generation: Option<&ShardGeneration>,
     f: impl Fn(&Arc<WorldView>, &T::Row) + Send + 'static,
 ) where
     T: Table<EventContext = EventContext>,
 {
     let view = view.clone();
-    let generation = generation.cloned();
     table.on_insert(move |_ctx, row| {
-        guarded(label, || {
-            ShardGeneration::run(generation.as_ref(), || f(&view, row))
-        });
+        guarded(label, || f(&view, row));
     });
 }
 
@@ -1228,20 +1112,16 @@ fn wire_insert_live<T>(
     table: T,
     label: &'static str,
     view: &Arc<WorldView>,
-    generation: Option<&ShardGeneration>,
     f: impl Fn(&Arc<WorldView>, &T::Row) + Send + 'static,
 ) where
     T: Table<EventContext = EventContext>,
 {
     let view = view.clone();
-    let generation = generation.cloned();
     table.on_insert(move |ctx, row| {
         if is_initial_apply(&ctx.event) {
             return;
         }
-        guarded(label, || {
-            ShardGeneration::run(generation.as_ref(), || f(&view, row))
-        });
+        guarded(label, || f(&view, row));
     });
 }
 
@@ -1250,17 +1130,13 @@ fn wire_update<T>(
     table: T,
     label: &'static str,
     view: &Arc<WorldView>,
-    generation: Option<&ShardGeneration>,
     f: impl Fn(&Arc<WorldView>, &T::Row, &T::Row) + Send + 'static,
 ) where
     T: TableWithPrimaryKey<EventContext = EventContext>,
 {
     let view = view.clone();
-    let generation = generation.cloned();
     table.on_update(move |_ctx, old, new| {
-        guarded(label, || {
-            ShardGeneration::run(generation.as_ref(), || f(&view, old, new))
-        });
+        guarded(label, || f(&view, old, new));
     });
 }
 
@@ -1269,17 +1145,13 @@ fn wire_delete<T>(
     table: T,
     label: &'static str,
     view: &Arc<WorldView>,
-    generation: Option<&ShardGeneration>,
     f: impl Fn(&Arc<WorldView>, &T::Row) + Send + 'static,
 ) where
     T: Table<EventContext = EventContext>,
 {
     let view = view.clone();
-    let generation = generation.cloned();
     table.on_delete(move |_ctx, row| {
-        guarded(label, || {
-            ShardGeneration::run(generation.as_ref(), || f(&view, row))
-        });
+        guarded(label, || f(&view, row));
     });
 }
 
@@ -2023,7 +1895,12 @@ fn melee_audience(view: &WorldView, shard: ShardId, row: &MeleeAttack) -> Vec<Ar
     let key = view
         .spatial
         .entity_cell_on_shard(EntityLayer::WorldEntity, row.attacker_guid, shard);
-    view.cell_audience(shard, key, BOX_HALF_SPAN, &[row.attacker_guid, row.target_guid])
+    view.cell_audience(
+        shard,
+        key,
+        BOX_HALF_SPAN,
+        &[row.attacker_guid, row.target_guid],
+    )
 }
 
 /// A melee/ranged engagement began → SMSG_ATTACKSTART per viewer (`melee_engage_outbound` runs
@@ -3655,8 +3532,8 @@ pub(crate) fn sweep_into_view(view: &WorldView, viewer: &Arc<Viewer>) {
     }
 }
 
-/// Replace this shard's rows on its pump. No SDK message or old-generation callback can
-/// interleave with the snapshot, and other shards retain their current rows.
+/// Replace this Shard's rows between SDK messages. Its old pump has stopped, and other
+/// Shards retain their current rows.
 fn seed_shard_from_cache(view: &Arc<WorldView>, shard: ShardId, db: &RemoteTables) {
     reconcile_shard(
         view,
