@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -81,25 +80,10 @@ impl Standalone {
     }
 
     /// Copy built Wasm bytes into this standalone's private directory and publish that copy.
+    #[allow(dead_code)] // Used by tests that build their own Wasm artifact.
     pub fn publish_module_bytes(&self, wasm: &[u8]) {
         let path = self.data_dir.join("published-module.wasm");
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .expect("failed to create private Wasm artifact");
-        file.write_all(wasm)
-            .expect("failed to copy private Wasm artifact");
-        file.sync_all()
-            .expect("failed to sync private Wasm artifact");
-        let mut permissions = file
-            .metadata()
-            .expect("failed to inspect private Wasm artifact")
-            .permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(&path, permissions)
-            .expect("failed to make private Wasm artifact read-only");
-        drop(file);
+        fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
 
         assert_success(self.command().args([
             "publish",
