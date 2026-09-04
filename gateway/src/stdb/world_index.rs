@@ -164,9 +164,9 @@ pub struct RecenterDelta {
 struct EntityIndex {
     /// cell → the guids resident in it. The forward direction of the interest question.
     cell_entities: HashMap<CellKey, HashSet<u64>>,
-    /// guid → where it is and whose cache holds it. Also the "did it move?" memory that makes
-    /// [`WorldIndex::upsert_entity`] O(1) instead of a search.
-    entity_cell: HashMap<u64, (CellKey, ShardId)>,
+    /// GUID to cell, Shard, and pet owner. The owner survives a reconnect so a missing
+    /// pet clears its Character's action bar as well as its client object.
+    entity_cell: HashMap<u64, (CellKey, ShardId, u64)>,
 }
 
 #[derive(Default)]
@@ -239,10 +239,14 @@ impl WorldIndex {
         guid: u64,
         key: CellKey,
         shard: ShardId,
+        owner_guid: u64,
     ) -> Option<CellKey> {
         let mut inner = self.lock();
         let entities = Self::layer_mut(&mut inner, layer);
-        let previous = entities.entity_cell.insert(guid, (key, shard)).map(|(k, _)| k);
+        let previous = entities
+            .entity_cell
+            .insert(guid, (key, shard, owner_guid))
+            .map(|(k, _, _)| k);
         match previous {
             Some(old) if old == key => return Some(old),
             Some(old) => {
@@ -259,29 +263,36 @@ impl WorldIndex {
         previous
     }
 
-    /// (Inspection only — dispatch uses the shard carried by visibility results.)
-    #[cfg(test)]
     /// Which shard's coordinator cache holds this entity's row.
     pub fn shard_of(&self, layer: EntityLayer, guid: u64) -> Option<ShardId> {
         let inner = self.lock();
         Self::layer(&inner, layer)
             .entity_cell
             .get(&guid)
-            .map(|(_, s)| *s)
+            .map(|(_, s, _)| *s)
     }
 
-    /// Forget an entity (its row was deleted). Returns the cell it was in, if it was known.
-    pub fn remove_entity(&self, layer: EntityLayer, guid: u64) -> Option<CellKey> {
+    /// Remove a row only from its current Shard. Returns its old cell and pet owner GUID.
+    pub fn remove_entity(
+        &self,
+        layer: EntityLayer,
+        guid: u64,
+        shard: ShardId,
+    ) -> Option<(CellKey, u64)> {
         let mut inner = self.lock();
         let entities = Self::layer_mut(&mut inner, layer);
-        let (key, _) = entities.entity_cell.remove(&guid)?;
+        let &(key, owner, owner_guid) = entities.entity_cell.get(&guid)?;
+        if owner != shard {
+            return None;
+        }
+        entities.entity_cell.remove(&guid);
         if let Some(set) = entities.cell_entities.get_mut(&key) {
             set.remove(&guid);
             if set.is_empty() {
                 entities.cell_entities.remove(&key);
             }
         }
-        Some(key)
+        Some((key, owner_guid))
     }
 
     /// Where the index believes `guid` is: the anchor of a relay driven by a table with no cell of
@@ -289,7 +300,71 @@ impl WorldIndex {
     /// seen (a row on a table it does not index, or one deleted already).
     pub fn entity_cell(&self, layer: EntityLayer, guid: u64) -> Option<CellKey> {
         let inner = self.lock();
-        Self::layer(&inner, layer).entity_cell.get(&guid).map(|(k, _)| *k)
+        Self::layer(&inner, layer)
+            .entity_cell
+            .get(&guid)
+            .map(|(k, _, _)| *k)
+    }
+
+    pub fn entity_cell_on_shard(
+        &self,
+        layer: EntityLayer,
+        guid: u64,
+        shard: ShardId,
+    ) -> Option<CellKey> {
+        let inner = self.lock();
+        Self::layer(&inner, layer)
+            .entity_cell
+            .get(&guid)
+            .and_then(|(key, owner, _)| (*owner == shard).then_some(*key))
+    }
+
+    /// Replace one shard's snapshot, preserving viewers and rows already owned by another shard.
+    /// Rows and returned removals carry GUID, cell, and pet owner GUID. Former viewers can
+    /// drop vanished or moved rows and clear a vanished pet's action bar.
+    pub fn replace_shard(
+        &self,
+        layer: EntityLayer,
+        shard: ShardId,
+        rows: impl IntoIterator<Item = (u64, CellKey, u64)>,
+    ) -> Vec<(u64, CellKey, u64)> {
+        let mut inner = self.lock();
+        let entities = Self::layer_mut(&mut inner, layer);
+        let fresh: HashMap<_, _> = rows
+            .into_iter()
+            .filter(|(guid, _, _)| {
+                entities
+                    .entity_cell
+                    .get(guid)
+                    .is_none_or(|(_, owner, _)| *owner == shard)
+            })
+            .map(|(guid, key, owner)| (guid, (key, owner)))
+            .collect();
+        let old: Vec<_> = entities
+            .entity_cell
+            .iter()
+            .filter(|(_, (_, owner, _))| *owner == shard)
+            .map(|(guid, (key, _, owner_guid))| (*guid, *key, *owner_guid))
+            .collect();
+        let mut removed = Vec::new();
+        for (guid, key, owner_guid) in old {
+            if fresh.get(&guid).map(|(cell, _)| cell) == Some(&key) {
+                continue;
+            }
+            entities.entity_cell.remove(&guid);
+            if let Some(guids) = entities.cell_entities.get_mut(&key) {
+                guids.remove(&guid);
+                if guids.is_empty() {
+                    entities.cell_entities.remove(&key);
+                }
+            }
+            removed.push((guid, key, owner_guid));
+        }
+        for (guid, (key, owner_guid)) in fresh {
+            entities.entity_cell.insert(guid, (key, shard, owner_guid));
+            entities.cell_entities.entry(key).or_default().insert(guid);
+        }
+        removed
     }
 
     // ---------------------------------------------------------------------------------------
@@ -403,7 +478,7 @@ impl WorldIndex {
             for cell in cells.difference(other) {
                 if let Some(guids) = entities.cell_entities.get(cell) {
                     for guid in guids {
-                        let shard = entities.entity_cell.get(guid).map(|(_, s)| *s).unwrap_or(0);
+                        let shard = entities.entity_cell.get(guid).map(|(_, s, _)| *s).unwrap_or(0);
                         out.push((*guid, shard));
                     }
                 }
@@ -438,15 +513,15 @@ impl WorldIndex {
             return entities
                 .entity_cell
                 .iter()
-                .filter(|(_, (k, _))| k.partition() == partition)
-                .map(|(guid, (_, shard))| (*guid, *shard))
+                .filter(|(_, (k, _, _))| k.partition() == partition)
+                .map(|(guid, (_, shard, _))| (*guid, *shard))
                 .collect();
         }
         let mut out = Vec::new();
         for cell in anchor.neighbourhood() {
             if let Some(guids) = entities.cell_entities.get(&cell) {
                 for guid in guids {
-                    if let Some((_, shard)) = entities.entity_cell.get(guid) {
+                    if let Some((_, shard, _)) = entities.entity_cell.get(guid) {
                         out.push((*guid, *shard));
                     }
                 }
@@ -465,7 +540,7 @@ impl WorldIndex {
         let Some(anchor) = inner.viewer_cell.get(&session) else {
             return false;
         };
-        let Some((cell, _)) = Self::layer(&inner, layer).entity_cell.get(&guid) else {
+        let Some((cell, _, _)) = Self::layer(&inner, layer).entity_cell.get(&guid) else {
             return false;
         };
         if anchor.partition() != cell.partition() {
@@ -581,6 +656,7 @@ mod tests {
                 layer,
                 r.guid,
                 CellKey::at(r.map_id, r.instance_id, r.gx, r.gy),
+                0,
                 0,
             );
         }
@@ -730,6 +806,7 @@ mod tests {
                         row.guid,
                         CellKey::at(row.map_id, row.instance_id, row.gx, row.gy),
                         0,
+                        0,
                     );
                 }
             }
@@ -828,18 +905,47 @@ mod tests {
         let index = WorldIndex::new(true);
         let a = CellKey::at(0, 0, 0, 0);
         let b = CellKey::at(0, 0, 40, 40); // far outside a's box
-        index.upsert_entity(EntityLayer::WorldEntity, 5, a, 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 5, a, 0, 0);
         index.add_viewer(1, a);
         assert_eq!(index_visible(&index, EntityLayer::WorldEntity, 1), HashSet::from([5]));
-        assert_eq!(index.upsert_entity(EntityLayer::WorldEntity, 5, b, 0), Some(a));
+        assert_eq!(index.upsert_entity(EntityLayer::WorldEntity, 5, b, 0, 0), Some(a));
         assert!(
             index_visible(&index, EntityLayer::WorldEntity, 1).is_empty(),
             "stale cell membership"
         );
         assert_eq!(index.entity_cell(EntityLayer::WorldEntity, 5), Some(b));
-        assert_eq!(index.remove_entity(EntityLayer::WorldEntity, 5), Some(b));
+        assert_eq!(index.remove_entity(EntityLayer::WorldEntity, 5, 0), Some((b, 0)));
         assert_eq!(index.entity_cell(EntityLayer::WorldEntity, 5), None);
-        assert_eq!(index.remove_entity(EntityLayer::WorldEntity, 5), None, "removal is idempotent");
+        assert_eq!(index.remove_entity(EntityLayer::WorldEntity, 5, 0), None, "removal is idempotent");
+    }
+
+    #[test]
+    fn a_shard_snapshot_replaces_its_rows_without_erasing_viewers_or_a_transfer_destination() {
+        let index = WorldIndex::new(true);
+        let near = CellKey::at(0, 0, 0, 0);
+        let far = CellKey::at(0, 0, 20, 20);
+        index.add_viewer(1, near);
+        index.upsert_entity(EntityLayer::WorldEntity, 10, near, 0, 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 20, near, 0, 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 30, near, 1, 0);
+
+        let removed = index.replace_shard(
+            EntityLayer::WorldEntity,
+            0,
+            [(20, far, 0), (30, far, 0), (40, near, 0)],
+        );
+        assert_eq!(
+            removed.into_iter().collect::<HashSet<_>>(),
+            HashSet::from([(10, near, 0), (20, near, 0)])
+        );
+        assert_eq!(index.viewer_cell(1), Some(near));
+        assert_eq!(index.shard_of(EntityLayer::WorldEntity, 30), Some(1));
+        assert_eq!(index.entity_cell(EntityLayer::WorldEntity, 30), Some(near));
+        assert_eq!(
+            index_visible(&index, EntityLayer::WorldEntity, 1),
+            HashSet::from([30, 40])
+        );
+        assert_eq!(index.entity_cell(EntityLayer::WorldEntity, 20), Some(far));
     }
 
     #[test]
@@ -852,7 +958,7 @@ mod tests {
         assert_eq!(index.viewer_cell(1), Some(CellKey::at(0, 0, 1, 0)));
         // Only one anchor is ever held: walking away must not leave the session visible from the
         // cell it started in.
-        index.upsert_entity(EntityLayer::WorldEntity, 5, CellKey::at(0, 0, 0, 0), 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 5, CellKey::at(0, 0, 0, 0), 0, 0);
         index.move_viewer_delta(1, CellKey::at(0, 0, 30, 30));
         assert!(index
             .viewers_of(EntityLayer::WorldEntity, CellKey::at(0, 0, 0, 0))
@@ -871,10 +977,10 @@ mod tests {
     #[test]
     fn the_aoi_off_hatch_sees_the_whole_partition_and_nothing_outside_it() {
         let index = WorldIndex::new(false);
-        index.upsert_entity(EntityLayer::WorldEntity, 1, CellKey::at(0, 0, 0, 0), 0);
-        index.upsert_entity(EntityLayer::WorldEntity, 2, CellKey::at(0, 0, 500, 500), 0);
-        index.upsert_entity(EntityLayer::WorldEntity, 3, CellKey::at(0, 77, 0, 0), 0); // another instance
-        index.upsert_entity(EntityLayer::WorldEntity, 4, CellKey::at(1, 0, 0, 0), 0); // another map
+        index.upsert_entity(EntityLayer::WorldEntity, 1, CellKey::at(0, 0, 0, 0), 0, 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 2, CellKey::at(0, 0, 500, 500), 0, 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 3, CellKey::at(0, 77, 0, 0), 0, 0); // another instance
+        index.upsert_entity(EntityLayer::WorldEntity, 4, CellKey::at(1, 0, 0, 0), 0, 0); // another map
         index.add_viewer(1, CellKey::at(0, 0, 0, 0));
         assert_eq!(index_visible(&index, EntityLayer::WorldEntity, 1), HashSet::from([1, 2]));
         assert_eq!(
@@ -931,9 +1037,9 @@ mod tests {
     #[test]
     fn stats_report_what_the_ops_line_prints() {
         let index = WorldIndex::new(true);
-        index.upsert_entity(EntityLayer::WorldEntity, 1, CellKey::at(0, 0, 0, 0), 0);
-        index.upsert_entity(EntityLayer::WorldEntity, 2, CellKey::at(0, 0, 0, 0), 0);
-        index.upsert_entity(EntityLayer::WorldEntity, 3, CellKey::at(0, 0, 1, 0), 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 1, CellKey::at(0, 0, 0, 0), 0, 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 2, CellKey::at(0, 0, 0, 0), 0, 0);
+        index.upsert_entity(EntityLayer::WorldEntity, 3, CellKey::at(0, 0, 1, 0), 0, 0);
         index.add_viewer(1, CellKey::at(0, 0, 0, 0));
         assert_eq!(index.stats(EntityLayer::WorldEntity), (3, 1, 2));
     }

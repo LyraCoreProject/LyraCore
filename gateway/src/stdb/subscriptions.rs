@@ -754,6 +754,7 @@ pub(crate) fn chat_range_yd(chat_type: u8) -> f32 {
 pub(crate) fn offer_peer_create_for(
     coord: &Coordinator,
     view: &WorldView,
+    shard: super::world_index::ShardId,
     viewer: &Viewer,
     row: &WorldEntity,
 ) -> Vec<Outbound> {
@@ -766,7 +767,7 @@ pub(crate) fn offer_peer_create_for(
     if row.npc_flags & SPIRITHEALER_NPC_FLAG != 0 && !viewer_is_ghost {
         return Vec::new();
     }
-    let row_is_stealthed = view.auras.is_stealthed(row.guid);
+    let row_is_stealthed = view.auras.is_stealthed(shard, row.guid);
     let guard = coord.0.coord();
     let db = &guard.conn.db;
     if !peer_create_gate(
@@ -873,6 +874,7 @@ fn append_encounter_equip_after_create(
 pub(crate) fn relay_entity_update(
     coord: &Coordinator,
     view: &WorldView,
+    shard: super::world_index::ShardId,
     viewer: &Viewer,
     old: &WorldEntity,
     new: &WorldEntity,
@@ -882,7 +884,7 @@ pub(crate) fn relay_entity_update(
     if new.guid != viewer.self_guid {
         let shown = viewer.created.lock().unwrap().contains(&new.guid);
         if is_update_reentry(new.guid, viewer.self_guid, shown) {
-            return offer_peer_create_for(coord, view, viewer, new);
+            return offer_peer_create_for(coord, view, shard, viewer, new);
         }
     }
     let dynamic_flags = {
@@ -918,7 +920,7 @@ pub(crate) fn relay_entity_update(
             drop(guard);
             for h in healers {
                 if is_ghost {
-                    out.extend(offer_peer_create_for(coord, view, viewer, &h));
+                    out.extend(offer_peer_create_for(coord, view, shard, viewer, &h));
                 } else if viewer.created.lock().unwrap().remove(&h.guid) {
                     out.push(Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
                         codec::build_destroy_object(h.guid),
@@ -1632,6 +1634,7 @@ pub(crate) fn stealth_visibility(
 pub(crate) fn aura_insert_outbound(
     coord: &Coordinator,
     view: &WorldView,
+    shard: super::world_index::ShardId,
     session: u64,
     created: &Arc<Mutex<HashSet<u64>>>,
     self_guid: u64,
@@ -1642,7 +1645,7 @@ pub(crate) fn aura_insert_outbound(
     // A stealth-hidden peer (not in `created`) must get NO per-peer relay: a partial VALUES on
     // a DESTROYed object is a client crash/desync vector.
     let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
-    let current = visible.then(|| view.auras.on_target(row.target_guid));
+    let current = visible.then(|| view.auras.on_target(shard, row.target_guid));
     if let Some(current) = &current {
         out.push(aura_sync(current.iter().cloned(), row.target_guid));
     }
@@ -1677,6 +1680,7 @@ pub(crate) fn aura_insert_outbound(
 pub(crate) fn aura_update_outbound(
     coord: &Coordinator,
     view: &WorldView,
+    shard: super::world_index::ShardId,
     created: &Arc<Mutex<HashSet<u64>>>,
     self_guid: u64,
     row: &Aura,
@@ -1684,7 +1688,7 @@ pub(crate) fn aura_update_outbound(
 ) -> Vec<Outbound> {
     let mut out = Vec::new();
     let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
-    let current = visible.then(|| view.auras.on_target(row.target_guid));
+    let current = visible.then(|| view.auras.on_target(shard, row.target_guid));
     if let Some(current) = &current {
         out.push(aura_sync(current.iter().cloned(), row.target_guid));
     }
@@ -1714,6 +1718,7 @@ pub(crate) fn aura_update_outbound(
 pub(crate) fn aura_delete_outbound(
     coord: &Coordinator,
     view: &WorldView,
+    shard: super::world_index::ShardId,
     session: u64,
     created: &Arc<Mutex<HashSet<u64>>>,
     self_guid: u64,
@@ -1723,7 +1728,7 @@ pub(crate) fn aura_delete_outbound(
     let mut out = Vec::new();
     let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
     if visible {
-        let current = view.auras.on_target(row.target_guid);
+        let current = view.auras.on_target(shard, row.target_guid);
         out.push(aura_sync(current.iter().cloned(), row.target_guid));
         if let Some(o) = run_speed_packet(current.into_iter(), row, self_guid) {
             out.push(o);
@@ -6199,7 +6204,7 @@ mod tests {
     /// freeze after their first step, or never move at all. Same for the creature-leg twin.
     #[test]
     fn both_halves_of_the_motion_and_spline_relays_are_registered_286() {
-        let arm = decommented(top_level_fn_body_of("world_view.rs", "arm_shard"));
+        let arm = decommented(top_level_fn_body_of("world_view.rs", "register_shard_callbacks"));
         // #490 factored every registration through `wire_insert`/`wire_update` (world_view.rs),
         // so the literal `.on_insert(`/`.on_update(` chain off the table handle is gone from
         // `arm_shard`'s own body — what's left to scan for is the (helper, table, label) triple

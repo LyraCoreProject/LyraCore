@@ -66,7 +66,7 @@ fn realm(rng: &mut Rng, players: usize, creatures: usize, span_yd: f32) -> Realm
         let (x, y) = position(rng);
         let key = CellKey::of_position(0, 0, x, y);
         view.spatial
-            .upsert_entity(EntityLayer::WorldEntity, guid, key, 0);
+            .upsert_entity(EntityLayer::WorldEntity, guid, key, 0, 0);
         let (tx, rx) = SessionTx::with_depth(0);
         let v = viewer(view.next_session_id(), guid, tx);
         view.add_viewer_on_shard(v.clone(), key, 0);
@@ -82,6 +82,7 @@ fn realm(rng: &mut Rng, players: usize, creatures: usize, span_yd: f32) -> Realm
                 EntityLayer::WorldEntity,
                 guid,
                 CellKey::of_position(0, 0, x, y),
+                0,
                 0,
             );
             positions.insert(guid, (x, y));
@@ -335,8 +336,8 @@ fn combat_candidates_gate_to_exactly_the_whole_shard_recipients() {
         let row = combat(&realm, attacker, target);
         let gate = |v: &Viewer| created_contains(v, attacker);
 
-        let candidates = sessions(combat_audience(&realm.view, &row));
-        combat_event_appeared(&realm.view, &row);
+        let candidates = sessions(combat_audience(&realm.view, 0, &row));
+        combat_event_appeared(&realm.view, 0, &row);
         assert_eq!(
             realm.jobs_landed(),
             candidates,
@@ -369,10 +370,10 @@ fn melee_candidates_gate_to_exactly_the_whole_shard_recipients() {
         let row = melee(attacker, realm.actor(&mut rng));
         let gate = |v: &Viewer| created_contains(v, attacker);
 
-        let candidates = sessions(melee_audience(&realm.view, &row));
-        melee_engaged(&realm.view, &row);
+        let candidates = sessions(melee_audience(&realm.view, 0, &row));
+        melee_engaged(&realm.view, 0, &row);
         assert_eq!(realm.jobs_landed(), candidates);
-        melee_disengaged(&realm.view, &row);
+        melee_disengaged(&realm.view, 0, &row);
         assert_eq!(realm.jobs_landed(), candidates);
 
         let gated: HashSet<SessionId> = realm
@@ -405,7 +406,7 @@ fn aura_candidates_gate_to_exactly_the_whole_shard_recipients() {
                     .can_see(EntityLayer::WorldEntity, v.session, target)
         };
 
-        let candidates = sessions(aura_audience(&realm.view, &row));
+        let candidates = sessions(aura_audience(&realm.view, 0, &row));
         let gated: HashSet<SessionId> = realm
             .viewers
             .iter()
@@ -428,17 +429,17 @@ fn an_aura_on_an_unindexed_unit_reaches_its_owner_only() {
     realm
         .view
         .spatial
-        .remove_entity(EntityLayer::WorldEntity, player);
+        .remove_entity(EntityLayer::WorldEntity, player, 0);
     assert_eq!(
-        sessions(aura_audience(&realm.view, &aura(1, player, 0xA0))),
+        sessions(aura_audience(&realm.view, 0, &aura(1, player, 0xA0))),
         HashSet::from([realm.viewers[3].session])
     );
     let creature = realm.creatures[0];
     realm
         .view
         .spatial
-        .remove_entity(EntityLayer::WorldEntity, creature);
-    assert!(aura_audience(&realm.view, &aura(2, creature, 0xA0)).is_empty());
+        .remove_entity(EntityLayer::WorldEntity, creature, 0);
+    assert!(aura_audience(&realm.view, 0, &aura(2, creature, 0xA0)).is_empty());
 }
 
 // ===============================================================================================
@@ -471,25 +472,25 @@ fn cast_impact_and_emote_reach_the_actors_box_and_both_owners() {
 
         let row = cast(&realm, actor, target);
         assert_eq!(
-            sessions(cast_audience(&realm.view, &row)),
+            sessions(cast_audience(&realm.view, 0, &row)),
             want,
             "cast by {actor:#x}"
         );
-        cast_event_appeared(&realm.view, &row);
+        cast_event_appeared(&realm.view, 0, &row);
         assert_eq!(realm.jobs_landed(), want);
 
         let row = impact(&realm, actor, target);
         assert_eq!(
-            sessions(impact_audience(&realm.view, &row)),
+            sessions(impact_audience(&realm.view, 0, &row)),
             want,
             "impact by {actor:#x}"
         );
-        impact_appeared(&realm.view, &row);
+        impact_appeared(&realm.view, 0, &row);
         assert_eq!(realm.jobs_landed(), want);
 
         let row = emote(&realm, actor, target);
         assert_eq!(
-            sessions(emote_audience(&realm.view, &row)),
+            sessions(emote_audience(&realm.view, 0, &row)),
             want,
             "emote by {actor:#x}"
         );
@@ -526,7 +527,7 @@ fn say_and_yell_candidates_gate_to_exactly_the_whole_shard_listeners() {
         let row = chat(speaker, chat_type);
         let gate = |v: &Viewer| hears(&realm, speaker, v, chat_type);
 
-        let candidates = sessions(chat_audience(&realm.view, &row));
+        let candidates = sessions(chat_audience(&realm.view, 0, &row));
         let gated: HashSet<SessionId> = realm
             .viewers
             .iter()
@@ -560,9 +561,9 @@ fn chat_from_an_unindexed_speaker_reaches_the_speaker_only() {
     realm
         .view
         .spatial
-        .remove_entity(EntityLayer::WorldEntity, speaker);
+        .remove_entity(EntityLayer::WorldEntity, speaker, 0);
     assert_eq!(
-        sessions(chat_audience(&realm.view, &chat(speaker, YELL))),
+        sessions(chat_audience(&realm.view, 0, &chat(speaker, YELL))),
         HashSet::from([realm.viewers[0].session])
     );
 }
@@ -577,20 +578,20 @@ fn aura_index_insert_update_delete_by_shard_and_id() {
     index.upsert(0, &aura(1, 77, A_STEALTH));
     index.upsert(0, &aura(2, 77, 0xA0));
     index.upsert(1, &aura(1, 78, 0xA0)); // shard 1 reuses id 1 for another unit
-    assert_eq!(index.stealth_count(77), 1);
-    assert!(index.is_stealthed(77));
-    assert!(!index.is_stealthed(78));
-    assert_eq!(index.on_target(77).len(), 2);
+    assert_eq!(index.stealth_count(0, 77), 1);
+    assert!(index.is_stealthed(0, 77));
+    assert!(!index.is_stealthed(1, 78));
+    assert_eq!(index.on_target(0, 77).len(), 2);
     assert_eq!(index.stats(), (3, 2));
 
     // An update lands on the same (shard, id) and replaces the row.
     let mut refreshed = aura(2, 77, 0xA0);
     refreshed.amount = 25;
     index.upsert(0, &refreshed);
-    assert_eq!(index.on_target(77).len(), 2);
+    assert_eq!(index.on_target(0, 77).len(), 2);
     assert_eq!(
         index
-            .on_target(77)
+            .on_target(0, 77)
             .iter()
             .find(|a| a.id == 2)
             .map(|a| a.amount),
@@ -599,12 +600,12 @@ fn aura_index_insert_update_delete_by_shard_and_id() {
 
     // A delete on shard 1 of id 1 must not touch shard 0's id 1.
     index.remove(1, &aura(1, 78, 0xA0));
-    assert!(index.on_target(78).is_empty());
-    assert_eq!(index.stealth_count(77), 1);
+    assert!(index.on_target(1, 78).is_empty());
+    assert_eq!(index.stealth_count(0, 77), 1);
     index.remove(0, &aura(1, 77, A_STEALTH));
-    assert_eq!(index.stealth_count(77), 0);
+    assert_eq!(index.stealth_count(0, 77), 0);
     index.remove(0, &aura(1, 77, A_STEALTH)); // idempotent
-    assert_eq!(index.on_target(77).len(), 1);
+    assert_eq!(index.on_target(0, 77).len(), 1);
     index.remove(0, &aura(2, 77, 0xA0));
     assert_eq!(index.stats(), (0, 0));
 }
@@ -614,10 +615,363 @@ fn aura_index_reseed_drops_rows_the_caches_no_longer_hold() {
     let index = AuraIndex::default();
     index.upsert(0, &aura(1, 77, 0xA0));
     index.upsert(0, &aura(2, 77, 0xA0));
-    index.replace_all([(0, aura(2, 77, 0xA0)), (1, aura(9, 80, A_STEALTH))]);
-    assert_eq!(index.on_target(77).len(), 1);
-    assert!(index.is_stealthed(80));
+    index.replace_shard(0, [aura(2, 77, 0xA0)]);
+    index.replace_shard(1, [aura(9, 80, A_STEALTH)]);
+    assert_eq!(index.on_target(0, 77).len(), 1);
+    assert!(index.is_stealthed(1, 80));
     assert_eq!(index.stats(), (2, 2));
+}
+
+#[test]
+fn a_transfer_keeps_each_shards_auras_independent() {
+    let index = AuraIndex::default();
+    let mut source = aura(1, PLAYER_BASE, A_STEALTH);
+    source.amount = 50;
+    let mut destination = aura(1, PLAYER_BASE, 0xA4);
+    destination.amount = 25;
+    index.upsert(0, &source);
+    index.upsert(1, &destination);
+
+    assert_eq!(index.on_target(1, PLAYER_BASE), vec![destination.clone()]);
+    assert!(!index.is_stealthed(1, PLAYER_BASE));
+    assert!(index.is_stealthed(0, PLAYER_BASE));
+    index.replace_shard(0, []);
+    index.remove(0, &source);
+    assert_eq!(index.on_target(1, PLAYER_BASE), vec![destination]);
+}
+
+#[test]
+fn old_shard_combat_cannot_address_a_transferred_character() {
+    let mut rng = Rng::new(74);
+    let realm = spread_realm(&mut rng);
+    let transferred = &realm.viewers[0];
+    let cast = cast(&realm, transferred.self_guid, transferred.self_guid);
+    let combat = combat(&realm, transferred.self_guid, transferred.self_guid);
+    realm
+        .view
+        .add_viewer_on_shard(transferred.clone(), CellKey::at(1, 0, 4, 4), 1);
+    realm.view.spatial.upsert_entity(
+        EntityLayer::WorldEntity,
+        transferred.self_guid,
+        CellKey::at(1, 0, 4, 4),
+        1,
+        0,
+    );
+
+    cast_event_appeared(&realm.view, 0, &cast);
+    combat_event_appeared(&realm.view, 0, &combat);
+    let mut ranged = melee(transferred.self_guid, 0);
+    ranged.ranged_spell_id = 75;
+    melee_disengaged(&realm.view, 0, &ranged);
+    assert!(realm.queues[0].try_recv().is_err());
+    assert!(aura_audience(&realm.view, 0, &aura(1, transferred.self_guid, 0xA0)).is_empty());
+
+    // A current-shard owner still receives its private stop with no indexed anchor.
+    realm
+        .view
+        .spatial
+        .remove_entity(EntityLayer::WorldEntity, transferred.self_guid, 1);
+    melee_disengaged(&realm.view, 1, &ranged);
+    let Outbound::Job(job) = realm.queues[0].try_recv().unwrap() else {
+        panic!("expected a Relay job");
+    };
+    assert!(matches!(
+        job().as_slice(),
+        [Outbound::One(
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_CANCEL_AUTO_REPEAT
+        )]
+    ));
+}
+
+#[test]
+fn spatial_candidates_also_stay_on_the_event_shard() {
+    let view = WorldView::new(true);
+    let (tx, rx) = SessionTx::with_depth(0);
+    let observer = viewer(1, PLAYER_BASE, tx);
+    let cell = CellKey::at(0, 0, 0, 0);
+    view.add_viewer_on_shard(observer, cell, 1);
+    assert!(view
+        .cell_audience(0, Some(cell), BOX_HALF_SPAN, &[])
+        .is_empty());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn late_source_deletes_preserve_the_destination_entity_and_its_client_object() {
+    let view = WorldView::new(true);
+    let (tx, rx) = SessionTx::with_depth(0);
+    let observer = viewer(1, PLAYER_BASE, tx);
+    observer.created.lock().unwrap().insert(CREATURE_BASE);
+    let source = CellKey::at(0, 0, 0, 0);
+    let destination = CellKey::at(1, 0, 0, 0);
+    view.add_viewer_on_shard(observer.clone(), destination, 1);
+    for layer in [EntityLayer::WorldEntity, EntityLayer::GameObject] {
+        view.spatial
+            .upsert_entity(layer, CREATURE_BASE, source, 0, 0);
+        view.spatial
+            .upsert_entity(layer, CREATURE_BASE, destination, 1, 0);
+    }
+
+    entity_vanished(&view, 0, CREATURE_BASE, 0);
+    gameobject_vanished(&view, 0, CREATURE_BASE);
+    assert!(rx.try_recv().is_err());
+    assert!(observer.created.lock().unwrap().contains(&CREATURE_BASE));
+    assert!(view
+        .spatial
+        .can_see(EntityLayer::WorldEntity, observer.session, CREATURE_BASE));
+    assert!(view
+        .spatial
+        .can_see(EntityLayer::GameObject, observer.session, CREATURE_BASE));
+}
+
+#[test]
+fn reconnect_removes_missing_rows_through_the_registered_viewers_writer() {
+    let view = Arc::new(WorldView::new(true));
+    let (tx, rx) = SessionTx::with_depth(0);
+    let arrival = crate::codec::EntityView {
+        guid: PLAYER_BASE,
+        ..Default::default()
+    };
+    let registration = super::super::subscriptions::PlayerSubscriptions::registered_for_test(
+        view.clone(),
+        PLAYER_BASE,
+        &arrival,
+        tx,
+    );
+    let observer = view.viewer_of_owner(OwnerGuid(PLAYER_BASE)).unwrap();
+    let cell = CellKey::of_position(0, 0, 0.0, 0.0);
+    for (layer, guid) in [
+        (EntityLayer::WorldEntity, CREATURE_BASE),
+        (EntityLayer::GameObject, CREATURE_BASE + 1),
+    ] {
+        view.spatial.upsert_entity(layer, guid, cell, 0, 0);
+        if layer == EntityLayer::WorldEntity {
+            observer.created.lock().unwrap().insert(guid);
+        }
+    }
+
+    reconcile_shard(&view, 0, vec![], vec![], vec![]);
+    let mut destroyed = HashSet::new();
+    while let Ok(Outbound::Job(job)) = rx.try_recv() {
+        for packet in job() {
+            let Outbound::One(
+                wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+                    message,
+                ),
+            ) = packet
+            else {
+                panic!("expected DESTROY for a missing snapshot row");
+            };
+            destroyed.insert(message.guid.guid());
+        }
+    }
+    assert_eq!(destroyed, HashSet::from([CREATURE_BASE, CREATURE_BASE + 1]));
+    assert_eq!(
+        *observer.created.lock().unwrap(),
+        HashSet::from([PLAYER_BASE])
+    );
+    assert_eq!(view.spatial.viewer_cell(observer.session), Some(cell));
+    drop(registration);
+    assert!(view.viewer_of_owner(OwnerGuid(PLAYER_BASE)).is_none());
+    assert_eq!(view.spatial.viewer_cell(observer.session), None);
+}
+
+#[test]
+fn a_gameobject_leaving_the_box_uses_its_own_destroy_path() {
+    let view = WorldView::new(true);
+    let (tx, rx) = SessionTx::with_depth(0);
+    let observer = viewer(1, PLAYER_BASE, tx);
+    view.add_viewer_on_shard(observer, CellKey::at(0, 0, 0, 0), 0);
+    view.spatial.upsert_entity(
+        EntityLayer::GameObject,
+        CREATURE_BASE,
+        CellKey::at(0, 0, 0, 0),
+        0,
+        0,
+    );
+    let row = GameObject {
+        guid: CREATURE_BASE,
+        template_entry: 1,
+        map_id: 0,
+        instance_id: 0,
+        grid_x: 10,
+        grid_y: 10,
+        cell: 0,
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        orientation: 0.0,
+        state: 0,
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+        respawn_at_micros: 0,
+        rotation_0: 0.0,
+        rotation_1: 0.0,
+        rotation_2: 0.0,
+        rotation_3: 1.0,
+    };
+    gameobject_appeared(&view, 0, &row);
+    let Outbound::Job(job) = rx.try_recv().unwrap() else {
+        panic!("expected the game object's Relay job");
+    };
+    assert!(matches!(job().as_slice(), [Outbound::One(
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_DESTROY_OBJECT(message)
+    )] if message.guid.guid() == CREATURE_BASE));
+}
+
+#[test]
+fn reconnect_clears_the_action_bar_of_a_pet_missing_from_the_snapshot() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+
+    let view = Arc::new(WorldView::new(true));
+    let (tx, rx) = SessionTx::with_depth(0);
+    let arrival = crate::codec::EntityView {
+        guid: PLAYER_BASE,
+        ..Default::default()
+    };
+    let _registration = super::super::subscriptions::PlayerSubscriptions::registered_for_test(
+        view.clone(),
+        PLAYER_BASE,
+        &arrival,
+        tx,
+    );
+    let observer = view.viewer_of_owner(OwnerGuid(PLAYER_BASE)).unwrap();
+    observer.created.lock().unwrap().insert(CREATURE_BASE);
+    view.spatial.upsert_entity(
+        EntityLayer::WorldEntity,
+        CREATURE_BASE,
+        CellKey::of_position(0, 0, 0.0, 0.0),
+        0,
+        PLAYER_BASE,
+    );
+
+    reconcile_shard(&view, 0, vec![], vec![], vec![]);
+    let Outbound::Job(job) = rx.try_recv().unwrap() else {
+        panic!("expected the missing pet's Relay job");
+    };
+    assert!(matches!(
+        job().as_slice(),
+        [
+            Outbound::One(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(_)),
+            Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_)),
+            Outbound::One(ServerOpcodeMessage::SMSG_PET_SPELLS(_)),
+        ]
+    ));
+    assert_eq!(
+        *observer.created.lock().unwrap(),
+        HashSet::from([PLAYER_BASE])
+    );
+}
+
+#[test]
+fn an_old_connection_cannot_change_a_new_shard_snapshot() {
+    let view = Arc::new(WorldView::new(true));
+    let mut old = None;
+    view.with_new_generation(0, |generation| old = Some(generation));
+    let old = old.unwrap();
+    let cell = CellKey::at(0, 0, 0, 0);
+    ShardGeneration::run(Some(&old), || {
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, CREATURE_BASE, cell, 0, 0);
+        view.auras.upsert(0, &aura(1, CREATURE_BASE, A_STEALTH));
+    });
+    view.with_new_generation(0, |_| reconcile_shard(&view, 0, vec![], vec![], vec![]));
+
+    ShardGeneration::run(Some(&old), || {
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, CREATURE_BASE, cell, 0, 0);
+        view.auras.upsert(0, &aura(1, CREATURE_BASE, A_STEALTH));
+    });
+    assert_eq!(
+        view.spatial
+            .entity_cell(EntityLayer::WorldEntity, CREATURE_BASE),
+        None
+    );
+    assert!(view.auras.on_target(0, CREATURE_BASE).is_empty());
+}
+
+#[test]
+fn a_reconnect_waits_for_an_old_callback_already_in_progress() {
+    let view = Arc::new(WorldView::new(true));
+    let mut generation = None;
+    view.with_new_generation(0, |current| generation = Some(current));
+    let generation = generation.unwrap();
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let (attempt, attempted) = std::sync::mpsc::channel();
+    let (complete, completed) = std::sync::mpsc::channel();
+    std::thread::scope(|threads| {
+        let old_view = view.clone();
+        threads.spawn(move || {
+            ShardGeneration::run(Some(&generation), || {
+                entered.send(()).unwrap();
+                released.recv().unwrap();
+                old_view.spatial.upsert_entity(
+                    EntityLayer::WorldEntity,
+                    CREATURE_BASE,
+                    CellKey::at(0, 0, 0, 0),
+                    0,
+                    0,
+                );
+                old_view.auras.upsert(0, &aura(1, CREATURE_BASE, A_STEALTH));
+            })
+        });
+        started.recv().unwrap();
+        threads.spawn(|| {
+            attempt.send(()).unwrap();
+            view.with_new_generation(0, |_| {
+                reconcile_shard(&view, 0, vec![], vec![], vec![]);
+            });
+            complete.send(()).unwrap();
+        });
+        attempted.recv().unwrap();
+        assert!(completed
+            .recv_timeout(std::time::Duration::from_millis(20))
+            .is_err());
+        release.send(()).unwrap();
+    });
+    completed.recv().unwrap();
+    assert_eq!(
+        view.spatial
+            .entity_cell(EntityLayer::WorldEntity, CREATURE_BASE),
+        None
+    );
+    assert!(view.auras.on_target(0, CREATURE_BASE).is_empty());
+}
+
+#[test]
+fn distant_characters_do_not_add_jobs_to_a_local_combat_event() {
+    let mut rng = Rng::new(810);
+    let realm = realm(&mut rng, 3, 1, 1.0);
+    let row = combat(&realm, realm.viewers[0].self_guid, realm.creatures[0]);
+    combat_event_appeared(&realm.view, 0, &row);
+    assert_eq!(
+        realm
+            .queues
+            .iter()
+            .filter(|rx| rx.try_recv().is_ok())
+            .count(),
+        3
+    );
+
+    let mut distant = Vec::new();
+    for i in 0..2000 {
+        let (tx, rx) = SessionTx::with_depth(0);
+        let observer = viewer(100 + i, PLAYER_BASE + 100 + i, tx);
+        realm
+            .view
+            .add_viewer_on_shard(observer, CellKey::at(0, 0, 100, 100), 0);
+        distant.push(rx);
+    }
+    combat_event_appeared(&realm.view, 0, &row);
+    assert_eq!(
+        realm
+            .queues
+            .iter()
+            .filter(|rx| rx.try_recv().is_ok())
+            .count(),
+        3
+    );
+    assert!(distant.iter().all(|rx| rx.try_recv().is_err()));
 }
 
 /// The aura audience follows the viewer's anchor: walking into the target's box adds the viewer,
@@ -634,24 +988,26 @@ fn aura_audience_follows_a_viewer_recenter() {
         stealther,
         CellKey::at(0, 0, 10, 10),
         0,
+        0,
     );
     let row = aura(1, stealther, A_STEALTH);
 
-    assert!(aura_audience(&view, &row).is_empty());
+    assert!(aura_audience(&view, 0, &row).is_empty());
     view.spatial
         .move_viewer_delta(watcher.session, CellKey::at(0, 0, 9, 9));
-    assert_eq!(sessions(aura_audience(&view, &row)), HashSet::from([1]));
+    assert_eq!(sessions(aura_audience(&view, 0, &row)), HashSet::from([1]));
     view.spatial
         .move_viewer_delta(watcher.session, CellKey::at(0, 0, 20, 20));
-    assert!(aura_audience(&view, &row).is_empty());
+    assert!(aura_audience(&view, 0, &row).is_empty());
     // The target moves under a resident viewer.
     view.spatial.upsert_entity(
         EntityLayer::WorldEntity,
         stealther,
         CellKey::at(0, 0, 21, 21),
         0,
+        0,
     );
-    assert_eq!(sessions(aura_audience(&view, &row)), HashSet::from([1]));
+    assert_eq!(sessions(aura_audience(&view, 0, &row)), HashSet::from([1]));
 }
 
 /// Every aura read the relays make goes through the index; a whole-cache scan must not creep
@@ -675,8 +1031,10 @@ fn aura_relays_never_scan_the_aura_cache() {
             "{signature} must read the aura index"
         );
     }
-    let arm =
-        crate::test_scan::code_of(include_str!("../world_view.rs"), "pub(crate) fn arm_shard");
+    let arm = crate::test_scan::code_of(
+        include_str!("../world_view.rs"),
+        "fn register_shard_callbacks",
+    );
     assert!(
         !arm.contains(".game_aura().iter()"),
         "the pump scans the aura cache"
