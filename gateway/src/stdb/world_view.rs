@@ -2338,7 +2338,7 @@ mod relay_bench;
 mod family_audience_tests {
     use super::{
         addon_message_appeared, duel_winner_audience, exploration_outbound_for_word,
-        is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared,
+        is_initial_apply, item_owner_job, levelup_appeared, reputation_appeared, sweep_into_view,
         system_message_appeared, teleport_appeared, weather_changed, xp_appeared, zone_crossed,
         BoundIdentity, ExplorationReplay, MotionPending, OwnerGuid, Viewer, WorldView,
     };
@@ -3317,6 +3317,69 @@ mod family_audience_tests {
     }
 
     #[test]
+    fn world_entry_sweep_defers_resident_reads_to_one_writer_job() {
+        let view = Arc::new(WorldView::new(true));
+        let (tx, rx) = SessionTx::with_depth(0);
+        let viewer = viewer_with_tx(1, 9001, identity(1), tx);
+        view.add_viewer_on_shard(viewer.clone(), CellKey::at(0, 0, 0, 0), 0);
+        let shards = view.shards.write().unwrap();
+        let (done, completed) = std::sync::mpsc::channel();
+        let reader = {
+            let view = view.clone();
+            std::thread::spawn(move || {
+                sweep_into_view(&view, &viewer);
+                done.send(()).unwrap();
+            })
+        };
+
+        let returned = completed.recv_timeout(std::time::Duration::from_secs(5));
+        drop(shards);
+        reader.join().unwrap();
+        assert!(
+            returned.is_ok(),
+            "the reader must not wait for the resident Shard table"
+        );
+        assert!(queued_job(&rx).is_empty(), "there are no resident rows");
+        assert!(rx.try_recv().is_err(), "one sweep must be one writer job");
+    }
+
+    #[test]
+    fn world_entry_sweep_reads_and_builds_only_inside_its_writer_job() {
+        // Resident packet construction needs a live Coordinator. Keep its AOI/cache reads and
+        // packet builders in the same writer job without substituting internal collaborators.
+        let source = include_str!("world_view.rs");
+        let signature = "pub(crate) fn sweep_into_view(";
+        let start = source.rfind(signature).unwrap();
+        let sweep = crate::test_scan::code_of(&source[start..], signature);
+        let job = crate::test_scan::body_of(&sweep, "enqueue(");
+        let outside_job = sweep.replacen(&job, "", 1);
+
+        assert_eq!(sweep.matches("enqueue(").count(), 1);
+        assert!(
+            !sweep.contains(".send("),
+            "the writer must send the returned packet sequence"
+        );
+        for operation in [
+            "visible_entities(",
+            ".shard(",
+            ".shards",
+            ".coord()",
+            "offer_peer_create_for(",
+            "relay_gameobject_create(",
+            "resident_taxi_spline_outbound(",
+        ] {
+            assert!(
+                job.contains(operation),
+                "the writer job must own {operation}"
+            );
+            assert!(
+                !outside_job.contains(operation),
+                "the reader must not run {operation}"
+            );
+        }
+    }
+
+    #[test]
     fn recenter_and_sweep_enqueue_world_entities_before_game_objects() {
         let source = include_str!("world_view.rs");
         let recenter_start = source.rfind("pub(crate) fn recenter(view:").unwrap();
@@ -3437,61 +3500,61 @@ pub(crate) fn recenter(view: &Arc<WorldView>, viewer: &Arc<Viewer>, map_id: u32,
     }
 }
 
-/// The world-entry sweep: offer every row already inside the fresh viewer's box.
-///
-/// A subscription's first apply never reliably fired per-row `on_insert`, which is
-/// why the per-player path had a sweep too; here there is no apply at all — the rows were already
-/// resident in the coordinator caches long before this session existed — so the sweep is not a
-/// belt-and-braces measure, it is the ONLY thing that populates a fresh client's world.
-pub(crate) fn sweep_into_view(view: &WorldView, viewer: &Arc<Viewer>) {
-    for (guid, shard) in view
-        .spatial
-        .visible_entities(EntityLayer::WorldEntity, viewer.session)
-    {
-        let Some(coord) = view.shard(shard) else {
-            continue;
-        };
-        let Some(row) = coord
-            .0
-            .coord()
-            .conn
-            .db
-            .game_world_entity()
-            .guid()
-            .find(&guid)
-        else {
-            continue;
-        };
-        for o in super::subscriptions::offer_peer_create_for(&coord, view, shard, viewer, &row) {
-            let _ = viewer.tx.send(o);
+/// Offer resident rows in one writer job. Reading the AOI and caches inside the job keeps a
+/// queued DESTROY from being followed by a CREATE built from an earlier resident snapshot.
+/// The writer sends every CREATE and its follow-up VALUES before running another Relay.
+pub(crate) fn sweep_into_view(view: &Arc<WorldView>, viewer: &Arc<Viewer>) {
+    let view = view.clone();
+    enqueue(viewer.clone(), move |viewer| {
+        let mut out = Vec::new();
+        for (guid, shard) in view
+            .spatial
+            .visible_entities(EntityLayer::WorldEntity, viewer.session)
+        {
+            let Some(coord) = view.shard(shard) else {
+                continue;
+            };
+            let Some(row) = coord
+                .0
+                .coord()
+                .conn
+                .db
+                .game_world_entity()
+                .guid()
+                .find(&guid)
+            else {
+                continue;
+            };
+            out.extend(super::subscriptions::offer_peer_create_for(
+                &coord, &view, shard, &viewer, &row,
+            ));
         }
-    }
-    for (guid, shard) in view
-        .spatial
-        .visible_entities(EntityLayer::GameObject, viewer.session)
-    {
-        let Some(coord) = view.shard(shard) else {
-            continue;
-        };
-        let Some(row) = coord.0.coord().conn.db.game_gameobject().guid().find(&guid) else {
-            continue;
-        };
-        for o in super::subscriptions::relay_gameobject_create(&coord, viewer, &row) {
-            let _ = viewer.tx.send(o);
+        for (guid, shard) in view
+            .spatial
+            .visible_entities(EntityLayer::GameObject, viewer.session)
+        {
+            let Some(coord) = view.shard(shard) else {
+                continue;
+            };
+            let Some(row) = coord.0.coord().conn.db.game_gameobject().guid().find(&guid) else {
+                continue;
+            };
+            out.extend(super::subscriptions::relay_gameobject_create(
+                &coord, &viewer, &row,
+            ));
         }
-    }
 
-    // The login sequence queued the owner's self CREATE before registering this viewer. Chain the
-    // resident flight now so reconnect observes CREATE before MONSTER_MOVE on the same writer.
-    for coord in view.shards.read().unwrap().iter() {
-        for outbound in super::subscriptions::resident_taxi_spline_outbound(
-            coord,
-            viewer,
-            viewer.self_guid,
-        ) {
-            let _ = viewer.tx.send(outbound);
+        // The login sequence queued self CREATE before registration, so the resident flight
+        // follows it on this writer too.
+        for coord in view.shards.read().unwrap().iter() {
+            out.extend(super::subscriptions::resident_taxi_spline_outbound(
+                coord,
+                &viewer,
+                viewer.self_guid,
+            ));
         }
-    }
+        out
+    });
 }
 
 /// Replace this Shard's rows between SDK messages. Its old pump has stopped, and other
