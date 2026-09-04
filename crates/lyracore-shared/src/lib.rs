@@ -25,6 +25,7 @@ pub mod opcodes;
 pub mod packing;
 pub mod quest;
 pub mod region;
+pub mod social;
 pub mod spatial;
 pub mod terrain;
 pub mod trade;

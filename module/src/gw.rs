@@ -568,7 +568,7 @@ pub fn gw_spirit_res(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String
 #[reducer]
 pub fn gw_accept_group_invite(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    group_actor(ctx, actor_guid)?;
     crate::actor::accept_group_invite(ctx, actor_guid)
 }
 
@@ -714,7 +714,7 @@ pub fn gw_send_whisper(
 #[reducer]
 pub fn gw_party_chat(ctx: &ReducerContext, actor_guid: u64, text: String) -> Result<(), String> {
     require_operator(ctx)?;
-    let sender = actor(ctx, actor_guid)?;
+    let sender = group_actor(ctx, actor_guid)?;
     crate::chat::apply_party_chat(ctx, sender, text)
 }
 
@@ -755,11 +755,25 @@ pub fn gw_send_channel_message(
     crate::chat::apply_send_channel_message(ctx, sender, channel, message)
 }
 
+/// Taxi flight is an expected contact Refusal. Missing actors still carry the generic actor error,
+/// which the Gateway treats as a failure with an unknown result.
+fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
+    let actor = acting_entity_by_guid(ctx, actor_guid)
+        .ok_or_else(|| "mover not in world".to_string())?;
+    if crate::taxi::is_in_flight(ctx, actor_guid) {
+        return Err(crate::chat::refused_contact(
+            lyracore_shared::social::ContactRefusal::ActorUnavailable,
+            &format!("actor {actor_guid} is in taxi flight"),
+        ));
+    }
+    Ok(actor)
+}
+
 /// [`crate::chat::add_contact`] (friend arm) with the owner named by guid.
 #[reducer]
 pub fn gw_add_friend(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    let sender = actor(ctx, actor_guid)?;
+    let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::add_contact(ctx, sender, target_guid, false)
 }
 
@@ -767,7 +781,7 @@ pub fn gw_add_friend(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) ->
 #[reducer]
 pub fn gw_del_friend(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    let sender = actor(ctx, actor_guid)?;
+    let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::remove_contact(ctx, sender, target_guid, false)
 }
 
@@ -775,7 +789,7 @@ pub fn gw_del_friend(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) ->
 #[reducer]
 pub fn gw_add_ignore(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    let sender = actor(ctx, actor_guid)?;
+    let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::add_contact(ctx, sender, target_guid, true)
 }
 
@@ -783,13 +797,27 @@ pub fn gw_add_ignore(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) ->
 #[reducer]
 pub fn gw_del_ignore(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    let sender = actor(ctx, actor_guid)?;
+    let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::remove_contact(ctx, sender, target_guid, true)
 }
 
 // ===========================================================================================
 //  Group (batch B)
 // ===========================================================================================
+
+/// Taxi flight is an expected group Refusal. Missing actors still carry the generic actor error,
+/// which the Gateway treats as a failure with an unknown result.
+fn group_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
+    let actor = acting_entity_by_guid(ctx, actor_guid)
+        .ok_or_else(|| "mover not in world".to_string())?;
+    if crate::taxi::is_in_flight(ctx, actor_guid) {
+        return Err(crate::group::refused(
+            lyracore_shared::group::GroupRefusal::ActorUnavailable,
+            &format!("actor {actor_guid} is in taxi flight"),
+        ));
+    }
+    Ok(actor)
+}
 
 /// [`crate::group::invite_core`] with the inviter named by guid.
 #[reducer]
@@ -799,7 +827,7 @@ pub fn gw_group_invite(
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    group_actor(ctx, actor_guid)?;
     crate::group::invite_core(ctx, actor_guid, target_guid)
 }
 
@@ -807,7 +835,7 @@ pub fn gw_group_invite(
 #[reducer]
 pub fn gw_group_decline(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    group_actor(ctx, actor_guid)?;
     crate::group::decline_invite_for(ctx, actor_guid)
 }
 
@@ -930,7 +958,7 @@ pub fn gw_duel_cancel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) -> 
 #[reducer]
 pub fn gw_group_leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    group_actor(ctx, actor_guid)?;
     crate::group::leave_group_for(ctx, actor_guid)
 }
 
@@ -942,7 +970,7 @@ pub fn gw_group_uninvite(
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    group_actor(ctx, actor_guid)?;
     crate::group::uninvite_from_group(ctx, actor_guid, target_guid)
 }
 
@@ -956,7 +984,7 @@ pub fn gw_group_loot_method(
     loot_threshold: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    actor(ctx, actor_guid)?;
+    group_actor(ctx, actor_guid)?;
     crate::group::set_loot_method_for(
         ctx,
         actor_guid,

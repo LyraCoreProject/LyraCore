@@ -3,10 +3,13 @@ use super::handlers::{
     ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
     QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
+use super::party::PartyOutcome;
 use super::*;
 use crate::read_deadline::{DeadlineClock, PreAuthDeadline};
+use lyracore_shared::group::GroupRefusal;
 use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot::LootRefusal;
+use lyracore_shared::social::ContactRefusal;
 use std::cell::Cell;
 use std::io::Cursor;
 use std::os::unix::net::UnixStream;
@@ -351,8 +354,9 @@ struct InMemoryStore {
     /// NAME as the pre-realm-core path passes it (the module resolves it). The single-database plane's
     /// byte-identity is asserted against this.
     whispers: std::sync::Mutex<Vec<(String, String)>>,
-    /// When set, `party_chat` returns this error — e.g. `group_err::NOT_IN_GROUP`
-    /// to drive the "not in a group" → `SMSG_PARTY_COMMAND_RESULT(NotInGroup)` mapping.
+    /// When set, `party_chat` answers this reducer error — a `GroupRefusal` tag becomes a Refusal,
+    /// anything else stays a failure. `NotInGroup`'s tag drives the
+    /// `SMSG_PARTY_COMMAND_RESULT(NotInGroup)` mapping.
     party_chat_error: Option<String>,
     /// Recorded `party_chat` messages — the dispatch test asserts the RIGHT text
     /// reached the reducer call.
@@ -738,7 +742,36 @@ struct InMemoryStore {
     ignore_trades: std::sync::Mutex<Vec<u64>>,
 }
 
+/// The Fake's reducer edge for a party op: the Module answers a Refusal as the bare tag, and
+/// anything else — a timeout, a dead transport — is a failure with an unknown durable outcome.
+fn faked_party(error: &str) -> Result<PartyOutcome> {
+    match lyracore_shared::group::GroupRefusal::parse_tag(error) {
+        Some(refusal) => Ok(refusal.into()),
+        None => Err(anyhow!("{error}")),
+    }
+}
+
+/// [`faked_party`] for the friends and ignore lists.
+fn faked_contact(error: &str) -> Result<ContactOutcome> {
+    match lyracore_shared::social::ContactRefusal::parse_tag(error) {
+        Some(refusal) => Ok(refusal.into()),
+        None => Err(anyhow!("{error}")),
+    }
+}
+
 impl InMemoryStore {
+    /// Drop one contact row, or refuse when the owner does not hold it.
+    fn remove_contact(&self, target_guid: u64, is_ignore: bool) -> Result<ContactOutcome> {
+        let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
+        let mut contacts = self.contacts.lock().unwrap();
+        let before = contacts.len();
+        contacts.retain(|&(o, t, ig)| !(o == owner && t == target_guid && ig == is_ignore));
+        if contacts.len() == before {
+            return Ok(lyracore_shared::social::ContactRefusal::NotOnList.into());
+        }
+        Ok(ContactOutcome::Done)
+    }
+
     /// Record one player-scoped call against THIS handle's shard.
     fn rec(&self, what: &str) {
         self.calls
@@ -2078,12 +2111,17 @@ impl WorldStore for InMemoryStore {
             None => Ok(()),
         }
     }
-    fn party_chat(&self, _account_id: u64, _self_guid: u64, message: String) -> Result<()> {
+    fn party_chat(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        message: String,
+    ) -> Result<PartyOutcome> {
         match &self.party_chat_error {
-            Some(e) => Err(anyhow!("{e}")),
+            Some(e) => faked_party(e),
             None => {
                 self.party_chats.lock().unwrap().push(message);
-                Ok(())
+                Ok(PartyOutcome::Ran)
             }
         }
     }
@@ -2226,17 +2264,22 @@ impl WorldStore for InMemoryStore {
     // Each of these records the SHARD it ran on (`rec`), so a test can tell the
     // single-database path (the op lands on the player's own shard, here) apart from the realm-core
     // one (it lands in `FakeParty::ops` and never reaches these at all).
-    fn group_invite(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
+    fn group_invite(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_guid: u64,
+    ) -> Result<PartyOutcome> {
         self.rec("group_invite");
         if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+            return faked_party(e);
         }
         self.group_invites.lock().unwrap().push(target_guid);
-        Ok(())
+        Ok(PartyOutcome::Ran)
     }
-    fn group_accept(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn group_accept(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
         self.rec("group_accept");
-        Ok(())
+        Ok(PartyOutcome::Ran)
     }
     // Trade (#120): pure recorders — the module owns every gate, so the fake just proves which
     // verb the dispatch chose and which args survived the wire.
@@ -2308,13 +2351,13 @@ impl WorldStore for InMemoryStore {
         self.ignore_trades.lock().unwrap().push(self_guid);
         Ok(())
     }
-    fn group_decline(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn group_decline(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
         self.rec("group_decline");
-        Ok(())
+        Ok(PartyOutcome::Ran)
     }
-    fn group_leave(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn group_leave(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
         self.rec("group_leave");
-        Ok(())
+        Ok(PartyOutcome::Ran)
     }
     fn group_loot_method(
         &self,
@@ -2323,16 +2366,16 @@ impl WorldStore for InMemoryStore {
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
-    ) -> Result<()> {
+    ) -> Result<PartyOutcome> {
         self.rec("group_loot_method");
         if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+            return faked_party(e);
         }
         self.group_loot_methods
             .lock()
             .unwrap()
             .push((loot_setting, master_guid, loot_threshold));
-        Ok(())
+        Ok(PartyOutcome::Ran)
     }
 
     // --- The realm-core plane (party/group routing) ---
@@ -2370,15 +2413,15 @@ impl WorldStore for InMemoryStore {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
-    ) -> Result<()> {
-        use lyracore_shared::group::{err as group_err, event_kind as kind, realm_op};
+    ) -> Result<PartyOutcome> {
+        use lyracore_shared::group::{event_kind as kind, realm_op, GroupRefusal};
         self.rec("realm_group_op");
         let mut p = self.party.lock().unwrap();
         p.ops.push((op, actor_guid, target_guid, arg_a, arg_b));
         match op {
             realm_op::INVITE => {
                 if p.group_of(target_guid).is_some() {
-                    return Err(anyhow!("{}", group_err::ALREADY_IN_GROUP));
+                    return Ok(GroupRefusal::AlreadyInGroup.into());
                 }
                 p.invites.retain(|(t, _)| *t != target_guid);
                 p.invites.push((target_guid, actor_guid));
@@ -2386,14 +2429,16 @@ impl WorldStore for InMemoryStore {
             }
             realm_op::ACCEPT => {
                 if let Some(e) = &self.party_accept_error {
-                    return Err(anyhow!("{e}"));
+                    return faked_party(e);
                 }
-                let inviter = p
+                let Some(inviter) = p
                     .invites
                     .iter()
                     .find(|(t, _)| *t == actor_guid)
                     .map(|(_, i)| *i)
-                    .ok_or_else(|| anyhow!("no pending invite"))?;
+                else {
+                    return Ok(GroupRefusal::NoPendingInvite.into());
+                };
                 p.invites.retain(|(t, _)| *t != actor_guid);
                 let group_id = match p.group_of(inviter) {
                     Some(g) => g,
@@ -2410,40 +2455,42 @@ impl WorldStore for InMemoryStore {
                 p.push_list(group_id);
             }
             realm_op::DECLINE => {
-                let inviter = p
+                let Some(inviter) = p
                     .invites
                     .iter()
                     .find(|(t, _)| *t == actor_guid)
                     .map(|(_, i)| *i)
-                    .ok_or_else(|| anyhow!("no pending invite"))?;
+                else {
+                    return Ok(GroupRefusal::NoPendingInvite.into());
+                };
                 p.invites.retain(|(t, _)| *t != actor_guid);
                 p.events.push((inviter, kind::DECLINE));
             }
             realm_op::LEAVE => {
                 if p.group_of(actor_guid).is_none() {
-                    return Err(anyhow!("{}", group_err::NOT_IN_GROUP));
+                    return Ok(GroupRefusal::NotInGroup.into());
                 }
                 p.remove_member(actor_guid);
             }
             realm_op::UNINVITE => {
-                let group_id = p
-                    .group_of(actor_guid)
-                    .ok_or_else(|| anyhow!("{}", group_err::NOT_IN_GROUP))?;
+                let Some(group_id) = p.group_of(actor_guid) else {
+                    return Ok(GroupRefusal::NotInGroup.into());
+                };
                 if p.groups.iter().find(|(g, ..)| *g == group_id).map(|e| e.1) != Some(actor_guid) {
-                    return Err(anyhow!("{}", group_err::NOT_LEADER));
+                    return Ok(GroupRefusal::NotLeader.into());
                 }
                 if p.group_of(target_guid) != Some(group_id) {
-                    return Err(anyhow!("{}", group_err::TARGET_NOT_IN_GROUP));
+                    return Ok(GroupRefusal::TargetNotInGroup.into());
                 }
                 p.remove_member(target_guid);
             }
             realm_op::LOOT_METHOD => {
-                let group_id = p
-                    .group_of(actor_guid)
-                    .ok_or_else(|| anyhow!("{}", group_err::NOT_IN_GROUP))?;
+                let Some(group_id) = p.group_of(actor_guid) else {
+                    return Ok(GroupRefusal::NotInGroup.into());
+                };
                 if let Some(entry) = p.groups.iter_mut().find(|(g, ..)| *g == group_id) {
                     if entry.1 != actor_guid {
-                        return Err(anyhow!("{}", group_err::NOT_LEADER));
+                        return Ok(GroupRefusal::NotLeader.into());
                     }
                     entry.2 = arg_a;
                     entry.3 = arg_b;
@@ -2453,7 +2500,7 @@ impl WorldStore for InMemoryStore {
             }
             other => return Err(anyhow!("unknown realm group op {other}")),
         }
-        Ok(())
+        Ok(PartyOutcome::Ran)
     }
 
     fn group_roster(&self, character_guid: u64) -> Result<Option<super::party::GroupRoster>> {
@@ -2651,9 +2698,14 @@ impl WorldStore for InMemoryStore {
         Ok((watermark, wins))
     }
 
-    fn group_uninvite(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
+    fn group_uninvite(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _target_guid: u64,
+    ) -> Result<PartyOutcome> {
         self.rec("group_uninvite");
-        Ok(())
+        Ok(PartyOutcome::Ran)
     }
     fn gossip_select(
         &self,
@@ -2669,47 +2721,53 @@ impl WorldStore for InMemoryStore {
             .push((option_id, option_row_id));
         Ok(())
     }
-    fn add_friend(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
+    fn add_friend(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome> {
         if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+            return faked_contact(e);
         }
         let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
         self.contacts
             .lock()
             .unwrap()
             .push((owner, target_guid, false));
-        Ok(())
+        Ok(ContactOutcome::Done)
     }
-    fn del_friend(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
-        let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
-        let mut contacts = self.contacts.lock().unwrap();
-        let before = contacts.len();
-        contacts.retain(|&(o, t, ig)| !(o == owner && t == target_guid && !ig));
-        if contacts.len() == before {
-            return Err(anyhow!("not on that list"));
-        }
-        Ok(())
+    fn del_friend(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome> {
+        self.remove_contact(target_guid, false)
     }
-    fn add_ignore(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
+    fn add_ignore(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome> {
         if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
+            return faked_contact(e);
         }
         let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
         self.contacts
             .lock()
             .unwrap()
             .push((owner, target_guid, true));
-        Ok(())
+        Ok(ContactOutcome::Done)
     }
-    fn del_ignore(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
-        let owner = self.login_entity.as_ref().map(|e| e.guid).unwrap_or(0);
-        let mut contacts = self.contacts.lock().unwrap();
-        let before = contacts.len();
-        contacts.retain(|&(o, t, ig)| !(o == owner && t == target_guid && ig));
-        if contacts.len() == before {
-            return Err(anyhow!("not on that list"));
-        }
-        Ok(())
+    fn del_ignore(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome> {
+        self.remove_contact(target_guid, true)
     }
 }
 
@@ -5517,6 +5575,85 @@ fn group_invite_by_name_replies_party_command_result_success() {
     let _ = server.join();
 }
 
+/// Every party Refusal the Module can send reaches the client as exactly one `PartyResult`, through
+/// the real store seam rather than the mapping function alone.
+#[test]
+fn every_group_refusal_reaches_the_client_as_one_party_result() {
+    use wow_world_messages::vanilla::PartyResult;
+    for refusal in GroupRefusal::ALL {
+        let want = match refusal {
+            GroupRefusal::AlreadyInGroup => PartyResult::AlreadyInGroup,
+            GroupRefusal::GroupFull => PartyResult::GroupFull,
+            GroupRefusal::NotLeader => PartyResult::NotLeader,
+            GroupRefusal::NotInGroup => PartyResult::NotInGroup,
+            GroupRefusal::TargetNotInGroup => PartyResult::TargetNotInGroup,
+            _ => PartyResult::BadPlayerName,
+        };
+        let mut s = quest_store();
+        s.characters = vec![codec::CharacterView {
+            guid: 2,
+            name: "Buddy".into(),
+            ..Default::default()
+        }];
+        s.trade_error = Some(refusal.as_tag().to_string());
+        let store = std::sync::Arc::new(s);
+        let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+        wow_world_messages::vanilla::CMSG_GROUP_INVITE {
+            name: "Buddy".into(),
+        }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => {
+                assert_eq!(r.result, want, "{refusal:?} must map to {want:?}")
+            }
+            other => panic!("expected SMSG_PARTY_COMMAND_RESULT, got {other}"),
+        }
+        drop(client);
+        let _ = server.join();
+    }
+}
+
+/// A reducer that timed out left the party in an unknown state, so it must end the session rather
+/// than pose as a gameplay answer the client renders.
+#[test]
+fn a_group_invite_timeout_is_not_answered_as_a_refusal() {
+    let mut s = quest_store();
+    s.characters = vec![codec::CharacterView {
+        guid: 2,
+        name: "Buddy".into(),
+        ..Default::default()
+    }];
+    s.login_entity = Some(warrior_entity());
+    s.trade_error = Some("gw_group_invite reducer timed out after 10s".into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        result_tx
+            .send(run_world_session(server_end, server_store.as_ref()))
+            .unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    wow_world_messages::vanilla::CMSG_GROUP_INVITE {
+        name: "Buddy".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let error = result_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("an unknown party outcome must end the session promptly")
+        .expect_err("a timed-out party reducer must be session-fatal");
+    assert!(format!("{error:#}").contains("timed out"));
+}
+
 #[test]
 fn group_invite_unknown_name_replies_bad_player_name() {
     // An unresolvable name never reaches the store — the reply is BadPlayerName ("player not found").
@@ -5650,10 +5787,10 @@ fn add_ignore_by_name_replies_ignore_added() {
 
 #[test]
 fn add_friend_maps_self_already_and_full_errors() {
-    for (err, want) in [
-        ("cannot add yourself", FriendResult::SelfX),
-        ("already added", FriendResult::Already),
-        ("list full", FriendResult::ListFull),
+    for (refusal, want) in [
+        (ContactRefusal::AddSelf, FriendResult::SelfX),
+        (ContactRefusal::AlreadyOnList, FriendResult::Already),
+        (ContactRefusal::ListFull, FriendResult::ListFull),
     ] {
         let mut s = quest_store();
         s.characters = vec![codec::CharacterView {
@@ -5661,7 +5798,7 @@ fn add_friend_maps_self_already_and_full_errors() {
             name: "Buddy".into(),
             ..Default::default()
         }];
-        s.trade_error = Some(err.into());
+        s.trade_error = Some(refusal.as_tag().to_string());
         let store = std::sync::Arc::new(s);
         let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
         CMSG_ADD_FRIEND {
@@ -5671,7 +5808,7 @@ fn add_friend_maps_self_already_and_full_errors() {
         .unwrap();
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_FRIEND_STATUS(s) => {
-                assert_eq!(s.result, want, "store error {err:?} must map to {want:?}")
+                assert_eq!(s.result, want, "{refusal:?} must map to {want:?}")
             }
             other => panic!("expected SMSG_FRIEND_STATUS, got {other}"),
         }
@@ -5682,9 +5819,10 @@ fn add_friend_maps_self_already_and_full_errors() {
 
 #[test]
 fn add_ignore_maps_already_and_full_errors_to_the_ignore_variants() {
-    for (err, want) in [
-        ("already added", FriendResult::IgnoreAlready),
-        ("list full", FriendResult::IgnoreFull),
+    for (refusal, want) in [
+        (ContactRefusal::AddSelf, FriendResult::IgnoreSelf),
+        (ContactRefusal::AlreadyOnList, FriendResult::IgnoreAlready),
+        (ContactRefusal::ListFull, FriendResult::IgnoreFull),
     ] {
         let mut s = quest_store();
         s.characters = vec![codec::CharacterView {
@@ -5692,7 +5830,7 @@ fn add_ignore_maps_already_and_full_errors_to_the_ignore_variants() {
             name: "Pest".into(),
             ..Default::default()
         }];
-        s.trade_error = Some(err.into());
+        s.trade_error = Some(refusal.as_tag().to_string());
         let store = std::sync::Arc::new(s);
         let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
         CMSG_ADD_IGNORE {
@@ -5702,13 +5840,101 @@ fn add_ignore_maps_already_and_full_errors_to_the_ignore_variants() {
         .unwrap();
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
             ServerOpcodeMessage::SMSG_FRIEND_STATUS(s) => {
-                assert_eq!(s.result, want, "store error {err:?} must map to {want:?}")
+                assert_eq!(s.result, want, "{refusal:?} must map to {want:?}")
             }
             other => panic!("expected SMSG_FRIEND_STATUS, got {other}"),
         }
         drop(client);
         server.join().unwrap();
     }
+}
+
+/// Every contact Refusal the Module can send reaches the client as exactly one `FriendResult`, and
+/// the friends and ignore lists get their own code family for the same condition.
+#[test]
+fn every_contact_refusal_reaches_the_client_as_one_friend_result() {
+    for refusal in ContactRefusal::ALL {
+        let (friend, ignore) = match refusal {
+            ContactRefusal::AddSelf => (FriendResult::SelfX, FriendResult::IgnoreSelf),
+            ContactRefusal::AlreadyOnList => (FriendResult::Already, FriendResult::IgnoreAlready),
+            ContactRefusal::ListFull => (FriendResult::ListFull, FriendResult::IgnoreFull),
+            ContactRefusal::NotOnList => (FriendResult::NotFound, FriendResult::IgnoreNotFound),
+            ContactRefusal::NoSuchPlayer | ContactRefusal::ActorUnavailable => {
+                (FriendResult::NotFound, FriendResult::NotFound)
+            }
+        };
+        for (is_ignore, want) in [(false, friend), (true, ignore)] {
+            let mut s = quest_store();
+            s.characters = vec![codec::CharacterView {
+                guid: 2,
+                name: "Buddy".into(),
+                ..Default::default()
+            }];
+            s.trade_error = Some(refusal.as_tag().to_string());
+            let store = std::sync::Arc::new(s);
+            let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+            if is_ignore {
+                CMSG_ADD_IGNORE {
+                    name: "Buddy".into(),
+                }
+                .write_encrypted_client(&mut client, &mut c_enc)
+                .unwrap();
+            } else {
+                CMSG_ADD_FRIEND {
+                    name: "Buddy".into(),
+                }
+                .write_encrypted_client(&mut client, &mut c_enc)
+                .unwrap();
+            }
+            match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+                ServerOpcodeMessage::SMSG_FRIEND_STATUS(s) => {
+                    assert_eq!(s.result, want, "{refusal:?} on ignore={is_ignore}")
+                }
+                other => panic!("expected SMSG_FRIEND_STATUS, got {other}"),
+            }
+            drop(client);
+            server.join().unwrap();
+        }
+    }
+}
+
+/// The contact half of the same rule: a timed-out add left the list in an unknown state.
+#[test]
+fn an_add_friend_timeout_is_not_answered_as_a_refusal() {
+    let mut s = quest_store();
+    s.characters = vec![codec::CharacterView {
+        guid: 2,
+        name: "Buddy".into(),
+        ..Default::default()
+    }];
+    s.login_entity = Some(warrior_entity());
+    s.trade_error = Some("gw_add_friend reducer timed out after 10s".into());
+    let store = std::sync::Arc::new(s);
+    let (mut client, server_end) = world_session_socket_pair();
+    let server_store = store.clone();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        result_tx
+            .send(run_world_session(server_end, server_store.as_ref()))
+            .unwrap();
+    });
+    let (mut c_enc, mut c_dec) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    for _ in 0..WORLD_ENTRY_PACKETS {
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    }
+    CMSG_ADD_FRIEND {
+        name: "Buddy".into(),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    let error = result_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("an unknown contact outcome must end the session promptly")
+        .expect_err("a timed-out contact reducer must be session-fatal");
+    assert!(format!("{error:#}").contains("timed out"));
 }
 
 #[test]
@@ -9055,11 +9281,10 @@ fn messagechat_party_from_a_grouped_caller_routes_to_party_chat() {
 
 #[test]
 fn messagechat_party_from_an_ungrouped_caller_replies_not_in_group() {
-    // The module's "not in a group" rejection maps to the SAME
-    // SMSG_PARTY_COMMAND_RESULT(NotInGroup) line `group_leave`/`group_uninvite` already use for
-    // this exact reducer error (the shared `lyracore_shared::group::err::NOT_IN_GROUP` contract).
+    // The module's NotInGroup Refusal maps to the SAME SMSG_PARTY_COMMAND_RESULT(NotInGroup) line
+    // `group_leave`/`group_uninvite` already use for this exact condition.
     let mut s = quest_store();
-    s.party_chat_error = Some(lyracore_shared::group::err::NOT_IN_GROUP.to_string());
+    s.party_chat_error = Some(GroupRefusal::NotInGroup.as_tag().to_string());
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
     CMSG_MESSAGECHAT {

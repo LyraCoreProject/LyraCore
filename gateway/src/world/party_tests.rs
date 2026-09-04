@@ -9,6 +9,7 @@
 //! A child module of `world::tests` so it can reach `InMemoryStore` without widening anything.
 
 use super::*;
+use lyracore_shared::group::GroupRefusal;
 
 pub(super) const GINGER: u64 = 1; // in the open world, on `world`
 pub(super) const VIM: u64 = 2; // inside the dungeon, on `instances`
@@ -471,19 +472,20 @@ fn world_entry_clears_a_mirror_that_still_lists_a_character_the_authority_droppe
 }
 
 /// The two gates realm-core cannot run for itself. Both are refused BEFORE the authority is touched,
-/// and both carry the module's own error strings so `social::party_result_for` classifies them
+/// and both answer the module's own Refusals so `social::party_result_for` classifies them
 /// identically on either plane.
 #[test]
 fn an_invite_to_a_missing_or_offline_target_never_reaches_realm_core() {
     let (realm, world, _instances, _calls) = party_topology();
 
-    let err = party::run(world.as_ref(), 7, GINGER, party::Op::Invite(DORMANT))
-        .expect_err("an offline target is refused");
-    assert!(err.to_string().contains("player not online"), "got {err}");
-
-    let err = party::run(world.as_ref(), 7, GINGER, party::Op::Invite(999))
-        .expect_err("an unknown target is refused");
-    assert!(err.to_string().contains("no such player"), "got {err}");
+    assert_eq!(
+        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(DORMANT)).unwrap(),
+        PartyOutcome::Refused(GroupRefusal::TargetOffline)
+    );
+    assert_eq!(
+        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(999)).unwrap(),
+        PartyOutcome::Refused(GroupRefusal::NoSuchPlayer)
+    );
 
     assert!(
         realm.party.lock().unwrap().ops.is_empty(),
@@ -1092,7 +1094,8 @@ fn a_bot_invite_forms_a_party_on_realm_core_across_a_shard_boundary() {
         "the op must reach realm-core; calls were {log:?}"
     );
     assert!(
-        !log.iter().any(|(_, call)| call == "group_invite" || call == "group_accept"),
+        !log.iter()
+            .any(|(_, call)| call == "group_invite" || call == "group_accept"),
         "a bot invite must not write either shard's own party tables directly — that is the \
          serendipity-invite shard-local-write bug. \
          Calls were {log:?}"
@@ -1321,12 +1324,14 @@ fn a_shard_local_only_group_realm_core_never_heard_of_is_wiped_by_the_next_push(
 fn a_bot_invite_to_a_missing_or_offline_target_never_reaches_realm_core() {
     let (realm, world, _instances, _calls) = party_topology();
 
-    let err =
-        party::run_bot_invite(world.as_ref(), BOT, DORMANT).expect_err("offline target refused");
-    assert!(err.to_string().contains("player not online"), "got {err}");
-
-    let err = party::run_bot_invite(world.as_ref(), BOT, 999).expect_err("unknown target refused");
-    assert!(err.to_string().contains("no such player"), "got {err}");
+    assert_eq!(
+        party::run_bot_invite(world.as_ref(), BOT, DORMANT).unwrap(),
+        PartyOutcome::Refused(GroupRefusal::TargetOffline)
+    );
+    assert_eq!(
+        party::run_bot_invite(world.as_ref(), BOT, 999).unwrap(),
+        PartyOutcome::Refused(GroupRefusal::NoSuchPlayer)
+    );
 
     assert!(
         realm.party.lock().unwrap().ops.is_empty(),

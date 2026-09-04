@@ -11,12 +11,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::bindings::*;
 use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
+use crate::world::party::PartyOutcome;
 use crate::world::{
-    ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
+    ContactOutcome, ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
 };
 use lyracore_shared::auction::AuctionRefusal;
+use lyracore_shared::group::GroupRefusal;
 use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot::{LootBoundaryFailure, LootRefusal};
+use lyracore_shared::social::ContactRefusal;
 use lyracore_shared::trainer::TrainerRefusal;
 
 static NEXT_TAXI_REQUEST_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -62,10 +65,7 @@ impl Coordinator {
             claim_bot_invite_intent_then(intent_id)
         ) {
             Ok(()) => Ok(true),
-            Err(error)
-                if reducer_refusal_reason(&error)
-                    == Some(lyracore_shared::group::err::BOT_INVITE_INTENT_ALREADY_CLAIMED) =>
-            {
+            Err(error) if group_refusal(&error) == Some(GroupRefusal::IntentAlreadyClaimed) => {
                 Ok(false)
             }
             Err(error) => Err(error),
@@ -1399,16 +1399,21 @@ impl Coordinator {
 
     /// `CMSG_MESSAGECHAT` Party (`/p`) — over the coordinator connection so the module
     /// attributes the line (and its group-membership check) to the caller.
-    pub fn party_chat(&self, _account_id: u64, actor_guid: u64, message: String) -> Result<()> {
+    pub fn party_chat(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        message: String,
+    ) -> Result<PartyOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("party_chat: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_party_chat",
             gw_party_chat_then(actor_guid, message)
-        )
+        ))
     }
 
     /// GM playtest dot-command: resolve current Account authority on Realm-core, then convey it to
@@ -1490,16 +1495,21 @@ impl Coordinator {
     }
 
     /// `CMSG_GROUP_INVITE` — `target_guid` is already resolved by the gateway.
-    pub fn group_invite(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn group_invite(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<PartyOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("group_invite: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_invite",
             gw_group_invite_then(actor_guid, target_guid)
-        )
+        ))
     }
 
     /// `CMSG_INITIATE_TRADE` — `target_guid` is the client's targeted player (#120).
@@ -1674,42 +1684,42 @@ impl Coordinator {
 
     /// `CMSG_GROUP_ACCEPT`. Rides the coordinator connection as
     /// `gw_accept_group_invite`.
-    pub fn group_accept(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+    pub fn group_accept(&self, _account_id: u64, actor_guid: u64) -> Result<PartyOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("group_accept: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_accept_group_invite",
             gw_accept_group_invite_then(actor_guid)
-        )
+        ))
     }
 
     /// `CMSG_GROUP_DECLINE`.
-    pub fn group_decline(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+    pub fn group_decline(&self, _account_id: u64, actor_guid: u64) -> Result<PartyOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("group_decline: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_decline",
             gw_group_decline_then(actor_guid)
-        )
+        ))
     }
 
     /// `CMSG_GROUP_DISBAND` — leave the caller's group.
-    pub fn group_leave(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
+    pub fn group_leave(&self, _account_id: u64, actor_guid: u64) -> Result<PartyOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("group_leave: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_leave",
             gw_group_leave_then(actor_guid)
-        )
+        ))
     }
 
     /// `CMSG_GROUP_UNINVITE` — the leader kicks `target_guid`.
@@ -1718,16 +1728,16 @@ impl Coordinator {
         _account_id: u64,
         actor_guid: u64,
         target_guid: u64,
-    ) -> Result<()> {
+    ) -> Result<PartyOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("group_uninvite: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_uninvite",
             gw_group_uninvite_then(actor_guid, target_guid)
-        )
+        ))
     }
 
     /// `CMSG_LOOT_METHOD` — the leader sets the party's loot method/
@@ -1741,16 +1751,16 @@ impl Coordinator {
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
-    ) -> Result<()> {
+    ) -> Result<PartyOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("group_loot_method: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_loot_method",
             gw_group_loot_method_then(actor_guid, loot_setting, master_guid, loot_threshold)
-        )
+        ))
     }
 
     /// `CMSG_GOSSIP_SELECT_OPTION` — the NOTIFY-ONLY module chokepoint. Fired
@@ -1775,55 +1785,75 @@ impl Coordinator {
     }
 
     /// `CMSG_ADD_FRIEND` — `target_guid` is already resolved by the gateway.
-    pub fn add_friend(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn add_friend(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("add_friend: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_add_friend",
             gw_add_friend_then(actor_guid, target_guid)
-        )
+        ))
     }
 
     /// `CMSG_DEL_FRIEND`.
-    pub fn del_friend(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn del_friend(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("del_friend: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_del_friend",
             gw_del_friend_then(actor_guid, target_guid)
-        )
+        ))
     }
 
     /// `CMSG_ADD_IGNORE` — `target_guid` is already resolved by the gateway.
-    pub fn add_ignore(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn add_ignore(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("add_ignore: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_add_ignore",
             gw_add_ignore_then(actor_guid, target_guid)
-        )
+        ))
     }
 
     /// `CMSG_DEL_IGNORE`.
-    pub fn del_ignore(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
+    pub fn del_ignore(
+        &self,
+        _account_id: u64,
+        actor_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome> {
         if actor_guid == 0 {
             return Err(anyhow!("del_ignore: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(
+        contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_del_ignore",
             gw_del_ignore_then(actor_guid, target_guid)
-        )
+        ))
     }
 
     /// Take the money from a corpse (`CMSG_LOOT_MONEY`, slice 3) over the coordinator connection so
@@ -2571,12 +2601,12 @@ impl Coordinator {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
-    ) -> Result<()> {
-        call_reducer!(
+    ) -> Result<PartyOutcome> {
+        party_outcome(call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_group_op",
             realm_group_op_then(op, actor_guid, target_guid, arg_a, arg_b)
-        )
+        ))
     }
 
     /// `realm_whisper` — deliver one whisper against the database THIS handle points at. The
@@ -3255,6 +3285,34 @@ fn resolved_item_actor(operation: &str, actor_guid: u64) -> Option<u64> {
         return None;
     }
     Some(actor_guid)
+}
+
+/// The Module's typed party Refusal. Only a reducer the Module rejected carries a tag; a timeout,
+/// transport, or SDK failure stays an error with an unknown outcome.
+fn group_refusal(error: &anyhow::Error) -> Option<GroupRefusal> {
+    reducer_refusal_reason(error).and_then(GroupRefusal::parse_tag)
+}
+
+/// A refused party reducer is an outcome the client renders; anything else ends the session.
+fn party_outcome(result: Result<()>) -> Result<PartyOutcome> {
+    match result {
+        Ok(()) => Ok(PartyOutcome::Ran),
+        Err(error) => match group_refusal(&error) {
+            Some(refusal) => Ok(refusal.into()),
+            None => Err(error),
+        },
+    }
+}
+
+/// [`party_outcome`] for the friends and ignore lists.
+fn contact_outcome(result: Result<()>) -> Result<ContactOutcome> {
+    match result {
+        Ok(()) => Ok(ContactOutcome::Done),
+        Err(error) => match reducer_refusal_reason(&error).and_then(ContactRefusal::parse_tag) {
+            Some(refusal) => Ok(refusal.into()),
+            None => Err(error),
+        },
+    }
 }
 
 fn bid_payload_matches(hold: &AuctionBidHold, decision: &AuctionBidDecision) -> bool {

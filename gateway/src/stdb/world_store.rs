@@ -816,7 +816,12 @@ impl WorldStore for Coordinator {
         self.send_whisper(account_id, self_guid, target_player, message)
     }
 
-    fn party_chat(&self, account_id: u64, self_guid: u64, message: String) -> Result<()> {
+    fn party_chat(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        message: String,
+    ) -> Result<crate::world::party::PartyOutcome> {
         self.party_chat(account_id, self_guid, message)
     }
 
@@ -876,7 +881,12 @@ impl WorldStore for Coordinator {
     // `self_guid` is unused here on purpose — the module resolves the actor from `ctx.sender()`'s
     // live entity, which is the whole reason this arm needs no operator gate. `world::party` is what
     // chooses between this and the realm-core arm below.
-    fn group_invite(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+    fn group_invite(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<crate::world::party::PartyOutcome> {
         self.group_invite(account_id, self_guid, target_guid)
     }
     fn initiate_trade(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
@@ -915,16 +925,33 @@ impl WorldStore for Coordinator {
     fn ignore_trade(&self, account_id: u64, self_guid: u64) -> Result<()> {
         self.ignore_trade(account_id, self_guid)
     }
-    fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<()> {
+    fn group_accept(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+    ) -> Result<crate::world::party::PartyOutcome> {
         self.group_accept(account_id, self_guid)
     }
-    fn group_decline(&self, account_id: u64, self_guid: u64) -> Result<()> {
+    fn group_decline(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+    ) -> Result<crate::world::party::PartyOutcome> {
         self.group_decline(account_id, self_guid)
     }
-    fn group_leave(&self, account_id: u64, self_guid: u64) -> Result<()> {
+    fn group_leave(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+    ) -> Result<crate::world::party::PartyOutcome> {
         self.group_leave(account_id, self_guid)
     }
-    fn group_uninvite(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+    fn group_uninvite(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<crate::world::party::PartyOutcome> {
         self.group_uninvite(account_id, self_guid, target_guid)
     }
     fn group_loot_method(
@@ -934,7 +961,7 @@ impl WorldStore for Coordinator {
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
-    ) -> Result<()> {
+    ) -> Result<crate::world::party::PartyOutcome> {
         self.group_loot_method(
             account_id,
             self_guid,
@@ -991,7 +1018,7 @@ impl WorldStore for Coordinator {
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
-    ) -> Result<()> {
+    ) -> Result<crate::world::party::PartyOutcome> {
         self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b)
     }
 
@@ -1103,19 +1130,39 @@ impl WorldStore for Coordinator {
     ) -> Result<()> {
         self.gossip_select(account_id, self_guid, npc_guid, option_id, option_row_id)
     }
-    fn add_friend(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+    fn add_friend(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<crate::world::ContactOutcome> {
         self.add_friend(account_id, self_guid, target_guid)
     }
 
-    fn del_friend(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+    fn del_friend(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<crate::world::ContactOutcome> {
         self.del_friend(account_id, self_guid, target_guid)
     }
 
-    fn add_ignore(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+    fn add_ignore(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<crate::world::ContactOutcome> {
         self.add_ignore(account_id, self_guid, target_guid)
     }
 
-    fn del_ignore(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+    fn del_ignore(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<crate::world::ContactOutcome> {
         self.del_ignore(account_id, self_guid, target_guid)
     }
 }

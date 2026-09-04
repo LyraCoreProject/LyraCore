@@ -201,7 +201,7 @@ pub trait WorldStore:
         _target_guid: u64,
         _arg_a: u8,
         _arg_b: u8,
-    ) -> Result<()> {
+    ) -> Result<party::PartyOutcome> {
         Err(anyhow!("this store does not host realm-wide party state"))
     }
 
@@ -662,12 +662,16 @@ pub trait WorldStore:
 
     /// Party chat (`CMSG_MESSAGECHAT` Party, `/p`): deliver `message` to every OTHER
     /// current group member plus an echo to the caller, over the `game_group_event` relay (no
-    /// gateway-subscribed table — see `module/src/chat.rs::party_chat`'s doc). `Err` when the caller
-    /// isn't in a group ([`lyracore_shared::group::err::NOT_IN_GROUP`] — the gateway maps it to
-    /// `SMSG_PARTY_COMMAND_RESULT(NotInGroup)`, "You aren't in a party") or on the other
-    /// `send_chat`-style rejections (not in world / empty message), which are silently dropped like
-    /// say/yell.
-    fn party_chat(&self, account_id: u64, self_guid: u64, message: String) -> Result<()>;
+    /// gateway-subscribed table — see `module/src/chat.rs::party_chat`'s doc). Speaking from no
+    /// party answers [`lyracore_shared::group::GroupRefusal::NotInGroup`], which the gateway renders
+    /// as `SMSG_PARTY_COMMAND_RESULT(NotInGroup)`, "You aren't in a party". Every other refusal and
+    /// every failure is dropped like a rejected say or yell line.
+    fn party_chat(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        message: String,
+    ) -> Result<party::PartyOutcome>;
 
     /// GM playtest dot-command for the proof-validated, realm-wide `account_name`: `text` is the
     /// raw Say line, STILL carrying its
@@ -965,14 +969,37 @@ pub trait WorldStore:
     /// Added-Online-vs-Offline split. `None` if the guid doesn't resolve to any character.
     fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>>;
 
+    // Contact ops answer a [`social::ContactOutcome`]: a typed Refusal is a gameplay answer the
+    // client renders, and only a failure with an unknown durable result stays `Err`.
+
     /// `CMSG_ADD_FRIEND` (the name is already resolved to `target_guid` by the gateway).
-    fn add_friend(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    fn add_friend(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<social::ContactOutcome>;
     /// `CMSG_DEL_FRIEND`.
-    fn del_friend(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    fn del_friend(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<social::ContactOutcome>;
     /// `CMSG_ADD_IGNORE` (the name is already resolved to `target_guid` by the gateway).
-    fn add_ignore(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    fn add_ignore(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<social::ContactOutcome>;
     /// `CMSG_DEL_IGNORE`.
-    fn del_ignore(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    fn del_ignore(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<social::ContactOutcome>;
 
     // The SINGLE-DATABASE party path (`world::party::run`'s `None` arm). Each takes the caller's
     // `self_guid` as well as its account: the account is what identifies the player CONNECTION these
@@ -980,16 +1007,26 @@ pub trait WorldStore:
     // Both are threaded through one call site (`world::social`), so the two planes take the same
     // arguments and a mock sees which character the op was for either way.
 
-    /// `CMSG_GROUP_INVITE` (name gateway-resolved). Module Err strings map to PartyResult codes.
-    fn group_invite(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    /// `CMSG_GROUP_INVITE` (name gateway-resolved). A `GroupRefusal` arrives as an outcome.
+    fn group_invite(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<party::PartyOutcome>;
     /// `CMSG_GROUP_ACCEPT`.
-    fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<party::PartyOutcome>;
     /// `CMSG_GROUP_DECLINE`.
-    fn group_decline(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    fn group_decline(&self, account_id: u64, self_guid: u64) -> Result<party::PartyOutcome>;
     /// `CMSG_GROUP_DISBAND` (the client's "Leave Party").
-    fn group_leave(&self, account_id: u64, self_guid: u64) -> Result<()>;
+    fn group_leave(&self, account_id: u64, self_guid: u64) -> Result<party::PartyOutcome>;
     /// `CMSG_GROUP_UNINVITE` (name gateway-resolved) — the leader kicks a member.
-    fn group_uninvite(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+    fn group_uninvite(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<party::PartyOutcome>;
     /// `CMSG_LOOT_METHOD` — the leader sets the party's loot method/
     /// threshold/master. `loot_setting`/`loot_threshold` are the gateway-decoded `GroupLootSetting`/
     /// `ItemQuality` wire bytes, passed straight through (the module adopted the wire ordering
@@ -1001,7 +1038,7 @@ pub trait WorldStore:
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
-    ) -> Result<()>;
+    ) -> Result<party::PartyOutcome>;
     /// `CMSG_LOOT_ROLL` — record the caller's need/greed/pass vote.
     fn loot_roll(
         &self,
