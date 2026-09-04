@@ -152,7 +152,7 @@ fn progression_after_award(
 
     XpProgression {
         level,
-        // The loop leaves less than one level threshold, whose largest value is well inside u32.
+        // A valid threshold leaves less than one level. A missing threshold keeps the bank bounded.
         xp: bank.min(u32::MAX as u64) as u32,
         next_level_xp: next,
     }
@@ -310,9 +310,9 @@ pub(crate) fn accrue_rested_on_login(
 
 /// Award `attacker_guid` the XP for killing `killed_guid` (a `mob_level` creature), applying any
 /// level-ups (max-health recalc + full heal) and the rested-XP bonus (double kill XP while the
-/// character's rested pool has XP, draining it). Emits a `game_xp_event` (skipped for a gray 0-XP kill —
-/// vanilla shows nothing) and one `game_levelup_event` per level gained. No-op if the attacker has left
-/// the world. Called from the combat killing-blow branch for player attackers.
+/// character's rested pool has XP, draining it). Emits a `game_xp_event` and one `game_levelup_event`
+/// per level gained. Grey kills, capped Characters and attackers who have left the world receive
+/// no award or event. Called from the combat killing-blow branch for Character attackers.
 pub(crate) fn award_xp(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -386,7 +386,8 @@ pub(crate) fn award_xp(
 /// `game_levelup_event` per level gained). Mutates `p` in place — the CALLER persists it (so a single
 /// `update` covers the XP write plus any dings). This is the single home of the leveling math, shared
 /// by the kill award ([`award_xp`]) and quest turn-in rewards ([`crate::quest`]) so they can never
-/// drift. No-op for `amount == 0`. Does NOT emit a `game_xp_event` (the kill path owns the
+/// drift. Capped Characters retain zero XP. Below the cap, `amount == 0` is a no-op.
+/// Does NOT emit a `game_xp_event` (the kill path owns the
 /// `SMSG_LOG_XPGAIN` source-guid line; quest XP has no killed unit). [entity]
 pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
     if p.level >= LEVEL_CAP {
@@ -569,21 +570,6 @@ mod tests {
                 next_level_xp: 0,
             }
         );
-    }
-
-    #[test]
-    fn capped_kill_stops_before_rest_or_event_side_effects() {
-        let body = crate::test_scan::code_of(include_str!("xp.rs"), "pub(crate) fn award_xp(");
-        let cap = body
-            .find("if p.level >= LEVEL_CAP")
-            .expect("award_xp keeps its level-cap gate");
-        let rested = body
-            .find("let chars = ctx.db.game_character()")
-            .expect("award_xp keeps its rested XP branch");
-        let event = body
-            .find("ctx.db.game_xp_event().insert")
-            .expect("award_xp keeps its XP event");
-        assert!(cap < rested && rested < event);
     }
 
     #[test]

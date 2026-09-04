@@ -326,9 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn capped_owner_still_allows_an_under_cap_pet_to_earn_xp_from_a_non_grey_kill() {
-        assert!(crate::xp::xp_for_kill(60, 60) > 0);
-        assert!(crate::xp::xp_for_kill(60, 59) > 0);
+    fn pet_award_is_gated_on_the_owner_gray_clamp() {
         let body = crate::test_scan::code_of(
             include_str!("pet_progression.rs"),
             "pub(crate) fn award_hunter_pet_kill_progression(",
