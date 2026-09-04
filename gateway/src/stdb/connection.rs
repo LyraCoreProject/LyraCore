@@ -163,6 +163,33 @@ fn replace_slot_ordered<T>(
     teardown(old);
 }
 
+/// An unwinding hook must stop the fresh pump before partially installed Relays can run.
+fn finish_relay_setup<C>(
+    commands: &tokio::sync::mpsc::UnboundedSender<PumpCommand<C>>,
+    setup: impl FnOnce(),
+) {
+    struct Completion<'a, C> {
+        commands: &'a tokio::sync::mpsc::UnboundedSender<PumpCommand<C>>,
+        complete: bool,
+    }
+    impl<C> Drop for Completion<'_, C> {
+        fn drop(&mut self) {
+            let command = if self.complete {
+                PumpCommand::Resume
+            } else {
+                PumpCommand::Stop
+            };
+            let _ = self.commands.send(command);
+        }
+    }
+    let mut completion = Completion {
+        commands,
+        complete: false,
+    };
+    setup();
+    completion.complete = true;
+}
+
 /// Drain the old pump before exposing the fresh cache. A fresh source cache can advance a
 /// Transfer to its destination, so no old source callback may update the shared indexes afterward.
 /// The slot lock is released before disconnect or join; callbacks can finish their cache reads.
@@ -202,8 +229,7 @@ fn replace_live_conn(
         },
         || {
             log::info!("{role_label} replacement installed");
-            post_install();
-            let _ = fresh_commands.send(PumpCommand::Resume);
+            finish_relay_setup(&fresh_commands, post_install);
         },
         drop,
     );
@@ -1644,7 +1670,7 @@ mod live_replacement_tests {
 
 #[cfg(test)]
 mod pump_tests {
-    use super::{pump_messages, replace_slot_ordered, PumpCommand};
+    use super::{finish_relay_setup, pump_messages, replace_slot_ordered, PumpCommand};
     use std::cell::RefCell;
     use std::future::Future;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1808,10 +1834,29 @@ mod pump_tests {
         assert_eq!(pump.as_mut().poll(&mut cx), Poll::Pending);
         assert_eq!(parked.try_recv().unwrap(), Ok(()));
         assert_eq!(advances.load(Ordering::Relaxed), 0);
-        commands.send(PumpCommand::Resume).unwrap();
+        finish_relay_setup(&commands, || {});
         assert_eq!(pump.as_mut().poll(&mut cx), Poll::Pending);
         assert_eq!(advances.load(Ordering::Relaxed), 1);
         commands.send(PumpCommand::Stop).unwrap();
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn a_panicking_reconnect_hook_stops_its_partially_armed_pump() {
+        let (commands, work) = mpsc::unbounded_channel();
+        let (applied, _parked) = std::sync::mpsc::channel();
+        commands.send(PumpCommand::Park(applied)).unwrap();
+        let mut pump = Box::pin(pump_messages(
+            &(),
+            work,
+            std::future::pending::<Result<(), ()>>,
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(pump.as_mut().poll(&mut cx), Poll::Pending);
+        let outcome = std::panic::catch_unwind(|| {
+            finish_relay_setup(&commands, || panic!("hook failed"));
+        });
+        assert!(outcome.is_err(), "hook failures still propagate");
         assert_eq!(pump.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
     }
 

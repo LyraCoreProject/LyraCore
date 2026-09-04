@@ -863,6 +863,92 @@ fn jobs_selected_before_worldport_cannot_reach_the_replacement_world_session() {
 }
 
 #[test]
+fn local_owner_events_cannot_reach_a_destination_world_session() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let view = WorldView::new(true);
+    let cell = CellKey::at(0, 0, 0, 0);
+    let (old_tx, _old_rx) = SessionTx::with_depth(0);
+    view.add_viewer_on_shard(viewer(1, PLAYER_BASE, old_tx), cell, 0);
+    view.remove_viewer(1);
+    let (tx, rx) = SessionTx::with_depth(0);
+    view.add_viewer_on_shard(viewer(2, PLAYER_BASE, tx), cell, 1);
+    let (other_tx, other_rx) = SessionTx::with_depth(0);
+    view.add_viewer_on_shard(viewer(3, PLAYER_BASE + 1, other_tx), cell, 1);
+    let rest = RestStateEvent {
+        id: 1,
+        character_guid: PLAYER_BASE,
+        player_bytes_2: 0x0100_0000,
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+    };
+    let breath = BreathRelayEvent {
+        id: 2,
+        character_guid: PLAYER_BASE,
+        kind: 0,
+        time_remaining_ms: 12000,
+        duration_ms: 60000,
+        damage: 0,
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+    };
+    let resurrect = ResurrectRequest {
+        target_guid: PLAYER_BASE,
+        target_identity: identity(PLAYER_BASE),
+        caster_guid: PLAYER_BASE + 1,
+        caster_name: "Caster".into(),
+        points: 50,
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+    };
+    let trade = TradeEvent {
+        id: 3,
+        recipient_identity: identity(PLAYER_BASE),
+        kind: lyracore_shared::trade::event_kind::TRADE_CANCELED,
+        other_guid: PLAYER_BASE + 1,
+        recipient_guid: PLAYER_BASE,
+        payload: String::new(),
+        created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+    };
+    for shard in [0, 1] {
+        rest_state_appeared(&view, shard, &rest);
+        breath_relay_appeared(&view, shard, &breath);
+        resurrect_offered(&view, shard, &resurrect);
+        trade_event_appeared(&view, shard, &trade);
+        assert!(
+            other_rx.try_recv().is_err(),
+            "owner rows must not reach a bystander"
+        );
+        if shard == 0 {
+            assert!(
+                rx.try_recv().is_err(),
+                "late source rows must not reach the destination"
+            );
+        }
+    }
+    let packets: Vec<_> = rx
+        .try_iter()
+        .flat_map(|outbound| {
+            let Outbound::Job(job) = outbound else {
+                panic!("expected a Relay job")
+            };
+            job()
+        })
+        .collect();
+    assert_eq!(packets.len(), 4);
+    assert!(matches!(&packets[0], Outbound::Raw { opcode: 0xA9, body }
+        if body.ends_with(&0x0100_0000_u32.to_le_bytes())));
+    assert!(matches!(
+        &packets[1],
+        Outbound::One(ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(_))
+    ));
+    assert!(matches!(
+        &packets[2],
+        Outbound::One(ServerOpcodeMessage::SMSG_RESURRECT_REQUEST(_))
+    ));
+    assert!(
+        matches!(&packets[3], Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(status))
+        if matches!(status.as_ref(), wow_world_messages::vanilla::SMSG_TRADE_STATUS::TradeCanceled))
+    );
+}
+
+#[test]
 fn spatial_candidates_also_stay_on_the_event_shard() {
     let view = WorldView::new(true);
     let (tx, rx) = SessionTx::with_depth(0);

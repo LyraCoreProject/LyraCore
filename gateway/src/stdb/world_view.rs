@@ -767,7 +767,7 @@ fn register_shard_callbacks(
         db.game_rest_state_event(),
         "game_rest_state_event.insert",
         &view,
-        |v, row| rest_state_appeared(v, row),
+        move |v, row| rest_state_appeared(v, shard, row),
     );
 
     // ---- game_breath_relay_event ------------------------------------------------------------
@@ -776,7 +776,7 @@ fn register_shard_callbacks(
         db.game_breath_relay_event(),
         "game_breath_relay_event.insert",
         &view,
-        |v, row| breath_relay_appeared(v, row),
+        move |v, row| breath_relay_appeared(v, shard, row),
     );
 
     // ---- game_dynamic_object -----------------------------------------------------------------
@@ -853,7 +853,7 @@ fn register_shard_callbacks(
         db.game_resurrect_request(),
         "game_resurrect_request.insert",
         &view,
-        |v, row| resurrect_offered(v, row),
+        move |v, row| resurrect_offered(v, shard, row),
     );
     wire_insert_live(
         db.game_whisper_event(),
@@ -882,21 +882,21 @@ fn register_shard_callbacks(
             db.game_group_member(),
             "game_group_member.insert",
             &view,
-            move |v, row| group_member_mirror_changed(v, &insert_coord, row),
+            move |v, row| group_member_mirror_changed(v, &insert_coord, shard, row),
         );
         let delete_coord = coord.clone();
         wire_delete(
             db.game_group_member(),
             "game_group_member.delete",
             &view,
-            move |v, row| group_member_mirror_changed(v, &delete_coord, row),
+            move |v, row| group_member_mirror_changed(v, &delete_coord, shard, row),
         );
     }
     wire_insert_live(
         db.game_trade_event(),
         "game_trade_event.insert",
         &view,
-        |v, row| trade_event_appeared(v, row),
+        move |v, row| trade_event_appeared(v, shard, row),
     );
     {
         let coord = coord.clone();
@@ -904,7 +904,7 @@ fn register_shard_callbacks(
             db.game_duel_event(),
             "game_duel_event.insert",
             &view,
-            move |v, row| duel_event_appeared(v, &coord, row),
+            move |v, row| duel_event_appeared(v, &coord, shard, row),
         );
     }
 
@@ -1757,19 +1757,9 @@ fn item_deleted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &Ite
     });
 }
 
-/// A rest-state flip landed on a shard's coordinator feed. Self-only family: the row names its
-/// owner and the owner is the ONLY lawful recipient, so the audience predicate IS the
-/// owner-session lookup — there is no candidate set to filter,
-/// and a row whose owner has no live session here is dropped.
-///
-/// This family needs no replay state: nothing re-subscribes per session on this path, so rows
-/// arriving after arming are live flips. A coordinator watchdog re-arm can replay rows still
-/// inside their GC TTL, which idempotently re-sends the current rest byte.
-fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
-    let Some(session) = view.session_of_owner(row.character_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+/// Send a rest-state change to its owner on the callback's Shard.
+fn rest_state_appeared(view: &WorldView, shard: ShardId, row: &RestStateEvent) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
     let (self_guid, bytes) = (row.character_guid, row.player_bytes_2);
@@ -1778,12 +1768,9 @@ fn rest_state_appeared(view: &WorldView, row: &RestStateEvent) {
     });
 }
 
-/// Breath relay events are delivered only to their owner.
-fn breath_relay_appeared(view: &WorldView, row: &BreathRelayEvent) {
-    let Some(session) = view.session_of_owner(row.character_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+/// Send breath events to their owner on the callback's Shard.
+fn breath_relay_appeared(view: &WorldView, shard: ShardId, row: &BreathRelayEvent) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
     let (guid, kind, remaining, duration, damage) = (
@@ -1930,11 +1917,8 @@ fn melee_disengaged(view: &WorldView, shard: ShardId, row: &MeleeAttack) {
 }
 
 /// A resurrect offer landed → SMSG_RESURRECT_REQUEST to the offer's TARGET and nobody else.
-fn resurrect_offered(view: &WorldView, row: &ResurrectRequest) {
-    let Some(session) = view.session_of_owner(row.target_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+fn resurrect_offered(view: &WorldView, shard: ShardId, row: &ResurrectRequest) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.target_guid)) else {
         return;
     };
     if !super::subscriptions::private_recipient_audience(row.target_guid, viewer.self_guid) {
@@ -1984,11 +1968,8 @@ fn system_message_appeared(view: &WorldView, row: &SystemMessageEvent) {
 
 /// A trade status landed → the `SMSG_TRADE_STATUS` packet to the row's RECIPIENT and nobody
 /// else (same shape as [`whisper_appeared`]) (#120).
-fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
-    let Some(session) = view.session_of_owner(row.recipient_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+fn trade_event_appeared(view: &WorldView, shard: ShardId, row: &TradeEvent) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.recipient_guid)) else {
         return;
     };
     if !super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid) {
@@ -2002,10 +1983,9 @@ fn trade_event_appeared(view: &WorldView, row: &TradeEvent) {
 
 /// A Duel lifecycle edge landed for one participant. Private packets go only to that participant;
 /// the initiator-addressed completion row also drives the one nearby winner announcement.
-fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
+fn duel_event_appeared(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &DuelEvent) {
     if let Some(viewer) = view
-        .session_of_owner(row.recipient_guid)
-        .and_then(|session| view.viewer(session))
+        .viewer_of_owner_on_shard(shard, OwnerGuid(row.recipient_guid))
         .filter(|viewer| {
             super::subscriptions::private_recipient_audience(row.recipient_guid, viewer.self_guid)
         })
@@ -2030,10 +2010,7 @@ fn duel_event_appeared(view: &WorldView, coord: &Coordinator, row: &DuelEvent) {
     }
     let key = CellKey::of_position(row.map_id, row.instance_id, row.flag_x, row.flag_y);
     let row = Arc::new(row.clone());
-    for session in view.spatial.viewers_of(EntityLayer::WorldEntity, key) {
-        let Some(viewer) = view.viewer(session) else {
-            continue;
-        };
+    for viewer in view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[]) {
         if !duel_winner_audience(viewer.self_guid, row.initiator_guid, row.challenged_guid) {
             continue;
         }
@@ -2066,11 +2043,13 @@ fn group_event_appeared(view: &WorldView, coord: &Coordinator, row: &GroupEvent)
 
 /// A shard mirror delta is the point at which viewer-relative Loot Tag flags can be projected from
 /// current membership without racing the realm event that requested the mirror write.
-fn group_member_mirror_changed(view: &WorldView, coord: &Coordinator, row: &GroupMember) {
-    let Some(session) = view.session_of_owner(row.character_guid) else {
-        return;
-    };
-    let Some(viewer) = view.viewer(session) else {
+fn group_member_mirror_changed(
+    view: &WorldView,
+    coord: &Coordinator,
+    shard: ShardId,
+    row: &GroupMember,
+) {
+    let Some(viewer) = view.viewer_of_owner_on_shard(shard, OwnerGuid(row.character_guid)) else {
         return;
     };
     let coord = coord.clone();
@@ -2713,23 +2692,8 @@ mod family_audience_tests {
         let source = include_str!("world_view.rs");
         let body = crate::test_scan::code_of(source, "fn duel_event_appeared(");
         assert!(body.contains("CellKey::of_position"));
-        assert!(body.contains("view.spatial.viewers_of(EntityLayer::WorldEntity, key)"));
+        assert!(body.contains("view.cell_audience(shard, Some(key), BOX_HALF_SPAN, &[])"));
         assert!(body.contains("duel_winner_outbound"));
-    }
-
-    #[test]
-    fn breath_relay_owner_lookup_selects_only_its_own_session() {
-        let view = WorldView::new(true);
-        // No owner session on this gateway: the relay must be dropped.
-        assert_eq!(view.session_of_owner(41), None);
-        // The registry tests pin the registration mechanics; the callback source scan below
-        // pins that breath events actually take this exact lookup rather than an AOI broadcast.
-        let source = include_str!("world_view.rs");
-        let start = source.find("fn breath_relay_appeared").unwrap();
-        let body = &source[start..];
-        assert!(body.contains("view.session_of_owner(row.character_guid)"));
-        assert!(!body[..body.find("fn skill_changed").unwrap()]
-            .contains("viewers_on_shard"), "breath rows must never broadcast to shard viewers");
     }
 
     #[test]
