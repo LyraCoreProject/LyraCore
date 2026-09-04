@@ -11,9 +11,9 @@ const MISSING_ACTOR: &str = "999999";
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
-    let wasm = build_frozen_module();
+    let wasm = build_module_bytes();
     let standalone = Standalone::start("typed-taxi-contracts");
-    standalone.publish_module_binary(&wasm);
+    standalone.publish_module_bytes(&wasm);
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_spawn_player_entity", &[ACTOR]);
     standalone.assert_sql(
@@ -143,7 +143,7 @@ fn failed_text(reducer: &str, output: Output) -> String {
     text
 }
 
-fn build_frozen_module() -> PathBuf {
+fn build_module_bytes() -> Vec<u8> {
     let module_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace = module_dir.parent().unwrap();
     let status = Command::new("cargo")
@@ -162,11 +162,19 @@ fn build_frozen_module() -> PathBuf {
         .expect("failed to run the Wasm preflight build");
     assert!(status.success(), "the Wasm preflight build failed");
 
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join("target"));
+    let target = match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                workspace.join(path)
+            }
+        }
+        None => workspace.join("target"),
+    };
     let wasm = target.join("wasm32-unknown-unknown/release/lyracore_module.wasm");
     let bytes = std::fs::read(&wasm).expect("the Wasm preflight output is missing");
-    assert!(bytes.starts_with(b"\0asm"), "the frozen module is not Wasm");
-    wasm
+    assert!(bytes.starts_with(b"\0asm"), "the built module is not Wasm");
+    bytes
 }
