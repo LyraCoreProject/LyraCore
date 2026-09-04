@@ -15,7 +15,7 @@ type SqlRow = BTreeMap<String, String>;
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_new_timed_cast_replaces_only_the_casters_pending_rows() {
-    let standalone = Standalone::start("pending-cast-replacement");
+    let mut standalone = Standalone::start("pending-cast-replacement");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &["1"]);
     standalone.assert_sql("UPDATE game_spell SET cast_time_ms = 60000 WHERE spell_id = 8129");

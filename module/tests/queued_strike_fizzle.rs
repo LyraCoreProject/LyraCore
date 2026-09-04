@@ -6,10 +6,9 @@
 mod support;
 
 use std::collections::BTreeMap;
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use support::Standalone;
+use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 type SqlRow = BTreeMap<String, String>;
 
@@ -30,7 +29,7 @@ const NO_POWER: &str = "1";
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_queued_strike_fizzles_into_a_white_swing_when_the_rage_is_gone() {
-    let standalone = Standalone::start("queued-strike-fizzle");
+    let mut standalone = Standalone::start("queued-strike-fizzle");
     standalone.publish_module();
     stage_on_next_swing_spell(
         &standalone,
@@ -168,9 +167,9 @@ fn stage_on_next_swing_spell(standalone: &Standalone, spell_id: u32, name: &str,
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
          VALUES ({spell_id}, '{name}', {RAGE}, {cost}, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, 0, 0, \
-         false, 0, 0, 0, 0)"
+         false, 0, 0, 0, 0, 0, 0, 0)"
     ));
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
@@ -206,11 +205,10 @@ fn spawn_target(standalone: &Standalone) -> u64 {
 /// rage from decaying out of combat while the scenario stages each case.
 fn engage(standalone: &Standalone, target: u64) {
     standalone.assert_call("debug_engage", &["1", &target.to_string()]);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while own_swings(standalone).is_empty() {
-        assert!(Instant::now() < deadline, "the engagement never swung");
-        thread::sleep(Duration::from_millis(50));
-    }
+    assert!(
+        poll_until(POLL_TIMEOUT, || !own_swings(standalone).is_empty()),
+        "the engagement never swung"
+    );
 }
 
 /// Set the Warrior's rage, holding the swing off so the staging call cannot be overtaken.
@@ -237,11 +235,10 @@ fn swing(standalone: &Standalone) {
     standalone.assert_sql("DELETE FROM game_spell_cast_event");
     standalone.assert_sql("DELETE FROM game_combat_event");
     standalone.assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while own_swings(standalone).is_empty() {
-        assert!(Instant::now() < deadline, "the swing never fired");
-        thread::sleep(Duration::from_millis(50));
-    }
+    assert!(
+        poll_until(POLL_TIMEOUT, || !own_swings(standalone).is_empty()),
+        "the swing never fired"
+    );
     hold_the_swing(standalone);
 }
 

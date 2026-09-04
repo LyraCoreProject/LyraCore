@@ -1,8 +1,5 @@
 mod support;
 
-use std::thread;
-use std::time::Duration;
-
 use support::Standalone;
 
 const PLAYER_GUID: u64 = 1;
@@ -16,7 +13,7 @@ const SOURCE_RULE_ID: u64 = 900_001;
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
-    let standalone = Standalone::start("lethal-damage-floor");
+    let mut standalone = Standalone::start("lethal-damage-floor");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER_GUID.to_string()]);
     let first_definition = definition("phase:1");
@@ -117,8 +114,8 @@ fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
         "debug_set_lethal_damage_floor_health_fixture",
         &[&THIRD_WOLF_GUID.to_string(), "5"],
     );
-    thread::sleep(Duration::from_millis(1_300));
-    standalone.assert_call(
+    // The ranged swing lands on a scheduled visit, so the verifier itself is the condition.
+    standalone.wait_until_call_succeeds(
         "debug_verify_ranged_lethal_damage_floor_fixture",
         &[
             &PLAYER_GUID.to_string(),

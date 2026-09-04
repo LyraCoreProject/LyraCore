@@ -160,7 +160,7 @@ fn refusal_text(output: &std::process::Output) -> String {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn quest_and_loot_claims_refuse_missing_cross_table_references() {
-    let standalone = Standalone::start("package-delta-references");
+    let mut standalone = Standalone::start("package-delta-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -201,7 +201,7 @@ fn quest_and_loot_claims_refuse_missing_cross_table_references() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn cast_claims_refuse_missing_cross_table_references() {
-    let standalone = Standalone::start("package-delta-cast-references");
+    let mut standalone = Standalone::start("package-delta-cast-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -249,7 +249,7 @@ fn cast_claims_refuse_missing_cross_table_references() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_profession_offerings_marker_spell_is_exempt_but_a_class_offerings_is_not() {
-    let standalone = Standalone::start("package-delta-trainer-references");
+    let mut standalone = Standalone::start("package-delta-trainer-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -306,7 +306,7 @@ fn a_profession_offerings_marker_spell_is_exempt_but_a_class_offerings_is_not() 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn gossip_claims_refuse_missing_cross_table_references() {
-    let standalone = Standalone::start("package-delta-gossip-references");
+    let mut standalone = Standalone::start("package-delta-gossip-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -358,7 +358,7 @@ fn gossip_claims_refuse_missing_cross_table_references() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn globals_claims_refuse_missing_references_and_every_insert_on_a_fixed_key_table() {
-    let standalone = Standalone::start("package-delta-globals-references");
+    let mut standalone = Standalone::start("package-delta-globals-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -417,7 +417,7 @@ fn globals_claims_refuse_missing_references_and_every_insert_on_a_fixed_key_tabl
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn spell_metadata_claims_refuse_a_missing_spell_in_the_key_and_in_a_column() {
-    let standalone = Standalone::start("package-delta-spellmeta-references");
+    let mut standalone = Standalone::start("package-delta-spellmeta-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -517,7 +517,7 @@ fn gameobject_template_insert() -> String {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_maps() {
-    let standalone = Standalone::start("package-delta-creature-references");
+    let mut standalone = Standalone::start("package-delta-creature-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -577,8 +577,7 @@ fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_ma
     let template = standalone.query_rows(&format!(
         "SELECT * FROM game_creature_template WHERE entry = {PACKAGE_CREATURE_TEMPLATE}"
     ));
-    // `spacetime sql` quotes a string column, so the expected value carries the quotes.
-    assert_eq!(template[0]["name"], "\"Kindled Sentinel\"");
+    assert_eq!(template[0]["name"], "Kindled Sentinel");
     let invented_guid = creature_guid(PACKAGE_CREATURE_TEMPLATE, PACKAGE_CREATURE_SPAWN);
     assert!(!standalone
         .query_rows(&format!(
@@ -592,7 +591,7 @@ fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_ma
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn gameobject_claims_refuse_a_missing_template_and_place_an_invented_one() {
-    let standalone = Standalone::start("package-delta-gameobject-references");
+    let mut standalone = Standalone::start("package-delta-gameobject-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
 
@@ -640,7 +639,7 @@ fn gameobject_claims_refuse_a_missing_template_and_place_an_invented_one() {
     let template = standalone.query_rows(&format!(
         "SELECT * FROM game_gameobject_template WHERE entry = {PACKAGE_GAMEOBJECT_TEMPLATE}"
     ));
-    assert_eq!(template[0]["name"], "\"Kindled Cache\"");
+    assert_eq!(template[0]["name"], "Kindled Cache");
 
     let cleared = apply(&standalone, "gameobjects", "");
     assert!(cleared.status.success(), "{}", refusal_text(&cleared));
@@ -721,7 +720,7 @@ fn broadcast_text_update(id: u32) -> String {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
-    let standalone = Standalone::start("package-delta-creature-ai-references");
+    let mut standalone = Standalone::start("package-delta-creature-ai-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -777,8 +776,7 @@ fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
     let text = standalone.query_rows(&format!(
         "SELECT * FROM game_creature_ai_broadcast_text WHERE id = {ORDINARY_TEXT}"
     ));
-    // `spacetime sql` quotes a string column, so the expected value carries the quotes.
-    assert_eq!(text[0]["male_text"], "\"You will burn.\"");
+    assert_eq!(text[0]["male_text"], "You will burn.");
 
     // That plan carries no quest event requirement, so the Package that invented one is gone from
     // the enabled set and its row went with it.
