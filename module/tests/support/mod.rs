@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub struct Standalone {
     child: Child,
+    cli_config: PathBuf,
     data_dir: PathBuf,
     spacetime: OsString,
     server: String,
@@ -30,11 +31,13 @@ impl Standalone {
             std::process::id()
         ));
         fs::create_dir(&data_dir).expect("failed to create standalone data directory");
+        let cli_config = data_dir.join("cli.toml");
 
         let spacetime = std::env::var_os("SPACETIME_BIN").unwrap_or_else(|| "spacetime".into());
         let address = format!("127.0.0.1:{port}");
         let server = format!("http://{address}");
         let child = Command::new(&spacetime)
+            .args(["--config-path", cli_config.to_str().unwrap()])
             .args([
                 "start",
                 "--listen-addr",
@@ -51,6 +54,7 @@ impl Standalone {
         let database = format!("{test_name}-{}-{nonce}", std::process::id());
         let mut standalone = Self {
             child,
+            cli_config,
             data_dir,
             spacetime,
             server,
@@ -63,7 +67,7 @@ impl Standalone {
     pub fn publish_module(&self) {
         let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = module_dir.parent().unwrap();
-        assert_success(Command::new(&self.spacetime).current_dir(workspace).args([
+        assert_success(self.command().current_dir(workspace).args([
             "publish",
             "-s",
             &self.server,
@@ -75,11 +79,25 @@ impl Standalone {
         ]));
     }
 
+    /// Publish one already-built Wasm artifact. The caller can hash and retain this exact file, so
+    /// the standalone never rebuilds different source during a contract run.
+    pub fn publish_module_binary(&self, wasm: &Path) {
+        assert_success(self.command().args([
+            "publish",
+            "-s",
+            &self.server,
+            "--bin-path",
+            wasm.to_str().unwrap(),
+            "-y",
+            &self.database,
+        ]));
+    }
+
     #[allow(dead_code)] // Used when a developer's cached token is not valid for an isolated server.
     pub fn publish_module_anonymous(&self) {
         let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = module_dir.parent().unwrap();
-        assert_success(Command::new(&self.spacetime).current_dir(workspace).args([
+        assert_success(self.command().current_dir(workspace).args([
             "publish",
             "-s",
             &self.server,
@@ -93,7 +111,7 @@ impl Standalone {
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
-        let mut command = Command::new(&self.spacetime);
+        let mut command = self.command();
         command.args(["call", "-s", &self.server, &self.database, reducer]);
         command.args(args);
         command.output().expect("failed to call reducer")
@@ -105,7 +123,7 @@ impl Standalone {
 
     #[allow(dead_code)] // Paired with `publish_module_anonymous` for isolated local servers.
     pub fn assert_call_anonymous(&self, reducer: &str, args: &[&str]) {
-        let mut command = Command::new(&self.spacetime);
+        let mut command = self.command();
         command.args([
             "call",
             "-s",
@@ -166,7 +184,7 @@ impl Standalone {
     }
 
     fn sql(&self, query: &str) -> Output {
-        Command::new(&self.spacetime)
+        self.command()
             .args([
                 "sql",
                 "-s",
@@ -178,6 +196,12 @@ impl Standalone {
             ])
             .output()
             .expect("failed to run SQL query")
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.spacetime);
+        command.args(["--config-path", self.cli_config.to_str().unwrap()]);
+        command
     }
 }
 
