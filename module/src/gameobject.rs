@@ -4,11 +4,11 @@
 //! `game_corpse_loot` table KEYED ON THE GO GUID (so the existing corpse loot window + take path serve
 //! it unchanged) — falling back to the legacy single `data0` drop when the chest has no data-driven
 //! table (the seed/demo chest) — a GOOBER grants quest credit for a USE_GAMEOBJECT objective, a
-//! DOOR/BUTTON toggles open/closed (work-item 211). Every OTHER in-scope cmangos GO type imports
+//! DOOR/BUTTON toggles open/closed. Every OTHER in-scope cmangos GO type imports
 //! (template + spawn) but is INERT — `use` is a benign no-op, not an error (see `go_type::*` +
-//! `apply_use_gameobject`'s catch-all arm). LOCK enforcement (`game_lock`, Lock.dbc — work-item 211's
-//! data half) is DEFERRED to work-item 119: a locked door/chest/goober opens freely today; `lock_id`
-//! is carried on the template but nothing reads it yet. New tables → additive auto-migration. [entity]
+//! `apply_use_gameobject`'s catch-all arm). A lock with a real opener blocks CHEST, GOOBER,
+//! DOOR and BUTTON use until `apply_pick_lock` records it as unlocked. New tables use additive
+//! auto-migration. [entity]
 
 use std::collections::HashSet;
 
@@ -25,10 +25,9 @@ use crate::terrain::game_terrain_chunk;
 /// The gameobject types this slice handles (cmangos `GAMEOBJECT_TYPE_*`). Deliberate
 /// simplification: only these two plus the synthetic GATHER marker.
 pub mod go_type {
-    /// Door prop — `use` toggles open/closed (state 0↔1 via [`super::toggle_state`]), byte-identical
-    /// shape to the BUTTON toggle below. LOCK enforcement (`game_lock`) is DATA-ONLY this slice
-    /// (work-item 211) — a locked door opens/closes freely until work-item 119 wires the gate into
-    /// this dispatch. autoCloseTime (cmangos data2) is NOT modeled — a toggled-open door stays open
+    /// Door prop. `use` toggles open/closed (state 0↔1 via [`super::toggle_state`]), byte-identical
+    /// shape to the BUTTON toggle below. A lock with a real opener must be opened first.
+    /// autoCloseTime (cmangos data2) is NOT modeled — a toggled-open door stays open
     /// until toggled again (no auto-close timer this slice). cmangos type 0 (GAMEOBJECT_TYPE_DOOR).
     pub const DOOR: u8 = 0;
     /// Button/lever prop — cmangos models a lever as a differently-DISPLAYED door; the toggle
@@ -46,7 +45,8 @@ pub mod go_type {
     pub const CHEST: u8 = lyracore_shared::constants::go_type::CHEST;
     /// Spell trap. Relay activation uses its imported spell and cooldown metadata.
     pub const TRAP: u8 = 6;
-    /// Quest-use object (lever/totem/etc.) — `use` grants USE_GAMEOBJECT quest credit. cmangos type 10.
+    /// Quest-use object such as a lever or totem. Unlocked `use` grants USE_GAMEOBJECT quest credit.
+    /// This is cmangos type 10.
     pub const GOOBER: u8 = 10;
     /// Gather node (mining vein / herb bush). `use` skill-gates then DIRECT-grants the ore/herb
     /// (skinning-style, NOT the loot window — the gtker loot-window codec is incomplete). cmangos models
@@ -100,14 +100,13 @@ pub struct GameObjectTemplate {
     // The "orange" floor is the node's existing `data1` (required skill). Real tables (gray>0) are DEFERRED.
     #[default(0u32)]
     pub gather_gray: u32,
-    // END-APPENDED (work-item 211, Option A — additive auto-migration, same discipline as the columns
-    // above). The cmangos lockId this template carries, hand-synced positionally into the gateway's
+    // END-APPENDED. Uses additive auto-migration, with the same discipline as the columns above.
+    // The cmangos lockId is hand-synced positionally into the gateway's
     // `game_object_template_type.rs` binding (decode-only — the gateway never READS this field, only
     // decodes past it). CHEST/GOOBER source it from the dump's `data0`; DOOR/BUTTON from `data1` (see
-    // `importer/src/dbc.rs`'s `go_template_row`). DATA-ONLY this slice: `game_lock` (below) holds the
-    // Lock.dbc requirements for this id, but NOTHING enforces them yet — work-item 119 wires the gate
-    // into `apply_use_gameobject`. 0 = unlocked / not carried this slice (every existing row,
-    // default-migrated, and any type this slice doesn't source a lockId for).
+    // `importer/src/dbc.rs`'s `go_template_row`). `game_lock` holds the Lock.dbc requirements for this
+    // id. A real opener gates CHEST, GOOBER, DOOR and BUTTON use. 0 = unlocked or not carried for this
+    // type. Existing rows default to 0.
     #[default(0u32)]
     pub lock_id: u32,
     // END-APPENDED. The cmangos `gameobject_template.size` the client renders this prop at
@@ -140,10 +139,9 @@ pub struct GameObjectTrapCooldown {
     pub ready_at: Timestamp,
 }
 
-/// Lock.dbc → `game_lock` (work-item 211: the DATA half of open-lock; work-item 119 is the system half
-/// that actually GATES `apply_use_gameobject` on this table — nothing reads `game_lock` yet). One
-/// Lock.dbc row packs up to 8 PARALLEL alternative ways to open it (e.g. "either the right key OR
-/// enough Lockpicking OR..."); each non-`LockType::None` alternative un-packs into its own row here,
+/// Lock.dbc data in `game_lock`. `apply_use_gameobject` reads this table to gate supported locked
+/// types. One Lock.dbc row packs up to 8 PARALLEL alternative ways to open it, such as the right key
+/// or enough Lockpicking. Each non-`LockType::None` alternative un-packs into its own row here,
 /// `index`-numbered 0..8 (see `importer/src/dbc.rs::lock_sql` — a lock with 1 real requirement emits
 /// exactly 1 row). Look up by [`GameObjectTemplate::lock_id`] via `by_lock`. `kind`: 1 = ITEM (open
 /// with the key item `property` names) — 2 = SKILL (need SkillLine `property` at >= `required_skill`;
@@ -180,8 +178,8 @@ pub(crate) fn is_real_lock_opener(kind: u8, property: u32) -> bool {
     (kind == LOCK_KIND_SKILL && property != 0) || kind == LOCK_KIND_ITEM
 }
 
-/// A GameObject whose lock has been PICKED open (work-item 119): the CHEST/DOOR use-gate reads this by
-/// GO guid to admit the loot/toggle a still-locked GO refuses. Module-only + UNSUBSCRIBED (no gateway
+/// A GameObject whose lock has been PICKED open. The CHEST/GOOBER/DOOR use-gate reads
+/// this by GO guid to admit a use that a lock would refuse. Module-only + UNSUBSCRIBED (no gateway
 /// binding files, no gateway subscription — the `game_lock` precedent above); `public` + no Timestamp so
 /// a verify can inspect it via `spacetime sql`. One row per unlocked GO guid; never re-locked this slice
 /// (matches vanilla — a picked chest stays open). A row for a despawned GO is a harmless orphan (a live
@@ -618,8 +616,8 @@ pub(crate) fn respawn_due(state: u8, respawn_at_micros: u64, now: u64) -> bool {
     state == 1 && respawn_at_micros != 0 && now >= respawn_at_micros
 }
 
-/// Does the lock `lock_id` REQUIRE opening before a CHEST/DOOR use (work-item 119)? True iff `game_lock`
-/// holds a REAL opener row for it (`is_real_lock_opener` — a skill line to meet, or a key item). A lock
+/// Does the lock `lock_id` require opening before a CHEST/GOOBER/DOOR use? True iff `game_lock`
+/// holds a REAL opener row for it, either a skill line to meet or a key item. A lock
 /// with ONLY degenerate `property==0` slots (unmapped LockTypes = open-by-hand) is NOT gated: it opened
 /// freely pre-119 and still does, so widening the import's lock coverage never bricks a hand-open chest.
 fn lock_requires_opening(ctx: &ReducerContext, lock_id: u32) -> bool {
@@ -630,9 +628,9 @@ fn lock_requires_opening(ctx: &ReducerContext, lock_id: u32) -> bool {
         .any(|r| is_real_lock_opener(r.kind, r.property))
 }
 
-/// Is the GO `go_guid` (template `lock_id`) LOCKED SHUT for the use-gate (work-item 119)? True iff it
+/// Is the GO `go_guid` with template `lock_id` locked shut for the use-gate? True iff it
 /// carries a lock_id with a real opener AND no `game_gameobject_unlocked` row exists yet. The shared
-/// gate for the CHEST + DOOR/BUTTON arms only (GATHER/QUESTGIVER carry lock_id 0 → never gated).
+/// gate for the CHEST, GOOBER and DOOR/BUTTON arms. GATHER and QUESTGIVER carry lock_id 0.
 fn locked_shut(ctx: &ReducerContext, go_guid: u64, lock_id: u32) -> bool {
     lock_id != 0
         && lock_requires_opening(ctx, lock_id)
@@ -754,7 +752,8 @@ pub(crate) fn apply_pick_lock(
 /// Shared use-a-gameobject core (player + debug paths). Gates same-map + range, then dispatches by
 /// template type. CHEST → roll its single `data0` drop into `game_corpse_loot` keyed on the GO guid,
 /// ONCE (state flips 0→1 so a re-use can't re-roll), so the existing loot window/take path serves it.
-/// GOOBER → grant USE_GAMEOBJECT quest credit. Other types are not usable yet. [entity]
+/// GOOBER requires its opener, then grants USE_GAMEOBJECT quest credit. Other types are not usable
+/// yet. [entity]
 pub(crate) fn apply_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -837,6 +836,9 @@ pub(crate) fn apply_use_gameobject(
             ctx.db.game_gameobject().guid().update(go);
         }
         go_type::GOOBER => {
+            if locked_shut(ctx, go.guid, tmpl.lock_id) {
+                return Err("it is locked".to_string());
+            }
             crate::quest::on_gameobject_used(ctx, caster_guid, go.template_entry);
         }
         go_type::GATHER => {
