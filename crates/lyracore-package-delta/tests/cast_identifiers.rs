@@ -1,7 +1,7 @@
-//! The casts family's identifier policy: `game_creature_spell` follows the loot shape (band
-//! checked against the row's own surrogate `id`). `game_creature_cast` follows no band at all —
-//! it is update-only, refused unconditionally on `insert` — the worked example of
-//! [`DeltaError::InsertNotSupported`].
+//! The casts family's identifier policy: `game_creature_spell` follows the loot shape, with its
+//! band checked against the row's own surrogate `id`. `game_creature_cast` has no Package band
+//! because it is update-only and every `insert` is refused. Both tables refuse the Module's
+//! fixture creature cluster at their own creature-entry boundary.
 
 mod common;
 
@@ -11,7 +11,8 @@ use common::{
 };
 use lyracore_package_delta::{
     is_fixture_reserved_cast_id, is_package_cast_id, DeltaError, PackageDelta, PrimaryKey, Table,
-    PACKAGE_CAST_ID_CEIL, PACKAGE_CAST_ID_FLOOR,
+    FIXTURE_CREATURE_ID_CEIL, FIXTURE_CREATURE_ID_FLOOR, PACKAGE_CAST_ID_CEIL,
+    PACKAGE_CAST_ID_FLOOR,
 };
 
 fn artifact(package: &str, claims: &str) -> String {
@@ -63,14 +64,33 @@ fn an_insert_outside_the_package_range_is_refused() {
 
 #[test]
 fn an_update_may_name_a_real_imported_creature_spell_row() {
+    let fields = format!(
+        r#"{{"creature_entry":{{"type":"u32","value":{REAL_CREATURE_CAST}}},"priority":{{"type":"u8","value":20}}}}"#
+    );
     let json = artifact(
         "example.pkg",
-        &creature_spell_claim(REAL_CREATURE_SPELL, "update", A_PRIORITY),
+        &creature_spell_claim(REAL_CREATURE_SPELL, "update", &fields),
     );
 
     let delta = PackageDelta::parse(&json).expect("a real creature spell row is updatable");
 
     assert_eq!(delta.claims()[0].key().row_id(), REAL_CREATURE_SPELL);
+}
+
+#[test]
+fn a_creature_spell_cannot_target_a_fixture_cluster_creature() {
+    for id in [FIXTURE_CREATURE_ID_FLOOR, 51_001, FIXTURE_CREATURE_ID_CEIL] {
+        let fields = format!(r#"{{"creature_entry":{{"type":"u32","value":{id}}}}}"#);
+        let json = artifact(
+            "example.pkg",
+            &creature_spell_claim(REAL_CREATURE_SPELL, "update", &fields),
+        );
+
+        assert_eq!(
+            PackageDelta::parse(&json).expect_err("the claim must be refused"),
+            DeltaError::CreatureIdFixtureReserved { id }
+        );
+    }
 }
 
 #[test]
@@ -186,6 +206,21 @@ fn an_update_on_a_real_creature_entry_is_accepted() {
         delta.claims()[0].key().row_id(),
         u64::from(REAL_CREATURE_CAST)
     );
+}
+
+#[test]
+fn a_creature_cast_cannot_target_a_fixture_cluster_creature() {
+    for id in [FIXTURE_CREATURE_ID_FLOOR, 51_001, FIXTURE_CREATURE_ID_CEIL] {
+        let json = artifact(
+            "example.pkg",
+            &creature_cast_claim(id, "update", A_SPELL_ID),
+        );
+
+        assert_eq!(
+            PackageDelta::parse(&json).expect_err("the claim must be refused"),
+            DeltaError::CreatureIdFixtureReserved { id }
+        );
+    }
 }
 
 #[test]

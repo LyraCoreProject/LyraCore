@@ -8,6 +8,7 @@ const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab
 const FIXTURE_QUEST: u32 = 50_900;
 const FIXTURE_CREATURE: u32 = 51_000; // Test Wolf.
 const FIXTURE_TRAINER: u32 = 51_001; // Profession Trainer.
+const IMPORTED_CREATURE: u32 = 620; // Chicken, a real catalogue creature seeded at init.
 const REAL_ITEM: u32 = 25;
 const MISSING_ITEM: u32 = 4_000_000;
 const PACKAGE_LOOT: u64 = 9_000_001;
@@ -15,6 +16,7 @@ const REAL_SPELL: u32 = 50_310; // Test Riding Horse, seeded by the land-mount f
 const MISSING_SPELL: u32 = 4_000_000;
 const MISSING_CREATURE: u32 = 4_000_000;
 const PACKAGE_CREATURE_SPELL: u64 = 10_000_001;
+const FIXTURE_TARGETED_CREATURE_SPELL: u64 = 4_000_001;
 const PACKAGE_TRAINER_SPELL: u64 = 11_000_001;
 const PACKAGE_NPC_TEXT: u64 = 12_000_001;
 const PACKAGE_NPC_TEXT_SLOT: u64 = 12_000_002;
@@ -60,6 +62,15 @@ fn creature_spell_insert(creature_entry: u32, spell_id: u32) -> String {
         "example.cast",
         &format!(
             r#"{{"table":"game_creature_spell","key":{{"id":{PACKAGE_CREATURE_SPELL}}},"operation":"insert","fields":{{"creature_entry":{{"type":"u32","value":{creature_entry}}},"spell_id":{{"type":"u32","value":{spell_id}}},"priority":{{"type":"u8","value":10}},"condition":{{"type":"u8","value":0}},"condition_value":{{"type":"u8","value":0}}}}}}"#
+        ),
+    )
+}
+
+fn creature_spell_update(id: u64, fields: &str) -> String {
+    artifact(
+        "example.cast",
+        &format!(
+            r#"{{"table":"game_creature_spell","key":{{"id":{id}}},"operation":"update","fields":{fields}}}"#
         ),
     )
 }
@@ -209,7 +220,7 @@ fn cast_claims_refuse_missing_cross_table_references() {
     let refused_spell = apply(
         &standalone,
         "casts",
-        &creature_spell_insert(FIXTURE_CREATURE, MISSING_SPELL),
+        &creature_spell_insert(IMPORTED_CREATURE, MISSING_SPELL),
     );
     assert!(!refused_spell.status.success());
     assert!(
@@ -233,13 +244,69 @@ fn cast_claims_refuse_missing_cross_table_references() {
     let accepted = apply(
         &standalone,
         "casts",
-        &creature_spell_insert(FIXTURE_CREATURE, REAL_SPELL),
+        &creature_spell_insert(IMPORTED_CREATURE, REAL_SPELL),
     );
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
     let spell = standalone.query_rows(&format!(
         "SELECT * FROM game_creature_spell WHERE id = {PACKAGE_CREATURE_SPELL}"
     ));
     assert_eq!(spell[0]["spell_id"], REAL_SPELL.to_string());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn creature_spell_updates_cannot_hide_their_fixture_creature_target() {
+    let standalone = Standalone::start("cast-fixture-target");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+    assert_eq!(
+        standalone
+            .query_rows(&format!(
+                "SELECT * FROM game_creature_template WHERE entry = {IMPORTED_CREATURE}"
+            ))
+            .len(),
+        1,
+        "the imported target must exist"
+    );
+    standalone.assert_sql(&format!(
+        "INSERT INTO game_creature_spell (id, creature_entry, spell_id, priority, condition, condition_value) VALUES ({FIXTURE_TARGETED_CREATURE_SPELL}, {FIXTURE_CREATURE}, {REAL_SPELL}, 10, 0, 0)"
+    ));
+
+    let partial = apply(
+        &standalone,
+        "casts",
+        &creature_spell_update(
+            FIXTURE_TARGETED_CREATURE_SPELL,
+            r#"{"priority":{"type":"u8","value":20}}"#,
+        ),
+    );
+    let retargeted = apply(
+        &standalone,
+        "casts",
+        &creature_spell_update(
+            FIXTURE_TARGETED_CREATURE_SPELL,
+            &format!(r#"{{"creature_entry":{{"type":"u32","value":{IMPORTED_CREATURE}}}}}"#),
+        ),
+    );
+
+    assert!(
+        !partial.status.success() && !retargeted.status.success(),
+        "partial update success: {}; retarget-away success: {}",
+        partial.status.success(),
+        retargeted.status.success()
+    );
+    for refusal in [&partial, &retargeted] {
+        let text = refusal_text(refusal);
+        assert!(text.contains("fixture-reserved"), "{text}");
+        assert!(text.contains(&FIXTURE_CREATURE.to_string()), "{text}");
+    }
+
+    let spell = standalone.query_rows(&format!(
+        "SELECT * FROM game_creature_spell WHERE id = {FIXTURE_TARGETED_CREATURE_SPELL}"
+    ));
+    assert_eq!(spell[0]["creature_entry"], FIXTURE_CREATURE.to_string());
+    assert_eq!(spell[0]["priority"], "10");
 }
 
 /// `game_trainer_spell.spell_id` is checked against `game_spell` only when the row's final
