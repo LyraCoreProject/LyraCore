@@ -6,10 +6,11 @@
 //! true of casts.
 //!
 //! `game_creature_cast` is update-only ([`lyracore_package_delta::DeltaError::InsertNotSupported`]):
-//! its key names a creature template, out of this family's scope to invent. It carries no Package
-//! band, so [`update_target`] and `write_row` never treat it as `Uninvented`, and
-//! [`clear_package_range`] never touches it. `game_creature_spell` follows the loot shape instead:
-//! its own surrogate `id` is the band, checked by `is_package_cast_id`.
+//! its key names a creature template and the parser refuses the fixture cluster. It carries no
+//! Package band, so [`update_target`] and `write_row` never treat it as `Uninvented`, and
+//! [`clear_package_range`] never touches it. `game_creature_spell` follows the loot shape instead.
+//! Its own surrogate `id` is the band, checked by `is_package_cast_id`, while this family's
+//! reference Gate checks both the existing and final creature target.
 //!
 //! The Claim schema and the setters below are one contract; the tests at the bottom fail if a
 //! claimable column has no setter.
@@ -17,7 +18,8 @@
 use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
-    is_package_cast_id, FieldValue, Operation, PrimaryKey, Table as ClaimTable, TracedRow,
+    is_fixture_reserved_creature_id, is_package_cast_id, DeltaError, FieldValue, Operation,
+    PrimaryKey, Table as ClaimTable, TracedRow,
 };
 
 use crate::creatures::{game_creature_cast, game_creature_spell, CreatureCast, CreatureSpell};
@@ -25,27 +27,48 @@ use crate::{game_creature_template, game_spell};
 
 use super::{as_u32, as_u8, check_insert_is_whole, UpdateTarget};
 
-/// Refuses a cast claim whose final row would point at data this Shard does not hold.
+/// Refuses a cast claim whose final row would point at data this Shard does not hold or whose
+/// existing or final target belongs to the fixture creature cluster.
 pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
+        if row.table() == ClaimTable::CreatureSpell {
+            check_creature_spell_target(ctx, row)?;
+        }
+
         let spell_id = final_u32(ctx, row, "spell_id")?;
         if spell_id == 0 || ctx.db.game_spell().spell_id().find(spell_id).is_none() {
             return Err(missing_reference(row, "spell_id", spell_id));
         }
+    }
+    Ok(())
+}
 
-        if row.table() == ClaimTable::CreatureSpell {
-            let creature_entry = final_u32(ctx, row, "creature_entry")?;
-            if creature_entry == 0
-                || ctx
-                    .db
-                    .game_creature_template()
-                    .entry()
-                    .find(creature_entry)
-                    .is_none()
-            {
-                return Err(missing_reference(row, "creature_entry", creature_entry));
-            }
+/// Refuses both a final fixture target and an existing fixture target a claim tries to hide by
+/// omitting or replacing `creature_entry`.
+fn check_creature_spell_target(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+    let current = ctx
+        .db
+        .game_creature_spell()
+        .id()
+        .find(row.row_id())
+        .map(|spell| spell.creature_entry);
+    let final_entry = final_u32(ctx, row, "creature_entry")?;
+
+    for entry in current.into_iter().chain([final_entry]) {
+        if is_fixture_reserved_creature_id(entry) {
+            return Err(fixture_creature_reference(row, entry));
         }
+    }
+
+    if final_entry == 0
+        || ctx
+            .db
+            .game_creature_template()
+            .entry()
+            .find(final_entry)
+            .is_none()
+    {
+        return Err(missing_reference(row, "creature_entry", final_entry));
     }
     Ok(())
 }
@@ -96,6 +119,15 @@ fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
         "`{}` row {} references missing {field} {value}",
         row.table(),
         row.key()
+    )
+}
+
+fn fixture_creature_reference(row: &TracedRow, entry: u32) -> String {
+    format!(
+        "`{}` row {} references {}",
+        row.table(),
+        row.key(),
+        DeltaError::CreatureIdFixtureReserved { id: entry }
     )
 }
 

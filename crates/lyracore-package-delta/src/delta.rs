@@ -570,19 +570,14 @@ impl PrimaryKey {
 
     /// Names a caster creature's single-spell cast row.
     ///
-    /// No fixture or band check: the table is update-only (every insert on it is refused
-    /// regardless of identifier — see [`DeltaError::InsertNotSupported`]), and its key names a
-    /// creature template, which is out of this crate's scope to police.
+    /// The table is update-only, so it has no Package identifier band. Its key still names a
+    /// creature template and takes the creature fixture policy.
     ///
     /// # Errors
-    /// [`DeltaError::MalformedKey`] for creature entry 0.
+    /// [`DeltaError::MalformedKey`] for creature entry 0 or an entry the spawn guid's field cannot
+    /// hold, and [`DeltaError::CreatureIdFixtureReserved`] for a seeded fixture creature.
     pub fn creature_cast(creature_entry: u32) -> Result<Self, DeltaError> {
-        if creature_entry == 0 {
-            return Err(DeltaError::MalformedKey {
-                table: Table::CreatureCast,
-                detail: "`creature_entry` 0 is not a creature".to_owned(),
-            });
-        }
+        check_claimable_creature_entry(Table::CreatureCast, "creature_entry", creature_entry)?;
         Ok(Self::CreatureCast { creature_entry })
     }
 
@@ -608,8 +603,8 @@ impl PrimaryKey {
 
     /// Names the greeting a creature template shows.
     ///
-    /// No fixture or band check: the table is update-only, and its key names a creature template,
-    /// which is out of this crate's scope to police — the `game_creature_cast` shape.
+    /// No fixture or band check: the table is update-only, and its key names a creature template.
+    /// Unlike `game_creature_cast`, this table does not yet apply the creature fixture policy.
     ///
     /// # Errors
     /// [`DeltaError::MalformedKey`] for creature entry 0.
@@ -805,7 +800,7 @@ impl PrimaryKey {
     /// [`DeltaError::MalformedKey`] for entry 0 or an entry the spawn guid's 24-bit field cannot
     /// hold, and [`DeltaError::CreatureIdFixtureReserved`] for a seeded fixture creature.
     pub fn creature_template(entry: u32) -> Result<Self, DeltaError> {
-        check_claimable_creature_entry(entry)?;
+        check_claimable_creature_entry(Table::CreatureTemplate, "entry", entry)?;
         Ok(Self::CreatureTemplate { entry })
     }
 
@@ -1467,10 +1462,14 @@ fn check_race_and_class(table: Table, race: u8, class: u8) -> Result<(), DeltaEr
     Ok(())
 }
 
-/// A creature TEMPLATE entry is refused the same way under every operation when it is 0, wider
-/// than the spawn guid's field, or fixture-owned.
-fn check_claimable_creature_entry(entry: u32) -> Result<(), DeltaError> {
-    check_guid_component(Table::CreatureTemplate, "entry", entry)?;
+/// A creature template entry is refused wherever a claim names one when it is 0, wider than the
+/// spawn guid's field, or fixture-owned.
+fn check_claimable_creature_entry(
+    table: Table,
+    member: &str,
+    entry: u32,
+) -> Result<(), DeltaError> {
+    check_guid_component(table, member, entry)?;
     if is_fixture_reserved_creature_id(entry) {
         return Err(DeltaError::CreatureIdFixtureReserved { id: entry });
     }
@@ -1621,6 +1620,12 @@ impl Claim {
                     found,
                 });
             }
+        }
+
+        if let (Table::CreatureSpell, Some(FieldValue::U32(creature_entry))) =
+            (table, fields.get("creature_entry"))
+        {
+            check_claimable_creature_entry(table, "creature_entry", *creature_entry)?;
         }
 
         match operation {
