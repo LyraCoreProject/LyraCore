@@ -328,11 +328,9 @@ pub(crate) fn apply_group_loot_rules(ctx: &ReducerContext, corpse_guid: u64, gro
     }
 }
 
-/// Insert one [`LootRoll`] row + one [`LootRollVote`] per recipient (`voted=false`), with NO event
-/// push. The shared core of [`start_roll`] (kill time — this database keeps the roll unsharded, or
-/// stages it for promotion sharded) and `realm_loot_op`'s `loot_op::START` arm (this
-/// database IS realm-core, RE-CREATING a roll a world shard already announced locally; pushing
-/// `ROLL_START` again here would double the popup). Returns the new roll's id.
+/// Create one Loot Roll and its votes, or return the existing roll for this corpse and slot.
+/// Repeated starts preserve votes, recipients and deadline. No event is emitted here.
+/// Resolution deletes these rows, so a later replay after resolution is not deduplicated.
 fn insert_roll_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,
@@ -341,7 +339,15 @@ fn insert_roll_rows(
     recipients: &[u64],
     deadline_micros: i64,
 ) -> u64 {
-    let roll = ctx.db.game_loot_roll().insert(LootRoll {
+    let rolls = ctx.db.game_loot_roll();
+    if let Some(existing) = rolls
+        .by_corpse()
+        .filter(&corpse_guid)
+        .find(|r| r.slot == slot)
+    {
+        return existing.id;
+    }
+    let roll = rolls.insert(LootRoll {
         id: 0,
         corpse_guid,
         slot,
