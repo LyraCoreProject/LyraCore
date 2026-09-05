@@ -64,9 +64,32 @@ impl Standalone {
         standalone
     }
 
+    #[allow(dead_code)] // Used by Gateway tests that connect through the SDK.
+    pub fn server(&self) -> &str {
+        &self.server
+    }
+
+    #[allow(dead_code)] // Used by Gateway tests that connect through the SDK.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    #[allow(dead_code)] // The token belongs to this private Standalone's publisher.
+    pub fn connection_token(&self) -> String {
+        let config = fs::read_to_string(&self.cli_config).expect("private CLI config is missing");
+        config
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key.trim() == "spacetimedb_token")
+                    .then(|| value.trim().trim_matches('"').to_owned())
+            })
+            .expect("private publisher token is missing")
+    }
+
     pub fn publish_module(&self) {
-        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let workspace = module_dir.parent().unwrap();
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let module_dir = workspace.join("module");
         assert_success(self.command().current_dir(workspace).args([
             "publish",
             "-s",
@@ -98,8 +121,8 @@ impl Standalone {
 
     #[allow(dead_code)] // Used when a developer's cached token is not valid for an isolated server.
     pub fn publish_module_anonymous(&self) {
-        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let workspace = module_dir.parent().unwrap();
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let module_dir = workspace.join("module");
         assert_success(self.command().current_dir(workspace).args([
             "publish",
             "-s",

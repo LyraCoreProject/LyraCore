@@ -12,7 +12,7 @@ pub(crate) struct AuctionHousePolicy {
 }
 
 /// What an auction packet needs from the auctioneer: the house it serves, and whether its faction
-/// refuses to talk to this player. Every other interaction condition belongs to the Module.
+/// refuses to talk to this Character. Every other interaction condition belongs to the Module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AuctionInteraction {
     pub(crate) house: AuctionHousePolicy,
@@ -276,8 +276,9 @@ pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
     player: AuctionActionPlayer,
     request: AuctionBrowseRequest,
 ) -> Result<AuctionActionOutcome> {
-    let Some((player_guid, house)) =
-        validated_auction_player_guid(store, player, request.auctioneer_guid)?
+    let Some((player_guid, interaction)) =
+        auction_actor_interaction(store, player, request.auctioneer_guid)?
+            .filter(|(_, interaction)| !interaction.refuses_interaction)
     else {
         return Ok(AuctionActionOutcome::Handled {
             outbound: vec![Outbound::One(
@@ -287,7 +288,11 @@ pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
             )],
         });
     };
-    let page = store.auction_query(player_guid, house.id, AuctionQuery::Browse(request))?;
+    let page = store.auction_query(
+        player_guid,
+        interaction.house.id,
+        AuctionQuery::Browse(request),
+    )?;
     Ok(AuctionActionOutcome::Handled {
         outbound: vec![Outbound::One(
             ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(
@@ -297,22 +302,19 @@ pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
     })
 }
 
-/// Resolve the house an auction packet names. The Module owns the auctioneer interaction Gate and
-/// refuses its own reducers, so only the faction refusal stays here: the browse and window paths
-/// are Durable Reads with no reducer to refuse them, as with vendor, bank and trainer.
-fn validated_auction_player_guid<St: AuctionActionStore + ?Sized>(
+/// Resolve the Character and auction house. Read paths apply the faction verdict; Durable
+/// Requests leave the interaction Gate to the Module.
+fn auction_actor_interaction<St: AuctionActionStore + ?Sized>(
     store: &St,
     player: AuctionActionPlayer,
     auctioneer_guid: u64,
-) -> Result<Option<(u64, AuctionHousePolicy)>> {
+) -> Result<Option<(u64, AuctionInteraction)>> {
     let Some(player_guid) = player.self_guid else {
         return Ok(None);
     };
     // A missing auctioneer or house is `None`; a failed Durable Read is a failure, not a Refusal.
     let interaction = store.auction_interaction(player_guid, auctioneer_guid)?;
-    Ok(interaction
-        .filter(|interaction| !interaction.refuses_interaction)
-        .map(|interaction| (player_guid, interaction.house)))
+    Ok(interaction.map(|interaction| (player_guid, interaction)))
 }
 
 fn create_result(outcome: CreateAuctionOutcome) -> AuctionActionOutcome {
@@ -423,8 +425,8 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(message) => {
             let auction_id = message.auction_id;
             let auctioneer_guid = message.auctioneer.guid();
-            let Some((player_guid, house)) =
-                validated_auction_player_guid(store, player, auctioneer_guid)?
+            let Some((player_guid, interaction)) =
+                auction_actor_interaction(store, player, auctioneer_guid)?
             else {
                 return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
             };
@@ -435,14 +437,14 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
                 auctioneer_guid,
                 auction_id,
                 offer: message.price.as_int(),
-                house_id: house.id,
+                house_id: interaction.house.id,
             })?;
             return Ok(bid_result(auction_id, outcome));
         }
         ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
             let auctioneer_guid = message.auctioneer.guid();
-            let Some((player_guid, house)) =
-                validated_auction_player_guid(store, player, auctioneer_guid)?
+            let Some((player_guid, interaction)) =
+                auction_actor_interaction(store, player, auctioneer_guid)?
             else {
                 return Ok(create_result(CreateAuctionOutcome::Database));
             };
@@ -453,19 +455,21 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
                 start_bid: message.starting_bid,
                 buyout: message.buyout,
                 duration_minutes: message.auction_duration_in_minutes,
-                house_id: house.id,
+                house_id: interaction.house.id,
             })?;
             return Ok(create_result(outcome));
         }
         other => return Ok(AuctionActionOutcome::PassThrough(other)),
     };
     let auctioneer_guid = auctioneer.guid();
-    let Some((player_guid, house)) = validated_auction_player_guid(store, player, auctioneer_guid)?
+    let Some((player_guid, interaction)) = auction_actor_interaction(store, player, auctioneer_guid)?
+        .filter(|(_, interaction)| !interaction.refuses_interaction)
     else {
         return Ok(AuctionActionOutcome::Handled {
             outbound: Vec::new(),
         });
     };
+    let house = interaction.house;
     use wow_world_messages::vanilla::{AuctionHouse, MSG_AUCTION_HELLO_Server};
     let message = match request {
         AuctionRequest::Hello(auctioneer) => {
@@ -677,6 +681,29 @@ mod tests {
         assert_eq!(decoded.inventory_type, None);
         assert_eq!(decoded.item_class, None);
         assert_eq!(decoded.item_subclass, None);
+    }
+
+    #[test]
+    fn faction_refusal_keeps_browse_empty() {
+        let store = store_with(Some(AuctionInteraction {
+            refuses_interaction: true,
+            ..valid_interaction()
+        }));
+        let outcome = dispatch_auction_browse_action(
+            &store,
+            AuctionActionPlayer { self_guid: Some(7) },
+            decode_auction_browse(&raw_browse(u32::MAX)).unwrap(),
+        )
+        .unwrap();
+        let AuctionActionOutcome::Handled { outbound } = outcome else {
+            panic!("browse must be handled")
+        };
+        assert!(matches!(
+            outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(message))]
+                if message.total_amount_of_auctions == 0 && message.auctions.is_empty()
+        ));
+        assert!(store.queries.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1262,11 +1289,12 @@ mod tests {
             .is_empty());
     }
 
-    // A dead, out-of-range or non-auctioneer target is the Module's Gate, so the sell and bid
-    // paths must still send the Durable Request and let its Refusal answer the client.
     #[test]
-    fn sell_and_bid_leave_the_rest_of_the_interaction_gate_to_the_module() {
-        let store = store_with(Some(valid_interaction()));
+    fn sell_and_bid_leave_faction_refusals_to_the_module() {
+        let store = store_with(Some(AuctionInteraction {
+            refuses_interaction: true,
+            ..valid_interaction()
+        }));
         *store.create_result.lock().unwrap() = Ok(CreateAuctionOutcome::Database);
         let outbound = sell_outbound(&store).unwrap();
         assert_eq!(store.creates.lock().unwrap().len(), 1);
@@ -1279,7 +1307,10 @@ mod tests {
                     }
         ));
 
-        let store = store_with(Some(valid_interaction()));
+        let store = store_with(Some(AuctionInteraction {
+            refuses_interaction: true,
+            ..valid_interaction()
+        }));
         *store.bid_result.lock().unwrap() = Ok(PlaceBidOutcome::Database);
         let outbound = bid_outbound(&store).unwrap();
         assert_eq!(store.bids.lock().unwrap().len(), 1);
