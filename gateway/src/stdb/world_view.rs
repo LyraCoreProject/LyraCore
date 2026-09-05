@@ -711,18 +711,24 @@ fn register_shard_callbacks(
     );
 
     // ---- game_entity_motion (peer movement) ------------------------------------------------
-    wire_insert(
-        db.game_entity_motion(),
-        "game_entity_motion.insert",
-        &view,
-        move |v, row| motion(v, shard, row),
-    );
-    wire_update(
-        db.game_entity_motion(),
-        "game_entity_motion.update",
-        &view,
-        move |v, _old, row| motion(v, shard, row),
-    );
+    {
+        let coord = coord.clone();
+        wire_insert(
+            db.game_entity_motion(),
+            "game_entity_motion.insert",
+            &view,
+            move |v, row| motion(v, shard, row, &coord.0.motion_batch.delivery),
+        );
+    }
+    {
+        let coord = coord.clone();
+        wire_update(
+            db.game_entity_motion(),
+            "game_entity_motion.update",
+            &view,
+            move |v, _old, row| motion(v, shard, row, &coord.0.motion_batch.delivery),
+        );
+    }
 
     // ---- game_creature_spline (creature legs) ----------------------------------------------
     wire_insert(
@@ -1361,7 +1367,13 @@ fn gameobject_vanished(view: &WorldView, shard: ShardId, guid: u64) {
 //  Motion + creature legs — no index of their own: the row carries its own cell.
 // ===============================================================================================
 
-fn motion(view: &WorldView, shard: ShardId, row: &EntityMotion) {
+fn motion(
+    view: &WorldView,
+    shard: ShardId,
+    row: &EntityMotion,
+    delivery: &super::movement_batch::MotionDelivery,
+) {
+    delivery.received();
     let key = CellKey::at(row.map_id, row.instance_id, row.grid_x, row.grid_y);
     let row = Arc::new(row.clone());
     // The MOVER is deliberately not a recipient (`world_entity_recipients`' self leg is skipped

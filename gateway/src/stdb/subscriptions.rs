@@ -422,10 +422,9 @@ pub(crate) fn instance_relay_gate(row_instance_id: u64, viewer_instance_id: Opti
 /// `log::info!` on the relay path made the intermittent failure vanish across six consecutive runs,
 /// so any instrument that touches the hot path perturbs the very race being measured.
 ///
-/// `MOTION_CALLS` counts entries to [`relay_entity_motion`] (before any guard), `MOTION_SENT` counts
-/// packets actually queued. Comparing them against the client's observed peer-moves localises a
-/// failing run to one of three hops: subscription→callback (calls stay 0), guard rejection
-/// (calls >> sent), or gateway→socket (sent >> observed).
+/// `MOTION_CALLS` counts per-viewer [`motion_outbound`] work before its audience Gate.
+/// `MOTION_SENT` counts packets built, and `MOTION_DROPPED` counts discarded writer work.
+/// These are fan-out counters. Incoming subscription rows are counted separately per Shard.
 pub(crate) static MOTION_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub(crate) static MOTION_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 

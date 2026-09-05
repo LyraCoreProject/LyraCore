@@ -686,6 +686,7 @@ fn an_old_shard_cannot_move_or_change_skills_on_a_destination_viewer() {
             seq: 1,
             cell: 0,
         },
+        &super::super::movement_batch::MotionDelivery::default(),
     );
     creature_leg(
         &view,
@@ -1230,4 +1231,94 @@ fn aura_relays_never_scan_the_aura_cache() {
     );
     assert_eq!(arm.matches("view.auras.upsert(shard, row)").count(), 2);
     assert_eq!(arm.matches("view.auras.remove(shard, row)").count(), 1);
+}
+
+fn queue_motion(batch: &super::super::movement_batch::MovementBatch, seq: u32) -> EntityMotion {
+    batch.push(GwMove {
+        actor_guid: PLAYER_BASE,
+        opcode: 0x00ee,
+        movement_info: vec![],
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        o: 0.0,
+        move_time_ms: seq,
+    });
+    EntityMotion {
+        guid: PLAYER_BASE,
+        map_id: 0,
+        instance_id: 0,
+        grid_x: 0,
+        grid_y: 0,
+        opcode: 0x00ee,
+        movement_info: vec![],
+        seq,
+        cell: 0,
+    }
+}
+
+#[test]
+fn healthy_motion_without_a_peer_does_not_report_stopped_delivery() {
+    let view = WorldView::new(true);
+    let batch = super::super::movement_batch::MovementBatch::new();
+    let (tx, rx) = SessionTx::with_depth(0);
+    view.add_viewer_on_shard(viewer(1, PLAYER_BASE, tx), CellKey::at(0, 0, 0, 0), 0);
+    let before = batch.delivery.snapshot();
+    for seq in 1..=172 {
+        motion(&view, 0, &queue_motion(&batch, seq), &batch.delivery);
+    }
+
+    assert!(
+        rx.try_recv().is_err(),
+        "the mover must not receive its own motion"
+    );
+    let delta = batch.delivery.snapshot().since(before);
+    assert_eq!(delta.queued, 172);
+    assert_eq!(delta.callbacks, 172);
+    assert!(!delta.is_silent());
+}
+
+#[test]
+fn motion_delivery_counts_coalesced_rows_before_a_stalled_peer_writer() {
+    let view = WorldView::new(true);
+    let batch = super::super::movement_batch::MovementBatch::new();
+    let (tx, rx) = SessionTx::with_depth(0);
+    let peer = viewer(1, PLAYER_BASE + 1, tx);
+    peer.created.lock().unwrap().insert(PLAYER_BASE);
+    view.add_viewer_on_shard(peer, CellKey::at(0, 0, 0, 0), 0);
+    let before = batch.delivery.snapshot();
+    let mut latest = queue_motion(&batch, 1);
+    for seq in 2..=172 {
+        latest = queue_motion(&batch, seq);
+    }
+    // The Module may coalesce several queued movements into one row. The writer has not run.
+    motion(&view, 0, &latest, &batch.delivery);
+
+    assert!(matches!(rx.try_recv().unwrap(), Outbound::Job(_)));
+    assert!(rx.try_recv().is_err());
+    let delta = batch.delivery.snapshot().since(before);
+    assert_eq!(delta.queued, 172);
+    assert_eq!(delta.callbacks, 1);
+    assert!(!delta.is_silent());
+}
+
+#[test]
+fn motion_delivery_silence_is_scoped_to_the_shard_and_current_window() {
+    let view = WorldView::new(true);
+    let stopped = super::super::movement_batch::MovementBatch::new();
+    let healthy = super::super::movement_batch::MovementBatch::new();
+    motion(&view, 0, &queue_motion(&stopped, 1), &stopped.delivery);
+    let before = stopped.delivery.snapshot();
+    for seq in 2..=173 {
+        queue_motion(&stopped, seq);
+        motion(&view, 1, &queue_motion(&healthy, seq), &healthy.delivery);
+    }
+    let silent = stopped.delivery.snapshot();
+    assert!(silent.since(before).is_silent());
+    assert!(!healthy.delivery.snapshot().is_silent());
+
+    motion(&view, 0, &queue_motion(&stopped, 174), &stopped.delivery);
+    let resumed = stopped.delivery.snapshot();
+    assert!(!resumed.since(silent).is_silent());
+    assert!(!stopped.delivery.snapshot().since(resumed).is_silent());
 }

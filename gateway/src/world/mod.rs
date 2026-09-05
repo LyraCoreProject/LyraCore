@@ -253,13 +253,12 @@ pub enum EnchantRoute {
     Disenchant,
 }
 
-/// Movements submitted in a 10s window below which the relay-health check stays quiet. A
-/// handful of movements with no relay traffic is just a lone player with nobody nearby to relay to;
-/// hundreds is the broken case. 100 ≈ five moving players.
+/// Activity floor for motion diagnostics. Counts below this leave short windows unclassified;
+/// even high activity can legitimately have no peer audience.
 pub const MOVE_ACTIVITY_FLOOR: u64 = 100;
 
-/// Accepted movements handed to shard-local shared batches. Relay-health and fan-out diagnostics
-/// use this process-wide count as their activity denominator.
+/// Accepted movements handed to shard-local shared batches. Fan-out diagnostics use this
+/// process-wide count as their activity denominator.
 pub static MOVE_SUBMITTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The connection's world-phase sub-state. Encodes the in-world invariant in the TYPE: the relay
@@ -1673,42 +1672,9 @@ pub async fn run(
                 );
             }
             prev_recenters = recenters;
-            // HEALTH SIGNAL. The failure this catches is silent and permanent: the motion
-            // subscription stops delivering while the module keeps accepting movement, so the
-            // server looks healthy — players are moving, reducers are committing — and every peer
-            // simply stands still. Observed running for 2.5 HOURS on one gateway before anyone
-            // noticed, and it does not self-heal.
-            //
-            // The two counters make it unambiguous without needing to know the trigger: movement
-            // being SUBMITTED (players are active) while the relay callback fires almost never can
-            // only mean delivery is broken. Deliberately a loud WARN and not a silent metric — the
-            // whole defect is that nothing said anything.
             let submitted_delta = sub.saturating_sub(prev_sub);
-            if submitted_delta > MOVE_ACTIVITY_FLOOR && c.saturating_sub(pc) * 10 < submitted_delta
-            {
-                log::warn!(
-                    "MOTION RELAY LOOKS DEAD: {submitted_delta} movements submitted in the \
-                     last 10s but the relay callback fired only {} times — peers are almost \
-                     certainly frozen for connected players. calls={c} sent={s}. \
-                     The historical cause (the AOI recenter resubscribing a SHORTER query set, so \
-                     the first cell crossing dropped game_entity_motion) cannot recur — the shared- \
-                     call path removed the per-player AOI subscription entirely. This firing now \
-                     means the SHARED \
-                     coordinator dispatch is not running: check the log for a `shared AOI dispatch` \
-                     panic line, and that `coordinator connected to shard` was printed for every \
-                     database. Restart the gateway to recover play.",
-                    c.saturating_sub(pc)
-                );
-            }
-            // FAN-OUT COLLAPSE SIGNAL. The health-signal check above only fires when
-            // the relay goes (almost) silent. The 371-client incident was the PARTIAL version of the
-            // same failure: 63 % of the movement delivered, `delivery` reading ~100 % because the
-            // shortfall was in `calls`, and the one field that showed it — `fanout` — meaning nothing
-            // to a reader who does not already know it should have read ~371. So compare fan-out
-            // against the gateway's OWN recent baseline and say so out loud. All of it inside this
-            // 10-second task: zero hot-path cost, per `subscriptions.rs:208`. Read
-            // `fanout_health_step`'s doc comment for what this deliberately does NOT catch (a gateway
-            // degraded since startup has a low baseline and never trips it).
+            // Compare per-viewer fan-out with its recent baseline. Coordinator watchdogs measure
+            // incoming motion separately, before audience selection and writer work.
             let fanout =
                 crate::stdb::subscriptions::fanout_ratio(c.saturating_sub(pc), submitted_delta);
             let (next_fan, fanout_warn) =

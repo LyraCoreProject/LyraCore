@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use super::bindings::GwMove;
@@ -8,6 +9,7 @@ const MAX_MOVES_PER_CALL: usize = 128;
 /// this type owns the deterministic queue and bounded submission behavior.
 pub(crate) struct MovementBatch {
     queued: Mutex<Vec<GwMove>>,
+    pub(crate) delivery: MotionDelivery,
 }
 
 pub(crate) struct SubmissionFailure<E> {
@@ -19,6 +21,7 @@ impl MovementBatch {
     pub(crate) fn new() -> Self {
         Self {
             queued: Mutex::new(Vec::new()),
+            delivery: MotionDelivery::default(),
         }
     }
 
@@ -27,6 +30,7 @@ impl MovementBatch {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(movement);
+        self.delivery.queued.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Removes the current window before submitting it, so movements queued by a
@@ -51,6 +55,46 @@ impl MovementBatch {
             }
         }
         failures
+    }
+}
+
+/// One Shard's accepted movement and incoming motion rows, before AOI selection or writer work.
+/// These counters survive Coordinator replacement. Queue acceptance does not prove Module commit.
+#[derive(Default)]
+pub(crate) struct MotionDelivery {
+    queued: AtomicU64,
+    callbacks: AtomicU64,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct MotionDeliverySnapshot {
+    pub(crate) queued: u64,
+    pub(crate) callbacks: u64,
+}
+
+impl MotionDelivery {
+    pub(crate) fn received(&self) {
+        self.callbacks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> MotionDeliverySnapshot {
+        MotionDeliverySnapshot {
+            queued: self.queued.load(Ordering::Relaxed),
+            callbacks: self.callbacks.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl MotionDeliverySnapshot {
+    pub(crate) fn since(self, previous: Self) -> Self {
+        Self {
+            queued: self.queued.saturating_sub(previous.queued),
+            callbacks: self.callbacks.saturating_sub(previous.callbacks),
+        }
+    }
+
+    pub(crate) fn is_silent(self) -> bool {
+        self.queued > crate::world::MOVE_ACTIVITY_FLOOR && self.callbacks == 0
     }
 }
 
