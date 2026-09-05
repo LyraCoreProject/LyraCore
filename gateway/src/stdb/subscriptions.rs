@@ -5847,7 +5847,12 @@ mod tests {
     #[test]
     fn source_scans_ignore_block_commented_code() {
         let source = r#"
-            wire_insert_live(db.live_table(), "live.label", &view, relay);
+            wire_insert_live(
+                db.live_table(),
+                "live.label",
+                &view,
+                |v, row| relay(v, row),
+            );
             /*
                 wire_insert_live(db.decoy_table(), "decoy.label", &view, relay);
                 /* wire_insert_live(db.nested_decoy(), "nested.label", &view, relay); */
@@ -5856,8 +5861,11 @@ mod tests {
         "#;
 
         let scanned = decommented(source);
+        let compact: String = scanned.chars().filter(|c| !c.is_whitespace()).collect();
 
-        assert!(scanned.contains("wire_insert_live(db.live_table()"));
+        assert!(compact.contains(
+            "wire_insert_live(db.live_table(),\"live.label\",&view,|v,row|relay(v,row));"
+        ));
         assert!(!scanned.contains("decoy_table"));
         assert!(!scanned.contains("nested_decoy"));
         assert!(scanned.contains("\"/* quoted label */\""));
@@ -5941,11 +5949,11 @@ mod tests {
         let body = decommented(top_level_fn_body_of("world_view.rs", "arm_realm_private"));
         let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            compact.contains("wire_insert_live(db.game_whisper_event(),\"realm.game_whisper_event.insert\",&view,|v,row|whisper_appeared(v,row),);"),
+            compact.contains("wire_insert_live(db.game_whisper_event(),\"realm.game_whisper_event.insert\",&view,|v,row|whisper_appeared(v,row));"),
             "arm_realm_private no longer relays realm-core whispers through `whisper_appeared`"
         );
         assert!(
-            compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,move|v,row|group_event_appeared(v,&coord,row),);"),
+            compact.contains("wire_insert_live(db.game_group_event(),\"realm.game_group_event.insert\",&view,move|v,row|group_event_appeared(v,&coord,row));"),
             "arm_realm_private no longer relays realm-core group events through \
              `group_event_appeared` (which also carries the QUEST_SHARE detail JOIN through a \
              WORLD handle — realm-core's cache has no quest catalogue)"
