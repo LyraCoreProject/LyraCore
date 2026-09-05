@@ -70,12 +70,12 @@ impl Standalone {
     }
 
     #[allow(dead_code)] // Used by Gateway tests that connect through the SDK.
-    pub fn database(&self) -> &str {
+    pub fn shard_name(&self) -> &str {
         &self.database
     }
 
-    #[allow(dead_code)] // The token belongs to this private Standalone's publisher.
-    pub fn connection_token(&self) -> String {
+    #[allow(dead_code)] // Used by Gateway tests that need the private shard's Owner Token.
+    pub fn owner_token(&self) -> String {
         let config = fs::read_to_string(&self.cli_config).expect("private CLI config is missing");
         config
             .lines()
@@ -84,7 +84,7 @@ impl Standalone {
                 (key.trim() == "spacetimedb_token")
                     .then(|| value.trim().trim_matches('"').to_owned())
             })
-            .expect("private publisher token is missing")
+            .expect("private Owner Token is missing")
     }
 
     pub fn publish_module(&self) {

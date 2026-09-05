@@ -3561,8 +3561,8 @@ mod auction_reducer_tests {
             logon_bind: "127.0.0.1:0".into(),
             world_bind: "127.0.0.1:0".into(),
             stdb_uri: standalone.server().into(),
-            module_name: standalone.database().into(),
-            coordinator_token: Some(standalone.connection_token()),
+            module_name: standalone.shard_name().into(),
+            coordinator_token: Some(standalone.owner_token()),
             gateway_id: "auction-refusal-test".into(),
             blocking_task_capacity: BlockingTaskCapacity::new(1),
         };
