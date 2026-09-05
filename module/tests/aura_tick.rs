@@ -11,7 +11,7 @@ const WOLF: u64 = (0xF130_u64 << 48) | (51_000_u64 << 24) | 1;
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_periodic_kill_commits_the_death_and_an_unrelated_heal() {
-    let standalone = Standalone::start("aura-tick-death");
+    let mut standalone = Standalone::start("aura-tick-death");
     standalone.publish_module();
     standalone.assert_sql("DELETE FROM game_creature_move_schedule");
     standalone.assert_sql("DELETE FROM game_melee_schedule");
