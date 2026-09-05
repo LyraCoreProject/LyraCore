@@ -8,7 +8,7 @@ use support::Standalone;
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
-    let standalone = Standalone::start("xp-cap");
+    let mut standalone = Standalone::start("xp-cap");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);

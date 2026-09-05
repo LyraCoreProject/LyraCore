@@ -45,6 +45,7 @@ pub struct Standalone {
     address: String,
     data_dir: PathBuf,
     log_path: PathBuf,
+    published: bool,
     spacetime: OsString,
     server: String,
     database: String,
@@ -79,6 +80,7 @@ impl Standalone {
             address,
             data_dir,
             log_path,
+            published: false,
             spacetime,
             server,
             database: name,
@@ -111,34 +113,36 @@ impl Standalone {
     }
 
     pub fn publish_module(&mut self) {
-        self.publish(&[]);
+        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        self.publish(
+            &[
+                "--module-path",
+                module_dir.to_str().unwrap(),
+                "--build-options=--features=debug_reducers",
+            ],
+            &[],
+        );
     }
 
     /// Copy built Wasm bytes into this standalone's private directory and publish that copy.
     #[allow(dead_code)] // Used by tests that build their own Wasm artifact.
-    pub fn publish_module_bytes(&self, wasm: &[u8]) {
+    pub fn publish_module_bytes(&mut self, wasm: &[u8]) {
         let path = self.data_dir.join("published-module.wasm");
         fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
-
-        let output = self
-            .command()
-            .args([
-            "publish",
-            "-s",
-            &self.server,
-            "--bin-path",
-            path.to_str().unwrap(),
-            "-y",
-            &self.database,
-            ])
-            .output()
-            .expect("failed to start spacetime publish");
-        self.assert_ok(&output);
+        self.publish(&["--bin-path", path.to_str().unwrap()], &[]);
     }
 
     #[allow(dead_code)] // Used when a developer's cached token is not valid for an isolated server.
     pub fn publish_module_anonymous(&mut self) {
-        self.publish(&["--anonymous"]);
+        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        self.publish(
+            &[
+                "--module-path",
+                module_dir.to_str().unwrap(),
+                "--build-options=--features=debug_reducers",
+            ],
+            &["--anonymous"],
+        );
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
@@ -198,39 +202,37 @@ impl Standalone {
         );
     }
 
-    /// Publish the module, restarting the node when it dies mid-publish.
+    /// Publish the module, restarting a fresh node when it dies mid-publish.
     ///
     /// `spacetimedb-standalone` 2.7.1 segfaults while launching this module roughly once in a dozen
     /// publishes (SIGSEGV, no log line past `launching module`). The node is `--in-memory`, so a
-    /// restart before the first publish loses nothing. A node that survives, or a refusal the node
-    /// itself returned, is reported on the spot rather than retried.
-    fn publish(&mut self, extra: &[&str]) {
+    /// restart before the first successful publish loses nothing. Once a publish succeeds, this
+    /// Standalone may hold state, so every later failure is reported without a restart.
+    fn publish(&mut self, source: &[&str], extra: &[&str]) {
         let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = module_dir.parent().unwrap();
         let mut attempts = Vec::new();
-        for _ in 0..PUBLISH_ATTEMPTS {
+        let allowed_attempts = if self.published { 1 } else { PUBLISH_ATTEMPTS };
+        for attempt in 0..allowed_attempts {
             let mut command = self.command();
-            command.current_dir(workspace).args([
-                "publish",
-                "-s",
-                &self.server,
-                "--module-path",
-                module_dir.to_str().unwrap(),
-                "--build-options=--features=debug_reducers",
-            ]);
+            command
+                .current_dir(workspace)
+                .args(["publish", "-s", &self.server]);
+            command.args(source);
             command.args(extra);
             command.args(["-y", &self.database]);
             let output = command.output().expect("failed to start spacetime publish");
             if output.status.success() {
+                self.published = true;
                 return;
             }
             attempts.push(describe(&output));
-            if self
+            let node_is_running = self
                 .child
                 .try_wait()
                 .expect("failed to poll standalone")
-                .is_none()
-            {
+                .is_none();
+            if node_is_running || attempt + 1 == allowed_attempts {
                 break;
             }
             self.restart();
@@ -301,10 +303,13 @@ impl Standalone {
     }
 
     fn assert_ok(&self, output: &Output) {
+        self.assert_output_success(output, &format!("command failed with {}", output.status));
+    }
+
+    pub fn assert_output_success(&self, output: &Output, context: &str) {
         assert!(
             output.status.success(),
-            "command failed with {}\n{}{}",
-            output.status,
+            "{context}\n{}{}",
             describe(output),
             self.log_tail(),
         );

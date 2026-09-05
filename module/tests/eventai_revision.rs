@@ -59,12 +59,12 @@ fn wait_for_verifier(standalone: &Standalone, expect_rule_state: bool) {
         ok
     });
     let last = last.expect("at least one attempt");
-    assert!(
-        reached,
-        "EventAI fixture did not reach the expected state\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&last.stdout),
-        String::from_utf8_lossy(&last.stderr),
-    );
+    if !reached {
+        standalone.assert_output_success(
+            &last,
+            "EventAI fixture did not reach the expected state before the deadline",
+        );
+    }
 }
 
 /// Re-check the verifier for `window`. Each check is a reducer call, which paces the loop. The last
@@ -81,12 +81,7 @@ fn hold_verifier(standalone: &Standalone, expect_rule_state: bool, window: Durat
 
 fn assert_verifier(standalone: &Standalone, expect_rule_state: bool) {
     let output = verifier(standalone, expect_rule_state);
-    assert!(
-        output.status.success(),
-        "EventAI fixture verification failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+    standalone.assert_output_success(&output, "EventAI fixture verification failed");
 }
 
 fn verifier(standalone: &Standalone, expect_rule_state: bool) -> std::process::Output {

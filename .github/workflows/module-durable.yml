@@ -1,6 +1,6 @@
 name: Module durable tests
 
-# The durable integration rung: `module/tests/`, 37 targets marked `#[ignore]` because each one
+# The durable integration rung: `module/tests/`, 39 targets marked `#[ignore]` because each one
 # starts its own SpacetimeDB standalone, publishes the module to it, and drives real reducers.
 # `rust.yml`'s `--lib` run cannot reach any of it.
 #
@@ -46,8 +46,9 @@ jobs:
           echo "spacetime $found"
           [ "$found" = "$SPACETIME_VERSION" ]
 
-      # Every test publishes the same wasm. Building it once here keeps the first test off a cold
-      # compile, and a build failure reports as a build failure rather than as a publish timeout.
+      # Building the workspace Module once keeps the module-path publishers off a cold compile, and
+      # a build failure reports as a build failure rather than as a publish timeout. The typed taxi
+      # test builds and privately copies the exact Wasm artifact it inspects.
       - name: Build the module wasm
         run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
 
