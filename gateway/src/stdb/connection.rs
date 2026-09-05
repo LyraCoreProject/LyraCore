@@ -1074,43 +1074,71 @@ const COORDINATOR_WATCHDOG_POLL: Duration = Duration::from_secs(3);
 fn spawn_coordinator_watchdog(inner: Arc<CoordinatorInner>) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("stdb-coordinator-watchdog".into())
-        .spawn(move || loop {
-            std::thread::sleep(COORDINATOR_WATCHDOG_POLL);
-            // Pipe repair is independent of coordinator recovery: a healthy coordinator is the
-            // fallback while a failed reducer-only pipe reconnects, and must not prevent that
-            // pipe returning to the round-robin pool.
-            repair_dead_call_pipes(&inner);
-            {
-                // One guard covers the whole health decision. Healthy means the transport and
-                // subscription belong to the same generation and are both active.
-                let live = inner.coord();
-                if live.is_healthy() {
-                    continue;
-                }
-            } // drop the read guard BEFORE the (blocking) rebuild
-            let role_label = coordinator_role_label(&inner.db_name);
-            log::warn!("{role_label} connection/subscription down; rebuilding (gateway self-heal)");
-            match connect_blocking(
-                inner.uri.clone(),
-                inner.db_name.clone(),
-                inner.token.clone(),
-                inner.sharded_tables,
-                true,
-            ) {
-                Ok(fresh) => {
-                    // Re-arm any relay with no per-login point to self-heal through — MUST run
-                    // after the install: each hook re-reads `inner.coord()` and must see fresh.
-                    // The old pump has finished before publication. Hooks read the fresh cache
-                    // without holding the slot write lock.
-                    replace_live_conn(&inner.live, fresh, &role_label, || {
-                        let hooks = inner.on_reconnect.lock().unwrap().clone();
-                        for hook in hooks {
-                            hook();
+        .spawn(move || {
+            let mut previous = inner.motion_batch.delivery.snapshot();
+            let mut sampled_at = std::time::Instant::now();
+            loop {
+                std::thread::sleep(COORDINATOR_WATCHDOG_POLL);
+                if sampled_at.elapsed() >= Duration::from_secs(10) {
+                    let current = inner.motion_batch.delivery.snapshot();
+                    let delta = current.since(previous);
+                    if delta.queued > 0 || delta.callbacks > 0 {
+                        let live = inner.coord();
+                        let line = format!(
+                            "MOTIONDELIVERY shard={} elapsed_secs={:.1} queued={} callbacks={} transport_active={} subscription_active={} pump_running={}",
+                            inner.db_name,
+                            sampled_at.elapsed().as_secs_f64(),
+                            delta.queued,
+                            delta.callbacks,
+                            live.conn.is_active(),
+                            live._sub.is_active(),
+                            live._pump.as_ref().is_some_and(|pump| !pump.is_finished()),
+                        );
+                        if delta.is_silent() {
+                            log::warn!("{line}: no incoming motion rows. Queue acceptance does not prove Module publishing; inspect motion publishing and Coordinator delivery before choosing recovery.");
+                        } else {
+                            log::info!("{line}");
                         }
-                    });
+                    }
+                    previous = current;
+                    sampled_at = std::time::Instant::now();
                 }
-                Err(error) => {
-                    log::error!("{role_label} reconnect failed (will retry): {error:#}")
+                // Pipe repair is independent of coordinator recovery: a healthy coordinator is the
+                // fallback while a failed reducer-only pipe reconnects, and must not prevent that
+                // pipe returning to the round-robin pool.
+                repair_dead_call_pipes(&inner);
+                {
+                    // One guard covers the whole health decision. Healthy means the transport and
+                    // subscription belong to the same generation and are both active.
+                    let live = inner.coord();
+                    if live.is_healthy() {
+                        continue;
+                    }
+                } // drop the read guard BEFORE the (blocking) rebuild
+                let role_label = coordinator_role_label(&inner.db_name);
+                log::warn!("{role_label} connection/subscription down; rebuilding (gateway self-heal)");
+                match connect_blocking(
+                    inner.uri.clone(),
+                    inner.db_name.clone(),
+                    inner.token.clone(),
+                    inner.sharded_tables,
+                    true,
+                ) {
+                    Ok(fresh) => {
+                        // Re-arm any relay with no per-login point to self-heal through — MUST run
+                        // after the install: each hook re-reads `inner.coord()` and must see fresh.
+                        // The old pump has finished before publication. Hooks read the fresh cache
+                        // without holding the slot write lock.
+                        replace_live_conn(&inner.live, fresh, &role_label, || {
+                            let hooks = inner.on_reconnect.lock().unwrap().clone();
+                            for hook in hooks {
+                                hook();
+                            }
+                        });
+                    }
+                    Err(error) => {
+                        log::error!("{role_label} reconnect failed (will retry): {error:#}")
+                    }
                 }
             }
         })
