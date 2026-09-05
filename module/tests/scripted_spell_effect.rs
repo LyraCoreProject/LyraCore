@@ -41,6 +41,7 @@ fn an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_ca
     let mut standalone = Standalone::start("scripted-effect-heal");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
+    prevent_scheduled_rage_decay(&standalone);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
 
     insert_spell(
@@ -158,6 +159,7 @@ fn a_missing_or_disabled_script_refuses_the_cast_before_any_cost_is_spent() {
     let mut standalone = Standalone::start("scripted-effect-gate");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
+    prevent_scheduled_rage_decay(&standalone);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
 
     insert_spell(
@@ -286,6 +288,7 @@ fn a_failing_scripted_effect_discards_only_its_own_staged_effects() {
     // Two calls, not one: the first buys headroom (`debug_set_power` raises `max_power` to meet
     // whatever it is told), the second sets the floor comfortably under that ceiling so the
     // effect's +50 below can never clamp against it.
+    prevent_scheduled_rage_decay(&standalone);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "800"]);
     const FLOOR: u32 = 800;
@@ -394,6 +397,20 @@ fn power(standalone: &Standalone, guid: u64) -> u32 {
     entity(standalone, guid)["power"]
         .parse()
         .expect("power is a number")
+}
+
+/// These tests assign a Warrior's Rage so they can observe only the spell's power change. Keep the
+/// Character in combat beyond the fixture deadline so the unrelated regeneration pass cannot decay
+/// that Rage while the test publishes scripts and spells.
+fn prevent_scheduled_rage_decay(standalone: &Standalone) {
+    let flags = entity(standalone, PLAYER)["unit_flags"]
+        .parse::<u32>()
+        .expect("unit flags are a number");
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {}, combat_until_ms = {} WHERE guid = {PLAYER}",
+        flags | unit_flags::IN_COMBAT,
+        u64::MAX,
+    ));
 }
 
 fn xp(standalone: &Standalone, guid: u64) -> u32 {
