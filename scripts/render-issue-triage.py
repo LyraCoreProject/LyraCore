@@ -200,8 +200,11 @@ def main():
     args.output.write_text(document)
     print(f"Rendered {len(numbers)} issues to {args.output}")
     if args.publish:
+        publisher = root / "docs/triage/node_modules/.bin/postplan"
+        if not publisher.is_file():
+            parser.error("Install the pinned publisher with: npm ci --prefix docs/triage --ignore-scripts")
         subprocess.run(
-            ["npx", "--yes", "postplan", "upload", str(args.output.resolve()),
+            [str(publisher), "upload", str(args.output.resolve()),
              "--draft", queue["postplan_draft"]],
             check=True,
         )

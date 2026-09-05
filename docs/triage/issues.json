@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-09-05 06:46 UTC",
-  "base_revision": "a6e7119",
-  "status_note": "All 88 issues have an evidence-based assessment. The first implementation wave covers aura tick rollback, motion delivery diagnosis, fixture cast protection and teleport cleanup.",
+  "updated_at": "2026-09-05 07:03 UTC",
+  "base_revision": "b1c0f9400a31a2522b9385f6870a9eb8f8f92c76",
+  "status_note": "All 88 issues are assessed. Aura rollback and fixture cast protection are merged. Motion diagnostics are merged; the reported long-running freeze remains unverified. The second wave is underway.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
   "focus": [
-    "#425: reproduce and fix whole-tick rollback after an aura disappears.",
-    "#424: isolate stopped motion delivery and implement recovery backed by a failure test.",
-    "#404 and #80: protect fixture creatures and remove stale teleport motion in separate worktrees.",
-    "Next available slot: #63 duplicate loot-roll promotion, then the highest-return unblocked work."
+    "#63: prevent duplicate active loot-roll promotion and preserve existing votes.",
+    "#367: enforce the existing lock Gate before GOOBER effects.",
+    "#398: count generated Package Deltas in CLI Trust Review, then update the core pin.",
+    "#80: complete teleport cleanup review. Maintain the report and drive each PR through CI and comments."
   ],
   "issues": [
     {
@@ -17,20 +17,22 @@
       "gain": 5,
       "effort": 2,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "The scheduler snapshots due auras, completes Duels and creature deaths, then updates every old row. Those completion paths can remove a due row and roll back the whole tick.",
-      "next_action": "Complete independent review and CI. The private regression, 1,475 Module tests and offline preflight pass.",
+      "disposition": "done",
+      "rationale": "A creature death can remove a due aura before the scheduler advances its old snapshot. The fix advances only rows that still exist, so death and unrelated periodic effects commit together.",
+      "next_action": "Merged after coordinating review and passing CI. No remaining acceptance check for this issue.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/425",
-        "module/src/spell/scheduler.rs: tick_auras advances the original due vector after complete_duel and kill_creature."
+        "module/src/spell/scheduler.rs: tick_auras advances the original due vector after complete_duel and kill_creature.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/435",
+        "Private regression changed from whole-tick rollback to committed death and Character health 57; 1,475 Module tests and offline preflight passed."
       ],
       "related_prs": [
         435
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/425",
       "updatedAt": "2026-09-04T06:20:59Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "GPT-6, Codex"
     },
     {
@@ -40,20 +42,22 @@
       "gain": 5,
       "effort": 4,
       "confidence": "medium",
-      "disposition": "implementing",
+      "disposition": "verify",
       "rationale": "An offline test now proves that 172 healthy motion callbacks can produce the reported warning when the mover has no peer viewer. The current counter counts peer packets. The report does not yet prove a stopped subscription or a root cause for visible freezing.",
-      "next_action": "Trace Coordinator dispatch and subscription lifetime offline; reproduce a stopped stream before selecting recovery behavior.",
+      "next_action": "Use the new per-Shard queue, callback and pump diagnostics to reproduce a stopped stream. A real-realm capture requires a named host and authorization; the original 15-hour freeze is not yet explained.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/424",
-        "gateway/src/world/mod.rs: motion health warning still directs an Operator to restart.",
-        "gateway/src/stdb/subscriptions.rs: shared dispatch owns motion callbacks."
+        "https://github.com/LyraCoreProject/LyraCore/pull/437",
+        "Real dispatch regression proves healthy mover-only traffic produced the old warning. Per-Shard diagnostics, coalescing and recovery-observation regressions pass."
       ],
-      "related_prs": [],
+      "related_prs": [
+        437
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/424",
       "updatedAt": "2026-09-04T06:20:58Z",
       "github_state": "open",
-      "owner": "GPT-6 Astra, motion diagnosis agent"
+      "owner": "Codex"
     },
     {
       "number": 404,
@@ -62,21 +66,22 @@
       "gain": 4,
       "effort": 1,
       "confidence": "high",
-      "disposition": "review",
+      "disposition": "done",
       "rationale": "The shared creature identifier policy exists on main through PR #405. The casts entry points do not consistently apply it, so this small fix protects fixtures and Package testing.",
-      "next_action": "Close the partial-update and retarget-away gaps found in coordinating review, then rerun checks and complete CodeRabbit review.",
+      "next_action": "Merged in PR #434. Coordinating review caught partial-update and retarget-away bypasses; durable regressions now prove both are refused.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/404",
         "crates/lyracore-package-delta/src/delta.rs: creature_template calls check_claimable_creature_entry; creature_cast and creature_spell use separate constructors.",
-        "https://github.com/LyraCoreProject/LyraCore/pull/403"
+        "https://github.com/LyraCoreProject/LyraCore/pull/403",
+        "https://github.com/LyraCoreProject/LyraCore/pull/434"
       ],
       "related_prs": [
         434
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/404",
       "updatedAt": "2026-09-03T08:19:36Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "GPT-5.6 Sol, Package Delta agent"
     },
     {
@@ -112,9 +117,9 @@
       "gain": 4,
       "effort": 2,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "Runtime Script names already landed in CLI PR #55. The remaining Datascript line falsely says nothing reads them. It obscures what an Operator installs.",
-      "next_action": "Count generated Package Deltas by Import Family through the existing review reader, then update the core CLI pin after review.",
+      "next_action": "Implement generated Package Delta counts in an isolated CLI worktree. Test through fake adapters, publish the CLI PR, then make a core pin PR after reviewed merge.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/398",
@@ -125,7 +130,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/398",
       "updatedAt": "2026-09-03T07:36:06Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-5.6 Sol, CLI review agent"
     },
     {
       "number": 373,
@@ -186,9 +191,9 @@
       "gain": 4,
       "effort": 2,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "The Defias Cannon can trigger without its required item. Current GOOBER dispatch skips locked_shut, while CHEST and DOOR/BUTTON apply it.",
-      "next_action": "Apply the existing lock Gate before GOOBER effects and verify refusal, success after unlocking, and unchanged unlocked use.",
+      "next_action": "Prove locked refusal has no effects, then apply the existing lock Gate and verify unlocked and lockless use.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/367",
@@ -198,7 +203,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/367",
       "updatedAt": "2026-08-28T12:22:50Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-5.6 Sol, GOOBER agent"
     },
     {
       "number": 366,
@@ -1010,16 +1015,18 @@
       "gain": 3,
       "effort": 1,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "The exact outlier remains in current code. teleport_player drops only game_entity_motion_pending, then deletes game_world_entity in the cross-map branch. Other teardown paths delete the public motion row.",
-      "next_action": "Delete the public game_entity_motion row in the cross-map teardown and add a behavior test beside the existing teleport cleanup coverage.",
+      "next_action": "Coordinating review and all CI checks passed. CodeRabbit is rate-limited; request its review after the window reopens at about 07:18 UTC.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/80",
         "module/src/world.rs: teleport_player calls motion::drop_pending before branching, but the cross-map branch deletes only the world entity after combat and stealth cleanup.",
         "module/src/helpers.rs and module/src/creatures/tick/lifecycle.rs: the standard entity cleanup contract includes game_entity_motion and game_creature_spline."
       ],
-      "related_prs": [],
+      "related_prs": [
+        438
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/80",
       "updatedAt": "2026-08-11T08:19:03Z",
       "github_state": "open",
@@ -1427,9 +1434,9 @@
       "gain": 4,
       "effort": 3,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "The current Gateway still promotes a staging roll on Realm-core and only then clears the World Shard copy. Both periodic and synchronous promotion paths can run in different Gateway processes. Realm-core's game_loot_roll has only an auto-increment primary key and insert_roll_rows always inserts a new roll and vote set. Module reducers serialize calls, so an idempotent Realm-core check or a compatible uniqueness key can close the race at its authoritative side.",
-      "next_action": "Make realm_loot_op START idempotent for corpse_guid plus slot, preserve exactly one complete vote set, and verify two concurrent promotions through Realm-core SQL; prefer a reducer-level compatible fix unless the schema migration is proven safe.",
+      "next_action": "A private concurrent START test reproduced two rolls and now passes with one complete vote set. Finish validation and review. Delayed replay after a resolved roll is deleted remains a separate lifecycle gap.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/63. The issue gives the two-Gateway race and requires exactly one durable roll and vote set.",
@@ -1441,7 +1448,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/63",
       "updatedAt": "2026-08-11T08:17:48Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-6 Astra, loot-roll agent"
     },
     {
       "number": 61,
@@ -2291,24 +2298,27 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/426",
       "title": "ci(module): run the durable test suite and drop its fixed sleeps",
       "owner": "Existing PR review owner; Codex monitors",
-      "status": "Conflicts with main",
-      "next_action": "Rebase the existing branch and preserve the durable-test evidence."
+      "status": "Durable CI failed on current head",
+      "next_action": "Existing owner fixes the durable CI failure and refreshes review.",
+      "head": "3677964044969f8012e05f6963a312f9ec7d222f"
     },
     {
       "number": 419,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/419",
       "title": "ci: make fmt and clippy blocking, and clear the workspace to match",
       "owner": "Existing PR review owner; Codex monitors",
-      "status": "Conflicts with main",
-      "next_action": "Merge after the other existing PRs, then rerun formatting and lint checks."
+      "status": "Test failed on current head",
+      "next_action": "Existing owner fixes the failing test and rebases after the other changes.",
+      "head": "bdb9d00843a72eb163baeff4847182710dbde22d"
     },
     {
       "number": 416,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/416",
       "title": "fix(logon): cap proof attempts per peer and expire session keys",
       "owner": "Existing PR review owner; Codex monitors",
-      "status": "Failed test on previous head",
-      "next_action": "Monitor the active rebase and security review; schema changes require human review."
+      "status": "Current CI passed; security and human review remain",
+      "next_action": "Existing owner handles security review. The new schema requires human review before shipping.",
+      "head": "27b8cb8af8232711b77b6eddb338b7c95c0631a0"
     },
     {
       "number": 415,
@@ -2323,16 +2333,47 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/434",
       "title": "Protect fixture creatures from cast Claims",
       "owner": "GPT-5.6 Sol, Package Delta agent",
-      "status": "Review found a possible partial-update bypass",
-      "next_action": "Check current row ownership at the durable boundary, prove the missing cases, then refresh CI and review."
+      "status": "Merged; all CI checks passed",
+      "next_action": "Complete. Coordinating review passed with no unresolved findings.",
+      "head": "1b120cc85e741188bee221c2bab973f2f555f3da",
+      "merge_commit": "2365075fdb0b110ad4bd56668f8c629fdfb5d14a"
     },
     {
       "number": 435,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/435",
       "title": "Keep periodic deaths from rolling back the aura tick",
       "owner": "GPT-6, Codex",
-      "status": "CI and CodeRabbit review running",
-      "next_action": "Review the current head, address findings and merge after checks pass."
+      "status": "Merged; all CI checks passed",
+      "next_action": "Complete. Coordinating review passed with no unresolved findings.",
+      "head": "7ef874dbf22cc5944433f2834b98af8eef531361",
+      "merge_commit": "8f3a8a78b69f701bb078cf54920722785d27c9af"
+    },
+    {
+      "number": 436,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/436",
+      "title": "Maintain the issue order and delivery report",
+      "owner": "GPT-6, Codex",
+      "status": "Addressing CodeRabbit publisher finding",
+      "next_action": "Pin the local publisher and lock its dependencies, update the report, then finish review and CI."
+    },
+    {
+      "number": 437,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/437",
+      "title": "Measure motion delivery at each Shard callback",
+      "owner": "GPT-6 Astra, motion diagnosis agent",
+      "status": "Merged; CI and review passed",
+      "next_action": "Diagnostic fix complete. Issue #424 remains open until the reported freeze is reproduced and resolved.",
+      "head": "4ec3ecd47b4e43854d48e696c1e54521e1160f24",
+      "merge_commit": "b1c0f9400a31a2522b9385f6870a9eb8f8f92c76"
+    },
+    {
+      "number": 438,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/438",
+      "title": "Remove public motion after cross-map teleport",
+      "owner": "GPT-5.6 Sol, teleport agent",
+      "status": "CI and coordinating review passed; CodeRabbit rate-limited",
+      "next_action": "Request CodeRabbit review after 07:18 UTC and resolve any findings before merge.",
+      "head": "97ea5b2349dfb5e836b8bd87ca0c8d88e8e5d74e"
     }
   ],
   "history": [
@@ -2351,6 +2392,10 @@
     {
       "at": "2026-09-05 06:45 UTC",
       "text": "PR #434 opened. Coordinating review identified a possible partial-update bypass. The aura rollback regression passes. A real-dispatch test proves the motion warning can be a false alarm."
+    },
+    {
+      "at": "2026-09-05 07:03 UTC",
+      "text": "Merged #435 aura rollback, #434 fixture cast protection and #437 motion diagnostics after review and green CI. Kept #424 open because the long-running freeze is unverified. Assigned #63, #367 and #398. CodeRabbit found the report publisher was unpinned; replacing it with a locked local dependency."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",

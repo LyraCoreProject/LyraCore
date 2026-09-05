@@ -19,8 +19,12 @@ evidence changes.
 4. Render and update the existing publication:
 
    ```bash
+   npm ci --prefix docs/triage --ignore-scripts
    python3 scripts/render-issue-triage.py --publish
    ```
+
+Run `npm ci` once per checkout and after the publisher lockfile changes. Publication uses that local,
+version-pinned executable and does not install packages.
 
 The saved Postplan draft identifier keeps the URL stable when this work moves to another checkout.
 Rendering without `--publish` only changes the local HTML. Check upload success before reporting an

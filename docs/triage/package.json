@@ -1,0 +1,7 @@
+{
+  "name": "lyracore-issue-report",
+  "private": true,
+  "devDependencies": {
+    "postplan": "0.0.4"
+  }
+}
