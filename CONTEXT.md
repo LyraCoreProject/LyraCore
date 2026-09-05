@@ -160,7 +160,7 @@ _Avoid_: rate limiter, throttle, brute-force lockout
 **Session Expiry**:
 The one hour a `game_session` row stays valid after its logon. The world handshake refuses an
 expired row like an absent one, and the Module's `reap_sessions` deletes it. Every logon rewrites
-the row, so a returning player always starts a fresh hour.
+the row, so a returning Account always starts a fresh hour.
 _Avoid_: session timeout, TTL (in prose)
 
 ### Sharding and transfer

@@ -157,6 +157,7 @@ pub mod debug_equip_item_reducer;
 pub mod debug_equip_offhand_reducer;
 pub mod debug_equip_weapon_reducer;
 pub mod debug_expire_quest_reducer;
+pub mod debug_expire_session_reducer;
 pub mod debug_explore_at_reducer;
 pub mod debug_fill_aura_slots_reducer;
 pub mod debug_fish_reducer;
@@ -1123,6 +1124,7 @@ pub use debug_equip_item_reducer::debug_equip_item;
 pub use debug_equip_offhand_reducer::debug_equip_offhand;
 pub use debug_equip_weapon_reducer::debug_equip_weapon;
 pub use debug_expire_quest_reducer::debug_expire_quest;
+pub use debug_expire_session_reducer::debug_expire_session;
 pub use debug_explore_at_reducer::debug_explore_at;
 pub use debug_fill_aura_slots_reducer::debug_fill_aura_slots;
 pub use debug_fish_reducer::debug_fish;
@@ -2226,6 +2228,9 @@ pub enum Reducer {
     DebugExpireQuest {
         character_guid: u64,
         quest_entry: u32,
+    },
+    DebugExpireSession {
+        account_id: u64,
     },
     DebugExploreAt {
         guid: u64,
@@ -3613,6 +3618,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugEquipOffhand { .. } => "debug_equip_offhand",
             Reducer::DebugEquipWeapon { .. } => "debug_equip_weapon",
             Reducer::DebugExpireQuest { .. } => "debug_expire_quest",
+            Reducer::DebugExpireSession { .. } => "debug_expire_session",
             Reducer::DebugExploreAt { .. } => "debug_explore_at",
             Reducer::DebugFillAuraSlots { .. } => "debug_fill_aura_slots",
             Reducer::DebugFish { .. } => "debug_fish",
@@ -4454,6 +4460,11 @@ Reducer::DebugCheckRestAt{
 }             => __sats::bsatn::to_vec(&debug_expire_quest_reducer::DebugExpireQuestArgs {
                 character_guid: character_guid.clone(),
                 quest_entry: quest_entry.clone(),
+}),
+            Reducer::DebugExpireSession{
+                account_id,
+}             => __sats::bsatn::to_vec(&debug_expire_session_reducer::DebugExpireSessionArgs {
+                account_id: account_id.clone(),
 }),
             Reducer::DebugExploreAt{
                 guid,

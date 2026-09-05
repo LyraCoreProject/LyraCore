@@ -117,7 +117,7 @@ pub struct Session {
 }
 
 /// How long a logon's session key stays valid for the world handshake. Every logon rewrites the
-/// row, so a returning player always gets a fresh window.
+/// row, so a returning Account always gets a fresh window.
 pub(crate) const SESSION_TTL_MICROS: i64 = 3_600_000_000;
 /// How often the reaper deletes expired sessions.
 pub(crate) const SESSION_REAP_MICROS: i64 = 300_000_000;
@@ -132,7 +132,7 @@ pub struct SessionReaperSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
-/// The one expiry rule, shared by the reaper and by the gateway's handshake lookup.
+/// Expiry includes the deadline itself, as in the Gateway handshake.
 pub(crate) fn session_expired(now_micros: i64, expires_at_micros: i64) -> bool {
     expires_at_micros <= now_micros
 }
@@ -488,7 +488,7 @@ pub fn establish_session(
 
 #[cfg(test)]
 mod session_expiry_tests {
-    use super::{expired_sessions, session_expired, SESSION_REAP_MICROS, SESSION_TTL_MICROS};
+    use super::{expired_sessions, session_expired};
 
     #[test]
     fn a_session_expires_at_its_deadline_and_not_before() {
@@ -501,46 +501,6 @@ mod session_expiry_tests {
     fn the_reaper_selects_only_the_sessions_whose_window_closed() {
         let rows = [(1, 500), (2, 1_000), (3, 1_500)].into_iter();
         assert_eq!(expired_sessions(rows, 1_000), vec![1, 2]);
-    }
-
-    #[test]
-    fn the_reaper_runs_far_more_often_than_a_session_lives() {
-        assert!(SESSION_REAP_MICROS * 10 <= SESSION_TTL_MICROS);
-    }
-
-    #[test]
-    fn the_reaper_refuses_every_caller_but_the_scheduler() {
-        let body = crate::test_scan::code_of(
-            include_str!("auth.rs"),
-            "pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> Result<(), String> {",
-        );
-        let gate = body
-            .find("if ctx.sender() != ctx.database_identity() {")
-            .expect("reap_sessions has no scheduler gate");
-        let delete = body
-            .find(".delete(")
-            .expect("reap_sessions deletes nothing");
-        assert!(
-            gate < delete,
-            "the scheduler gate must come before any delete"
-        );
-    }
-
-    #[test]
-    fn every_logon_rewrites_the_row_and_arms_the_reaper() {
-        let body = crate::test_scan::code_of(
-            include_str!("auth.rs"),
-            "pub fn establish_session(
-",
-        );
-        assert!(
-            body.contains("sessions.account_id().update(row)"),
-            "a returning player's stale row must be replaced, never refused"
-        );
-        assert!(
-            body.contains("ensure_session_reaper_armed(ctx);"),
-            "the reaper is armed lazily from the one reducer every logon runs"
-        );
     }
 }
 

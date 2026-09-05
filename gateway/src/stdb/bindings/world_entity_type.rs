@@ -280,6 +280,7 @@ impl __sdk::__query_builder::HasCols for WorldEntity {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct WorldEntityIxCols {
+    pub entry: __sdk::__query_builder::IxCol<WorldEntity, u32>,
     pub guid: __sdk::__query_builder::IxCol<WorldEntity, u64>,
     pub map_id: __sdk::__query_builder::IxCol<WorldEntity, u32>,
     pub owner_identity: __sdk::__query_builder::IxCol<WorldEntity, __sdk::Identity>,
@@ -289,6 +290,7 @@ impl __sdk::__query_builder::HasIxCols for WorldEntity {
     type IxCols = WorldEntityIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         WorldEntityIxCols {
+            entry: __sdk::__query_builder::IxCol::new(table_name, "entry"),
             guid: __sdk::__query_builder::IxCol::new(table_name, "guid"),
             map_id: __sdk::__query_builder::IxCol::new(table_name, "map_id"),
             owner_identity: __sdk::__query_builder::IxCol::new(table_name, "owner_identity"),

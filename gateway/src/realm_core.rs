@@ -44,7 +44,7 @@ pub(crate) struct SessionKey {
     pub expires_at_micros: i64,
 }
 
-/// The one expiry rule, the same comparison the Module's `reap_sessions` applies.
+/// Expiry includes the deadline itself, as in the Module reaper.
 pub(crate) fn session_expired(now_micros: i64, expires_at_micros: i64) -> bool {
     expires_at_micros <= now_micros
 }
@@ -1215,6 +1215,25 @@ mod tests {
                 .is_none(),
             "an expired session row must refuse the world handshake"
         );
+    }
+
+    #[test]
+    fn a_new_logon_replaces_an_expired_session_for_the_world_handshake() {
+        let h = split_realm();
+        h.db_at(CORE)
+            .sessions
+            .lock()
+            .unwrap()
+            .insert(9, (K, [0x5A; 32], 1));
+        assert!(lookup_session(&h, USER).unwrap().is_none());
+
+        let fresh_key = [0xA7; 40];
+        CoordinatorStore::new(h.clone())
+            .save_session(9, USER, &fresh_key, [0x5A; 32])
+            .unwrap();
+        let session = lookup_session(&h, USER).unwrap().unwrap();
+        assert_eq!(session.session_key, fresh_key);
+        assert_eq!(session.account_id, 3);
     }
 
     #[test]
