@@ -256,7 +256,7 @@ fn cast_claims_refuse_missing_cross_table_references() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn creature_spell_updates_cannot_hide_their_fixture_creature_target() {
-    let standalone = Standalone::start("cast-fixture-target");
+    let mut standalone = Standalone::start("cast-fixture-target");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
