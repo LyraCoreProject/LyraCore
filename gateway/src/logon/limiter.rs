@@ -20,6 +20,8 @@ pub const CONNECTIONS_PER_ADDRESS: usize = 8;
 /// Pause before answering a failed proof, so a guess costs wall-clock time as well as a modexp.
 pub const PROOF_FAILURE_DELAY: Duration = Duration::from_millis(200);
 
+const PRUNE_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Why the limiter closed or refused a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogonRefusal {
@@ -93,10 +95,16 @@ impl AddressRecord {
     }
 }
 
+#[derive(Default)]
+struct TrackedAddresses {
+    records: HashMap<IpAddr, AddressRecord>,
+    last_pruned: Option<Instant>,
+}
+
 /// Shared across every logon connection of one listener.
 #[derive(Default)]
 pub struct LogonLimiter {
-    addresses: Mutex<HashMap<IpAddr, AddressRecord>>,
+    addresses: Mutex<TrackedAddresses>,
 }
 
 impl LogonLimiter {
@@ -104,16 +112,23 @@ impl LogonLimiter {
         Arc::new(Self::default())
     }
 
-    /// Admit one connection from `ip`, or refuse it before it costs a thread. Idle addresses are
-    /// pruned on every admission, so the map holds only addresses with a connection or a window.
+    /// Admit one connection from `ip`, or refuse it before it costs a thread. Check this address
+    /// every time; prune idle addresses on the first admission at least one second after the last
+    /// scan. Admissions between scans only look up this address under the shared lock.
     pub fn admit(
         self: &Arc<Self>,
         ip: IpAddr,
         now: Instant,
     ) -> Result<LogonConnection, LogonRefusal> {
         let mut addresses = self.lock();
-        addresses.retain(|_, record| !record.is_idle(now));
-        let record = addresses.entry(ip).or_default();
+        if addresses
+            .last_pruned
+            .is_none_or(|last| now.duration_since(last) >= PRUNE_INTERVAL)
+        {
+            addresses.records.retain(|_, record| !record.is_idle(now));
+            addresses.last_pruned = Some(now);
+        }
+        let record = addresses.records.entry(ip).or_default();
         if record.open_connections >= CONNECTIONS_PER_ADDRESS {
             return Err(LogonRefusal::TooManyConnections);
         }
@@ -130,22 +145,27 @@ impl LogonLimiter {
 
     fn refuses(&self, ip: IpAddr, now: Instant) -> bool {
         self.lock()
+            .records
             .get_mut(&ip)
             .is_some_and(|record| record.refuses(now))
     }
 
     fn record_failure(&self, ip: IpAddr, now: Instant) {
-        self.lock().entry(ip).or_default().record_failure(now);
+        self.lock()
+            .records
+            .entry(ip)
+            .or_default()
+            .record_failure(now);
     }
 
     fn release(&self, ip: IpAddr) {
-        if let Some(record) = self.lock().get_mut(&ip) {
+        if let Some(record) = self.lock().records.get_mut(&ip) {
             record.open_connections = record.open_connections.saturating_sub(1);
         }
     }
 
     /// A poisoned lock only means a connection task panicked mid-update; the counts are still usable.
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<IpAddr, AddressRecord>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, TrackedAddresses> {
         self.addresses
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -153,7 +173,7 @@ impl LogonLimiter {
 
     #[cfg(test)]
     pub fn tracked_addresses(&self) -> usize {
-        self.lock().len()
+        self.lock().records.len()
     }
 }
 
@@ -291,7 +311,58 @@ mod tests {
     }
 
     #[test]
-    fn idle_addresses_are_pruned_on_the_next_admission() {
+    fn idle_addresses_are_pruned_at_the_interval_and_not_on_each_admission() {
+        let limiter = LogonLimiter::new();
+        let start = Instant::now();
+        drop(limiter.admit(ip(1), start).unwrap());
+        drop(
+            limiter
+                .admit(ip(2), start + Duration::from_millis(999))
+                .unwrap(),
+        );
+        assert_eq!(limiter.tracked_addresses(), 2, "no second scan yet");
+
+        let _open = limiter
+            .admit(ip(3), start + Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            limiter.tracked_addresses(),
+            1,
+            "both idle records are removed"
+        );
+    }
+
+    #[test]
+    fn address_windows_expire_even_between_cleanup_scans() {
+        let limiter = LogonLimiter::new();
+        let start = Instant::now();
+        let mut held = limiter.admit(ip(1), start).unwrap();
+        for address in [ip(1), ip(2)] {
+            for _ in 0..FAILURES_PER_WINDOW {
+                let mut connection = limiter.admit(address, start).unwrap();
+                connection.start_attempt(start).unwrap();
+                connection.record_failure(start).unwrap();
+            }
+        }
+        let before_expiry = start + FAILURE_WINDOW - Duration::from_millis(1);
+        drop(limiter.admit(ip(3), before_expiry).unwrap());
+        assert_eq!(
+            limiter.admit(ip(2), before_expiry).err(),
+            Some(LogonRefusal::TooManyFailures)
+        );
+        assert_eq!(
+            held.start_attempt(before_expiry),
+            Err(LogonRefusal::TooManyFailures)
+        );
+
+        let expired = start + FAILURE_WINDOW;
+        assert!(limiter.admit(ip(2), expired).is_ok());
+        assert_eq!(held.start_attempt(expired), Ok(()));
+        assert_eq!(limiter.tracked_addresses(), 3, "no global cleanup was due");
+    }
+
+    #[test]
+    fn expired_failure_windows_are_pruned_on_the_next_cleanup() {
         let limiter = LogonLimiter::new();
         let start = Instant::now();
         for last in 1..=50 {

@@ -498,8 +498,9 @@ are concrete, not precautionary:
   One anonymous call owns any character. This build is for the loopback harness; it must never reach
   a reachable node.
 - **No TLS.** The logon port has the Logon Limiter (three attempts per connection, ten failed
-  logons per address per minute, eight open logon connections per address) and sessions expire an
-  hour after logon, but the SRP6 exchange itself is 2004-era and unencrypted.
+  logons per address per minute, eight open logon connections per address). The stored `game_session`
+  key expires one hour after logon and prevents later world handshakes. Existing World Sessions
+  continue. The SRP6 exchange itself is 2004-era and unencrypted.
 
 If you ever want to run this for real players, understand that the localhost → public-VPS delta
 is real hardening work (a plain build, a firewalled `:3000`, DoS guards, the realm address, launch

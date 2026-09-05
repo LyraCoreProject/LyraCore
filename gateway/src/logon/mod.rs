@@ -2048,7 +2048,10 @@ mod tests {
             "no challenge reply: the connection is closed before any SRP math"
         );
         let err = server.join().unwrap().expect_err("the limiter's verdict");
-        assert!(err.to_string().contains("failed"), "{err:#}");
+        assert_eq!(
+            err.downcast_ref::<limiter::LogonRefusal>(),
+            Some(&limiter::LogonRefusal::TooManyFailures)
+        );
     }
 
     /// Client side of challenge -> proof for a provisioned account; asserts the proof succeeds.
