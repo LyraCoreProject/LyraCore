@@ -1,16 +1,51 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// How often every wait in this suite re-checks its condition.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// The deadline every wait uses unless it says otherwise. Deliberately generous: a wait that gives
+/// up early is a flake, and a condition that is already true costs one poll either way.
+pub const POLL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many times a publish may be retried past a node that died launching the module.
+const PUBLISH_ATTEMPTS: usize = 3;
+
+/// Where each standalone's own stdout and stderr land. Outside the data directory on purpose — the
+/// data directory goes away with the node, and a crash is exactly when the log is worth reading.
+/// CI collects this directory as an artifact.
+pub fn log_dir() -> PathBuf {
+    std::env::temp_dir().join("lyracore-standalone-logs")
+}
+
+/// Poll `probe` every [`POLL_INTERVAL`] until it answers `true`. Returns `false` when `timeout`
+/// passes first, so the caller reports what it was waiting for rather than a bare timeout.
+pub fn poll_until(timeout: Duration, mut probe: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if probe() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
 pub struct Standalone {
     child: Child,
     cli_config: PathBuf,
+    address: String,
     data_dir: PathBuf,
+    log_path: PathBuf,
+    published: bool,
     spacetime: OsString,
     server: String,
     database: String,
@@ -26,41 +61,31 @@ impl Standalone {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let data_dir = std::env::temp_dir().join(format!(
-            "lyracore-{test_name}-{}-{nonce}",
-            std::process::id()
-        ));
+        let name = format!("{test_name}-{}-{nonce}", std::process::id());
+        let data_dir = std::env::temp_dir().join(format!("lyracore-{name}"));
         fs::create_dir(&data_dir).expect("failed to create standalone data directory");
         let cli_config = data_dir.join("cli.toml");
+
+        let log_dir = log_dir();
+        fs::create_dir_all(&log_dir).expect("failed to create the standalone log directory");
+        let log_path = log_dir.join(format!("{name}.log"));
 
         let spacetime = std::env::var_os("SPACETIME_BIN").unwrap_or_else(|| "spacetime".into());
         let address = format!("127.0.0.1:{port}");
         let server = format!("http://{address}");
-        let child = Command::new(&spacetime)
-            .args(["--config-path", cli_config.to_str().unwrap()])
-            .args([
-                "start",
-                "--listen-addr",
-                &address,
-                "--data-dir",
-                data_dir.to_str().unwrap(),
-                "--in-memory",
-                "--non-interactive",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("failed to start standalone");
-        let database = format!("{test_name}-{}-{nonce}", std::process::id());
+        let child = spawn_node(&spacetime, &cli_config, &address, &data_dir, &log_path);
         let mut standalone = Self {
             child,
             cli_config,
+            address,
             data_dir,
+            log_path,
+            published: false,
             spacetime,
             server,
-            database,
+            database: name,
         };
-        standalone.wait_for_server(&address);
+        standalone.wait_for_server();
         standalone
     }
 
@@ -87,53 +112,39 @@ impl Standalone {
             .expect("private Owner Token is missing")
     }
 
-    pub fn publish_module(&self) {
+    pub fn publish_module(&mut self) {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let module_dir = workspace.join("module");
-        assert_success(self.command().current_dir(workspace).args([
-            "publish",
-            "-s",
-            &self.server,
-            "--module-path",
-            module_dir.to_str().unwrap(),
-            "--build-options=--features=debug_reducers",
-            "-y",
-            &self.database,
-        ]));
+        self.publish(
+            &[
+                "--module-path",
+                module_dir.to_str().unwrap(),
+                "--build-options=--features=debug_reducers",
+            ],
+            &[],
+        );
     }
 
     /// Copy built Wasm bytes into this standalone's private directory and publish that copy.
     #[allow(dead_code)] // Used by tests that build their own Wasm artifact.
-    pub fn publish_module_bytes(&self, wasm: &[u8]) {
+    pub fn publish_module_bytes(&mut self, wasm: &[u8]) {
         let path = self.data_dir.join("published-module.wasm");
         fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
-
-        assert_success(self.command().args([
-            "publish",
-            "-s",
-            &self.server,
-            "--bin-path",
-            path.to_str().unwrap(),
-            "-y",
-            &self.database,
-        ]));
+        self.publish(&["--bin-path", path.to_str().unwrap()], &[]);
     }
 
     #[allow(dead_code)] // Used when a developer's cached token is not valid for an isolated server.
-    pub fn publish_module_anonymous(&self) {
+    pub fn publish_module_anonymous(&mut self) {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let module_dir = workspace.join("module");
-        assert_success(self.command().current_dir(workspace).args([
-            "publish",
-            "-s",
-            &self.server,
-            "--module-path",
-            module_dir.to_str().unwrap(),
-            "--build-options=--features=debug_reducers",
-            "--anonymous",
-            "-y",
-            &self.database,
-        ]));
+        self.publish(
+            &[
+                "--module-path",
+                module_dir.to_str().unwrap(),
+                "--build-options=--features=debug_reducers",
+            ],
+            &["--anonymous"],
+        );
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
@@ -144,7 +155,7 @@ impl Standalone {
     }
 
     pub fn assert_call(&self, reducer: &str, args: &[&str]) {
-        assert_output_success(self.call(reducer, args));
+        self.assert_ok(&self.call(reducer, args));
     }
 
     #[allow(dead_code)] // Paired with `publish_module_anonymous` for isolated local servers.
@@ -159,53 +170,116 @@ impl Standalone {
             reducer,
         ]);
         command.args(args);
-        assert_output_success(command.output().expect("failed to call reducer"));
+        self.assert_ok(&command.output().expect("failed to call reducer"));
     }
 
     #[allow(dead_code)] // Used by integration targets that inspect committed table state.
     pub fn assert_sql(&self, query: &str) {
-        assert_output_success(self.sql(query));
+        self.assert_ok(&self.sql(query));
     }
 
     #[allow(dead_code)] // Used by integration targets that inspect committed table state.
     pub fn query_rows(&self, query: &str) -> Vec<BTreeMap<String, String>> {
         let output = self.sql(query);
-        assert_output_ok(&output);
+        self.assert_ok(&output);
         parse_text_rows(&String::from_utf8(output.stdout).expect("SQL output was not UTF-8"))
     }
 
-    #[allow(dead_code)] // This shared method is used only by the expiry integration target.
-    pub fn wait_until_call_succeeds(&self, reducer: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let output = self.call(reducer, &[]);
-            if output.status.success() {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "{reducer} did not succeed in time\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr),
-            );
-            thread::sleep(Duration::from_millis(50));
-        }
+    /// Wait for a reducer that refuses until the durable state it checks has settled. The reducer
+    /// itself is the condition, so the test waits exactly as long as the schedule behind it needs.
+    #[allow(dead_code)] // Used by the integration targets that wait on a scheduled outcome.
+    pub fn wait_until_call_succeeds(&self, reducer: &str, args: &[&str]) {
+        let mut last = None;
+        let settled = poll_until(POLL_TIMEOUT, || {
+            let output = self.call(reducer, args);
+            let ok = output.status.success();
+            last = Some(output);
+            ok
+        });
+        assert!(
+            settled,
+            "{reducer} did not succeed in time\n{}{}",
+            describe(last.as_ref().expect("at least one attempt")),
+            self.log_tail(),
+        );
     }
 
-    fn wait_for_server(&mut self, address: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+    /// Publish the module, restarting a fresh node when it dies mid-publish.
+    ///
+    /// `spacetimedb-standalone` 2.7.1 segfaults while launching this module roughly once in a dozen
+    /// publishes (SIGSEGV, no log line past `launching module`). The node is `--in-memory`, so a
+    /// restart before the first successful publish loses nothing. Once a publish succeeds, this
+    /// Standalone may hold state, so every later failure is reported without a restart.
+    fn publish(&mut self, source: &[&str], extra: &[&str]) {
+        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace = module_dir.parent().unwrap();
+        let mut attempts = Vec::new();
+        let allowed_attempts = if self.published { 1 } else { PUBLISH_ATTEMPTS };
+        for attempt in 0..allowed_attempts {
+            let mut command = self.command();
+            command
+                .current_dir(workspace)
+                .args(["publish", "-s", &self.server]);
+            command.args(source);
+            command.args(extra);
+            command.args(["-y", &self.database]);
+            let output = command.output().expect("failed to start spacetime publish");
+            if output.status.success() {
+                self.published = true;
+                return;
+            }
+            attempts.push(describe(&output));
+            let node_is_running = self
+                .child
+                .try_wait()
+                .expect("failed to poll standalone")
+                .is_none();
+            if node_is_running || attempt + 1 == allowed_attempts {
+                break;
+            }
+            self.restart();
+        }
+        panic!(
+            "spacetime publish failed after {} attempt(s)\n{}{}",
+            attempts.len(),
+            attempts.join("\n"),
+            self.log_tail(),
+        );
+    }
+
+    /// Start a replacement node on the same address, appending to the same log.
+    fn restart(&mut self) {
+        let _ = self.child.wait();
+        self.child = spawn_node(
+            &self.spacetime,
+            &self.cli_config,
+            &self.address,
+            &self.data_dir,
+            &self.log_path,
+        );
+        self.wait_for_server();
+    }
+
+    /// Not `poll_until`: a node that has already exited never starts listening, so this one waits
+    /// on two outcomes and reports the exit rather than burning the whole deadline on it.
+    fn wait_for_server(&mut self) {
+        let deadline = Instant::now() + POLL_TIMEOUT;
         loop {
-            if TcpStream::connect(address).is_ok() {
+            if TcpStream::connect(&self.address).is_ok() {
                 return;
             }
             if let Some(status) = self.child.try_wait().expect("failed to poll standalone") {
-                panic!("standalone exited before accepting connections: {status}");
+                panic!(
+                    "standalone exited before accepting connections: {status}\n{}",
+                    self.log_tail()
+                );
             }
             assert!(
                 Instant::now() < deadline,
-                "standalone did not start in time"
+                "standalone did not start in time\n{}",
+                self.log_tail()
             );
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(POLL_INTERVAL);
         }
     }
 
@@ -229,6 +303,30 @@ impl Standalone {
         command.args(["--config-path", self.cli_config.to_str().unwrap()]);
         command
     }
+
+    fn assert_ok(&self, output: &Output) {
+        self.assert_output_success(output, &format!("command failed with {}", output.status));
+    }
+
+    pub fn assert_output_success(&self, output: &Output, context: &str) {
+        assert!(
+            output.status.success(),
+            "{context}\n{}{}",
+            describe(output),
+            self.log_tail(),
+        );
+    }
+
+    /// The end of this node's own log, appended to every failure. A publish that reports only
+    /// "connection closed" says nothing; the node's last lines say why it closed it.
+    fn log_tail(&self) -> String {
+        let Ok(log) = fs::read_to_string(&self.log_path) else {
+            return String::new();
+        };
+        let lines: Vec<&str> = log.lines().collect();
+        let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+        format!("standalone log ({}):\n{tail}\n", self.log_path.display())
+    }
 }
 
 impl Drop for Standalone {
@@ -239,22 +337,43 @@ impl Drop for Standalone {
     }
 }
 
-fn assert_success(command: &mut Command) {
-    assert_output_success(command.output().expect("failed to start command"));
+/// Start one standalone node, appending its stdout and stderr to `log_path`.
+fn spawn_node(
+    spacetime: &OsString,
+    cli_config: &Path,
+    address: &str,
+    data_dir: &Path,
+    log_path: &Path,
+) -> Child {
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .expect("failed to open the standalone log");
+    let log_err = log.try_clone().expect("failed to share the standalone log");
+    Command::new(spacetime)
+        .args(["--config-path", cli_config.to_str().unwrap()])
+        .args([
+            "start",
+            "--listen-addr",
+            address,
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+            "--in-memory",
+            "--non-interactive",
+        ])
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err))
+        .spawn()
+        .expect("failed to start standalone")
 }
 
-fn assert_output_success(output: Output) {
-    assert_output_ok(&output);
-}
-
-fn assert_output_ok(output: &Output) {
-    assert!(
-        output.status.success(),
-        "command failed with {}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
+fn describe(output: &Output) -> String {
+    format!(
+        "stdout:\n{}\nstderr:\n{}\n",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
-    );
+    )
 }
 
 fn parse_text_rows(output: &str) -> Vec<BTreeMap<String, String>> {
@@ -282,8 +401,18 @@ fn parse_text_rows(output: &str) -> Vec<BTreeMap<String, String>> {
             headers
                 .iter()
                 .zip(values)
-                .map(|(name, value)| ((*name).to_string(), value.to_string()))
+                .map(|(name, value)| ((*name).to_string(), unquote(value)))
                 .collect()
         })
         .collect()
+}
+
+/// `spacetime sql --format text` prints a string column inside double quotes. Callers compare
+/// against the value, not against its rendering, so the quotes come off here once.
+fn unquote(value: &str) -> String {
+    value
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(value)
+        .to_string()
 }

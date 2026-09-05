@@ -34,7 +34,7 @@ fn one_row(standalone: &Standalone, zone_id: &str) -> BTreeMap<String, String> {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn forced_weather_is_per_zone_and_a_refusal_leaves_every_row_unchanged() {
-    let standalone = Standalone::start("weather-forced");
+    let mut standalone = Standalone::start("weather-forced");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
 
@@ -123,7 +123,7 @@ fn forced_weather_is_per_zone_and_a_refusal_leaves_every_row_unchanged() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn the_weather_roll_and_its_climate_survive_a_republish() {
-    let standalone = Standalone::start("weather-republish");
+    let mut standalone = Standalone::start("weather-republish");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("gw_force_zone_weather", &[ELWYNN, RAIN, "0.75"]);

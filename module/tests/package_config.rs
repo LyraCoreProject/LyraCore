@@ -37,7 +37,7 @@ fn config_value(rows: &[BTreeMap<String, String>], key: &str) -> Option<String> 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn debug_seed_package_config_seeds_once_and_never_clobbers_a_live_value_on_reseed() {
-    let standalone = Standalone::start("package-config-seed");
+    let mut standalone = Standalone::start("package-config-seed");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
 
@@ -81,7 +81,7 @@ fn debug_seed_package_config_seeds_once_and_never_clobbers_a_live_value_on_resee
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn set_package_config_updates_an_existing_keys_value() {
-    let standalone = Standalone::start("package-config-update");
+    let mut standalone = Standalone::start("package-config-update");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call(
@@ -104,7 +104,7 @@ fn set_package_config_updates_an_existing_keys_value() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn set_package_config_refuses_an_unknown_key_and_names_the_packages_known_keys() {
-    let standalone = Standalone::start("package-config-refusal");
+    let mut standalone = Standalone::start("package-config-refusal");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call(
@@ -144,7 +144,7 @@ fn set_package_config_refuses_an_unknown_key_and_names_the_packages_known_keys()
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn set_package_config_with_allow_new_creates_an_unknown_key() {
-    let standalone = Standalone::start("package-config-allow-new");
+    let mut standalone = Standalone::start("package-config-allow-new");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call(

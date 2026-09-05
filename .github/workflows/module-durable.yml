@@ -1,0 +1,81 @@
+name: Module durable tests
+
+# The durable integration rung: `module/tests/`, 39 targets marked `#[ignore]` because each one
+# starts its own SpacetimeDB standalone, publishes the module to it, and drives real reducers.
+# `rust.yml`'s `--lib` run cannot reach any of it.
+#
+# There is no shared node to start here: `module/tests/support/mod.rs` starts one standalone per
+# test on a free loopback port with `--in-memory`, publishes with `--features=debug_reducers` (the
+# feature set `lyracore publish` bakes in), and kills it on drop. This job installs the pinned CLI
+# and gets out of the way.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # docs/quickstart.md and install.sh pin this exactly; `lyracore preflight` enforces the match.
+  SPACETIME_VERSION: 2.7.1
+  # Digest of the x86_64 Linux archive in the upstream v2.7.1 GitHub release.
+  SPACETIME_ARCHIVE_SHA256: 9b58192135733083479f30aba47dbbbc79b51db368c46cc221baa663e9c3a2c1
+
+jobs:
+  durable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Each test uses its own temporary CLI configuration.
+      - name: Install SpacetimeDB ${{ env.SPACETIME_VERSION }}
+        run: |
+          archive_path="$RUNNER_TEMP/spacetime.tar.gz"
+          cli_dir="$RUNNER_TEMP/spacetime-$SPACETIME_VERSION"
+          curl --fail --location --retry 3 \
+            "https://github.com/clockworklabs/SpacetimeDB/releases/download/v$SPACETIME_VERSION/spacetime-x86_64-unknown-linux-gnu.tar.gz" \
+            --output "$archive_path"
+          printf '%s  %s\n' "$SPACETIME_ARCHIVE_SHA256" "$archive_path" | sha256sum --check --strict
+          mkdir -p "$cli_dir"
+          tar --extract --gzip --file "$archive_path" --directory "$cli_dir"
+          ln -s spacetimedb-cli "$cli_dir/spacetime"
+          echo "$cli_dir" >> "$GITHUB_PATH"
+
+      # Verify the downloaded CLI matches the version required by the Module.
+      - name: Check the pinned version
+        run: |
+          found=$(spacetime --version | sed -n 's/.*version[ ]*\([0-9][0-9.]*\).*/\1/p' | head -n 1)
+          echo "spacetime $found"
+          [ "$found" = "$SPACETIME_VERSION" ]
+
+      # Building the workspace Module once keeps the module-path publishers off a cold compile, and
+      # a build failure reports as a build failure rather than as a publish timeout. The typed taxi
+      # test builds and privately copies the exact Wasm artifact it inspects.
+      - name: Build the module wasm
+        run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
+
+      # Each test owns a whole database process, so the thread cap is a memory bound, not a CPU one.
+      #
+      # `deadmines` and `playerbots` are Packages an Operator installs (`lyracore packages add`);
+      # they are not in this repository, so their reducers do not exist in the published module.
+      # `lethal_floor`'s ranged phase races the module's own cast-event sweep and health regen, and
+      # is flaky on `main` with or without this change.
+      - name: Run the durable suite
+        run: cargo test -p lyracore-module --tests -- --ignored --test-threads=4 --skip deadmines --skip personality --skip lethal_floor
+
+      - name: Run the single-shard auction Refusal regression
+        run: cargo test -p lyracore-gateway --bin lyracore-gateway stdb::reducers::auction_reducer_tests::a_local_bid_interaction_refusal_stays_a_client_outcome -- --ignored --exact
+
+      - name: Upload the standalone logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: standalone-logs
+          path: /tmp/lyracore-standalone-logs
+          if-no-files-found: ignore

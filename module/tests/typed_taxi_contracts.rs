@@ -12,7 +12,7 @@ const MISSING_ACTOR: &str = "999999";
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     let wasm = build_module_bytes();
-    let standalone = Standalone::start("typed-taxi-contracts");
+    let mut standalone = Standalone::start("typed-taxi-contracts");
     standalone.publish_module_bytes(&wasm);
     assert_loot_boundary_failure(&standalone, ACTOR, "loot:boundary_operator_rejected");
     standalone.assert_call("claim_operator", &[]);

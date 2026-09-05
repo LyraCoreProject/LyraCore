@@ -15,7 +15,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use support::Standalone;
+use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 /// The Package's own identity, which is also the prefix of every event it fires.
 const PACKAGE: &str = "playerbots";
@@ -55,13 +55,6 @@ const ROW_FLEE_AT_PCT: u32 = 15;
 /// has to arrive as a JSON string literal.
 fn arg(value: &str) -> String {
     serde_json::to_string(value).expect("a string encodes as JSON")
-}
-
-/// `spacetime sql` 2.7.1 prints a string column inside quotes and the shared row parser keeps them
-/// verbatim. Stripping here rather than in the parser keeps this test off a shared harness every
-/// other integration target already reads its own way.
-fn unquote(value: &str) -> &str {
-    value.trim_matches('"')
 }
 
 /// A one-script artifact for `playerbots`, built through `serde_json` so the Lua's own quotes and
@@ -129,26 +122,23 @@ fn goal_kind(standalone: &Standalone, bot: u64) -> Option<u32> {
 }
 
 /// Poll the goal row until `wanted` says yes. A bot decides once a second, and reconciliation lands
-/// between two of its decisions, so every assertion here is a settling one.
+/// between two of its decisions, so every assertion here is a settling one. Returns the last goal
+/// seen, so the caller reports what the bot actually decided.
 fn wait_for_goal(
     standalone: &Standalone,
     bot: u64,
-    seconds: u64,
     wanted: impl Fn(Option<u32>) -> bool,
 ) -> Option<u32> {
-    let mut seen = goal_kind(standalone, bot);
-    for _ in 0..seconds {
-        if wanted(seen) {
-            return seen;
-        }
-        std::thread::sleep(std::time::Duration::from_secs(1));
+    let mut seen = None;
+    poll_until(POLL_TIMEOUT, || {
         seen = goal_kind(standalone, bot);
-    }
+        wanted(seen)
+    });
     seen
 }
 
 fn assert_flees(standalone: &Standalone, bot: u64, why: &str) {
-    let goal = wait_for_goal(standalone, bot, 15, |kind| kind == Some(GOAL_FLEE));
+    let goal = wait_for_goal(standalone, bot, |kind| kind == Some(GOAL_FLEE));
     assert_eq!(
         goal,
         Some(GOAL_FLEE),
@@ -158,7 +148,7 @@ fn assert_flees(standalone: &Standalone, bot: u64, why: &str) {
 }
 
 fn assert_does_not_flee(standalone: &Standalone, bot: u64, why: &str) {
-    let goal = wait_for_goal(standalone, bot, 15, |kind| kind == Some(GOAL_WANDER));
+    let goal = wait_for_goal(standalone, bot, |kind| kind == Some(GOAL_WANDER));
     assert_eq!(
         goal,
         Some(GOAL_WANDER),
@@ -173,7 +163,7 @@ fn assert_does_not_flee(standalone: &Standalone, bot: u64, why: &str) {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI, the Wasm toolchain, and the playerbots Package installed (lyracore packages add playerbots)"]
 fn a_personality_script_decides_for_a_bot_and_a_broken_one_leaves_it_on_its_row() {
-    let standalone = Standalone::start("playerbots-personality");
+    let mut standalone = Standalone::start("playerbots-personality");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("install_guid_range", &[GUID_BASE]);
@@ -221,7 +211,7 @@ fn a_personality_script_decides_for_a_bot_and_a_broken_one_leaves_it_on_its_row(
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI, the Wasm toolchain, and the playerbots Package installed (lyracore packages add playerbots)"]
 fn the_packages_own_personality_artifact_reconciles_onto_a_shard() {
-    let standalone = Standalone::start("playerbots-personality-shipped");
+    let mut standalone = Standalone::start("playerbots-personality-shipped");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
 
@@ -235,8 +225,8 @@ fn the_packages_own_personality_artifact_reconciles_onto_a_shard() {
         .map(|row| {
             (
                 row["script_id"].parse().expect("a script id"),
-                unquote(&row["event"]).to_string(),
-                unquote(&row["package"]).to_string(),
+                row["event"].clone(),
+                row["package"].clone(),
             )
         })
         .collect();

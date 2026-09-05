@@ -9,6 +9,7 @@ mod support;
 
 use std::collections::BTreeMap;
 
+use lyracore_shared::constants::unit_flags;
 use support::Standalone;
 
 type SqlRow = BTreeMap<String, String>;
@@ -37,9 +38,10 @@ const GATE_SPELL_COST: u32 = 40;
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_caster() {
-    let standalone = Standalone::start("scripted-effect-heal");
+    let mut standalone = Standalone::start("scripted-effect-heal");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
+    prevent_scheduled_rage_decay(&standalone);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
 
     insert_spell(
@@ -66,8 +68,11 @@ fn an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_ca
     );
 
     let wolf = spawn_wolf(&standalone);
+    // `max_health` is the healed total, not a round number. A creature below its maximum regenerates
+    // on its own schedule, so an exact reading only survives when the heal fills the bar. A heal that
+    // never lands still fails here, because regeneration needs many passes to cover 15.
     standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET health = 50, max_health = 1000 WHERE guid = {wolf}"
+        "UPDATE game_world_entity SET health = 50, max_health = 65 WHERE guid = {wolf}"
     ));
     let xp_before = xp(&standalone, PLAYER);
 
@@ -102,7 +107,7 @@ fn an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_ca
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_scripted_effect_with_script_id_zero_stays_the_vanilla_no_op() {
-    let standalone = Standalone::start("scripted-effect-noop");
+    let mut standalone = Standalone::start("scripted-effect-noop");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
 
@@ -151,9 +156,10 @@ fn a_scripted_effect_with_script_id_zero_stays_the_vanilla_no_op() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_missing_or_disabled_script_refuses_the_cast_before_any_cost_is_spent() {
-    let standalone = Standalone::start("scripted-effect-gate");
+    let mut standalone = Standalone::start("scripted-effect-gate");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
+    prevent_scheduled_rage_decay(&standalone);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
 
     insert_spell(
@@ -241,7 +247,7 @@ fn a_missing_or_disabled_script_refuses_the_cast_before_any_cost_is_spent() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_failing_scripted_effect_discards_only_its_own_staged_effects() {
-    let standalone = Standalone::start("scripted-effect-partial-failure");
+    let mut standalone = Standalone::start("scripted-effect-partial-failure");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
 
@@ -282,12 +288,18 @@ fn a_failing_scripted_effect_discards_only_its_own_staged_effects() {
     // Two calls, not one: the first buys headroom (`debug_set_power` raises `max_power` to meet
     // whatever it is told), the second sets the floor comfortably under that ceiling so the
     // effect's +50 below can never clamp against it.
+    prevent_scheduled_rage_decay(&standalone);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "800"]);
     const FLOOR: u32 = 800;
     let wolf = spawn_wolf(&standalone);
+    // Keep this fixture in combat past the test deadline. Ordinary in-combat creatures do not
+    // regenerate health, so any change from 100 came from the failed Invocation.
     standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET health = 100, max_health = 100000 WHERE guid = {wolf}"
+        "UPDATE game_world_entity SET health = 100, max_health = 100000, \
+         unit_flags = {}, combat_until_ms = {} WHERE guid = {wolf}",
+        unit_flags::IN_COMBAT,
+        u64::MAX,
     ));
 
     standalone.assert_call(
@@ -307,7 +319,7 @@ fn a_failing_scripted_effect_discards_only_its_own_staged_effects() {
     assert_eq!(
         health(&standalone, wolf),
         100,
-        "the failing invocation's own staged heal must never commit"
+        "the failed Invocation's staged heal must not commit"
     );
 }
 
@@ -316,9 +328,9 @@ fn insert_spell(standalone: &Standalone, spell_id: u32, name: &str, cost: u32) {
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
          VALUES ({spell_id}, '{name}', 0, {cost}, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, \
-         false, 0, 0, 0, 0)"
+         false, 0, 0, 0, 0, 0, 0, 0)"
     ));
 }
 
@@ -385,6 +397,20 @@ fn power(standalone: &Standalone, guid: u64) -> u32 {
     entity(standalone, guid)["power"]
         .parse()
         .expect("power is a number")
+}
+
+/// These tests assign a Warrior's Rage so they can observe only the spell's power change. Keep the
+/// Character in combat beyond the fixture deadline so the unrelated regeneration pass cannot decay
+/// that Rage while the test publishes scripts and spells.
+fn prevent_scheduled_rage_decay(standalone: &Standalone) {
+    let flags = entity(standalone, PLAYER)["unit_flags"]
+        .parse::<u32>()
+        .expect("unit flags are a number");
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {}, combat_until_ms = {} WHERE guid = {PLAYER}",
+        flags | unit_flags::IN_COMBAT,
+        u64::MAX,
+    ));
 }
 
 fn xp(standalone: &Standalone, guid: u64) -> u32 {

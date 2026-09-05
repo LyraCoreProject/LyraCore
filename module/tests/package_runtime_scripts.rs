@@ -47,14 +47,6 @@ fn arg(value: &str) -> String {
     serde_json::to_string(value).expect("a string encodes as JSON")
 }
 
-/// `spacetime sql` 2.7.1 prints a string column inside quotes, and the shared row parser keeps the
-/// cell verbatim rather than deciding what a type looks like. Stripping here, at the one place this
-/// target compares a string, keeps that decision out of a harness every other integration target
-/// reads its own way.
-fn unquote(value: &str) -> String {
-    value.trim_matches('"').to_string()
-}
-
 /// The whole enabled plan, one canonical artifact per line — the payload shape the reducer reads.
 fn apply(standalone: &Standalone, artifacts: &[String]) {
     standalone.assert_call(
@@ -70,10 +62,10 @@ fn scripts_on_shard(standalone: &Standalone) -> Vec<(u32, String, String, String
         .map(|row| {
             (
                 row["script_id"].parse().expect("script_id is a number"),
-                unquote(&row["name"]),
-                unquote(&row["package"]),
-                unquote(&row["event"]),
-                unquote(&row["content_hash"]),
+                row["name"].clone(),
+                row["package"].clone(),
+                row["event"].clone(),
+                row["content_hash"].clone(),
             )
         })
         .collect();
@@ -87,7 +79,7 @@ fn provenance(standalone: &Standalone) -> Vec<(String, u64)> {
         .into_iter()
         .map(|row| {
             (
-                unquote(&row["package"]),
+                row["package"].clone(),
                 row["inserted_rows"].parse().expect("a row count"),
             )
         })
@@ -100,7 +92,7 @@ fn provenance(standalone: &Standalone) -> Vec<(String, u64)> {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
-    let standalone = Standalone::start("package-runtime-scripts");
+    let mut standalone = Standalone::start("package-runtime-scripts");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
 
@@ -236,7 +228,7 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
-    let standalone = Standalone::start("package-runtime-scripts-conflict");
+    let mut standalone = Standalone::start("package-runtime-scripts-conflict");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
 
@@ -309,7 +301,7 @@ fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_package_binds_its_own_event_and_never_another_packages() {
-    let standalone = Standalone::start("package-runtime-scripts-package-event");
+    let mut standalone = Standalone::start("package-runtime-scripts-package-event");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
 
@@ -374,7 +366,7 @@ fn a_package_binds_its_own_event_and_never_another_packages() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_next() {
-    let standalone = Standalone::start("package-runtime-scripts-fire");
+    let mut standalone = Standalone::start("package-runtime-scripts-fire");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
