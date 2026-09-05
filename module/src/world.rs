@@ -768,13 +768,10 @@ pub(crate) fn apply_zone_transition(
 ///
 /// CROSS map: the client needs a full reload (`SMSG_TRANSFER_PENDING`/`SMSG_NEW_WORLD`, gateway-side), so
 /// the live entity is DESPAWNED here rather than moved — `build_player_entity` rebuilds it fresh on the
-/// far side once the gateway drives `MSG_MOVE_WORLDPORT_ACK` (mirroring `player_login`'s own entity
-/// build). Progression is persisted BEFORE the despawn (`persist_entity`, the same discipline
-/// `remove_from_world`/logout uses) so nothing earned on the old map is lost; combat is disengaged and
-/// stealth broken for the same reason `remove_from_world` does it on logout — an orphan `game_melee_attack`
-/// row or a stale `A_STEALTH` aura would otherwise survive the entity's deletion and corrupt the arrival
-/// (see `remove_from_world`'s identical rationale). The durable `Character` row is updated in BOTH
-/// branches (single source of truth for the WORLDPORT_ACK rebuild).
+/// far side once the gateway drives `MSG_MOVE_WORLDPORT_ACK`. Progression is persisted before the
+/// despawn so nothing earned on the old map is lost. Combat, stealth, and public motion state are
+/// cleared before the entity is deleted, so none survives on the source map. The durable `Character`
+/// row is updated in both branches because the WORLDPORT_ACK rebuild reads it.
 ///
 /// No-op if the player isn't in world.
 pub(crate) fn teleport_player(
@@ -818,6 +815,7 @@ pub(crate) fn teleport_player(
         // Combat/visibility cleanup mirrors logout — see the doc comment above.
         crate::combat::disengage(ctx, player_guid);
         crate::spell::break_stealth(ctx, player_guid);
+        ctx.db.game_entity_motion().guid().delete(player_guid);
         entities.guid().delete(player_guid);
     } else {
         let (grid_x, grid_y) = spatial::grid_cell(x, y);
