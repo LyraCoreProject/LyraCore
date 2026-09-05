@@ -113,7 +113,8 @@ impl Standalone {
     }
 
     pub fn publish_module(&mut self) {
-        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let module_dir = workspace.join("module");
         self.publish(
             &[
                 "--module-path",
@@ -134,7 +135,8 @@ impl Standalone {
 
     #[allow(dead_code)] // Used when a developer's cached token is not valid for an isolated server.
     pub fn publish_module_anonymous(&mut self) {
-        let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let module_dir = workspace.join("module");
         self.publish(
             &[
                 "--module-path",
