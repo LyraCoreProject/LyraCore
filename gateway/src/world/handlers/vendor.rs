@@ -436,8 +436,14 @@ mod tests {
         CMSG_REPAIR_ITEM, CMSG_SELL_ITEM,
     };
 
-    /// (account_id, player_guid, vendor_guid, item_entry, count) as the handler passed them on.
-    type BuyRequest = (u64, u64, u64, u32, u32);
+    #[derive(Debug, Eq, PartialEq)]
+    struct BuyRequest {
+        account_id: u64,
+        actor_guid: u64,
+        vendor_guid: u64,
+        item_entry: u32,
+        count: u32,
+    }
 
     #[derive(Default)]
     struct InMemoryVendorActions {
@@ -487,13 +493,13 @@ mod tests {
             item_entry: u32,
             count: u32,
         ) -> Result<()> {
-            self.buy_requests.lock().unwrap().push((
+            self.buy_requests.lock().unwrap().push(BuyRequest {
                 account_id,
-                self_guid,
+                actor_guid: self_guid,
                 vendor_guid,
                 item_entry,
                 count,
-            ));
+            });
             match &self.buy_error {
                 Some(error) => Err(anyhow::anyhow!("{error}")),
                 None => Ok(()),
@@ -760,7 +766,13 @@ mod tests {
         );
         assert_eq!(
             actions.buy_requests.lock().unwrap().as_slice(),
-            &[(7, 42, VENDOR, 2589, 3)]
+            &[BuyRequest {
+                account_id: 7,
+                actor_guid: 42,
+                vendor_guid: VENDOR,
+                item_entry: 2589,
+                count: 3,
+            }]
         );
     }
 
@@ -795,7 +807,13 @@ mod tests {
 
         assert_eq!(
             actions.buy_requests.lock().unwrap().as_slice(),
-            &[(7, 0, VENDOR, 2589, 1)]
+            &[BuyRequest {
+                account_id: 7,
+                actor_guid: 0,
+                vendor_guid: VENDOR,
+                item_entry: 2589,
+                count: 1,
+            }]
         );
     }
 
