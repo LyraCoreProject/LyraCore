@@ -569,9 +569,12 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     for (guid, killer) in &dying {
         crate::combat::kill_creature(ctx, *guid, *killer);
     }
-    // Advance each due aura's cadence by one period.
+    // Death and Duel completion can remove due auras. Advance only surviving rows and preserve
+    // any other fields those completion paths changed.
     for a in due {
-        let mut a2 = a;
+        let Some(mut a2) = auras.id().find(a.id) else {
+            continue;
+        };
         a2.next_tick_micros += (a2.period_ms as i64) * 1000;
         auras.id().update(a2);
     }
