@@ -61,6 +61,9 @@ jobs:
       - name: Run the durable suite
         run: cargo test -p lyracore-module --tests -- --ignored --test-threads=4 --skip deadmines --skip personality --skip lethal_floor
 
+      - name: Run the single-shard auction Refusal regression
+        run: cargo test -p lyracore-gateway --bin lyracore-gateway stdb::reducers::auction_reducer_tests::a_local_bid_interaction_refusal_stays_a_client_outcome -- --ignored --exact
+
       - name: Upload the standalone logs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

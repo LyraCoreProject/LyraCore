@@ -3554,7 +3554,7 @@ mod auction_reducer_tests {
                 "unset {variable} for this private test"
             );
         }
-        let standalone = Standalone::start("auction-refusal");
+        let mut standalone = Standalone::start("auction-refusal");
         standalone.publish_module();
         standalone.assert_call("claim_operator", &[]);
         let cfg = GatewayConfig {
