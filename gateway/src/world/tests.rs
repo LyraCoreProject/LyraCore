@@ -1,6 +1,6 @@
 use super::handlers::{
-    AuctionActionStore, AuctionInteraction, CastStore, DuelActionStore,
-    ItemActionStore, LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
+    AuctionActionStore, AuctionInteraction, CastStore, DuelActionStore, ItemActionStore,
+    LootWindowRefusal, LootWindowRequestStatus, LootWindowStore, MeleeActionStore,
     QuestActionStore, TaxiActionStore, VendorActionStore, WeatherStore,
 };
 use super::party::PartyOutcome;
