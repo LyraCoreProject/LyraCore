@@ -9,6 +9,7 @@ mod support;
 
 use std::collections::BTreeMap;
 
+use lyracore_shared::constants::unit_flags;
 use support::Standalone;
 
 type SqlRow = BTreeMap<String, String>;
@@ -289,8 +290,13 @@ fn a_failing_scripted_effect_discards_only_its_own_staged_effects() {
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "800"]);
     const FLOOR: u32 = 800;
     let wolf = spawn_wolf(&standalone);
+    // Keep this fixture in combat past the test deadline. Ordinary in-combat creatures do not
+    // regenerate health, so any change from 100 came from the failed Invocation.
     standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET health = 100, max_health = 100000 WHERE guid = {wolf}"
+        "UPDATE game_world_entity SET health = 100, max_health = 100000, \
+         unit_flags = {}, combat_until_ms = {} WHERE guid = {wolf}",
+        unit_flags::IN_COMBAT,
+        u64::MAX,
     ));
 
     standalone.assert_call(
@@ -307,13 +313,10 @@ fn a_failing_scripted_effect_discards_only_its_own_staged_effects() {
         FLOOR + 50,
         "the sibling ENERGIZE effect must apply regardless of the scripted effect's failure"
     );
-    // Not an exact reading: the unit sits below its maximum, so regeneration adds a few points on
-    // its own schedule. Bounded on both sides, because a rollback that also undid the starting
-    // health would satisfy the upper bound alone. The staged heal was 999.
-    let healed = health(&standalone, wolf);
-    assert!(
-        (100..200).contains(&healed),
-        "the failing invocation's own staged heal must never commit, health was {healed}"
+    assert_eq!(
+        health(&standalone, wolf),
+        100,
+        "the failed Invocation's staged heal must not commit"
     );
 }
 
