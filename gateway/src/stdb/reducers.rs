@@ -535,8 +535,8 @@ impl Coordinator {
         let result = if self.is_sharded() {
             self.drive_sharded_auction_bid(operation_id, request)
         } else {
-            self.auction_bid_local(operation_id, request)?;
-            self.wait_for_terminal_bid_hold(operation_id)
+            self.auction_bid_local(operation_id, request)
+                .and_then(|()| self.wait_for_terminal_bid_hold(operation_id))
         };
         match result {
             Ok(hold) => bid_outcome(&hold),
@@ -3535,6 +3535,54 @@ mod loot_reducer_tests {
 mod auction_reducer_tests {
     use super::*;
     use crate::stdb::connection::ReducerCallError;
+
+    #[test]
+    #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+    fn a_local_bid_interaction_refusal_stays_a_client_outcome() {
+        use crate::accept::BlockingTaskCapacity;
+        use crate::config::GatewayConfig;
+        use crate::durable_test_support::Standalone;
+        use crate::world::{PlaceBidOutcome, PlaceBidRequest};
+
+        for variable in [
+            "LYRACORE_SHARD_MAP",
+            "LYRACORE_SHARD_MAP_FILE",
+            "LYRACORE_REALM_CORE",
+        ] {
+            assert!(
+                std::env::var_os(variable).is_none(),
+                "unset {variable} for this private test"
+            );
+        }
+        let standalone = Standalone::start("auction-refusal");
+        standalone.publish_module();
+        standalone.assert_call("claim_operator", &[]);
+        let cfg = GatewayConfig {
+            logon_bind: "127.0.0.1:0".into(),
+            world_bind: "127.0.0.1:0".into(),
+            stdb_uri: standalone.server().into(),
+            module_name: standalone.shard_name().into(),
+            coordinator_token: Some(standalone.owner_token()),
+            gateway_id: "auction-refusal-test".into(),
+            blocking_task_capacity: BlockingTaskCapacity::new(1),
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let coordinator = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
+        assert!(!coordinator.is_sharded());
+        let outcome = coordinator
+            .place_bid(PlaceBidRequest {
+                actor_guid: 5_090_099,
+                auctioneer_guid: 5_090_098,
+                auction_id: 5_090_097,
+                offer: 100,
+                house_id: 1,
+            })
+            .expect("a Module Refusal must not end the World Session");
+        assert_eq!(outcome, PlaceBidOutcome::Database);
+        assert!(standalone
+            .query_rows("SELECT * FROM game_auction_bid_hold")
+            .is_empty());
+    }
 
     #[test]
     fn only_a_rejected_reducer_carries_a_typed_refusal() {

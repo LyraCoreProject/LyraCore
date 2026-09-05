@@ -86,12 +86,12 @@ fn auctioneer_lookup_uses_the_sessions_pinned_home_shard() {
     let log = calls.lock().unwrap();
     assert!(
         log.iter()
-            .any(|(shard, call)| shard == "instances" && call == "auction_entities"),
+            .any(|(shard, call)| shard == "instances" && call == "auction_interaction"),
         "the named lookup must run on the pinned home shard: {log:?}"
     );
     assert!(
         !log.iter()
-            .any(|(shard, call)| shard == "world" && call == "auction_entities"),
+            .any(|(shard, call)| shard == "world" && call == "auction_interaction"),
         "auction lookup escaped to the default shard: {log:?}"
     );
 }
