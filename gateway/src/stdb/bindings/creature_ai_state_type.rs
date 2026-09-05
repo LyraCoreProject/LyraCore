@@ -67,6 +67,7 @@ impl __sdk::__query_builder::HasCols for CreatureAiState {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct CreatureAiStateIxCols {
+    pub active_object: __sdk::__query_builder::IxCol<CreatureAiState, bool>,
     pub creature_guid: __sdk::__query_builder::IxCol<CreatureAiState, u64>,
 }
 
@@ -74,6 +75,7 @@ impl __sdk::__query_builder::HasIxCols for CreatureAiState {
     type IxCols = CreatureAiStateIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         CreatureAiStateIxCols {
+            active_object: __sdk::__query_builder::IxCol::new(table_name, "active_object"),
             creature_guid: __sdk::__query_builder::IxCol::new(table_name, "creature_guid"),
         }
     }
