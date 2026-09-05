@@ -1,0 +1,2358 @@
+{
+  "updated_at": "2026-09-05 06:46 UTC",
+  "base_revision": "a6e7119",
+  "status_note": "All 88 issues have an evidence-based assessment. The first implementation wave covers aura tick rollback, motion delivery diagnosis, fixture cast protection and teleport cleanup.",
+  "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
+  "focus": [
+    "#425: reproduce and fix whole-tick rollback after an aura disappears.",
+    "#424: isolate stopped motion delivery and implement recovery backed by a failure test.",
+    "#404 and #80: protect fixture creatures and remove stale teleport motion in separate worktrees.",
+    "Next available slot: #63 duplicate loot-roll promotion, then the highest-return unblocked work."
+  ],
+  "issues": [
+    {
+      "number": 425,
+      "summary": "Aura tick aborts after a due aura is removed",
+      "importance": 5,
+      "gain": 5,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "review",
+      "rationale": "The scheduler snapshots due auras, completes Duels and creature deaths, then updates every old row. Those completion paths can remove a due row and roll back the whole tick.",
+      "next_action": "Complete independent review and CI. The private regression, 1,475 Module tests and offline preflight pass.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/425",
+        "module/src/spell/scheduler.rs: tick_auras advances the original due vector after complete_duel and kill_creature."
+      ],
+      "related_prs": [
+        435
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/425",
+      "updatedAt": "2026-09-04T06:20:59Z",
+      "github_state": "open",
+      "owner": "GPT-6, Codex"
+    },
+    {
+      "number": 424,
+      "summary": "Motion delivery can stop until the Gateway restarts",
+      "importance": 5,
+      "gain": 5,
+      "effort": 4,
+      "confidence": "medium",
+      "disposition": "implementing",
+      "rationale": "An offline test now proves that 172 healthy motion callbacks can produce the reported warning when the mover has no peer viewer. The current counter counts peer packets. The report does not yet prove a stopped subscription or a root cause for visible freezing.",
+      "next_action": "Trace Coordinator dispatch and subscription lifetime offline; reproduce a stopped stream before selecting recovery behavior.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/424",
+        "gateway/src/world/mod.rs: motion health warning still directs an Operator to restart.",
+        "gateway/src/stdb/subscriptions.rs: shared dispatch owns motion callbacks."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/424",
+      "updatedAt": "2026-09-04T06:20:58Z",
+      "github_state": "open",
+      "owner": "GPT-6 Astra, motion diagnosis agent"
+    },
+    {
+      "number": 404,
+      "summary": "Package casts can change fixture creatures",
+      "importance": 4,
+      "gain": 4,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "review",
+      "rationale": "The shared creature identifier policy exists on main through PR #405. The casts entry points do not consistently apply it, so this small fix protects fixtures and Package testing.",
+      "next_action": "Close the partial-update and retarget-away gaps found in coordinating review, then rerun checks and complete CodeRabbit review.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/404",
+        "crates/lyracore-package-delta/src/delta.rs: creature_template calls check_claimable_creature_entry; creature_cast and creature_spell use separate constructors.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/403"
+      ],
+      "related_prs": [
+        434
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/404",
+      "updatedAt": "2026-09-03T08:19:36Z",
+      "github_state": "open",
+      "owner": "GPT-5.6 Sol, Package Delta agent"
+    },
+    {
+      "number": 399,
+      "summary": "Replay no longer needs client data for a completed plan",
+      "importance": 3,
+      "gain": 3,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "verify",
+      "rationale": "Current CLI main reads target provenance before resolving client data. The script-only no-op test already runs without client data. The original control-flow complaint appears fixed by the replay work.",
+      "next_action": "Run the empty-inventory/no-client regression against the pinned CLI, then close with evidence if it passes.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/399",
+        "lyracore-cli/src/cmd/packages/replay.rs: run computes spell_wanted before resolve_client_data.",
+        "lyracore-cli/src/cmd/packages/replay.rs: a_script_only_no_op_needs_no_client_data.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/393"
+      ],
+      "related_prs": [
+        400,
+        406
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/399",
+      "updatedAt": "2026-09-02T18:01:19Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 398,
+      "summary": "Trust Review omits shipped Package Deltas",
+      "importance": 3,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "Runtime Script names already landed in CLI PR #55. The remaining Datascript line falsely says nothing reads them. It obscures what an Operator installs.",
+      "next_action": "Count generated Package Deltas by Import Family through the existing review reader, then update the core CLI pin after review.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/398",
+        "lyracore-cli/src/cmd/packages/review.rs: render still prints the stale datascripts line.",
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/55"
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/398",
+      "updatedAt": "2026-09-03T07:36:06Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 373,
+      "summary": "Observe imported bots and a fresh Deadmines entry",
+      "importance": 3,
+      "gain": 3,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "Mechanics tests cannot establish believable motion or a fresh real-client instance entry. The issue already contains a combined one-hour acceptance runbook.",
+      "next_action": "Run the combined bot and dungeon acceptance session after the missing dungeon content ships.",
+      "blockers": [
+        "Named imported test realm and real 1.12.1 client.",
+        "https://github.com/LyraCoreProject/packages/issues/18"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/373",
+        "https://github.com/LyraCoreProject/packages/issues/17",
+        "https://github.com/LyraCoreProject/LyraCore/issues/366"
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/373",
+      "updatedAt": "2026-09-02T12:58:43Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 368,
+      "summary": "Detect generated Gateway binding drift in CI",
+      "importance": 4,
+      "gain": 5,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "Subscribed-table parity leaves other generated definitions unchecked. A reproducible generation check would catch drift before unrelated schema work encounters it.",
+      "next_action": "Build a deterministic offline generation check using the documented exceptions, after the active CI cleanup settles.",
+      "blockers": [
+        "Coordinate workflow changes with active PRs #419 and #426."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/368",
+        "gateway/tests/schema_parity.rs checks subscribed tables.",
+        "docs/danger-zones.md lists required generator flags and restored field spellings."
+      ],
+      "related_prs": [
+        419,
+        426
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/368",
+      "updatedAt": "2026-08-28T12:22:53Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 367,
+      "summary": "Locked GOOBER use bypasses its opener",
+      "importance": 3,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The Defias Cannon can trigger without its required item. Current GOOBER dispatch skips locked_shut, while CHEST and DOOR/BUTTON apply it.",
+      "next_action": "Apply the existing lock Gate before GOOBER effects and verify refusal, success after unlocking, and unchanged unlocked use.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/367",
+        "module/src/gameobject.rs: apply_use_gameobject GOOBER arm directly invokes quest credit."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/367",
+      "updatedAt": "2026-08-28T12:22:50Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 366,
+      "summary": "Verify Deadmines choreography in the real client",
+      "importance": 3,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "The Package has durable tests. Visible door changes, Smite movement and chat still need observation. The stomp decision is settled, but packages issue #18 remains open.",
+      "next_action": "Finish the stomp content, then combine dungeon visuals and bot acceptance in one imported-map session.",
+      "blockers": [
+        "https://github.com/LyraCoreProject/packages/issues/18",
+        "Named imported map 36 fixture and real client."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/366",
+        "https://github.com/LyraCoreProject/LyraCore/issues/373",
+        "https://github.com/LyraCoreProject/LyraCore/issues/114"
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/366",
+      "updatedAt": "2026-09-01T20:12:38Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 353,
+      "summary": "Make workspace lint checks pass and block regressions",
+      "importance": 4,
+      "gain": 5,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "review",
+      "rationale": "PR #419 already implements the cleanup and blocking checks. Its branch conflicts with current main and is under active review in another worktree.",
+      "next_action": "Monitor the existing owner, rebase after the other open PRs, and require fresh blocking checks.",
+      "blockers": [
+        "Existing PR #419 must rebase after the earlier open PRs."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/353",
+        ".github/workflows/rust.yml still uses continue-on-error for fmt and clippy."
+      ],
+      "related_prs": [
+        419
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/353",
+      "updatedAt": "2026-08-28T12:23:40Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 346,
+      "summary": "Finish enforcing the repository checks in CI",
+      "importance": 4,
+      "gain": 5,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "review",
+      "rationale": "The claim that no workflows exist is stale. Rust tests and wasm checks now run; formatting and clippy remain advisory until PR #419. PR #426 adds durable tests.",
+      "next_action": "Finish the existing CI PRs and record which preflight coverage remains before closing this umbrella issue.",
+      "blockers": [
+        "PR #419 and PR #426 are already owned and under review."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/346",
+        ".github/workflows/rust.yml",
+        "https://github.com/LyraCoreProject/LyraCore/pull/426"
+      ],
+      "related_prs": [
+        419,
+        426
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/346",
+      "updatedAt": "2026-08-28T12:23:39Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 341,
+      "summary": "Service unit parsing misses continued directives",
+      "importance": 4,
+      "gain": 3,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The CLI parser still splits physical lines. Continued directives can hide a conflicting Standalone service. The fix is testable without changing a host.",
+      "next_action": "Implement systemd logical-line parsing through the existing process Fake and test tracked and conflicting units.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/341",
+        "lyracore-cli/src/cmd/service.rs: UnitContract::parse iterates text.lines()."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/341",
+      "updatedAt": "2026-08-26T11:12:02Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 340,
+      "summary": "Service Reconciliation misses effective command drift",
+      "importance": 4,
+      "gain": 4,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The current verifier reads ActiveState, LimitNOFILE and StandardError. It does not compare the effective ExecStart or name relevant drop-ins. A success report can therefore describe the wrong service.",
+      "next_action": "Compare the effective command with the tracked contract and report overriding drop-ins, using a process Fake.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/340",
+        "lyracore-cli/src/cmd/service.rs: verify omits ExecStart and DropInPaths."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/340",
+      "updatedAt": "2026-08-26T11:11:59Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 318,
+      "summary": "Confirm Package script removal across a realm",
+      "importance": 3,
+      "gain": 4,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "PR #358 ships Module reconciliation and four durable tests were recorded green. CLI replay wiring also shipped through #393. The remaining recorded acceptance is visible login effects and removal on a named realm.",
+      "next_action": "Run the existing install, login, disable and login acceptance sequence; preserve cross-Shard evidence.",
+      "blockers": [
+        "Named test realm and permission for its Package changes."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/318",
+        "module/tests/package_runtime_scripts.rs",
+        "https://github.com/LyraCoreProject/LyraCore/issues/393"
+      ],
+      "related_prs": [
+        358,
+        400,
+        406
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/318",
+      "updatedAt": "2026-09-03T07:17:46Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 313,
+      "summary": "Choose which non-spell DBC catalogues Packages may edit",
+      "importance": 3,
+      "gain": 4,
+      "effort": 5,
+      "confidence": "medium",
+      "disposition": "decision",
+      "rationale": "The proposal names a concrete update-only set, but explicitly awaits maintainer approval. Positional keys and cross-family ordering affect the contract and should be settled before implementation.",
+      "next_action": "Approve or revise the proposed table set, stable keys, family boundaries and replay order, then assign a Tracer.",
+      "blockers": [
+        "Maintainer decision requested in the issue comment."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/313",
+        "https://github.com/LyraCoreProject/LyraCore/issues/313"
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/313",
+      "updatedAt": "2026-09-02T17:48:43Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 304,
+      "summary": "Verify FrameXML and GlueXML transforms on the real client",
+      "importance": 3,
+      "gain": 3,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "The transform engine, conflict checks and content hashes already shipped in PR #392. Current issue comments explicitly leave separate FrameXML and GlueXML client checks outstanding.",
+      "next_action": "Run the existing transform Tracer against the Operator baseline in both client phases.",
+      "blockers": [
+        "Real unmodified 1.12.1 client and Operator baseline."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/304",
+        "importer/src/ui_transform.rs",
+        "importer/src/pack_client.rs"
+      ],
+      "related_prs": [
+        392
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/304",
+      "updatedAt": "2026-09-02T17:47:42Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 272,
+      "summary": "A creature that enters a viewer's AOI during an active movement leg can stand still and then jump forward; delayed motion flushes and the four-second sensing cadence can produce similar symptoms.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The cheapest defect is still present: peer CREATE replays a resident taxi spline but never the creature's current spline. Motion shedding and sensing cadence are separate policy choices, so they should not hold up that localized fix.",
+      "next_action": "Implement resident creature-spline replay immediately after peer CREATE with an ordering test. Split motion shedding and sensing cadence into separate decisions before changing either.",
+      "blockers": [
+        "Full closure needs a maintainer choice for motion-flush shedding and proximity sensing cadence.",
+        "The combined symptom still needs real-client acceptance."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/272",
+        "https://github.com/LyraCoreProject/LyraCore/pull/271",
+        "gateway/src/stdb/subscriptions.rs: offer_peer_create appends a resident taxi spline after CREATE but has no equivalent lookup for game_creature_spline.",
+        "gateway/src/stdb/world_view.rs: maybe_queue_motion_flush still drops a flush at egress depth while retaining the superseding pending map.",
+        "module/src/creatures/ai.rs: SENSE_EVERY_N_TICKS remains 8 at a 500 ms movement tick."
+      ],
+      "related_prs": [
+        271
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/272",
+      "updatedAt": "2026-08-18T10:03:08Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 202,
+      "summary": "The low gossip text identifier is implemented, but nobody has confirmed that Marshal McBride's gossip and quest window renders in the stock client.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "The code already sends identifier 1 and answers its text query. The remaining question is client rendering, which the Headless Client cannot decide.",
+      "next_action": "Right-click Marshal McBride in a stock build-5875 client and record whether the greeting and quest offer appear.",
+      "blockers": [
+        "Requires a stock 1.12.1 client and a human visual check."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/202",
+        "gateway/src/codec/npc.rs: GOSSIP_GREETING_TEXT_ID is 1 and build_npc_text_update accepts arbitrary queried identifiers.",
+        "gateway/src/codec/tests.rs: packet tests cover the low identifier but explicitly cannot prove client rendering."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/202",
+      "updatedAt": "2026-08-13T08:21:33Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 198,
+      "summary": "Exact vmap consumption still depends on a realm-wide boolean as well as an active map generation, but the issue's rollout topology no longer matches the canonical World Import Profiles.",
+      "importance": 3,
+      "gain": 3,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "The implementation is absent and the prerequisites remain open. More seriously, current rollout docs route open-world vmaps to the two World Shards and skip the Instance Pool, contradicting the issue's map-0 account. Removing the Gate from this stale Spec would be unsafe.",
+      "next_action": "Rewrite the supported-map inventory and eligibility rule against the current World Import Profiles, then wait for corrected rollout and matching navigation-coverage Verification before removing the Gate.",
+      "blockers": [
+        "Issue 184 needs corrected rollout acceptance.",
+        "Issue 195 needs corrected matching navigation-coverage acceptance.",
+        "A maintainer must approve the supported-map inventory and emergency rollback rule."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/198",
+        "https://github.com/LyraCoreProject/LyraCore/pull/275",
+        "module/src/vmap.rs: vmap_enabled still requires game_config.vmap_enabled and an active generation.",
+        "docs/vmap-rollout.md: current production destinations are alliance-eastern and alliance-kalimdor World Shards; the Instance Pool must receive no bounded-profile vmap generation."
+      ],
+      "related_prs": [
+        192,
+        258,
+        275
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/198",
+      "updatedAt": "2026-09-01T08:55:50Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 196,
+      "summary": "Bounded ground-snapped patrol return is implemented; only a real-client observation of a badly displaced patroller remains.",
+      "importance": 3,
+      "gain": 2,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "PR 253 added repeated return steps and pure coverage for long displacement and ordinary patrol behavior. The latest issue comment correctly narrows the remainder to visual Verification.",
+      "next_action": "Displace a patroller across uneven terrain in a stock client and record its return, route rejoin, and resumed patrol.",
+      "blockers": [
+        "Requires a stock 1.12.1 client and a suitable live creature scenario."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/196",
+        "https://github.com/LyraCoreProject/LyraCore/pull/253",
+        "module/src/creatures/cycle/harness.rs: focused cases cover a badly displaced patroller and convergence back to ordinary patrol."
+      ],
+      "related_prs": [
+        253
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/196",
+      "updatedAt": "2026-09-01T08:55:50Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 195,
+      "summary": "Generation-scoped navigation coverage is implemented, but rollout acceptance has not been recorded and the issue's old Shard examples conflict with the current import topology.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "PR 258 shipped preparation, finalization, matched-generation selection, and route-planner use. The latest comment says only rollout remains, but it predates the canonical profile change that moved open-world coverage to two World Shards and excluded the Instance Pool.",
+      "next_action": "Correct the rollout matrix to the current World Import Profiles, then prepare and finalize matching coverage on each eligible World Shard and record route and client Verification before enabling nav_coverage_enabled.",
+      "blockers": [
+        "The acceptance matrix must be updated for the current Eastern and Kalimdor World Shards.",
+        "Requires approved client data, named non-production or production targets, and human acceptance."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/195",
+        "https://github.com/LyraCoreProject/LyraCore/pull/258",
+        "https://github.com/LyraCoreProject/LyraCore/pull/275",
+        "module/src/vmap.rs: game_vmap_nav_coverage and its manifest are generation-scoped and finalized before selection.",
+        "module/src/nav.rs: route planning consumes coverage only when nav_coverage_enabled is on and the active generation has a matching manifest."
+      ],
+      "related_prs": [
+        258,
+        275
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/195",
+      "updatedAt": "2026-09-01T08:55:50Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 184,
+      "summary": "The staged vmap import workflow exists, but the issue still asks for map 0 on the Instance Pool, which current canonical rollout rules explicitly forbid.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "PR 192 shipped the source workflow. PR 275 later introduced the Eastern and Kalimdor World Import Profiles and changed the target matrix. The latest issue comment repeats the retired Instance Pool target, so following it would populate the wrong Shard.",
+      "next_action": "Replace the acceptance checklist with map 0 on the Eastern World Shard, map 1 on the Kalimdor World Shard, and an explicit open-world exclusion for the Instance Pool. Only then schedule operator Verification.",
+      "blockers": [
+        "The issue and its latest comment contradict docs/vmap-rollout.md.",
+        "Any rollout requires a named host, approved client data, a maintenance window, and real-client acceptance."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/184",
+        "https://github.com/LyraCoreProject/LyraCore/pull/192",
+        "https://github.com/LyraCoreProject/LyraCore/pull/275",
+        "docs/vmap-rollout.md: the canonical rollout uses both World Shards and says the Instance Pool must receive no bounded-profile generation."
+      ],
+      "related_prs": [
+        192,
+        275
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/184",
+      "updatedAt": "2026-09-01T08:55:50Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 154,
+      "summary": "Aura stacking-family code and its single insertion boundary are covered; the documented live stacking sequence has no recorded evidence.",
+      "importance": 4,
+      "gain": 3,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "PR 217 shipped the code and Architecture Test. The issue's latest comment and the still-empty evidence template agree that only operator-run aura and client Verification remains.",
+      "next_action": "Run docs/aura-stacking-probes.md on an approved development Realm, fill its evidence template, and close this issue if every persisted and visible result agrees.",
+      "blockers": [
+        "Requires an Operator-approved Module publish and a real client."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/154",
+        "https://github.com/LyraCoreProject/LyraCore/pull/217",
+        "module/src/spell/stacking.rs: tests cover stacking policy and one authoritative aura insertion boundary.",
+        "docs/aura-stacking-probes.md: the evidence template is still unfilled."
+      ],
+      "related_prs": [
+        217
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/154",
+      "updatedAt": "2026-09-01T08:55:14Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 142,
+      "summary": "Drowning works in Module and Gateway tests, but there is no pinned Headless Client adapter for a complete dive cycle and no real-client calibration of the submerge threshold.",
+      "importance": 3,
+      "gain": 3,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The code half shipped in PRs 150 and 166. The pinned wire-harness tree contains no drowning or breath adapter, so a bounded cross-repository implementation remains before the human pass.",
+      "next_action": "Add the LyraCore dive adapter in wire-harness with no stored credentials, then release and bump the pin. Run it on an approved development Realm before calibrating the real client.",
+      "blockers": [
+        "Completing the issue requires a wire-harness release and LyraCore pin bump.",
+        "Submerge timing and mirror-bar rendering require a human with a stock client."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/142",
+        "https://github.com/LyraCoreProject/LyraCore/pull/150",
+        "https://github.com/LyraCoreProject/LyraCore/pull/166",
+        "https://github.com/LyraCoreProject/wire-harness/tree/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore",
+        "module/src/breath.rs and gateway/src/codec/breath.rs: the durable timer behavior and start/stop packet builders exist."
+      ],
+      "related_prs": [
+        150,
+        166
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/142",
+      "updatedAt": "2026-08-13T05:28:29Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 138,
+      "summary": "The repository quickstart is still the only complete guide; the public site exists only as an unbuilt specification, so there is nothing safe to point the 819-line document at.",
+      "importance": 1,
+      "gain": 2,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "The issue body contains only a dash. The public-site repository says it is not built yet and has no quickstart content. Shrinking the local guide now would remove the usable instructions.",
+      "next_action": "Wait for the public site to publish and version a complete quickstart, then replace docs/quickstart.md with a short durable pointer and check inbound links.",
+      "blockers": [
+        "The published quickstart does not exist yet.",
+        "The issue needs an explicit destination URL and ownership rule."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/138",
+        "https://github.com/LyraCoreProject/LyraCoreProject.github.io/blob/main/README.md",
+        "docs/quickstart.md: the current guide is 819 lines and remains linked from README.md."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/138",
+      "updatedAt": "2026-08-13T05:28:30Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 137,
+      "summary": "Bank storage and purchase behavior are implemented, but the pinned Headless Client has no end-to-end bank adapter and the stock-client window has not been checked.",
+      "importance": 3,
+      "gain": 3,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The parent and both blocking code issues are closed. Current Gateway paths cover activate, deposit, withdraw, and slot purchase, while the pinned adapter tree has no bank script.",
+      "next_action": "Add the bank-flow adapter in wire-harness, release it, and bump the pin. Then run the adapter and the listed real-client window checks on an approved development Realm.",
+      "blockers": [
+        "Completing the issue requires a wire-harness release and LyraCore pin bump.",
+        "The final window and cell behavior require a human with a stock client."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/137",
+        "https://github.com/LyraCoreProject/LyraCore/pull/158",
+        "https://github.com/LyraCoreProject/LyraCore/pull/171",
+        "https://github.com/LyraCoreProject/wire-harness/tree/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore",
+        "gateway/src/world/handlers/bank.rs: all four requested client operations dispatch through the current Store."
+      ],
+      "related_prs": [
+        158,
+        171
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/137",
+      "updatedAt": "2026-08-12T05:25:15Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 114,
+      "summary": "Instance-aware door collision and Deadmines acceptance cannot start until dynamic door collision exists and its map-36 eligibility conflict is resolved.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "The ray functions and debug reducer still lack instance_id. Issue 113 is unimplemented, and current vmap eligibility requires an active static generation even though the canonical import skips open-world vmaps on the Instance Pool.",
+      "next_action": "After issue 113 has an approved eligibility rule and implementation, thread instance_id through ray callers and run isolated sibling-instance tests before the Deadmines acceptance run.",
+      "blockers": [
+        "Issue 113 is unimplemented.",
+        "A maintainer must decide how dynamic collision becomes eligible on map 36 without a bounded-profile static vmap generation.",
+        "Final acceptance needs approved client data and an Operator-run development Shard."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/114",
+        "module/src/vmap.rs: los_ray and collision_ray accept map_id and endpoints only.",
+        "module/src/debug/instance.rs: debug_vmap_ray has no instance argument.",
+        "docs/vmap-rollout.md: the Instance Pool is excluded from bounded-profile vmap generations."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/114",
+      "updatedAt": "2026-08-13T05:25:54Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 113,
+      "summary": "Door collision meshes can be imported, but no per-GameObject collider registry or state-gated ray merge consumes them.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "The prerequisite importer is merged and the runtime work is absent. The Spec now conflicts with active-generation eligibility: it expects dynamic doors to work on map 36 with no static chunks, while vmap_enabled returns false without an active generation. That decision affects the central Gate and must be settled first.",
+      "next_action": "Choose and document the map-36 eligibility rule. Then implement game_go_collider, lifecycle registration, transforms, state gating, and synthetic ray behavior against that rule.",
+      "blockers": [
+        "Maintainer decision: dynamic-only generation or a separate dynamic-collision eligibility rule for the Instance Pool.",
+        "The chosen rule must stay consistent with issue 198's future per-map eligibility model."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/113",
+        "https://github.com/LyraCoreProject/LyraCore/pull/254",
+        "module/src/go_model.rs: game_go_model stores imported local-space meshes, and comments name game_go_collider as the absent consumer.",
+        "module/src/vmap.rs: vmap_enabled requires both the global Gate and an active static generation.",
+        "docs/vmap-rollout.md: bounded-profile vmaps skip the Instance Pool."
+      ],
+      "related_prs": [
+        254
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/113",
+      "updatedAt": "2026-08-13T05:25:52Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 112,
+      "summary": "The DOOR and BUTTON model importer is merged; only an approved client-data dry run and apply to a named development Shard remain.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "PR 254 shipped DBC lookup, M2 extraction, storage reducers, limits, and tests. The latest evidence correctly says runtime use belongs to issue 113 and this issue needs Operator-owned data acceptance only.",
+      "next_action": "Run --go-models as a dry run against approved client data, record nonzero Deadmines door triangles, then apply to a named development Shard.",
+      "blockers": [
+        "Requires approved client Data and an explicitly named development Shard."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/112",
+        "https://github.com/LyraCoreProject/LyraCore/pull/254",
+        "importer/src/go_model.rs: --go-models resolves DOOR and BUTTON models, reports triangle counts, and applies import_go_models batches.",
+        "module/src/go_model.rs: game_go_model and both import reducers are present."
+      ],
+      "related_prs": [
+        254
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/112",
+      "updatedAt": "2026-09-01T08:55:50Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 107,
+      "summary": "GameObject template scale is imported and sent on the wire; current data and stock-client proportions have not been checked.",
+      "importance": 2,
+      "gain": 3,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "PR 110 shipped all three code layers and fallback tests. The issue's latest comment correctly limits the remainder to import, row and wire checks, and visual proportions.",
+      "next_action": "Publish and import on a named development Shard, compare Peacebloom and Copper Vein template sizes with the source data, inspect OBJECT_FIELD_SCALE_X, and check both in a stock client.",
+      "blockers": [
+        "Requires approved game data, an Operator-run development Shard, and a stock client."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/107",
+        "https://github.com/LyraCoreProject/LyraCore/pull/110",
+        "importer/src/main.rs: gameobject_template size is part of the imported row.",
+        "gateway/src/codec/gameobject.rs: object_scale_x sends a positive template size and falls back to 1.0."
+      ],
+      "related_prs": [
+        110
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/107",
+      "updatedAt": "2026-09-01T08:55:52Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 105,
+      "summary": "The pinned Headless Client suite still invokes file-based scenarios relative to the LyraCore checkout, so many scenarios fail to spawn while the summary looks like an ordinary test failure.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "The current pin is still v0.1.0-alpha.3 at the exact reported commit. Its wire-suite.sh contains the broken relative calls, and no newer release exists. This undermines confidence in every live suite claim that uses the pin.",
+      "next_action": "Fix every scenario call to use ADAPTER_DIR, add subset arguments and a distinct spawn-failure summary in wire-harness, then publish a release and bump the LyraCore pin.",
+      "blockers": [
+        "The change must land and be released in LyraCoreProject/wire-harness before the core pin can move.",
+        "A maintainer must publish or approve the new harness release."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/105",
+        "https://github.com/LyraCoreProject/wire-harness/blob/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore/wire-suite.sh",
+        ".wire-harness-rev: still pins v0.1.0-alpha.3 at 219f8cd1670f4b783892388f110d233722892bb3.",
+        "The pinned wire-suite.sh uses paths such as bash adapters/lyracore/test-move-relay.sh after sourcing adapter-env.sh."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/105",
+      "updatedAt": "2026-08-11T08:20:54Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 104,
+      "summary": "The Rust CLI now has import world and import vmaps, but fresh-provision parity is unrecorded and the old import-world.sh still exists.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "verify",
+      "rationale": "lyracore-cli PR 25 implemented the verbs and the current pin includes them. That PR explicitly left fresh-provision Verification and retirement of the script for later, and the script remains in the tree.",
+      "next_action": "Run import world and import vmaps on a fresh approved development stack. If their results match the old flow, inventory remaining script consumers, repoint them, and delete import-world.sh.",
+      "blockers": [
+        "Fresh-provision parity needs approved dump and client data plus Operator coordination.",
+        "Private or external consumers of import-world.sh must be inventoried before deletion."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/104",
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/25",
+        "docs/development-cli.md: the current CLI documents import world followed by import vmaps.",
+        "importer/scripts/import-world.sh: the legacy flow is still present."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/104",
+      "updatedAt": "2026-08-11T08:23:39Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 103,
+      "summary": "The dynamic door-collision parent has one imported-mesh slice shipped, while runtime collision and instance-aware acceptance remain in issues 113 and 114.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "The parent is now a tracker rather than an implementation unit. Its original request for a Spec and split is complete, but the implemented behavior is not. Current eligibility conflicts must be resolved in issue 113 before the parent can advance.",
+      "next_action": "Keep this as the parent. Resolve issue 113's eligibility decision, implement 113, then complete issue 114 and close the parent from its acceptance evidence.",
+      "blockers": [
+        "Issue 113 requires a collision-eligibility decision and implementation.",
+        "Issue 114 depends on issue 113 and Operator-assisted Deadmines acceptance."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/103",
+        "https://github.com/LyraCoreProject/LyraCore/pull/254",
+        "module/src/go_model.rs: imported door meshes exist but the named runtime collider registry does not.",
+        "module/src/vmap.rs: ray functions still contain static generation rays only."
+      ],
+      "related_prs": [
+        254
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/103",
+      "updatedAt": "2026-08-11T12:43:26Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 92,
+      "summary": "client sync and the later Client Artifact command are implemented; only a real client sync load check remains.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "CLI PR 32 and core PR 322 shipped sync. Issue 303 and PR 392 later shipped the distributable Client Artifact that the original issue deferred. The latest issue evidence correctly leaves only stock-client loading.",
+      "next_action": "Run lyracore client sync against a configured stock client and record that patch-3.MPQ and every enabled Package addon load.",
+      "blockers": [
+        "Requires a configured, legally obtained stock 1.12.1 client and a human load check."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/92",
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/32",
+        "https://github.com/LyraCoreProject/LyraCore/pull/322",
+        "https://github.com/LyraCoreProject/LyraCore/pull/392",
+        "docs/development-cli.md: client sync and client pack are both current supported commands."
+      ],
+      "related_prs": [
+        322,
+        392
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/92",
+      "updatedAt": "2026-09-02T11:46:39Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 88,
+      "summary": "Movement heartbeat batching is already active at 40 ms with 128-entry calls; the remaining work is an approved load acceptance run and tuning only if its timing signals regress.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "verify",
+      "rationale": "The current code contradicts the original title: gw_movement_batch, chunking across call pipes, entry isolation, and metrics all exist. PR 234 added a guarded acceptance runner but explicitly left the 500-mover and real-client checks undone.",
+      "next_action": "Run docs/movement-batch-acceptance.md against an approved disposable Realm with at least 500 movers, record batch factor and both latency signals, and tune one lever only if the tripwire fires.",
+      "blockers": [
+        "Requires an approved synthetic load driver and disposable Realm.",
+        "Visual acceptance requires a stock client."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/88",
+        "https://github.com/LyraCoreProject/LyraCore/pull/234",
+        "gateway/src/stdb/connection.rs: the flusher drains every 40 ms and caps calls at 128 entries across call pipes.",
+        "docs/movement-batch-acceptance.md: the guarded load and real-client acceptance remain external checks."
+      ],
+      "related_prs": [
+        234
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/88",
+      "updatedAt": "2026-08-11T08:23:13Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 86,
+      "summary": "Per-viewer motion supersession is implemented, but there is no current evidence that dense-crowd login starvation still has the 2026-08-09 shape after the shared WorldView changes.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 3,
+      "confidence": "medium",
+      "disposition": "verify",
+      "rationale": "The first coalescing rung is present. Later work replaced per-Character subscriptions with one per-Shard stream and an in-memory cell index, invalidating part of the old cost account. Dense fan-out is still inherently large, but a login-priority lane or interest cap needs fresh evidence.",
+      "next_action": "Run the current dense-crowd measurement from issue 59 and record login completion, queue depth, relay latency, CPU, and delivered motion. Choose a priority lane or interest cap only if starvation reproduces.",
+      "blockers": [
+        "Issue 59's current crowd-cliff measurement is still open.",
+        "A dense interest cap changes visible behavior and needs maintainer approval."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/86",
+        "https://github.com/LyraCoreProject/LyraCore/issues/59",
+        "https://github.com/LyraCoreProject/LyraCore/pull/244",
+        "gateway/src/stdb/world_view.rs: each viewer keeps a latest-row map per mover and queues at most one motion flush.",
+        "gateway/src/stdb/world_index.rs: relay audience selection now uses one in-memory cell index fed by one global subscription per Shard."
+      ],
+      "related_prs": [
+        244
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/86",
+      "updatedAt": "2026-08-11T08:23:07Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 84,
+      "summary": "The current Gateway has explicit world-Shard promotion to Realm-core and settlement fan-out, but the reported three-Shard failure has never been rerun against this implementation.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "medium",
+      "disposition": "verify",
+      "rationale": "Current Store code and Fake-based tests cover the topology the issue said was suspect. That is meaningful newer evidence, but it does not reproduce the exact development stack. The issue also combines an unrelated bot-party combat failure that should be split if it remains.",
+      "next_action": "Rerun group loot on a fresh current three-Shard development stack with schedules armed. If it fails, capture promotion, Realm-core resolution, and settlement rows separately. Split any bot-party combat failure into its own issue.",
+      "blockers": [
+        "The exact three-Shard scenario needs an Operator-run development stack and the repaired Headless Client pin from issue 105."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/84",
+        "gateway/src/world/loot.rs: relay_tick promotes pending Shard rolls to Realm-core and fans resolved winners to every connected World Shard.",
+        "gateway/src/world/loot_tests.rs: Fake-based tests cover staging promotion, clearing, and settlement fan-out.",
+        "module/src/loot/rolls.rs: settle_loot_roll grants only on the Shard that owns the corpse item."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/84",
+      "updatedAt": "2026-08-11T08:23:01Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 82,
+      "summary": "A real Realm still has no tracked TCP load balancer, backend admission cap, or drain procedure for a Gateway pool.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "The repository contains only the Standalone Supervisor deployment artifact. The issue is explicitly tied to host topology and kill-a-backend acceptance, while the old capacity numbers need refresh after shared connections and batching.",
+      "next_action": "After current capacity and dense-crowd Verification, choose the supported load balancer and tracked deployment shape. Build static backend caps, health checks, drain commands, and a failure drill against a named non-production host first.",
+      "blockers": [
+        "Needs current single-Gateway and dense-crowd capacity evidence.",
+        "Requires a maintainer choice of load balancer and a named host before any topology change."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/82",
+        "deploy/systemd: only the Standalone Supervisor service is tracked; no Gateway load-balancer configuration exists.",
+        "gateway/src/config.rs: LYRACORE_REALM_ADDRESS can advertise an external address but does not provision or drain backends."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/82",
+      "updatedAt": "2026-08-11T08:22:59Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 80,
+      "summary": "A cross-map teleport still removes the Character's world entity without deleting its public motion row, leaving a stale AOI-visible row on the source Shard.",
+      "importance": 4,
+      "gain": 3,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "implementing",
+      "rationale": "The exact outlier remains in current code. teleport_player drops only game_entity_motion_pending, then deletes game_world_entity in the cross-map branch. Other teardown paths delete the public motion row.",
+      "next_action": "Delete the public game_entity_motion row in the cross-map teardown and add a behavior test beside the existing teleport cleanup coverage.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/80",
+        "module/src/world.rs: teleport_player calls motion::drop_pending before branching, but the cross-map branch deletes only the world entity after combat and stealth cleanup.",
+        "module/src/helpers.rs and module/src/creatures/tick/lifecycle.rs: the standard entity cleanup contract includes game_entity_motion and game_creature_spline."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/80",
+      "updatedAt": "2026-08-11T08:19:03Z",
+      "github_state": "open",
+      "owner": "GPT-5.6 Sol, teleport agent"
+    },
+    {
+      "number": 79,
+      "summary": "Gateway connections still use the SpacetimeDB confirmed-read default, and the current shared Coordinator gives no movement-only connection on which to disable it safely.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 3,
+      "confidence": "medium",
+      "disposition": "decision",
+      "rationale": "No confirmed-read override exists. The issue's proposed one-line movement-path change no longer fits the architecture: a Coordinator carries all subscribed state and Durable Reads for a Shard, so the durability trade affects more than movement.",
+      "next_action": "Measure confirmed-read latency on the current Coordinator, list which state would become visible before durability, and decide whether to keep confirmation or introduce a narrowly scoped connection before changing the setting.",
+      "blockers": [
+        "A maintainer must approve the crash-durability trade.",
+        "There is no current movement-only subscription connection."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/79",
+        "https://spacetimedb.com/docs/upgrade",
+        "gateway/src/stdb/connection.rs: the shared Coordinator owns Shard subscriptions and Durable Reads; no with_confirmed_reads override is present."
+      ],
+      "related_prs": [
+        247
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/79",
+      "updatedAt": "2026-08-11T08:18:58Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 78,
+      "summary": "GridBox still recenters at every cell crossing, but this no longer tears down SpacetimeDB subscriptions; it now applies a bounded in-memory index delta and may cause only entity create and destroy churn.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "verify",
+      "rationale": "The original measured subscription cost is retired by the shared WorldView. Widening the AOI to 7 by 7 would raise steady audience and relay work, so the old proposed fix should not ship without new evidence of visible churn.",
+      "next_action": "Measure current AOI recenter deltas and client create and destroy traffic near cell boundaries. Close as superseded if bounded in-memory churn is harmless; otherwise write a new Spec that prices the wider AOI.",
+      "blockers": [
+        "The original measurement does not describe the current architecture."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/78",
+        "https://github.com/LyraCoreProject/LyraCore/pull/244",
+        "gateway/src/stdb/aoi.rs: the old per-Character subscription builder is compiled only for differential tests.",
+        "gateway/src/stdb/world_index.rs: a recenter is now a fixed cell-index delta in memory.",
+        "crates/lyracore-shared/src/spatial.rs: needs_recenter still triggers on any anchor-cell change."
+      ],
+      "related_prs": [
+        244
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/78",
+      "updatedAt": "2026-08-11T08:18:54Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 77,
+      "summary": "The reported per-Character AOI query cost and roughly 525-seat result describe the retired connection model, while its follow-up concerns are tracked by narrower capacity issues.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "The Gateway now uses shared per-Shard Coordinators, an in-memory viewer index, call pipes, and batched movement. Issue 88 records 1,735 seats after batching, contradicting the original ceiling. The remaining blocking-thread cap is documented and bounded under issue 76's work.",
+      "next_action": "Close this broad diagnosis as superseded by issues 76, 82, 86, and 88. Keep future capacity work tied to fresh acceptance runs rather than its old numbers.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/77",
+        "https://github.com/LyraCoreProject/LyraCore/issues/81",
+        "https://github.com/LyraCoreProject/LyraCore/pull/244",
+        "https://github.com/LyraCoreProject/LyraCore/pull/247",
+        "gateway/src/stdb/aoi.rs and gateway/src/stdb/world_index.rs: one global subscription per Shard replaced distinct AOI subscription queries."
+      ],
+      "related_prs": [
+        244,
+        247
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/77",
+      "updatedAt": "2026-08-11T08:22:53Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 76,
+      "summary": "The blocking-pool limit is now configured, logged, documented, and enforced before a socket enters Tokio's blocking queue, satisfying the issue's stated completion rule.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "Current code and PR 410 go beyond the original acceptance criteria by sharing a non-waiting capacity across both listeners. The title's old 477 and 535 observations remain historical evidence, not an open implementation request.",
+      "next_action": "Close the issue against the current configuration, startup log, architecture documentation, and PR 410 admission bound. Track new capacity failures from fresh measurements in narrower issues.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/76",
+        "https://github.com/LyraCoreProject/LyraCore/pull/410",
+        "gateway/src/config.rs: LYRACORE_MAX_BLOCKING_THREADS is parsed with a finite default and sizes BlockingTaskCapacity.",
+        "gateway/src/main.rs: startup logs the resolved blocking-pool ceiling.",
+        "docs/architecture.md: the setting, measured seats, failure shape, and operator guidance are documented."
+      ],
+      "related_prs": [
+        410
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/76",
+      "updatedAt": "2026-08-11T08:18:45Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 75,
+      "summary": "The pinned raid benchmark neither reports dead Characters nor sends Release Spirit, so later additive stages can silently measure a mostly inactive population.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The exact harness release named in the issue is still pinned. Its benchmark source has raid mode but no death counter, CMSG_REPOP_REQUEST, or revive flow. Reporting the count is a bounded first slice that restores measurement honesty.",
+      "next_action": "Add a dead-at-window-end count to the wire-harness benchmark report and tests first. Treat automatic Release Spirit and recovery as a second protocol slice, then release and bump the LyraCore pin.",
+      "blockers": [
+        "Landing in LyraCore requires a wire-harness release and pin bump.",
+        "Automatic recovery needs real protocol and development-Realm Verification."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/75",
+        "https://github.com/LyraCoreProject/wire-harness/blob/219f8cd1670f4b783892388f110d233722892bb3/src/bin/bench/main.rs",
+        ".wire-harness-rev: still pins the reported v0.1.0-alpha.3 commit.",
+        "The pinned bench source has boss raid mode and report generation but no repop, revive, or dead-Character report path."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/75",
+      "updatedAt": "2026-08-11T08:18:41Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 73,
+      "summary": "The pinned CLI has a useful text dev status command and no Ratatui dependency; choosing a TUI remains a product decision.",
+      "importance": 2,
+      "gain": 3,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "The sibling lyracore-cli repository at the pinned revision has no ratatui or crossterm dependency. dev status already renders process, topology, and per-database health directly from the CLI's existing state and health checks. A TUI could make local observation easier, but the spatial seam map is retired and a remote GM console has different authentication and reach. The remaining work is to select one bounded surface rather than adopt a rendering library first.",
+      "next_action": "Have the Operator choose whether local dev status needs an interactive TUI; if yes, scope a read-only local process and database view before considering remote Realm or spatial editing.",
+      "blockers": [
+        "No operations surface has been selected.",
+        "The spatial seam map named by the issue is retired."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/73. The issue asks for a decision among three different operations surfaces.",
+        "https://github.com/LyraCoreProject/lyracore-cli/blob/61f198aa0d5ace26528ed894f269fcf2c4c642bd/Cargo.toml. The pinned CLI manifest contains no Ratatui or Crossterm dependency.",
+        "https://github.com/LyraCoreProject/lyracore-cli/blob/61f198aa0d5ace26528ed894f269fcf2c4c642bd/src/cmd/dev.rs. The pinned dev status implementation already prints process, topology, and database health.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/docs/agents/cross-repo-cli.md. Repository instructions identify the pinned sibling CLI source as authoritative for this audit."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/73",
+      "updatedAt": "2026-08-11T08:22:51Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 72,
+      "summary": "SpellCastEvent still multiplexes several wire signals through independent booleans and zero-value conventions.",
+      "importance": 3,
+      "gain": 3,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The row contains is_completion, is_interrupted, delay_ms, and is_proc_log alongside ordinary START and GO fields. The Gateway decodes them in ordered branches, while comments state which fields must be the only active signal. Typed signal constructors reduced literal duplication but do not enforce mutual exclusion. An additive kind would make the union explicit, but schema publication and generated bindings make this more than a local refactor, and the unused is_completion field needs a compatibility choice.",
+      "next_action": "Approve an additive event-kind contract and is_completion policy, then stamp every constructor, regenerate Gateway bindings, switch decoding to the kind, and publish all fixture databases before removing reliance on the old fields.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/72. The issue inventories five logical signals and calls for an additive discriminator.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/spell/tables.rs#L329-L450. SpellCastEvent carries the boolean and zero-value conventions in one subscribed row.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/spell/tables.rs#L452-L490. Typed constructors centralize the neutral baseline but still rely on per-site field overrides.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/subscriptions.rs#L1238-L1295. Gateway decoding returns through ordered interruption, pushback, and proc-log branches."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/72",
+      "updatedAt": "2026-08-11T08:18:27Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 71,
+      "summary": "Item GUID allocation can leave a Character's 256-value packed block and collide with another Character; transfer relies on the opposite invariant.",
+      "importance": 5,
+      "gain": 3,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "item_guid_for keeps only 24 owner bits and reserves eight bits for a starting slot. next_item_guid then uses the owner's maximum GUID plus one without checking the low-byte boundary. Enough grants, splits, mail, trade, or inventory churn can enter the next owner's block, while owner GUIDs that differ above bit 24 share a block immediately. A primary-key collision can abort an inventory reducer, and cross-database transfer preserves these GUIDs as globally safe identifiers. Existing rows prevent a casual packing change.",
+      "next_action": "Choose a durable allocation scheme and live-row migration before implementation; define saturation behavior, preserve client-visible identifiers through transfer, and test allocation beyond 256 creations plus owners that share the low 24 bits.",
+      "blockers": [
+        "Existing item rows use the current packed format.",
+        "A durable per-owner serial or another globally unique allocation scheme must be selected.",
+        "The migration and rollback plan is undefined."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/71. The issue identifies both block escape and low-24-bit owner aliasing.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L266-L286. item_guid_for masks the owner to 24 bits and next_item_guid increments the current maximum without a boundary check.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/ops.rs#L213-L228. Routine item storage repeatedly calls next_item_guid, so allocation is not limited to the initial slot set.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L248-L264. Cross-database transfer preserves item GUIDs because the code assumes they are already namespaced per Character."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/71",
+      "updatedAt": "2026-08-11T08:18:22Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 70,
+      "summary": "A fresh clone now runs a four-database sharded fixture, while the requested Northshire region seam was deliberately retired.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "The issue's product goal, showing Sharding out of the box, is shipped in an evolved form. dev up publishes Eastern Kingdoms, Kalimdor, an Instance Pool, and Realm-core, so contributors exercise both continental and instance routing. The same docs explicitly record removal of the second Elwynn database and walkable Northshire seam. Keeping the exact original issue open would reverse a later Operator decision.",
+      "next_action": "Close as shipped in revised form: retain the four-database fixture and cite the documented retirement of the Northshire region seam.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/70. The requested outcome is a sharded default fixture with a region seam and continent split.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/108. Closed work added the Instance Pool to the local fixture.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/111. Merged the four-database fixture pin and documentation.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/docs/development-cli.md#L970-L1004. dev up now runs four databases and documents the region-tier removal.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/321. Bare local publish now covers every database in the active fixture topology."
+      ],
+      "related_prs": [
+        111,
+        321
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/70",
+      "updatedAt": "2026-08-11T08:22:48Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 69,
+      "summary": "The claimed choice between free-form Gateways and Gateway-per-Shard affinity no longer matches the shared connection model and needs a narrower decision.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "medium",
+      "disposition": "decision",
+      "rationale": "Current Gateways keep shared coordinator connections to Shards, maintain a local WorldView, and select event audiences by spatial cells. That is already a hybrid: any Gateway can serve a viewer while local indexes avoid broadcasting most Relays to every World Session. Motion still comes from per-mover Shard rows, so the remaining question is measured subscription and writer cost, not the issue's original strict architectural fork.",
+      "next_action": "Rewrite the decision around the current shared connection and WorldView model, then use #59 and #66 measurements to decide whether process-to-Shard affinity adds enough gain to justify routing and failover constraints.",
+      "blockers": [
+        "Issue #59 lacks a current baseline.",
+        "Issue #66 lacks a two-Gateway comparison."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/69. The issue frames the designs as mutually exclusive based on the former co-Gateway Relay model.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/421. Merged cell audiences moved event Relay selection into each Gateway's WorldView and measured the local fan-out cost.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/world.rs#L470-L484. Motion is one per-mover Shard row consumed through the Gateway AOI model, not the old per-recipient Relay table."
+      ],
+      "related_prs": [
+        421
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/69",
+      "updatedAt": "2026-08-11T08:22:45Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 68,
+      "summary": "Zero-disconnect file-descriptor handoff remains a large optional architecture project with all of its prerequisites open.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "The Gateway keeps DecrypterHalf in the reader and EncrypterHalf in the writer; there is no cipher snapshot, SCM_RIGHTS transport, or receiving process protocol. The proposed handoff must also reconstruct WorldView state and coordinate ownership without letting either process write stale data. This complexity is only justified after measured restart cost and two-Gateway gain show that ordinary drain and reconnect are insufficient.",
+      "next_action": "Do not implement before #64, #66, and #67. If measurements justify it, first isolate and test vanilla header-cipher snapshot restoration, then specify the Unix handoff state machine and real-client acceptance check.",
+      "blockers": [
+        "Issues #64, #66, and #67 are unresolved.",
+        "No cipher-state snapshot API or acceptance test exists.",
+        "The feature is Unix-specific and needs an Operator value decision."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/68. The issue depends on graceful drain, overlapping listeners, and measured multi-Gateway gain.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/world/mod.rs#L316-L324. The current WorldConn owns DecrypterHalf while the writer separately owns EncrypterHalf.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/world/mod.rs#L824-L839. The single writer thread owns the encryption state and socket write clone; no transfer protocol exists."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/68",
+      "updatedAt": "2026-08-11T08:22:42Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 67,
+      "summary": "SO_REUSEPORT is still absent, but its value depends on the chosen drain and world-address routing design.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "Both Gateway listeners still use TcpListener::bind, and there is no reuse-port setup. That proves the feature is unimplemented, but not that it is the best deploy mechanism. If logon sends new clients only to a fresh advertised address and the old Gateway drains, overlapping binds may add little. Platform behavior and failure reporting also need an explicit support policy.",
+      "next_action": "Decide after #64 and #65 whether overlapping binds are required; if yes, specify supported operating systems and add socket creation plus an overlap acceptance test.",
+      "blockers": [
+        "Issue #64 has no graceful drain.",
+        "Issue #65 has no Gateway-address selection.",
+        "The supported-platform policy is unstated."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/67. The issue itself treats reuse-port as a possible bridge for rolling drains.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/logon/mod.rs#L314. Logon uses TcpListener::bind without socket options.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/world/mod.rs#L1575. World uses the same plain bind path."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/67",
+      "updatedAt": "2026-08-11T08:22:39Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 66,
+      "summary": "The two-Gateway capacity experiment remains valuable, but its baseline and three correctness prerequisites are still open.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "The duplicate bot-invite defect in #62 is fixed, while #61, #63, and #65 remain. The coordinator and Relay cost model also changed: shared Shard connections and cell audiences make the issue's original query-count assumptions stale. A second Gateway measurement can decide whether horizontal Gateway scaling earns its operational cost, but only against a fresh one-Gateway baseline and after known cross-process corruption paths are closed.",
+      "next_action": "Complete #59, #61, #63, and #65, then run one and two Gateway processes against the same Realm with identical Headless Client load and compare writer occupancy, subscriptions, Gateway CPU, latency, and disconnects.",
+      "blockers": [
+        "Issue #59 has no current one-Gateway baseline.",
+        "Issues #61 and #63 retain cross-process correctness failures.",
+        "Issue #65 has no routable Gateway selection mechanism."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/66. The issue lists #61, #62, #63, and #65 as prerequisites and asks for a measured comparison.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/390. The merged claim-and-delete reducer closed #62's duplicate bot-invite path.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/421. Current Relay selection uses cell audiences; its synthetic benchmark does not establish two-Gateway end-to-end gain."
+      ],
+      "related_prs": [
+        390,
+        421
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/66",
+      "updatedAt": "2026-08-11T08:22:35Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 65,
+      "summary": "Logon still advertises one configured world address and has no Realm-core registry of Gateway address, load, or draining state.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "The logon Store returns a one-element realm list built from the configured world address. Realm-core has per-Gateway Shard load samples, but their gateway_key is a hash for accounting rather than a routable address, and no row says a Gateway accepts new World Sessions or is draining. The old estimate that selection is a tiny change no longer matches the required registration and lease work.",
+      "next_action": "After #69, define a leased Gateway process row on Realm-core with advertised address, admission state, and load; make realm-list selection deterministic and test drain exclusion and stale-row expiry.",
+      "blockers": [
+        "Issue #69 must choose the multi-Gateway serving model.",
+        "A leased process registry and expiry rule do not exist.",
+        "Issue #59 must provide a useful load signal for selection."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/65. The issue requests Realm-core-backed world-address selection for scaling and rolling deploys.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/logon/mod.rs#L559-L577. The production realms method returns one RealmInfo using the configured address.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/load.rs#L43-L82. Existing per-Gateway load rows contain a numeric gateway_key and totals, not an address or admission lease."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/65",
+      "updatedAt": "2026-08-11T08:17:57Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 64,
+      "summary": "The Gateway still has no SIGTERM drain path and both listeners end only when their tasks fail.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "Current main binds ordinary Tokio listeners and does not register a Unix signal handler. A stop therefore does not close admission, wait for World Sessions, or perform orderly logout. Session leases reduce how long crash residue survives, but they do not provide a drain. The issue correctly waits for #60 because mass teardown behavior must be known before building shutdown around it.",
+      "next_action": "After #60, add a shared shutdown signal that closes both listeners, stops new logons, drains World Sessions to a deadline, records clean logout, and exits with observable phase logs.",
+      "blockers": [
+        "Issue #60 must first establish current mass-disconnect behavior."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/64. The issue explicitly depends on the Runbook B result.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/logon/mod.rs#L314. The logon listener is a plain TcpListener bind loop.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/world/mod.rs#L1575. The world listener is also a plain TcpListener bind loop; no Tokio signal path exists in gateway/src."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/64",
+      "updatedAt": "2026-08-11T08:22:32Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 63,
+      "summary": "Loot-roll promotion remains non-idempotent: concurrent Gateways can create duplicate rolls and split the party's votes.",
+      "importance": 5,
+      "gain": 4,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The current Gateway still promotes a staging roll on Realm-core and only then clears the World Shard copy. Both periodic and synchronous promotion paths can run in different Gateway processes. Realm-core's game_loot_roll has only an auto-increment primary key and insert_roll_rows always inserts a new roll and vote set. Module reducers serialize calls, so an idempotent Realm-core check or a compatible uniqueness key can close the race at its authoritative side.",
+      "next_action": "Make realm_loot_op START idempotent for corpse_guid plus slot, preserve exactly one complete vote set, and verify two concurrent promotions through Realm-core SQL; prefer a reducer-level compatible fix unless the schema migration is proven safe.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/63. The issue gives the two-Gateway race and requires exactly one durable roll and vote set.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/world/loot.rs#L130-L166. promote_one calls Realm-core before clearing the World Shard staging row.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/loot/rolls.rs#L45-L78. game_loot_roll has no unique corpse_guid and slot key.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/loot/rolls.rs#L326-L355. insert_roll_rows unconditionally inserts a new roll and a new vote row per recipient."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/63",
+      "updatedAt": "2026-08-11T08:17:48Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 61,
+      "summary": "Deterministic bound identity shipped, but World Session epochs still live inside each Gateway process and cannot reject stale teardown across processes.",
+      "importance": 5,
+      "gain": 5,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "One half of the issue is stale: each Gateway now derives the same synthetic owner identity from the Account. The more serious half remains. SessionEpochs is an AtomicU64 plus a process-local map, and disconnect cleanup trusts that local release result before logout. Two Gateways can therefore each believe their World Session is current and let an older socket remove the newer live Character. The issue should be narrowed to a Realm-core Session generation or lease.",
+      "next_action": "Rewrite the issue around a Realm-core-owned Session generation or lease, pass its token through login and logout, and add a two-Gateway test where the losing socket disconnects after the winner enters the world.",
+      "blockers": [
+        "The durable lease and expiry semantics need a small design decision.",
+        "Issue #69 should state whether arbitrary Gateways may serve the same Account."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/61. The issue identifies stale disconnect cleanup as a cross-process Character corruption path.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/account_sessions.rs#L18-L47. SessionEpochs remains process-local state.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/connection.rs#L2552-L2560. Coordinator claim_session and release_session delegate to that local map.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/world_store.rs#L227-L231. Bound identity is now deterministic per Account, so that part no longer differs between Gateway processes."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/61",
+      "updatedAt": "2026-08-11T08:22:29Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 60,
+      "summary": "The two historical crashes during roughly 500 simultaneous disconnects have no current rerun, so core availability is still unverified.",
+      "importance": 5,
+      "gain": 4,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "verify",
+      "rationale": "The Gateway has since gained pre-auth deadlines, bounded blocking-task admission, file-descriptor checks, and more resilient accept handling, all of which can change failure behavior. None proves that the post-auth mass-disconnect crash is gone. The issue's done condition remains two clean Runbook B runs with process, kernel, and application evidence.",
+      "next_action": "Run the pinned Headless Client Runbook B twice against the current release Gateway, recording exit status, kernel OOM or signal evidence, file descriptors, task counts, session cleanup, and recovery.",
+      "blockers": [
+        "Requires the controlled 500-client load environment.",
+        "No current Runbook B evidence is attached."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/60. The issue records two crashes and requires two clean reruns.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/410. Current main bounds pre-auth connection work and adds absolute I/O deadlines, changing part of the resource profile without testing mass teardown.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/fd_limit.rs. The Gateway now audits and raises file-descriptor limits, another material difference from the historical run."
+      ],
+      "related_prs": [
+        410
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/60",
+      "updatedAt": "2026-08-11T08:17:35Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 59,
+      "summary": "The old crowd-cliff numbers cannot answer current capacity after movement and Relay changes; Runbook A still needs a fresh end-to-end run.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "verify",
+      "rationale": "The current movement model writes one row per mover and uses AOI selection instead of the former per-recipient event rows. PR #421 also reduced distributed event Relay work, but its benchmark explicitly measured selection and encoding rather than realm capacity or latency. The 150/371-client measurements therefore describe neither the current writer load nor the current Gateway work.",
+      "next_action": "Run Runbook A against a release build at the current main commit and publish capacity, latency, disconnect, writer-occupancy, QUEUESTAT, AOISTAT, and SHARDLOAD results with exact revisions.",
+      "blockers": [
+        "Requires a controlled release benchmark environment.",
+        "Current end-to-end capacity evidence is absent."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/59. The issue says the recorded cliff predates Relay, subscription, and heartbeat changes.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/world.rs#L470-L484. game_entity_motion replaces quadratic per-recipient movement event inserts with one indexed row per mover.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/421. The merged Relay benchmark reports lower distributed fan-out but explicitly excludes end-to-end realm capacity and latency."
+      ],
+      "related_prs": [
+        421
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/59",
+      "updatedAt": "2026-08-11T08:17:30Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 58,
+      "summary": "The curl-to-shell local bootstrap is already present as install.sh and is the documented first-run path.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "The repository root contains a POSIX installer with the exact raw-GitHub curl command. It checks prerequisites, offers user-local tool installs, clones the repository, installs the checkout-resolving CLI launcher, and points the user to lyracore dev up. README and quickstart both lead with it. The implementation evolved from fetching a Gateway binary to a source-first, pinned-CLI checkout, but it satisfies the bootstrap outcome.",
+      "next_action": "Close as shipped under the current source-first installer; optionally record one clean Linux and one clean macOS smoke before closure.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/58. The requested outcome is a curl bootstrap into a working local LyraCore checkout.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/install.sh#L1-L35. install.sh documents the one-line command and its prerequisite, clone, and launcher steps.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/README.md#L19-L26. The README uses install.sh followed by lyracore dev up as the primary quick start.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/35. The broader CLI/operator issue treats the installer as the remaining bootstrap story rather than a Gateway binary release."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/58",
+      "updatedAt": "2026-08-11T08:17:26Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 56,
+      "summary": "The requested walkable-seam presentation polish has no active region seam after the region tier was retired.",
+      "importance": 2,
+      "gain": 1,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "Abrupt range-leave presentation and repeated crossings were properties of the removed Northshire-to-Elwynn region handoff. Current fixture Shard crossings are escrowed continent or instance transfers, not an overlapping walkable view merge. Keeping this issue open implies an active feature that the current topology deliberately removed.",
+      "next_action": "Close with the region tier retirement; restore or rewrite the issue only if a walkable region seam returns.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/56. The issue is scoped to range-leave behavior and repeated crossings at a walkable seam.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/54. The region/location-shard work was closed after the topology decision.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/docs/quickstart.md#L237-L241. The quickstart records removal of the region tier and retirement of its view-merge design."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/56",
+      "updatedAt": "2026-08-11T08:17:17Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 55,
+      "summary": "The residual crowd disconnects remain unclassified and require a fresh correlated load run.",
+      "importance": 3,
+      "gain": 3,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "verify",
+      "rationale": "The issue's static audit found no corruption path and deliberately parked the symptom until logs could separate peer exits, writer failures, and subscription recovery. The Gateway still logs the terminal World Session error, while the current movement and load-shedding paths have changed enough that the old 3 to 8 per 150 result cannot establish today's behavior.",
+      "next_action": "Run the current crowd scenario with stable peer IDs and collect Gateway session-end causes, Headless Client disconnect reasons, QUEUESTAT, AOISTAT, and SHARDLOAD for the same time window.",
+      "blockers": [
+        "Requires a controlled load run and correlated logs.",
+        "No current reproduction is attached to the issue."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/55. The issue records a static audit and explicitly parks diagnosis pending correlated live evidence.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/world/mod.rs#L1816. The current World Session path logs the peer and terminal error when a session ends.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/world_view.rs. Current load shedding and shared WorldView behavior differ from the code measured by the issue."
+      ],
+      "related_prs": [
+        421
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/55",
+      "updatedAt": "2026-08-11T08:17:12Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 53,
+      "summary": "A maintained public demo realm still needs deployment, backup, restore, and operations work despite recent pre-auth hardening.",
+      "importance": 4,
+      "gain": 3,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "Recent work closed two unauthenticated denial-of-service paths, and an open PR adds proof limits and Session expiry. Those changes cover part of the security section, but the issue also requires a named host, TLS and network policy, durable backup and restore, monitoring, restart practice, and a real Internet client drill. This is an Operator project rather than one source change.",
+      "next_action": "Split the remaining work into a reviewed public-host runbook and reversible automation, then have an Operator name the host and approve the first deployment and restore drill.",
+      "blockers": [
+        "No named public host or deployment target is authorized.",
+        "Backup and restore behavior has not been demonstrated.",
+        "PR #416 is still under review."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/53. The issue spans host hardening, deployment, backups, monitoring, and real-client operation.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/410. Merged pre-auth deadlines, bounded blocking capacity, and fixed-field world authentication decoding.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/416. The open PR caps proof attempts and expires Session keys.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/deploy/systemd/spacetimedb-standalone.service. The repository contains a standalone SpacetimeDB service unit, but that is only one part of the requested operated realm."
+      ],
+      "related_prs": [
+        410,
+        416
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/53",
+      "updatedAt": "2026-08-11T08:22:23Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 51,
+      "summary": "The old away-Shard subscription path is gone, and the replacement shared connection model enforces ghost and stealth visibility.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "The issue targets ensure_away and fold_home_shard, neither of which exists. The Gateway now keeps shared Shard connections and selects visible peers through WorldView. ViewerGates carries the viewer's ghost state, and peer creation consults ghost and stealth state before sending CREATE. A later merged fix also restores a peer's aura state when stealth ends.",
+      "next_action": "Close the issue as superseded by the shared connection model and the current visibility gates; retain the existing WorldView coverage.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/51. The requested changes name the removed ensure_away and away-feed design.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/aoi.rs. ViewerGates owns viewer-specific ghost and visibility state in the current design.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/subscriptions.rs. offer_peer_create_for applies the ghost and stealth checks before peer creation.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/432. The merged follow-up restores current auras when a peer enters view or leaves stealth."
+      ],
+      "related_prs": [
+        421,
+        432
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/51",
+      "updatedAt": "2026-08-11T08:22:18Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 50,
+      "summary": "The character-owned Architecture Test still misses tables that refer to a Character through unit-shaped columns such as target_guid or attacker_guid.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The source scanner still recognizes only character_guid, player_guid, and owner_guid. Existing manual cleanup for aura, melee, threat, and combo state shows that unit-keyed tables remain a real transfer blind spot. This is a localized Architecture Test change that prevents future cross-database state loss without changing runtime behavior.",
+      "next_action": "Extend character_owned_tripwire to inventory unit-guid columns and require each discovered table to have character_owned markers or an explicit exclusion with a reason; add a scanner fixture that fails on an unclassified target_guid table.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/50. The issue records the aura transfer omission that exposed this blind spot.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/tripwires.rs#L27-L42. The Architecture Test documents only character_guid, player_guid, and owner_guid as ownership field conventions.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/tripwires.rs#L196-L198. The scanner's actual predicate checks only those three field names.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/world.rs. Character cleanup still contains explicit combat-state handling outside the marker inventory."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/50",
+      "updatedAt": "2026-08-11T08:16:50Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 49,
+      "summary": "The seam operations console has no active region tier to operate; only the underlying load samples remain useful.",
+      "importance": 2,
+      "gain": 1,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "The fixture and production topology no longer activate region assignments. Current documentation explicitly retires the walkable region seam and keeps continental and instance routing. Building the requested editor now would put a large UI around inert topology data. Shard load telemetry can support a smaller future operations surface after #73 selects one.",
+      "next_action": "Close this issue as retired with the region tier; file a smaller load-telemetry issue only after #73 chooses the CLI or remote console surface.",
+      "blockers": [
+        "The region tier was retired.",
+        "Issue #73 has not selected an operations surface."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/49. The issue is specifically a region map, assignment editor, and seam operations console.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/54. The region/location-shard experiment was closed after the alpha topology was reduced.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/docs/quickstart.md#L237-L241. The quickstart says the region tier was removed and the seam design is retired.",
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/load.rs#L43-L82. Realm-core still stores per-Gateway Shard samples and materialized totals, so a narrower telemetry view remains possible."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/49",
+      "updatedAt": "2026-08-11T08:22:15Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 48,
+      "summary": "The reported warm-handoff seam feel belongs to the retired region tier; the current Gateway has no seam state machine to tune.",
+      "importance": 1,
+      "gain": 1,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "The repository removed sub-map regions and mid-walk warm handoff. All recorded angle tests also passed before that removal, so further work on the old hysteresis design would target code that no longer exists.",
+      "next_action": "Close the issue with links to the retired region-sharding design and current architecture.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/48",
+        "https://github.com/LyraCoreProject/LyraCore/blob/main/docs/region-sharding.md",
+        "Code fact: gateway/src/world/seam.rs is absent, and docs/architecture.md records the 2026-08-08 removal of the region tier and seam menu."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/48",
+      "updatedAt": "2026-08-11T08:16:42Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 46,
+      "summary": "A deleted Character previously left a realm-core party member row, but the Gateway now relays Character disappearance and removes membership only after the Character is absent from every Shard.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "verify",
+      "rationale": "PR #384 implements the missing cleanup while preserving Transfer safety. The workaround named in the issue is no longer present, so this open issue appears stale and needs a focused regression check before closure.",
+      "next_action": "Run the existing party cleanup and Transfer tests against main, then close the issue if both pass.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/46",
+        "https://github.com/LyraCoreProject/LyraCore/pull/384",
+        "Code fact: gateway/src/main.rs starts spawn_character_gone_relay, and gateway/src/stdb/subscriptions.rs leaves the realm-core party only when character_anywhere reports the Character absent from all Shards."
+      ],
+      "related_prs": [
+        384
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/46",
+      "updatedAt": "2026-08-11T08:22:10Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 45,
+      "summary": "The old question about per-Character AOI subscription cost no longer matches the event relay design, which now uses one stable event subscription per Shard and computes viewer audiences in Gateway memory.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "superseded",
+      "rationale": "PR #421 removed the fan-out pattern that motivated the table-collapse decision. Its 2,000-Character benchmark reduced queued jobs from 4,000,000 to 336,124 in the distributed case, so the proposed comparison would measure an obsolete architecture.",
+      "next_action": "Close the issue as superseded by PR #421 and retain future performance work under a benchmark that exercises the current viewer-audience path.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/45",
+        "https://github.com/LyraCoreProject/LyraCore/pull/421",
+        "Code fact: gateway/src/stdb/connection.rs installs stable Shard event subscriptions, while gateway/src/stdb/world_view.rs selects the visible audience in memory."
+      ],
+      "related_prs": [
+        421
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/45",
+      "updatedAt": "2026-08-11T08:16:28Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 42,
+      "summary": "The scripted and package-based Playerbot work has shipped; the remaining acceptance bar is a human-run real-client session that judges believable behavior and completes Deadmines.",
+      "importance": 3,
+      "gain": 5,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "Core PRs #394 and #395 and the linked package, CLI, and wire-harness work are merged. The issue's latest checklist explicitly leaves human judgment of believability, serendipity, and a full real 1.12.1 client dungeon run.",
+      "next_action": "Run issue #373's imported-node playbook, then complete issue #366 through VanCleef and record the observed failures as narrow follow-up issues.",
+      "blockers": [
+        "A real 1.12.1 client and imported node",
+        "The Playerbot packages needed by the acceptance scenario",
+        "Human judgment of behavior quality"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/42#issuecomment-5511966201",
+        "https://github.com/LyraCoreProject/LyraCore/issues/373",
+        "https://github.com/LyraCoreProject/LyraCore/issues/366",
+        "https://github.com/LyraCoreProject/LyraCore/pull/394",
+        "https://github.com/LyraCoreProject/LyraCore/pull/395"
+      ],
+      "related_prs": [
+        394,
+        395
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/42",
+      "updatedAt": "2026-09-02T15:24:09Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 41,
+      "summary": "Ritual of Summoning still lacks the ritual portal, two-assistant interaction, and targeted teleport flow.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 5,
+      "confidence": "medium",
+      "disposition": "decision",
+      "rationale": "The requested behavior depends on exact 1.12 group and GameObject interaction semantics that are not specified in the issue or represented in current code. A multi-client observation is needed before implementation can be split safely.",
+      "next_action": "Research the missing protocol and gameplay facts from primary sources, then define a complete implementation Ticket. Keep the final real-client check separate.",
+      "blockers": [
+        "Exact 1.12 ritual interaction behavior",
+        "A three-client acceptance session"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/41",
+        "Code fact: searches for spell 698, Ritual of Summoning, and ritual portal assistance found no implementation in importer, Module, or Gateway code."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/41",
+      "updatedAt": "2026-08-11T08:22:02Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 40,
+      "summary": "Early Warlock pet quest chains still lack the imported hostile summon encounters and item-use path needed to earn the Voidwalker and Succubus.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "This is the strongest ready feature candidate because it restores core class progression and the issue already names concrete creatures, items, and spells. Most behavior can be covered with Module and Headless Client Gates; only the final presentation check needs a human.",
+      "next_action": "Write a scoped Ticket for the hostile ownerless summon effect, required importer rows, item-use route, and kill credit, then implement it with Headless Client coverage and leave the visual check for a real client.",
+      "blockers": [
+        "A real-client visual check after the Module behavior passes"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/40",
+        "Code fact: importer/src/main.rs force-includes only the existing pet templates 416 and 1860; the Module has E_SUMMON_PET for persistent owned pets but no hostile ownerless summon effect for these quests."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/40",
+      "updatedAt": "2026-08-11T08:16:06Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 39,
+      "summary": "Static world collision is shipped, while dynamic GameObject collision, fresh-provision parity, and the final real-client movement checks remain open.",
+      "importance": 3,
+      "gain": 5,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "The epic's main collision slices landed in PR #115. Completion now depends on open issue #103 and its remaining children, issue #104's provisioning Gate, and a human Blink and line-of-sight check, so the umbrella is not a single implementation candidate.",
+      "next_action": "Finish #103 through its remaining dynamic collision Tickets, complete #104 on a fresh provision, then run the real-client Blink and line-of-sight matrix and close the epic.",
+      "blockers": [
+        "Issue #103 dynamic GameObject collision, including open children #113 and #114",
+        "Issue #104 fresh-provision parity",
+        "A real-client Blink and line-of-sight session"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/39#issuecomment-5253362768",
+        "https://github.com/LyraCoreProject/LyraCore/issues/103",
+        "https://github.com/LyraCoreProject/LyraCore/issues/104",
+        "https://github.com/LyraCoreProject/LyraCore/pull/115",
+        "https://github.com/LyraCoreProject/LyraCore/pull/254"
+      ],
+      "related_prs": [
+        115,
+        254
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/39",
+      "updatedAt": "2026-08-11T12:46:47Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 38,
+      "summary": "The Gateway now installs Shard event callbacks once and performs a single ordered login visibility sweep; the remaining work is the issue's real-client login matrix.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "PRs #421 and #433 replaced the subscription and login ordering paths described by the issue. Code-level Gates cover callback placement and sweep ordering, but the acceptance criteria still require fresh and geared Characters, auras, and questgivers on a real client.",
+      "next_action": "Run the stated 5875 login matrix on main and close the issue if every initial snapshot and following delta is correct; file narrow failures separately.",
+      "blockers": [
+        "A real 1.12.1 client with fresh and geared Character fixtures"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/38",
+        "https://github.com/LyraCoreProject/LyraCore/pull/421",
+        "https://github.com/LyraCoreProject/LyraCore/pull/433",
+        "Code fact: gateway/src/stdb/world_view.rs arms callbacks once per Shard and queues one initial visibility sweep after viewer registration."
+      ],
+      "related_prs": [
+        421,
+        433
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/38",
+      "updatedAt": "2026-08-11T08:15:57Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 37,
+      "summary": "Spell rank supersession and trainer plus relog behavior have shipped; only the real 1.12 client acceptance check remains.",
+      "importance": 2,
+      "gain": 3,
+      "effort": 1,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "PR #256 merged the specified packet behavior, and the issue comment confirms the trainer and relog Gate shipped. No further code slice is identified.",
+      "next_action": "Learn a higher spell rank in a real 1.12.1 client, relog, and confirm the spellbook contains the expected visible rank before closing.",
+      "blockers": [
+        "A real 1.12.1 client acceptance session"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/37#issuecomment-5491495231",
+        "https://github.com/LyraCoreProject/LyraCore/pull/256"
+      ],
+      "related_prs": [
+        256
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/37",
+      "updatedAt": "2026-09-01T08:55:50Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 36,
+      "summary": "Speed and teleport movement checks exist, but fall, gravity, Z-axis, and wall-crossing checks remain undefined and unimplemented.",
+      "importance": 4,
+      "gain": 3,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "The Module reserves violation codes for the remaining checks, but the issue does not set thresholds or a false-positive budget from observed traces. Those policy choices affect legitimate movement and should be settled before more enforcement is added.",
+      "next_action": "Choose the next check and its false-positive budget from recorded movement traces, then write one Ticket with deterministic Module Gates and a Headless Client scenario.",
+      "blockers": [
+        "Threshold and false-positive policy for the next movement check",
+        "Representative legitimate and violating movement traces"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/36",
+        "Code fact: module/src/world.rs implements movement violation codes 1 and 2 for speed and teleport, and reserves codes 3 through 5 for fall or gravity, Z-axis, and wall checks."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/36",
+      "updatedAt": "2026-08-11T08:21:56Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 35,
+      "summary": "Package authoring, trust, provenance, and the compiled CLI are present; the remaining public-host work is the install script, Server manifest design, and fresh-machine acceptance.",
+      "importance": 3,
+      "gain": 5,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "PR #397 closed the package API and lint slice, and the cross-repository CLI workflow is established. The unresolved Server manifest is a product and deployment design choice, while issue #58 and fresh-machine verification are separate executable slices.",
+      "next_action": "Decide the minimum Server manifest contract, then delegate issue #58 and a separate fresh-machine Gate in the lyracore-cli repository before returning here for the pin bump.",
+      "blockers": [
+        "A decision on the Server manifest contract",
+        "Open issue #58 for the installer",
+        "Fresh-machine acceptance across the CLI repository and this pinned shim"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/35#issuecomment-5499636994",
+        "https://github.com/LyraCoreProject/LyraCore/issues/58",
+        "https://github.com/LyraCoreProject/LyraCore/pull/397",
+        "Code fact: docs/package-api.md and module/tests/package_api_lint.rs define and enforce the shipped package contract; docs/agents/cross-repo-cli.md requires CLI work in the sibling lyracore-cli repository followed by a pin bump here."
+      ],
+      "related_prs": [
+        397
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/35",
+      "updatedAt": "2026-09-01T19:58:40Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 34,
+      "summary": "Realm-core authentication is active, but role-selectable Gateway processes, cross-Realm ban kicks, GM baselines, account migration, registration guidance, and a two-Realm Gate remain.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "The data seam has shipped, but the remaining slices change deployment roles and account policy across Realm processes. The issue still requires Operator sequencing and does not identify which operational slice should land first.",
+      "next_action": "Choose the next operational slice, preferably explicit Gateway role flags, and write separate Tickets for role selection, ban propagation, GM policy, migration, registration, and the two-Realm Gate.",
+      "blockers": [
+        "Operator sequencing for the remaining slices",
+        "A product decision for GM baseline and per-Realm override behavior",
+        "A two-Realm live acceptance environment"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/34",
+        "Code fact: gateway/src/config.rs reads LYRACORE_REALM_CORE and gateway/src/main.rs starts both logon and world listeners without a role selection enum or flag.",
+        "Code fact: the current CoordinatorStore realm list contains one Realm, and account ban state has no cross-Realm active-session kick subscription."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/34",
+      "updatedAt": "2026-08-11T08:21:51Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 33,
+      "summary": "The protocol can expose a Realm list, but the Gateway still presents one configured Realm and the deployment lacks the shared account foundation needed for multiple Realms.",
+      "importance": 2,
+      "gain": 4,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "dependency",
+      "rationale": "Issue #33 explicitly depends on the shared authentication and account work in #34. Starting independent multi-Realm implementation would duplicate or constrain that unfinished design.",
+      "next_action": "Complete and verify issue #34, then rewrite this issue around Realm directory discovery, selection, routing, and a two-Realm Gate.",
+      "blockers": [
+        "Issue #34 shared authentication hub and account policy"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/33",
+        "https://github.com/LyraCoreProject/LyraCore/issues/34",
+        "Code fact: the current CoordinatorStore realms path returns exactly one configured Realm despite the protocol-level Realm list response."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/33",
+      "updatedAt": "2026-08-11T08:21:47Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 31,
+      "summary": "Random item properties are absent from imported data and item state, and all relevant Gateway packet paths still emit random property id zero.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "This is the second-best ready feature candidate. The issue has a current two-Ticket Spec, the missing storage and packet fields are confirmed in code, and the first Tracer can establish one deterministic affix end to end without a design decision.",
+      "next_action": "Implement the Spec's Tracer Ticket first: import the minimum property data, persist one rolled property, and carry it through loot, inventory, mail, and auction packets; follow with the weighted generalization Ticket.",
+      "blockers": [
+        "A real-client tooltip check after the deterministic Tracer passes"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/31#issuecomment-5379512339",
+        "Code fact: module/src/items/rules.rs still uses a fixed ENCHANTS list, no game_item_random_property or property-weight table exists, and Gateway loot, item, mail, and auction codecs write item_random_property_id as zero."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/31",
+      "updatedAt": "2026-08-22T09:18:51Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 30,
+      "summary": "The Realm has no seasonal game-event data model, calendar activation, spawn participation, or Operator debug controls.",
+      "importance": 2,
+      "gain": 4,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The issue has a detailed current Spec and carries the ready-for-agent label. It is implementable, but it spans importer data, persistent state, spawn lifecycle, calendar logic, and tooling, so it should be split before code work begins.",
+      "next_action": "Split the Spec into a deterministic single-event Tracer, calendar generalization, spawn integration, and Operator control Tickets, then implement the Tracer first.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/30",
+        "Code fact: the repository has no seasonal game-event tables or debug verbs; game_event_reaper_schedule is an unrelated cleanup schedule, and Gateway condition handling states that seasonal events do not exist."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/30",
+      "updatedAt": "2026-08-21T15:12:38Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 29,
+      "summary": "Basic GM playtest commands exist, while moderation audit, mute, kick, ban enforcement, summon or appear, and freeze behavior remain absent.",
+      "importance": 4,
+      "gain": 4,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "The issue now mixes shipped playtest tooling with unimplemented moderation and policy work. The remaining work crosses Gateway sessions, Module state, realm-core account policy, and audit retention, so the umbrella needs a current moderation-only Spec.",
+      "next_action": "Rewrite the issue around moderation outcomes, permission levels, audit records, and ban or mute propagation, then split it into one command and enforcement path per Ticket.",
+      "blockers": [
+        "A decision on GM permission levels and audit retention",
+        "Alignment with issue #34 account ban and GM baseline policy"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/29",
+        "Code fact: module/src/gm.rs implements speed, god, XP rate, level, money, heal, kill, gps, teleport, and add-item commands with gm_level checks, but no game_gm_action table or mute, kick, ban, summon, appear, or freeze path exists."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/29",
+      "updatedAt": "2026-08-11T08:15:18Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 28,
+      "summary": "Drink item use does not create or decay an inebriation state, update PLAYER_BYTES_3, or apply chat slurring.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "The feature is self-contained once the exact 1.12 field encoding, decay rate, and text transform are taken from a primary reference. No competing architecture or open dependency is visible.",
+      "next_action": "Confirm the 1.12 constants and transform from a primary emulator source, then implement persistent inebriation, timed decay, PLAYER_BYTES_3 projection, and deterministic chat Gates as one Ticket.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/28",
+        "Code fact: PLAYER_BYTES_3 is initialized for Character creation, but searches across importer, Module, and Gateway code find no drunk state, inebriation decay, or slur transform."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/28",
+      "updatedAt": "2026-08-11T08:15:13Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 27,
+      "summary": "Groups remain limited to parties; raid conversion, subgroups, assistants, raid roster packets, and raid quest-credit rules are absent.",
+      "importance": 3,
+      "gain": 4,
+      "effort": 5,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "Current code explicitly excludes raid groups. The issue spans data modeling, protocol behavior, permissions, quest credit, and multi-client acceptance without a current packet or policy Spec.",
+      "next_action": "Define the 1.12 raid roster packet shapes and quest-credit policy, then split conversion, subgroup movement, assistant permissions, roster projection, and credit behavior into separate Tickets.",
+      "blockers": [
+        "Exact 1.12 raid packet behavior",
+        "A policy decision for raid quest credit",
+        "A multi-client roster acceptance session"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/27",
+        "Code fact: module/src/group.rs states that raid groups are out of scope, and the current schema has no raid subgroup or assistant role state."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/27",
+      "updatedAt": "2026-08-11T08:15:09Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 11,
+      "summary": "Self-resurrection effects such as Soulstone and Reincarnation have no stored eligibility, consume-on-use flow, or self-resurrect packet handling.",
+      "importance": 3,
+      "gain": 3,
+      "effort": 4,
+      "confidence": "medium",
+      "disposition": "decision",
+      "rationale": "Existing resurrection code handles requests from another Character, while the importer leaves Reincarnation scripted. The exact 1.12 duration, death-screen option, reagent, cooldown, and consumption behavior need observation before the state model is fixed.",
+      "next_action": "Research the missing protocol and gameplay facts from primary sources, then define a complete implementation Ticket. Keep the final real-client check separate.",
+      "blockers": [
+        "Exact 1.12 Soulstone and Reincarnation semantics",
+        "A real-client acceptance session"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/11",
+        "Code fact: current resurrection handling models an ally-issued resurrection request, no SELF_RESURRECT path exists, and importer spell classification leaves Reincarnation as E_SCRIPTED."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/11",
+      "updatedAt": "2026-08-11T08:13:59Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 10,
+      "summary": "Distract has no destination checks, temporary Creature attention state, facing update, or combat and expiry rules.",
+      "importance": 2,
+      "gain": 2,
+      "effort": 4,
+      "confidence": "medium",
+      "disposition": "decision",
+      "rationale": "The desired idle, combat, radius, duration, and facing semantics are not specified precisely, and the current Creature behavior has no matching investigation or attention state. Observation should precede a new AI state seam.",
+      "next_action": "Research the missing protocol and gameplay facts from primary sources, then define a complete implementation Ticket. Keep the final real-client check separate.",
+      "blockers": [
+        "Exact 1.12 Distract targeting and expiry behavior",
+        "A real-client behavior check"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/10",
+        "Code fact: searches across spell, combat, and Creature behavior code find no Distract, investigation, or temporary attention implementation."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/10",
+      "updatedAt": "2026-08-11T08:13:54Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 4,
+      "summary": "The imported world has no continent-crossing transport or synthetic AreaTrigger link, and the issue offers two different destinations with different content costs.",
+      "importance": 2,
+      "gain": 3,
+      "effort": 3,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "The Operator must choose between the cheap Ratchet to Stormwind synthetic link and waiting for a real dock path that needs wider map-0 content. Code work before that choice risks implementing the wrong world route.",
+      "next_action": "Choose the temporary synthetic route or the real-dock route; for the temporary route, write one importer plus teleport Gate Ticket using the selected trigger ids.",
+      "blockers": [
+        "Operator choice between the proposed Ratchet to Stormwind link and a later real-dock route",
+        "Wider map-0 import scope if the real-dock route is selected"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/4",
+        "Code fact: the importer reads source AreaTrigger rows, but trigger ids 3551, 3530, and 4029 and any synthetic continent-crossing link are absent from current code."
+      ],
+      "related_prs": [],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/4",
+      "updatedAt": "2026-08-11T08:21:28Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 3,
+      "summary": "Realm-wide mail, auctions, guilds, whispers, parties, and loot coordination are present, but the reopened epic still lacks a consolidated two-client, multi-Shard acceptance record and contains stale mirror-removal wording.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 2,
+      "confidence": "medium",
+      "disposition": "human",
+      "rationale": "The major systems named by the epic now use realm-core authority, including cross-Shard party and whisper paths. The remaining useful work is a real-client system Gate and an acceptance update that distinguishes authoritative state from deliberate Shard read mirrors.",
+      "next_action": "Run two real clients on different Shards through mail, auction, guild, whisper, party, loot-roll, Transfer, and delete scenarios; update the mirror criterion and file only concrete failures.",
+      "blockers": [
+        "A two-client multi-Shard 1.12.1 acceptance environment",
+        "Clarification that Shard read mirrors may remain when realm-core is authoritative"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/3",
+        "https://github.com/LyraCoreProject/LyraCore/pull/203",
+        "https://github.com/LyraCoreProject/LyraCore/pull/226",
+        "https://github.com/LyraCoreProject/LyraCore/pull/384",
+        "Code fact: gateway/src/world/party.rs uses realm-core authority with Shard write-through reads, gateway/src/world/whisper.rs routes across Shards, and mail, auction, guild, and realm-core loot-roll paths exist."
+      ],
+      "related_prs": [
+        203,
+        226,
+        384
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/3",
+      "updatedAt": "2026-08-11T08:28:41Z",
+      "github_state": "open",
+      "owner": "Codex"
+    },
+    {
+      "number": 1,
+      "summary": "The public package-manager proposal is largely implemented, while the remaining work is human product review, a real-client sync check, and maintenance of the proposal as a tracker.",
+      "importance": 3,
+      "gain": 5,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "human",
+      "rationale": "Most linked slices are closed, and the repository documents package, build, config, replay, client sync, and client pack workflows. The issue comments say not to implement the umbrella directly; open issue #92 now retains only a real-client sync acceptance step.",
+      "next_action": "Complete issue #92's real-client sync check, review the installed workflow against the public proposal, and refresh or close the umbrella without starting code from it.",
+      "blockers": [
+        "Issue #92 real-client sync acceptance",
+        "Human review of the public proposal's remaining product commitments"
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/1#issuecomment-5392208341",
+        "https://github.com/LyraCoreProject/LyraCore/issues/92#issuecomment-5481872226",
+        "https://github.com/LyraCoreProject/LyraCore/pull/322",
+        "https://github.com/LyraCoreProject/LyraCore/pull/392",
+        "https://github.com/LyraCoreProject/LyraCore/pull/397",
+        "Code fact: docs/development-cli.md documents packages, build, check, config, replay, client sync, and client pack; docs/package-api.md defines the shipped package interface."
+      ],
+      "related_prs": [
+        322,
+        392,
+        397
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/1",
+      "updatedAt": "2026-08-24T07:48:15Z",
+      "github_state": "open",
+      "owner": "Codex"
+    }
+  ],
+  "pull_requests": [
+    {
+      "number": 426,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/426",
+      "title": "ci(module): run the durable test suite and drop its fixed sleeps",
+      "owner": "Existing PR review owner; Codex monitors",
+      "status": "Conflicts with main",
+      "next_action": "Rebase the existing branch and preserve the durable-test evidence."
+    },
+    {
+      "number": 419,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/419",
+      "title": "ci: make fmt and clippy blocking, and clear the workspace to match",
+      "owner": "Existing PR review owner; Codex monitors",
+      "status": "Conflicts with main",
+      "next_action": "Merge after the other existing PRs, then rerun formatting and lint checks."
+    },
+    {
+      "number": 416,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/416",
+      "title": "fix(logon): cap proof attempts per peer and expire session keys",
+      "owner": "Existing PR review owner; Codex monitors",
+      "status": "Failed test on previous head",
+      "next_action": "Monitor the active rebase and security review; schema changes require human review."
+    },
+    {
+      "number": 415,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/415",
+      "title": "refactor(auction): let the Module own the auctioneer interaction Gate",
+      "owner": "Existing PR review owner; Codex monitors",
+      "status": "Merged",
+      "next_action": "Complete; preserve the reviewed result."
+    },
+    {
+      "number": 434,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/434",
+      "title": "Protect fixture creatures from cast Claims",
+      "owner": "GPT-5.6 Sol, Package Delta agent",
+      "status": "Review found a possible partial-update bypass",
+      "next_action": "Check current row ownership at the durable boundary, prove the missing cases, then refresh CI and review."
+    },
+    {
+      "number": 435,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/435",
+      "title": "Keep periodic deaths from rolling back the aura tick",
+      "owner": "GPT-6, Codex",
+      "status": "CI and CodeRabbit review running",
+      "next_action": "Review the current head, address findings and merge after checks pass."
+    }
+  ],
+  "history": [
+    {
+      "at": "2026-09-05 06:30 UTC",
+      "text": "Read the 88 open issues into the audit queue. Assigned three independent audits; Codex owns the combined report and newest issues."
+    },
+    {
+      "at": "2026-09-05 06:36 UTC",
+      "text": "Completed 28 more assessments. Assigned #80 teleport cleanup and started the #425 durable regression. PR #415 merged through its existing owner."
+    },
+    {
+      "at": "2026-09-05 06:37 UTC",
+      "text": "Completed all 88 assessments. Distinguished retired work, existing implementations, design work and human acceptance. Selected four independent first-wave tasks."
+    },
+    {
+      "at": "2026-09-05 06:45 UTC",
+      "text": "PR #434 opened. Coordinating review identified a possible partial-update bypass. The aura rollback regression passes. A real-dispatch test proves the motion warning can be a false alarm."
+    }
+  ],
+  "postplan_draft": "1u1gh8ximdga",
+  "report_url": "https://1u1gh8ximdga.postplan.dev"
+}
