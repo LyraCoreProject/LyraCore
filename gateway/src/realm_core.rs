@@ -37,6 +37,26 @@ use crate::config::{HomeShard, ShardMap};
 use crate::stdb::{AccountRow, RealmRow};
 use crate::world::WorldSession;
 
+/// The `game_session` row as the world handshake reads it: K and the end of its validity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SessionKey {
+    pub key: [u8; 40],
+    pub expires_at_micros: i64,
+}
+
+/// Expiry includes the deadline itself, as in the Module reaper.
+pub(crate) fn session_expired(now_micros: i64, expires_at_micros: i64) -> bool {
+    expires_at_micros <= now_micros
+}
+
+fn now_micros() -> i64 {
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros();
+    i64::try_from(micros).unwrap_or(i64::MAX)
+}
+
 /// A SpacetimeDB database handle, reduced to exactly what the realm-core split touches.
 ///
 /// Implemented by [`crate::stdb::Coordinator`] (production) and [`fake::Handle`] (tests). Every
@@ -59,7 +79,7 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
 
     // --- auth reads
     fn account_by_username(&self, username: &str) -> Result<Option<AccountRow>>;
-    fn session_key(&self, account_id: u64) -> Result<Option<[u8; 40]>>;
+    fn session_key(&self, account_id: u64) -> Result<Option<SessionKey>>;
     fn bound_identity(&self, account_id: u64) -> Result<[u8; 32]>;
     fn character_count(&self, account_id: u64) -> Result<u8>;
     fn realm(&self) -> Result<RealmRow>;
@@ -169,9 +189,14 @@ pub(crate) fn lookup_session<D: RealmDb>(
     // (subscribe to the account row, disconnect on `banned`), not a one-shot check at handshake
     // time. Adding one here would also change unconfigured-realm-core behavior, which the split
     // promises it will not. Ceiling: a ban does not take effect until the player's next logon.
-    let Some(session_key) = realm_core.session_key(authoritative.id)? else {
+    let Some(session) = realm_core.session_key(authoritative.id)? else {
         return Ok(None);
     };
+    // Expired is refused exactly like absent: the client has to log on again.
+    if session_expired(now_micros(), session.expires_at_micros) {
+        log::info!("account {account_name}: session expired; refusing the world handshake");
+        return Ok(None);
+    }
     let Some(local) = db.account_by_username(account_name)? else {
         // `Ok(None)` (reject the handshake), NOT the id from realm-core: that id names whichever
         // account this world shard happened to issue it to. Unreachable with realm-core
@@ -187,7 +212,7 @@ pub(crate) fn lookup_session<D: RealmDb>(
     };
     Ok(Some(WorldSession {
         account_id: local.id,
-        session_key,
+        session_key: session.key,
     }))
 }
 
@@ -500,6 +525,9 @@ pub(crate) mod fake {
     use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex};
 
+    /// A session expiry no test clock reaches.
+    pub(crate) const NEVER: i64 = i64::MAX;
+
     /// One "database".
     #[derive(Default)]
     pub(crate) struct Db {
@@ -507,8 +535,8 @@ pub(crate) mod fake {
         pub accounts: Mutex<HashMap<String, AccountRow>>,
         // Test-double storage: each map mirrors one module TABLE's columns, so the tuple is the row shape.
         #[allow(clippy::type_complexity)]
-        /// `game_session`: account_id -> (K, bound identity).
-        pub sessions: Mutex<HashMap<u64, ([u8; 40], [u8; 32])>>,
+        /// `game_session`: account_id -> (K, bound identity, expires_at micros).
+        pub sessions: Mutex<HashMap<u64, ([u8; 40], [u8; 32], i64)>>,
         // Test-double storage: each map mirrors one module TABLE's columns, so the tuple is the row shape.
         #[allow(clippy::type_complexity)]
         /// `game_character`: guid -> (map, instance). Also the character COUNT per account.
@@ -580,7 +608,6 @@ pub(crate) mod fake {
                 .get(name)
                 .expect("no such database in the fake realm")
         }
-
     }
 
     /// Build a realm. `dbs` are the database names (the first is the default world shard), `rules`
@@ -660,7 +687,7 @@ pub(crate) mod fake {
             db.note(&format!("account_by_username({username})"));
             Ok(db.accounts.lock().unwrap().get(username).cloned())
         }
-        fn session_key(&self, account_id: u64) -> Result<Option<[u8; 40]>> {
+        fn session_key(&self, account_id: u64) -> Result<Option<SessionKey>> {
             let db = self.store();
             db.note(&format!("session_key({account_id})"));
             Ok(db
@@ -668,7 +695,10 @@ pub(crate) mod fake {
                 .lock()
                 .unwrap()
                 .get(&account_id)
-                .map(|(k, _)| *k))
+                .map(|(key, _, expires_at_micros)| SessionKey {
+                    key: *key,
+                    expires_at_micros: *expires_at_micros,
+                }))
         }
         fn bound_identity(&self, account_id: u64) -> Result<[u8; 32]> {
             let db = self.store();
@@ -726,7 +756,7 @@ pub(crate) mod fake {
             db.sessions
                 .lock()
                 .unwrap()
-                .insert(account_id, (*session_key, bound_identity));
+                .insert(account_id, (*session_key, bound_identity, NEVER));
             Ok(())
         }
         fn request_gm_command(
@@ -811,7 +841,7 @@ pub(crate) mod fake {
 /// regression the realm-core auth split was built to prevent.
 #[cfg(test)]
 mod tests {
-    use super::fake::{account, realm, realm_with_dead_core};
+    use super::fake::{account, realm, realm_with_dead_core, NEVER};
     use super::*;
     use crate::logon::{CoordinatorStore, LogonStore};
 
@@ -919,8 +949,7 @@ mod tests {
             .expect("lookup succeeds")
             .expect("the account exists");
         assert_eq!(
-            a.salt,
-            [0xAA; 32],
+            a.salt, [0xAA; 32],
             "the logon challenge was answered with the WORLD shard's salt. `game_account` on a \
              world shard is a write-through CACHE — refreshed at logon and \
              never authoritative — so authenticating against it means a password rotation or a ban \
@@ -1008,13 +1037,23 @@ mod tests {
             .expect("both writes land");
 
         assert_eq!(
-            h.db_at(CORE).sessions.lock().unwrap().get(&9).map(|(k, _)| *k),
+            h.db_at(CORE)
+                .sessions
+                .lock()
+                .unwrap()
+                .get(&9)
+                .map(|(k, _, _)| *k),
             Some(K),
             "realm-core's `game_session` must be written under REALM-CORE's id (9) — it is the row \
              every world gateway later reads to complete a handshake"
         );
         assert_eq!(
-            h.db_at(WORLD).sessions.lock().unwrap().get(&3).map(|(k, _)| *k),
+            h.db_at(WORLD)
+                .sessions
+                .lock()
+                .unwrap()
+                .get(&3)
+                .map(|(k, _, _)| *k),
             Some(K),
             "the world shard's write-through cache write is missing, or landed under the wrong id. \
              Its real job is binding `game_character.owner_identity` for this account's characters \
@@ -1133,12 +1172,12 @@ mod tests {
             .sessions
             .lock()
             .unwrap()
-            .insert(9, (K, [0x5A; 32]));
+            .insert(9, (K, [0x5A; 32], NEVER));
         h.db_at(WORLD)
             .sessions
             .lock()
             .unwrap()
-            .insert(3, ([0xEE; 40], [0x5A; 32]));
+            .insert(3, ([0xEE; 40], [0x5A; 32], NEVER));
 
         let s = lookup_session(&h, USER)
             .expect("handshake lookup")
@@ -1162,6 +1201,49 @@ mod tests {
     }
 
     #[test]
+    fn an_expired_session_is_refused_like_an_absent_one() {
+        let h = split_realm();
+        // Expired one microsecond after the epoch: no clock this test runs under is earlier.
+        h.db_at(CORE)
+            .sessions
+            .lock()
+            .unwrap()
+            .insert(9, (K, [0x5A; 32], 1));
+        assert!(
+            lookup_session(&h, USER)
+                .expect("handshake lookup")
+                .is_none(),
+            "an expired session row must refuse the world handshake"
+        );
+    }
+
+    #[test]
+    fn a_new_logon_replaces_an_expired_session_for_the_world_handshake() {
+        let h = split_realm();
+        h.db_at(CORE)
+            .sessions
+            .lock()
+            .unwrap()
+            .insert(9, (K, [0x5A; 32], 1));
+        assert!(lookup_session(&h, USER).unwrap().is_none());
+
+        let fresh_key = [0xA7; 40];
+        CoordinatorStore::new(h.clone())
+            .save_session(9, USER, &fresh_key, [0x5A; 32])
+            .unwrap();
+        let session = lookup_session(&h, USER).unwrap().unwrap();
+        assert_eq!(session.session_key, fresh_key);
+        assert_eq!(session.account_id, 3);
+    }
+
+    #[test]
+    fn a_session_expires_at_its_deadline_and_not_before() {
+        assert!(!session_expired(999, 1_000));
+        assert!(session_expired(1_000, 1_000));
+        assert!(session_expired(1_001, 1_000));
+    }
+
+    #[test]
     fn the_world_handshake_fails_closed_when_realm_core_is_unreachable() {
         let h = realm_with_dead_core(&[WORLD, CORE], "", CORE);
         h.db_at(WORLD)
@@ -1173,7 +1255,7 @@ mod tests {
             .sessions
             .lock()
             .unwrap()
-            .insert(3, ([0xEE; 40], [0x5A; 32]));
+            .insert(3, ([0xEE; 40], [0x5A; 32], NEVER));
         assert!(
             lookup_session(&h, USER).is_err(),
             "with realm-core down the handshake must be refused, not served from the world DB's \
@@ -1193,7 +1275,7 @@ mod tests {
             .sessions
             .lock()
             .unwrap()
-            .insert(3, (K, [0x5A; 32]));
+            .insert(3, (K, [0x5A; 32], NEVER));
         let s = lookup_session(&h, USER)
             .expect("lookup")
             .expect("a live session");
@@ -1788,7 +1870,7 @@ mod tests {
             fn world_shards(&self) -> Vec<(String, Coordinator)> { self.world_shards() } \
             fn account_by_username(&self, username: &str) -> Result<Option<AccountRow>> { \
             self.account_by_username(username) } \
-            fn session_key(&self, account_id: u64) -> Result<Option<[u8; 40]>> { \
+            fn session_key(&self, account_id: u64) -> Result<Option<SessionKey>> { \
             self.session_key(account_id) } \
             fn bound_identity(&self, account_id: u64) -> Result<[u8; 32]> { \
             self.bound_identity(account_id) } \

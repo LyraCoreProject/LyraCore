@@ -157,6 +157,7 @@ pub mod debug_equip_item_reducer;
 pub mod debug_equip_offhand_reducer;
 pub mod debug_equip_weapon_reducer;
 pub mod debug_expire_quest_reducer;
+pub mod debug_expire_session_reducer;
 pub mod debug_explore_at_reducer;
 pub mod debug_fill_aura_slots_reducer;
 pub mod debug_fish_reducer;
@@ -501,6 +502,7 @@ pub mod game_resurrect_request_table;
 pub mod game_roll_event_table;
 pub mod game_school_lockout_table;
 pub mod game_script_table;
+pub mod game_session_reaper_schedule_table;
 pub mod game_session_table;
 pub mod game_shard_load_table;
 pub mod game_shard_load_total_table;
@@ -811,6 +813,7 @@ pub mod reap_gateway_leases_reducer;
 pub mod reap_instances_reducer;
 pub mod reap_mail_escrows_reducer;
 pub mod reap_movement_events_reducer;
+pub mod reap_sessions_reducer;
 pub mod reap_transfers_reducer;
 pub mod receive_ai_event_condition_type;
 pub mod receive_emote_condition_type;
@@ -875,6 +878,7 @@ pub mod scale_selected_threat_instruction_type;
 pub mod school_lockout_type;
 pub mod script_type;
 pub mod server_config_type;
+pub mod session_reaper_schedule_type;
 pub mod session_type;
 pub mod set_alpha_test_tools_enrollment_reducer;
 pub mod set_character_shard_reducer;
@@ -1120,6 +1124,7 @@ pub use debug_equip_item_reducer::debug_equip_item;
 pub use debug_equip_offhand_reducer::debug_equip_offhand;
 pub use debug_equip_weapon_reducer::debug_equip_weapon;
 pub use debug_expire_quest_reducer::debug_expire_quest;
+pub use debug_expire_session_reducer::debug_expire_session;
 pub use debug_explore_at_reducer::debug_explore_at;
 pub use debug_fill_aura_slots_reducer::debug_fill_aura_slots;
 pub use debug_fish_reducer::debug_fish;
@@ -1464,6 +1469,7 @@ pub use game_resurrect_request_table::*;
 pub use game_roll_event_table::*;
 pub use game_school_lockout_table::*;
 pub use game_script_table::*;
+pub use game_session_reaper_schedule_table::*;
 pub use game_session_table::*;
 pub use game_shard_load_table::*;
 pub use game_shard_load_total_table::*;
@@ -1774,6 +1780,7 @@ pub use reap_gateway_leases_reducer::reap_gateway_leases;
 pub use reap_instances_reducer::reap_instances;
 pub use reap_mail_escrows_reducer::reap_mail_escrows;
 pub use reap_movement_events_reducer::reap_movement_events;
+pub use reap_sessions_reducer::reap_sessions;
 pub use reap_transfers_reducer::reap_transfers;
 pub use receive_ai_event_condition_type::ReceiveAiEventCondition;
 pub use receive_emote_condition_type::ReceiveEmoteCondition;
@@ -1838,6 +1845,7 @@ pub use scale_selected_threat_instruction_type::ScaleSelectedThreatInstruction;
 pub use school_lockout_type::SchoolLockout;
 pub use script_type::Script;
 pub use server_config_type::ServerConfig;
+pub use session_reaper_schedule_type::SessionReaperSchedule;
 pub use session_type::Session;
 pub use set_alpha_test_tools_enrollment_reducer::set_alpha_test_tools_enrollment;
 pub use set_character_shard_reducer::set_character_shard;
@@ -2220,6 +2228,9 @@ pub enum Reducer {
     DebugExpireQuest {
         character_guid: u64,
         quest_entry: u32,
+    },
+    DebugExpireSession {
+        account_id: u64,
     },
     DebugExploreAt {
         guid: u64,
@@ -3416,6 +3427,9 @@ pub enum Reducer {
     ReapMovementEvents {
         schedule: EventReaperSchedule,
     },
+    ReapSessions {
+        schedule: SessionReaperSchedule,
+    },
     ReapTransfers {
         schedule: TransferReaperSchedule,
     },
@@ -3604,6 +3618,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugEquipOffhand { .. } => "debug_equip_offhand",
             Reducer::DebugEquipWeapon { .. } => "debug_equip_weapon",
             Reducer::DebugExpireQuest { .. } => "debug_expire_quest",
+            Reducer::DebugExpireSession { .. } => "debug_expire_session",
             Reducer::DebugExploreAt { .. } => "debug_explore_at",
             Reducer::DebugFillAuraSlots { .. } => "debug_fill_aura_slots",
             Reducer::DebugFish { .. } => "debug_fish",
@@ -3905,6 +3920,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ReapInstances { .. } => "reap_instances",
             Reducer::ReapMailEscrows { .. } => "reap_mail_escrows",
             Reducer::ReapMovementEvents { .. } => "reap_movement_events",
+            Reducer::ReapSessions { .. } => "reap_sessions",
             Reducer::ReapTransfers { .. } => "reap_transfers",
             Reducer::RecordRegionLoad { .. } => "record_region_load",
             Reducer::RecordShardLoad { .. } => "record_shard_load",
@@ -4444,6 +4460,11 @@ Reducer::DebugCheckRestAt{
 }             => __sats::bsatn::to_vec(&debug_expire_quest_reducer::DebugExpireQuestArgs {
                 character_guid: character_guid.clone(),
                 quest_entry: quest_entry.clone(),
+}),
+            Reducer::DebugExpireSession{
+                account_id,
+}             => __sats::bsatn::to_vec(&debug_expire_session_reducer::DebugExpireSessionArgs {
+                account_id: account_id.clone(),
 }),
             Reducer::DebugExploreAt{
                 guid,
@@ -6583,6 +6604,11 @@ Reducer::PrepareVmapNavCoverage{
 }             => __sats::bsatn::to_vec(&reap_movement_events_reducer::ReapMovementEventsArgs {
                 schedule: schedule.clone(),
 }),
+            Reducer::ReapSessions{
+                schedule,
+}             => __sats::bsatn::to_vec(&reap_sessions_reducer::ReapSessionsArgs {
+                schedule: schedule.clone(),
+}),
             Reducer::ReapTransfers{
                 schedule,
 }             => __sats::bsatn::to_vec(&reap_transfers_reducer::ReapTransfersArgs {
@@ -6973,6 +6999,7 @@ pub struct DbUpdate {
     game_school_lockout: __sdk::TableUpdate<SchoolLockout>,
     game_script: __sdk::TableUpdate<Script>,
     game_session: __sdk::TableUpdate<Session>,
+    game_session_reaper_schedule: __sdk::TableUpdate<SessionReaperSchedule>,
     game_shard_load: __sdk::TableUpdate<ShardLoad>,
     game_shard_load_total: __sdk::TableUpdate<ShardLoadTotal>,
     game_skill_ability: __sdk::TableUpdate<SkillAbility>,
@@ -7640,6 +7667,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_session" => db_update
                     .game_session
                     .append(game_session_table::parse_table_update(table_update)?),
+                "game_session_reaper_schedule" => db_update.game_session_reaper_schedule.append(
+                    game_session_reaper_schedule_table::parse_table_update(table_update)?,
+                ),
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(game_shard_load_table::parse_table_update(table_update)?),
@@ -8673,6 +8703,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_session = cache
             .apply_diff_to_table::<Session>("game_session", &self.game_session)
             .with_updates_by_pk(|row| &row.account_id);
+        diff.game_session_reaper_schedule = cache
+            .apply_diff_to_table::<SessionReaperSchedule>(
+                "game_session_reaper_schedule",
+                &self.game_session_reaper_schedule,
+            )
+            .with_updates_by_pk(|row| &row.scheduled_id);
         diff.game_shard_load = cache
             .apply_diff_to_table::<ShardLoad>("game_shard_load", &self.game_shard_load)
             .with_updates_by_pk(|row| &row.id);
@@ -9457,6 +9493,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_session" => db_update
                     .game_session
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_session_reaper_schedule" => db_update
+                    .game_session_reaper_schedule
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10187,6 +10226,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_session" => db_update
                     .game_session
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_session_reaper_schedule" => db_update
+                    .game_session_reaper_schedule
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10556,6 +10598,7 @@ pub struct AppliedDiff<'r> {
     game_school_lockout: __sdk::TableAppliedDiff<'r, SchoolLockout>,
     game_script: __sdk::TableAppliedDiff<'r, Script>,
     game_session: __sdk::TableAppliedDiff<'r, Session>,
+    game_session_reaper_schedule: __sdk::TableAppliedDiff<'r, SessionReaperSchedule>,
     game_shard_load: __sdk::TableAppliedDiff<'r, ShardLoad>,
     game_shard_load_total: __sdk::TableAppliedDiff<'r, ShardLoadTotal>,
     game_skill_ability: __sdk::TableAppliedDiff<'r, SkillAbility>,
@@ -11488,6 +11531,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         );
         callbacks.invoke_table_row_callbacks::<Script>("game_script", &self.game_script, event);
         callbacks.invoke_table_row_callbacks::<Session>("game_session", &self.game_session, event);
+        callbacks.invoke_table_row_callbacks::<SessionReaperSchedule>(
+            "game_session_reaper_schedule",
+            &self.game_session_reaper_schedule,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<ShardLoad>(
             "game_shard_load",
             &self.game_shard_load,
@@ -12603,6 +12651,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_school_lockout_table::register_table(client_cache);
         game_script_table::register_table(client_cache);
         game_session_table::register_table(client_cache);
+        game_session_reaper_schedule_table::register_table(client_cache);
         game_shard_load_table::register_table(client_cache);
         game_shard_load_total_table::register_table(client_cache);
         game_skill_ability_table::register_table(client_cache);
@@ -12844,6 +12893,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_school_lockout",
         "game_script",
         "game_session",
+        "game_session_reaper_schedule",
         "game_shard_load",
         "game_shard_load_total",
         "game_skill_ability",

@@ -38,6 +38,7 @@
 // (`cargo check --features=debug_reducers`) and the prod-safety note above lib.rs's `mod debug;` guard.
 
 mod audit;
+mod auth;
 mod encounter;
 mod eventai;
 mod fingerprint;
@@ -48,6 +49,7 @@ mod repair;
 mod runtime_script;
 
 pub use audit::*;
+pub use auth::*;
 pub use encounter::*;
 pub use eventai::*;
 pub use fingerprint::*;

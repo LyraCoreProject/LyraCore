@@ -473,8 +473,8 @@ Rules `--lan` enforces for you:
 - A **running** gateway is never silently rebound — switching modes is refused with the `dev down`
   to run first, rather than reported as "already up".
 
-This is a LAN convenience for a contributor fixture, **not a deployment mode**: no rate limiting, no
-TLS, 2004-era password hashing, and a fixture account whose password is written in this document.
+This is a LAN convenience for a contributor fixture, **not a deployment mode**: no TLS, 2004-era
+password hashing, and a fixture account whose password is written in this document.
 Only put it on a network you trust, and read the next section.
 
 ---
@@ -497,8 +497,10 @@ are concrete, not precautionary:
   identity gate at all (`debug_set_health(any_guid, 0)`, `set_level`, `kill_nearest`, `teleport`, …).
   One anonymous call owns any character. This build is for the loopback harness; it must never reach
   a reachable node.
-- **No rate limiting, no TLS, no brute-force lockout.** SRP6 proof attempts are unlimited, and the
-  logon tier has no per-IP cap. That is acceptable on loopback and nowhere else.
+- **No TLS.** The logon port has the Logon Limiter (three attempts per connection, ten failed
+  logons per address per minute, eight open logon connections per address). The stored `game_session`
+  key expires one hour after logon and prevents later world handshakes. Existing World Sessions
+  continue. The SRP6 exchange itself is 2004-era and unencrypted.
 
 If you ever want to run this for real players, understand that the localhost → public-VPS delta
 is real hardening work (a plain build, a firewalled `:3000`, DoS guards, the realm address, launch
