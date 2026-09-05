@@ -5713,8 +5713,72 @@ mod tests {
         assert!(!instance_relay_gate(7, None));
     }
 
-    /// The non-test half of this file as the source scans below may read it: `//` comments STRIPPED
-    /// and every whitespace run collapsed to one space.
+    /// Remove line and nested block comments while preserving ordinary string literals.
+    ///
+    /// This is deliberately limited to the Rust source spans scanned in this module. The scans need
+    /// quoted labels, so comment markers inside a quoted label remain part of the source.
+    fn without_comments(text: &str) -> String {
+        let mut output = String::with_capacity(text.len());
+        let mut chars = text.char_indices().peekable();
+        let (mut in_string, mut in_line_comment, mut block_depth) = (false, false, 0usize);
+
+        while let Some((index, character)) = chars.next() {
+            if in_line_comment {
+                if character == '\n' {
+                    in_line_comment = false;
+                    output.push(character);
+                }
+                continue;
+            }
+
+            if block_depth > 0 {
+                if character == '/' && text[index..].starts_with("/*") {
+                    block_depth += 1;
+                    chars.next();
+                } else if character == '*' && text[index..].starts_with("*/") {
+                    block_depth -= 1;
+                    chars.next();
+                } else if character == '\n' {
+                    output.push(character);
+                }
+                continue;
+            }
+
+            if in_string {
+                output.push(character);
+                if character == '\\' {
+                    if let Some((_, escaped)) = chars.next() {
+                        output.push(escaped);
+                    }
+                } else if character == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match character {
+                '"' => {
+                    in_string = true;
+                    output.push(character);
+                }
+                '/' if text[index..].starts_with("//") => {
+                    in_line_comment = true;
+                    output.push(' ');
+                }
+                '/' if text[index..].starts_with("/*") => {
+                    block_depth = 1;
+                    output.push(' ');
+                    chars.next();
+                }
+                _ => output.push(character),
+            }
+        }
+
+        output
+    }
+
+    /// The non-test half of this file as the source scans below may read it: comments stripped and
+    /// every whitespace run collapsed to one space.
     ///
     /// Both steps are mutation findings, not tidiness. Counting matches in the raw text made every
     /// scan below satisfiable by a COMMENT quoting the pattern while the real call was deleted —
@@ -5729,11 +5793,7 @@ mod tests {
             .split("mod tests {")
             .next()
             .expect("the non-test half of this file");
-        let decommented: String = body
-            .lines()
-            .map(|l| l.split("//").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let decommented = without_comments(body);
         decommented.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
@@ -5770,23 +5830,38 @@ mod tests {
     }
 
     /// Comment-stripped, whitespace-collapsed form of an arbitrary source span — the same two-step
-    /// mutation-hardening [`scanned_source`] applies to the whole file (strip a `//` line comment
+    /// mutation-hardening [`scanned_source`] applies to the whole file (strip comments
     /// FIRST, so a scan can't be satisfied by a comment quoting the pattern; collapse whitespace
     /// SECOND, so a rustfmt line-split can't fail a scan that pins a whole statement).
     ///
     /// The last step drops what a broken-out call leaves behind — the space after `(`, the trailing
     /// comma before `)` — so a needle reads as one written call whichever way rustfmt wrapped it.
     fn decommented(text: &str) -> String {
-        let stripped: String = text
-            .lines()
-            .map(|l| l.split("//").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let stripped = without_comments(text);
         let one_line = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
         one_line
             .replace("( ", "(")
             .replace(", )", ")")
             .replace(" )", ")")
+    }
+
+    #[test]
+    fn source_scans_ignore_block_commented_code() {
+        let source = r#"
+            wire_insert_live(db.live_table(), "live.label", &view, relay);
+            /*
+                wire_insert_live(db.decoy_table(), "decoy.label", &view, relay);
+                /* wire_insert_live(db.nested_decoy(), "nested.label", &view, relay); */
+            */
+            let label = "/* quoted label */";
+        "#;
+
+        let scanned = decommented(source);
+
+        assert!(scanned.contains("wire_insert_live(db.live_table()"));
+        assert!(!scanned.contains("decoy_table"));
+        assert!(!scanned.contains("nested_decoy"));
+        assert!(scanned.contains("\"/* quoted label */\""));
     }
 
     /// The call-site tripwire for the shared-view `Viewer`'s construction.

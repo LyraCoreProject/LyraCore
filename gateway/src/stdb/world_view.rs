@@ -2338,6 +2338,7 @@ mod cell_audience_tests;
 #[cfg(test)]
 mod relay_bench;
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod family_audience_tests {
     use super::{
