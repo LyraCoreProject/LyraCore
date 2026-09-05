@@ -709,10 +709,12 @@ pub(super) mod tests {
             if let Some(e) = &self.ranged_error {
                 return Err(anyhow!("{e}"));
             }
-            self.ranged_attacks
-                .lock()
-                .unwrap()
-                .push((account_id, self_guid, target_guid, spell_id));
+            self.ranged_attacks.lock().unwrap().push((
+                account_id,
+                self_guid,
+                target_guid,
+                spell_id,
+            ));
             Ok(())
         }
 
@@ -728,7 +730,12 @@ pub(super) mod tests {
     /// The ranged teardown the cast module shares with the melee seam. `start_attack` is never
     /// reached from a cast route; it exists because the two share one durable engagement row.
     impl MeleeActionStore for InMemoryCasts {
-        fn start_attack(&self, _account_id: u64, _actor_guid: u64, _target_guid: u64) -> Result<()> {
+        fn start_attack(
+            &self,
+            _account_id: u64,
+            _actor_guid: u64,
+            _target_guid: u64,
+        ) -> Result<()> {
             unreachable!("no cast route arms a melee engagement")
         }
 

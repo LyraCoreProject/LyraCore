@@ -12,21 +12,21 @@
 //! relay reuses the proven dirty_reset discipline (the gateway reads slot/spell_id/level/flags). [event]
 //!
 //! Submodules:
-//!   - `tables`    — the spell/aura/cooldown/cast/schedule table structs (+ their generated accessors).
-//!   - `taxonomy`  — the KIND/MECHANIC/param/target/combat-field/stat/resistance consts + tuning.
-//!   - `control`   — the crowd-control model (the 7 CC predicates + immunity + break-on-damage), the
-//!                   (381) cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
-//!                   `break_channel` / `interrupt_cast_and_lock`), and the death aura cleanup.
-//!   - `math`      — pure helpers + aura-read folds only (388: no ctx-bound orchestration — see `effects`).
-//!   - `effects`   — (388) the ctx-bound orchestration `math` used to carry: `arm_spell_retaliation` /
-//!                   `apply_target_damage` / `dispel_target` / `recompute_vitals` / `absorb_incoming` —
-//!                   every one of which WRITES to a live table, split out so `math`'s own charter is true.
-//!   - `cast`      — a directory module (381 split): `targeting` (`select_targets` / `aura_apply` /
-//!                   `apply_effect` + per-kind handlers) and `resolve` (the cast core —
-//!                   `resolve_cast_at` + its extracted `check_cast_gates` gate sweep / `resolve_cast` /
-//!                   `begin_cast` / the passive-apply path).
-//!   - `proc`      — the Proc engine: the pure proc decision plus the ONE pass, from `apply_hit`.
-//!   - `scheduler` — the `#[reducer]`s (`tick_auras` / `fire_pending_cast` / `cast_spell`).
+//! - `tables`    — the spell/aura/cooldown/cast/schedule table structs (+ their generated accessors).
+//! - `taxonomy`  — the KIND/MECHANIC/param/target/combat-field/stat/resistance consts + tuning.
+//! - `control`   — the crowd-control model (the 7 CC predicates + immunity + break-on-damage), the
+//!   (381) cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
+//!   `break_channel` / `interrupt_cast_and_lock`), and the death aura cleanup.
+//! - `math`      — pure helpers + aura-read folds only (388: no ctx-bound orchestration — see `effects`).
+//! - `effects`   — (388) the ctx-bound orchestration `math` used to carry: `arm_spell_retaliation` /
+//!   `apply_target_damage` / `dispel_target` / `recompute_vitals` / `absorb_incoming` —
+//!   every one of which WRITES to a live table, split out so `math`'s own charter is true.
+//! - `cast`      — a directory module (381 split): `targeting` (`select_targets` / `aura_apply` /
+//!   `apply_effect` + per-kind handlers) and `resolve` (the cast core —
+//!   `resolve_cast_at` + its extracted `check_cast_gates` gate sweep / `resolve_cast` /
+//!   `begin_cast` / the passive-apply path).
+//! - `proc`      — the Proc engine: the pure proc decision plus the ONE pass, from `apply_hit`.
+//! - `scheduler` — the `#[reducer]`s (`tick_auras` / `fire_pending_cast` / `cast_spell`).
 //!
 //! Everything is re-exported below so every `crate::spell::<sym>` path resolves regardless of which
 //! submodule actually defines it.

@@ -46,7 +46,14 @@ crate::character_owned!(delete, fn sweep_delete_game_breath_relay_event(ctx, cha
 // its next movement edge instead.
 crate::character_owned!(not_transported, fn sweep_transfer_game_breath_relay_event());
 
-fn insert(ctx: &ReducerContext, character_guid: u64, kind: u8, time_remaining_ms: u32, duration_ms: u32, damage: u32) {
+fn insert(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    kind: u8,
+    time_remaining_ms: u32,
+    duration_ms: u32,
+    damage: u32,
+) {
     ctx.db.game_breath_relay_event().insert(BreathRelayEvent {
         id: 0,
         character_guid,
@@ -59,8 +66,20 @@ fn insert(ctx: &ReducerContext, character_guid: u64, kind: u8, time_remaining_ms
 }
 
 /// Write the single packet-worthy edge when a player submerges.
-pub(crate) fn start(ctx: &ReducerContext, character_guid: u64, time_remaining_ms: u32, duration_ms: u32) {
-    insert(ctx, character_guid, KIND_START, time_remaining_ms, duration_ms, 0);
+pub(crate) fn start(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    time_remaining_ms: u32,
+    duration_ms: u32,
+) {
+    insert(
+        ctx,
+        character_guid,
+        KIND_START,
+        time_remaining_ms,
+        duration_ms,
+        0,
+    );
 }
 
 /// Write the single packet-worthy edge when a player surfaces.

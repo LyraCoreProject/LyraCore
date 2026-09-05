@@ -13,9 +13,7 @@
 //! fn. The `game_client_command!` build.rs marker (the 143-substrate ideal from the 184 plan) can
 //! replace the match when a second package needs registration without touching this file.
 
-use spacetimedb::{
-    table, Identity, ReducerContext, Table, Timestamp,
-};
+use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_character;
 

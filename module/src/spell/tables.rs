@@ -3,9 +3,7 @@
 //! re-exports them (`pub use tables::*`) so every `crate::spell::<Table>` / `ctx.db.game_<table>()`
 //! path resolves.
 
-use spacetimedb::{
-    table, Identity, ReducerContext, ScheduleAt, Table, Timestamp,
-};
+use spacetimedb::{table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 
 // The `scheduled(..)` table macros below reference the reducer callbacks by name; those reducers live in
 // `scheduler.rs` and are re-exported by `mod.rs`, so pull them into scope for the macro to resolve.

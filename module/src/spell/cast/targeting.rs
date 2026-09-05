@@ -328,6 +328,7 @@ fn displace_auras(
 /// re-freezes the magnitude + resets the next tick. The `UNIT_FIELD_AURA` slot is chosen PER-SPELL on a
 /// fresh apply (`pick_aura_slot` — all of a spell's effects share one slot ⇒ one icon). The cast visual is
 /// emitted ONCE by `resolve_cast_at`, not here. [entity]
+#[allow(clippy::too_many_lines)] // The refresh and insert branches share one frozen magnitude and stay together.
 pub(crate) fn aura_apply(
     ctx: &ReducerContext,
     e: &SpellEffect,

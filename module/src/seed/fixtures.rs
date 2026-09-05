@@ -71,7 +71,7 @@ pub(crate) fn test_wolf_template() -> CreatureTemplate {
         // 0 ⇒ `skin_corpse` falls back to the flat Light Leather — the pre-210 verify flow
         // (debug_skin_nearest → 1x Light Leather) stays byte-identical without a seeded skin table.
         skin_loot_id: 0,
-        trainer_type: 0,   // the test wolf is a beast, not a trainer
+        trainer_type: 0, // the test wolf is a beast, not a trainer
         trainer_class: 0,
     }
 }
@@ -107,7 +107,7 @@ pub(crate) fn profession_trainer_template() -> CreatureTemplate {
         armor: 0,              // a trainer never takes damage anyway
         pickpocket_loot_id: 0, // not imported — a friendly trainer is never pickpocketed
         skin_loot_id: 0,       // not imported — a Humanoid trainer isn't skinnable anyway
-        trainer_type: 2,   // TRADESKILLS — serves every class; the gate keys on trainer_class, which stays 0
+        trainer_type: 2, // TRADESKILLS — serves every class; the gate keys on trainer_class, which stays 0
         trainer_class: 0,
     }
 }
@@ -404,7 +404,7 @@ pub(crate) fn tough_jerky_template(entry: u32) -> ItemTemplate {
         buy_price: 10,
         sell_price: 2,
         max_stack: 20,
-        food_type: 1, // Meat
+        food_type: 1,                         // Meat
         spellid_1: 50115,                     // "Eating" — A_PERIODIC_HEAL food HoT
         spelltrigger_1: 0,                    // on-use
         bonding: crate::items::bonding::NONE, // plain food — unbound/tradeable
@@ -1341,6 +1341,7 @@ pub(crate) fn seed_fixture_catalogue(ctx: &ReducerContext) {
 /// unconditionally (contrast `FIXTURE_BLADE`/`FIXTURE_JERKY` above, which stay reachable from `init`
 /// in every build and so carry no such attribute).
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+#[allow(clippy::too_many_lines)] // A seed data table written as code.
 pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
     use crate::quest::quest_role;
 
@@ -1489,7 +1490,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             armor: 0,
             pickpocket_loot_id: 0,
             skin_loot_id: 0,
-            trainer_type: 0,   // not a trainer
+            trainer_type: 0, // not a trainer
             trainer_class: 0,
         });
     }
@@ -1520,7 +1521,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             armor: 0,
             pickpocket_loot_id: 0, // not imported — a Humanoid questgiver has no pickpocket table
             skin_loot_id: 0,       // not imported — a Humanoid questgiver isn't skinnable anyway
-            trainer_type: 0,   // not a trainer
+            trainer_type: 0,       // not a trainer
             trainer_class: 0,
         });
     }
@@ -1553,7 +1554,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             armor: 0,
             pickpocket_loot_id: 0, // not imported — a Humanoid vendor has no pickpocket table
             skin_loot_id: 0,       // not imported — a Humanoid vendor isn't skinnable anyway
-            trainer_type: 0,   // not a trainer
+            trainer_type: 0,       // not a trainer
             trainer_class: 0,
         });
     }
@@ -1647,7 +1648,7 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             armor: 0,
             pickpocket_loot_id: 0, // not imported — a friendly weapon master has no pickpocket table
             skin_loot_id: 0,       // not imported — a Humanoid trainer isn't skinnable anyway
-            trainer_type: 2,   // TRADESKILLS: the weapon master serves every class, matching the real Woo Ping (entry 11867) in the dump
+            trainer_type: 2, // TRADESKILLS: the weapon master serves every class, matching the real Woo Ping (entry 11867) in the dump
             trainer_class: 0,
         });
     }

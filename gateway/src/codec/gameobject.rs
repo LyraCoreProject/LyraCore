@@ -107,13 +107,16 @@ pub fn build_gameobject_create_object(go: &GameObjectView) -> SMSG_UPDATE_OBJECT
 /// matching vanilla's Z-axis-only yaw convention — rot0/rot1 stay 0, i.e. no terrain pitch/roll, which
 /// is the best a bare `orientation` float can express) instead.
 pub fn build_gameobject_rotation_values(go: &GameObjectView) -> (u16, Vec<u8>) {
-    let (rot0, rot1, rot2, rot3) =
-        if go.rotation_0 == 0.0 && go.rotation_1 == 0.0 && go.rotation_2 == 0.0 && go.rotation_3 == 0.0 {
-            let half = go.orientation * 0.5;
-            (0.0, 0.0, half.sin(), half.cos())
-        } else {
-            (go.rotation_0, go.rotation_1, go.rotation_2, go.rotation_3)
-        };
+    let (rot0, rot1, rot2, rot3) = if go.rotation_0 == 0.0
+        && go.rotation_1 == 0.0
+        && go.rotation_2 == 0.0
+        && go.rotation_3 == 0.0
+    {
+        let half = go.orientation * 0.5;
+        (0.0, 0.0, half.sin(), half.cos())
+    } else {
+        (go.rotation_0, go.rotation_1, go.rotation_2, go.rotation_3)
+    };
     let mut mask = update_mask::UpdateMaskValues::new();
     mask.set_f32(update_mask::idx::GAMEOBJECT_ROTATION, rot0);
     mask.set_f32(update_mask::idx::GAMEOBJECT_ROTATION + 1, rot1);
@@ -196,6 +199,7 @@ pub fn build_dynamicobject_create_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::FRAC_1_SQRT_2;
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
     #[test]
@@ -282,7 +286,10 @@ mod tests {
         let block_count = body[mask_start] as usize;
         let values_start = mask_start + 1 + block_count * 4;
         let mut out = [0.0f32; 4];
-        for (i, chunk) in body[values_start..values_start + 16].chunks_exact(4).enumerate() {
+        for (i, chunk) in body[values_start..values_start + 16]
+            .chunks_exact(4)
+            .enumerate()
+        {
             out[i] = f32::from_le_bytes(chunk.try_into().unwrap());
         }
         out
@@ -305,14 +312,14 @@ mod tests {
             display_id: 259,
             rotation_0: 0.1,
             rotation_1: 0.2,
-            rotation_2: 0.70710678,
-            rotation_3: 0.70710678,
+            rotation_2: FRAC_1_SQRT_2,
+            rotation_3: FRAC_1_SQRT_2,
             size: 0.0,
         };
         let (opcode, body) = build_gameobject_rotation_values(&go);
         assert_eq!(opcode, 0x00A9, "SMSG_UPDATE_OBJECT opcode");
         let floats = decode_rotation_floats(go.guid, &body);
-        assert_eq!(floats, [0.1, 0.2, 0.70710678, 0.70710678]);
+        assert_eq!(floats, [0.1, 0.2, FRAC_1_SQRT_2, FRAC_1_SQRT_2]);
     }
 
     #[test]

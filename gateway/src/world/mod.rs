@@ -50,25 +50,22 @@ use coalesce::CoalesceState;
 use handlers::{
     decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
     dispatch_duel_action, dispatch_item_action, dispatch_loot_window, dispatch_melee_action,
-    dispatch_quest_action,
-    dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char, handle_combat,
-    handle_loot, handle_mail, handle_query, handle_trade, handle_trainer, queue_reply_then_arm,
-    AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition,
-    DuelActionOutcome, DuelActionPlayer, ItemActionOutcome, ItemActionPlayer, LootWindowOutcome,
-    LootWindowPlayer, MeleeActionOutcome,
-    MeleeActionPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome,
-    TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
-    CMSG_AUCTION_LIST_ITEMS_OPCODE, quest_giver_menu,
+    dispatch_quest_action, dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char,
+    handle_combat, handle_loot, handle_mail, handle_query, handle_trade, handle_trainer,
+    quest_giver_menu, queue_reply_then_arm, AuctionActionOutcome, AuctionActionPlayer, CastOutcome,
+    CastPlayer, CastTransition, DuelActionOutcome, DuelActionPlayer, ItemActionOutcome,
+    ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome, MeleeActionPlayer,
+    OpenLootState, QuestActionOutcome, QuestActionPlayer, TaxiActionOutcome, TaxiActionPlayer,
+    VendorActionOutcome, VendorActionPlayer, CMSG_AUCTION_LIST_ITEMS_OPCODE,
 };
 pub(crate) use handlers::{
     zone_weather_message, AuctionBrowseRequest, AuctionPage, AuctionQuery, CreateAuctionOutcome,
     CreateAuctionRequest, ItemActionResult, LootActionStatus, LootWindowRefusal,
-    LootWindowRequestStatus,
-    PlaceBidOutcome, PlaceBidRequest, TrainerBuyOutcome, WeatherStore,
+    LootWindowRequestStatus, PlaceBidOutcome, PlaceBidRequest, TrainerBuyOutcome, WeatherStore,
 };
 use login_queue::{Admission, LoginQueue};
-pub(crate) use social::ContactOutcome;
 use social::handle_social;
+pub(crate) use social::ContactOutcome;
 pub use store::WorldStore;
 use transfer::{EscrowedTransfer, TransferPlan};
 
@@ -1173,6 +1170,7 @@ fn apply_cast_transition(conn: &mut WorldConn, transition: CastTransition) {
 
 /// Route one decrypted client message through the per-family handlers. Each stage either consumes
 /// its opcode or passes it onward, so the disjoint-family chain ends in the movement-relay catch-all.
+#[allow(clippy::too_many_lines)] // One stage per opcode family.
 fn dispatch<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,

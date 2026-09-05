@@ -580,7 +580,6 @@ pub(crate) mod fake {
                 .get(name)
                 .expect("no such database in the fake realm")
         }
-
     }
 
     /// Build a realm. `dbs` are the database names (the first is the default world shard), `rules`
@@ -919,8 +918,7 @@ mod tests {
             .expect("lookup succeeds")
             .expect("the account exists");
         assert_eq!(
-            a.salt,
-            [0xAA; 32],
+            a.salt, [0xAA; 32],
             "the logon challenge was answered with the WORLD shard's salt. `game_account` on a \
              world shard is a write-through CACHE — refreshed at logon and \
              never authoritative — so authenticating against it means a password rotation or a ban \

@@ -169,8 +169,8 @@ pub fn reap_gateway_leases(
 /// `is_desync_error` on the gateway classifies on "not in world", and the two entries must be
 /// indistinguishable to that classifier.
 fn actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
-    let actor = acting_entity_by_guid(ctx, actor_guid)
-        .ok_or_else(|| "mover not in world".to_string())?;
+    let actor =
+        acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
     crate::taxi::reject_action_while_in_flight(ctx, actor_guid)?;
     Ok(actor)
 }
@@ -421,8 +421,8 @@ pub fn gw_turn_in_quest(
 /// Taxi flight is an expected item Refusal. Missing actors still carry the generic actor error,
 /// which the Gateway treats as a failure with an unknown result.
 fn item_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
-    let actor = acting_entity_by_guid(ctx, actor_guid)
-        .ok_or_else(|| "mover not in world".to_string())?;
+    let actor =
+        acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
     if crate::taxi::is_in_flight(ctx, actor_guid) {
         return Err(crate::items::refused(crate::items::refuse(
             lyracore_shared::item::ItemRefusal::NotRightNow,
@@ -456,7 +456,11 @@ pub fn gw_cast_item_target(
 
 /// [`crate::actor::loot_money`] behind the gateway gate.
 #[reducer]
-pub fn gw_loot_money(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
+pub fn gw_loot_money(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
     loot_actor(ctx, actor_guid)?;
     crate::actor::loot_money(ctx, actor_guid, target_guid)
@@ -512,8 +516,8 @@ pub fn gw_use_gameobject(
 /// Taxi flight is an expected trainer Refusal. Missing actors still carry the generic actor error,
 /// which the Gateway treats as a failure with an unknown result.
 fn trainer_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
-    let actor = acting_entity_by_guid(ctx, actor_guid)
-        .ok_or_else(|| "mover not in world".to_string())?;
+    let actor =
+        acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
     if crate::taxi::is_in_flight(ctx, actor_guid) {
         return Err(crate::trainer::refused(
             lyracore_shared::trainer::TrainerRefusal::Unavailable,
@@ -676,7 +680,10 @@ pub fn gw_leave_world(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
     if let Some(entity) = ctx.db.game_world_entity().guid().find(actor_guid) {
         crate::world::remove_from_world(ctx, entity.owner_identity);
     }
-    ctx.db.game_gateway_session().entity_guid().delete(actor_guid);
+    ctx.db
+        .game_gateway_session()
+        .entity_guid()
+        .delete(actor_guid);
     Ok(())
 }
 
@@ -758,8 +765,8 @@ pub fn gw_send_channel_message(
 /// Taxi flight is an expected contact Refusal. Missing actors still carry the generic actor error,
 /// which the Gateway treats as a failure with an unknown result.
 fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
-    let actor = acting_entity_by_guid(ctx, actor_guid)
-        .ok_or_else(|| "mover not in world".to_string())?;
+    let actor =
+        acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
     if crate::taxi::is_in_flight(ctx, actor_guid) {
         return Err(crate::chat::refused_contact(
             lyracore_shared::social::ContactRefusal::ActorUnavailable,
@@ -771,7 +778,11 @@ fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
 
 /// [`crate::chat::add_contact`] (friend arm) with the owner named by guid.
 #[reducer]
-pub fn gw_add_friend(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
+pub fn gw_add_friend(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), String> {
     require_operator(ctx)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::add_contact(ctx, sender, target_guid, false)
@@ -779,7 +790,11 @@ pub fn gw_add_friend(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) ->
 
 /// [`crate::chat::remove_contact`] (friend arm) with the owner named by guid.
 #[reducer]
-pub fn gw_del_friend(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
+pub fn gw_del_friend(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), String> {
     require_operator(ctx)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::remove_contact(ctx, sender, target_guid, false)
@@ -787,7 +802,11 @@ pub fn gw_del_friend(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) ->
 
 /// [`crate::chat::add_contact`] (ignore arm) with the owner named by guid.
 #[reducer]
-pub fn gw_add_ignore(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
+pub fn gw_add_ignore(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), String> {
     require_operator(ctx)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::add_contact(ctx, sender, target_guid, true)
@@ -795,7 +814,11 @@ pub fn gw_add_ignore(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) ->
 
 /// [`crate::chat::remove_contact`] (ignore arm) with the owner named by guid.
 #[reducer]
-pub fn gw_del_ignore(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
+pub fn gw_del_ignore(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    target_guid: u64,
+) -> Result<(), String> {
     require_operator(ctx)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::remove_contact(ctx, sender, target_guid, true)
@@ -808,8 +831,8 @@ pub fn gw_del_ignore(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) ->
 /// Taxi flight is an expected group Refusal. Missing actors still carry the generic actor error,
 /// which the Gateway treats as a failure with an unknown result.
 fn group_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
-    let actor = acting_entity_by_guid(ctx, actor_guid)
-        .ok_or_else(|| "mover not in world".to_string())?;
+    let actor =
+        acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
     if crate::taxi::is_in_flight(ctx, actor_guid) {
         return Err(crate::group::refused(
             lyracore_shared::group::GroupRefusal::ActorUnavailable,
@@ -985,13 +1008,7 @@ pub fn gw_group_loot_method(
 ) -> Result<(), String> {
     require_operator(ctx)?;
     group_actor(ctx, actor_guid)?;
-    crate::group::set_loot_method_for(
-        ctx,
-        actor_guid,
-        loot_setting,
-        master_guid,
-        loot_threshold,
-    )
+    crate::group::set_loot_method_for(ctx, actor_guid, loot_setting, master_guid, loot_threshold)
 }
 
 /// [`crate::quest::apply_push_quest_to_party`] with the sharer named by guid.
@@ -1229,7 +1246,11 @@ pub fn gw_inspect(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Re
 /// [`crate::talent::do_learn_talent`] with the learner named by guid. The owner identity stamped on
 /// the learned rows is the ACTOR's binding, never `ctx.sender()` (the shared connection's operator).
 #[reducer]
-pub fn gw_learn_talent(ctx: &ReducerContext, actor_guid: u64, talent_id: u32) -> Result<(), String> {
+pub fn gw_learn_talent(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    talent_id: u32,
+) -> Result<(), String> {
     require_operator(ctx)?;
     let learner = actor(ctx, actor_guid)?;
     crate::talent::do_learn_talent(ctx, actor_guid, learner.owner_identity, talent_id).map(|_| ())
@@ -1335,10 +1356,6 @@ pub fn gw_pet_command(
     crate::creatures::apply_pet_command(ctx, actor_guid, data, target_guid)
 }
 
-
-
-
-
 /// [`crate::bridge::apply_client_command`] with the sender named by guid (operator call:
 /// the GM/bridge surface rides the gateway path like every other verb; authorization was never
 /// the connection identity).
@@ -1432,7 +1449,7 @@ mod tests {
         assert!(!lease_expired(1_000_000, 1_000_000, LEASE_TTL_MICROS));
         assert!(!lease_expired(LEASE_TTL_MICROS, 0, LEASE_TTL_MICROS));
         assert!(lease_expired(LEASE_TTL_MICROS + 1, 0, LEASE_TTL_MICROS));
-        assert!(
+        const _: () = assert!(
             LEASE_TTL_MICROS >= 3 * LEASE_REAP_MICROS,
             "TTL must tolerate at least two missed heartbeats plus a reap interval"
         );

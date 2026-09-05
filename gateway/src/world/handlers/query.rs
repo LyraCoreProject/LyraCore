@@ -51,6 +51,7 @@ fn filtered_gossip_options<St: WorldStore + ?Sized>(
 /// Query / social family: name / creature / item lookups + the gossip / npc-text round-trips, plus
 /// the social tier (say / yell / whisper chat + text emotes) — grouped as the stateless
 /// request→reply / broadcast opcodes.
+#[allow(clippy::too_many_lines)] // One arm per query and social opcode.
 pub(crate) fn handle_query<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,

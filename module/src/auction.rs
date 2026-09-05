@@ -1850,34 +1850,6 @@ impl ExpirySink for CtxExpiry<'_> {
     }
 }
 
-fn listing_request(
-    operation_id: u64,
-    seller_guid: u64,
-    item_guid: u64,
-    house: u32,
-    deposit_rate: u32,
-    consignment_rate: u32,
-    start_bid: u32,
-    buyout: u32,
-    duration_minutes: u32,
-) -> ListingRequest {
-    ListingRequest {
-        operation_id,
-        seller_guid,
-        item_guid,
-        house: AuctionHousePolicy {
-            id: house,
-            deposit_rate,
-            consignment_rate,
-        },
-        terms: ListingTerms {
-            start_bid,
-            buyout,
-            duration_minutes,
-        },
-    }
-}
-
 /// Single-database listing: item, deposit, Auction, receipt, and expiry are one transaction.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
@@ -1920,17 +1892,17 @@ pub fn gw_auction_list_local(
     }
     create_local_listing(
         &mut CtxSource { ctx },
-        listing_request(
+        ListingRequest {
             operation_id,
             seller_guid,
             item_guid,
-            house.id,
-            house.deposit_rate,
-            house.consignment_rate,
-            start_bid,
-            buyout,
-            duration_minutes,
-        ),
+            house,
+            terms: ListingTerms {
+                start_bid,
+                buyout,
+                duration_minutes,
+            },
+        },
     )
     .map(|_| ())
     .map_err(|refusal| refused(refusal, "listing rejected"))
@@ -1986,17 +1958,17 @@ pub fn gw_auction_hold_listing(
     }
     fence_listing(
         &mut CtxSource { ctx },
-        listing_request(
+        ListingRequest {
             operation_id,
             seller_guid,
             item_guid,
-            house.id,
-            house.deposit_rate,
-            house.consignment_rate,
-            start_bid,
-            buyout,
-            duration_minutes,
-        ),
+            house,
+            terms: ListingTerms {
+                start_bid,
+                buyout,
+                duration_minutes,
+            },
+        },
     )
     .map_err(|refusal| refused(refusal, "listing Hold rejected"))
 }
@@ -2026,17 +1998,21 @@ pub fn realm_auction_commit_listing(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let listing = PreparedListing {
-        request: listing_request(
+        request: ListingRequest {
             operation_id,
             seller_guid,
             item_guid,
-            house,
-            deposit_rate,
-            consignment_rate,
-            start_bid,
-            buyout,
-            duration_minutes,
-        ),
+            house: AuctionHousePolicy {
+                id: house,
+                deposit_rate,
+                consignment_rate,
+            },
+            terms: ListingTerms {
+                start_bid,
+                buyout,
+                duration_minutes,
+            },
+        },
         snapshot: crate::items::ItemSnapshot {
             entry: item_entry,
             stack_count: item_stack_count,
@@ -3130,7 +3106,7 @@ mod tests {
         }
 
         fn commit_refund(&mut self, refund: ListingRefund) {
-            self.mails.push(refund.mail.clone());
+            self.mails.push(refund.mail);
             self.refund = Some(refund);
         }
     }
@@ -3473,7 +3449,10 @@ mod tests {
             "source cleanup may not treat a sentinel as receipt evidence"
         );
         assert!(source.hold.is_some());
-        assert_eq!(source.receipt.as_ref().map(|receipt| receipt.auction_id), Some(0));
+        assert_eq!(
+            source.receipt.as_ref().map(|receipt| receipt.auction_id),
+            Some(0)
+        );
     }
 
     #[test]

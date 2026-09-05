@@ -906,12 +906,9 @@ pub(crate) mod grid_cell_tripwire {
         // `helpers.rs` reads the grid off rows (`grid_of`, `entity_addr`) and its ONE fixture writer
         // is covered; the exemptions below are files where `grid_x` appears only in a signature,
         // a tuple destructure or a comment.
-        [
-            "module/src/tripwires.rs",
-            "module/src/region.rs",
-        ]
-        .iter()
-        .any(|p| path.ends_with(p) || path.replace('\\', "/").ends_with(p))
+        ["module/src/tripwires.rs", "module/src/region.rs"]
+            .iter()
+            .any(|p| path.ends_with(p) || path.replace('\\', "/").ends_with(p))
     }
 
     /// The AOI-scoped tables' own `#[table]` definitions declare `pub grid_x: i32` next to a `cell`
@@ -919,7 +916,10 @@ pub(crate) mod grid_cell_tripwire {
     /// match that is a struct FIELD DECLARATION rather than an initializer or assignment.
     fn is_field_declaration(code: &str, idx: usize) -> bool {
         let line_start = code[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let line_end = code[idx..].find('\n').map(|i| idx + i).unwrap_or(code.len());
+        let line_end = code[idx..]
+            .find('\n')
+            .map(|i| idx + i)
+            .unwrap_or(code.len());
         let line = code[line_start..line_end].trim();
         line.starts_with("pub grid_x") || line.starts_with("grid_x: i32")
     }
@@ -1208,7 +1208,8 @@ pub(crate) mod grid_cell_tripwire {
         // `struct E` declares a `cell` column, so this tripwire is E's business — mirrors a real
         // cell-bearing table's own file, where the `#[table]` struct and every construction site
         // live together.
-        let cell_bearing_struct = "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n";
+        let cell_bearing_struct =
+            "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n";
 
         let bad = format!(
             "{cell_bearing_struct}fn f() -> E {{\n    E {{\n        grid_x,\n        grid_y,\n    }}\n}}\n"
@@ -1272,7 +1273,8 @@ pub(crate) mod grid_cell_tripwire {
     /// was skipped outright — violation or not. Confirms a broken compact literal is still CAUGHT.
     #[test]
     fn the_scan_catches_a_broken_compact_one_line_shorthand() {
-        let cell_bearing_struct = "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n";
+        let cell_bearing_struct =
+            "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n";
 
         let bad = format!("{cell_bearing_struct}fn f() -> E {{ E {{ grid_x, grid_y }} }}\n");
         assert_eq!(

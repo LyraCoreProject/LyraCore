@@ -1118,15 +1118,15 @@ const CHOICE_FIXTURE_GIVER_SOURCE: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) 
 #[cfg(feature = "debug_reducers")]
 const CHOICE_FIXTURE_QUEST: u32 = 509_033;
 #[cfg(feature = "debug_reducers")]
-const CHOICE_FIXTURE_OBJECTIVE_ITEM: u32 = 509_033_0;
+const CHOICE_FIXTURE_OBJECTIVE_ITEM: u32 = 5_090_330;
 #[cfg(feature = "debug_reducers")]
-const CHOICE_FIXTURE_CHOICE_0: u32 = 509_033_1;
+const CHOICE_FIXTURE_CHOICE_0: u32 = 5_090_331;
 #[cfg(feature = "debug_reducers")]
-const CHOICE_FIXTURE_CHOICE_1: u32 = 509_033_2;
+const CHOICE_FIXTURE_CHOICE_1: u32 = 5_090_332;
 #[cfg(feature = "debug_reducers")]
-const CHOICE_FIXTURE_GUARANTEED: u32 = 509_033_3;
+const CHOICE_FIXTURE_GUARANTEED: u32 = 5_090_333;
 #[cfg(feature = "debug_reducers")]
-const CHOICE_FIXTURE_FILLER: u32 = 509_033_4;
+const CHOICE_FIXTURE_FILLER: u32 = 5_090_334;
 
 /// Stage a quest-33-shaped durable turn-in fixture for the standalone reducer test.
 #[cfg(feature = "debug_reducers")]
@@ -1212,9 +1212,9 @@ pub fn debug_stage_choice_reward_fixture(
     });
 
     let objectives = ctx.db.game_quest_objective();
-    objectives.id().delete(509_033_0);
+    objectives.id().delete(5_090_330);
     objectives.insert(QuestObjective {
-        id: 509_033_0,
+        id: 5_090_330,
         quest_entry: CHOICE_FIXTURE_QUEST,
         obj_index: 0,
         kind: objective_kind::COLLECT_ITEM,
@@ -1222,34 +1222,34 @@ pub fn debug_stage_choice_reward_fixture(
         required_count: 8,
     });
     let guaranteed = ctx.db.game_quest_reward_item();
-    guaranteed.id().delete(509_033_3);
+    guaranteed.id().delete(5_090_333);
     guaranteed.insert(QuestRewardItem {
-        id: 509_033_3,
+        id: 5_090_333,
         quest_entry: CHOICE_FIXTURE_QUEST,
         item_entry: CHOICE_FIXTURE_GUARANTEED,
         count: 3,
     });
     let choices = ctx.db.game_quest_reward_choice();
-    choices.id().delete(509_033_1);
-    choices.id().delete(509_033_2);
+    choices.id().delete(5_090_331);
+    choices.id().delete(5_090_332);
     choices.insert(QuestRewardChoice {
-        id: 509_033_1,
+        id: 5_090_331,
         quest_entry: CHOICE_FIXTURE_QUEST,
         choice_index: 0,
         item_entry: CHOICE_FIXTURE_CHOICE_0,
         count: 1,
     });
     choices.insert(QuestRewardChoice {
-        id: 509_033_2,
+        id: 5_090_332,
         quest_entry: CHOICE_FIXTURE_QUEST,
         choice_index: 1,
         item_entry: CHOICE_FIXTURE_CHOICE_1,
         count: 2,
     });
     let relations = ctx.db.game_creature_quest();
-    relations.id().delete(509_033_4);
+    relations.id().delete(5_090_334);
     relations.insert(CreatureQuest {
-        id: 509_033_4,
+        id: 5_090_334,
         creature_entry: CHOICE_FIXTURE_GIVER_ENTRY,
         quest_entry: CHOICE_FIXTURE_QUEST,
         role: quest_role::END,
@@ -1479,6 +1479,7 @@ fn eventai_credit_fixture_count(
 /// Exercise EventAI quest authority against durable live rows in one standalone transaction.
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
+#[allow(clippy::too_many_lines)] // One durable step per staged fixture row.
 pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
 

@@ -515,6 +515,7 @@ pub(crate) fn arm_shard(view: Arc<WorldView>, coord: Coordinator, shard: ShardId
     })
 }
 
+#[allow(clippy::too_many_lines)] // One callback registration per relayed shard table.
 fn register_shard_callbacks(
     view: Arc<WorldView>,
     coord: Coordinator,
@@ -2328,12 +2329,16 @@ fn duel_winner_audience(viewer_guid: u64, initiator_guid: u64, challenged_guid: 
     viewer_guid != 0 && viewer_guid != initiator_guid && viewer_guid != challenged_guid
 }
 
+// The relay-order tests below scan this file's own source, so the production items that follow
+// them must stay where they are.
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod cell_audience_tests;
 
 #[cfg(test)]
 mod relay_bench;
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod family_audience_tests {
     use super::{
@@ -2628,9 +2633,18 @@ mod family_audience_tests {
     #[test]
     fn private_rows_reach_their_addressee_and_nobody_else() {
         assert!(private_recipient_audience(42, 42));
-        assert!(!private_recipient_audience(42, 43), "a third party must never receive a private row");
-        assert!(!private_recipient_audience(0, 42), "recipient 0 (unaddressed) matches no viewer");
-        assert!(!private_recipient_audience(42, 0), "an uninitialized viewer guid matches no row");
+        assert!(
+            !private_recipient_audience(42, 43),
+            "a third party must never receive a private row"
+        );
+        assert!(
+            !private_recipient_audience(0, 42),
+            "recipient 0 (unaddressed) matches no viewer"
+        );
+        assert!(
+            !private_recipient_audience(42, 0),
+            "an uninitialized viewer guid matches no row"
+        );
         assert!(
             !private_recipient_audience(0, 0),
             "the all-zero case is a leak, not a match — both sides unset must still deny"
@@ -2856,7 +2870,9 @@ mod family_audience_tests {
         assert_eq!(view.viewers_on_shard(4).len(), 1);
 
         view.remove_viewer(replacement.session);
-        assert!(view.viewer_of_owner(OwnerGuid(replacement.self_guid)).is_none());
+        assert!(view
+            .viewer_of_owner(OwnerGuid(replacement.self_guid))
+            .is_none());
         assert!(view
             .viewer_of_identity(BoundIdentity(replacement.bound_identity))
             .is_none());
@@ -2876,19 +2892,28 @@ mod family_audience_tests {
 
         teleport_appeared(&view, 0, &teleport(owner.self_guid));
 
-        assert!(other_rx.try_recv().is_err(), "an unrelated viewer receives nothing");
+        assert!(
+            other_rx.try_recv().is_err(),
+            "an unrelated viewer receives nothing"
+        );
         let out = queued_job(&owner_rx);
         assert_eq!(out.len(), 1, "one teleport row creates one writer result");
         match &out[0] {
             Outbound::Batch(messages) => {
                 assert!(matches!(
                     messages.as_slice(),
-                    [ServerOpcodeMessage::SMSG_TRANSFER_PENDING(_), ServerOpcodeMessage::SMSG_NEW_WORLD(_)]
+                    [
+                        ServerOpcodeMessage::SMSG_TRANSFER_PENDING(_),
+                        ServerOpcodeMessage::SMSG_NEW_WORLD(_)
+                    ]
                 ));
             }
             _ => panic!("cross-map teleport must remain one ordered writer batch"),
         }
-        assert!(owner_rx.try_recv().is_err(), "the owner receives exactly one job");
+        assert!(
+            owner_rx.try_recv().is_err(),
+            "the owner receives exactly one job"
+        );
     }
 
     #[test]
@@ -2905,27 +2930,48 @@ mod family_audience_tests {
         view.add_viewer_on_shard(other, anchor, 0);
 
         item_owner_job(&view, 0, source.self_guid, |_| {
-            vec![Outbound::Raw { opcode: 1, body: vec![1] }]
+            vec![Outbound::Raw {
+                opcode: 1,
+                body: vec![1],
+            }]
         });
-        assert!(matches!(queued_job(&source_rx).as_slice(), [Outbound::Raw { .. }]));
-        assert!(other_rx.try_recv().is_err(), "an unrelated item owner receives nothing");
+        assert!(matches!(
+            queued_job(&source_rx).as_slice(),
+            [Outbound::Raw { .. }]
+        ));
+        assert!(
+            other_rx.try_recv().is_err(),
+            "an unrelated item owner receives nothing"
+        );
 
         view.remove_viewer(source.session);
         item_owner_job(&view, 0, source.self_guid, |_| {
-            vec![Outbound::Raw { opcode: 2, body: vec![2] }]
+            vec![Outbound::Raw {
+                opcode: 2,
+                body: vec![2],
+            }]
         });
-        assert!(source_rx.try_recv().is_err(), "a removed source viewer receives no cascade delete");
+        assert!(
+            source_rx.try_recv().is_err(),
+            "a removed source viewer receives no cascade delete"
+        );
 
         view.add_viewer_on_shard(destination, anchor, 1);
         item_owner_job(&view, 0, source.self_guid, |_| {
-            vec![Outbound::Raw { opcode: 2, body: vec![2] }]
+            vec![Outbound::Raw {
+                opcode: 2,
+                body: vec![2],
+            }]
         });
         assert!(
             destination_rx.try_recv().is_err(),
             "a source-shard delta applied after destination registration must be dropped"
         );
         item_owner_job(&view, 1, source.self_guid, |_| {
-            vec![Outbound::Raw { opcode: 3, body: vec![3] }]
+            vec![Outbound::Raw {
+                opcode: 3,
+                body: vec![3],
+            }]
         });
         assert!(matches!(
             queued_job(&destination_rx).as_slice(),
@@ -3043,12 +3089,18 @@ mod family_audience_tests {
         let (discovery_opcode, discovery_body) =
             crate::codec::build_exploration_experience_raw(88, 121);
         match fresh_out.as_slice() {
-            [
-                Outbound::Raw { opcode: fog_opcode, body: fog_body },
-                Outbound::Raw { opcode: toast_opcode, body: toast_body },
-            ] => {
+            [Outbound::Raw {
+                opcode: fog_opcode,
+                body: fog_body,
+            }, Outbound::Raw {
+                opcode: toast_opcode,
+                body: toast_body,
+            }] => {
                 assert_eq!((*fog_opcode, fog_body), (new_fog_opcode, &new_fog_body));
-                assert_eq!((*toast_opcode, toast_body), (discovery_opcode, &discovery_body));
+                assert_eq!(
+                    (*toast_opcode, toast_body),
+                    (discovery_opcode, &discovery_body)
+                );
             }
             _ => panic!("fog VALUES must precede discovery feedback for a new area"),
         }
@@ -3068,18 +3120,27 @@ mod family_audience_tests {
         reputation_appeared(&view, 0, &reputation(9001, 19, 3175));
         reputation_appeared(&view, 0, &reputation(9001, 19, 3200));
 
-        assert!(other_rx.try_recv().is_err(), "an unrelated owner receives nothing");
+        assert!(
+            other_rx.try_recv().is_err(),
+            "an unrelated owner receives nothing"
+        );
         for standing in [3175, 3200] {
             let (opcode, body) = crate::codec::build_set_faction_standing_raw(19, standing)
                 .expect("a valid reputation index has a packet");
             match queued_job(&owner_rx).as_slice() {
-                [Outbound::Raw { opcode: actual_opcode, body: actual_body }] => {
+                [Outbound::Raw {
+                    opcode: actual_opcode,
+                    body: actual_body,
+                }] => {
                     assert_eq!((*actual_opcode, actual_body), (opcode, &body));
                 }
                 _ => panic!("the reputation row must use its reputation_index, not faction_id"),
             }
         }
-        assert!(owner_rx.try_recv().is_err(), "each reputation row queues exactly one job");
+        assert!(
+            owner_rx.try_recv().is_err(),
+            "each reputation row queues exactly one job"
+        );
     }
 
     #[test]

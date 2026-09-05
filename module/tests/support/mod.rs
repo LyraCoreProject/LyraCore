@@ -64,6 +64,7 @@ impl Standalone {
         standalone
     }
 
+    #[allow(dead_code)] // Only the integration tests that publish a module use this.
     pub fn publish_module(&self) {
         let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = module_dir.parent().unwrap();
@@ -120,6 +121,7 @@ impl Standalone {
         command.output().expect("failed to call reducer")
     }
 
+    #[allow(dead_code)] // Only the integration tests that call reducers use this.
     pub fn assert_call(&self, reducer: &str, args: &[&str]) {
         assert_output_success(self.call(reducer, args));
     }

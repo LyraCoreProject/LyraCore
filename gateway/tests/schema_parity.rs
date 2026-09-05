@@ -84,6 +84,9 @@
 
 #[path = "../src/stdb/bindings/mod.rs"]
 #[allow(dead_code)]
+// The SpacetimeDB codegen writes one function per table subscription; several run past any
+// reasonable length ceiling and no edit there survives a regeneration.
+#[allow(clippy::too_many_lines)]
 mod bindings;
 
 use spacetimedb_lib::db::raw_def::v9::RawModuleDefV9Builder;

@@ -823,9 +823,7 @@ fn generation_info(args: &crate::Args, generation_id: u64) -> Result<GenerationI
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("unknown vmap generation {generation_id}"))?;
-    let map_id = row[0]
-        .as_u64()
-        .context("vmap generation map_id")? as u32;
+    let map_id = row[0].as_u64().context("vmap generation map_id")? as u32;
     let state = row[1].as_u64().context("vmap generation state")?;
     Ok(GenerationInfo { map_id, state })
 }
@@ -1242,7 +1240,10 @@ mod tests {
         assert_eq!(pending_cells(&all, &covered), vec![(1, 1), (3, 3)]);
         assert!(pending_cells(&all, &std::collections::HashSet::new()) == all);
         let all_covered: std::collections::HashSet<_> = all.iter().copied().collect();
-        assert!(pending_cells(&all, &all_covered).is_empty(), "a fully resumed run submits nothing");
+        assert!(
+            pending_cells(&all, &all_covered).is_empty(),
+            "a fully resumed run submits nothing"
+        );
     }
 
     /// A fixture too large for one `BATCH_BYTES` call must split into several, and the split must
@@ -1250,7 +1251,9 @@ mod tests {
     /// coverage identity (the reducer keys each cell independently).
     #[test]
     fn coverage_batches_split_a_fixture_larger_than_one_batch_and_reassemble_exactly() {
-        let cells: Vec<(u16, u16)> = (0..2000u32).map(|i| (i as u16, (i * 7 % 997) as u16)).collect();
+        let cells: Vec<(u16, u16)> = (0..2000u32)
+            .map(|i| (i as u16, (i * 7 % 997) as u16))
+            .collect();
         let batches = coverage_batches(&cells);
         assert!(batches.len() > 1, "fixture must not fit in one batch");
         for b in &batches {

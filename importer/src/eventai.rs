@@ -1251,6 +1251,7 @@ struct RawRelayStep {
 }
 
 impl RelaySource {
+    #[allow(clippy::too_many_lines)] // One parse pass per dumped table.
     fn parse(dump: &str) -> Self {
         let mut source = Self::default();
         source.broadcast_ids.extend(
@@ -2164,6 +2165,7 @@ impl RawRelayStep {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // One arm per action kind that can name a dependency.
     fn resolved_dependencies(
         &self,
         source: &RelaySource,
@@ -2625,6 +2627,7 @@ impl RawRelayStep {
         self.encode_instruction()
     }
 
+    #[allow(clippy::too_many_lines)] // One arm per action kind.
     fn encode_instruction(&self) -> Result<String, String> {
         let bool_value = |value: u32| u8::from(value != 0);
         let forced = |value: i32| match value {
@@ -3253,6 +3256,7 @@ fn source_overlap_census(dump: &str, rules: &[RawRule]) -> (u64, u64, u64) {
 }
 
 impl EventAiSource {
+    #[allow(clippy::too_many_lines)] // One assembly pass per EventAI rule family.
     pub(crate) fn assemble(
         &self,
         imported_entries: &HashSet<u64>,
@@ -3394,12 +3398,14 @@ impl EventAiSource {
                     rule.id,
                     rule.subject,
                     slot,
-                    broadcasts,
-                    summon_locations,
-                    &self.quest_entries,
-                    importable_templates,
-                    &self.source_maps,
-                    &self.relays,
+                    ActionLookups {
+                        broadcasts,
+                        summon_locations,
+                        quest_entries: &self.quest_entries,
+                        importable_templates,
+                        source_maps: &self.source_maps,
+                        relays: &self.relays,
+                    },
                 ) {
                     Ok(action) => actions.push(action),
                     Err(mut action_failures) => failures.append(&mut action_failures),
@@ -4540,19 +4546,33 @@ fn repeats_on_each_event(event: u32) -> bool {
     )
 }
 
+/// The import-wide lookup tables one action mapping consults.
+#[derive(Clone, Copy)]
+struct ActionLookups<'a> {
+    broadcasts: &'a BTreeMap<u32, Broadcast>,
+    summon_locations: &'a BTreeMap<u32, SummonLocation>,
+    quest_entries: &'a HashSet<u32>,
+    importable_templates: &'a HashSet<u64>,
+    source_maps: &'a HashMap<u32, BTreeSet<u32>>,
+    relays: &'a RelaySource,
+}
+
 fn map_action(
     action: [u32; 4],
     raw_subject: i32,
     rule_id: u64,
     subject: i32,
     slot: usize,
-    broadcasts: &BTreeMap<u32, Broadcast>,
-    summon_locations: &BTreeMap<u32, SummonLocation>,
-    quest_entries: &HashSet<u32>,
-    importable_templates: &HashSet<u64>,
-    source_maps: &HashMap<u32, BTreeSet<u32>>,
-    relays: &RelaySource,
+    lookups: ActionLookups,
 ) -> Result<NativeAction, Vec<MappingFailure>> {
+    let ActionLookups {
+        broadcasts,
+        summon_locations,
+        quest_entries,
+        importable_templates,
+        source_maps,
+        relays,
+    } = lookups;
     let kind = action[0];
     if let Some(mapped) =
         eventai_presentation::map_action(action, rule_id, subject, slot, importable_templates)
@@ -6386,18 +6406,21 @@ mod tests {
         let templates = HashSet::new();
         let maps = HashMap::new();
         let relays = RelaySource::default();
+        let lookups = ActionLookups {
+            broadcasts: &broadcasts,
+            summon_locations: &summons,
+            quest_entries: &quest_entries,
+            importable_templates: &templates,
+            source_maps: &maps,
+            relays: &relays,
+        };
         let fail = map_action(
             [ACTION_SET_INSTANCE_DATA, 1, 2, 0],
             4_832,
             483_201,
             4_832,
             0,
-            &broadcasts,
-            &summons,
-            &quest_entries,
-            &templates,
-            &maps,
-            &relays,
+            lookups,
         )
         .unwrap();
         let complete = map_action(
@@ -6406,12 +6429,7 @@ mod tests {
             483_202,
             4_832,
             0,
-            &broadcasts,
-            &summons,
-            &quest_entries,
-            &templates,
-            &maps,
-            &relays,
+            lookups,
         )
         .unwrap();
         assert_eq!(
@@ -6462,12 +6480,14 @@ mod tests {
             10,
             4_832,
             1,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &maps,
-            &RelaySource::default(),
+            ActionLookups {
+                broadcasts: &BTreeMap::new(),
+                summon_locations: &BTreeMap::new(),
+                quest_entries: &HashSet::new(),
+                importable_templates: &HashSet::new(),
+                source_maps: &maps,
+                relays: &RelaySource::default(),
+            },
         );
         let Err(failures) = result else {
             panic!("cross-map encounter binding was accepted");
@@ -6970,12 +6990,14 @@ mod tests {
                 10,
                 100,
                 slot,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &HashSet::new(),
-                &templates,
-                &HashMap::new(),
-                &relays,
+                ActionLookups {
+                    broadcasts: &BTreeMap::new(),
+                    summon_locations: &BTreeMap::new(),
+                    quest_entries: &HashSet::new(),
+                    importable_templates: &templates,
+                    source_maps: &HashMap::new(),
+                    relays: &relays,
+                },
             )
             .unwrap();
             assert_eq!(mapped.encoded, expected);
@@ -8180,6 +8202,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires LYRACORE_CLASSIC_DB_SQL pointing at the pinned decompressed SQL or gzip"]
+    #[allow(clippy::too_many_lines)] // One assertion per censused source family.
     fn pinned_full_dump_source_census_matches_the_profile() {
         use std::io::Read;
 
@@ -8398,12 +8421,14 @@ mod tests {
                         rule.id,
                         rule.subject,
                         slot,
-                        &source.broadcasts,
-                        &source.summon_locations,
-                        &source.quest_entries,
-                        &HashSet::new(),
-                        &source.source_maps,
-                        &source.relays,
+                        ActionLookups {
+                            broadcasts: &source.broadcasts,
+                            summon_locations: &source.summon_locations,
+                            quest_entries: &source.quest_entries,
+                            importable_templates: &HashSet::new(),
+                            source_maps: &source.source_maps,
+                            relays: &source.relays,
+                        },
                     )
                     .unwrap()
                     .encoded,

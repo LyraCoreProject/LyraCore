@@ -251,6 +251,7 @@ pub fn debug_set_nav_coverage_enabled(ctx: &ReducerContext, enabled: bool) -> Re
 /// hit/miss + the first-hit point for each flavor so a doodad-vs-wall distinction is directly
 /// observable: a doodad blocks `collision` but leaves `los` clear.
 #[reducer]
+#[allow(clippy::too_many_arguments)] // A reducer's arguments are its call signature.
 pub fn debug_vmap_ray(
     ctx: &ReducerContext,
     map: u32,
@@ -950,6 +951,7 @@ pub fn debug_assert_unreachable_goal_stops_at_wall(
 /// this reducer does no timing itself — it only produces the query volume and logs a checksum
 /// (`hits`) so two runs can be diffed for correctness, not just speed.
 #[reducer]
+#[allow(clippy::too_many_arguments)] // A reducer's arguments are its call signature.
 pub fn debug_bench_los(
     ctx: &ReducerContext,
     map: u32,
@@ -1017,6 +1019,7 @@ pub fn debug_bench_los(
 /// probes the ray actually truncated (checksum, not just speed, so two runs can be diffed for
 /// correctness too).
 #[reducer]
+#[allow(clippy::too_many_arguments)] // A reducer's arguments are its call signature.
 pub fn debug_bench_collision_gate(
     ctx: &ReducerContext,
     map: u32,

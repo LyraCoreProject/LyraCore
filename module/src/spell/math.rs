@@ -778,8 +778,7 @@ pub(crate) fn aura_moves_sheet(kind: u8, p0: i32) -> bool {
             || p0 == STAT_INT as i32
             || p0 == STAT_SPI as i32
             || p0 == STAT_ALL as i32))
-        || (kind == A_MOD_COMBAT
-            && (p0 == COMBAT_ATTACK_POWER as i32 || p0 == COMBAT_CRIT as i32))
+        || (kind == A_MOD_COMBAT && (p0 == COMBAT_ATTACK_POWER as i32 || p0 == COMBAT_CRIT as i32))
 }
 
 /// One shield's draw against `incoming` damage from a pool of `remaining`: returns

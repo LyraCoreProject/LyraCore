@@ -263,5 +263,4 @@ mod tests {
         let sworn = ft(3, 14, 8, 0, 1, 0);
         assert!(super::faction_template_hostile(&sworn, &player));
     }
-
 }

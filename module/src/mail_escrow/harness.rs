@@ -141,7 +141,7 @@ impl FakeShard {
             .borrow()
             .values()
             .filter(|(o, _)| *o == owner)
-            .map(|(_, i)| i.clone())
+            .map(|(_, i)| *i)
             .collect();
         held.sort_by_key(|i| i.entry);
         held
@@ -243,9 +243,7 @@ impl PayoutSink for FakeShard {
         }
         let guid = self.next_item_guid.get() + 1;
         self.next_item_guid.set(guid);
-        self.items
-            .borrow_mut()
-            .insert(guid, (payee_guid, item.clone()));
+        self.items.borrow_mut().insert(guid, (payee_guid, *item));
         Ok(())
     }
     fn file_receipt(&mut self, row: MailDelivery) {
@@ -363,7 +361,7 @@ impl TakeFenceSink for FakeMailPlane {
             .borrow()
             .iter()
             .find(|m| m.id == mail_id)
-            .map(|m| (m.recipient_guid, m.item.clone()))
+            .map(|m| (m.recipient_guid, m.item))
     }
     fn clear_mail_item(&mut self, mail_id: u64) {
         if let Some(m) = self.mails.borrow_mut().iter_mut().find(|m| m.id == mail_id) {
@@ -395,7 +393,7 @@ impl DeliverySink for FakeMailPlane {
             body: letter.body.clone(),
             money: letter.money,
             cod: letter.cod,
-            item: item.clone(),
+            item: *item,
         });
         id
     }

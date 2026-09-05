@@ -3,6 +3,7 @@
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table};
 
+use crate::breath_relay::game_breath_relay_event;
 use crate::{
     game_addon_message, game_bot_invite_intent, game_channel_event, game_chat_event,
     game_combat_event, game_duel_event, game_emote_event, game_group_event, game_group_invite,
@@ -10,7 +11,6 @@ use crate::{
     game_spell_impact_event, game_system_message_event, game_teleport_event, game_trade_event,
     game_trade_session, game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
-use crate::breath_relay::game_breath_relay_event;
 // `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
 // other event table's accessor trait rides that glob, so this is the one accessor here needing its
 // own import.
@@ -125,7 +125,9 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
         let now = ctx.timestamp.to_micros_since_unix_epoch();
         let stale: Vec<u64> = sessions
             .iter()
-            .filter(|s| crate::trade::session_is_stale(s.created_at.to_micros_since_unix_epoch(), now))
+            .filter(|s| {
+                crate::trade::session_is_stale(s.created_at.to_micros_since_unix_epoch(), now)
+            })
             .map(|s| s.initiator_guid)
             .collect();
         for guid in stale {

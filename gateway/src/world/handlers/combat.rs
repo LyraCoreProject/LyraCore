@@ -81,7 +81,8 @@ pub(crate) fn handle_combat<St: WorldStore + ?Sized>(
             }
         }
         ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(c) => {
-            if let Err(e) = store.leave_channel(conn.account_id, self_guid, c.channel_name.clone()) {
+            if let Err(e) = store.leave_channel(conn.account_id, self_guid, c.channel_name.clone())
+            {
                 log::debug!(
                     "world: leave_channel failed (account {}): {e}",
                     conn.account_id

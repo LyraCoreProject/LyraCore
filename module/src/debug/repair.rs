@@ -38,6 +38,7 @@ use crate::{
 /// provenance) with the total row count across every seeded/rearmed family, rather than the 13
 /// separate per-family stamps the old reducers wrote.
 #[reducer]
+#[allow(clippy::too_many_lines)] // One idempotent repair pass per row family.
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
 

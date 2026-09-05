@@ -33,9 +33,7 @@
 //! the demo rows (idle, orphaned in tree_id 0-2 alongside real tabs) and the real tree — harmless, since
 //! nothing gates on "is this the only row in tree_id N".
 
-use spacetimedb::{
-    table, Identity, ReducerContext, Table,
-};
+use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::{game_character, game_spell, game_spell_effect, game_world_entity, Spell, SpellEffect};
 

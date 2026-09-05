@@ -480,6 +480,7 @@ fn parse_recurrence(encoded: &str) -> Result<RecurrencePolicy, String> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // One arm per instruction kind.
 fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
     let fields: Vec<&str> = encoded.split(':').collect();
     match fields.as_slice() {

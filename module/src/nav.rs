@@ -281,8 +281,12 @@ pub fn nav_step(
     let stepped = if !nav_enabled(ctx) {
         crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
     } else {
-        match lyracore_shared::nav::find_leg(&mut fetcher(ctx, map_id), cur, dest, LEG_MAX_EXPANSIONS)
-        {
+        match lyracore_shared::nav::find_leg(
+            &mut fetcher(ctx, map_id),
+            cur,
+            dest,
+            LEG_MAX_EXPANSIONS,
+        ) {
             // Real detour: head for the first corner, no stop-short (that's for the final approach).
             Some(path) if path.len() > 1 || path[0] != dest => {
                 let wp = path[0];
@@ -293,9 +297,7 @@ pub fn nav_step(
                 crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
             }
             // Keep aiming at an unreachable goal; the commit gate truncates the move at geometry.
-            None => {
-                crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
-            }
+            None => crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
         }
     };
     step_gate(ctx, map_id, cur, stepped, z)
@@ -338,7 +340,10 @@ fn step_gate(
             if land_dist <= 0.0 {
                 cur // hit inside the clearance margin — hold in place
             } else {
-                (cur.0 + dx / hit_dist * land_dist, cur.1 + dy / hit_dist * land_dist)
+                (
+                    cur.0 + dx / hit_dist * land_dist,
+                    cur.1 + dy / hit_dist * land_dist,
+                )
             }
         }
         None => stepped, // clear (or no data under this segment) — the plain step stands

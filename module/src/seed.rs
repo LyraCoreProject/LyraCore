@@ -243,6 +243,7 @@ fn seed_production_core(ctx: &ReducerContext) {
 /// `importer --apply` run lands for map 0 (or fenced off entirely for any other continent). This is
 /// a DIFFERENT fixture family from `seed/fixtures.rs`'s synthetic engine-mechanic fixtures (5xxxx
 /// ids, no map content) — see that file's header.
+#[allow(clippy::too_many_lines)] // A seed data table written as code.
 fn seed_map0_demo_content(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
 
@@ -803,6 +804,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
 /// Stratum 3 — the hand-authored spell/item registry: `game_spell`/`game_spell_effect` rows, the
 /// crafted-consumable on-use spells, 1-10-alpha consumable breadth, the mock-seed fixture kits
 /// (`seed/fixtures.rs`), enchant/disenchant, talents, and the stacking-group starter set.
+#[allow(clippy::too_many_lines)] // A seed data table written as code.
 fn seed_spell_registry(ctx: &ReducerContext) {
     // --- Spell registry: hand-authored `game_spell` headers + `game_spell_effect` rows (the
     // data-driven effect-row engine). Each spell = a header + 1..3 effect rows; effect.id is the
@@ -1393,12 +1395,14 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
         scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
     });
 
-    ctx.db.game_duel_schedule().insert(crate::duel::DuelSchedule {
-        scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-            crate::duel::DUEL_TICK_MICROS,
-        )),
-    });
+    ctx.db
+        .game_duel_schedule()
+        .insert(crate::duel::DuelSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+                crate::duel::DUEL_TICK_MICROS,
+            )),
+        });
 
     // Ground-AoE damage tick every 500ms (118): drives game_ground_area (Consecration/…). 500ms so a
     // 1s/2s area period fires within ~½ tick of due. Areas gate on their own next_tick_micros.
@@ -1937,14 +1941,22 @@ mod tests {
             crate::skill::LEARN_JOURNEYMAN_RIDING_SPELL_ID,
         ];
         let unique: std::collections::BTreeSet<u32> = ids.iter().copied().collect();
-        assert_eq!(unique.len(), ids.len(), "fixture spell ids collide: {ids:?}");
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "fixture spell ids collide: {ids:?}"
+        );
 
         // Creature template + item entry: the same reserved families the other fixtures use.
         assert!(
             (51_000..52_000).contains(&RIDING_TRAINER_ENTRY),
             "the riding trainer must use a reserved 51xxx creature entry"
         );
-        for entry in [TEST_WOLF_ENTRY, PROFESSION_TRAINER_ENTRY, TEST_TAME_BOAR_ENTRY] {
+        for entry in [
+            TEST_WOLF_ENTRY,
+            PROFESSION_TRAINER_ENTRY,
+            TEST_TAME_BOAR_ENTRY,
+        ] {
             assert_ne!(
                 entry, RIDING_TRAINER_ENTRY,
                 "the riding trainer shadows an existing fixture creature"

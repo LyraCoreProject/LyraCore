@@ -20,9 +20,9 @@ pub mod social;
 pub mod update_mask;
 
 // Packet-family submodules.
-mod char;
 mod auction;
 mod breath;
+mod char;
 mod combat;
 mod corpse;
 mod duel;
@@ -36,8 +36,8 @@ mod movement;
 mod npc;
 mod pet;
 mod quest;
-mod trainer;
 mod taxi;
+mod trainer;
 mod values;
 mod weather;
 
@@ -50,9 +50,9 @@ pub use social::{
 };
 
 // Re-export packet-family surfaces through `crate::codec::<sym>`.
-pub use char::*;
 pub use auction::*;
 pub use breath::*;
+pub use char::*;
 pub use combat::*;
 pub use corpse::*;
 pub use duel::*;
@@ -66,8 +66,8 @@ pub use movement::*;
 pub use npc::*;
 pub use pet::*;
 pub use quest::*;
-pub use trainer::*;
 pub use taxi::*;
+pub use trainer::*;
 pub use values::*;
 pub use weather::*;
 
@@ -80,9 +80,9 @@ use lyracore_shared::opcodes::movement as movement_opcodes;
 use lyracore_shared::packing::unpack4;
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
 use wow_world_messages::vanilla::{
-    Area,
     AllowedClass,
     AllowedRace,
+    Area,
     BagFamily,
     // Item binding: "Binds when picked up/equipped" tooltip line.
     Bonding,

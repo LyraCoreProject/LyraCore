@@ -25,11 +25,11 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{Vector3d, WeatherChangeType};
 
 use super::aoi::ViewerGates;
-use super::world_index::{CellKey, EntityLayer};
-use super::world_view::{self, Viewer, WorldView};
 use super::bindings::*;
 use super::connection::Coordinator;
 use super::views::{corpse_view, entity_view, go_view, hunter_pet_protocol_view};
+use super::world_index::{CellKey, EntityLayer};
+use super::world_view::{self, Viewer, WorldView};
 
 /// RAII guard for one world session's shared-view registration, held by the world connection.
 /// Dropping the guard makes the session unreachable from every shard-level dispatcher.
@@ -342,7 +342,10 @@ fn viewer_relative_dynamic_flags(
     let Some(tap) = rows.tap.filter(|tap| tap.creature_guid == entity.guid) else {
         return entity.dynamic_flags;
     };
-    let entitled = match rows.tag_group.filter(|group| group.creature_guid == entity.guid) {
+    let entitled = match rows
+        .tag_group
+        .filter(|group| group.creature_guid == entity.guid)
+    {
         Some(group) => {
             rows.tag_members.iter().any(|member| {
                 member.creature_guid == entity.guid && member.character_guid == viewer_guid
@@ -359,12 +362,11 @@ fn viewer_relative_dynamic_flags(
     }
 }
 
-fn projected_dynamic_flags(
-    db: &RemoteTables,
-    viewer_guid: u64,
-    entity: &WorldEntity,
-) -> u32 {
-    let tap = db.game_creature_quest_tap().creature_guid().find(&entity.guid);
+fn projected_dynamic_flags(db: &RemoteTables, viewer_guid: u64, entity: &WorldEntity) -> u32 {
+    let tap = db
+        .game_creature_quest_tap()
+        .creature_guid()
+        .find(&entity.guid);
     let tag_group = db
         .game_creature_loot_tag_group()
         .creature_guid()
@@ -840,12 +842,7 @@ pub(crate) fn offer_peer_create_for(
     {
         // CREATE is already first in `out`. A resident flight must follow it in the same writer
         // work item so AOI entry can never observe MONSTER_MOVE for an unknown passenger.
-        append_resident_taxi_after_create(
-            &mut out,
-            &viewer.created,
-            viewer.self_guid,
-            &spline,
-        );
+        append_resident_taxi_after_create(&mut out, &viewer.created, viewer.self_guid, &spline);
     }
     out
 }
@@ -905,10 +902,11 @@ pub(crate) fn relay_entity_update(
         let guard = coord.0.coord();
         projected_dynamic_flags(&guard.conn.db, viewer.self_guid, new)
     };
-    let mut out: Vec<Outbound> = entity_update_to_outbound_with_dynamic_flags(old, new, dynamic_flags)
-        .into_iter()
-        .map(Outbound::One)
-        .collect();
+    let mut out: Vec<Outbound> =
+        entity_update_to_outbound_with_dynamic_flags(old, new, dynamic_flags)
+            .into_iter()
+            .map(Outbound::One)
+            .collect();
     if new.guid == viewer.self_guid {
         if let Some(is_ghost) =
             ghost_transition(old.player_flags, new.player_flags, GHOST_PLAYER_FLAG)
@@ -1243,9 +1241,9 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         let is_creature = matches!(row.caster_guid >> 48, 0xF130 | 0xF140);
         if is_creature || row.caster_guid == self_guid {
             let m = codec::build_spell_failure(row.caster_guid, row.spell_id);
-            out.push(Outbound::One(
-                ServerOpcodeMessage::SMSG_SPELL_FAILURE(Box::new(m)),
-            ));
+            out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_FAILURE(
+                Box::new(m),
+            )));
         }
         // A row that names a concrete reason (an on-next-swing strike that could not pay its cost at
         // the swing) follows the teardown with the failed cast result, in vanilla's order
@@ -1300,13 +1298,8 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
     if row.cast_time_ms > 0 {
         // Cast-START (a timed spell): SMSG_SPELL_START with the cast-bar duration so observers
         // see the bar FILL. The GO/COOLDOWN follow on the cast-GO COMPLETION event.
-        let start = codec::build_spell_start(
-            row.caster_guid,
-            row.spell_id,
-            row.cast_time_ms,
-            0,
-            None,
-        );
+        let start =
+            codec::build_spell_start(row.caster_guid, row.spell_id, row.cast_time_ms, 0, None);
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
             Box::new(start),
         )));
@@ -1335,8 +1328,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
     let caster_synced_instant = row.client_initiated && row.caster_guid == self_guid;
     if !caster_synced_instant {
         if !row.is_completion {
-            let start =
-                codec::build_spell_start(row.caster_guid, row.spell_id, 0, 0, None);
+            let start = codec::build_spell_start(row.caster_guid, row.spell_id, 0, 0, None);
             out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(
                 Box::new(start),
             )));
@@ -1350,8 +1342,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
                 body: codec::build_cast_result_ok(row.spell_id),
             });
         }
-        let mut go =
-            codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, None);
+        let mut go = codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, None);
         // A 0-damage on-next-swing FIRE that rode a missed/dodged/parried swing reports
         // the outcome in the GO's miss list — the client prints the yellow "Your Heroic
         // Strike missed/was dodged/was parried" line (the white MISS was suppressed via
@@ -1373,9 +1364,9 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
                 }];
             }
         }
-        out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(
-            Box::new(go),
-        )));
+        out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(
+            go,
+        ))));
     }
     // FIX 2: the floating spell damage number — relay SMSG_SPELLNONMELEEDAMAGELOG when this cast
     // dealt damage (the module summed it onto the row + stored the school INDEX). 0 damage (heals /
@@ -1422,8 +1413,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
     // "Another action is in progress" — could only cast each spell once). The SMSG_SPELL_GO above is
     // what releases the client's pending-cast state (as in mangos); a 0-cooldown cast sends nothing.
     if row.cooldown_ms > 0 {
-        let cd =
-            codec::build_spell_cooldown(row.caster_guid, row.spell_id, row.cooldown_ms);
+        let cd = codec::build_spell_cooldown(row.caster_guid, row.spell_id, row.cooldown_ms);
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(
             Box::new(cd),
         )));
@@ -1459,7 +1449,11 @@ pub(crate) fn aura_sync(
 // both land the right value, exactly like `run_speed_packet`). Returns `None` unless `changed` is a
 // self armor aura, so ordinary buffs/debuffs don't spam the opcode. Self-scoped: the sheet shows
 // only your own armor, so no peer relay is needed.
-pub(crate) fn armor_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) -> Option<Outbound> {
+pub(crate) fn armor_packet(
+    coord: &Coordinator,
+    changed: &Aura,
+    self_guid: u64,
+) -> Option<Outbound> {
     const A_MOD_RESISTANCE: u8 = 0xA1; // taxonomy A_MOD_RESISTANCE
     const RESIST_ARMOR_MASK: u32 = 0x01; // taxonomy RESIST_ARMOR bit (eff_p0 is a school MASK)
     if changed.target_guid != self_guid
@@ -1493,7 +1487,11 @@ pub(crate) fn armor_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) 
 // `recompute_sheet` actually reacts to (`aura_moves_sheet`'s mirror), so an unrelated buff/debuff
 // (a DoT, a slow) doesn't spam the opcode — purely a re-push filter, not aura interpretation. Self-
 // scoped: the sheet shows only your own numbers, so no peer relay is needed.
-pub(crate) fn sheet_packet(coord: &Coordinator, changed: &Aura, self_guid: u64) -> Option<Outbound> {
+pub(crate) fn sheet_packet(
+    coord: &Coordinator,
+    changed: &Aura,
+    self_guid: u64,
+) -> Option<Outbound> {
     const A_MOD_STAT: u8 = 0xA0; // taxonomy A_MOD_STAT
     const A_MOD_COMBAT: u8 = 0xA3; // taxonomy A_MOD_COMBAT
     const COMBAT_ATTACK_POWER: i32 = 0; // taxonomy COMBAT_ATTACK_POWER
@@ -1607,7 +1605,8 @@ pub(crate) fn aura_insert_outbound(
     let mut out = Vec::new();
     // A stealth-hidden peer (not in `created`) must get NO per-peer relay: a partial VALUES on
     // a DESTROYed object is a client crash/desync vector.
-    let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
+    let visible =
+        row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
     let current = visible.then(|| view.auras.on_target(shard, row.target_guid));
     if let Some(current) = &current {
         out.push(aura_sync(current.iter().cloned(), row.target_guid));
@@ -1651,7 +1650,8 @@ pub(crate) fn aura_update_outbound(
     expires_changed: bool,
 ) -> Vec<Outbound> {
     let mut out = Vec::new();
-    let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
+    let visible =
+        row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
     let current = visible.then(|| view.auras.on_target(shard, row.target_guid));
     if let Some(current) = &current {
         out.push(aura_sync(current.iter().cloned(), row.target_guid));
@@ -1690,7 +1690,8 @@ pub(crate) fn aura_delete_outbound(
     stealth_count: usize,
 ) -> Vec<Outbound> {
     let mut out = Vec::new();
-    let visible = row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
+    let visible =
+        row.target_guid == self_guid || created.lock().unwrap().contains(&row.target_guid);
     if visible {
         let current = view.auras.on_target(shard, row.target_guid);
         out.push(aura_sync(current.iter().cloned(), row.target_guid));
@@ -1941,13 +1942,14 @@ pub(crate) fn duel_event_outbound(
             raw_values(row.initiator_guid, None, Some(1)),
             raw_values(row.challenged_guid, None, Some(2)),
         ],
-        event_kind::OUT_OF_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)],
+        event_kind::OUT_OF_BOUNDS => {
+            vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_OUTOFBOUNDS)]
+        }
         event_kind::IN_BOUNDS => vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_INBOUNDS)],
         event_kind::COMPLETE => {
             let mut outbound = vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_COMPLETE(
                 SMSG_DUEL_COMPLETE {
-                    ended_without_interruption: row.completion_kind
-                        != completion_kind::INTERRUPTED,
+                    ended_without_interruption: row.completion_kind != completion_kind::INTERRUPTED,
                 },
             ))];
             outbound.extend(duel_winner_outbound(row));
@@ -1988,13 +1990,13 @@ pub(crate) fn duel_winner_outbound(row: &DuelEvent) -> Vec<Outbound> {
     };
     // `opponent_name` is the first CString on the wire and carries the WINNER: mangos sends
     // this packet from the loser, announcing its opponent as victor.
-    vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(Box::new(
-        SMSG_DUEL_WINNER {
+    vec![Outbound::One(ServerOpcodeMessage::SMSG_DUEL_WINNER(
+        Box::new(SMSG_DUEL_WINNER {
             reason,
             opponent_name: row.winner_name.clone(),
             initiator_name: row.loser_name.clone(),
-        },
-    )))]
+        }),
+    ))]
 }
 
 /// Decode an `OFFER_*` payload into the fixed-444-byte `SMSG_TRADE_STATUS_EXTENDED` (#121):
@@ -2087,14 +2089,22 @@ pub(crate) fn group_event_outbound(
         group_kind::LIST => match lyracore_shared::group::decode_roster(&row.payload) {
             Some((leader, loot_method, loot_threshold, master_looter_guid, members)) => {
                 let members = name_the_roster(coord, members);
-                Some(ServerOpcodeMessage::SMSG_GROUP_LIST(Box::new(codec::build_group_list(
-                    self_guid, leader, loot_method, loot_threshold, master_looter_guid, &members,
-                ))))
+                Some(ServerOpcodeMessage::SMSG_GROUP_LIST(Box::new(
+                    codec::build_group_list(
+                        self_guid,
+                        leader,
+                        loot_method,
+                        loot_threshold,
+                        master_looter_guid,
+                        &members,
+                    ),
+                )))
             }
             None => {
                 log::warn!(
                     "group LIST relay: unparseable roster payload {:?} (event {})",
-                    row.payload, row.id
+                    row.payload,
+                    row.id
                 );
                 None
             }
@@ -2113,63 +2123,104 @@ pub(crate) fn group_event_outbound(
                 codec::build_party_chat(row.other_guid, message),
             ))),
             None => {
-                log::warn!("party PARTY_CHAT relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                log::warn!(
+                    "party PARTY_CHAT relay: unparseable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
                 None
             }
         },
         roll_kind::ROLL_START => match lyracore_shared::loot_roll::decode_start(&row.payload) {
             Some((corpse_guid, slot, item_entry, countdown_ms)) => {
-                Some(ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(codec::build_loot_start_roll(
-                    corpse_guid, slot, item_entry, countdown_ms,
-                ))))
+                Some(ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(
+                    codec::build_loot_start_roll(corpse_guid, slot, item_entry, countdown_ms),
+                )))
             }
             None => {
-                log::warn!("loot ROLL_START relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                log::warn!(
+                    "loot ROLL_START relay: unparseable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
                 None
             }
         },
         roll_kind::ROLL_VOTE => match lyracore_shared::loot_roll::decode_vote(&row.payload) {
-            Some((corpse_guid, slot, item_entry, roll_number, vote, auto_pass)) => {
-                Some(ServerOpcodeMessage::SMSG_LOOT_ROLL(Box::new(codec::build_loot_roll(
-                    corpse_guid, slot, row.other_guid, item_entry, roll_number, vote, auto_pass,
-                ))))
-            }
+            Some((corpse_guid, slot, item_entry, roll_number, vote, auto_pass)) => Some(
+                ServerOpcodeMessage::SMSG_LOOT_ROLL(Box::new(codec::build_loot_roll(
+                    corpse_guid,
+                    slot,
+                    row.other_guid,
+                    item_entry,
+                    roll_number,
+                    vote,
+                    auto_pass,
+                ))),
+            ),
             None => {
-                log::warn!("loot ROLL_VOTE relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                log::warn!(
+                    "loot ROLL_VOTE relay: unparseable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
                 None
             }
         },
         roll_kind::ROLL_WON => match lyracore_shared::loot_roll::decode_won(&row.payload) {
-            Some((corpse_guid, slot, item_entry, winning_roll, winning_vote)) => {
-                Some(ServerOpcodeMessage::SMSG_LOOT_ROLL_WON(Box::new(codec::build_loot_roll_won(
-                    corpse_guid, slot, item_entry, row.other_guid, winning_roll, winning_vote,
-                ))))
-            }
+            Some((corpse_guid, slot, item_entry, winning_roll, winning_vote)) => Some(
+                ServerOpcodeMessage::SMSG_LOOT_ROLL_WON(Box::new(codec::build_loot_roll_won(
+                    corpse_guid,
+                    slot,
+                    item_entry,
+                    row.other_guid,
+                    winning_roll,
+                    winning_vote,
+                ))),
+            ),
             None => {
-                log::warn!("loot ROLL_WON relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                log::warn!(
+                    "loot ROLL_WON relay: unparseable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
                 None
             }
         },
-        roll_kind::MASTER_LIST => match lyracore_shared::loot_roll::decode_master_list(&row.payload) {
-            Some((_corpse_guid, eligible)) => Some(ServerOpcodeMessage::SMSG_LOOT_MASTER_LIST(Box::new(
-                codec::build_loot_master_list(&eligible),
-            ))),
-            None => {
-                log::warn!("loot MASTER_LIST relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                None
+        roll_kind::MASTER_LIST => {
+            match lyracore_shared::loot_roll::decode_master_list(&row.payload) {
+                Some((_corpse_guid, eligible)) => Some(ServerOpcodeMessage::SMSG_LOOT_MASTER_LIST(
+                    Box::new(codec::build_loot_master_list(&eligible)),
+                )),
+                None => {
+                    log::warn!(
+                        "loot MASTER_LIST relay: unparseable payload {:?} (event {})",
+                        row.payload,
+                        row.id
+                    );
+                    None
+                }
             }
-        },
+        }
         // A grouped money-loot split's per-recipient share → the SAME
         // `SMSG_LOOT_MONEY_NOTIFY` the (now-removed) unconditional gateway send used to build,
         // just per-recipient and carrying the SHARE instead of the total (`amount` here IS the
         // wire field, matching `codec::build_loot_money_notify`'s single `amount: u32`).
-        roll_kind::MONEY_SHARE => match lyracore_shared::loot_roll::decode_money_share(&row.payload) {
-            Some(share) => Some(ServerOpcodeMessage::SMSG_LOOT_MONEY_NOTIFY(codec::build_loot_money_notify(share))),
-            None => {
-                log::warn!("loot MONEY_SHARE relay: unparseable payload {:?} (event {})", row.payload, row.id);
-                None
+        roll_kind::MONEY_SHARE => {
+            match lyracore_shared::loot_roll::decode_money_share(&row.payload) {
+                Some(share) => Some(ServerOpcodeMessage::SMSG_LOOT_MONEY_NOTIFY(
+                    codec::build_loot_money_notify(share),
+                )),
+                None => {
+                    log::warn!(
+                        "loot MONEY_SHARE relay: unparseable payload {:?} (event {})",
+                        row.payload,
+                        row.id
+                    );
+                    None
+                }
             }
-        },
+        }
         // Quest sharing: an eligible party member receives the shared quest —
         // `row.other_guid` is the SHARER (resolved/pushed by `group::push_event`), `row.payload`
         // is the quest entry. Opens the DETAILS screen with the SHARER as "giver" (the
@@ -2182,16 +2233,26 @@ pub(crate) fn group_event_outbound(
                     return vec![Outbound::Raw { opcode, body }];
                 }
                 Ok(None) => {
-                    log::warn!("quest QUEST_SHARE relay: quest {quest_id} not loaded (event {})", row.id);
+                    log::warn!(
+                        "quest QUEST_SHARE relay: quest {quest_id} not loaded (event {})",
+                        row.id
+                    );
                     None
                 }
                 Err(e) => {
-                    log::warn!("quest QUEST_SHARE relay: quest_detail lookup failed (event {}): {e}", row.id);
+                    log::warn!(
+                        "quest QUEST_SHARE relay: quest_detail lookup failed (event {}): {e}",
+                        row.id
+                    );
                     None
                 }
             },
             Err(_) => {
-                log::warn!("quest QUEST_SHARE relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                log::warn!(
+                    "quest QUEST_SHARE relay: unparseable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
                 None
             }
         },
@@ -2203,7 +2264,11 @@ pub(crate) fn group_event_outbound(
                 codec::build_quest_push_result(row.other_guid, code),
             ))),
             Err(_) => {
-                log::warn!("quest QUEST_PUSH_RESULT relay: unparseable payload {:?} (event {})", row.payload, row.id);
+                log::warn!(
+                    "quest QUEST_PUSH_RESULT relay: unparseable payload {:?} (event {})",
+                    row.payload,
+                    row.id
+                );
                 None
             }
         },
@@ -2270,7 +2335,9 @@ pub(crate) fn impact_event_outbound(row: &SpellImpactEvent) -> Vec<Outbound> {
         row.resisted,
         row.absorbed,
     );
-    vec![Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)))]
+    vec![Outbound::One(
+        ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(Box::new(log)),
+    )]
 }
 
 /// Nearby chat: the one body both legs run. A player speaker always hears
@@ -2413,12 +2480,9 @@ pub(crate) fn emote_event_outbound(coord: &Coordinator, row: &EmoteEvent) -> Vec
         None
     };
     let mut out = Vec::new();
-    if let Some(m) = codec::build_text_emote(
-        row.sender_guid,
-        row.text_emote,
-        row.emote_anim,
-        target_name,
-    ) {
+    if let Some(m) =
+        codec::build_text_emote(row.sender_guid, row.text_emote, row.emote_anim, target_name)
+    {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_TEXT_EMOTE(
             Box::new(m),
         )));
@@ -2527,9 +2591,14 @@ pub(crate) fn creature_leg_outbound(
     // `FacingAngle` variant — the only 1.12 `SMSG_MONSTER_MOVE` shape that turns a STATIONARY
     // creature without a spline the client would otherwise have nothing to interpolate from.
     if row.facing {
-        return vec![Outbound::One(ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(
-            codec::build_monster_move_facing(row.guid, start, row.facing_angle, row.spline_id),
-        )))];
+        return vec![Outbound::One(ServerOpcodeMessage::SMSG_MONSTER_MOVE(
+            Box::new(codec::build_monster_move_facing(
+                row.guid,
+                start,
+                row.facing_angle,
+                row.spline_id,
+            )),
+        ))];
     }
     let dest = Vector3d {
         x: row.dx,
@@ -2587,7 +2656,9 @@ pub(crate) fn taxi_spline_outbound(
         row.duration_ms,
         row.spline_id,
     )
-    .map_or_else(Vec::new, |(opcode, body)| vec![Outbound::Raw { opcode, body }])
+    .map_or_else(Vec::new, |(opcode, body)| {
+        vec![Outbound::Raw { opcode, body }]
+    })
 }
 
 fn append_resident_taxi_after_create(
@@ -2925,15 +2996,15 @@ pub(crate) fn quest_update_feedback(
     row: &CharacterQuest,
     objectives: &[(u8, u8, u32, u32)],
 ) -> Vec<Outbound> {
-    let mut outbound = codec::kill_progress_add_kills(
-        row.quest_entry,
-        &old.counts,
-        &row.counts,
-        objectives,
-    )
-    .into_iter()
-    .map(|packet| Outbound::One(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(Box::new(packet))))
-    .collect::<Vec<_>>();
+    let mut outbound =
+        codec::kill_progress_add_kills(row.quest_entry, &old.counts, &row.counts, objectives)
+            .into_iter()
+            .map(|packet| {
+                Outbound::One(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(Box::new(
+                    packet,
+                )))
+            })
+            .collect::<Vec<_>>();
     if !old.failed && row.failed {
         outbound.push(Outbound::One(
             ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
@@ -3143,7 +3214,8 @@ pub(crate) fn item_instance_update_outbound(
     }
     let moved_into_equipment = old.slot != row.slot && row.slot <= 18;
     let emptied_equipment = old.slot != row.slot && old.slot <= 18 && old_slot_is_empty;
-    if moved_into_equipment || emptied_equipment
+    if moved_into_equipment
+        || emptied_equipment
         || row.slot <= 18 && (old.durability == 0) != (row.durability == 0)
     {
         append_item_armor_and_sheet(db, self_guid, &mut out);
@@ -3416,8 +3488,6 @@ impl Coordinator {
             view: Some(view),
         })
     }
-
-
 }
 
 impl Coordinator {
@@ -3647,8 +3717,7 @@ mod tests {
                 ..swing_event()
             };
             let out = combat_event_outbound(&created, &row);
-            let [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(go))] = out.as_slice()
-            else {
+            let [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(go))] = out.as_slice() else {
                 panic!("a ranged launch must emit exactly one SPELL_GO");
             };
             assert_eq!((go.caster.guid(), go.spell), (7, 75));
@@ -3691,7 +3760,12 @@ mod tests {
             panic!("an impact must emit exactly one damage log");
         };
         assert_eq!(
-            (log.attacker.guid(), log.target.guid(), log.spell, log.damage),
+            (
+                log.attacker.guid(),
+                log.target.guid(),
+                log.spell,
+                log.damage
+            ),
             (7, 11, 75, 23)
         );
     }
@@ -3703,7 +3777,9 @@ mod tests {
         let out = combat_event_outbound(&created, &row);
         assert!(matches!(
             out.as_slice(),
-            [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(_))]
+            [Outbound::One(
+                ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(_)
+            )]
         ));
 
         row.killing_blow = true;
@@ -3787,12 +3863,8 @@ mod tests {
             (equipment.clone(), true, (0, 0, 0)),
         ] {
             let out = encounter_equip_outbound(&viewer, &row, cleared);
-            let (expected_opcode, expected_body) = codec::build_virtual_item_values(
-                creature_guid,
-                expected.0,
-                expected.1,
-                expected.2,
-            );
+            let (expected_opcode, expected_body) =
+                codec::build_virtual_item_values(creature_guid, expected.0, expected.1, expected.2);
             assert!(matches!(
                 out.as_slice(),
                 [Outbound::Raw { opcode, body }]
@@ -3938,8 +4010,14 @@ mod tests {
             })
             .collect();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].initiator, wow_world_messages::Guid::new(row.flag_guid));
-        assert_eq!(requests[0].target, wow_world_messages::Guid::new(row.initiator_guid));
+        assert_eq!(
+            requests[0].initiator,
+            wow_world_messages::Guid::new(row.flag_guid)
+        );
+        assert_eq!(
+            requests[0].target,
+            wow_world_messages::Guid::new(row.initiator_guid)
+        );
     }
 
     #[test]
@@ -4038,7 +4116,7 @@ mod tests {
             let out = trade_event_outbound(&event(k));
             assert_eq!(out.len(), 1, "kind {k} must decode to exactly one packet");
             match &out[0] {
-                Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(s)) => (**s).clone(),
+                Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS(s)) => **s,
                 Outbound::One(other) => panic!("kind {k}: expected SMSG_TRADE_STATUS, got {other}"),
                 _ => panic!("kind {k}: expected a single SMSG_TRADE_STATUS packet"),
             }
@@ -4052,38 +4130,87 @@ mod tests {
             "BeginTrade must carry the initiator guid off the row"
         );
         assert_eq!(status_of(kind::OPEN_WINDOW), SMSG_TRADE_STATUS::OpenWindow);
-        assert_eq!(status_of(kind::TRADE_CANCELED), SMSG_TRADE_STATUS::TradeCanceled);
+        assert_eq!(
+            status_of(kind::TRADE_CANCELED),
+            SMSG_TRADE_STATUS::TradeCanceled
+        );
         assert_eq!(status_of(kind::BUSY), SMSG_TRADE_STATUS::Busy);
         assert_eq!(status_of(kind::NO_TARGET), SMSG_TRADE_STATUS::NoTarget);
-        assert_eq!(status_of(kind::TARGET_TO_FAR), SMSG_TRADE_STATUS::TargetToFar);
-        assert_eq!(status_of(kind::WRONG_FACTION), SMSG_TRADE_STATUS::WrongFaction);
+        assert_eq!(
+            status_of(kind::TARGET_TO_FAR),
+            SMSG_TRADE_STATUS::TargetToFar
+        );
+        assert_eq!(
+            status_of(kind::WRONG_FACTION),
+            SMSG_TRADE_STATUS::WrongFaction
+        );
         assert_eq!(status_of(kind::YOU_DEAD), SMSG_TRADE_STATUS::YouDead);
         assert_eq!(status_of(kind::TARGET_DEAD), SMSG_TRADE_STATUS::TargetDead);
         assert_eq!(status_of(kind::IGNORE_YOU), SMSG_TRADE_STATUS::IgnoreYou);
-        assert_eq!(status_of(kind::TRADE_ACCEPT), SMSG_TRADE_STATUS::TradeAccept);
-        assert_eq!(status_of(kind::BACK_TO_TRADE), SMSG_TRADE_STATUS::BackToTrade);
-        assert_eq!(status_of(kind::TRADE_COMPLETE), SMSG_TRADE_STATUS::TradeComplete);
+        assert_eq!(
+            status_of(kind::TRADE_ACCEPT),
+            SMSG_TRADE_STATUS::TradeAccept
+        );
+        assert_eq!(
+            status_of(kind::BACK_TO_TRADE),
+            SMSG_TRADE_STATUS::BackToTrade
+        );
+        assert_eq!(
+            status_of(kind::TRADE_COMPLETE),
+            SMSG_TRADE_STATUS::TradeComplete
+        );
         // The bag-space refusal closes the window naming WHOSE bags overflowed.
         let full_self = status_of(kind::INV_FULL_SELF);
         let full_partner = status_of(kind::INV_FULL_PARTNER);
         match (&full_self, &full_partner) {
             (
-                SMSG_TRADE_STATUS::CloseWindow { target_error: false, inventory_result: a, .. },
-                SMSG_TRADE_STATUS::CloseWindow { target_error: true, inventory_result: b, .. },
+                SMSG_TRADE_STATUS::CloseWindow {
+                    target_error: false,
+                    inventory_result: a,
+                    ..
+                },
+                SMSG_TRADE_STATUS::CloseWindow {
+                    target_error: true,
+                    inventory_result: b,
+                    ..
+                },
             ) => {
-                assert_eq!(*a, wow_world_messages::vanilla::InventoryResult::InventoryFull);
-                assert_eq!(*b, wow_world_messages::vanilla::InventoryResult::InventoryFull);
+                assert_eq!(
+                    *a,
+                    wow_world_messages::vanilla::InventoryResult::InventoryFull
+                );
+                assert_eq!(
+                    *b,
+                    wow_world_messages::vanilla::InventoryResult::InventoryFull
+                );
             }
             other => panic!("expected CloseWindow pair with flipped target_error, got {other:?}"),
         }
         // The purse-failure pair mirrors it with NotEnoughMoney.
-        match (&status_of(kind::GOLD_FAIL_SELF), &status_of(kind::GOLD_FAIL_PARTNER)) {
+        match (
+            &status_of(kind::GOLD_FAIL_SELF),
+            &status_of(kind::GOLD_FAIL_PARTNER),
+        ) {
             (
-                SMSG_TRADE_STATUS::CloseWindow { target_error: false, inventory_result: a, .. },
-                SMSG_TRADE_STATUS::CloseWindow { target_error: true, inventory_result: b, .. },
+                SMSG_TRADE_STATUS::CloseWindow {
+                    target_error: false,
+                    inventory_result: a,
+                    ..
+                },
+                SMSG_TRADE_STATUS::CloseWindow {
+                    target_error: true,
+                    inventory_result: b,
+                    ..
+                },
             ) => {
-                assert_eq!(*a, wow_world_messages::vanilla::InventoryResult::NotEnoughMoney);
-                assert_eq!(*b, wow_world_messages::vanilla::InventoryResult::NotEnoughMoney);
+                assert_eq!(
+                    *a,
+                    wow_world_messages::vanilla::InventoryResult::NotEnoughMoney
+                );
+                assert_eq!(
+                    *b,
+                    wow_world_messages::vanilla::InventoryResult::NotEnoughMoney
+                );
             }
             other => panic!("expected NotEnoughMoney CloseWindow pair, got {other:?}"),
         }
@@ -4127,9 +4254,7 @@ mod tests {
         let extended = |k: u8| -> SMSG_TRADE_STATUS_EXTENDED {
             let out = trade_event_outbound(&event(k, &payload));
             match out.first() {
-                Some(Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(m))) => {
-                    (**m).clone()
-                }
+                Some(Outbound::One(ServerOpcodeMessage::SMSG_TRADE_STATUS_EXTENDED(m))) => **m,
                 _ => panic!("kind {k}: expected one SMSG_TRADE_STATUS_EXTENDED"),
             }
         };
@@ -4137,9 +4262,15 @@ mod tests {
         // Wire polarity (mangoszero): the `self_player` BYTE is "1 means traders data, 0 means
         // own", so your OWN echo carries 0 and the partner's side carries 1.
         let own = extended(kind::OFFER_SELF);
-        assert!(!own.self_player, "OFFER_SELF describes your own window: wire byte 0");
+        assert!(
+            !own.self_player,
+            "OFFER_SELF describes your own window: wire byte 0"
+        );
         let theirs = extended(kind::OFFER_PARTNER);
-        assert!(theirs.self_player, "OFFER_PARTNER describes the partner's side: wire byte 1");
+        assert!(
+            theirs.self_player,
+            "OFFER_PARTNER describes the partner's side: wire byte 1"
+        );
 
         assert_eq!(own.money_in_trade.as_int(), 1_2345);
         assert_eq!((own.trade_slot_count1, own.trade_slot_count2), (7, 7));
@@ -4407,7 +4538,15 @@ mod tests {
         let members = [tag_member(7), tag_member(8)];
         let current = [current_member(8, 42)];
         assert_eq!(
-            project_flags(8, &entity, Some(&tap), Some(&group), &members, &current, &[]),
+            project_flags(
+                8,
+                &entity,
+                Some(&tap),
+                Some(&group),
+                &members,
+                &current,
+                &[]
+            ),
             entity.dynamic_flags | lyracore_shared::constants::unit_dynamic_flags::TAPPED_BY_PLAYER
         );
     }
@@ -4433,7 +4572,15 @@ mod tests {
         let members = [tag_member(7)];
         let current = [current_member(8, 42)];
         assert_eq!(
-            project_flags(8, &entity, Some(&tap), Some(&group), &members, &current, &[]),
+            project_flags(
+                8,
+                &entity,
+                Some(&tap),
+                Some(&group),
+                &members,
+                &current,
+                &[]
+            ),
             entity.dynamic_flags
         );
     }
@@ -4449,7 +4596,15 @@ mod tests {
         let members = [tag_member(7), tag_member(8)];
         let current = [current_member(8, 99)];
         assert_eq!(
-            project_flags(8, &entity, Some(&tap), Some(&group), &members, &current, &[]),
+            project_flags(
+                8,
+                &entity,
+                Some(&tap),
+                Some(&group),
+                &members,
+                &current,
+                &[]
+            ),
             entity.dynamic_flags
         );
     }
@@ -4480,7 +4635,10 @@ mod tests {
             corpse_guid: entity.guid,
             eligible_guid: 7,
         }];
-        assert_eq!(project_flags(8, &entity, None, None, &[], &[], &eligible), 0);
+        assert_eq!(
+            project_flags(8, &entity, None, None, &[], &[], &eligible),
+            0
+        );
     }
 
     #[test]
@@ -4573,8 +4731,8 @@ mod tests {
         old.dynamic_flags = 0;
         let mut new = old.clone();
         new.dynamic_flags = lyracore_shared::constants::unit_dynamic_flags::TAPPED;
-        let projected = new.dynamic_flags
-            | lyracore_shared::constants::unit_dynamic_flags::TAPPED_BY_PLAYER;
+        let projected =
+            new.dynamic_flags | lyracore_shared::constants::unit_dynamic_flags::TAPPED_BY_PLAYER;
         assert_eq!(
             entity_update_to_outbound_with_dynamic_flags(&old, &new, projected),
             vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
@@ -5555,8 +5713,72 @@ mod tests {
         assert!(!instance_relay_gate(7, None));
     }
 
-    /// The non-test half of this file as the source scans below may read it: `//` comments STRIPPED
-    /// and every whitespace run collapsed to one space.
+    /// Remove line and nested block comments while preserving ordinary string literals.
+    ///
+    /// This is deliberately limited to the Rust source spans scanned in this module. The scans need
+    /// quoted labels, so comment markers inside a quoted label remain part of the source.
+    fn without_comments(text: &str) -> String {
+        let mut output = String::with_capacity(text.len());
+        let mut chars = text.char_indices().peekable();
+        let (mut in_string, mut in_line_comment, mut block_depth) = (false, false, 0usize);
+
+        while let Some((index, character)) = chars.next() {
+            if in_line_comment {
+                if character == '\n' {
+                    in_line_comment = false;
+                    output.push(character);
+                }
+                continue;
+            }
+
+            if block_depth > 0 {
+                if character == '/' && text[index..].starts_with("/*") {
+                    block_depth += 1;
+                    chars.next();
+                } else if character == '*' && text[index..].starts_with("*/") {
+                    block_depth -= 1;
+                    chars.next();
+                } else if character == '\n' {
+                    output.push(character);
+                }
+                continue;
+            }
+
+            if in_string {
+                output.push(character);
+                if character == '\\' {
+                    if let Some((_, escaped)) = chars.next() {
+                        output.push(escaped);
+                    }
+                } else if character == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match character {
+                '"' => {
+                    in_string = true;
+                    output.push(character);
+                }
+                '/' if text[index..].starts_with("//") => {
+                    in_line_comment = true;
+                    output.push(' ');
+                }
+                '/' if text[index..].starts_with("/*") => {
+                    block_depth = 1;
+                    output.push(' ');
+                    chars.next();
+                }
+                _ => output.push(character),
+            }
+        }
+
+        output
+    }
+
+    /// The non-test half of this file as the source scans below may read it: comments stripped and
+    /// every whitespace run collapsed to one space.
     ///
     /// Both steps are mutation findings, not tidiness. Counting matches in the raw text made every
     /// scan below satisfiable by a COMMENT quoting the pattern while the real call was deleted —
@@ -5571,11 +5793,7 @@ mod tests {
             .split("mod tests {")
             .next()
             .expect("the non-test half of this file");
-        let decommented: String = body
-            .lines()
-            .map(|l| l.split("//").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let decommented = without_comments(body);
         decommented.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
@@ -5612,16 +5830,38 @@ mod tests {
     }
 
     /// Comment-stripped, whitespace-collapsed form of an arbitrary source span — the same two-step
-    /// mutation-hardening [`scanned_source`] applies to the whole file (strip a `//` line comment
+    /// mutation-hardening [`scanned_source`] applies to the whole file (strip comments
     /// FIRST, so a scan can't be satisfied by a comment quoting the pattern; collapse whitespace
     /// SECOND, so a rustfmt line-split can't fail a scan that pins a whole statement).
+    ///
+    /// The last step drops what a broken-out call leaves behind — the space after `(`, the trailing
+    /// comma before `)` — so a needle reads as one written call whichever way rustfmt wrapped it.
     fn decommented(text: &str) -> String {
-        let stripped: String = text
-            .lines()
-            .map(|l| l.split("//").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
-        stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+        let stripped = without_comments(text);
+        let one_line = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+        one_line
+            .replace("( ", "(")
+            .replace(", )", ")")
+            .replace(" )", ")")
+    }
+
+    #[test]
+    fn source_scans_ignore_block_commented_code() {
+        let source = r#"
+            wire_insert_live(db.live_table(), "live.label", &view, relay);
+            /*
+                wire_insert_live(db.decoy_table(), "decoy.label", &view, relay);
+                /* wire_insert_live(db.nested_decoy(), "nested.label", &view, relay); */
+            */
+            let label = "/* quoted label */";
+        "#;
+
+        let scanned = decommented(source);
+
+        assert!(scanned.contains("wire_insert_live(db.live_table()"));
+        assert!(!scanned.contains("decoy_table"));
+        assert!(!scanned.contains("nested_decoy"));
+        assert!(scanned.contains("\"/* quoted label */\""));
     }
 
     /// The call-site tripwire for the shared-view `Viewer`'s construction.
@@ -5651,7 +5891,6 @@ mod tests {
         );
     }
 
-
     /// Tripwire for the realm-core PRIVATE tier (#22 → #483): the cross-shard whisper/group
     /// twins are armed ONCE per realm-core connection (`arm_realm_private`), gated on realm-core
     /// being a DISTINCT database. Without the gate a single-database gateway registers a SECOND
@@ -5661,7 +5900,10 @@ mod tests {
     /// coordinator connection), so the wiring is pinned in source, comment-stripped.
     #[test]
     fn the_realm_private_tier_is_armed_once_gated_on_a_distinct_database() {
-        let body = decommented(top_level_fn_body_of("connection.rs", "arm_shared_world_view"));
+        let body = decommented(top_level_fn_body_of(
+            "connection.rs",
+            "arm_shared_world_view",
+        ));
         assert!(
             body.contains("if let Ok(realm) = self.realm_core() {"),
             "arming no longer resolves the realm-core handle — pointed anywhere else it hears \
@@ -5675,7 +5917,9 @@ mod tests {
              whisper line twice."
         );
         assert!(
-            body.contains("super::world_view::arm_realm_private(view.clone(), realm.clone(), world.clone());"),
+            body.contains(
+                "super::world_view::arm_realm_private(view.clone(), realm.clone(), world.clone());"
+            ),
             "the realm-core private tier is never armed — a cross-shard whisper is written on \
              realm-core and delivered to nobody"
         );
@@ -5712,7 +5956,8 @@ mod tests {
         let whisper = decommented(top_level_fn_body_of("world_view.rs", "whisper_appeared"));
         assert!(
             whisper.contains("session_of_owner(row.recipient_guid)")
-                && whisper.contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
+                && whisper
+                    .contains("private_recipient_audience(row.recipient_guid, viewer.self_guid)"),
             "whisper_appeared is no longer recipient-keyed — on an owner-token read that is a \
              privacy leak: every session would receive every player's private whispers"
         );
@@ -5760,7 +6005,11 @@ mod tests {
         }
     }
 
-    fn relay_creature_leg(tx: &SessionTx, created: &Arc<Mutex<HashSet<u64>>>, row: &CreatureSpline) {
+    fn relay_creature_leg(
+        tx: &SessionTx,
+        created: &Arc<Mutex<HashSet<u64>>>,
+        row: &CreatureSpline,
+    ) {
         if shed_motion_at_depth(tx.depth()) {
             MOTION_DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return;
@@ -6078,8 +6327,14 @@ mod tests {
     fn the_motionstat_line_reports_delivery_dropped_and_fanout_287() {
         // 1000 callbacks, 900 packets queued, 7 discarded, from 10 submitted movements.
         let line = motionstat_line(5000, 4500, 21, 1000, 900, 7, 10, 400);
-        assert!(line.contains("calls=5000"), "cumulative calls missing: {line}");
-        assert!(line.contains("sent=4500"), "cumulative sent missing: {line}");
+        assert!(
+            line.contains("calls=5000"),
+            "cumulative calls missing: {line}"
+        );
+        assert!(
+            line.contains("sent=4500"),
+            "cumulative sent missing: {line}"
+        );
         assert!(
             line.contains("dropped=21"),
             "cumulative dropped count missing: {line}"
@@ -6096,9 +6351,18 @@ mod tests {
             line.contains("fanout=100.0/move"),
             "per-movement fan-out missing/wrong: {line}"
         );
-        assert!(line.contains("submitted=400"), "submitted count missing: {line}");
-        assert!(!line.contains("completed="), "retired completed count remains: {line}");
-        assert!(!line.contains("outstanding="), "retired outstanding count remains: {line}");
+        assert!(
+            line.contains("submitted=400"),
+            "submitted count missing: {line}"
+        );
+        assert!(
+            !line.contains("completed="),
+            "retired completed count remains: {line}"
+        );
+        assert!(
+            !line.contains("outstanding="),
+            "retired outstanding count remains: {line}"
+        );
 
         // An idle window must not divide by zero or print a fake 0 %.
         let idle = motionstat_line(5000, 4500, 21, 0, 0, 0, 0, 400);
@@ -6440,13 +6704,34 @@ mod tests {
         // `arm_shard`'s own body — what's left to scan for is the (helper, table, label) triple
         // that proves the callback is still wired, not skipped.
         for (helper, table, label, what) in [
-            ("wire_insert", "game_entity_motion", "game_entity_motion.insert", "a mover's FIRST heartbeat"),
-            ("wire_update", "game_entity_motion", "game_entity_motion.update", "every heartbeat after the first — i.e. all peer movement"),
-            ("wire_insert", "game_creature_spline", "game_creature_spline.insert", "a creature's first leg"),
-            ("wire_update", "game_creature_spline", "game_creature_spline.update", "every leg after the first"),
+            (
+                "wire_insert",
+                "game_entity_motion",
+                "game_entity_motion.insert",
+                "a mover's FIRST heartbeat",
+            ),
+            (
+                "wire_update",
+                "game_entity_motion",
+                "game_entity_motion.update",
+                "every heartbeat after the first — i.e. all peer movement",
+            ),
+            (
+                "wire_insert",
+                "game_creature_spline",
+                "game_creature_spline.insert",
+                "a creature's first leg",
+            ),
+            (
+                "wire_update",
+                "game_creature_spline",
+                "game_creature_spline.update",
+                "every leg after the first",
+            ),
         ] {
             assert!(
-                arm.contains(&format!("{helper}(db.{table}()")) && arm.contains(&format!("\"{label}\"")),
+                arm.contains(&format!("{helper}(db.{table}()"))
+                    && arm.contains(&format!("\"{label}\"")),
                 "the {table} {label} half is no longer registered on the shared coordinator \
                  dispatch — {what} is silently dropped for every session"
             );
@@ -6460,17 +6745,13 @@ mod tests {
         );
     }
 
-
     /// And the instrument's wiring: the counters are only ever read by the 10-second task in
     /// `world::run`. Without this scan, reverting that task to the old hand-formatted line — no
     /// delivery ratio, no dropped count — leaves the whole suite green, which is precisely how the
     /// 63 % under-delivery went unlogged in the first place.
     #[test]
     fn the_10s_task_prints_the_delivery_instrument_287() {
-        let body = crate::test_scan::code_of(
-            include_str!("../world/mod.rs"),
-            "pub async fn run(",
-        );
+        let body = crate::test_scan::code_of(include_str!("../world/mod.rs"), "pub async fn run(");
         assert!(
             body.contains("crate::stdb::subscriptions::MOTION_DROPPED.load(Relaxed)")
                 && body.contains("crate::stdb::subscriptions::motionstat_line("),
@@ -6489,10 +6770,7 @@ mod tests {
     /// "reported the call, not the effect" defect class).
     #[test]
     fn the_10s_task_warns_on_a_fanout_collapse_b1() {
-        let body = crate::test_scan::code_of(
-            include_str!("../world/mod.rs"),
-            "pub async fn run(",
-        );
+        let body = crate::test_scan::code_of(include_str!("../world/mod.rs"), "pub async fn run(");
         assert!(
             body.contains("crate::stdb::subscriptions::fanout_health_step(fan, fanout, submitted_delta)"),
             "the 10s task no longer runs the fan-out collapse check — peer movement can degrade by \
@@ -6505,5 +6783,4 @@ mod tests {
              something out loud. Body was:\n{body}"
         );
     }
-
 }

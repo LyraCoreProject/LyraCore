@@ -306,9 +306,12 @@ pub fn build_taxi_move_raw(
     duration_ms: u32,
     spline_id: u32,
 ) -> Option<(u16, Vec<u8>)> {
-    if points.is_empty() || points.iter().chain([&start]).any(|p| {
-        !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite()
-    }) {
+    if points.is_empty()
+        || points
+            .iter()
+            .chain([&start])
+            .any(|p| !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite())
+    {
         return None;
     }
     let mut body = Vec::with_capacity(34 + points.len() * 12);
