@@ -320,21 +320,12 @@ pub(crate) fn is_due_for_expiry(eff_kind: u8, expires_at: Timestamp, now: Timest
     expires_at <= now && eff_kind != A_STEALTH
 }
 
-/// The aura tick (scheduled, scheduler-only). Two passes: (1) PERIODIC — every still-active aura that
-/// is due (`period_ms > 0` and `now >= next_tick_at`) applies its FROZEN per-tick effect (DoT subtracts
-/// via `damaged_value` floored-at-1 — NO kill this spike; HoT adds via `healed_value` clamped; ENERGIZE
-/// restores power via `energized_value` clamped to `max_power`, on a separate fold so it never clobbers
-/// a same-tick health write) reading ONLY the aura row (no template re-join), then advances its
-/// `next_tick_at` by `period_ms` so each aura ticks on its own cadence; (2) EXPIRY — delete auras past
-/// `expires_at`. Periodic runs FIRST so a final tick lands on the tick it expires. Collect-then-mutate
-/// throughout.
+/// Runs due periodic effects before expiry, including the final effect at the expiry boundary.
+/// Health and power changes fold per target. Lethal creature damage completes the shared death
+/// path, then surviving auras advance their cadence. Expired auras are removed last.
 ///
-/// Work-item 229 (per-instance ticks): DELIBERATELY LEFT GLOBAL — one schedule row, no `instance_id`
-/// scoping. Verified: this tick outer-loops `game_aura`, whose rows are per-TARGET and purely
-/// due-TIME driven (`next_tick_micros`/`expires_at`); each row touches only its own target's
-/// entity/aura state, so there are no cross-instance reads to scope away and the cost is O(active
-/// auras) — it scales with buffs/DoTs in flight, NOT with instance count. Per-instance aura cadence
-/// would also change DoT/HoT tick RATES (a gameplay change, not smoothing) — out of scope.
+/// Scheduler-only. Time indexes select due rows across the Shard; each effect operates on its
+/// own target, so instance count does not change an aura's cadence.
 #[reducer]
 pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     if ctx.sender() != ctx.database_identity() {
@@ -569,9 +560,12 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     for (guid, killer) in &dying {
         crate::combat::kill_creature(ctx, *guid, *killer);
     }
-    // Advance each due aura's cadence by one period.
+    // Death completion can remove due auras. Advance only surviving rows and preserve any other
+    // fields changed during death handling.
     for a in due {
-        let mut a2 = a;
+        let Some(mut a2) = auras.id().find(a.id) else {
+            continue;
+        };
         a2.next_tick_micros += (a2.period_ms as i64) * 1000;
         auras.id().update(a2);
     }
