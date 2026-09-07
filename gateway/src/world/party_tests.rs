@@ -578,6 +578,47 @@ fn deleted_character_cleanup_stops_after_three_realm_core_leave_failures() {
 }
 
 #[test]
+fn roster_confirmation_failure_preserves_the_realm_core_leave_error() {
+    let (realm, world, _instances, _calls) = topology_after_vim_is_deleted();
+    realm
+        .party_leave_failures
+        .store(3, std::sync::atomic::Ordering::SeqCst);
+    *realm.group_roster_error_on_read.lock().unwrap() =
+        Some((2, "Realm-core roster confirmation unavailable".into()));
+
+    let error = party::cleanup_deleted_character(world.as_ref(), VIM)
+        .expect_err("cleanup must retain the failed LEAVE as its primary error");
+
+    assert!(error.to_string().contains("LEAVE connection interrupted"));
+    assert!(!error
+        .to_string()
+        .contains("roster confirmation unavailable"));
+    assert!(realm.group_roster(VIM).unwrap().is_some());
+}
+
+#[test]
+fn reconciliation_continues_when_one_shard_cannot_enumerate_mirrored_groups() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    world.mirror.lock().unwrap().clear();
+    *instances.party_group_ids_error.lock().unwrap() =
+        Some("instances party subscription unavailable".into());
+
+    let error = party::reconcile_deleted_character_parties(world.as_ref())
+        .expect_err("the unavailable Shard read must keep reconciliation pending");
+
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("1 deleted Character party reconciliation attempt"));
+    assert!(diagnostic.contains("instances party subscription unavailable"));
+    let authoritative = realm.group_roster(GINGER).unwrap().unwrap();
+    assert_eq!(
+        world.mirror.lock().unwrap().as_slice(),
+        std::slice::from_ref(&authoritative),
+        "the known realm-core group must still repair healthy Shard mirrors"
+    );
+}
+
+#[test]
 fn unsharded_deleted_character_cleanup_stays_on_the_module_sweep() {
     let store = InMemoryStore {
         shard: "world".into(),

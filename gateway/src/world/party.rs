@@ -569,11 +569,22 @@ fn run_server_leave<St: WorldStore + ?Sized>(
             previous_group_id: before,
         });
     };
-    if before.is_some() && realm.group_roster(leaver_guid)?.is_none() {
-        return Ok(ServerLeave {
-            outcome: PartyOutcome::Ran,
-            previous_group_id: before,
-        });
+    if before.is_some() {
+        match realm.group_roster(leaver_guid) {
+            Ok(None) => {
+                return Ok(ServerLeave {
+                    outcome: PartyOutcome::Ran,
+                    previous_group_id: before,
+                });
+            }
+            Ok(Some(_)) => {}
+            Err(confirmation_error) => {
+                log::warn!(
+                    "party: could not confirm Character {leaver_guid} membership after Realm-core \
+                     LEAVE failed ({confirmation_error:#}); retrying"
+                );
+            }
+        }
     }
     Err(error)
 }
@@ -641,7 +652,17 @@ pub(crate) fn reconcile_deleted_character_parties<St: WorldStore>(store: &St) ->
     let mut group_ids: std::collections::HashSet<u64> =
         realm.party_group_ids()?.into_iter().collect();
     for shard in store.world_stores() {
-        group_ids.extend(shard.party_group_ids()?);
+        match shard.party_group_ids() {
+            Ok(ids) => group_ids.extend(ids),
+            Err(error) => {
+                failures += 1;
+                log::warn!(
+                    "party: could not enumerate mirrored groups on {} ({error:#}); retrying",
+                    shard.shard_name()
+                );
+                last_error = Some(error);
+            }
+        }
     }
     for group_id in group_ids {
         if let Err(error) = sync_group_mirrors_required(store, realm.as_ref(), group_id) {

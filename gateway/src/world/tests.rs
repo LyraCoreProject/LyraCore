@@ -631,6 +631,12 @@ struct InMemoryStore {
     party_leave_failures: std::sync::atomic::AtomicUsize,
     /// Return a connection failure after the next Realm-core LEAVE commits.
     party_leave_commit_then_error: std::sync::atomic::AtomicBool,
+    /// Fail one `group_roster` read by its one-based call number.
+    group_roster_error_on_read: std::sync::Mutex<Option<(usize, String)>>,
+    /// Number of `group_roster` reads on this handle.
+    group_roster_reads: std::sync::atomic::AtomicUsize,
+    /// When set, this handle cannot enumerate its mirrored party ids.
+    party_group_ids_error: std::sync::Mutex<Option<String>>,
     /// When set, deleted Character cleanup cannot reach Realm-core.
     party_cleanup_realm_error: Option<String>,
     /// The transfer step to fail at, simulating a gateway killed before that step's
@@ -2560,6 +2566,15 @@ impl WorldStore for InMemoryStore {
     }
 
     fn group_roster(&self, character_guid: u64) -> Result<Option<super::party::GroupRoster>> {
+        let read = self
+            .group_roster_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if let Some((error_read, error)) = &*self.group_roster_error_on_read.lock().unwrap() {
+            if read == *error_read {
+                return Err(anyhow!(error.clone()));
+            }
+        }
         if self.is_realm {
             let p = self.party.lock().unwrap();
             return Ok(p.group_of(character_guid).and_then(|g| p.roster(g)));
@@ -2601,6 +2616,9 @@ impl WorldStore for InMemoryStore {
     }
 
     fn party_group_ids(&self) -> Result<Vec<u64>> {
+        if let Some(error) = &*self.party_group_ids_error.lock().unwrap() {
+            return Err(anyhow!(error.clone()));
+        }
         if self.is_realm {
             return Ok(self
                 .party
