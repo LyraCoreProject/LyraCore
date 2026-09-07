@@ -911,7 +911,8 @@ fn resolve_instant_params(kind: u8, misc: u32, item_type: i32) -> (i32, u8) {
 /// Location targets use their companion selection in `resolve_effect_target`.
 fn resolve_target(target: i32, is_negative: bool) -> u8 {
     match target {
-        0 | 1 => T_SELF,
+        0 => T_SCRIPTED,
+        1 => T_SELF,
         6 => T_TARGET_ENEMY,
         21 | 35 | 37 | 45 | 57 | 61 => T_TARGET_ALLY,
         25 => {
@@ -932,6 +933,73 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
         }
         _ => T_SCRIPTED,
     }
+}
+
+const TARGET_FLAG_UNIT: u32 = 0x0002;
+const TARGET_FLAG_UNIT_ENEMY: u32 = 0x0080;
+const TARGET_FLAG_UNIT_ALLY: u32 = 0x0100;
+const TARGET_FLAG_CORPSE_ENEMY: u32 = 0x0200;
+const TARGET_FLAG_UNIT_DEAD: u32 = 0x0400;
+const TARGET_FLAG_CORPSE_ALLY: u32 = 0x8000;
+
+fn polarity_target(is_negative: bool) -> u8 {
+    if is_negative {
+        T_TARGET_ENEMY
+    } else {
+        T_TARGET_ALLY
+    }
+}
+
+/// Resolve an explicit target shape from the Spell header when the effect has no implicit target.
+/// Only flags accepted by the source effect type participate.
+fn compatible_header_target(effect_id: i32, kind: u8, flags: u32, is_negative: bool) -> Option<u8> {
+    if kind == E_SCRIPTED {
+        return None;
+    }
+    let accepted = match effect_id {
+        // Source effects whose required target type is Unit or UnitDest.
+        1 | 2 | 5 | 6 | 8 | 9 | 10 | 11 | 16 | 17 | 19 | 24 | 29 | 30 | 31 | 34 | 36 | 38 | 40
+        | 43 | 45 | 46 | 47 | 55 | 57 | 58 | 61 | 62 | 63 | 67 | 68 | 69 | 70 | 71 | 75 | 79
+        | 80 | 82 | 83 | 85 | 92 | 95 | 96 | 98 | 100 | 102 | 103 | 108 | 111 | 114 | 115 | 117
+        | 120 | 121 | 123 | 124 | 125 | 126 => {
+            flags
+                & (TARGET_FLAG_UNIT
+                    | TARGET_FLAG_UNIT_ENEMY
+                    | TARGET_FLAG_UNIT_ALLY
+                    | TARGET_FLAG_UNIT_DEAD)
+        }
+        // Resurrection effects accept corpse flags rather than unit flags.
+        18 | 113 | 116 => flags & (TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_CORPSE_ALLY),
+        _ => 0,
+    };
+    let enemy = accepted & (TARGET_FLAG_UNIT_ENEMY | TARGET_FLAG_CORPSE_ENEMY) != 0;
+    let ally = accepted & (TARGET_FLAG_UNIT_ALLY | TARGET_FLAG_CORPSE_ALLY) != 0;
+    match (enemy, ally) {
+        (true, false) => Some(T_TARGET_ENEMY),
+        (false, true) => Some(T_TARGET_ALLY),
+        (true, true) => Some(T_TARGET_ANY),
+        (false, false) if accepted != 0 => Some(polarity_target(is_negative)),
+        (false, false) => None,
+    }
+}
+
+/// Apply the pinned source's effect default after a `(TARGET_NONE, TARGET_NONE)` pair. Unsupported
+/// effects retain the runtime fallback instead of acquiring a unit target from a foreign effect.
+fn supported_effect_default(effect_id: i32, kind: u8, is_negative: bool) -> u8 {
+    if kind == E_SCRIPTED {
+        return T_SCRIPTED;
+    }
+    let default = match effect_id {
+        2 => 6,                                              // enemy
+        6 | 34 | 46 | 47 | 61 | 79 => 1,                     // caster
+        11 | 18 | 24 | 36 | 44 | 85 | 116 | 118 | 123 => 25, // selected unit
+        28 | 50 => 18,                                       // caster destination
+        57 => 5,                                             // caster pet
+        // Source area auras use the caster when neither implicit target names a single unit.
+        35 | 119 => return T_SELF,
+        _ => 0,
+    };
+    resolve_target(default, is_negative)
 }
 
 /// Coverage accounting accumulated across the whole import — drives the COVERAGE REPORT.
@@ -1606,12 +1674,17 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
     let channeled = header.channeled;
     let target_a = s.implicit_target_a[i];
     let target_b = s.implicit_target_b[i];
-    let selection = if matches!(target_a, 0 | 18 | 22) && target_b != 0 {
-        target_b
+    let target = if target_a == 0 && target_b == 0 {
+        compatible_header_target(s.effect[i], kind, s.targets, is_negative)
+            .unwrap_or_else(|| supported_effect_default(s.effect[i], kind, is_negative))
     } else {
-        target_a
+        let selection = if matches!(target_a, 0 | 18 | 22) && target_b != 0 {
+            target_b
+        } else {
+            target_a
+        };
+        resolve_target(selection, is_negative)
     };
-    let target = resolve_target(selection, is_negative);
     // These handlers operate on the caster or a ground location, regardless of unit selection.
     let target = match kind {
         E_CHARGE | E_JUDGEMENT | E_PICKPOCKET | E_INTERRUPT | E_NEXT_SWING | E_TAUNT
@@ -2187,6 +2260,7 @@ mod tests {
             (7, 0x0008_0000),
             (8, 32),
             (11, 1 << 16),
+            (13, TARGET_FLAG_UNIT_ALLY),
             (18, 1),
             (19, 1234),
             (20, 2345),
@@ -2412,6 +2486,29 @@ mod tests {
         assert!(rows.reagents.contains(&"(61985,7748,10938,2)".to_owned()));
     }
 
+    #[test]
+    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    fn actual_target_none_uses_flags_defaults_and_scripted_fallback() {
+        let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
+        let (rows, _, _) =
+            build_spell_rows(Path::new(&dir), &[16456, 18435, 21403, 28374], &[]).unwrap();
+        let effects = |spell_id| {
+            rows.effects
+                .iter()
+                .filter(|effect| effect.spell_id == spell_id)
+                .collect::<Vec<_>>()
+        };
+
+        assert!(effects(16456)
+            .iter()
+            .all(|effect| effect.target == T_TARGET_ENEMY));
+        assert!(effects(21403)
+            .iter()
+            .all(|effect| effect.target == T_TARGET_ALLY));
+        assert_eq!(effects(18435)[1].target, T_SCRIPTED);
+        assert_eq!(effects(28374)[2].target, T_SCRIPTED);
+    }
+
     fn imported_spell_fixture(
         ids: &[u32],
     ) -> (crate::standalone_support::Standalone, String, String) {
@@ -2533,6 +2630,7 @@ mod tests {
     fn source_header_reagents_and_references_reach_the_derived_rows() {
         let dbc = fixture_tables();
         let source = &dbc.spells[0];
+        assert_eq!(source.targets, TARGET_FLAG_UNIT_ALLY);
         assert_eq!(source.equipment, [u32::MAX, 31, 1_048_608]);
         assert_eq!(source.implicit_target_b, [21, 22, 23]);
         assert_eq!(source.effect_base_dice, [1, 2, 3]);
@@ -2636,6 +2734,31 @@ mod tests {
         assert_eq!(
             rows.effects.iter().map(|e| e.target).collect::<Vec<_>>(),
             [T_TARGET_ALLY, T_AREA_ENEMY, T_TARGET_ALLY]
+        );
+    }
+
+    #[test]
+    fn source_target_none_uses_compatible_flags_then_effect_defaults() {
+        let mut dbc = fixture_tables();
+        dbc.spells[0].implicit_target_a = [0; 3];
+        dbc.spells[0].implicit_target_b = [0; 3];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert_eq!(
+            rows.effects
+                .iter()
+                .map(|effect| effect.target)
+                .collect::<Vec<_>>(),
+            [T_TARGET_ALLY, T_TARGET_ALLY, T_SCRIPTED]
+        );
+
+        dbc.spells[0].targets = 0;
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert_eq!(
+            rows.effects
+                .iter()
+                .map(|effect| effect.target)
+                .collect::<Vec<_>>(),
+            [T_SELF, T_SELF, T_SCRIPTED]
         );
     }
 
@@ -3386,7 +3509,7 @@ mod tests {
         assert_eq!(resolve_target(6, true), T_TARGET_ENEMY);
         assert_eq!(resolve_target(6, false), T_TARGET_ENEMY);
         assert_eq!(resolve_target(1, false), T_SELF);
-        assert_eq!(resolve_target(0, false), T_SELF);
+        assert_eq!(resolve_target(0, false), T_SCRIPTED);
         // Target 20 selects the party within caster range.
         assert_eq!(resolve_target(20, false), T_AREA_ALLY);
         // area-of-effect code 8: polarity still decides enemy-area vs ally-area.

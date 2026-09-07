@@ -359,7 +359,9 @@ The normalized input preserves all three slots and raw aura numbers. Unsupported
 
 [Target definitions](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Spells/SpellTargetDefines.h)
 define 6 as enemy, 21 and 57 as friendly units, and 22 as the caster's source location. Location targets
-use the companion selection where present. The importer translates vanilla damage and movement
+use the companion selection where present. Code 0 means no implicit target. For a `(0, 0)` pair, the
+importer uses compatible Spell header target flags, then the source effect's default target. An
+unsupported effect keeps the scripted fallback. The importer translates vanilla damage and movement
 interrupt bits into the Module's compact mask. Gouge's control and Stealth's speed penalty come from
 the third source effect. Their former synthetic additions are removed. The Human Spirit maps directly
 to its percentage aura. Evocation's existing periodic-mana correction now addresses source slot 0.
