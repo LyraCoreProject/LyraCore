@@ -1,12 +1,12 @@
 {
-  "updated_at": "2026-09-07 14:06 UTC",
-  "base_revision": "38a78b827b92cf4a231196df7352b1852c2722d8",
-  "status_note": "72 open issues assessed; 17 closed issues retained for history. Completing benchmark reporting, creature movement and service contract checks.",
+  "updated_at": "2026-09-07 14:22 UTC",
+  "base_revision": "6ccfe68e4cb226c5cac836fd309976b44ebb19cd",
+  "status_note": "71 open issues assessed; 18 closed issues retained for history. Movement replay and benchmark reporting are merged. Service checks, Warlock quests and the bank adapter are active.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
   "focus": [
-    "Finish corrected benchmark pin #449 through current-head checks and review.",
-    "Complete resident movement #272 and service-contract #341 then #340 with GPT-5.6 Sol at high effort.",
-    "Implement The Binding quest mechanic #40 with GPT-6 Astra at high effort."
+    "Review CLI PR #57 for service parsing #341 and effective command #340, then adopt its pin.",
+    "Finish and test The Binding #40 draft for required human schema review.",
+    "Implement bank-flow adapter #137; keep live execution with the Operator."
   ],
   "issues": [
     {
@@ -170,7 +170,7 @@
       "confidence": "high",
       "disposition": "done",
       "rationale": "Subscribed-table parity leaves other generated definitions unchecked. A reproducible generation check would catch drift before unrelated schema work encounters it.",
-      "next_action": "Complete. CI generates and compares all 967 Gateway binding files; all checks passed in merged #448.",
+      "next_action": "Complete. Merged #448 generates and compares every Gateway binding file, with documented normalization. Its baseline contained 967 files.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/368",
@@ -292,13 +292,14 @@
       "gain": 3,
       "effort": 2,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "The CLI parser still splits physical lines. Continued directives can hide a conflicting Standalone service. The fix is testable without changing a host.",
-      "next_action": "Implement continued directives first, then effective command verification in one CLI worktree. Use process Fakes, publish the reviewed CLI change, then update the core pin.",
+      "next_action": "Finish CLI #57 through review and CI, then update the core CLI pin. Keep this issue open until core adoption.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/341",
-        "lyracore-cli/src/cmd/service.rs: UnitContract::parse iterates text.lines()."
+        "lyracore-cli/src/cmd/service.rs: UnitContract::parse iterates text.lines().",
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/57"
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/341",
@@ -313,13 +314,14 @@
       "gain": 4,
       "effort": 3,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "The current verifier reads ActiveState, LimitNOFILE and StandardError. It does not compare the effective ExecStart or name relevant drop-ins. A success report can therefore describe the wrong service.",
-      "next_action": "Implement continued directives first, then effective command verification in one CLI worktree. Use process Fakes, publish the reviewed CLI change, then update the core pin.",
+      "next_action": "Finish CLI #57 through review and CI, then update the core CLI pin. Keep this issue open until core adoption.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/340",
-        "lyracore-cli/src/cmd/service.rs: verify omits ExecStart and DropInPaths."
+        "lyracore-cli/src/cmd/service.rs: verify omits ExecStart and DropInPaths.",
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/57"
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/340",
@@ -406,14 +408,14 @@
     },
     {
       "number": 272,
-      "summary": "A creature that enters a viewer's AOI during an active movement leg can stand still and then jump forward; delayed motion flushes and the four-second sensing cadence can produce similar symptoms.",
+      "summary": "Resident creature movement now replays after CREATE. Motion-flush shedding and sensing cadence still need decisions.",
       "importance": 3,
       "gain": 4,
       "effort": 3,
       "confidence": "high",
-      "disposition": "implementing",
-      "rationale": "The cheapest defect is still present: peer CREATE replays a resident taxi spline but never the creature's current spline. Motion shedding and sensing cadence are separate policy choices, so they should not hold up that localized fix.",
-      "next_action": "Implement resident creature movement after CREATE with elapsed-leg timing and ordering coverage. Keep motion shedding, sensing cadence and real-client acceptance separate.",
+      "disposition": "decision",
+      "rationale": "Merged #450 resumes resident movement from its current point and remaining duration. The issue also describes delayed flushes under load and a four-second sensing cadence; those remain separate policy choices.",
+      "next_action": "Choose motion-flush shedding and sensing cadence after measuring current behavior. Complete the stock-client acceptance recording.",
       "blockers": [
         "Full closure needs a maintainer choice for motion-flush shedding and proximity sensing cadence.",
         "The combined symptom still needs real-client acceptance."
@@ -421,17 +423,18 @@
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/272",
         "https://github.com/LyraCoreProject/LyraCore/pull/271",
-        "gateway/src/stdb/subscriptions.rs: offer_peer_create appends a resident taxi spline after CREATE but has no equivalent lookup for game_creature_spline.",
         "gateway/src/stdb/world_view.rs: maybe_queue_motion_flush still drops a flush at egress depth while retaining the superseding pending map.",
-        "module/src/creatures/ai.rs: SENSE_EVERY_N_TICKS remains 8 at a 500 ms movement tick."
+        "module/src/creatures/ai.rs: SENSE_EVERY_N_TICKS remains 8 at a 500 ms movement tick.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/450",
+        "https://github.com/LyraCoreProject/LyraCore/issues/272#issuecomment-5572001403"
       ],
       "related_prs": [
-        271
+        450
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/272",
-      "updatedAt": "2026-08-18T10:03:08Z",
+      "updatedAt": "2026-09-07T14:21:21Z",
       "github_state": "open",
-      "owner": "GPT-5.6 Sol, high effort, relay agent"
+      "owner": "Codex"
     },
     {
       "number": 202,
@@ -662,9 +665,9 @@
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "The parent and both blocking code issues are closed. Current Gateway paths cover activate, deposit, withdraw, and slot purchase, while the pinned adapter tree has no bank script.",
-      "next_action": "Add the bank-flow adapter in wire-harness, release it, and bump the pin. Then run the adapter and the listed real-client window checks on an approved development Realm.",
+      "next_action": "Implement the bank-flow protocol scenario and LyraCore adapter with stdin credentials and offline checks. Operator execution and real-client window acceptance remain separate.",
       "blockers": [
         "Completing the issue requires a wire-harness release and LyraCore pin bump.",
         "The final window and cell behavior require a human with a stock client."
@@ -683,7 +686,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/137",
       "updatedAt": "2026-08-12T05:25:15Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-5.6 Sol, medium effort, adapter agent"
     },
     {
       "number": 114,
@@ -1148,35 +1151,28 @@
     },
     {
       "number": 75,
-      "summary": "The pinned raid benchmark neither reports dead Characters nor sends Release Spirit, so later additive stages can silently measure a mostly inactive population.",
+      "summary": "Raid benchmark reports dead and unknown Characters at each measurement window.",
       "importance": 4,
       "gain": 4,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "The alpha.4 benchmark has raid mode but no death count. Reporting dead and unknown clients is a bounded first slice that makes later additive-stage measurements interpretable.",
-      "next_action": "Finish current-head CI and review on core pin #449, now using corrected alpha.6. Reporting and sparse CREATE corrections are merged upstream.",
-      "blockers": [
-        "Landing in LyraCore requires a wire-harness release and pin bump.",
-        "Automatic recovery needs real protocol and development-Realm Verification."
-      ],
+      "disposition": "done",
+      "rationale": "Core #449 adopts alpha.6, including the sparse CREATE correction. Reporting satisfies the issue's stated completion rule without automatic recovery.",
+      "next_action": "Complete. Automatic recovery can be a separate feature if requested.",
+      "blockers": [],
       "evidence": [
-        "https://github.com/LyraCoreProject/LyraCore/issues/75",
-        "https://github.com/LyraCoreProject/wire-harness/blob/219f8cd1670f4b783892388f110d233722892bb3/src/bin/bench/main.rs",
-        ".wire-harness-rev now pins alpha.4 (fcaabf9486a774611c1ee3d1a69710471c79c60a), whose benchmark still lacks a death count.",
-        "The pinned bench source has boss raid mode and report generation but no repop, revive, or dead-Character report path.",
-        "https://github.com/LyraCoreProject/wire-harness/pull/7 passed independent review and 62 tests; current-head CI is running.",
-        "https://github.com/LyraCoreProject/wire-harness/releases/tag/v0.1.0-alpha.5",
         "https://github.com/LyraCoreProject/LyraCore/pull/449",
+        "https://github.com/LyraCoreProject/wire-harness/pull/7",
         "https://github.com/LyraCoreProject/wire-harness/pull/8",
-        "https://github.com/LyraCoreProject/wire-harness/releases/tag/v0.1.0-alpha.6"
+        "https://github.com/LyraCoreProject/wire-harness/releases/tag/v0.1.0-alpha.6",
+        "Core pin 78f191f5463d6834041801b0d6d9079427907ec9. All seven core checks passed; CodeRabbit reviewed final head 00f64bb with no actionable findings."
       ],
       "related_prs": [
         449
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/75",
-      "updatedAt": "2026-08-11T08:18:41Z",
-      "github_state": "open",
+      "updatedAt": "2026-09-07T14:16:47Z",
+      "github_state": "closed",
       "owner": "GPT-5.6 Sol, medium effort, benchmark agent"
     },
     {
@@ -1857,18 +1853,20 @@
       "summary": "The Binding pet quests need the scripted ritual encounter that turns source-item use into the objective fight.",
       "importance": 4,
       "gain": 4,
-      "effort": 4,
+      "effort": 5,
       "confidence": "high",
       "disposition": "implementing",
-      "rationale": "Source data maps item 6928 to spell 7728 and item 6913 to spell 8674. Both use SendEvent and ActivateObject with spell focus 83. Current quest source-item reachability and item-use routing already exist. The remaining work must preserve the source-backed event behavior, focus Gate and objective credit.",
-      "next_action": "Implement the verified ritual event path through existing importer, summon and cast mechanisms. Prove both quest variants server-side; retain ritual-circle visual acceptance.",
+      "rationale": "Source data maps item 6928 to spell 7728 and item 6913 to spell 8674. Both use SendEvent and ActivateObject with spell focus 83. Current quest source-item reachability and item-use routing already exist. The remaining work must preserve the source-backed event behavior, focus Gate and objective credit. Quest turn-in also lacks reward-spell data, so the complete path needs a small durable catalogue and generated bindings.",
+      "next_action": "Prepare and test the complete ritual and reward-spell change as a draft PR. Obtain required human schema review before merge; retain ritual-circle visual acceptance.",
       "blockers": [
-        "A real-client visual check after the Module behavior passes"
+        "Human review of the concrete schema and binding change under docs/danger-zones.md section 1 before shipping.",
+        "A real-client ritual-circle check after Module behavior passes."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/40",
         "Code fact: importer/src/main.rs force-includes only the existing pet templates 416 and 1860; the Module has E_SUMMON_PET for persistent owned pets but no hostile ownerless summon effect for these quests.",
-        "Current pinned cmangos rows: item 6928 -> spell 7728 -> event 1131; item 6913 -> spell 8674 -> event 1134. Both spells use effects 61 and 86 with focus 83. The issue's suggested plain hostile-summon effect is not the source spell shape."
+        "Current pinned cmangos rows: item 6928 -> spell 7728 -> event 1131; item 6913 -> spell 8674 -> event 1134. Both spells use effects 61 and 86 with focus 83. The issue's suggested plain hostile-summon effect is not the source spell shape.",
+        "Current quest importer omits RewSpell and RewSpellCast; the Module has no durable quest reward-spell catalogue. The draft must preserve their distinct source semantics."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/40",
@@ -2798,7 +2796,7 @@
       "title": "fix(bench): report dead clients at window close",
       "owner": "GPT-5.6 Sol, medium effort, benchmark agent",
       "status": "Merged; alpha.5 released",
-      "next_action": "Correction #8 is merged and alpha.6 is released. Finish core adoption in #449.",
+      "next_action": "Complete. Core #449 adopts corrected alpha.6.",
       "head": "289b6dad09bb32474cf64f87df4652498b31e6a6",
       "checked_at": "2026-09-07 13:57 UTC",
       "github_state": "MERGED",
@@ -2823,15 +2821,15 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/449",
       "title": "fix(bench): pin dead-client reporting release",
       "owner": "Codex",
-      "status": "Ready for review; corrected alpha.6",
-      "next_action": "Complete fresh current-head checks and review, then merge and close #75.",
+      "status": "Merged; #75 closed",
+      "next_action": "Complete. Corrected alpha.6 is pinned in core.",
       "head": "00f64bb2930924ff45b8295035697758ced88920",
-      "checked_at": "2026-09-07 14:05 UTC",
-      "github_state": "OPEN",
+      "checked_at": "2026-09-07 14:20 UTC",
+      "github_state": "MERGED",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -2843,21 +2841,22 @@
         },
         {
           "name": "clippy",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "test",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "wasm",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "CodeRabbit",
-          "result": "PENDING"
+          "result": "SUCCESS"
         }
-      ]
+      ],
+      "merge_commit": "e6194ef2018e8765f459012ae52f16eb06dbbe99"
     },
     {
       "number": 8,
@@ -2865,7 +2864,7 @@
       "title": "fix(client): apply sparse Character create snapshots",
       "owner": "GPT-5.6 Sol, medium effort, benchmark agent",
       "status": "Merged; alpha.6 released",
-      "next_action": "Finish core adoption in #449.",
+      "next_action": "Complete. Core #449 adopts corrected alpha.6.",
       "head": "50a3eb215f792ad3d8afeaeb52feaf542c00d349",
       "checked_at": "2026-09-07 14:05 UTC",
       "github_state": "MERGED",
@@ -2884,6 +2883,65 @@
         }
       ],
       "merge_commit": "78f191f5463d6834041801b0d6d9079427907ec9"
+    },
+    {
+      "number": 450,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/450",
+      "title": "fix(gateway): replay resident creature movement after CREATE",
+      "owner": "Codex, after implementer handoff",
+      "status": "Merged; #272 has remaining decisions",
+      "next_action": "Resident replay is complete. Keep #272 open for the remaining policy choices and real-client acceptance.",
+      "head": "153f55f5f37185b5590bb16b452f7c72cf5e5554",
+      "checked_at": "2026-09-07 14:22 UTC",
+      "github_state": "MERGED",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ],
+      "merge_commit": "6ccfe68e4cb226c5cac836fd309976b44ebb19cd"
+    },
+    {
+      "number": 57,
+      "url": "https://github.com/LyraCoreProject/lyracore-cli/pull/57",
+      "title": "fix(service): verify the effective start command",
+      "owner": "GPT-5.6 Sol, high effort, CLI agent",
+      "status": "Review and CI running",
+      "next_action": "Review current head, merge, then adopt the CLI pin for #341 and #340.",
+      "head": "94535c723ca9b3fc10c420bae5edc91c8b10bd0b",
+      "github_state": "OPEN",
+      "checks": [
+        {
+          "name": "CodeRabbit",
+          "result": "PENDING"
+        }
+      ],
+      "checked_at": "2026-09-07 14:22 UTC"
     }
   ],
   "history": [
@@ -2982,10 +3040,26 @@
     {
       "at": "2026-09-07 14:06 UTC",
       "text": "Corrected #40 from verified source data. The items already use the spell route; their effects send ritual events and activate a focus object. The implementation will preserve those Gates and reuse temporary summon behavior."
+    },
+    {
+      "at": "2026-09-07 14:09 UTC",
+      "text": "Raised #40 effort after tracing the missing reward-spell catalogue. Its schema change will go to a tested draft PR for required human review. Service review also established that flat systemctl output loses argv boundaries; a typed read is needed."
+    },
+    {
+      "at": "2026-09-07 14:14 UTC",
+      "text": "Parent took #450 through the remaining CI and review. Assigned bank adapter #137 to GPT-5.6 Sol at medium effort in a separate wire-harness worktree. The service change now uses typed D-Bus arguments, avoiding flat show-output ambiguity."
+    },
+    {
+      "at": "2026-09-07 14:20 UTC",
+      "text": "Merged core #449 after all seven checks and final-head CodeRabbit review passed. Issue #75 is closed. CLI #57 is open after 711 tests, strict clippy and Rust 1.85 checks."
+    },
+    {
+      "at": "2026-09-07 14:22 UTC",
+      "text": "Merged resident movement #450 after all seven checks passed and final-head CodeRabbit review found no actionable findings. Kept #272 open with a bounded completion comment. A full 71-issue census found no new issues."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
   "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "Refetched all 73 open issues with comments. All open issue timestamps match their assessments. Reviewed intervening main changes and retained real-client acceptance separately from merged code."
+  "audit_note": "Refetched all 71 open issues. No new issues appeared; the only updated discussion is the recorded completion of resident movement in #272. All 89 assessments remain in the report."
 }
