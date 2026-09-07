@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-09-07 16:15 UTC",
-  "base_revision": "3455aa2ef1de7eb959909fa79d55f62a90925cba",
+  "updated_at": "2026-09-07 16:35 UTC",
+  "base_revision": "627327f04aab8ceae9e021ef3450212dda40680c",
   "status_note": "All 69 open issues have been rechecked; 20 closed issues remain for history. Three isolated agents own Character deletion cleanup, the Random Property Tracer and Loot Roll replay prevention. Nine assessments changed after the audit.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
   "focus": [
@@ -1776,14 +1776,15 @@
       "confidence": "medium",
       "disposition": "implementing",
       "rationale": "The Character deletion Relay is present, but it converts failed reads to absence before a direct Realm-core LEAVE. Its tests inspect source text. The current path also needs verification of Transfer/cache ordering and surviving party mirrors before the suite workaround can be removed.",
-      "next_action": "Recover and finish the existing cleanup patch in an isolated worktree. Prove Transfer preservation, failed-read handling and surviving rosters, then publish and monitor its PR.",
+      "next_action": "Complete the private Coordinator callback and Transfer regression, then finish Gateway checks and publish the cleanup PR. Keep suite workaround removal as a separate follow-up.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/46",
         "https://github.com/LyraCoreProject/LyraCore/pull/384",
         "Code fact: gateway/src/main.rs starts spawn_character_gone_relay, and gateway/src/stdb/subscriptions.rs leaves the realm-core party only when character_anywhere reports the Character absent from all Shards.",
         "Coordinating review found callback/reconnect deadlocks and a sequential absence-scan race during Transfer; the implementation agent is fixing these before PR publication.",
-        "Recovery copied the committed and unfinished source into a new worktree. Original tracked diffs stayed unchanged during capture."
+        "Recovery copied the committed and unfinished source into a new worktree. Original tracked diffs stayed unchanged during capture.",
+        "Direct tests pass for unreadable Shards, unavailable Realm-core, Transfer preservation, failed LEAVE and mirror retries, lost replies and stale mirror repair. The actual Coordinator callback test remains in progress."
       ],
       "related_prs": [
         384
@@ -2097,7 +2098,7 @@
       "confidence": "high",
       "disposition": "implementing",
       "rationale": "The approved two-Ticket Spec starts with weighted property selection, durable item state and the existing EquipStat families. The recovered Tracer also carries the property through buyback, Mail, Escrow, Auctions, Loot Rolls and Transfer. Compilation, durable tests and the remaining stat families are still required.",
-      "next_action": "Finish the recovered Tracer, complete generated bindings and durable verification, and publish a tested draft for schema review. The remaining stat families follow the checked Tracer.",
+      "next_action": "Complete final checks and publish the Random Property Tracer draft for human schema review. Then assign the remaining stat families to GPT-5.6 Sol at high effort.",
       "blockers": [
         "Human review of the concrete schema and binding changes before shipping.",
         "A real-client tooltip check and approved Realm acceptance after the Tracer and remaining stat-family work."
@@ -2109,7 +2110,8 @@
         "Source preflight checked pinned CMaNGOS data and the local build-5875 client tables. Existing synthetic enchant IDs 7745 and 7748 do not collide with imported enchantments. Buyback, Mail, Escrow, Auction and Loot Roll paths must preserve the selected property; old opaque Transfer blobs need an explicit compatibility path.",
         "Takeover review fixed partial inventory grants, empty catalogue import, and stat-sum overflow. Importer tests pass; Module checks, generated bindings, Gateway projection and private durable fixtures are in progress.",
         "Recovery copied the committed and unfinished source into a new worktree. Original tracked diffs stayed unchanged during capture.",
-        "Coordinating review found repeated enchantment-catalogue scans in armor projection and overflow in the changed Spirit fold; the implementer is correcting both before publication."
+        "Coordinating review found repeated enchantment-catalogue scans in armor projection and overflow in the changed Spirit fold; the implementer is correcting both before publication.",
+        "All eight private durable property tests and the complete 973-file binding comparison passed. Real-data import exposed shifted Spell fields; the corrected reader now imports primary-stat effects. Final checks are rerunning after that fix."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/31",
@@ -2360,7 +2362,7 @@
       "confidence": "high",
       "disposition": "implementing",
       "rationale": "PR #439 is merged, so the listed prerequisite is stale. Stable promotion identity and durable replay refusal are distributed idempotency work that an agent can design and implement. Human review is required only before a schema change ships.",
-      "next_action": "Choose a stable promotion identity and cleanup boundary, then prove resolved START replay cannot recreate active rolls while a later valid roll succeeds. Publish a tested draft if schema changes.",
+      "next_action": "Complete Gateway checks and publish the tested replay-prevention draft for human schema and upgrade review.",
       "blockers": [
         "Human review before shipping any concrete schema change."
       ],
@@ -2370,7 +2372,8 @@
         "gateway/src/world/loot.rs promote_one sends START using corpse_guid and slot, then clears the staging row after success.",
         "module/src/loot/rolls.rs insert_roll_rows deduplicates only against a live corpse and slot row, while cleanup_roll deletes the row and votes.",
         "The issue provides the required replay, later-valid-roll, cleanup-boundary, and settlement-Gate tests.",
-        "PR #439 is already merged into the report base revision."
+        "PR #439 is already merged into the report base revision.",
+        "A private durable test reproduced delayed START recreating a resolved roll on unchanged main. Six durable checks now pass with a receipt keyed by source database identity, corpse and slot, retaining the greatest source roll id. Private old-to-new Module publish tests pass for drained legacy state and refusal of unidentifiable legacy promotions. Receipt storage grows with distinct corpse keys."
       ],
       "related_prs": [
         439
@@ -3397,15 +3400,15 @@
       "title": "docs(triage): resume issue ownership and PR monitoring",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/458",
       "owner": "Codex, coordinating agent",
-      "status": "Open; checks and review running",
-      "next_action": "Incorporate audit results and active assignments, then finish CI and actual CodeRabbit review.",
-      "head": "650bf7dba78d9faa66adcc6369659935ce96c4f0",
-      "github_state": "OPEN",
-      "checked_at": "2026-09-07 16:15 UTC",
+      "status": "Merged; one review finding remains for the report correction",
+      "next_action": "Commit the corrected review status, publish it at the stable URL, and resolve the review thread after the correction lands.",
+      "head": "da2140f545711063c490149217ad370c3fc08662",
+      "github_state": "MERGED",
+      "checked_at": "2026-09-07 16:35 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -3431,7 +3434,16 @@
           "name": "CodeRabbit",
           "result": "SUCCESS"
         }
-      ]
+      ],
+      "merge_commit": "627327f04aab8ceae9e021ef3450212dda40680c",
+      "review_state": {
+        "CodeRabbit": "COMPLETE",
+        "coordinating": "CORRECTION_PENDING"
+      },
+      "review_findings": [
+        "CodeRabbit found inconsistent review status in this report. This snapshot corrects the status; the follow-up PR and review thread remain open until the correction lands."
+      ],
+      "review_note": "All seven checks passed at da2140f. CodeRabbit completed review with one actionable report-state finding. The coordinating merge script continued after a failed review assertion and merged the PR with that thread unresolved. Validation and merge now run as separate steps."
     }
   ],
   "history": [
@@ -3598,6 +3610,10 @@
     {
       "at": "2026-09-07 16:15 UTC",
       "text": "Completed a fresh audit of all 69 open issues. Nine assessments changed. Removed stale design blockers from #441, #61, #72 and #113; #71 can proceed to an agent-produced migration design. Assigned #441 to GPT-6 Astra at high effort. Report PR #458 is open. Parent review is checking failure recovery in #46 and item identity in #31."
+    },
+    {
+      "at": "2026-09-07 16:35 UTC",
+      "text": "Merged report PR #458 after seven passing checks, but the merge script continued past a failed review assertion. One CodeRabbit finding remained about stale report status. Corrected the snapshot and separated validation from merge commands; the follow-up and original review thread still need completion. Loot replay has six passing durable checks, and real-data import caught and fixed the Random Property Spell reader offset."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
