@@ -18,11 +18,14 @@ This change adds a defaulted `Identity` column to LootRoll, a private receipt ta
 
 Human review under `docs/danger-zones.md` section 1 is required before shipping. The reviewer must approve the additive schema, generated bindings, retained receipt storage and the following upgrade boundary:
 
-1. Stop every Gateway that can promote a Loot Roll. Keep the Modules running so their scheduled deadline sweeps can finish existing rolls. Stop other Operator clients that can send START.
-2. On every World Shard, Instance Pool and Realm-core, check through SQL that both `game_loot_roll` and `game_loot_roll_vote` have zero rows. Normal roll deadlines are 60 seconds. Check the state rather than assuming that waiting 60 seconds drained it. If rows remain, diagnose their deadlines and the scheduled sweep before continuing.
-3. Publish the new Module to every destination with the ordinary non-destructive publish procedure. Do not reset tables or their auto-increment sequences.
-4. Start only the Gateway build that sends the new promotion identity arguments. Old Gateway processes and their retained requests must remain stopped.
+1. Prevent new gameplay and Operator requests from creating Loot Rolls, including bot combat. Keep the old Gateways running while existing rolls resolve so their relays can deliver winner settlement to the World Shards.
+2. On every World Shard, Instance Pool and Realm-core, require zero rows in `game_loot_roll` and `game_loot_roll_vote`, and zero rows in `game_corpse_loot WHERE withheld = true`. An empty active-roll table alone does not prove that the winner received the item. Check the state rather than assuming the 60-second roll deadline completed settlement. Diagnose any remaining rows before continuing.
+3. Once settlement has drained, stop every old Gateway and other Operator client that can promote or settle a roll. Keep gameplay producers quiescent. Recheck every intended destination before the first publish.
+4. Publish the new Module to every destination with the ordinary non-destructive publish procedure. Do not reset tables or their auto-increment sequences.
+5. Start only the Gateway build that sends the new promotion identity arguments. Old Gateway processes and their retained requests must remain stopped.
 
-The empty-roll checkpoint prevents an old Realm-core roll from resolving without a corresponding receipt while an old staging copy is still eligible for promotion. An idempotent source-column backfill alone would not establish that missing Realm-core receipt.
+The empty-roll checkpoint prevents an old Realm-core roll from resolving without a corresponding receipt while an old staging copy is still eligible for promotion. The withheld-loot check also prevents publishing between resolution and winner settlement. A source-column backfill alone would not establish the missing Realm-core receipt.
+
+A controlled check published baseline `3455aa2` to two disposable Shards, created a source staging roll and a Realm-core roll, then cast the winning votes. Both roll tables became empty while the source still held withheld loot. Delivering the old `settle_loot_roll` request granted exactly one item and cleared the final pending row. Publishing this change then preserved that item and the source sequence, refused the old START arguments and produced a nonzero identity on new staging rows. This checks the Module transition; the publish command's separate all-destination check enforces the checkpoint.
 
 No production upgrade was performed while developing this change. The regression suite uses owned disposable Standalone fixtures.
