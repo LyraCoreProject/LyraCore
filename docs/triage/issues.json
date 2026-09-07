@@ -1,14 +1,13 @@
 {
-  "updated_at": "2026-09-07 13:04 UTC",
-  "base_revision": "b4c17c481f66784fd24677f583e0368fc3ac8c95",
-  "status_note": "77 open issues assessed; 12 closed issues retained for history. Finishing existing PRs and implementing the next independent checks.",
+  "updated_at": "2026-09-07 13:40 UTC",
+  "base_revision": "0b8631d400d9a445aec4fe1af5a80f87c83aee4b",
+  "status_note": "75 open issues assessed; 14 closed issues retained for history. Finishing reviewed PRs and the next independent checks.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
   "focus": [
-    "Finish current-head reviews for core PRs #438, #439 and #440.",
-    "Implement #50 to catch Character state omitted from cleanup or Transfer.",
-    "Finish CLI PR #56 for #398 and publish the core pin update.",
-    "Refresh every issue assessment and prepare the next independent tasks.",
-    "#105: repair suite dispatch and distinguish startup failures before relying on more Headless Client runs."
+    "Finish ownership-check #445 and CLI pin #447 through their current-head CI.",
+    "Publish and verify the offline binding-drift check for #368.",
+    "Implement the #75 benchmark dead-client count with GPT-5.6 Sol at medium effort.",
+    "Track full-suite and real-client acceptance separately from merged code."
   ],
   "issues": [
     {
@@ -113,14 +112,14 @@
     },
     {
       "number": 398,
-      "summary": "Trust Review omits shipped Package Deltas",
+      "summary": "The merged CLI fix counts generated Package Deltas and Runtime Scripts correctly. Core pin #447 is in review.",
       "importance": 3,
       "gain": 4,
-      "effort": 2,
+      "effort": 3,
       "confidence": "high",
       "disposition": "review",
-      "rationale": "Runtime Script names already landed in CLI PR #55. The remaining Datascript line falsely says nothing reads them. It obscures what an Operator installs.",
-      "next_action": "Fix CLI PR #56 to count all Package Delta Import Families, then verify fake-adapter tests, complete review and publish a core pin PR.",
+      "rationale": "The old review counted source filenames and missed prebuilt Script Artifacts. Correct accounting also separates physical Delta artifacts from their Import Family memberships. This was more work than replacing the stale Datascript line.",
+      "next_action": "Complete core pin #447 and close the issue after it lands.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/398",
@@ -128,7 +127,9 @@
         "https://github.com/LyraCoreProject/lyracore-cli/pull/55",
         "https://github.com/LyraCoreProject/lyracore-cli/pull/56"
       ],
-      "related_prs": [],
+      "related_prs": [
+        447
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/398",
       "updatedAt": "2026-09-03T07:36:06Z",
       "github_state": "open",
@@ -166,14 +167,15 @@
       "gain": 5,
       "effort": 3,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "Subscribed-table parity leaves other generated definitions unchecked. A reproducible generation check would catch drift before unrelated schema work encounters it.",
-      "next_action": "Build a deterministic offline generation check using the documented exceptions. The prerequisite CI PRs are merged.",
+      "next_action": "Build the deterministic generation check in an isolated worktree. Report any schema drift before changing the generated baseline.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/368",
         "gateway/tests/schema_parity.rs checks subscribed tables.",
-        "docs/danger-zones.md lists required generator flags and restored field spellings."
+        "docs/danger-zones.md lists required generator flags and restored field spellings.",
+        "SpacetimeDB 2.7.1 generation differs in only the four documented naming/comment exceptions. No binding schema or serialization drift was found."
       ],
       "related_prs": [
         419,
@@ -182,30 +184,31 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/368",
       "updatedAt": "2026-08-28T12:22:53Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-5.6 Sol, ownership check agent"
     },
     {
       "number": 367,
-      "summary": "Locked GOOBER use bypasses its opener",
+      "summary": "The GOOBER lock Gate is merged and verified through real reducers. Imported Defias Cannon acceptance remains.",
       "importance": 3,
       "gain": 4,
       "effort": 2,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "The Defias Cannon can trigger without its required item. Current GOOBER dispatch skips locked_shut, while CHEST and DOOR/BUTTON apply it.",
-      "next_action": "Complete the current-head review audit of PR #440, fix valid findings, and check CI. Preserve any remaining live-client acceptance.",
+      "disposition": "human",
+      "rationale": "The missing GOOBER lock Gate allowed quest credit and Package hooks before an opener. PR #440 now applies the existing Gate and proves atomic Refusal through real reducers. The imported cannon still needs its stated client acceptance.",
+      "next_action": "Verify the imported cannon requires its gunpowder with a real 1.12 client on an approved Realm. Module code and its durable regression are complete.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/367",
-        "module/src/gameobject.rs: apply_use_gameobject GOOBER arm directly invokes quest credit."
+        "module/src/gameobject.rs: apply_use_gameobject GOOBER arm directly invokes quest credit.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/367#issuecomment-5571495033"
       ],
       "related_prs": [
         440
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/367",
-      "updatedAt": "2026-08-28T12:22:50Z",
+      "updatedAt": "2026-09-07T13:39:51Z",
       "github_state": "open",
-      "owner": "GPT-5.6 Sol, PR completion agent"
+      "owner": "Codex tracks; real-client acceptance needed"
     },
     {
       "number": 366,
@@ -793,24 +796,27 @@
     },
     {
       "number": 105,
-      "summary": "The pinned Headless Client suite still invokes file-based scenarios relative to the LyraCore checkout, so many scenarios fail to spawn while the summary looks like an ordinary test failure.",
+      "summary": "LyraCore now pins the repaired wire suite. Full-suite realm acceptance remains.",
       "importance": 4,
       "gain": 5,
       "effort": 3,
       "confidence": "high",
-      "disposition": "implementing",
-      "rationale": "The current pin is still v0.1.0-alpha.3 at the exact reported commit. Its wire-suite.sh contains the broken relative calls, and no newer release exists. This undermines confidence in every live suite claim that uses the pin.",
-      "next_action": "Fix all scenario paths in wire-harness, prove dispatch from distinct roots and startup-failure accounting offline, then review a PR and update the released core pin.",
+      "disposition": "verify",
+      "rationale": "The old pin started scenario files relative to the core checkout. The released fix uses the adapter directory and distinguishes startup failures. Offline dispatch and CI pass, while all-scenario realm acceptance still needs a run.",
+      "next_action": "Run the pinned full suite on an approved development Realm and retain each scenario result. Source and pin work are complete.",
       "blockers": [],
       "evidence": [
-        "https://github.com/LyraCoreProject/LyraCore/issues/105",
-        "https://github.com/LyraCoreProject/wire-harness/blob/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore/wire-suite.sh",
-        ".wire-harness-rev: still pins v0.1.0-alpha.3 at 219f8cd1670f4b783892388f110d233722892bb3.",
-        "The pinned wire-suite.sh uses paths such as bash adapters/lyracore/test-move-relay.sh after sourcing adapter-env.sh."
+        "https://github.com/LyraCoreProject/wire-harness/pull/6",
+        "https://github.com/LyraCoreProject/wire-harness/releases/tag/v0.1.0-alpha.4",
+        "Fresh anonymous alpha.4 checkout resolved to fcaabf9486a774611c1ee3d1a69710471c79c60a. Offline path, subset and startup-result checks pass.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/446",
+        "https://github.com/LyraCoreProject/LyraCore/issues/105#issuecomment-5571352859"
       ],
-      "related_prs": [],
+      "related_prs": [
+        446
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/105",
-      "updatedAt": "2026-08-11T08:20:54Z",
+      "updatedAt": "2026-09-07T13:27:56Z",
       "github_state": "open",
       "owner": "GPT-6 Astra, Codex"
     },
@@ -1006,26 +1012,27 @@
     },
     {
       "number": 80,
-      "summary": "A cross-map teleport still removes the Character's world entity without deleting its public motion row, leaving a stale AOI-visible row on the source Shard.",
+      "summary": "Cross-map teleport now deletes public and staged motion with the live entity.",
       "importance": 4,
       "gain": 3,
       "effort": 1,
       "confidence": "high",
-      "disposition": "review",
+      "disposition": "done",
       "rationale": "The exact outlier remains in current code. teleport_player drops only game_entity_motion_pending, then deletes game_world_entity in the cross-map branch. Other teardown paths delete the public motion row.",
-      "next_action": "Complete the current-head review audit of PR #438, fix valid findings, and check CI. Preserve any remaining live-client acceptance.",
+      "next_action": "Complete. PR #438 merged after the durable regression, all other checks and review passed.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/80",
         "module/src/world.rs: teleport_player calls motion::drop_pending before branching, but the cross-map branch deletes only the world entity after combat and stealth cleanup.",
-        "module/src/helpers.rs and module/src/creatures/tick/lifecycle.rs: the standard entity cleanup contract includes game_entity_motion and game_creature_spline."
+        "module/src/helpers.rs and module/src/creatures/tick/lifecycle.rs: the standard entity cleanup contract includes game_entity_motion and game_creature_spline.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/438#issuecomment-5571147620"
       ],
       "related_prs": [
         438
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/80",
-      "updatedAt": "2026-08-11T08:19:03Z",
-      "github_state": "open",
+      "updatedAt": "2026-09-07T13:24:28Z",
+      "github_state": "closed",
       "owner": "GPT-5.6 Sol, PR completion agent"
     },
     {
@@ -1145,9 +1152,9 @@
       "gain": 4,
       "effort": 3,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "The exact harness release named in the issue is still pinned. Its benchmark source has raid mode but no death counter, CMSG_REPOP_REQUEST, or revive flow. Reporting the count is a bounded first slice that restores measurement honesty.",
-      "next_action": "Add a dead-at-window-end count to the wire-harness benchmark report and tests first. Treat automatic Release Spirit and recovery as a second protocol slice, then release and bump the LyraCore pin.",
+      "next_action": "Count observed dead clients at each measured-window end in wire-harness text and JSON reports. Preserve the additive ramp and leave recovery for a later task.",
       "blockers": [
         "Landing in LyraCore requires a wire-harness release and pin bump.",
         "Automatic recovery needs real protocol and development-Realm Verification."
@@ -1162,7 +1169,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/75",
       "updatedAt": "2026-08-11T08:18:41Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-5.6 Sol, medium effort, benchmark agent"
     },
     {
       "number": 73,
@@ -1429,27 +1436,28 @@
     },
     {
       "number": 63,
-      "summary": "Loot-roll promotion remains non-idempotent: concurrent Gateways can create duplicate rolls and split the party's votes.",
+      "summary": "Concurrent promotions now reuse one active Loot Roll and preserve its complete vote set.",
       "importance": 5,
       "gain": 4,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
+      "disposition": "done",
       "rationale": "The current Gateway still promotes a staging roll on Realm-core and only then clears the World Shard copy. Both periodic and synchronous promotion paths can run in different Gateway processes. Realm-core's game_loot_roll has only an auto-increment primary key and insert_roll_rows always inserts a new roll and vote set. Module reducers serialize calls, so an idempotent Realm-core check or a compatible uniqueness key can close the race at its authoritative side.",
-      "next_action": "Complete the current-head review audit of PR #439, fix valid findings, and check CI. Preserve any remaining live-client acceptance.",
+      "next_action": "Complete. Concurrent-promotion SQL acceptance passed in merged #439. Post-resolution replay remains in #441.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/63. The issue gives the two-Gateway race and requires exactly one durable roll and vote set.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/world/loot.rs#L130-L166. promote_one calls Realm-core before clearing the World Shard staging row.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/loot/rolls.rs#L45-L78. game_loot_roll has no unique corpse_guid and slot key.",
-        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/loot/rolls.rs#L326-L355. insert_roll_rows unconditionally inserts a new roll and a new vote row per recipient."
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/loot/rolls.rs#L326-L355. insert_roll_rows unconditionally inserts a new roll and a new vote row per recipient.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/63#issuecomment-5571387184"
       ],
       "related_prs": [
         439
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/63",
-      "updatedAt": "2026-08-11T08:17:48Z",
-      "github_state": "open",
+      "updatedAt": "2026-09-07T13:30:53Z",
+      "github_state": "closed",
       "owner": "GPT-5.6 Sol, PR completion agent"
     },
     {
@@ -1664,11 +1672,11 @@
       "summary": "The character-owned Architecture Test still misses tables that refer to a Character through unit-shaped columns such as target_guid or attacker_guid.",
       "importance": 4,
       "gain": 4,
-      "effort": 2,
+      "effort": 3,
       "confidence": "high",
-      "disposition": "implementing",
-      "rationale": "The source scanner still recognizes only character_guid, player_guid, and owner_guid. Existing manual cleanup for aura, melee, threat, and combo state shows that unit-keyed tables remain a real transfer blind spot. This is a localized Architecture Test change that prevents future cross-database state loss without changing runtime behavior.",
-      "next_action": "Extend character_owned_tripwire to inventory unit-guid columns and require each discovered table to have character_owned markers or an explicit exclusion with a reason; add a scanner fixture that fails on an unclassified target_guid table.",
+      "disposition": "review",
+      "rationale": "Unit-shaped and bare guid columns need a complete ownership classification. The implementation also needs table-specific marker matching and source masking, so the effort is larger than the initial estimate. The Architecture Test prevents Character state omissions during cleanup or Transfer without changing runtime behavior.",
+      "next_action": "All known review findings are fixed and resolved. Finish fresh current-head checks before merging #445.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/50. The issue records the aura transfer omission that exposed this blind spot.",
@@ -1676,7 +1684,9 @@
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/tripwires.rs#L196-L198. The scanner's actual predicate checks only those three field names.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/world.rs. Character cleanup still contains explicit combat-state handling outside the marker inventory."
       ],
-      "related_prs": [],
+      "related_prs": [
+        445
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/50",
       "updatedAt": "2026-08-11T08:16:50Z",
       "github_state": "open",
@@ -2399,11 +2409,15 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/438",
       "title": "fix(world): remove motion after cross-map teleport",
       "owner": "GPT-5.6 Sol, PR completion agent",
-      "status": "Open; fresh review audit assigned",
-      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
-      "head": "97ea5b2349dfb5e836b8bd87ca0c8d88e8e5d74e",
-      "checked_at": "2026-09-07 13:04 UTC",
+      "status": "Merged",
+      "next_action": "Reassess linked issues for remaining acceptance.",
+      "head": "0734b3bb47f43ecd88445263d9ae8117a1e405d3",
+      "checked_at": "2026-09-07 13:24 UTC",
       "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
         {
           "name": "build",
           "result": "SUCCESS"
@@ -2428,18 +2442,24 @@
           "name": "CodeRabbit",
           "result": "SUCCESS"
         }
-      ]
+      ],
+      "github_state": "MERGED",
+      "merge_commit": "3e750af3ab6f5fcc75f22040f3b7ece1edd5075c"
     },
     {
       "number": 440,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/440",
       "title": "fix(gameobject): require opener for locked goobers",
       "owner": "GPT-5.6 Sol, PR completion agent",
-      "status": "Open; fresh review audit assigned",
-      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
-      "head": "c668015c66bfae3e9928611f2a9e118850636914",
-      "checked_at": "2026-09-07 13:04 UTC",
+      "status": "Merged",
+      "next_action": "Reassess linked issues for remaining acceptance.",
+      "head": "6c32518d358c77aae0eca881eec7d9846b21eb5d",
+      "checked_at": "2026-09-07 13:40 UTC",
       "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
         {
           "name": "build",
           "result": "SUCCESS"
@@ -2464,18 +2484,24 @@
           "name": "CodeRabbit",
           "result": "SUCCESS"
         }
-      ]
+      ],
+      "github_state": "MERGED",
+      "merge_commit": "0b8631d400d9a445aec4fe1af5a80f87c83aee4b"
     },
     {
       "number": 439,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/439",
       "title": "fix(loot): keep concurrent promotions on one live roll",
       "owner": "GPT-5.6 Sol, PR completion agent",
-      "status": "Open; fresh review audit assigned",
-      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
-      "head": "7b11e682ee0581c47432d0d23539105dbbd69f5f",
-      "checked_at": "2026-09-07 13:04 UTC",
+      "status": "Merged",
+      "next_action": "Reassess linked issues for remaining acceptance.",
+      "head": "94c5d5e12ac3d9d45727e78b8977392230603ac3",
+      "checked_at": "2026-09-07 13:31 UTC",
       "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
         {
           "name": "build",
           "result": "SUCCESS"
@@ -2500,33 +2526,187 @@
           "name": "CodeRabbit",
           "result": "SUCCESS"
         }
-      ]
+      ],
+      "github_state": "MERGED",
+      "merge_commit": "918a057eb38814245cefd7407c67eb53c0c43445"
     },
     {
       "number": 56,
       "url": "https://github.com/LyraCoreProject/lyracore-cli/pull/56",
       "title": "fix(packages): count Package Deltas in trust review",
       "owner": "GPT-5.6 Sol, CLI completion agent",
-      "status": "Open in lyracore-cli; review audit assigned",
-      "next_action": "Resolve review findings, verify CLI tests and MSRV, then publish the core pin update.",
-      "head": "9830550c14af4049941a1931e09e2795d1cfe3ee",
-      "checked_at": "2026-09-07 13:04 UTC",
+      "status": "Merged",
+      "next_action": "Reassess linked issues for remaining acceptance.",
+      "head": "5da24b50ce324a8db9ebd037c68fd485b3f7494d",
+      "checked_at": "2026-09-07 13:31 UTC",
       "checks": [
         {
           "name": "CodeRabbit",
           "result": "SUCCESS"
         }
-      ]
+      ],
+      "github_state": "MERGED",
+      "merge_commit": "def8492a6b135ffc4afe69a1100e0f9c08519735"
     },
     {
       "number": 444,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/444",
       "title": "docs(triage): refresh issue order and resume PR ownership",
       "owner": "GPT-6 Astra, Codex",
-      "status": "Addressed three CodeRabbit findings; durable CI rerun underway",
-      "next_action": "Refresh stale evidence and recorded heads, finish the failed-job retry, and verify the revised commit.",
-      "head": "a8d3dabd33d3766d0daf1a42ff30df66cae56047",
-      "checked_at": "2026-09-07 13:04 UTC",
+      "status": "Merged after all checks and review passed",
+      "next_action": "Complete. Report ownership continues in this thread.",
+      "head": "d4bac13e2fcfb038729943d1d3b280d3eebc0f0e",
+      "checked_at": "2026-09-07 13:17 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ],
+      "merge_commit": "49061fe2ec84412e1cce8484a6cf64f37aa1f022"
+    },
+    {
+      "number": 6,
+      "url": "https://github.com/LyraCoreProject/wire-harness/pull/6",
+      "title": "fix(suite): run scenarios from the adapter directory",
+      "owner": "GPT-6 Astra, Codex",
+      "status": "Merged; alpha.4 released",
+      "next_action": "Complete core pin PR #446. Full realm acceptance remains on #105.",
+      "head": "9da18425cf099bcd66d1f193f7fabac44f174e9e",
+      "checked_at": "2026-09-07 13:16 UTC",
+      "checks": [
+        {
+          "name": "test (ubuntu-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test (macos-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "coverage",
+          "result": "SUCCESS"
+        }
+      ],
+      "merge_commit": "fcaabf9486a774611c1ee3d1a69710471c79c60a"
+    },
+    {
+      "number": 445,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/445",
+      "title": "test(transfer): classify unit-keyed ownership tables",
+      "owner": "GPT-5.6 Sol, ownership check agent",
+      "head": "58b7eb34b3e9207e1f405a2c44df2f58ff976d97",
+      "status": "All known review findings resolved; fresh CI running",
+      "next_action": "Merge after current-head checks pass and any new findings are resolved.",
+      "checked_at": "2026-09-07 13:40 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ],
+      "github_state": "OPEN"
+    },
+    {
+      "number": 446,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/446",
+      "title": "fix(test): pin the wire suite dispatch repair",
+      "owner": "GPT-6 Astra, Codex",
+      "head": "ace303fdcd2aa431cc15354a0d0c3e131ae0abfc",
+      "status": "Merged",
+      "next_action": "Reassess linked issues for remaining acceptance.",
+      "checked_at": "2026-09-07 13:28 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ],
+      "github_state": "MERGED",
+      "merge_commit": "faf230aea9c02d8997679638f907d2fed7b2abc6"
+    },
+    {
+      "number": 447,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/447",
+      "title": "chore(cli): pin generated artifact trust review",
+      "owner": "GPT-5.6 Sol, CLI completion agent",
+      "status": "Independent pin review passed; CodeRabbit rate limited; durable CI running",
+      "next_action": "Merge after durable CI passes, then close #398.",
+      "head": "a504359689082c2b4a5157a21b13e365469f6af5",
+      "checked_at": "2026-09-07 13:40 UTC",
+      "github_state": "OPEN",
       "checks": [
         {
           "name": "durable",
@@ -2554,30 +2734,6 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "SUCCESS"
-        }
-      ]
-    },
-    {
-      "number": 6,
-      "url": "https://github.com/LyraCoreProject/wire-harness/pull/6",
-      "title": "fix(suite): run scenarios from the adapter directory",
-      "owner": "GPT-6 Astra, Codex",
-      "status": "PR open; CI running",
-      "next_action": "Complete independent review and CI, then publish a release tag and core pin.",
-      "head": "9da18425cf099bcd66d1f193f7fabac44f174e9e",
-      "checked_at": "2026-09-07 13:04 UTC",
-      "checks": [
-        {
-          "name": "test (ubuntu-latest)",
-          "result": "SUCCESS"
-        },
-        {
-          "name": "test (macos-latest)",
-          "result": "SUCCESS"
-        },
-        {
-          "name": "coverage",
           "result": "SUCCESS"
         }
       ]
@@ -2615,6 +2771,34 @@
     {
       "at": "2026-09-07 13:04 UTC",
       "text": "Opened wire-harness PR #6 for #105 after a failing path repro and 55 passing Rust tests. CodeRabbit found three stale report records; corrected CI evidence, the merged security dependency and missing PR heads."
+    },
+    {
+      "at": "2026-09-07 13:16 UTC",
+      "text": "Merged wire-harness #6 after independent review and green CI, released alpha.4, and opened core pin #446. Ownership-check #445 is open with a CI finding assigned to its owner."
+    },
+    {
+      "at": "2026-09-07 13:17 UTC",
+      "text": "Merged report PR #444 after all seven checks passed and all three CodeRabbit threads were resolved. Corrected trailing punctuation in evidence links."
+    },
+    {
+      "at": "2026-09-07 13:24 UTC",
+      "text": "Merged #438 after all seven checks passed with no unresolved review threads. Issue #80 is closed; the durable test proves public and pending motion leave with the live entity."
+    },
+    {
+      "at": "2026-09-07 13:28 UTC",
+      "text": "Merged core wire pin #446 after all seven checks passed and review completed. #105 now awaits full-suite acceptance on an approved development Realm."
+    },
+    {
+      "at": "2026-09-07 13:31 UTC",
+      "text": "Merged Loot Roll deduplication #439 and closed #63 with SQL evidence. Merged CLI #56 after all findings were fixed; core pin #447 is open. #445 now includes bare guid fields."
+    },
+    {
+      "at": "2026-09-07 13:35 UTC",
+      "text": "Raised effort estimates for #50 and #398 after review exposed source-scanning and artifact-accounting work. #445 has two further source-scan documentation/cfg findings assigned."
+    },
+    {
+      "at": "2026-09-07 13:40 UTC",
+      "text": "Merged GOOBER lock fix #440 after all checks passed. #367 retains imported-cannon acceptance. Assigned #75 reporting to GPT-5.6 Sol at medium effort in a separate wire-harness worktree."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",

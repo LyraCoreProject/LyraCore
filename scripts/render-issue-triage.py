@@ -27,7 +27,7 @@ def escape(value):
 
 
 def link(url, label):
-    url = url.split()[0]
+    url = url.split()[0].rstrip(".,;")
     if not url.startswith("https://github.com/"):
         return escape(label)
     return f'<a href="{escape(url)}">{escape(label)}</a>'
