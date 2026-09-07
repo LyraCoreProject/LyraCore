@@ -290,7 +290,7 @@ pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), String> 
 
 // ===========================================================================================
 //  ENCHANTING (completing the 13) — two reducers over the per-instance enchant overlay (`enchant_id` on
-//  ItemInstance + the `rules::ENCHANTS` stat table). `disenchant` consumes an equipped item → mats +
+//  ItemInstance + the `game_item_enchantment` catalogue). `disenchant` consumes an equipped item → mats +
 //  skill; `enchant_item` stamps an enchant id onto an equipped instance (server-real via the
 //  effective-* pipeline). The client glow/green-text is DEFERRED (by-entry item-stat cache). [entity]
 // ===========================================================================================
@@ -362,7 +362,7 @@ pub(crate) fn apply_disenchant(ctx: &ReducerContext, guid: u64, slot: u8) -> Res
 }
 
 /// ENCHANT the item in `target_slot` with `enchant_id`: validate the id (it must be a known enchant in
-/// `rules::ENCHANTS`), consume the enchanting mats, stamp `enchant_id` onto the instance, climb Enchanting.
+/// `game_item_enchantment`), consume the enchanting mats, stamp `enchant_id` onto the instance, climb Enchanting.
 /// The core (resolved guid), shared by the `enchant_item` reducer + `debug_enchant_item` twin. The enchant
 /// is server-REAL: `equipped_stat_bonus` now folds `enchant_stat(enchant_id, ..)`, so an equipped enchanted
 /// piece moves the effective-* readouts (swing/dodge/armor/crit/hit + max HP/mana via recompute_vitals).

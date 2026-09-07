@@ -1039,7 +1039,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     // these effect rows, resolves the item GUID→bag slot, and calls enchant_item_on_slot / disenchant_item.
     // The effect row is the ROUTING CLASSIFIER: kind 0x17 E_ENCHANT_ITEM (p0 = enchant_id, p0_kind 10
     // P_ENCHANT_ID — the gateway reads enchant_id off p0) / kind 0x18 E_DISENCHANT (no params). The enchant
-    // stat overlay (enchant_id→stat) lives in the module ENCHANTS table; disenchant reagents/skill in the
+    // stat overlay (enchant_id→stat) lives in the `game_item_enchantment` catalogue; disenchant reagents/skill in the
     // disenchant reducer. A NEW enchant is a data row here (a new id + p0), ZERO gateway code. target 0 is
     // inert (the gateway resolves the item from the cast packet, not the effect target).
     spell(
