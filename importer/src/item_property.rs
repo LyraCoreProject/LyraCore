@@ -5,9 +5,7 @@ use anyhow::{bail, Context, Result};
 use lyracore_shared::item_property as kind;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use wow_dbc::vanilla_tables::{
-    item_random_properties::ItemRandomProperties,
-    spell::{Spell, SpellRow},
-    spell_item_enchantment::SpellItemEnchantment,
+    item_random_properties::ItemRandomProperties, spell_item_enchantment::SpellItemEnchantment,
 };
 use wow_dbc::DbcTable;
 use wow_mpq::PatchChain;
@@ -19,6 +17,65 @@ struct Effect {
     amount: i32,
     spell_id: u32,
     school_mask: u32,
+}
+
+#[derive(Default)]
+struct EquipSpell {
+    id: u32,
+    equipped_item_class: u32,
+    effect: [u32; 3],
+    effect_die_sides: [i32; 3],
+    effect_base_dice: [u32; 3],
+    effect_dice_per_level: [f32; 3],
+    effect_real_points_per_level: [f32; 3],
+    effect_base_points: [i32; 3],
+    effect_aura: [u32; 3],
+    effect_misc_value: [u32; 3],
+    effect_points_per_combo: [f32; 3],
+}
+
+/// Read build 5875 column positions. wow_dbc 0.3 omits InterruptFlags and shifts the
+/// equipment fields and effect arrays, so its named SpellRow fields cannot define this catalogue.
+fn read_equip_spells(bytes: &[u8]) -> Result<Vec<EquipSpell>> {
+    if bytes.len() < 20 || &bytes[..4] != b"WDBC" {
+        bail!("Spell.dbc has no WDBC header");
+    }
+    let header = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let (count, fields, size, strings) = (header(4), header(8), header(12), header(16));
+    if fields != 173 || size != 692 {
+        bail!("Spell.dbc requires the build 5875 layout: 173 fields, 692 bytes per row");
+    }
+    let records_end = count.checked_mul(size).and_then(|n| n.checked_add(20));
+    if records_end.and_then(|n| n.checked_add(strings)) != Some(bytes.len()) {
+        bail!("Spell.dbc record and string lengths do not match its header");
+    }
+    let mut ids = BTreeSet::new();
+    bytes[20..records_end.unwrap()]
+        .chunks_exact(size)
+        .map(|row| {
+            // Every referenced column fits the checked fixed-width record.
+            let column =
+                |at: usize| u32::from_le_bytes(row[at * 4..at * 4 + 4].try_into().unwrap());
+            let array = |at: usize| std::array::from_fn(|i| column(at + i));
+            let id = column(0);
+            if !ids.insert(id) {
+                bail!("duplicate Spell.dbc row {id}");
+            }
+            Ok(EquipSpell {
+                id,
+                equipped_item_class: column(58),
+                effect: array(61),
+                effect_die_sides: array(64).map(|n| n as i32),
+                effect_base_dice: array(67),
+                effect_dice_per_level: array(70).map(f32::from_bits),
+                effect_real_points_per_level: array(73).map(f32::from_bits),
+                effect_base_points: array(76).map(|n| n as i32),
+                effect_aura: array(91),
+                effect_misc_value: array(106),
+                effect_points_per_combo: array(112).map(f32::from_bits),
+            })
+        })
+        .collect()
 }
 
 fn resistance_kind(school: u32) -> Option<u8> {
@@ -65,25 +122,26 @@ fn aura_kinds(aura: u32, misc: u32) -> Vec<(u8, u32)> {
     }
 }
 
-fn spell_effects(slot: u8, spell: &SpellRow) -> Result<Vec<Effect>> {
+fn spell_effects(slot: u8, spell: &EquipSpell) -> Result<Vec<Effect>> {
     let mut mapped = Vec::new();
     for subeffect in 0..3 {
         if spell.effect[subeffect] == 0 {
             continue;
         }
-        let aura = spell.effect_aura[subeffect] as u32;
+        let aura = spell.effect_aura[subeffect];
         let flat = spell.effect[subeffect] == 6
             && spell.effect_real_points_per_level[subeffect] == 0.0
             && spell.effect_dice_per_level[subeffect] == 0.0
             && spell.effect_points_per_combo[subeffect] == 0.0
-            && spell.equipped_item_class.id == u32::MAX;
+            && spell.effect_die_sides[subeffect] <= 1
+            && spell.equipped_item_class == u32::MAX;
         let kinds = if flat {
             aura_kinds(aura, spell.effect_misc_value[subeffect])
         } else {
             vec![(kind::UNKNOWN, 0)]
         };
         let amount = spell.effect_base_points[subeffect]
-            .checked_add(1)
+            .checked_add(i32::try_from(spell.effect_base_dice[subeffect])?)
             .context("enchantment spell amount overflows")?;
         for (expanded, (kind, school_mask)) in kinds.into_iter().enumerate() {
             let amount = match kind {
@@ -96,7 +154,7 @@ fn spell_effects(slot: u8, spell: &SpellRow) -> Result<Vec<Effect>> {
                 index: slot * 64 + subeffect as u8 * 8 + expanded as u8,
                 kind,
                 amount,
-                spell_id: spell.id.id,
+                spell_id: spell.id,
                 school_mask,
             });
         }
@@ -106,7 +164,7 @@ fn spell_effects(slot: u8, spell: &SpellRow) -> Result<Vec<Effect>> {
             index: slot * 64,
             kind: kind::UNKNOWN,
             amount: 0,
-            spell_id: spell.id.id,
+            spell_id: spell.id,
             school_mask: 0,
         });
     }
@@ -116,25 +174,25 @@ fn spell_effects(slot: u8, spell: &SpellRow) -> Result<Vec<Effect>> {
 pub(crate) fn catalogue_sql(chain: &mut PatchChain) -> Result<(Vec<String>, BTreeSet<u32>)> {
     let properties: ItemRandomProperties = dbc::read_table(chain)?;
     let enchantments: SpellItemEnchantment = dbc::read_table(chain)?;
-    let spells: Spell = dbc::read_table(chain)?;
+    let spells = read_equip_spells(&chain.read_file("DBFilesClient\\Spell.dbc")?)?;
     catalogue_rows_sql(&properties, &enchantments, &spells)
 }
 
 fn catalogue_rows_sql(
     properties: &ItemRandomProperties,
     enchantments: &SpellItemEnchantment,
-    spells: &Spell,
+    spells: &[EquipSpell],
 ) -> Result<(Vec<String>, BTreeSet<u32>)> {
     for (name, count) in [
         ("ItemRandomProperties.dbc", properties.rows().len()),
         ("SpellItemEnchantment.dbc", enchantments.rows().len()),
-        ("Spell.dbc", spells.rows().len()),
+        ("Spell.dbc", spells.len()),
     ] {
         if count == 0 {
             bail!("{name} contains no rows; item catalogues were not changed");
         }
     }
-    let spells: HashMap<_, _> = spells.rows().iter().map(|row| (row.id.id, row)).collect();
+    let spells: HashMap<_, _> = spells.iter().map(|row| (row.id, row)).collect();
     let enchant_ids: BTreeSet<_> = enchantments.rows().iter().map(|row| row.id.id).collect();
     for (id, _, _) in kind::COMPATIBILITY_ENCHANTMENTS {
         if enchant_ids.contains(&id) {
@@ -378,6 +436,71 @@ pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<String>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spell_columns_keep_equipment_masks_out_of_all_three_effect_slots() {
+        let mut bytes = b"WDBC".to_vec();
+        for value in [1u32, 173, 692, 1] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.resize(713, 0);
+        // Build 5875 columns, including the inventory mask immediately before Effect[0].
+        for (column, value) in [
+            (0, 509_0003),
+            (58, u32::MAX),
+            (60, 1_048_608),
+            (61, 6),
+            (62, 6),
+            (63, 6),
+            (64, 1),
+            (65, 1),
+            (66, 1),
+            (67, 1),
+            (68, 1),
+            (69, 1),
+            (76, 6),
+            (77, 14),
+            (78, 0),
+            (91, 29),
+            (92, 34),
+            (93, 54),
+            (106, 2),
+        ] {
+            let at = 20 + column * 4;
+            bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let spells = read_equip_spells(&bytes).unwrap();
+        let effects = spell_effects(0, &spells[0]).unwrap();
+        assert_eq!(
+            effects,
+            vec![
+                Effect {
+                    index: 0,
+                    kind: kind::STAMINA,
+                    amount: 7,
+                    spell_id: 509_0003,
+                    school_mask: 0
+                },
+                Effect {
+                    index: 8,
+                    kind: kind::HEALTH,
+                    amount: 15,
+                    spell_id: 509_0003,
+                    school_mask: 0
+                },
+                Effect {
+                    index: 16,
+                    kind: kind::HIT,
+                    amount: 100,
+                    spell_id: 509_0003,
+                    school_mask: 0
+                },
+            ]
+        );
+        bytes[12..16].copy_from_slice(&688u32.to_le_bytes());
+        assert!(read_equip_spells(&bytes).is_err());
+    }
+
     // Authored zero records let tests exercise the real DBC parser without client bytes.
     fn synthetic_table<T: DbcTable>(fields: u32) -> T {
         let mut bytes = b"WDBC".to_vec();
@@ -388,7 +511,7 @@ mod tests {
         T::read(&mut std::io::Cursor::new(bytes)).unwrap()
     }
 
-    fn catalogues() -> (ItemRandomProperties, SpellItemEnchantment, Spell) {
+    fn catalogues() -> (ItemRandomProperties, SpellItemEnchantment, Vec<EquipSpell>) {
         let mut properties: ItemRandomProperties = synthetic_table(16);
         properties.rows[0].id.id = 509_0001;
         properties.rows[0].spell_item_enchantment = [509_0002, 0, 0, 0, 0];
@@ -398,7 +521,7 @@ mod tests {
         enchantments.rows[0].enchantment_type = [5, 5, 77];
         enchantments.rows[0].effect_arg = [7, 4, 0];
         enchantments.rows[0].effect_points_min = [7, 9, 11];
-        (properties, enchantments, synthetic_table(173))
+        (properties, enchantments, vec![EquipSpell::default()])
     }
 
     #[test]
@@ -437,7 +560,7 @@ mod tests {
             match missing {
                 0 => properties.rows.clear(),
                 1 => enchantments.rows.clear(),
-                _ => spells.rows.clear(),
+                _ => spells.clear(),
             }
             assert!(catalogue_rows_sql(&properties, &enchantments, &spells).is_err());
         }
@@ -454,12 +577,13 @@ mod tests {
 
     #[test]
     fn equip_spell_expands_stats_and_retains_unmapped_effects() {
-        let mut spells: Spell = synthetic_table(173);
-        let spell = &mut spells.rows[0];
-        spell.id.id = 509_0003;
-        spell.equipped_item_class.id = u32::MAX;
+        let mut spell = EquipSpell::default();
+        let spell = &mut spell;
+        spell.id = 509_0003;
+        spell.equipped_item_class = u32::MAX;
         spell.effect = [6, 6, 2];
-        spell.effect_aura[0] = 29u32.try_into().unwrap();
+        spell.effect_aura[0] = 29;
+        spell.effect_base_dice = [1; 3];
         spell.effect_misc_value[0] = u32::MAX;
         spell.effect_base_points = [6, 8, 10];
         let mapped = spell_effects(1, spell).unwrap();
