@@ -1,10 +1,10 @@
 {
-  "updated_at": "2026-09-07 22:06 UTC",
+  "updated_at": "2026-09-07 22:38 UTC",
   "base_revision": "34e9a35420377dd2ec8dc1cae769fbbe22d1da80",
-  "status_note": "All 68 open issues have an assessment; 23 closed issues remain for history. Item stats #466, Spell repair #465, summon fix #470, party cleanup #463 and human-approved Loot replay #461 are merged. Headless Client alpha11 removes the global party reset. Account ownership #471 is published at 7177b25 with all local and CI checks passed; full CodeRabbit review remains before human schema approval.",
+  "status_note": "All 68 open issues have an assessment; 23 closed issues remain for history. Item stats #466, Spell repair #465, summon fix #470, party cleanup #463 and human-approved Loot replay #461 are merged. Account ownership #471 passed all checks and actual CodeRabbit review at 9dd2955. Human schema approval is now requested.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
   "focus": [
-    "Finish the full CodeRabbit review of Account ownership #471 at 7177b25, then request human schema approval.",
+    "Human schema review of Account ownership #471 at 9dd2955; all checks and actual review passed.",
     "Run Random Property tooltip and crafting acceptance with the real client in a named Realm.",
     "Run the eight Package-backed party scenarios once a compatible Module and Gateway pair is available.",
     "Preserve checked PR states, human approvals and remaining acceptance work in this report."
@@ -1492,9 +1492,9 @@
       "gain": 5,
       "effort": 4,
       "confidence": "high",
-      "disposition": "review",
+      "disposition": "human",
       "rationale": "The corruption exists whenever two Gateways serve one Account. A Realm-core Session generation and compare-by-generation logout is an ordinary consistency design. #69 may affect routing policy but does not need to block this invariant.",
-      "next_action": "Finish actual CodeRabbit review at published head 7177b25; all local and CI checks passed. Request human schema approval after that review passes.",
+      "next_action": "Await requested human schema approval for 9dd2955. Codex will recheck the approved commit, merge #471 and close #61 after approval.",
       "blockers": [
         "Human review before shipping the concrete Account ownership schema change."
       ],
@@ -1518,7 +1518,9 @@
         "https://github.com/LyraCoreProject/LyraCore/pull/471#issuecomment-5575251072. Both directions of the literal two-process acceptance pass with frozen artifact hashes.",
         "https://github.com/LyraCoreProject/wire-harness/pull/12. Corrects root's alpha9 structured-GUID advice after the real CLI refused a JSON string; an exact value above 2^53 is verified durably.",
         "The earlier Transfer review response was incomplete: production Transfer ids equal Character guids, masking an incorrect Actor fallback. A real Coordinator test with Transfer 7001 and Character 1 reproduces STALE_WORLD_SESSION for the valid owner. Four wrappers now retain the bound Character Actor while preserving the Transfer id; valid completion and all four stale-owner Refusals pass. Final integrated checks are running.",
-        "https://github.com/LyraCoreProject/LyraCore/pull/471#issuecomment-5575933410. Published 7177b25 includes main 34e9a35 and Headless Client alpha11. All combined local checks pass: 990 bindings, 1,501 Module unit tests, 1,322 Gateway unit tests, 121 integration/parity tests, six Account and four item-stat durable cases, four Gateway durable regressions, strict workspace lint, formatting and preflight."
+        "https://github.com/LyraCoreProject/LyraCore/pull/471#issuecomment-5575933410. Published 7177b25 includes main 34e9a35 and Headless Client alpha11. All combined local checks pass: 990 bindings, 1,501 Module unit tests, 1,322 Gateway unit tests, 121 integration/parity tests, six Account and four item-stat durable cases, four Gateway durable regressions, strict workspace lint, formatting and preflight.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/471#issuecomment-5576175126. The final test-only follow-up 9dd2955 fixes both full-review suggestions: observe the blocked socket syscall before shutdown, and exercise tokenless deletion while preserving both closed generation-2 rows. Both fixtures, strict Gateway and Module lint, and formatting passed. Production, schema and bindings are byte-identical to fully checked 7177b25.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/471#issuecomment-5576251573. The actual incremental review covers 9dd2955 with no actionable findings; all 16 threads are resolved. All seven statuses passed at 22:37 UTC, including the full Module durable suite and four Gateway cases. GitHub reports CLEAN and MERGEABLE. Human review of the two private Account tables and SessionActor ABI was requested at 22:38 UTC under docs/danger-zones.md section 1."
       ],
       "related_prs": [
         471
@@ -4111,18 +4113,18 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/471",
       "title": "fix(account): fence World Sessions across Gateways",
       "owner": "GPT-6 Astra, high effort, Account ownership implementer",
-      "head": "7177b25ce1eebee54d993f265e538a262be8986d",
+      "head": "9dd2955d64be9704cdb7e2069ea75e1a6effade5",
       "github_state": "OPEN",
-      "checked_at": "2026-09-07 22:06 UTC",
-      "status": "All local and CI checks passed at 7177b25; full CodeRabbit review running",
-      "next_action": "Finish actual CodeRabbit review at published head 7177b25; all local and CI checks passed. Request human schema approval after that review passes.",
+      "checked_at": "2026-09-07 22:37 UTC",
+      "status": "All checks and actual review passed at 9dd2955; human schema approval requested",
+      "next_action": "Await requested human schema approval for 9dd2955. Codex will recheck the approved commit, merge #471 and close #61 after approval.",
       "review_state": {
-        "CodeRabbit": "IN_PROGRESS",
-        "coordinating": "IN_PROGRESS",
-        "human_schema": "NOT_REQUESTED"
+        "CodeRabbit": "SUCCESS",
+        "coordinating": "COMPLETE",
+        "human_schema": "REQUESTED"
       },
       "review_findings": [],
-      "review_note": "All 16 prior review threads are resolved. The distinct-ID Transfer regression verifies valid completion and all four stale-owner Refusals. The bounded reaper observes committed batches of 64 and 1. All combined local gates pass on 7177b25: 990 bindings; 1,501 Module and 1,322 Gateway unit tests; 121 Gateway integration/parity tests; six Account and four item-stat durable cases; the four Gateway CI regressions; strict lint, formatting and preflight. All six current-head CI checks pass, including the full Module durable suite and four exact Gateway regressions. CodeRabbit is actively reviewing all 194 changed files from main 34e9a35 to 7177b25; its review is not skipped or rate-limited. Human schema approval has not been requested.",
+      "review_note": "All current-head checks pass at 9dd2955. CodeRabbit reviewed the full change at 7177b25, then reviewed both final test fixes at 9dd2955 with no actionable findings. All 16 threads are resolved. The repeated generic risk summary is reconciled with the distinct-ID Transfer proof, the documented conservative renewal/release policy and the withdrawn Account-name mapping finding. Both closed generation-2 rows survive tokenless Character deletion, and the socket test observes the blocked write before shutdown. Root verified that production, schema and bindings are unchanged after 7177b25. Human schema approval was requested at 22:38 UTC; the PR remains a draft pending that response.",
       "checks": [
         {
           "name": "durable",
@@ -4150,7 +4152,7 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "PENDING"
+          "result": "SUCCESS"
         }
       ]
     },
@@ -4224,10 +4226,10 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/472",
       "title": "docs(triage): record merged work and remaining acceptance",
       "owner": "Codex",
-      "head": "62cf69296654bbea4127e51476b73108df1e9c7f",
+      "head": "f1053594148ee9164c6d5e55d3b1fb8bbd64c00e",
       "github_state": "OPEN",
-      "checked_at": "2026-09-07 22:03 UTC",
-      "status": "Prior snapshot 62cf692 passed CI and actual review; Account results added here",
+      "checked_at": "2026-09-07 22:22 UTC",
+      "status": "Published f105359 passed checks and review; human-review snapshot ready to publish",
       "next_action": "Complete CI and actual review for the updated report snapshot, then merge.",
       "checks": [
         {
@@ -4264,7 +4266,7 @@
         "coordinating": "IN_PROGRESS"
       },
       "review_findings": [],
-      "review_note": "All checks and actual CodeRabbit review passed on inspected snapshot 62cf692. Its stale merged-review notes are corrected. This update records the subsequently published Account ownership head and completed local and CI checks. It requires fresh CI and actual review after publication."
+      "review_note": "All checks and actual CodeRabbit review passed on inspected snapshot f105359. This final update records Account ownership 9dd2955 with all checks and review complete and the human schema request pending. Fresh CI and actual review are required for this updated report after publication."
     }
   ],
   "history": [
@@ -4539,6 +4541,18 @@
     {
       "at": "2026-09-07 22:06 UTC",
       "text": "All six CI checks pass for Account ownership #471 at 7177b25, including the full Module durable suite and four Gateway regressions. The full CodeRabbit review remains active. Report snapshot 62cf692 passed all checks and actual review; this update records the later Account results."
+    },
+    {
+      "at": "2026-09-07 22:16 UTC",
+      "text": "Full review of Account ownership 7177b25 completed after all CI passed. Two test gaps are being corrected before human schema review: observe the blocked socket write, and exercise the real tokenless Character deletion path while retaining closed ownership generations."
+    },
+    {
+      "at": "2026-09-07 22:23 UTC",
+      "text": "Account ownership test-only head 9dd2955 is published. Both final test gaps are fixed and passed focused validation and strict lint. Production, schema and bindings are unchanged from fully checked 7177b25. Fresh CI and incremental review are running before human schema approval. Report head f105359 passed all checks and actual review."
+    },
+    {
+      "at": "2026-09-07 22:38 UTC",
+      "text": "All checks and actual review passed for Account ownership 9dd2955. Root verified CLEAN/MERGEABLE state and requested human review of the two private Account tables and SessionActor ABI. The PR remains a draft while that approval is pending."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
