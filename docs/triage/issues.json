@@ -4066,7 +4066,8 @@
         "coordinating": "COMPLETE"
       },
       "review_findings": [],
-      "review_note": "Published 47184b7 on merged Loot replay 5f42e5a. The stale-callback mutation reproduces the unique-key panic; the corrected durable regression and natural expiry pass. All 1,495 Module tests, 1,442 applicable Gateway tests, strict lint and 979 generated binding comparisons pass. Actual CodeRabbit review completed without actionable comments; durable CI remains pending."
+      "review_note": "Published 47184b7 on merged Loot replay 5f42e5a. The stale-callback mutation reproduces the unique-key panic; the corrected durable regression and natural expiry pass. All 1,495 Module tests, 1,442 applicable Gateway tests, strict lint and 979 generated binding comparisons pass. Actual CodeRabbit review completed without actionable comments; durable CI remains pending.",
+      "merge_commit": "3669dfbc7f648fd098cb77317a44f76c8597e262"
     },
     {
       "number": 471,
