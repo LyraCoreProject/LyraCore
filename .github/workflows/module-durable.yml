@@ -1,6 +1,6 @@
 name: Module durable tests
 
-# The durable integration rung: `module/tests/`, 39 targets marked `#[ignore]` because each one
+# The durable integration rung: `module/tests/`, marked `#[ignore]` because each target
 # starts its own SpacetimeDB standalone, publishes the module to it, and drives real reducers.
 # `rust.yml`'s `--lib` run cannot reach any of it.
 #
