@@ -526,28 +526,7 @@ pub(crate) fn place_temporary_summon(
     location: SummonLocation,
 ) -> Result<u64, String> {
     let summoner_guid = caster.guid;
-    let entity = caster;
-    let summoner = super::EventAiUnit {
-        guid: entity.guid,
-        entry: entity.entry,
-        x: entity.x,
-        y: entity.y,
-        z: entity.z,
-        map_id: entity.map_id,
-        instance_id: entity.instance_id,
-        zone_id: entity.zone_id,
-        health: entity.health,
-        max_health: entity.max_health,
-        power: entity.power,
-        max_power: entity.max_power,
-        power_type: (entity.unit_bytes_0 >> 24) as u8,
-        level: entity.level,
-        faction_template: entity.faction_template,
-        dead: entity.dead,
-        is_player: entity.is_player(),
-        orientation: entity.orientation,
-        owner_guid: entity.owner_guid,
-    };
+    let summoner = super::engine::unit_of(caster);
     if ctx
         .db
         .game_creature_template()

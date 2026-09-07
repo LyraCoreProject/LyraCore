@@ -323,9 +323,9 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
             summon["guid"]
         ));
         node.assert_call("gw_attack", &[PLAYER, &summon["guid"]]);
-        assert!(poll_until(POLL_TIMEOUT, || summoned(&node, creature)[0]
-            ["dead"]
-            == "true"));
+        assert!(poll_until(POLL_TIMEOUT, || summoned(&node, creature)
+            .first()
+            .is_some_and(|summon| summon["dead"] == "true")));
         let progress = node.query_rows(&format!(
             "SELECT * FROM game_character_quest WHERE quest_entry = {quest}"
         ));

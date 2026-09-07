@@ -837,7 +837,7 @@ impl<'a> DatabaseWorld<'a> {
     }
 }
 
-fn unit_of(entity: &WorldEntity) -> EventAiUnit {
+pub(super) fn unit_of(entity: &WorldEntity) -> EventAiUnit {
     EventAiUnit {
         guid: entity.guid,
         entry: entity.entry,
