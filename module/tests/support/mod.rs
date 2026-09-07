@@ -24,18 +24,27 @@ pub fn log_dir() -> PathBuf {
     std::env::temp_dir().join("lyracore-standalone-logs")
 }
 
-/// Poll `probe` every [`POLL_INTERVAL`] until it answers `true`. Returns `false` when `timeout`
-/// passes first, so the caller reports what it was waiting for rather than a bare timeout.
+/// Poll `probe` every [`POLL_INTERVAL`] until it answers `true` within `timeout`. The timeout is the
+/// full budget from this call until a successful probe returns. A probe runs synchronously and must
+/// return on its own; this helper can refuse a late result but cannot interrupt a blocked probe.
 pub fn poll_until(timeout: Duration, mut probe: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        if probe() {
-            return true;
-        }
-        if Instant::now() >= deadline {
+        let now = Instant::now();
+        if now >= deadline {
             return false;
         }
-        thread::sleep(POLL_INTERVAL);
+
+        let succeeded = probe();
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        if succeeded {
+            return true;
+        }
+
+        thread::sleep(POLL_INTERVAL.min(deadline.duration_since(now)));
     }
 }
 
@@ -432,4 +441,40 @@ fn unquote(value: &str) -> String {
         .and_then(|rest| rest.strip_suffix('"'))
         .unwrap_or(value)
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn an_immediate_success_finishes_on_the_first_probe() {
+        let calls = Cell::new(0);
+
+        assert!(poll_until(Duration::from_secs(1), || {
+            calls.set(calls.get() + 1);
+            true
+        }));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn success_after_the_deadline_is_a_timeout() {
+        assert!(!poll_until(Duration::from_millis(1), || {
+            thread::sleep(Duration::from_millis(10));
+            true
+        }));
+    }
+
+    #[test]
+    fn an_expired_budget_starts_no_further_probe() {
+        let calls = Cell::new(0);
+
+        assert!(!poll_until(Duration::from_millis(25), || {
+            calls.set(calls.get() + 1);
+            false
+        }));
+        assert_eq!(calls.get(), 1);
+    }
 }
