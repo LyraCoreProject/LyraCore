@@ -21,6 +21,7 @@ pub struct Mail {
     pub cod: u32,
     pub was_read: bool,
     pub created_at: __sdk::Timestamp,
+    pub random_property_id: u32,
 }
 
 impl __sdk::InModule for Mail {
@@ -45,6 +46,7 @@ pub struct MailCols {
     pub cod: __sdk::__query_builder::Col<Mail, u32>,
     pub was_read: __sdk::__query_builder::Col<Mail, bool>,
     pub created_at: __sdk::__query_builder::Col<Mail, __sdk::Timestamp>,
+    pub random_property_id: __sdk::__query_builder::Col<Mail, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for Mail {
@@ -65,6 +67,7 @@ impl __sdk::__query_builder::HasCols for Mail {
             cod: __sdk::__query_builder::Col::new(table_name, "cod"),
             was_read: __sdk::__query_builder::Col::new(table_name, "was_read"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
+            random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
         }
     }
 }

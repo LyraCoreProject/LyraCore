@@ -13,6 +13,7 @@ pub struct BuybackEntry {
     pub stack_count: u32,
     pub price: u32,
     pub soulbound: bool,
+    pub random_property_id: u32,
 }
 
 impl __sdk::InModule for BuybackEntry {
@@ -29,6 +30,7 @@ pub struct BuybackEntryCols {
     pub stack_count: __sdk::__query_builder::Col<BuybackEntry, u32>,
     pub price: __sdk::__query_builder::Col<BuybackEntry, u32>,
     pub soulbound: __sdk::__query_builder::Col<BuybackEntry, bool>,
+    pub random_property_id: __sdk::__query_builder::Col<BuybackEntry, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for BuybackEntry {
@@ -41,6 +43,7 @@ impl __sdk::__query_builder::HasCols for BuybackEntry {
             stack_count: __sdk::__query_builder::Col::new(table_name, "stack_count"),
             price: __sdk::__query_builder::Col::new(table_name, "price"),
             soulbound: __sdk::__query_builder::Col::new(table_name, "soulbound"),
+            random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
         }
     }
 }

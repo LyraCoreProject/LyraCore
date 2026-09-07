@@ -3099,7 +3099,7 @@ fn build_items_and_loot(
     creature_loot_ids: &std::collections::HashMap<u64, u64>,
     vendor_entries: &std::collections::HashSet<u64>,
     extra_item_entries: &std::collections::HashSet<u64>,
-) -> (Vec<String>, Vec<String>, Vec<String>) {
+) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     use std::collections::HashSet;
 
     // 0+1) Parse the LootId-keyed creature drops (reference-pool expansion + direct rows). Shared with
@@ -3356,7 +3356,7 @@ fn build_items_and_loot(
             delay = field(&row, it::DELAY),
             armor = field(&row, it::ARMOR),
             block = field(&row, it::BLOCK),
-            random_property = field(&row, it::RANDOM_PROPERTY).parse::<u32>().unwrap_or(0),
+            random_property = item_property::template_pool(&row)?,
             allowed_class = allowed_class,
             allowed_race = allowed_race,
         ));
@@ -3384,7 +3384,7 @@ fn build_items_and_loot(
         );
     }
 
-    (item_rows, loot_rows, vendor_rows)
+    Ok((item_rows, loot_rows, vendor_rows))
 }
 
 /// Append chunked `INSERT INTO {table} ({cols}) VALUES (...)` statements for `rows` — bounded BOTH by
@@ -3819,7 +3819,7 @@ fn build_dump_plan(
         .copied()
         .collect();
     let (item_rows, loot_rows, vendor_rows) =
-        build_items_and_loot(dump, &creature_loot_ids, &entries, &extra_item_entries);
+        build_items_and_loot(dump, &creature_loot_ids, &entries, &extra_item_entries)?;
     eprintln!(
         "mapped: {} item_templates, {} creature_loot rows, {} npc_vendor rows ({} creatures with loot)",
         item_rows.len(), loot_rows.len(), vendor_rows.len(), creature_loot_ids.len()
@@ -6200,7 +6200,7 @@ mod tests {
         let dump = format!("x INSERT INTO `item_template` VALUES ({tuple}); y");
 
         let (item_rows, _loot, _vendor) =
-            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new());
+            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new()).unwrap();
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
@@ -6239,7 +6239,7 @@ mod tests {
         let dump = format!("x INSERT INTO `item_template` VALUES ({tuple}); y");
 
         let (item_rows, _loot, _vendor) =
-            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new());
+            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new()).unwrap();
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
@@ -6260,7 +6260,7 @@ mod tests {
         let tuple = cols.join(",").replacen("__NAME__", "'Opaque Mask Item'", 1);
         let dump = format!("x INSERT INTO `item_template` VALUES ({tuple}); y");
         let (item_rows, _loot, _vendor) =
-            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new());
+            build_items_and_loot(&dump, &HashMap::new(), &HashSet::new(), &HashSet::new()).unwrap();
 
         assert_eq!(item_rows.len(), 1);
         assert!(

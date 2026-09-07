@@ -660,7 +660,7 @@ mod lint_tests {
             ),
             (
                 "visible_item",
-                build_visible_item_values(g, 15, 25, 0).unwrap(),
+                build_visible_item_values(g, 15, 25, 117).unwrap(),
             ),
             ("item", build_item_values(0x4000_0000_0000_0001, 5, 70)),
         ];

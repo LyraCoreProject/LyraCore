@@ -231,12 +231,11 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
         e.max_power // unchanged for rage/energy pools
     };
 
-    // --- effective Spirit into the FIELD (regen + the char sheet both read e.spirit; unlike STR/AGI which
-    // combat re-derives at read time, Spirit's only consumers read the field, so folding it here is safe —
-    // no double-count). base (curve) + flat A_MOD_STAT(SPI) auras, then × the A_MOD_STAT_PCT(SPI) multiplier
-    // (The Human Spirit +5%). Re-derives base from the curve each call, so it's idempotent on relog.
+    // Regen and the character sheet read effective Spirit from the entity field.
+    // Rebuild from the base curve, gear and auras before applying percent bonuses.
     let base_spirit = crate::stats::base_attributes_for(ctx, race, class, e.level).4 as i32;
-    let spi_flat = stat_bonus(ctx, unit_guid, STAT_SPI);
+    let spi_flat = stat_bonus(ctx, unit_guid, STAT_SPI)
+        + crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Spirit);
     let spi_pct = stat_pct_bonus(ctx, unit_guid, STAT_SPI);
     let new_spirit = (((base_spirit + spi_flat) * (100 + spi_pct)) / 100).max(0) as u32;
 

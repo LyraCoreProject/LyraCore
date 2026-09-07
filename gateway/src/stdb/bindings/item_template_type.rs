@@ -65,6 +65,7 @@ pub struct ItemTemplate {
     pub food_type: u8,
     pub allowed_class: u32,
     pub allowed_race: u32,
+    pub random_property: u32,
 }
 
 impl __sdk::InModule for ItemTemplate {
@@ -133,6 +134,7 @@ pub struct ItemTemplateCols {
     pub food_type: __sdk::__query_builder::Col<ItemTemplate, u8>,
     pub allowed_class: __sdk::__query_builder::Col<ItemTemplate, u32>,
     pub allowed_race: __sdk::__query_builder::Col<ItemTemplate, u32>,
+    pub random_property: __sdk::__query_builder::Col<ItemTemplate, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for ItemTemplate {
@@ -206,6 +208,7 @@ impl __sdk::__query_builder::HasCols for ItemTemplate {
             food_type: __sdk::__query_builder::Col::new(table_name, "food_type"),
             allowed_class: __sdk::__query_builder::Col::new(table_name, "allowed_class"),
             allowed_race: __sdk::__query_builder::Col::new(table_name, "allowed_race"),
+            random_property: __sdk::__query_builder::Col::new(table_name, "random_property"),
         }
     }
 }

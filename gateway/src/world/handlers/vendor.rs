@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn selling_an_item_resolves_its_guid_to_the_durable_slot_and_returns_the_buyback_view() {
-        let ring = vec![(2589, 1, 120)];
+        let ring = vec![(2589, 1, 120, 0)];
         let actions = InMemoryVendorActions {
             item_slots: vec![(ITEM, 30)],
             ring: ring.clone(),

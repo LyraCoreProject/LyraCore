@@ -14,7 +14,7 @@ fn fixture(name: &str) -> Standalone {
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
     shard.assert_sql("INSERT INTO game_item_random_property (property_id,enchant_id_1,enchant_id_2,enchant_id_3,suffix) VALUES (5090101,5090103,0,0,'of the Fixture'),(5090102,0,0,0,'of the Other Fixture')");
-    shard.assert_sql("INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES (1303066368,5090103,0,3,7,0,0)");
+    shard.assert_sql("INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES (1303066368,5090103,0,3,7,0,0),(1303066369,5090103,1,5,9,0,0)");
     shard.assert_sql("INSERT INTO game_item_property_weight (id,pool_id,property_id,weight) VALUES (5090100,5090100,5090101,10000)");
     shard.assert_sql(&format!("UPDATE game_item_template SET random_property = {POOL}, stat_stamina = 0, bonding = 0 WHERE entry = {ITEM}"));
     shard
@@ -32,6 +32,16 @@ fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it()
     let shard = fixture("property-loot");
     shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false)"));
     shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
+    let wolf =
+        shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false");
+    shard.assert_call("debug_apply_damage", &[&wolf[0]["guid"], "100", "1"]);
+    assert_eq!(
+        shard
+            .query_rows("SELECT character_guid FROM game_creature_quest_tap")
+            .len(),
+        1,
+        "damage must acquire the Loot Tag"
+    );
     shard.assert_call("debug_kill_nearest", &["1", "51000"]);
     let loot = shard.query_rows(&format!(
         "SELECT * FROM game_corpse_loot WHERE item_entry = {ITEM}"
@@ -43,11 +53,7 @@ fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it()
     );
     shard.assert_call(
         "debug_take_loot",
-        &[
-            "1",
-            &format!("\"{}\"", loot[0]["corpse_guid"]),
-            &loot[0]["slot"],
-        ],
+        &["1", &loot[0]["corpse_guid"], &loot[0]["slot"]],
     );
     let item = shard.query_rows(&format!(
         "SELECT * FROM game_item_instance WHERE owner_guid = 1 AND entry = {ITEM}"
@@ -55,12 +61,21 @@ fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it()
     assert_eq!(item.len(), 1);
     assert_eq!(item[0]["random_property_id"], PROPERTY);
     let base = max_health(&shard);
+    let base_spirit: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")
+        [0]["spirit"]
+        .parse()
+        .unwrap();
     shard.assert_call("debug_equip_item", &["1", &item[0]["slot"]]);
     assert_eq!(
         max_health(&shard),
         base + 70,
         "seven Stamina above the base curve adds 70 health"
     );
+    let spirit: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")[0]
+        ["spirit"]
+        .parse()
+        .unwrap();
+    assert_eq!(spirit, base_spirit + 9);
     shard.assert_sql(
         "UPDATE game_item_instance SET enchant_id = 7748 WHERE owner_guid = 1 AND slot = 15",
     );
@@ -81,6 +96,11 @@ fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it()
         base,
         "broken items grant neither overlay"
     );
+    let spirit: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")[0]
+        ["spirit"]
+        .parse()
+        .unwrap();
+    assert_eq!(spirit, base_spirit);
 }
 
 fn create_spell(shard: &Standalone) {
@@ -155,4 +175,63 @@ fn splitting_and_moving_stacks_never_mix_properties() {
     assert!(merged
         .iter()
         .any(|item| item["random_property_id"] == "5090102" && item["stack_count"] == "4"));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
+    let shard = fixture("property-mail");
+    for (escrow_id, property) in [(5090110, PROPERTY), (5090120, "0")] {
+        let send = escrow_id.to_string();
+        shard.assert_call(
+            "realm_mail_commit",
+            &[
+                &send,
+                "2",
+                "1",
+                "\"Fixture\"",
+                "\"\"",
+                "0",
+                ITEM,
+                "1",
+                "42",
+                "7748",
+                "false",
+                property,
+                "0",
+                "0",
+            ],
+        );
+        let mails = shard.query_rows("SELECT id,random_property_id FROM game_mail WHERE recipient_guid = 1 AND item_entry = 5090050");
+        assert_eq!(mails.len(), 1);
+        assert_eq!(mails[0]["random_property_id"], property);
+        let payout = (escrow_id + 1).to_string();
+        shard.assert_call(
+            "realm_mail_take_item_fence",
+            &[&payout, "1", &mails[0]["id"], ITEM],
+        );
+        let fenced = shard.query_rows(&format!(
+            "SELECT random_property_id FROM game_mail_escrow WHERE escrow_id = {payout}"
+        ));
+        assert_eq!(fenced[0]["random_property_id"], property);
+        let args = [
+            &payout,
+            "1",
+            &mails[0]["id"],
+            ITEM,
+            "1",
+            "42",
+            "7748",
+            "false",
+            property,
+        ];
+        shard.assert_call("realm_mail_item_payout", &args);
+        shard.assert_call("realm_mail_item_payout", &args);
+        let items = shard.query_rows("SELECT random_property_id,enchant_id,durability FROM game_item_instance WHERE owner_guid = 1");
+        assert_eq!(items.len(), 1, "payout replay must not duplicate the item");
+        assert_eq!(items[0]["random_property_id"], property);
+        assert_eq!(items[0]["enchant_id"], "7748");
+        assert_eq!(items[0]["durability"], "42");
+        shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+    }
 }

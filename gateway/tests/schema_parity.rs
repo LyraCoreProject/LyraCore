@@ -464,6 +464,7 @@ parity_test!(parity_game_system_message_event, "game_system_message_event", lyra
 // realm-core's votes back — a drifted column here breaks that relay silently, not a client packet.
 parity_test!(parity_game_loot_roll, "game_loot_roll", lyracore_module::LootRoll, bindings::loot_roll_type::LootRoll, {
     id, corpse_guid, slot, item_entry, deadline_micros, resolved,
+    random_property_id,
 });
 parity_test!(parity_game_loot_roll_vote, "game_loot_roll_vote", lyracore_module::LootRollVote, bindings::loot_roll_vote_type::LootRollVote, {
     id, roll_id, voter_guid, voted, vote, rolled,
@@ -567,6 +568,7 @@ parity_test!(parity_game_item_template, "game_item_template", lyracore_module::I
     spelltrigger_5, required_skill, required_skill_rank, required_reputation_faction,
     required_reputation_rank, max_count, item_flags, page_text, start_quest, bag_family,
     buy_count, food_type, allowed_class, allowed_race,
+    random_property,
 });
 parity_test!(parity_game_spell, "game_spell", lyracore_module::Spell, bindings::spell_type::Spell, {
     spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms,
@@ -586,10 +588,12 @@ parity_test!(parity_game_spell_effect, "game_spell_effect", lyracore_module::Spe
 parity_test!(parity_game_item_instance, "game_item_instance", lyracore_module::ItemInstance, bindings::item_instance_type::ItemInstance, {
     guid, entry, owner_identity, owner_guid, slot, stack_count, durability, created_at,
     enchant_id, soulbound,
+    random_property_id,
 });
 parity_test!(parity_game_corpse_loot, "game_corpse_loot", lyracore_module::CorpseLoot, bindings::corpse_loot_type::CorpseLoot, {
     id, corpse_guid, slot, item_entry, count, quest_only, reserved_for, designated_looter_guid,
     master_only, withheld,
+    random_property_id,
 });
 parity_test!(parity_game_npc_vendor, "game_npc_vendor", lyracore_module::NpcVendor, bindings::npc_vendor_type::NpcVendor, {
     id, creature_entry, item_entry, slot, max_count,
@@ -689,6 +693,7 @@ parity_test!(parity_game_creature_spline, "game_creature_spline", lyracore_modul
 });
 parity_test!(parity_game_character_buyback, "game_character_buyback", lyracore_module::BuybackEntry, bindings::buyback_entry_type::BuybackEntry, {
     id, player_guid, item_entry, stack_count, price, soulbound,
+    random_property_id,
 });
 parity_test!(parity_game_gameobject_template, "game_gameobject_template", lyracore_module::GameObjectTemplate, bindings::game_object_template_type::GameObjectTemplate, {
     entry, type_id, display_id, name, data_0, data_1, gather_skill_line, respawn_secs,
@@ -764,16 +769,19 @@ parity_test!(parity_game_character_contact, "game_character_contact", lyracore_m
 parity_test!(parity_game_mail, "game_mail", lyracore_module::Mail, bindings::mail_type::Mail, {
     id, recipient_guid, sender_guid, subject, body, item_entry, item_stack_count, item_durability,
     item_enchant_id, item_soulbound, money, cod, was_read, created_at,
+    random_property_id,
 });
 parity_test!(parity_game_mail_escrow, "game_mail_escrow", lyracore_module::MailEscrow, bindings::mail_escrow_type::MailEscrow, {
     escrow_id, sender_guid, recipient_guid, subject, body, money, postage, created_micros,
     delivered, payout, mail_id, item_entry, item_stack_count, item_durability, item_enchant_id,
     item_soulbound, cod,
+    random_property_id,
 });
 parity_test!(parity_game_auction, "game_auction", lyracore_module::Auction, bindings::auction_type::Auction, {
     id, listing_operation_id, house, owner_guid, item_guid, item_entry, item_stack_count,
     item_durability, item_enchant_id, item_soulbound, start_bid, buyout, highest_bidder_guid,
     highest_bid, deposit, created_at, expires_at, revision, deposit_rate, consignment_rate,
+    random_property_id,
 });
 parity_test!(parity_game_auction_bid_decision, "game_auction_bid_decision", lyracore_module::AuctionBidDecision, bindings::auction_bid_decision_type::AuctionBidDecision, {
     operation_id, bidder_guid, auction_id, offer, outcome, revision, result_bidder_guid,
@@ -787,11 +795,13 @@ parity_test!(parity_game_auction_hold, "game_auction_hold", lyracore_module::Auc
     operation_id, seller_guid, item_guid, item_entry, item_stack_count, item_durability,
     item_enchant_id, item_soulbound, start_bid, buyout, duration_minutes, deposit, created_micros,
     expires_micros, house, deposit_rate, consignment_rate,
+    random_property_id,
 });
 parity_test!(parity_game_auction_operation_receipt, "game_auction_operation_receipt", lyracore_module::AuctionOperationReceipt, bindings::auction_operation_receipt_type::AuctionOperationReceipt, {
     operation_id, auction_id, actor_guid, item_guid, item_entry, item_stack_count, item_durability,
     item_enchant_id, item_soulbound, start_bid, buyout, duration_minutes, deposit, created_micros,
     expires_micros, house, deposit_rate, consignment_rate,
+    random_property_id,
 });
 parity_test!(parity_game_auction_house, "game_auction_house", lyracore_module::AuctionHouseDefinition, bindings::auction_house_definition_type::AuctionHouseDefinition, {
     id, faction, deposit_rate, consignment_rate, name,
@@ -1003,3 +1013,13 @@ fn every_subscribed_table_in_connection_rs_has_a_parity_manifest_entry() {
          break live BSATN decode silently. See docs/agent-playbook.md failure-mode §1."
     );
 }
+
+parity_test!(parity_game_item_random_property, "game_item_random_property", lyracore_module::ItemRandomProperty, bindings::item_random_property_type::ItemRandomProperty, {
+    property_id, enchant_id_1, enchant_id_2, enchant_id_3, suffix,
+});
+parity_test!(parity_game_item_enchantment, "game_item_enchantment", lyracore_module::ItemEnchantment, bindings::item_enchantment_type::ItemEnchantment, {
+    id, enchant_id, effect_index, kind, amount, spell_id, school_mask,
+});
+parity_test!(parity_game_item_property_weight, "game_item_property_weight", lyracore_module::ItemPropertyWeight, bindings::item_property_weight_type::ItemPropertyWeight, {
+    id, pool_id, property_id, weight,
+});

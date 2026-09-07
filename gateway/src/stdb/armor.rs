@@ -1,28 +1,6 @@
-//! The gateway-side EFFECTIVE-armor fold (Approach B) for the character sheet's "Armor" readout
-//! (`UNIT_FIELD_RESISTANCES[0]`). The MODULE is left byte-identical: `module::combat::effective_armor`
-//! stays an on-demand combat fold and `e.armor` stays BASE (agility*2), so physical-mitigation is
-//! untouched. This recomputes the same EFFECTIVE value the sheet must DISPLAY — base armor + every
-//! `A_MOD_RESISTANCE(armor)` aura + the armor summed across equipped gear — purely from a connection's
-//! subscription cache, so no module change is needed to drive it live.
-//!
-//! The SAME fold runs at two sites with two caches:
-//!   - player CREATE on the COORDINATOR cache (base + gear; `game_aura` isn't in that cache → the aura
-//!     term is 0, which the on_aura relay corrects the instant a login-present aura inserts), and
-//!   - the aura / gear relays on the PER-PLAYER cache (base + auras + gear; all three tables subscribed).
-//!
-//! It mirrors the Module's armor fold, including catalogue effects for applied enchantments
-//! and Random Properties. The other character-sheet values below come directly from the Module.
-//!
-//! [`sheet_stats`] (the STR/AGI/STA/INT/SPI/AP/damage-range/crit half of the paperdoll, #517 + #532) is
-//! NOT a gateway-side fold like the Armor half above — it is a plain READ of
-//! `module::spell::recompute_sheet`'s output, END-appended onto `game_world_entity` (`sheet_*_bonus`/
-//! `sheet_ap_base`/`sheet_ap_mods`/`sheet_dmg_min`/`sheet_dmg_max`/`sheet_crit_bp` and the ranged
-//! attack-power/damage projection). Those columns
-//! already ride the player CREATE relay (the same row), so — unlike Armor — there is no
-//! coordinator-cache gap to patch: an aura present at login already shows on the very first CREATE, no
-//! on-aura re-push needed. Do NOT re-introduce a second aura/gear fold here for those numbers; extend
-//! `recompute_sheet` instead (that's the whole point of #517 — the previous gateway-only mirror never
-//! read `game_aura`, so no aura could ever move the sheet).
+//! Character-sheet armor from the coordinator's entity, aura, item and catalogue caches.
+//! The fold mirrors Module combat armor, including applied enchantments and Random Properties.
+//! Other character-sheet values come directly from the Module's derived entity fields.
 
 use super::bindings::*;
 use spacetimedb_sdk::Table;

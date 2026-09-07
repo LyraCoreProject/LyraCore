@@ -194,12 +194,11 @@ fn catalogue_rows_sql(
                 continue;
             }
             let argument = enchant.effect_arg[slot];
-            if matches!(source_kind, 1 | 3) && !spells.contains_key(&(argument as u32)) {
-                bail!("enchantment {enchant_id} slot {slot} references missing spell {argument}");
-            }
             if source_kind == 3 {
-                effects.extend(spell_effects(slot as u8, spells[&(argument as u32)])?);
-                continue;
+                if let Some(spell) = spells.get(&(argument as u32)) {
+                    effects.extend(spell_effects(slot as u8, spell)?);
+                    continue;
+                }
             }
             let kind = match source_kind {
                 2 => kind::WEAPON_DAMAGE,
@@ -220,7 +219,11 @@ fn catalogue_rows_sql(
                 index: slot as u8 * 64,
                 kind,
                 amount: enchant.effect_points_min[slot],
-                spell_id: if source_kind == 1 { argument as u32 } else { 0 },
+                spell_id: if matches!(source_kind, 1 | 3) {
+                    argument as u32
+                } else {
+                    0
+                },
                 school_mask: 0,
             });
         }
@@ -314,15 +317,24 @@ fn decimal_weight(value: &str) -> Result<u32> {
     Ok(weight)
 }
 
+pub(crate) fn template_pool(row: &[String]) -> Result<u32> {
+    field(row, crate::it::RANDOM_PROPERTY)
+        .parse::<u32>()
+        .with_context(|| {
+            format!(
+                "item {} has an invalid Property Pool ID",
+                field(row, crate::it::ENTRY)
+            )
+        })
+}
+
 pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<String>> {
     let raw = parse_table(dump, "item_enchantment_template");
     let required: BTreeSet<u32> = parse_table(dump, "item_template")
         .iter()
-        .map(|row| {
-            field(row, crate::it::RANDOM_PROPERTY)
-                .parse::<u32>()
-                .unwrap_or(0)
-        })
+        .map(|row| template_pool(row))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
         .filter(|id| *id != 0)
         .collect();
     if raw.is_empty() && required.is_empty() {
@@ -413,6 +425,17 @@ mod tests {
         ] {
             assert!(sql.contains(row), "missing {row}: {sql}");
         }
+    }
+
+    #[test]
+    fn absent_linked_spells_retain_the_source_reference_as_unknown() {
+        let (properties, mut enchantments, spells) = catalogues();
+        enchantments.rows[0].enchantment_type = [1, 3, 0];
+        enchantments.rows[0].effect_arg = [509_0098, 509_0099, 0];
+        let (sql, _) = catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
+        let sql = sql.join("\n");
+        assert!(sql.contains("(1303040512,5090002,0,0,7,5090098,0)"));
+        assert!(sql.contains("(1303040576,5090002,64,0,9,5090099,0)"));
     }
 
     #[test]

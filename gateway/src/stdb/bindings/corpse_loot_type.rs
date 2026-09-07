@@ -17,6 +17,7 @@ pub struct CorpseLoot {
     pub designated_looter_guid: u64,
     pub master_only: bool,
     pub withheld: bool,
+    pub random_property_id: u32,
 }
 
 impl __sdk::InModule for CorpseLoot {
@@ -37,6 +38,7 @@ pub struct CorpseLootCols {
     pub designated_looter_guid: __sdk::__query_builder::Col<CorpseLoot, u64>,
     pub master_only: __sdk::__query_builder::Col<CorpseLoot, bool>,
     pub withheld: __sdk::__query_builder::Col<CorpseLoot, bool>,
+    pub random_property_id: __sdk::__query_builder::Col<CorpseLoot, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for CorpseLoot {
@@ -56,6 +58,7 @@ impl __sdk::__query_builder::HasCols for CorpseLoot {
             ),
             master_only: __sdk::__query_builder::Col::new(table_name, "master_only"),
             withheld: __sdk::__query_builder::Col::new(table_name, "withheld"),
+            random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
         }
     }
 }

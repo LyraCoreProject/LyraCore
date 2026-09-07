@@ -1832,7 +1832,7 @@ fn player_create_seeds_inventory_slot_descriptor() {
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
-        &[(23, item_guid, 25)],
+        &[(23, item_guid, 25, 0)],
         &[],
     )
     .unwrap();
@@ -1944,7 +1944,7 @@ fn player_create_equips_mainhand_renders_visible_item() {
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
-        &[(15, item_guid, 25)],
+        &[(15, item_guid, 25, 0)],
         &[],
     )
     .unwrap();
@@ -3166,7 +3166,7 @@ fn visible_item_index_boundary_stops_after_equipment_slot_18() {
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
-        &[(18, g18, 100), (19, g19, 200)],
+        &[(18, g18, 100, 0), (19, g19, 200, 0)],
         &[],
     )
     .unwrap();
@@ -3702,7 +3702,6 @@ fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
             mask1: UpdateMask::Player(p),
             ..
         } => {
-            assert!(p.object_type().is_none());
             let vi = p
                 .player_visible_item(VisibleItemIndex::Index15)
                 .expect("visible item set");

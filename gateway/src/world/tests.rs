@@ -407,7 +407,7 @@ struct InMemoryStore {
     /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
     talent_grant: u32,
     /// What `talent_pane_sync` returns: (teach rank-spell, superseded prev, points remaining).
-    talent_pane: (u32, u32, u32, u32),
+    talent_pane: (u32, u32, u32),
     /// What `superseded_old_rank` returns for a trainer buy — the known previous rank a
     /// non-stacking chain's new rank replaces. `None` (derive-Default) mirrors "no known prior
     /// rank" -> a trainer buy pushes plain SMSG_LEARNED_SPELL.
@@ -1912,7 +1912,7 @@ impl WorldStore for InMemoryStore {
     ) -> Result<()> {
         Ok(())
     }
-    fn talent_pane_sync(&self, _character_guid: u64, _talent_id: u32) -> (u32, u32, u32, u32) {
+    fn talent_pane_sync(&self, _character_guid: u64, _talent_id: u32) -> (u32, u32, u32) {
         self.talent_pane
     }
     fn talent_points_spent(&self, _character_guid: u64) -> u32 {
@@ -2621,7 +2621,7 @@ impl WorldStore for InMemoryStore {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
-        random_property_id: u32,
+        _random_property_id: u32,
     ) -> Result<()> {
         self.rec("realm_loot_op");
         self.realm_loot_ops.lock().unwrap().push((
@@ -7111,7 +7111,8 @@ fn questgiver_gameobject_bypasses_the_chest_lifecycle() {
     s.gameobject_type = Some(lyracore_shared::constants::go_type::QUESTGIVER);
     s.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
     s.quest_details = vec![detail_view(1234, "A Threat Within")];
-    s.corpse_loot_by_viewer.insert(1, vec![(0, 2589, 1, 200)]);
+    s.corpse_loot_by_viewer
+        .insert(1, vec![(0, 2589, 1, 200, 0)]);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -7161,7 +7162,7 @@ fn non_chest_gameobject_preserves_the_general_use_path() {
 fn chest_dispatch_opens_the_shared_window_and_tracks_its_target() {
     let mut s = quest_store();
     s.gameobject_type = Some(lyracore_shared::constants::go_type::CHEST);
-    s.corpse_loot_by_viewer.insert(1, vec![(4, 117, 2, 321)]);
+    s.corpse_loot_by_viewer.insert(1, vec![(4, 117, 2, 321, 0)]);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -7766,7 +7767,7 @@ fn login_replays_a_persisted_buyback_ring_after_the_login_sequence() {
     // entry, then the raw descriptor update. (An EMPTY ring emits nothing — every other login test
     // reads the login sequence and then EOF, which is that case.)
     let store = std::sync::Arc::new(InMemoryStore {
-        buyback_ring: vec![(2589, 5, 120), (4540, 1, 30)],
+        buyback_ring: vec![(2589, 5, 120, 0), (4540, 1, 30, 0)],
         ..quest_store()
     });
     let (mut client, _c_enc, mut c_dec, server) = enter_world(store.clone(), 1);

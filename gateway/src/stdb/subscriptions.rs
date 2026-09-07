@@ -3338,7 +3338,7 @@ fn append_final_item_slots(
     }
     for (slot, (guid, _, _)) in slots {
         if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
-            if let Some((bag_guid, _)) = item_in_slot(bag_slot) {
+            if let Some((bag_guid, _, _)) = item_in_slot(bag_slot) {
                 let (opcode, body) =
                     codec::build_container_slot_values(bag_guid, slot_in_bag, guid);
                 out.push(Outbound::Raw { opcode, body });
@@ -5296,7 +5296,7 @@ mod tests {
 
             let view = entity_view(entity, 0);
             let out =
-                peer_create_outbound(&view, &[(0, 700, 1337)], &index.on_target(0, view.guid))
+                peer_create_outbound(&view, &[(0, 700, 1337, 0)], &index.on_target(0, view.guid))
                     .unwrap();
             let [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)), Outbound::Raw { opcode, body }] =
                 out.as_slice()
@@ -5421,7 +5421,7 @@ mod tests {
             committed
                 .iter()
                 .find(|item| item.0 == slot)
-                .map(|item| (item.1, item.2))
+                .map(|item| (item.1, item.2, 0))
         };
         let mut outbound = Vec::new();
 
@@ -5476,7 +5476,7 @@ mod tests {
 
         let mut outbound = Vec::new();
         append_final_item_slots(7, 23, 0, &mut outbound, |slot| {
-            (slot == 0).then_some((202, 1337))
+            (slot == 0).then_some((202, 1337, 0))
         });
 
         let mut equipment = Vec::new();
@@ -5506,7 +5506,7 @@ mod tests {
 
         let mut outbound = Vec::new();
         append_final_item_slots(7, 23, 24, &mut outbound, |slot| {
-            (slot == 24).then_some((202, 1337))
+            (slot == 24).then_some((202, 1337, 0))
         });
 
         let mut source = Vec::new();
