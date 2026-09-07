@@ -562,6 +562,18 @@ pub(crate) fn apply_start_attack(
     // the mount up. No-op for an unmounted attacker, and idempotent on a re-target.
     crate::mount::dismount(ctx, attacker.guid);
 
+    if !attacker.is_player() {
+        if arm_creature_engagement(ctx, attacker.guid, target_guid, false) {
+            return Ok(());
+        }
+        if let Some(mut creature) = ctx.db.game_world_entity().guid().find(attacker.guid) {
+            if creature.target_guid != target_guid {
+                creature.target_guid = target_guid;
+                ctx.db.game_world_entity().guid().update(creature);
+            }
+        }
+    }
+
     // Arm the engagement (the tick gates each swing on range + timer). Re-arming retargets.
     let melee = ctx.db.game_melee_attack();
     let row = MeleeAttack {

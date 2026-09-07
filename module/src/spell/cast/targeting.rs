@@ -819,6 +819,12 @@ pub(crate) fn apply_effect(
         return EffectHit::none(); // an aura effect deals no direct cast damage
     }
     match e.kind {
+        E_SUMMON_HOSTILE => {
+            if let Err(error) = crate::creatures::summon_hostile(ctx, caster_guid, hdr, e) {
+                spacetimedb::log::warn!("hostile summon refused: {error}");
+            }
+            EffectHit::none()
+        }
         E_DUEL => {
             if e.p0_kind == P_GAMEOBJECT_ENTRY {
                 crate::duel::request_duel(ctx, caster_guid, target_guid, e.p0.max(0) as u32);

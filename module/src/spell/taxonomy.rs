@@ -115,6 +115,8 @@ pub(crate) const E_DUEL: u8 = 0x22; // Duel (raw effect 83): request a server-au
 /// `DISPEL_MECHANIC` effect whose parameter is the mount mechanic onto this kind, so the runtime never
 /// implements a generic mechanic dispel and never branches on spell 1604 or a spell name.
 pub(crate) const E_DISMOUNT: u8 = 0x23;
+pub(crate) const E_SUMMON_HOSTILE: u8 = 0x24; // temporary ownerless summon; p0 = creature entry, p1 = required spell focus, header duration = lifetime
+
 pub(crate) const E_POWER_BURN: u8 = 0x19; // drain N mana from the target and deal a fraction of it as damage (Mana Burn): MANA-power-type gate read off the target's `unit_bytes_0` byte 3 (same read as `is_rage_user`) — a rage/energy target is a silent no-op (power AND health untouched), matching vanilla's behaviour of skipping the effect entirely. drained = min(base_points, target.power) (floor-at-available; an empty/low pool just burns less, never fails the cast). damage = drained * p1 / 100 (p1 = the effect's ratio in basis-points — vanilla Mana Burn is EffectMultipleValue=0.5 -> p1=50 -> half the drained mana as Shadow damage); `p1<=0` (unauthored data) defaults to 100 (1:1), so a missing p1 never silently zeroes all burn damage. Dealt via the shared `apply_target_damage` (threat/kill/absorb reuse, no new wire work)
 
 // --- aura effects (high bit set) ---
@@ -226,7 +228,7 @@ pub(crate) const P_COMBAT_FIELD: u8 = 5;
 pub(crate) const P_SPEED_KIND: u8 = 6;
 pub(crate) const P_FLAG: u8 = 7;
 pub(crate) const P_ITEM_ENTRY: u8 = 8; // p0 is a game_item_template entry (E_CREATE_ITEM)
-pub(crate) const P_ENTRY: u8 = 9; // p0 is a game_creature_template entry (E_SUMMON_PET — the summoned pet's creature entry)
+pub(crate) const P_ENTRY: u8 = 9; // p0 is a game_creature_template entry
 pub(crate) const P_ENCHANT_ID: u8 = 10; // p0 is an enchant id (E_ENCHANT_ITEM — the enchant applied to the item)
                                         // SpellModOp values the engine consumes (mangos SpellModOp; the rest import fine and stay inert until a seam folds them).
 pub(crate) const SPELLMOD_OP_DAMAGE: i32 = 0;
@@ -396,6 +398,7 @@ pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_NEXT_SWING,
     E_SET_STANCE,
     E_SUMMON_PET,
+    E_SUMMON_HOSTILE,
     E_HEAL_MAX_HEALTH,
     E_ENCHANT_ITEM,
     E_DISENCHANT,

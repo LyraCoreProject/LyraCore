@@ -12,6 +12,7 @@ use super::event_ai_quest_credit_type::EventAiQuestCredit;
 use super::facing_instruction_type::FacingInstruction;
 use super::force_despawn_instruction_type::ForceDespawnInstruction;
 use super::increment_phase_instruction_type::IncrementPhaseInstruction;
+use super::instruction_target_type::InstructionTarget;
 use super::missing_text_template_no_effect_type::MissingTextTemplateNoEffect;
 use super::movement_operation_type::MovementOperation;
 use super::notify_encounter_instruction_type::NotifyEncounterInstruction;
@@ -95,6 +96,8 @@ pub enum CreatureInstruction {
     NotifyEncounter(NotifyEncounterInstruction),
 
     StartRelay(StartRelayInstruction),
+
+    AttackStart(InstructionTarget),
 }
 
 impl __sdk::InModule for CreatureInstruction {

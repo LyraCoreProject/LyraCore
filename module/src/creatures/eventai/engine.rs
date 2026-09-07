@@ -134,6 +134,7 @@ pub(crate) trait EventAiWorld {
     );
     /// The fresh summon joins the fight against `target_guid`.
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64);
+    fn eventai_start_attack(&mut self, creature_guid: u64, target_guid: u64) -> bool;
     fn eventai_remove_aura(&mut self, target_guid: u64, spell_id: u32) -> bool;
     fn eventai_force_despawn(&mut self, creature_guid: u64, delay_ms: u32) -> bool;
     fn eventai_throw_ai_event(
@@ -433,7 +434,8 @@ fn execute_instruction<W: EventAiWorld>(
             world.set_eventai_phase(context.creature_guid, phase);
             ActionResult::Applied
         }
-        CreatureInstruction::Emote(_)
+        CreatureInstruction::AttackStart(_)
+        | CreatureInstruction::Emote(_)
         | CreatureInstruction::RandomEmote(_)
         | CreatureInstruction::FleeForAssist
         | CreatureInstruction::CallForHelp(_) => {
@@ -764,6 +766,7 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
             .any(|instruction| match instruction {
                 CreatureInstruction::Speak(speech) => speech.broadcast_ids.len() > 1,
                 CreatureInstruction::Cast(cast) => random_target(cast.target),
+                CreatureInstruction::AttackStart(target) => random_target(*target),
                 CreatureInstruction::Emote(emote) => random_target(emote.target),
                 CreatureInstruction::RandomEmote(_) => true,
                 CreatureInstruction::Summon(summon) => random_target(summon.target),
@@ -1502,6 +1505,10 @@ impl EventAiWorld for DatabaseWorld<'_> {
 
     fn eventai_engage_summon(&mut self, summon_guid: u64, target_guid: u64) {
         super::mobility::engage_summon(self.ctx, summon_guid, target_guid)
+    }
+
+    fn eventai_start_attack(&mut self, creature_guid: u64, target_guid: u64) -> bool {
+        crate::combat::apply_start_attack(self.ctx, creature_guid, target_guid).is_ok()
     }
 
     fn eventai_remove_aura(&mut self, target_guid: u64, spell_id: u32) -> bool {

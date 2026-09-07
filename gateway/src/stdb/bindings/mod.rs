@@ -490,6 +490,7 @@ pub mod game_quest_event_requirement_table;
 pub mod game_quest_objective_table;
 pub mod game_quest_reward_choice_table;
 pub mod game_quest_reward_item_table;
+pub mod game_quest_reward_spell_table;
 pub mod game_quest_template_table;
 pub mod game_quest_text_table;
 pub mod game_race_info_table;
@@ -771,6 +772,7 @@ pub mod quest_event_type;
 pub mod quest_objective_type;
 pub mod quest_reward_choice_type;
 pub mod quest_reward_item_type;
+pub mod quest_reward_spell_type;
 pub mod quest_taken_predicate_type;
 pub mod quest_template_type;
 pub mod quest_text_type;
@@ -1457,6 +1459,7 @@ pub use game_quest_event_requirement_table::*;
 pub use game_quest_objective_table::*;
 pub use game_quest_reward_choice_table::*;
 pub use game_quest_reward_item_table::*;
+pub use game_quest_reward_spell_table::*;
 pub use game_quest_template_table::*;
 pub use game_quest_text_table::*;
 pub use game_race_info_table::*;
@@ -1738,6 +1741,7 @@ pub use quest_event_type::QuestEvent;
 pub use quest_objective_type::QuestObjective;
 pub use quest_reward_choice_type::QuestRewardChoice;
 pub use quest_reward_item_type::QuestRewardItem;
+pub use quest_reward_spell_type::QuestRewardSpell;
 pub use quest_taken_predicate_type::QuestTakenPredicate;
 pub use quest_template_type::QuestTemplate;
 pub use quest_text_type::QuestText;
@@ -6986,6 +6990,7 @@ pub struct DbUpdate {
     game_quest_objective: __sdk::TableUpdate<QuestObjective>,
     game_quest_reward_choice: __sdk::TableUpdate<QuestRewardChoice>,
     game_quest_reward_item: __sdk::TableUpdate<QuestRewardItem>,
+    game_quest_reward_spell: __sdk::TableUpdate<QuestRewardSpell>,
     game_quest_template: __sdk::TableUpdate<QuestTemplate>,
     game_quest_text: __sdk::TableUpdate<QuestText>,
     game_race_info: __sdk::TableUpdate<RaceInfo>,
@@ -7627,6 +7632,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 ),
                 "game_quest_reward_item" => db_update.game_quest_reward_item.append(
                     game_quest_reward_item_table::parse_table_update(table_update)?,
+                ),
+                "game_quest_reward_spell" => db_update.game_quest_reward_spell.append(
+                    game_quest_reward_spell_table::parse_table_update(table_update)?,
                 ),
                 "game_quest_template" => db_update
                     .game_quest_template
@@ -8652,6 +8660,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_quest_reward_item,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_quest_reward_spell = cache
+            .apply_diff_to_table::<QuestRewardSpell>(
+                "game_quest_reward_spell",
+                &self.game_quest_reward_spell,
+            )
+            .with_updates_by_pk(|row| &row.quest_entry);
         diff.game_quest_template = cache
             .apply_diff_to_table::<QuestTemplate>("game_quest_template", &self.game_quest_template)
             .with_updates_by_pk(|row| &row.entry);
@@ -9454,6 +9468,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_quest_reward_item" => db_update
                     .game_quest_reward_item
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_quest_reward_spell" => db_update
+                    .game_quest_reward_spell
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_quest_template" => db_update
                     .game_quest_template
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10187,6 +10204,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_quest_reward_item" => db_update
                     .game_quest_reward_item
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_quest_reward_spell" => db_update
+                    .game_quest_reward_spell
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_quest_template" => db_update
                     .game_quest_template
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10585,6 +10605,7 @@ pub struct AppliedDiff<'r> {
     game_quest_objective: __sdk::TableAppliedDiff<'r, QuestObjective>,
     game_quest_reward_choice: __sdk::TableAppliedDiff<'r, QuestRewardChoice>,
     game_quest_reward_item: __sdk::TableAppliedDiff<'r, QuestRewardItem>,
+    game_quest_reward_spell: __sdk::TableAppliedDiff<'r, QuestRewardSpell>,
     game_quest_template: __sdk::TableAppliedDiff<'r, QuestTemplate>,
     game_quest_text: __sdk::TableAppliedDiff<'r, QuestText>,
     game_race_info: __sdk::TableAppliedDiff<'r, RaceInfo>,
@@ -11476,6 +11497,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<QuestRewardItem>(
             "game_quest_reward_item",
             &self.game_quest_reward_item,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<QuestRewardSpell>(
+            "game_quest_reward_spell",
+            &self.game_quest_reward_spell,
             event,
         );
         callbacks.invoke_table_row_callbacks::<QuestTemplate>(
@@ -12638,6 +12664,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_quest_objective_table::register_table(client_cache);
         game_quest_reward_choice_table::register_table(client_cache);
         game_quest_reward_item_table::register_table(client_cache);
+        game_quest_reward_spell_table::register_table(client_cache);
         game_quest_template_table::register_table(client_cache);
         game_quest_text_table::register_table(client_cache);
         game_race_info_table::register_table(client_cache);
@@ -12880,6 +12907,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_quest_objective",
         "game_quest_reward_choice",
         "game_quest_reward_item",
+        "game_quest_reward_spell",
         "game_quest_template",
         "game_quest_text",
         "game_race_info",

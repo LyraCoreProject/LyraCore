@@ -302,6 +302,15 @@ pub struct QuestRewardItem {
     pub count: u32,
 }
 
+/// A quest reward whose source cast teaches one spell. The importer stores the learned spell,
+/// never its teaching wrapper. Non-teaching reward casts are outside this catalogue.
+#[table(accessor = game_quest_reward_spell)]
+pub struct QuestRewardSpell {
+    #[primary_key]
+    pub quest_entry: u32,
+    pub spell_id: u32,
+}
+
 /// A CHOICE reward item (pick-1-of-N) granted on turn-in (cmangos RewChoiceItemId/Count1-6). The player
 /// picks ONE row by `choice_index`; that single item is granted IN ADDITION to every [`QuestRewardItem`].
 /// `choice_index` is 0-based and matches the wire order of the offer/details `choice_item_rewards` array
@@ -991,6 +1000,25 @@ pub(crate) fn apply_turn_in_quest(
         .find(quest_entry)
         .ok_or_else(|| format!("no such quest {quest_entry}"))?;
 
+    let reward_spell = ctx
+        .db
+        .game_quest_reward_spell()
+        .quest_entry()
+        .find(quest_entry);
+    if let Some(reward) = &reward_spell {
+        use crate::game_spell;
+        if ctx
+            .db
+            .game_spell()
+            .spell_id()
+            .find(reward.spell_id)
+            .is_none()
+        {
+            return Err(format!("quest reward spell {} is missing", reward.spell_id));
+        }
+    }
+    let owner_identity = player.owner_identity;
+
     // Consume the COLLECT objectives' required items BEFORE granting rewards — frees the bag
     // space the reward may need, and is atomic with the grant (any later Err rolls the whole tx back, so a
     // failed turn-in neither eats the items nor hands out the reward). `quest_is_complete` already verified
@@ -1088,6 +1116,10 @@ pub(crate) fn apply_turn_in_quest(
         tmpl.rew_rep_faction_2,
         tmpl.rew_rep_value_2,
     );
+
+    if let Some(reward) = reward_spell {
+        crate::spell::learn_spell(ctx, player_guid, owner_identity, reward.spell_id);
+    }
 
     // Mark the row rewarded and KEEP it — for every quest, repeatable or not. Deleting it here for a
     // repeatable quest would erase the only record it was ever completed, which would permanently break
@@ -2420,6 +2452,13 @@ pub(crate) fn apply_abandon_quest(
         .ok_or_else(|| "you are not on that quest".to_string())?;
     if cq.rewarded {
         return Err("cannot abandon a completed quest".to_string());
+    }
+    if let Some(tmpl) = ctx.db.game_quest_template().entry().find(quest_entry) {
+        if tmpl.src_item != 0 {
+            let available = crate::items::item_count(ctx, player_guid, tmpl.src_item);
+            let count = available.min(tmpl.src_item_count.max(1));
+            crate::items::remove_items(ctx, player_guid, tmpl.src_item, count)?;
+        }
     }
     ctx.db.game_character_quest().id().delete(cq.id);
     Ok(())
