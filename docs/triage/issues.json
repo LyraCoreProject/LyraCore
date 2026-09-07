@@ -1,12 +1,12 @@
 {
-  "updated_at": "2026-09-07 14:22 UTC",
+  "updated_at": "2026-09-07 14:28 UTC",
   "base_revision": "6ccfe68e4cb226c5cac836fd309976b44ebb19cd",
   "status_note": "71 open issues assessed; 18 closed issues retained for history. Movement replay and benchmark reporting are merged. Service checks, Warlock quests and the bank adapter are active.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
   "focus": [
-    "Review CLI PR #57 for service parsing #341 and effective command #340, then adopt its pin.",
+    "Adopt merged CLI #57 for service parsing #341 and effective command #340 through a checked core pin.",
     "Finish and test The Binding #40 draft for required human schema review.",
-    "Implement bank-flow adapter #137; keep live execution with the Operator."
+    "Finish bank adapter wire-harness #9 through review, release and core adoption; keep live execution with the Operator."
   ],
   "issues": [
     {
@@ -294,7 +294,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "The CLI parser still splits physical lines. Continued directives can hide a conflicting Standalone service. The fix is testable without changing a host.",
-      "next_action": "Finish CLI #57 through review and CI, then update the core CLI pin. Keep this issue open until core adoption.",
+      "next_action": "Complete the core pin for merged CLI #57. Keep the issue open until adoption passes checks and review.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/341",
@@ -316,7 +316,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "The current verifier reads ActiveState, LimitNOFILE and StandardError. It does not compare the effective ExecStart or name relevant drop-ins. A success report can therefore describe the wrong service.",
-      "next_action": "Finish CLI #57 through review and CI, then update the core CLI pin. Keep this issue open until core adoption.",
+      "next_action": "Complete the core pin for merged CLI #57. Keep the issue open until adoption passes checks and review.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/340",
@@ -665,9 +665,9 @@
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "The parent and both blocking code issues are closed. Current Gateway paths cover activate, deposit, withdraw, and slot purchase, while the pinned adapter tree has no bank script.",
-      "next_action": "Implement the bank-flow protocol scenario and LyraCore adapter with stdin credentials and offline checks. Operator execution and real-client window acceptance remain separate.",
+      "next_action": "Finish wire-harness #9 through checks and review, then release and update the core pin. Operator execution and real-client window acceptance remain.",
       "blockers": [
         "Completing the issue requires a wire-harness release and LyraCore pin bump.",
         "The final window and cell behavior require a human with a stock client."
@@ -677,7 +677,8 @@
         "https://github.com/LyraCoreProject/LyraCore/pull/158",
         "https://github.com/LyraCoreProject/LyraCore/pull/171",
         "https://github.com/LyraCoreProject/wire-harness/tree/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore",
-        "gateway/src/world/handlers/bank.rs: all four requested client operations dispatch through the current Store."
+        "gateway/src/world/handlers/bank.rs: all four requested client operations dispatch through the current Store.",
+        "https://github.com/LyraCoreProject/wire-harness/pull/9"
       ],
       "related_prs": [
         158,
@@ -2931,17 +2932,43 @@
       "url": "https://github.com/LyraCoreProject/lyracore-cli/pull/57",
       "title": "fix(service): verify the effective start command",
       "owner": "GPT-5.6 Sol, high effort, CLI agent",
-      "status": "Review and CI running",
-      "next_action": "Review current head, merge, then adopt the CLI pin for #341 and #340.",
+      "status": "Merged; core pin next",
+      "next_action": "Open and complete the core CLI pin for #340 and #341.",
       "head": "94535c723ca9b3fc10c420bae5edc91c8b10bd0b",
-      "github_state": "OPEN",
+      "github_state": "MERGED",
       "checks": [
         {
           "name": "CodeRabbit",
-          "result": "PENDING"
+          "result": "SUCCESS"
         }
       ],
-      "checked_at": "2026-09-07 14:22 UTC"
+      "checked_at": "2026-09-07 14:28 UTC",
+      "merge_commit": "ad2aa067bf5c9bf47c3c4034aaa3897c1eb6f502"
+    },
+    {
+      "number": 9,
+      "url": "https://github.com/LyraCoreProject/wire-harness/pull/9",
+      "title": "test(bank): add the full bank flow adapter",
+      "owner": "GPT-5.6 Sol, medium effort, adapter agent",
+      "status": "Parent review passed; CI running",
+      "next_action": "Complete checks/review, release, then adopt in core. Keep #137 open for live acceptance.",
+      "head": "98c4e0ebd64fda247a4a75ebf72f9357b807572a",
+      "github_state": "OPEN",
+      "checks": [
+        {
+          "name": "test (ubuntu-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test (macos-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "coverage",
+          "result": "SUCCESS"
+        }
+      ],
+      "checked_at": "2026-09-07 14:28 UTC"
     }
   ],
   "history": [
@@ -3056,6 +3083,10 @@
     {
       "at": "2026-09-07 14:22 UTC",
       "text": "Merged resident movement #450 after all seven checks passed and final-head CodeRabbit review found no actionable findings. Kept #272 open with a bounded completion comment. A full 71-issue census found no new issues."
+    },
+    {
+      "at": "2026-09-07 14:28 UTC",
+      "text": "Merged CLI #57 after 711 tests and final-head CodeRabbit review passed. The owner is preparing its core pin. Bank adapter #9 is open after parent review corrected setup failures and partial VALUES handling; no live acceptance run was claimed."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
