@@ -13,11 +13,9 @@
 //! The measured consequence of not doing it (2026-08-07): a default Docker container has
 //! `RLIMIT_NOFILE` soft **1024** against a hard limit of **524288**, and the gateway died at ~200
 //! sessions with `Error: Too many open files (os error 24)` — a 512× headroom sitting unused. A live
-//! session costs 3–5 descriptors: the client socket, the `try_clone` dup the writer thread owns, and
-//! one SpacetimeDB websocket per shard the player's view touches (a dispersed realm opens more, since
-//! the AOI view-merge opens a further per-account connection on each away shard as players scatter).
-//! So the stock 1024 buys roughly 200 players on a five-shard
-//! realm, and the operator gets no warning that this is the number.
+//! session now needs three client descriptors: the reader, writer and ownership-loss shutdown
+//! handle. Each subscribed Shard also needs a SpacetimeDB websocket. Capacity therefore depends
+//! on the topology and on how widely the Characters are spread.
 //!
 //! # Failure is never fatal
 //!
@@ -122,12 +120,11 @@ pub fn raise_nofile_soft_to_hard() -> Option<u64> {
             Err(e) => {
                 log::warn!(
                     "fd limit: could not raise RLIMIT_NOFILE soft {} -> {} ({e}) — continuing at \
-                     {}. A live session costs 3-5 descriptors, so expect roughly {} concurrent \
-                     players before accept starts failing with EMFILE.",
+                     {}. Each World Session needs three client descriptors plus database \
+                     sockets. Set LYRACORE_MAX_SESSIONS within this descriptor budget.",
                     describe_limit(from),
                     describe_limit(to),
-                    describe_limit(from),
-                    from / 5
+                    describe_limit(from)
                 );
                 Some(from)
             }

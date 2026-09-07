@@ -2700,11 +2700,11 @@ impl Coordinator {
             .into_iter()
             .map(|name| {
                 let inner = self.1.conns.get(&name).ok_or_else(|| {
-                    anyhow!("Account admission requires unavailable Shard {name}")
+                    anyhow!("Shard {name} is configured but has no Coordinator connection")
                 })?;
                 if !inner.coord().is_healthy() {
                     return Err(anyhow!(
-                        "Account admission requires unavailable Shard {name}"
+                        "Shard {name} has no healthy Coordinator subscription"
                     ));
                 }
                 Ok(Coordinator(inner.clone(), self.1.clone(), self.2.clone()))

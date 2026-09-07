@@ -136,8 +136,10 @@ Account admission requires every configured World Shard and Instance Pool to be 
 Character-to-Shard index is a hint; fencing only its current answer would leave an in-flight Transfer
 able to create a second live copy elsewhere. A partial admission starts no renewal. After its claim
 expires, another generation can finish fencing all Shards. Completed fences retain their generation
-so delayed delivery cannot reopen them. The Module's existing Gateway lease schedule removes
-Characters whose Account Fence expires. Gateway routing preserves the bound token across Transfer.
+so delayed delivery cannot reopen them. The Module's existing Gateway lease schedule closes up to
+64 expired Account Fences and removes their Characters per 15-second pass. A backlog takes additional
+passes; expired tokens are refused even while their entities await cleanup. Gateway routing
+preserves the bound token across Transfer.
 
 ---
 
@@ -199,6 +201,10 @@ gateway's environment. Omit one and you get a **working-looking single-database 
 | `LYRACORE_WRITER_TRACE` | per-session writer black-box ring | off | — |
 | `LYRACORE_TRANSFER_ABORT_AFTER` | crash-injection harness (aborts a named transfer step) | unset | an unknown step name logs an error and nothing fires |
 | `LYRACORE_PROFILE_SECS` | `--features dhat-heap` builds only | `120` | — |
+
+Budget three client socket descriptors per World Session: reader, writer and ownership-loss
+shutdown handle. Add the database sockets for its subscribed Shards and reserve headroom for
+listeners, handshakes and Coordinator connections when setting `LYRACORE_MAX_SESSIONS`.
 
 Two non-`LYRACORE_` variables matter: `RUST_LOG` (consumed by `env_logger` in `gateway/src/main.rs`)
 and `MALLOC_ARENA_MAX` (glibc, not the binary — worth ~4× RSS per connection).

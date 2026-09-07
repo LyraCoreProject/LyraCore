@@ -6,6 +6,7 @@ pub use module_wasm::module_bytes;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -202,6 +203,52 @@ impl Standalone {
         command.args(["call", "-s", &self.server, &self.database, reducer]);
         command.args(args);
         command.output().expect("failed to call reducer")
+    }
+
+    /// Capture committed transactions after the subscription's initial result is visible.
+    #[allow(dead_code)]
+    pub fn capture_updates(
+        &self,
+        query: &str,
+        count: u32,
+        action: impl FnOnce(),
+    ) -> Vec<serde_json::Value> {
+        struct Subscription(Child);
+        impl Drop for Subscription {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = Subscription(
+            self.command()
+                .args([
+                    "subscribe",
+                    "-s",
+                    &self.server,
+                    "--print-initial-update",
+                    "--num-updates",
+                    &count.to_string(),
+                    "--timeout",
+                    "45",
+                    &self.database,
+                    query,
+                ])
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("failed to subscribe to fixture"),
+        );
+        let mut reader = BufReader::new(child.0.stdout.take().unwrap());
+        let mut initial = String::new();
+        assert!(reader.read_line(&mut initial).unwrap() > 0);
+        serde_json::from_str::<serde_json::Value>(&initial).expect("initial subscription result");
+        action();
+        let updates = reader
+            .lines()
+            .map(|line| serde_json::from_str(&line.unwrap()).expect("transaction update"))
+            .collect();
+        assert!(child.0.wait().unwrap().success(), "subscription failed");
+        updates
     }
 
     #[allow(dead_code)] // Only the integration tests that call reducers use this.

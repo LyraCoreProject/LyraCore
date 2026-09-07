@@ -340,3 +340,50 @@ fn first_admission_cleans_each_legacy_character_with_a_shared_identity() {
         "456"
     );
 }
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn expired_fences_make_progress_in_bounded_batches() {
+    let mut shard = Standalone::start("account-fence-batches");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let mut rows: Vec<_> = (1..=65)
+        .map(|id| format!("({id},'TEST',1,1,{id},0,false)"))
+        .collect();
+    rows.push("(66,'TEST',1,1,66,9223372036854775807,false)".into());
+    let updates = shard.capture_updates(
+        "SELECT * FROM game_account_fence WHERE closed = true",
+        2,
+        || {
+            shard.assert_sql(&format!(
+                "INSERT INTO game_account_fence (account_id,account_name,generation,request_nonce,character_guid,expires_micros,closed) VALUES {}",
+                rows.join(",")
+            ));
+        },
+    );
+    let batch_sizes: Vec<_> = updates
+        .iter()
+        .map(|update| {
+            update["game_account_fence"]["inserts"]
+                .as_array()
+                .unwrap()
+                .len()
+        })
+        .collect();
+    assert_eq!(batch_sizes, [64, 1]);
+    assert_eq!(
+        shard
+            .query_rows("SELECT account_id FROM game_account_fence WHERE closed = true")
+            .len(),
+        65
+    );
+    assert!(shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE guid = 1")
+        .is_empty());
+    assert_eq!(
+        shard.query_rows("SELECT account_id FROM game_account_fence WHERE closed = false")[0]
+            ["account_id"],
+        "66"
+    );
+}

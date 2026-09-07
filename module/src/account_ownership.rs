@@ -5,6 +5,7 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
 use crate::{game_account, game_character, game_gateway_session, game_world_entity};
 
 const CLAIM_MICROS: i64 = 60_000_000;
+const REAP_LIMIT: usize = 64;
 const STALE: &str = "STALE_WORLD_SESSION";
 
 #[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,12 +381,14 @@ pub(crate) fn require_actor_for(
 /// Called from the existing Gateway lease schedule; one surviving Gateway cannot renew another
 /// World Session's Account claim or keep its Character alive.
 pub(crate) fn reap_account_fences(ctx: &ReducerContext) {
+    let cutoff = now(ctx);
     let expired: Vec<_> = ctx
         .db
         .game_account_fence()
         .by_closed()
         .filter(false)
-        .filter(|row| row.expires_micros <= now(ctx))
+        .filter(|row| row.expires_micros <= cutoff)
+        .take(REAP_LIMIT)
         .collect();
     for mut row in expired {
         remove_character(ctx, row.character_guid, &row.account_name);
