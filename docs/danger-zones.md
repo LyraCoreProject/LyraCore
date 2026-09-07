@@ -36,6 +36,9 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
      code accesses; `cargo build` E0609 "no field X" tells you which way each one goes.
      Regeneration also removes the explanatory `facing` / `facing_angle` comment from
      `creature_spline_type.rs`; restore it from the committed binding after every regeneration.
+     `scripts/check-gateway-bindings.py` runs the same private generation offline with SpacetimeDB
+     2.7.1, applies only these spelling and comment exceptions in its temporary output, formats it
+     with the pinned Rust toolchain, and compares every generated file with the committed tree.
      Regeneration needs a machine that can run `spacetimedb-standalone` — schema extraction shells
      out to it, so a sandbox without it cannot regenerate. Diff-review the regenerated tree before
      committing (it rewrites every file; drift deletions are expected and correct), then run the
@@ -44,22 +47,11 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
      `gateway/tests/schema_parity.rs` structurally checks every subscribed table's binding against
      the module schema — run `cargo test -p lyracore-gateway` after ANY hand edit to a
      `<table>_type.rs` file to catch a missed, misordered, or mistyped column before it ships.
-     **One documented exception:** `game_transfer_out` plus the seven transfer/instance reducer
-     bindings were spliced BY HAND rather than regenerating all ~512 files — they are the only
-     module→gateway data flow the cross-database transfer adds, and the regen's blast radius was
-     worse than the splice. `transfer_out_type.rs` / `game_transfer_out_table.rs` say so in their
-     headers, and `schema_parity.rs` covers the row shape. A future regen overwrites both with
-     identical content; nothing needs undoing.
-     **A second exception:** `record_shard_load`/`record_region_load` (and their `game_shard_load` /
-     `game_region_load` tables) were also hand-spliced, because no live `spacetimedb-standalone` was
-     available to run the generator. Only the REDUCER bindings were added
-     (`record_shard_load_reducer.rs`, `record_region_load_reducer.rs`, mirroring
-     `install_guid_range_reducer.rs`'s shape) — the gateway only ever WRITES those two tables (an
-     operator reads them with `spacetime sql`), so no TABLE binding exists and none is needed. A
-     future regen adds the two table bindings (harmless, since nothing subscribes them) and
-     overwrites the reducer bindings with equivalent content; nothing needs undoing. This is also
-     the case that establishes the general rule: **a table binding is only needed if the gateway
-     subscribes to or reads that table.**
+     `game_transfer_out`, its transfer/instance reducers, `record_shard_load`, and
+     `record_region_load` began as narrow hand-splices when a full regeneration was unavailable or
+     carried too much unrelated churn. The full generated baseline now contains equivalent output
+     for them, and the complete-tree check covers their table and reducer definitions. The Gateway
+     still only needs to use a table binding when it subscribes to or reads that table.
 
    **A defaulted column's default can be a VALID VALUE, not a sentinel — plan the backfill (#456).**
    `cell` was END-appended to the four AOI-scoped tables as `#[default(0i64)]`, and 0 is the legitimate

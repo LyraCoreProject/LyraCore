@@ -1,4 +1,4 @@
-name: Module durable tests
+name: Module durable tests and Gateway bindings
 
 # The durable integration rung: `module/tests/`, marked `#[ignore]` because each target
 # starts its own SpacetimeDB standalone, publishes the module to it, and drives real reducers.
@@ -53,6 +53,14 @@ jobs:
           found=$(spacetime --version | sed -n 's/.*version[ ]*\([0-9][0-9.]*\).*/\1/p' | head -n 1)
           echo "spacetime $found"
           [ "$found" = "$SPACETIME_VERSION" ]
+
+      - name: Test the Gateway binding check
+        run: python3 -m unittest scripts/tests/test_check_gateway_bindings.py
+
+      # This regenerates the complete private schema into a temporary directory. It does not need a
+      # running Realm and never publishes the Module.
+      - name: Check all Gateway bindings
+        run: scripts/check-gateway-bindings.py
 
       # Building the workspace Module once keeps the module-path publishers off a cold compile, and
       # a build failure reports as a build failure rather than as a publish timeout. The typed taxi
