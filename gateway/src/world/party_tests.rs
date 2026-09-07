@@ -9,7 +9,7 @@
 //! A child module of `world::tests` so it can reach `InMemoryStore` without widening anything.
 
 use super::*;
-use lyracore_shared::group::GroupRefusal;
+use lyracore_shared::group::{realm_op, GroupRefusal};
 
 pub(super) const GINGER: u64 = 1; // in the open world, on `world`
 pub(super) const VIM: u64 = 2; // inside the dungeon, on `instances`
@@ -23,6 +23,50 @@ pub(super) const BOT: u64 = 5;
 /// [`BOT`], on the far side of the boundary. The invite is authoritative on realm-core, so a bot
 /// standing on a different database than the inviting player is reachable in principle; this pins it.
 const FAR_BOT: u64 = 6;
+
+fn topology_after_vim_is_deleted() -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    ShardCallLog,
+) {
+    let (realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("invite the survivor");
+    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).expect("the survivor accepts");
+
+    let deleted_from_instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        calls: calls.clone(),
+        realm: Some(realm.clone()),
+        mirror: std::sync::Mutex::new(instances.mirror.lock().unwrap().clone()),
+        ..Default::default()
+    });
+    *world.peers.lock().unwrap() = vec![world.clone(), deleted_from_instances.clone()];
+    *deleted_from_instances.peers.lock().unwrap() =
+        vec![world.clone(), deleted_from_instances.clone()];
+    (realm, world, deleted_from_instances, calls)
+}
+
+fn two_member_topology_after_vim_is_deleted() -> (
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+    std::sync::Arc<InMemoryStore>,
+) {
+    let (realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    let deleted_from_instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        calls,
+        realm: Some(realm.clone()),
+        mirror: std::sync::Mutex::new(instances.mirror.lock().unwrap().clone()),
+        ..Default::default()
+    });
+    *world.peers.lock().unwrap() = vec![world.clone(), deleted_from_instances.clone()];
+    *deleted_from_instances.peers.lock().unwrap() =
+        vec![world.clone(), deleted_from_instances.clone()];
+    (realm, world, deleted_from_instances)
+}
 
 pub(super) fn character(guid: u64, name: &str) -> codec::CharacterView {
     codec::CharacterView {
@@ -291,6 +335,329 @@ fn leaving_a_party_re_pushes_the_roster_of_the_group_the_leaver_left() {
              actor was in BEFORE the op, not only the one they are in after it"
         );
     }
+}
+
+#[test]
+fn an_uncertain_character_read_preserves_realm_core_membership() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    let uncertain_instances = std::sync::Arc::new(InMemoryStore {
+        shard: "instances".into(),
+        realm: Some(realm.clone()),
+        character_read_error: Some("subscription unavailable".into()),
+        ..Default::default()
+    });
+    *world.peers.lock().unwrap() = vec![world.clone(), uncertain_instances];
+
+    let error = party::cleanup_deleted_character(world.as_ref(), VIM)
+        .expect_err("unknown absence must stop cleanup");
+
+    assert!(error.to_string().contains("subscription unavailable"));
+    assert!(
+        realm.group_roster(VIM).unwrap().is_some(),
+        "an unreadable Shard cannot prove deletion, so Realm-core membership must stay unchanged"
+    );
+}
+
+#[test]
+fn a_deleted_member_leaves_realm_core_and_both_shards_receive_the_surviving_roster() {
+    let (realm, world, instances, _calls) = topology_after_vim_is_deleted();
+
+    assert_eq!(
+        party::cleanup_deleted_character(world.as_ref(), VIM).unwrap(),
+        party::DeletedCharacterPartyCleanup::Removed
+    );
+
+    let survivors = realm.group_roster(GINGER).unwrap().unwrap();
+    assert_eq!(survivors.members, vec![GINGER, TRIN]);
+    for shard in [&world, &instances] {
+        assert_eq!(
+            shard.mirror.lock().unwrap().as_slice(),
+            std::slice::from_ref(&survivors)
+        );
+    }
+}
+
+#[test]
+fn a_character_visible_on_the_destination_shard_keeps_party_membership() {
+    let (realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    calls.lock().unwrap().clear();
+
+    assert_eq!(
+        party::cleanup_deleted_character(world.as_ref(), VIM).unwrap(),
+        party::DeletedCharacterPartyCleanup::Preserved
+    );
+    assert!(realm.group_roster(VIM).unwrap().is_some());
+    assert!(calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_unavailable_configured_shard_preserves_realm_core_membership() {
+    let (realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    let incomplete = InMemoryStore {
+        shard: "world".into(),
+        calls,
+        realm: Some(realm.clone()),
+        world_shard_set_error: Some("instances has no healthy Coordinator subscription".into()),
+        ..Default::default()
+    };
+
+    let error = party::cleanup_deleted_character(&incomplete, VIM)
+        .expect_err("an incomplete Shard set cannot establish absence");
+
+    assert!(error.to_string().contains("no healthy Coordinator"));
+    assert!(realm.group_roster(VIM).unwrap().is_some());
+}
+
+#[test]
+fn an_unavailable_realm_core_preserves_party_membership() {
+    let (realm, world, instances, calls) = party_topology();
+    form_split_party(&world, &instances);
+    let unavailable = InMemoryStore {
+        shard: "world".into(),
+        calls,
+        realm: Some(realm.clone()),
+        party_cleanup_realm_error: Some("Realm-core is not connected".into()),
+        ..Default::default()
+    };
+
+    let error = party::cleanup_deleted_character(&unavailable, VIM)
+        .expect_err("unavailable Realm-core cannot become an unsharded cleanup");
+
+    assert!(error.to_string().contains("not connected"));
+    assert!(realm.group_roster(VIM).unwrap().is_some());
+}
+
+#[test]
+fn repeated_deleted_character_cleanup_is_harmless() {
+    let (realm, world, _instances, _calls) = topology_after_vim_is_deleted();
+    assert_eq!(
+        party::cleanup_deleted_character(world.as_ref(), VIM).unwrap(),
+        party::DeletedCharacterPartyCleanup::Removed
+    );
+
+    assert_eq!(
+        party::cleanup_deleted_character(world.as_ref(), VIM).unwrap(),
+        party::DeletedCharacterPartyCleanup::AlreadyClean
+    );
+    assert_eq!(
+        realm.group_roster(GINGER).unwrap().unwrap().members,
+        vec![GINGER, TRIN]
+    );
+}
+
+#[test]
+fn deleted_character_cleanup_retries_a_transient_realm_core_leave_failure() {
+    let (realm, world, _instances, _calls) = topology_after_vim_is_deleted();
+    realm
+        .party_leave_failures
+        .store(2, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(
+        party::cleanup_deleted_character(world.as_ref(), VIM).unwrap(),
+        party::DeletedCharacterPartyCleanup::Removed
+    );
+    assert_eq!(realm.group_roster(VIM).unwrap(), None);
+    assert_eq!(
+        realm
+            .party
+            .lock()
+            .unwrap()
+            .ops
+            .iter()
+            .filter(|(op, actor, ..)| *op == realm_op::LEAVE && *actor == VIM)
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn a_lost_realm_core_leave_reply_still_refreshes_the_surviving_party() {
+    let (realm, world, instances, _calls) = topology_after_vim_is_deleted();
+    realm
+        .party_leave_commit_then_error
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(
+        party::cleanup_deleted_character(world.as_ref(), VIM).unwrap(),
+        party::DeletedCharacterPartyCleanup::Removed
+    );
+
+    let survivors = realm.group_roster(GINGER).unwrap().unwrap();
+    assert_eq!(survivors.members, vec![GINGER, TRIN]);
+    for shard in [&world, &instances] {
+        assert_eq!(
+            shard.mirror.lock().unwrap().as_slice(),
+            std::slice::from_ref(&survivors)
+        );
+    }
+}
+
+#[test]
+fn deleted_character_cleanup_retries_a_transient_mirror_failure() {
+    let (realm, world, instances, calls) = topology_after_vim_is_deleted();
+    instances
+        .mirror_failures
+        .store(2, std::sync::atomic::Ordering::SeqCst);
+    calls.lock().unwrap().clear();
+
+    assert_eq!(
+        party::cleanup_deleted_character(world.as_ref(), VIM).unwrap(),
+        party::DeletedCharacterPartyCleanup::Removed
+    );
+
+    let survivors = realm.group_roster(GINGER).unwrap().unwrap();
+    assert_eq!(
+        instances.mirror.lock().unwrap().as_slice(),
+        std::slice::from_ref(&survivors)
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(shard, call)| shard == "instances" && call == "sync_group_mirror")
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn reconciliation_repairs_a_mirror_left_stale_after_membership_cleanup() {
+    let (realm, world, instances) = two_member_topology_after_vim_is_deleted();
+    instances
+        .mirror_failures
+        .store(7, std::sync::atomic::Ordering::SeqCst);
+
+    let error = party::cleanup_deleted_character(world.as_ref(), VIM)
+        .expect_err("three failed mirror writes must keep cleanup pending");
+    assert!(error.to_string().contains("3 attempts"));
+    assert_eq!(realm.group_roster(VIM).unwrap(), None);
+    assert_eq!(realm.party_group_ids().unwrap(), Vec::<u64>::new());
+    assert!(instances
+        .mirror
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|roster| roster.members.contains(&VIM)));
+
+    party::reconcile_deleted_character_parties(world.as_ref())
+        .expect_err("the first reconciliation exhausts its bounded mirror retries");
+    assert!(!instances.mirror.lock().unwrap().is_empty());
+
+    party::reconcile_deleted_character_parties(world.as_ref()).unwrap();
+
+    assert!(instances.mirror.lock().unwrap().is_empty());
+}
+
+#[test]
+fn deleted_character_cleanup_stops_after_three_realm_core_leave_failures() {
+    let (realm, world, _instances, _calls) = topology_after_vim_is_deleted();
+    realm
+        .party_leave_failures
+        .store(4, std::sync::atomic::Ordering::SeqCst);
+
+    let error = party::cleanup_deleted_character(world.as_ref(), VIM)
+        .expect_err("cleanup must report a persistent Realm-core failure");
+
+    assert!(error.to_string().contains("connection interrupted"));
+    assert!(realm.group_roster(VIM).unwrap().is_some());
+    assert_eq!(
+        realm
+            .party
+            .lock()
+            .unwrap()
+            .ops
+            .iter()
+            .filter(|(op, actor, ..)| *op == realm_op::LEAVE && *actor == VIM)
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn unsharded_deleted_character_cleanup_stays_on_the_module_sweep() {
+    let store = InMemoryStore {
+        shard: "world".into(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        party::cleanup_deleted_character(&store, VIM).unwrap(),
+        party::DeletedCharacterPartyCleanup::AlreadyClean
+    );
+    assert!(store.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn reconnect_reconciliation_removes_a_member_whose_delete_event_was_missed() {
+    let (realm, world, instances, _calls) = topology_after_vim_is_deleted();
+
+    party::reconcile_deleted_character_parties(world.as_ref()).unwrap();
+
+    let survivors = realm.group_roster(GINGER).unwrap().unwrap();
+    assert_eq!(survivors.members, vec![GINGER, TRIN]);
+    assert_eq!(
+        instances.mirror.lock().unwrap().as_slice(),
+        std::slice::from_ref(&survivors)
+    );
+}
+
+#[test]
+fn deleted_character_cleanup_flushes_pending_loot_before_leaving_realm_core() {
+    let (_realm, world, instances, calls) = topology_after_vim_is_deleted();
+    *instances.pending_rolls.lock().unwrap() = vec![loot::PendingLootRoll {
+        roll_id: 40,
+        corpse_guid: 90,
+        slot: 1,
+        item_entry: 100,
+        deadline_micros: 500,
+        recipients: vec![GINGER, VIM, TRIN],
+    }];
+    calls.lock().unwrap().clear();
+
+    party::cleanup_deleted_character(world.as_ref(), VIM).unwrap();
+
+    let names: Vec<String> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, call)| call.clone())
+        .collect();
+    let promotion = names
+        .iter()
+        .position(|name| name == "realm_loot_op")
+        .unwrap();
+    let leave = names
+        .iter()
+        .position(|name| name == "realm_group_op")
+        .unwrap();
+    assert!(
+        promotion < leave,
+        "pending loot from the deleted Character's former Shard must reach Realm-core before a \
+         disband-capable leave"
+    );
+}
+
+#[test]
+fn deleted_character_leave_returns_with_the_committed_roster_visible() {
+    let src = include_str!("../stdb/reducers.rs");
+    let body = crate::test_scan::code_of(src, "pub fn deleted_character_party_leave(");
+    assert!(
+        body.contains("let coordinator = self.0.visibility_pipe()")
+            && body.contains("coordinator.conn.reducers"),
+        "cleanup reads Realm-core immediately after LEAVE, so the Durable Request must return a \
+         Coordinator visibility receipt. Body was:\n{body}"
+    );
+
+    let ordinary = crate::test_scan::code_of(src, "pub fn realm_group_op(");
+    assert!(
+        ordinary.contains("self.0.call_pipe().conn.reducers"),
+        "bot callbacks can invoke the ordinary party operation on their Coordinator pump, so it \
+         must retain the independent call pipe. Body was:\n{ordinary}"
+    );
 }
 
 /// **The invariant this batch has broken five times: unset config changes NOTHING.**

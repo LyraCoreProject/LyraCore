@@ -12,16 +12,48 @@
 //! serializes the `MovementInfo` before enqueueing it on the shard's shared batch.
 
 use anyhow::{anyhow, Result};
+use spacetimedb_sdk::Table;
 use wow_world_messages::vanilla::MovementInfo;
 
 use crate::codec;
 use crate::realm_core::SessionKey;
 use crate::world::{SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
-use super::bindings::GwMove;
-use super::connection::Coordinator;
+use super::bindings::{
+    game_group_member_table::GameGroupMemberTableAccess, game_group_table::GameGroupTableAccess,
+    GwMove,
+};
+use super::connection::{CharacterPresenceSnapshot, Coordinator};
 use super::views::{AccountRow, RealmRow};
 use super::PlayerSubscriptions;
+
+fn stable_character_absence(
+    first: &[CharacterPresenceSnapshot],
+    second: &[CharacterPresenceSnapshot],
+) -> bool {
+    first.len() == second.len()
+        && first.iter().zip(second).all(|(before, after)| {
+            !before.present
+                && !after.present
+                && before.generation == after.generation
+                && before.revision == after.revision
+        })
+}
+
+fn durable_character_presence_snapshots(
+    shards: &[(String, Coordinator)],
+    guid: u64,
+) -> Result<Vec<CharacterPresenceSnapshot>> {
+    shards
+        .iter()
+        .map(|(name, shard)| {
+            shard
+                .0
+                .coord()
+                .durable_character_presence_snapshot(guid, name)
+        })
+        .collect()
+}
 
 impl WorldStore for Coordinator {
     /// Multi-shard routing, driven by the realm-core character→shard index.
@@ -401,6 +433,24 @@ impl WorldStore for Coordinator {
 
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
         self.character_by_guid(guid)
+    }
+
+    fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
+        let shards = self.world_shards_for_absence()?;
+        let first = durable_character_presence_snapshots(&shards, guid)?;
+        if first.iter().any(|snapshot| snapshot.present) {
+            return Ok(true);
+        }
+        let second = durable_character_presence_snapshots(&shards, guid)?;
+        if second.iter().any(|snapshot| snapshot.present) {
+            return Ok(true);
+        }
+        if !stable_character_absence(&first, &second) {
+            anyhow::bail!(
+                "World Shard Character presence changed while checking {guid}; cleanup is deferred"
+            );
+        }
+        Ok(false)
     }
 
     fn creature_template(&self, entry: u32) -> Result<Option<codec::CreatureView>> {
@@ -996,6 +1046,14 @@ impl WorldStore for Coordinator {
             .map(|rc| std::sync::Arc::new(rc) as std::sync::Arc<dyn WorldStore>)
     }
 
+    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if !self.is_sharded() {
+            return Ok(None);
+        }
+        self.realm_core()
+            .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
+    }
+
     /// Every connected WORLD shard (realm-core excluded by `ShardMap::shards`, as always) — the
     /// mirror fan-out set. Empty when unsharded, so the push costs a single-database gateway nothing.
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
@@ -1023,6 +1081,13 @@ impl WorldStore for Coordinator {
         self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b)
     }
 
+    fn deleted_character_party_leave(
+        &self,
+        character_guid: u64,
+    ) -> Result<crate::world::party::PartyOutcome> {
+        self.deleted_character_party_leave(character_guid)
+    }
+
     fn group_roster(
         &self,
         character_guid: u64,
@@ -1035,6 +1100,62 @@ impl WorldStore for Coordinator {
         group_id: u64,
     ) -> Result<Option<crate::world::party::GroupRoster>> {
         Ok(self.group_roster_by_id(group_id))
+    }
+
+    fn party_cleanup_group_roster_by_id(
+        &self,
+        group_id: u64,
+    ) -> Result<Option<crate::world::party::GroupRoster>> {
+        let live = self.0.coord();
+        if !live.is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for party cleanup",
+                self.shard_name()
+            );
+        }
+        let db = &live.conn.db;
+        let Some(group) = db
+            .game_group()
+            .iter()
+            .find(|group| group.group_id == group_id)
+        else {
+            return Ok(None);
+        };
+        let mut rows: Vec<(u64, u64)> = db
+            .game_group_member()
+            .iter()
+            .filter(|member| member.group_id == group_id)
+            .map(|member| (member.id, member.character_guid))
+            .collect();
+        rows.sort_unstable();
+        Ok(Some(crate::world::party::GroupRoster {
+            group_id,
+            leader_guid: group.leader_guid,
+            loot_method: group.loot_method,
+            loot_threshold: group.loot_threshold,
+            master_looter_guid: group.master_looter_guid,
+            members: rows.into_iter().map(|(_, guid)| guid).collect(),
+        }))
+    }
+
+    fn party_member_guids(&self) -> Result<Vec<u64>> {
+        if !self.0.coord().is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for party cleanup",
+                self.shard_name()
+            );
+        }
+        Ok(self.party_member_guids())
+    }
+
+    fn party_group_ids(&self) -> Result<Vec<u64>> {
+        if !self.0.coord().is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for party cleanup",
+                self.shard_name()
+            );
+        }
+        Ok(self.party_group_ids())
     }
 
     fn sync_group_mirror(&self, roster: &crate::world::party::GroupRoster) -> Result<()> {
@@ -1610,5 +1731,55 @@ mod routing_call_site_tests {
             "world_stores lost its single-database short-circuit — the mirror push must cost an \
              unconfigured gateway nothing"
         );
+    }
+
+    #[test]
+    fn deleted_character_absence_uses_two_durable_snapshots_from_every_shard() {
+        let read = code_of("character_exists_on_any_world_shard");
+        assert!(
+            read.contains("self.world_shards_for_absence()?")
+                && read
+                    .matches("durable_character_presence_snapshots(&shards, guid)?")
+                    .count()
+                    == 2
+                && read.contains("stable_character_absence(&first, &second)")
+        );
+
+        let src = include_str!("connection.rs");
+        let body = crate::test_scan::code_of(src, "pub(crate) fn world_shards_for_absence(&self)");
+        assert!(
+            body.contains(".shards()")
+                && body.contains("self.1.conns.get(&db)")
+                && body.contains("inner.coord().is_healthy()"),
+            "absence can only be established from every configured World Shard's healthy \
+             Coordinator subscription. Body was:\n{body}"
+        );
+
+        let realm = code_of("party_cleanup_realm");
+        assert!(
+            realm.contains("self.realm_core()") && !realm.contains(".ok()"),
+            "deleted Character cleanup must fail when configured Realm-core is unavailable. Body \
+             was:\n{realm}"
+        );
+    }
+
+    #[test]
+    fn a_transfer_between_durable_scans_cannot_prove_stable_absence() {
+        use super::{stable_character_absence, CharacterPresenceSnapshot};
+
+        let snapshot = |generation, revision, present| CharacterPresenceSnapshot {
+            generation,
+            revision,
+            present,
+        };
+        let first = [snapshot(1, 0, false), snapshot(2, 1, false)];
+        let destination_visible = [snapshot(1, 1, true), snapshot(2, 1, false)];
+        assert!(!stable_character_absence(&first, &destination_visible));
+
+        let moved_again = [snapshot(1, 2, false), snapshot(2, 2, false)];
+        assert!(!stable_character_absence(&first, &moved_again));
+
+        let unchanged = [snapshot(1, 0, false), snapshot(2, 1, false)];
+        assert!(stable_character_absence(&first, &unchanged));
     }
 }
