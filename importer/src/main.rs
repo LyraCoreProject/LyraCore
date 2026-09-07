@@ -60,12 +60,17 @@ mod nav;
 mod pack_client;
 mod package_delta;
 mod spell;
+mod spell_dbc;
 mod spell_snapshot;
 mod talent;
 mod terrain;
 mod ui_transform;
 mod vmap;
 mod world_import_scope;
+
+#[cfg(test)]
+#[path = "../../module/tests/support/mod.rs"]
+mod standalone_support;
 
 use std::collections::HashMap;
 use std::io::Read;

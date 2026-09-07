@@ -330,13 +330,46 @@ dump.
 records what its rows were checked against, because "hand-authored" is not the same as "unverified"
 and the two must not be conflated.
 
-**Reference source.** `DBFilesClient/Spell.dbc`, read out of a locally owned 1.12.1 client install
-(`Data/dbc.MPQ` + `patch*.MPQ` patch chain, build 5875), through the same `wow-mpq` + `wow_dbc` read
-path `importer/src/dbc.rs` already uses. **Revision:** the client's own shipped DBC — there is no
-upstream revision to pin beyond the build number, and `wow_dbc` hard-asserts the 5875 record shape, so
-a wrong-version client fails the read rather than producing silent drift. The probe was a throwaway
-example, run once, deleted after; it printed derived facts (id, name, rank subtext, base points) and
-wrote nothing. **No client bytes entered the repository tree**, matching the firewall above.
+**Reference source.** The Operator supplies build 5875 client archives. The importer reads
+`DBFilesClient/Spell.dbc` in memory through `wow-mpq`. `importer/src/spell_dbc.rs` checks the 173-field,
+692-byte layout and reads the columns shared by spell and item enchantment import. Other DBC tables
+still use `wow_dbc`. No client bytes enter the repository.
+
+The Spell layout follows the pinned [SpellEntry definition](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Server/DBCStructure.h).
+`wow_dbc` 0.3 omits column 21, InterruptFlags. Its named fields stay shifted through the effect arrays.
+An extra field restores alignment at the localized name, column 120.
+
+| Consumed fields | Build 5875 columns |
+|---|---|
+| ID, school, dispel, mechanic | 0, 1, 4, 5 |
+| Attributes, AttributesEx1, AttributesEx2, stance mask | 6, 7, 8, 11 |
+| Required spell focus, cast time, recovery times | 15, 18, 19, 20 |
+| Aura interrupt, Proc mask, chance, charges | 22, 24, 25, 26 |
+| Maximum level, spell level, duration, power, cost, range, stack count | 27, 29, 30, 31, 32, 36, 39 |
+| Reagents and counts, equipment class and masks | 42..49, 50..57, 58..60 |
+| Effects, die sides, base dice, dice scaling, level scaling, base points | 61..63, 64..66, 67..69, 70..72, 73..75, 76..78 |
+| Mechanics, target A, target B, radii, auras, amplitudes | 79..81, 82..84, 85..87, 88..90, 91..93, 94..96 |
+| Multipliers, chain targets, item references, miscellaneous values, triggered spells, combo scaling | 97..99, 100..102, 103..105, 106..108, 109..111, 112..114 |
+| English name, family, complete 64-bit family mask | 120, 160, 161..162 |
+
+Spell output retains its existing magnitude convention, base points plus one, and auxiliary-table
+range, radius, duration and cast-time resolution. Item enchantments retain base points plus base dice.
+The normalized input preserves all three slots and raw aura numbers. Unsupported effects remain
+`E_SCRIPTED`, and unsupported item enchantment effects remain Stat Kind 0.
+
+[Target definitions](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Spells/SpellTargetDefines.h)
+define 6 as enemy, 21 and 57 as friendly units, and 22 as the caster's source location. Location targets
+use the companion selection where present. The importer translates vanilla damage and movement
+interrupt bits into the Module's compact mask. Gouge's control and Stealth's speed penalty come from
+the third source effect. Their former synthetic additions are removed. The Human Spirit maps directly
+to its percentage aura. Evocation's existing periodic-mana correction now addresses source slot 0.
+The authored seal marker and Power Word: Shield's linked Weakened Soul rule remain because their
+Module behavior is not an equivalent DBC effect.
+
+Every World Import Profile loads the same full Spell catalogue. After this importer change, each
+World Shard and Instance Pool needs the normal Spell reimport and curated class-spell pass. Rebuild
+Base Snapshots and review Package Deltas that name affected effect indices before replaying them.
+Publishing the Module alone does not correct stored rows. No live Realm update is part of this change.
 
 **Not used, deliberately:** cmangos `spell_group` / `spell_group_stack_rules`. That dataset would
 answer the rule questions directly, but it is GPL-licensed content this project ships zero rows of, and

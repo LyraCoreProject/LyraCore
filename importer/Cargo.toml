@@ -35,7 +35,7 @@ wow-m2 = "=0.7.0"
 wow-mpq = "=0.7.0"
 wow-wmo = "=0.7.0"
 wow_dbc = { version = "0.3", features = ["vanilla"] }
-# The Spell.dbc importer matches on the typed `AuraMod` enum + reads `Attributes` flags off `SpellRow`.
+# The Spell.dbc importer maps numeric aura columns through the typed `AuraMod` enum.
 # Those types live in wow_world_base; wow_dbc 0.3 pins it to =0.2.0, so we depend on the SAME version
 # (same type instance) to name the variants by hand. Pure parser, ships ZERO Blizzard data.
 wow_world_base = { version = "=0.2.0", features = ["vanilla"] }
