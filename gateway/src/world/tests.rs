@@ -275,6 +275,8 @@ struct InMemoryStore {
     username: String,
     session: Option<WorldSession>,
     characters: Vec<codec::CharacterView>,
+    /// When set, `character_by_guid` cannot answer from this Shard.
+    character_read_error: Option<String>,
     login_entity: Option<codec::EntityView>,
     /// The auctioneer's house and faction verdict returned to the focused auction seam.
     auction_interaction: Option<AuctionInteraction>,
@@ -549,6 +551,8 @@ struct InMemoryStore {
     /// the topology can be wired up AFTER every handle exists — production reads the shared
     /// `ShardSet`, which has the same shape and the same "includes this handle" membership.
     peers: std::sync::Mutex<Vec<std::sync::Arc<InMemoryStore>>>,
+    /// When set, the configured World Shard set is incomplete or unhealthy.
+    world_shard_set_error: Option<String>,
     /// Unclaimed bot invite intent ids on this World Shard. Two concurrent consumers share this
     /// collection, matching the Module table both Gateways call into.
     bot_invite_intents: std::sync::Mutex<Vec<u64>>,
@@ -571,6 +575,8 @@ struct InMemoryStore {
     /// When set, `sync_group_mirror` fails with this message — a world shard that cannot be
     /// mirrored (an unreachable database), which must not fail a party op realm-core already took.
     mirror_error: Option<String>,
+    /// How many mirror writes fail before this Shard accepts one.
+    mirror_failures: std::sync::atomic::AtomicUsize,
     /// What `realm_whisper` was asked to deliver on THIS handle —
     /// `(sender_guid, target_guid, message, sender_is_ignored)`. The realm handle owns the list; a
     /// world shard's staying empty is how a test tells "the whisper went to the authority" from "it
@@ -621,6 +627,18 @@ struct InMemoryStore {
     /// reachable in production — a concurrent op on another socket — and what it must not do is leave
     /// the invite dialog hanging.
     party_accept_error: Option<String>,
+    /// How many Realm-core LEAVE calls fail before one reaches the party state.
+    party_leave_failures: std::sync::atomic::AtomicUsize,
+    /// Return a connection failure after the next Realm-core LEAVE commits.
+    party_leave_commit_then_error: std::sync::atomic::AtomicBool,
+    /// Fail one `group_roster` read by its one-based call number.
+    group_roster_error_on_read: std::sync::Mutex<Option<(usize, String)>>,
+    /// Number of `group_roster` reads on this handle.
+    group_roster_reads: std::sync::atomic::AtomicUsize,
+    /// When set, this handle cannot enumerate its mirrored party ids.
+    party_group_ids_error: std::sync::Mutex<Option<String>>,
+    /// When set, deleted Character cleanup cannot reach Realm-core.
+    party_cleanup_realm_error: Option<String>,
     /// The transfer step to fail at, simulating a gateway killed before that step's
     /// transaction committed. `None` = nothing fails.
     kill_at: Option<String>,
@@ -650,10 +668,11 @@ struct InMemoryStore {
     // Test recorder: the tuple is `realm_loot_op`'s argument list verbatim.
     #[allow(clippy::type_complexity)]
     /// Recorded `realm_loot_op` calls — `(op, corpse_guid, slot, item_entry, actor_guid, vote,
-    /// deadline_micros, recipients)` — every arg the gateway's loot-roll routing/relay passed. The
+    /// deadline_micros, recipients, random_property_id)` — every arg the gateway's loot-roll
+    /// routing/relay passed. The
     /// realm handle owns this; a world shard's staying empty is how a test tells "the vote/promotion
     /// went to the authority" from "it stayed shard-local".
-    realm_loot_ops: std::sync::Mutex<Vec<(u8, u64, u8, u32, u64, u8, i64, Vec<u64>)>>,
+    realm_loot_ops: std::sync::Mutex<Vec<(u8, u64, u8, u32, u64, u8, i64, Vec<u64>, u32)>>,
     /// When set, `realm_loot_op` fails with this message.
     realm_loot_op_error: Option<String>,
     /// This WORLD SHARD's staging rolls `pending_local_rolls` answers — the relay's promotion
@@ -1307,7 +1326,25 @@ impl WorldStore for InMemoryStore {
         }
     }
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
+        if let Some(error) = &self.character_read_error {
+            return Err(anyhow!(error.clone()));
+        }
         Ok(self.characters.iter().find(|c| c.guid == guid).cloned())
+    }
+
+    fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
+        if let Some(error) = &self.world_shard_set_error {
+            return Err(anyhow!(error.clone()));
+        }
+        if self.character_by_guid(guid)?.is_some() {
+            return Ok(true);
+        }
+        for shard in self.peers.lock().unwrap().iter() {
+            if shard.character_by_guid(guid)?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     fn creature_template(&self, _entry: u32) -> Result<Option<codec::CreatureView>> {
         Ok(None)
@@ -2386,6 +2423,13 @@ impl WorldStore for InMemoryStore {
             .map(|r| r as std::sync::Arc<dyn WorldStore>)
     }
 
+    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.party_cleanup_realm_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.realm_store())
+    }
+
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
         self.peers
             .lock()
@@ -2467,8 +2511,26 @@ impl WorldStore for InMemoryStore {
                 p.events.push((inviter, kind::DECLINE));
             }
             realm_op::LEAVE => {
+                if self
+                    .party_leave_failures
+                    .fetch_update(
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                        |remaining| remaining.checked_sub(1),
+                    )
+                    .is_ok()
+                {
+                    return Err(anyhow!("Realm-core LEAVE connection interrupted"));
+                }
                 if p.group_of(actor_guid).is_none() {
                     return Ok(GroupRefusal::NotInGroup.into());
+                }
+                if self
+                    .party_leave_commit_then_error
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    p.remove_member(actor_guid);
+                    return Err(anyhow!("Realm-core LEAVE reply was lost after commit"));
                 }
                 p.remove_member(actor_guid);
             }
@@ -2504,6 +2566,15 @@ impl WorldStore for InMemoryStore {
     }
 
     fn group_roster(&self, character_guid: u64) -> Result<Option<super::party::GroupRoster>> {
+        let read = self
+            .group_roster_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if let Some((error_read, error)) = &*self.group_roster_error_on_read.lock().unwrap() {
+            if read == *error_read {
+                return Err(anyhow!(error.clone()));
+            }
+        }
         if self.is_realm {
             let p = self.party.lock().unwrap();
             return Ok(p.group_of(character_guid).and_then(|g| p.roster(g)));
@@ -2530,8 +2601,56 @@ impl WorldStore for InMemoryStore {
             .cloned())
     }
 
+    fn party_member_guids(&self) -> Result<Vec<u64>> {
+        if !self.is_realm {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .party
+            .lock()
+            .unwrap()
+            .members
+            .iter()
+            .map(|(_, guid)| *guid)
+            .collect())
+    }
+
+    fn party_group_ids(&self) -> Result<Vec<u64>> {
+        if let Some(error) = &*self.party_group_ids_error.lock().unwrap() {
+            return Err(anyhow!(error.clone()));
+        }
+        if self.is_realm {
+            return Ok(self
+                .party
+                .lock()
+                .unwrap()
+                .groups
+                .iter()
+                .map(|(group_id, ..)| *group_id)
+                .collect());
+        }
+        Ok(self
+            .mirror
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|roster| roster.group_id)
+            .collect())
+    }
+
     fn sync_group_mirror(&self, roster: &super::party::GroupRoster) -> Result<()> {
         self.rec("sync_group_mirror");
+        if self
+            .mirror_failures
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(anyhow!("World Shard mirror connection interrupted"));
+        }
         if let Some(e) = &self.mirror_error {
             return Err(anyhow!("{e}"));
         }
@@ -2621,7 +2740,7 @@ impl WorldStore for InMemoryStore {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
-        _random_property_id: u32,
+        random_property_id: u32,
     ) -> Result<()> {
         self.rec("realm_loot_op");
         self.realm_loot_ops.lock().unwrap().push((
@@ -2633,6 +2752,7 @@ impl WorldStore for InMemoryStore {
             vote,
             deadline_micros,
             recipients,
+            random_property_id,
         ));
         if let Some(e) = &self.realm_loot_op_error {
             return Err(anyhow!("{e}"));

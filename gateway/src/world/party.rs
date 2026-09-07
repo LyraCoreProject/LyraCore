@@ -513,15 +513,206 @@ pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Res
         }
         None => store,
     };
+    let leave = run_server_leave(store, realm, leaver_guid, 1, |realm, character_guid| {
+        realm.realm_group_op(realm_op::LEAVE, character_guid, 0, 0, 0)
+    })?;
+    if leave.outcome == PartyOutcome::Ran {
+        sync_mirrors(store, realm, leaver_guid, leave.previous_group_id);
+    }
+    Ok(leave.outcome)
+}
+
+struct ServerLeave {
+    outcome: PartyOutcome,
+    previous_group_id: Option<u64>,
+}
+
+fn run_server_leave<St: WorldStore + ?Sized>(
+    store: &St,
+    realm: &dyn WorldStore,
+    leaver_guid: u64,
+    attempts: usize,
+    leave_party: impl Fn(&dyn WorldStore, u64) -> Result<PartyOutcome>,
+) -> Result<ServerLeave> {
     let before = realm.group_roster(leaver_guid)?.map(|r| r.group_id);
     crate::world::loot::flush_pending_promotions(store, realm);
-    if let PartyOutcome::Refused(refusal) =
-        realm.realm_group_op(realm_op::LEAVE, leaver_guid, 0, 0, 0)?
-    {
-        return Ok(PartyOutcome::Refused(refusal));
+    let mut last_error = None;
+    for _ in 0..attempts {
+        match leave_party(realm, leaver_guid) {
+            Ok(PartyOutcome::Ran) => {
+                return Ok(ServerLeave {
+                    outcome: PartyOutcome::Ran,
+                    previous_group_id: before,
+                });
+            }
+            Ok(PartyOutcome::Refused(GroupRefusal::NotInGroup))
+                if before.is_some() && last_error.is_some() =>
+            {
+                return Ok(ServerLeave {
+                    outcome: PartyOutcome::Ran,
+                    previous_group_id: before,
+                });
+            }
+            Ok(PartyOutcome::Refused(refusal)) => {
+                return Ok(ServerLeave {
+                    outcome: PartyOutcome::Refused(refusal),
+                    previous_group_id: before,
+                });
+            }
+            Err(error) => last_error = Some(error),
+        }
     }
-    sync_mirrors(store, realm, leaver_guid, before);
-    Ok(PartyOutcome::Ran)
+
+    let Some(error) = last_error else {
+        return Ok(ServerLeave {
+            outcome: PartyOutcome::Refused(GroupRefusal::NotInGroup),
+            previous_group_id: before,
+        });
+    };
+    if before.is_some() {
+        match realm.group_roster(leaver_guid) {
+            Ok(None) => {
+                return Ok(ServerLeave {
+                    outcome: PartyOutcome::Ran,
+                    previous_group_id: before,
+                });
+            }
+            Ok(Some(_)) => {}
+            Err(confirmation_error) => {
+                log::warn!(
+                    "party: could not confirm Character {leaver_guid} membership after Realm-core \
+                     LEAVE failed ({confirmation_error:#}); retrying"
+                );
+            }
+        }
+    }
+    Err(error)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeletedCharacterPartyCleanup {
+    Preserved,
+    Removed,
+    AlreadyClean,
+}
+
+const DELETED_CHARACTER_LEAVE_ATTEMPTS: usize = 3;
+
+/// Remove a deleted Character from its realm-core party after every World Shard confirms absence.
+pub(crate) fn cleanup_deleted_character<St: WorldStore>(
+    store: &St,
+    character_guid: u64,
+) -> Result<DeletedCharacterPartyCleanup> {
+    let Some(realm) = store.party_cleanup_realm()? else {
+        return Ok(DeletedCharacterPartyCleanup::AlreadyClean);
+    };
+    if store.character_exists_on_any_world_shard(character_guid)? {
+        return Ok(DeletedCharacterPartyCleanup::Preserved);
+    }
+    let leave = run_server_leave(
+        store,
+        realm.as_ref(),
+        character_guid,
+        DELETED_CHARACTER_LEAVE_ATTEMPTS,
+        |realm, character_guid| realm.deleted_character_party_leave(character_guid),
+    )?;
+    match leave.outcome {
+        PartyOutcome::Ran => {
+            if let Some(group_id) = leave.previous_group_id {
+                sync_group_mirrors_required(store, realm.as_ref(), group_id)?;
+            }
+            Ok(DeletedCharacterPartyCleanup::Removed)
+        }
+        PartyOutcome::Refused(GroupRefusal::NotInGroup) => {
+            Ok(DeletedCharacterPartyCleanup::AlreadyClean)
+        }
+        PartyOutcome::Refused(refusal) => {
+            anyhow::bail!("realm-core refused deleted Character cleanup: {refusal:?}")
+        }
+    }
+}
+
+/// Recheck authoritative party members after startup or a Coordinator reconnect. Row-delete
+/// callbacks are not replayed, so this closes cleanup attempts deferred while a Shard was down.
+pub(crate) fn reconcile_deleted_character_parties<St: WorldStore>(store: &St) -> Result<()> {
+    let Some(realm) = store.party_cleanup_realm()? else {
+        return Ok(());
+    };
+    let mut failures = 0usize;
+    let mut last_error = None;
+    for character_guid in realm.party_member_guids()? {
+        if let Err(error) = cleanup_deleted_character(store, character_guid) {
+            failures += 1;
+            log::warn!(
+                "party: could not finish reconciling Character {character_guid} ({error:#}); retrying"
+            );
+            last_error = Some(error);
+        }
+    }
+    let mut group_ids: std::collections::HashSet<u64> =
+        realm.party_group_ids()?.into_iter().collect();
+    for shard in store.world_stores() {
+        match shard.party_group_ids() {
+            Ok(ids) => group_ids.extend(ids),
+            Err(error) => {
+                failures += 1;
+                log::warn!(
+                    "party: could not enumerate mirrored groups on {} ({error:#}); retrying",
+                    shard.shard_name()
+                );
+                last_error = Some(error);
+            }
+        }
+    }
+    for group_id in group_ids {
+        if let Err(error) = sync_group_mirrors_required(store, realm.as_ref(), group_id) {
+            failures += 1;
+            log::warn!("party: could not reconcile group {group_id} mirrors ({error:#}); retrying");
+            last_error = Some(error);
+        }
+    }
+    match last_error {
+        Some(error) => Err(error.context(format!(
+            "{failures} deleted Character party reconciliation attempt(s) were deferred"
+        ))),
+        None => Ok(()),
+    }
+}
+
+const DELETED_CHARACTER_MIRROR_ATTEMPTS: usize = 3;
+
+fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
+    store: &St,
+    realm: &dyn WorldStore,
+    group_id: u64,
+) -> Result<()> {
+    let roster = realm
+        .party_cleanup_group_roster_by_id(group_id)?
+        .unwrap_or_else(|| GroupRoster::disbanded(group_id));
+    let mut failures = 0usize;
+    let mut last_error = None;
+    for shard in store.world_stores() {
+        let mut synced = false;
+        for _ in 0..DELETED_CHARACTER_MIRROR_ATTEMPTS {
+            match shard.sync_group_mirror(&roster) {
+                Ok(()) => {
+                    synced = true;
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if !synced {
+            failures += 1;
+        }
+    }
+    match last_error {
+        Some(error) if failures > 0 => Err(error.context(format!(
+            "{failures} World Shard party mirror update(s) failed after \
+             {DELETED_CHARACTER_MIRROR_ATTEMPTS} attempts"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// Push realm-core's roster for every party this op could have touched onto every connected world

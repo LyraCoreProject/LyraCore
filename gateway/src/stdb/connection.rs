@@ -15,6 +15,15 @@ use super::account_sessions::SessionEpochs;
 use super::bindings::*;
 use super::movement_batch::MovementBatch;
 
+static LIVE_CONN_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CharacterPresenceSnapshot {
+    pub(crate) generation: u64,
+    pub(crate) revision: u64,
+    pub(crate) present: bool,
+}
+
 /// Shared handle to the privileged coordination connection **of one shard**.
 ///
 /// Field 0 is the shard this handle talks to — every read, every reducer call, and every
@@ -46,6 +55,9 @@ pub(crate) struct ShardSet {
     /// unique across databases (realm-core hands each shard a disjoint guid range), so one index
     /// spans the whole realm.
     world: Arc<super::world_view::WorldView>,
+    /// Coalesce row-delete and reconnect requests behind one off-pump reconciliation worker.
+    pub(crate) party_reconciliation_requested: AtomicBool,
+    pub(crate) party_reconciliation_running: AtomicBool,
 }
 
 /// One live SDK connection generation and the handles that keep its pump and subscription alive.
@@ -61,6 +73,9 @@ pub(crate) struct LiveConn {
     /// Keeps the SDK message-pump thread alive for the connection's lifetime.
     _pump: Option<std::thread::JoinHandle<()>>,
     pump_commands: tokio::sync::mpsc::UnboundedSender<PumpCommand>,
+    /// Identity of this cache plus the Character-presence revision maintained by row callbacks.
+    cache_generation: u64,
+    character_revision: Arc<AtomicU64>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
@@ -134,10 +149,72 @@ fn start_pump(
 impl LiveConn {
     /// A connection needs its transport, subscription, and pump. A Module republish can
     /// invalidate the subscription while the socket remains connected.
-    fn is_healthy(&self) -> bool {
+    pub(super) fn is_healthy(&self) -> bool {
         self.conn.is_active()
             && self._sub.is_active()
             && self._pump.as_ref().is_some_and(|pump| !pump.is_finished())
+    }
+
+    /// Ask the server for a fresh, filtered subscription before sampling Character presence.
+    ///
+    /// The ordinary subscription can lag a commit made through another Gateway. `on_applied`
+    /// runs after the server's snapshot has updated this connection's cache, so the returned sample
+    /// is current through a server-acknowledged boundary. The main subscription continues to own
+    /// every Character row after this temporary query is removed.
+    pub(super) fn durable_character_presence_snapshot(
+        &self,
+        guid: u64,
+        shard_name: &str,
+    ) -> Result<CharacterPresenceSnapshot> {
+        if !self.is_healthy() {
+            return Err(anyhow!(
+                "World Shard {shard_name} has no healthy Coordinator subscription"
+            ));
+        }
+        let generation = self.cache_generation;
+        let revision = self.character_revision.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<_, String>>();
+        let tx_error = tx.clone();
+        let query = format!("SELECT * FROM game_character WHERE guid = {guid}");
+        let subscription = self
+            .conn
+            .subscription_builder()
+            .on_applied(move |ctx| {
+                let _ = tx.send(Ok(CharacterPresenceSnapshot {
+                    generation,
+                    revision: revision.load(Ordering::Acquire),
+                    present: ctx.db.game_character().guid().find(&guid).is_some(),
+                }));
+            })
+            .on_error(move |_ctx, error| {
+                let _ = tx_error.send(Err(error.to_string()));
+            })
+            .subscribe(query);
+        let snapshot = match rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(Ok(snapshot)) => Ok(snapshot),
+            Ok(Err(error)) => Err(anyhow!(
+                "World Shard {shard_name} Character presence subscription failed: {error}"
+            )),
+            Err(error) => Err(anyhow!(
+                "World Shard {shard_name} Character presence subscription did not apply: {error}"
+            )),
+        };
+        if let Err(error) = subscription.unsubscribe() {
+            log::warn!(
+                "World Shard {shard_name} Character presence subscription could not stop: {error}"
+            );
+            if snapshot.is_ok() {
+                return Err(anyhow!(
+                    "World Shard {shard_name} Character presence subscription could not stop: \
+                     {error}"
+                ));
+            }
+        }
+        snapshot
+    }
+
+    pub(super) fn character_revision(&self) -> Arc<AtomicU64> {
+        self.character_revision.clone()
     }
 }
 
@@ -621,6 +698,8 @@ fn connect_subscribed(
         reducer_completion,
         _pump: Some(pump),
         pump_commands,
+        cache_generation: LIVE_CONN_GENERATION.fetch_add(1, Ordering::Relaxed),
+        character_revision: Arc::new(AtomicU64::new(0)),
         _sub: sub,
     })
 }
@@ -2117,6 +2196,23 @@ macro_rules! call_reducer {
 pub(crate) use call_reducer;
 
 impl Coordinator {
+    #[cfg(test)]
+    pub(crate) fn park_pump_for_test(&self) {
+        let commands = self.0.coord().pump_commands.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        commands.send(PumpCommand::Park(tx)).unwrap();
+        rx.recv_timeout(Duration::from_secs(15)).unwrap().unwrap();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resume_pump_for_test(&self) {
+        self.0
+            .coord()
+            .pump_commands
+            .send(PumpCommand::Resume)
+            .unwrap();
+    }
+
     /// Live player-session count on THIS shard: player entities (`account_id != 0`) in the
     /// shard's coordinator cache. Shard truth, so horizontally-scaled gateways report the same
     /// number instead of each undercounting to its own connections. Good enough for an ops gauge.
@@ -2346,6 +2442,8 @@ impl Coordinator {
                 conns,
                 sessions: SessionEpochs::default(),
                 world,
+                party_reconciliation_requested: AtomicBool::new(false),
+                party_reconciliation_running: AtomicBool::new(false),
             }),
         );
         // Arm the shared spatial, broadcast, private, and owner dispatch — one callback set per
@@ -2568,6 +2666,26 @@ impl Coordinator {
             .filter_map(|db| {
                 let inner = self.1.conns.get(&db)?.clone();
                 Some((db, Coordinator(inner, self.1.clone())))
+            })
+            .collect()
+    }
+
+    /// Every configured World Shard, only while each Coordinator subscription is healthy.
+    pub(crate) fn world_shards_for_absence(&self) -> Result<Vec<(String, Coordinator)>> {
+        self.1
+            .map
+            .shards()
+            .into_iter()
+            .map(|db| {
+                let inner = self.1.conns.get(&db).cloned().ok_or_else(|| {
+                    anyhow!("World Shard {db} is configured but has no Coordinator connection")
+                })?;
+                if !inner.coord().is_healthy() {
+                    return Err(anyhow!(
+                        "World Shard {db} has no healthy Coordinator subscription"
+                    ));
+                }
+                Ok((db, Coordinator(inner, self.1.clone())))
             })
             .collect()
     }

@@ -19,6 +19,7 @@ use crate::world::{Outbound, SessionTx};
 use anyhow::Result;
 use spacetimedb_sdk::Table;
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -3650,14 +3651,10 @@ impl Coordinator {
         }
     }
 
-    /// Wire up the character-gone relay: one registration per connected WORLD SHARD, armed once at
-    /// gateway startup (`main.rs`), re-armed on reconnect like the two intent relays above.
+    /// Reconcile party membership when a World Shard deletes a Character.
     ///
-    /// realm-core owns party membership and holds no character rows, so a Character a Shard deletes
-    /// — a despawned playerbot, a deleted character — stays a member there until something asks.
-    /// This watches every Shard's `game_character` deletes and, when the Character exists on no
-    /// Shard at all, makes it leave its realm-core party. A Transfer deletes its source copy only
-    /// after the destination copy exists, so a moved Character is found and left alone.
+    /// Fresh Character subscriptions on every Shard distinguish deletion from a Transfer whose
+    /// destination update has not reached this Gateway yet.
     pub fn spawn_character_gone_relay(&self) {
         for shard in self.all_shards() {
             shard.arm_character_gone_relay();
@@ -3669,47 +3666,109 @@ impl Coordinator {
                 .unwrap()
                 .push(std::sync::Arc::new(move || {
                     hook_shard.arm_character_gone_relay();
+                    hook_shard.request_deleted_character_party_reconciliation();
                 }));
+        }
+        if self.is_sharded() {
+            if let Ok(realm) = self.realm_core() {
+                let reconciliation_store = self.clone();
+                realm
+                    .0
+                    .on_reconnect
+                    .lock()
+                    .unwrap()
+                    .push(std::sync::Arc::new(move || {
+                        reconciliation_store.request_deleted_character_party_reconciliation();
+                    }));
+            }
+        }
+        self.request_deleted_character_party_reconciliation();
+    }
+
+    fn request_deleted_character_party_reconciliation(&self) {
+        self.1
+            .party_reconciliation_requested
+            .store(true, Ordering::Release);
+        if self
+            .1
+            .party_reconciliation_running
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let store = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("party-reconcile-deleted".into())
+            .spawn(move || {
+                let mut retry_delay = Duration::from_millis(100);
+                loop {
+                    store
+                        .1
+                        .party_reconciliation_requested
+                        .store(false, Ordering::Release);
+                    if let Err(error) =
+                        crate::world::party::reconcile_deleted_character_parties(&store)
+                    {
+                        log::warn!(
+                        "party: deleted Character reconciliation deferred ({error:#}); retrying in \
+                         {retry_delay:?}"
+                    );
+                        store
+                            .1
+                            .party_reconciliation_requested
+                            .store(true, Ordering::Release);
+                        std::thread::sleep(retry_delay);
+                        retry_delay = (retry_delay * 2).min(Duration::from_secs(5));
+                        continue;
+                    } else {
+                        retry_delay = Duration::from_millis(100);
+                    }
+
+                    if store
+                        .1
+                        .party_reconciliation_requested
+                        .load(Ordering::Acquire)
+                    {
+                        continue;
+                    }
+                    store
+                        .1
+                        .party_reconciliation_running
+                        .store(false, Ordering::Release);
+                    if !store
+                        .1
+                        .party_reconciliation_requested
+                        .load(Ordering::Acquire)
+                        || store
+                            .1
+                            .party_reconciliation_running
+                            .swap(true, Ordering::AcqRel)
+                    {
+                        break;
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            self.1
+                .party_reconciliation_running
+                .store(false, Ordering::Release);
+            log::error!("party: could not start deleted Character reconciliation: {error}");
         }
     }
 
     fn arm_character_gone_relay(&self) {
-        use crate::world::WorldStore as _;
+        let live = self.0.coord();
+        let inserted_revision = live.character_revision();
+        live.conn.db.game_character().on_insert(move |_ctx, _row| {
+            inserted_revision.fetch_add(1, Ordering::Release);
+        });
+
+        let deleted_revision = live.character_revision();
         let store = self.clone();
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_character()
-            .on_delete(move |_ctx, row| {
-                let Some(realm) = store.realm_store() else {
-                    return; // one database: the Shard's own sweep already removed the member
-                };
-                if crate::world::party::character_anywhere(&store, row.guid)
-                    .ok()
-                    .flatten()
-                    .is_some()
-                {
-                    return;
-                }
-                match realm.realm_group_op(
-                    lyracore_shared::group::realm_op::LEAVE,
-                    row.guid,
-                    0,
-                    0,
-                    0,
-                ) {
-                    Ok(crate::world::party::PartyOutcome::Ran) => log::info!(
-                        "party: character {} exists on no Shard and left its realm-core party",
-                        row.guid
-                    ),
-                    outcome => log::debug!(
-                        "party: character {} exists on no Shard; realm-core had no party to leave \
-                         ({outcome:?})",
-                        row.guid
-                    ),
-                }
-            });
+        live.conn.db.game_character().on_delete(move |_ctx, _row| {
+            deleted_revision.fetch_add(1, Ordering::Release);
+            store.request_deleted_character_party_reconciliation();
+        });
     }
 
     /// One shard's half of [`spawn_bot_transfer_relay`], for the same reason
@@ -7016,3 +7075,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "subscriptions_character_gone_durable_tests.rs"]
+mod character_gone_durable_tests;

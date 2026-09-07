@@ -65,7 +65,8 @@ fn a_sharded_store_routes_the_vote_to_realm_core_with_the_authenticated_guid() {
             GINGER,
             lyracore_shared::loot_roll::vote_kind::GREED,
             0,
-            vec![]
+            vec![],
+            0
         )],
         "sharded, the vote must reach REALM-CORE, addressed by the AUTHENTICATED guid"
     );
@@ -124,7 +125,7 @@ fn relay_tick_promotes_a_staging_roll_and_clears_it() {
         item_entry: 1234,
         deadline_micros: 999_999,
         recipients: vec![GINGER, TRIN],
-        random_property_id: 0,
+        random_property_id: 0x1234_5678,
     }];
     let mut watermark = 0u64;
     loot::relay_tick(world.as_ref(), &mut watermark);
@@ -138,7 +139,8 @@ fn relay_tick_promotes_a_staging_roll_and_clears_it() {
             0,
             0,
             999_999,
-            vec![GINGER, TRIN]
+            vec![GINGER, TRIN],
+            0x1234_5678
         )],
         "the promoted roll must carry the ORIGINAL deadline and the FULL recipient snapshot"
     );
@@ -217,7 +219,7 @@ fn a_leave_flushes_every_connected_shards_pending_rolls_before_the_disband_reach
 
     assert_eq!(
         realm.realm_loot_ops.lock().unwrap().clone(),
-        vec![(loot_op::START, 500, 2, 1234, 0, 0, 999, vec![GINGER])],
+        vec![(loot_op::START, 500, 2, 1234, 0, 0, 999, vec![GINGER], 0)],
         "the pending roll on the OTHER shard must be promoted before the disband, not left behind"
     );
     assert_eq!(

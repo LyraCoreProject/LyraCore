@@ -523,14 +523,24 @@ mod character_gone_relay_tripwires {
     }
 
     #[test]
-    fn the_on_delete_callback_leaves_the_realm_core_party() {
+    fn the_on_delete_callback_moves_party_cleanup_off_the_coordinator_pump() {
         let src = include_str!("stdb/subscriptions.rs");
         let body = code_of(src, "fn arm_character_gone_relay(&self) {");
         assert!(
-            body.contains("realm_op::LEAVE") && body.contains("character_anywhere("),
-            "`arm_character_gone_relay` no longer checks every Shard and leaves on realm-core — \
-             either a moved Character is kicked mid-Transfer, or a gone one is never removed. Body \
-             was:\n{body}"
+            body.contains("store.request_deleted_character_party_reconciliation()")
+                && !body.contains("party::cleanup_deleted_character("),
+            "the row-delete callback must leave the Coordinator pump before cleanup sends Durable \
+             Requests back to the deleting Shard. Body was:\n{body}"
+        );
+        let worker = code_of(
+            src,
+            "fn request_deleted_character_party_reconciliation(&self) {",
+        );
+        assert!(
+            worker.contains("std::thread::Builder::new()")
+                && worker.contains("party_reconciliation_running")
+                && worker.contains("party::reconcile_deleted_character_parties(&store)"),
+            "deleted Character cleanup must use one coalescing worker thread. Body was:\n{worker}"
         );
     }
 
@@ -539,9 +549,23 @@ mod character_gone_relay_tripwires {
         let src = include_str!("stdb/subscriptions.rs");
         let body = code_of(src, "pub fn spawn_character_gone_relay(&self) {");
         assert!(
-            body.contains("on_reconnect") && body.contains("arm_character_gone_relay();"),
+            body.contains("on_reconnect")
+                && body.contains("arm_character_gone_relay();")
+                && body.contains("self.realm_core()")
+                && body.contains("request_deleted_character_party_reconciliation();"),
             "`spawn_character_gone_relay` no longer installs the per-shard `on_reconnect` re-arm; \
-             it goes silent after the first module republish. Body was:\n{body}"
+             both World Shard and Realm-core reconnects must schedule deferred cleanup off the \
+             parked Coordinator pump. Body was:\n{body}"
+        );
+        let worker = code_of(
+            src,
+            "fn request_deleted_character_party_reconciliation(&self) {",
+        );
+        assert!(
+            worker.contains("std::thread::Builder::new()")
+                && worker.contains("Duration::from_secs(5)")
+                && worker.contains("party::reconcile_deleted_character_parties(&store)"),
+            "reconciliation must run on its worker thread. Body was:\n{worker}"
         );
     }
 }

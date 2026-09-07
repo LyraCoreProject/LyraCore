@@ -181,6 +181,12 @@ pub trait WorldStore:
         None
     }
 
+    /// Realm-core for deleted Character cleanup. An unavailable configured Realm-core is an
+    /// infrastructure failure and cannot fall back to a World Shard.
+    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        Ok(self.realm_store())
+    }
+
     /// Every connected WORLD shard's handle (realm-core excluded — it owns no gameplay reads). The
     /// fan-out set for the roster mirror; empty on a single-database gateway, which is what makes the
     /// mirror push a no-op there.
@@ -205,6 +211,18 @@ pub trait WorldStore:
         Err(anyhow!("this store does not host realm-wide party state"))
     }
 
+    /// Realm-core LEAVE for a deleted Character. Production returns after its Coordinator cache
+    /// has the committed roster; Fakes may reuse the ordinary party operation.
+    fn deleted_character_party_leave(&self, character_guid: u64) -> Result<party::PartyOutcome> {
+        self.realm_group_op(
+            lyracore_shared::group::realm_op::LEAVE,
+            character_guid,
+            0,
+            0,
+            0,
+        )
+    }
+
     /// The party `character_guid` is in, as THIS handle's database sees it: authoritative on
     /// realm-core, a mirror on a world shard. `None` = not in a party there.
     fn group_roster(&self, _character_guid: u64) -> Result<Option<party::GroupRoster>> {
@@ -215,6 +233,26 @@ pub trait WorldStore:
     /// party the acting character has just left.
     fn group_roster_by_id(&self, _group_id: u64) -> Result<Option<party::GroupRoster>> {
         Ok(None)
+    }
+
+    /// Authoritative roster read used to repair mirrors after deleted Character cleanup. A
+    /// configured but unhealthy Realm-core must return `Err`, never a false disband.
+    fn party_cleanup_group_roster_by_id(
+        &self,
+        group_id: u64,
+    ) -> Result<Option<party::GroupRoster>> {
+        self.group_roster_by_id(group_id)
+    }
+
+    /// Every Character with authoritative Realm-core party membership.
+    fn party_member_guids(&self) -> Result<Vec<u64>> {
+        Ok(Vec::new())
+    }
+
+    /// Every party id held by this store. Realm-core rows are authoritative; World Shard rows are
+    /// mirrors that reconnect reconciliation must also inspect for stale parties.
+    fn party_group_ids(&self) -> Result<Vec<u64>> {
+        Ok(Vec::new())
     }
 
     /// `sync_group_mirror` — replace this shard's mirror of one party with realm-core's roster.
@@ -385,6 +423,20 @@ pub trait WorldStore:
     /// Look up a character by guid (any owner) to answer `CMSG_NAME_QUERY` — the queried guid is
     /// usually a peer, so this is not account-scoped.
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>>;
+
+    /// Does any World Shard hold this Character? `false` means every configured Shard was readable
+    /// and had no row. An incomplete, unhealthy, or changing Shard set must return `Err`.
+    fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
+        if self.character_by_guid(guid)?.is_some() {
+            return Ok(true);
+        }
+        for shard in self.world_stores() {
+            if shard.character_by_guid(guid)?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 
     /// Look up a creature template by entry to answer `CMSG_CREATURE_QUERY` (Tier 2 / NPCs).
     fn creature_template(&self, entry: u32) -> Result<Option<codec::CreatureView>>;

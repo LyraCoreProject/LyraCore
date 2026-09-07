@@ -2613,6 +2613,23 @@ impl Coordinator {
         ))
     }
 
+    /// Remove a deleted Character from a party and return only after the Coordinator cache holds
+    /// the committed Realm-core roster. The caller always runs off the Coordinator pump.
+    pub fn deleted_character_party_leave(&self, character_guid: u64) -> Result<PartyOutcome> {
+        let coordinator = self.0.visibility_pipe();
+        party_outcome(call_reducer!(
+            coordinator.conn.reducers,
+            "realm_group_op",
+            realm_group_op_then(
+                lyracore_shared::group::realm_op::LEAVE,
+                character_guid,
+                0,
+                0,
+                0
+            )
+        ))
+    }
+
     /// `realm_whisper` — deliver one whisper against the database THIS handle points at. The
     /// gateway calls it on the **realm-core** handle, the only database that can
     /// address both parties of a cross-shard whisper (a guid is realm-wide; an identity is not).

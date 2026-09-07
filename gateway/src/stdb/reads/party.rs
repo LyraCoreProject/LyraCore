@@ -8,6 +8,30 @@ use super::super::bindings::*;
 use super::super::connection::Coordinator;
 
 impl Coordinator {
+    /// Every party in this Realm-core or World Shard cache.
+    pub fn party_group_ids(&self) -> Vec<u64> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_group()
+            .iter()
+            .map(|group| group.group_id)
+            .collect()
+    }
+
+    /// Every Character with party membership in this Realm-core cache.
+    pub fn party_member_guids(&self) -> Vec<u64> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_group_member()
+            .iter()
+            .map(|member| member.character_guid)
+            .collect()
+    }
+
     /// The party `character_guid` belongs to, read from THIS handle's database.
     ///
     /// Which database the handle points at is the whole meaning of the answer: on the **realm-core**
