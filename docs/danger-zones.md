@@ -108,8 +108,12 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
 - **`spacetime sql` (2.5):** NO `ORDER BY`, NO `IN`/subqueries, NO `Timestamp`/`Identity` literal. A
   range filter on a SINGLE column can wrongly return 0 rows — use a histogram or `COUNT`. To load a
   `Timestamp` column, go through a reducer that stamps `ctx.timestamp`.
-- **`spacetime call` mangles u64 guids > 2^53** (JSON number truncation) — pass big integers as
-  **string** arguments.
+- **`spacetime call` u64 arguments:** shell-quote the decimal argument to keep it intact. Inside
+  structured arguments, keep u64 fields as JSON numbers, for example
+  `'{"guid":9007199254740993,"ownership":null}'`. JSON strings in those fields are refused.
+  CLI 2.7.1 forwards numeric argument text unchanged; avoid float-based intermediates when
+  constructing it. See the pinned [argument assembly](https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/cli/src/subcommands/call.rs#L111-L130)
+  and [HTTP body](https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/cli/src/api.rs#L69-L76).
 - **`game_package_import` is private and has no gateway binding.** Read it with `spacetime sql`
   only, and with an EQUALITY filter on `family` (a range filter on one column can wrongly return 0
   rows). `lyracore packages replay` is the supported way to change it; never write it by hand.

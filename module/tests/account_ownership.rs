@@ -313,8 +313,9 @@ fn first_admission_cleans_each_legacy_character_with_a_shared_identity() {
         shard.query_rows("SELECT owner_identity FROM game_world_entity WHERE account_id = 1");
     assert_eq!(owners.len(), 2);
     assert_eq!(owners[0], owners[1]);
-    let other_entities =
+    let mut other_entities =
         shard.query_rows("SELECT guid FROM game_world_entity WHERE account_id = 0");
+    other_entities.sort();
     assert!(!other_entities.is_empty());
     shard.assert_sql("UPDATE game_world_entity SET money = 123 WHERE guid = 1");
     shard.assert_sql(&format!(
@@ -325,10 +326,9 @@ fn first_admission_cleans_each_legacy_character_with_a_shared_identity() {
     assert!(shard
         .query_rows("SELECT guid FROM game_world_entity WHERE account_id = 1")
         .is_empty());
-    assert_eq!(
-        shard.query_rows("SELECT guid FROM game_world_entity WHERE account_id = 0"),
-        other_entities
-    );
+    let mut remaining = shard.query_rows("SELECT guid FROM game_world_entity WHERE account_id = 0");
+    remaining.sort();
+    assert_eq!(remaining, other_entities);
     assert_eq!(
         shard.query_rows("SELECT money FROM game_character WHERE guid = 1")[0]["money"],
         "123"
