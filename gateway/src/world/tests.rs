@@ -428,9 +428,6 @@ struct InMemoryStore {
     reset_talents_error: Option<String>,
     /// Recorded `send_chat` lines: (chat_type, language, message).
     chats: std::sync::Mutex<Vec<(u8, u8, String)>>,
-    /// When true, `release_session` reports the epoch superseded (stale socket) — the world-side
-    /// half of the session-epoch arbitration: `leave_world` must then SKIP the `logout` reducer.
-    stale_session: bool,
     /// Imported gossip menu options `gossip_options` returns for ANY npc_guid — empty
     /// by default (the pre-import fallback path).
     gossip_opts: Vec<codec::GossipOptionView>,
@@ -2200,9 +2197,6 @@ impl WorldStore for InMemoryStore {
         })
     }
     fn release_session(&self, _token: WorldSessionToken) -> Result<()> {
-        if self.stale_session {
-            return Ok(());
-        }
         self.rec("logout");
         self.logout_called
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -6691,7 +6685,7 @@ fn item_reducer_transport_loss_ends_the_world_session() {
 #[test]
 fn logout_while_out_of_combat_succeeds_and_clears_open_loot() {
     // combat_until_ms=0 (default, never in combat) → CMSG_LOGOUT_REQUEST must reply
-    // Success/Instant + LOGOUT_COMPLETE and the logout() store reducer must be called.
+    // Success/Instant + LOGOUT_COMPLETE and the Store must release Account ownership.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
         corpse_money: 25,
@@ -6732,12 +6726,12 @@ fn logout_while_out_of_combat_succeeds_and_clears_open_loot() {
     drop(client);
     server.join().unwrap();
 
-    // The logout() reducer must have been called (entity removal path was taken).
+    // Releasing Account ownership removes the live Character.
     assert!(
         store
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
-        "logout() must be called on a successful out-of-combat logout"
+        "Account ownership must be released after successful logout"
     );
     assert!(
         store.money_looted.lock().unwrap().is_empty(),
@@ -7850,7 +7844,7 @@ fn attackswing_desync_error_is_session_fatal() {
     drop(client);
 }
 
-// ── Smaller mappings: WHO, buyback slots, trainer buy, talents, gossip select, chat, epochs ─────
+// ── Smaller mappings: WHO, buyback slots, trainer buy, talents, gossip select, chat ─────
 
 #[test]
 fn who_reply_lists_every_online_player_with_level_and_zone() {
@@ -9473,36 +9467,6 @@ fn messagechat_party_other_rejections_are_silently_dropped() {
     }
     drop(client);
     server.join().unwrap();
-}
-
-#[test]
-fn stale_epoch_logout_skips_the_logout_reducer() {
-    // The world-side half of the session-epoch arbitration: when release_session says a newer
-    // login superseded this socket, leave_world must NOT call logout (deleting the entity would
-    // vanish the LIVE player).
-    let mut s = quest_store();
-    s.stale_session = true;
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_LOGOUT_REQUEST {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_LOGOUT_RESPONSE(_) => {}
-        other => panic!("expected SMSG_LOGOUT_RESPONSE, got {other}"),
-    }
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE => {}
-        other => panic!("expected SMSG_LOGOUT_COMPLETE, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    assert!(
-        !store
-            .logout_called
-            .load(std::sync::atomic::Ordering::SeqCst),
-        "a superseded epoch must NOT delete the newer session's entity"
-    );
 }
 
 // The cross-database transfer TESTS live in `transfer_tests.rs`, but the fixture types
