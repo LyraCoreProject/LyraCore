@@ -157,6 +157,11 @@ Shard. The Module checks it in the transaction that acts on the Character.
 The Realm-core Account id, claim generation and request nonce carried by a bound Store and each
 queued Durable Request. It preserves ownership across Transfer without changing bound identity.
 
+**SessionActor**:
+The Character guid and optional World Session Token carried by a reducer request. Bound World
+Sessions retain their token across requests and Transfer. Tokenless requests are for trusted
+Operator tools and bots; they refuse a Character with active Account ownership.
+
 **Pre-auth I/O Deadline**:
 The absolute budget from socket acceptance until the peer proves itself: 10 s on the logon port and
 15 s on the world port. It bounds reads and writes, and an independent watchdog closes the socket

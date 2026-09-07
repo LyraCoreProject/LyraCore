@@ -2560,7 +2560,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "import_character_blob",
-            import_character_blob_then(transfer_id, blob.to_vec(), self.session_actor(transfer_id))
+            import_character_blob_then(transfer_id, blob.to_vec(), self.session_actor(0))
         )
     }
 
@@ -2570,7 +2570,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "confirm_import",
-            confirm_import_then(transfer_id, self.session_actor(transfer_id))
+            confirm_import_then(transfer_id, self.session_actor(0))
         )
     }
 
@@ -2579,7 +2579,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "finish_transfer",
-            finish_transfer_then(transfer_id, self.session_actor(transfer_id))
+            finish_transfer_then(transfer_id, self.session_actor(0))
         )
     }
 
@@ -2588,7 +2588,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "release_transfer",
-            release_transfer_then(transfer_id, self.session_actor(transfer_id))
+            release_transfer_then(transfer_id, self.session_actor(0))
         )
     }
 

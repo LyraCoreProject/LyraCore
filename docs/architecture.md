@@ -132,6 +132,11 @@ requests, including queued movement, mail, auctions, party operations and Transf
 Release closes matching Shard fences and removes their Character before closing the Realm-core
 claim. Delayed cleanup cannot close a newer generation. Bound identity remains deterministic.
 
+The Module applies two authority checks. `require_operator(ctx)` authorizes the calling Operator
+through `ctx.sender`. `require_actor(ctx, request_actor)` checks the Character and captured World
+Session Token against the Account Claim or Account Fence. An Operator identity is distinct from a
+Character identity.
+
 Account admission requires every configured World Shard and Instance Pool to be available. The
 Character-to-Shard index is a hint; fencing only its current answer would leave an in-flight Transfer
 able to create a second live copy elsewhere. A partial admission starts no renewal. After its claim

@@ -127,7 +127,10 @@ impl Standalone {
         // Nodes in one fixture must accept the same Owner Token. Keep their signing keys private
         // and wait for the first node to finish creating the pair before another node reads it.
         let signing_keys = signing_keys();
-        let startup = signing_keys.startup.lock().unwrap();
+        let startup = signing_keys
+            .startup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let child = spawn_node(
             &spacetime,
             &cli_config,
