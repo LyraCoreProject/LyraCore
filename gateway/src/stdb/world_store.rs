@@ -12,17 +12,13 @@
 //! serializes the `MovementInfo` before enqueueing it on the shard's shared batch.
 
 use anyhow::{anyhow, Result};
-use spacetimedb_sdk::Table;
 use wow_world_messages::vanilla::MovementInfo;
 
 use crate::codec;
 use crate::realm_core::SessionKey;
 use crate::world::{SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
-use super::bindings::{
-    game_group_member_table::GameGroupMemberTableAccess, game_group_table::GameGroupTableAccess,
-    GwMove,
-};
+use super::bindings::GwMove;
 use super::connection::{CharacterPresenceSnapshot, Coordinator};
 use super::views::{AccountRow, RealmRow};
 use super::PlayerSubscriptions;
@@ -1106,36 +1102,17 @@ impl WorldStore for Coordinator {
         &self,
         group_id: u64,
     ) -> Result<Option<crate::world::party::GroupRoster>> {
-        let live = self.0.coord();
-        if !live.is_healthy() {
+        let healthy = {
+            let live = self.0.coord();
+            live.is_healthy()
+        };
+        if !healthy {
             anyhow::bail!(
                 "{} has no healthy Coordinator subscription for party cleanup",
                 self.shard_name()
             );
         }
-        let db = &live.conn.db;
-        let Some(group) = db
-            .game_group()
-            .iter()
-            .find(|group| group.group_id == group_id)
-        else {
-            return Ok(None);
-        };
-        let mut rows: Vec<(u64, u64)> = db
-            .game_group_member()
-            .iter()
-            .filter(|member| member.group_id == group_id)
-            .map(|member| (member.id, member.character_guid))
-            .collect();
-        rows.sort_unstable();
-        Ok(Some(crate::world::party::GroupRoster {
-            group_id,
-            leader_guid: group.leader_guid,
-            loot_method: group.loot_method,
-            loot_threshold: group.loot_threshold,
-            master_looter_guid: group.master_looter_guid,
-            members: rows.into_iter().map(|(_, guid)| guid).collect(),
-        }))
+        Ok(self.group_roster_by_id(group_id))
     }
 
     fn party_member_guids(&self) -> Result<Vec<u64>> {

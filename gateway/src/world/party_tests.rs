@@ -613,6 +613,7 @@ fn deleted_character_cleanup_flushes_pending_loot_before_leaving_realm_core() {
         corpse_guid: 90,
         slot: 1,
         item_entry: 100,
+        random_property_id: 0,
         deadline_micros: 500,
         recipients: vec![GINGER, VIM, TRIN],
     }];

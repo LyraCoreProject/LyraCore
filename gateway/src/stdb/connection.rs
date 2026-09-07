@@ -200,9 +200,15 @@ impl LiveConn {
             )),
         };
         if let Err(error) = subscription.unsubscribe() {
-            return Err(anyhow!(
+            log::warn!(
                 "World Shard {shard_name} Character presence subscription could not stop: {error}"
-            ));
+            );
+            if snapshot.is_ok() {
+                return Err(anyhow!(
+                    "World Shard {shard_name} Character presence subscription could not stop: \
+                     {error}"
+                ));
+            }
         }
         snapshot
     }
