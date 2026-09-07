@@ -273,8 +273,10 @@ entering. Gateway and Module request arguments change together to carry a `Sessi
 `GwMove` entries carry the same value. Operator requests for Characters without a World Session
 supply no token, and cannot act as a Character with an active Account Claim or Account Fence.
 
-The tables and generated bindings must reach every configured Shard with the matching Gateway
-before serving World Sessions. The schema change requires human review under `danger-zones.md`.
+Stop serving World Sessions on every Gateway before publishing. Install the matching Module on
+Realm-core and every configured World Shard and Instance Pool, then restart only matching Gateways.
+Existing live Characters have no initial fence; first admission intentionally removes those legacy
+live copies. This schema and reducer ABI change requires human review under `danger-zones.md`.
 
 External Headless Client adapters must send the new `SessionActor` shape too. Cleanup for a running
 fixture Character carries the intended World Session's token. Null ownership deliberately refuses
