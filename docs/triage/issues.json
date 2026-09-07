@@ -1,11 +1,11 @@
 {
-  "updated_at": "2026-09-07 20:00 UTC",
+  "updated_at": "2026-09-07 20:05 UTC",
   "base_revision": "a345555b09623d4cf344106e31b0435a807357df",
-  "status_note": "All 71 open issues have an assessment; 20 closed issues remain for history. Party cleanup #463 is merged. Loot replay awaits human schema review and is integrating that merge. Spell corrections are published. Item stats passed review but need summon fix #470 to clear the main Binding test failure. Account ownership #471 is completing integrated checks and two-process acceptance.",
+  "status_note": "All 71 open issues have an assessment; 20 closed issues remain for history. Party cleanup #463 is merged. Human schema review is approved for Loot replay #461, whose integrated commit is completing CI and review. Spell repair and item stats await summon fix #470 to clear the main Binding test failure. Account ownership #471 is completing integrated checks and two-process acceptance.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
   "focus": [
     "Complete the requested stale-callback and natural-expiry regressions in summon fix #470.",
-    "Await the requested human schema review of fully checked Loot Roll replay #461.",
+    "Merge human-approved Loot replay #461 after current-commit CI and review pass.",
     "Finish Gouge rank and provenance corrections in Spell repair #465.",
     "Complete current-head checks and review for item stats #466.",
     "Finish Account ownership #471 with isolated fixtures and literal two-process acceptance, then request human schema review.",
@@ -2395,7 +2395,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "PR #439 is merged, so the listed prerequisite is stale. Stable promotion identity and durable replay refusal are distributed idempotency work that an agent can design and implement. Human review is required only before a schema change ships.",
-      "next_action": "Complete Gateway checks for the local integration with merged #463, publish the rebased branch and refresh review. Human approval of the unchanged schema remains pending.",
+      "next_action": "Merge after current-head checks and actual review pass. Human schema review is approved and does not need repeating for this unchanged schema.",
       "blockers": [
         "Human schema review under docs/danger-zones.md section 1 after current-head CI and review pass."
       ],
@@ -2413,7 +2413,8 @@
         "lyracore-cli #58 merged as 5688972 after 722 local tests, Rust 1.85 checks and actual CodeRabbit review. The CLI refuses pending legacy rolls, votes and withheld loot before any publish. It requires Operator-enforced quiescence throughout the batch. Core integration pins reachable implementation d6601ec and is in progress.",
         "The rebased Loot Roll implementation preserves the approved property column before its new identity column. Full private generation produced 978 bindings. All six replay durable cases, 1,494 Module tests, 1,304 Gateway unit tests and 119 Gateway integration checks pass. A two-Shard 8a40989 upgrade proof preserved the settled item, property 117 and source sequence; old START arguments were refused.",
         "The CLI checkpoint is integrated at d6601ec. Its previous review thread is resolved. Rebase aea68d8 includes merged Binding fixture #468; Module, Gateway and replay fixture trees are byte-identical to locally checked 6d62bc0. The two-Shard upgrade proof preserves item property 117 and settled inventory. Actual review on this new head is still required.",
-        "All seven checks and full CodeRabbit review passed at aea68d8. Requested human review of the appended default-ZERO source Identity, private permanent receipt table, reducer arguments, bindings and tested upgrade procedure. No approval is assumed."
+        "All seven checks and full CodeRabbit review passed at aea68d8. Requested human review of the appended default-ZERO source Identity, private permanent receipt table, reducer arguments, bindings and tested upgrade procedure. No approval is assumed.",
+        "The maintainer explicitly reviewed and approved the schema at aea68d8. The published integration 034079a has identical Module, bindings, CLI pin and upgrade procedure. All 1,323 Gateway unit tests, 119 integration/parity checks, strict all-target/all-feature lint, formatting and diff checks pass. PR is ready; current CI and review are running."
       ],
       "related_prs": [
         439,
@@ -2434,7 +2435,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "Real-data checks found the general importer reads an equipment mask as an effect and shifts valid effects by one slot. This affects core spell behavior. The Random Property Tracer has a narrow corrected reader that can guide the broader repair.",
-      "next_action": "Complete current-head checks and actual review, then merge and record the required Spell reimport.",
+      "next_action": "Integrate summon fix #470 after merge, then complete CI and current-head review.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/460",
@@ -3597,14 +3598,14 @@
       "number": 461,
       "title": "fix(loot): refuse replayed promotions after resolution",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/461",
-      "head": "aea68d8d08aee09f1a44dcd40333a0de230a7cf1",
+      "head": "034079ae748e09cc0e0731f9e635a55031d51ef7",
       "github_state": "OPEN",
       "owner": "Codex, coordinating PR review",
-      "checked_at": "2026-09-07 19:44 UTC",
+      "checked_at": "2026-09-07 20:05 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "SUCCESS"
+          "result": "IN_PROGRESS"
         },
         {
           "name": "build",
@@ -3620,7 +3621,7 @@
         },
         {
           "name": "test",
-          "result": "SUCCESS"
+          "result": "IN_PROGRESS"
         },
         {
           "name": "wasm",
@@ -3628,19 +3629,24 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "SUCCESS"
+          "result": "PENDING"
         }
       ],
-      "status": "Human schema review pending; latest-main integration in local checks",
-      "next_action": "Complete Gateway checks for the local integration with merged #463, publish the rebased branch and refresh review. Human approval of the unchanged schema remains pending.",
+      "status": "Human schema approved; integrated commit completing CI and review",
+      "next_action": "Merge after current-head checks and actual review pass. Human schema review is approved and does not need repeating for this unchanged schema.",
       "review_state": {
-        "CodeRabbit": "COMPLETE",
+        "CodeRabbit": "PENDING",
         "coordinating": "COMPLETE",
-        "human_schema": "REQUESTED"
+        "human_schema": "APPROVED"
       },
       "review_findings": [],
-      "review_note": "All checks and full review passed on published aea68d8. The local rebase onto merged #463 leaves the Module, schema, bindings and upgrade procedure identical. Combined fixtures preserve nonzero item properties and source identity; the new party fixture now supplies its required source identity. Gateway tests and lint are running before publication.",
-      "local_head": "fc854d1"
+      "review_note": "The maintainer explicitly reviewed and approved the schema at aea68d8. The published integration 034079a has identical Module, bindings, CLI pin and upgrade procedure. All 1,323 Gateway unit tests, 119 integration/parity checks, strict all-target/all-feature lint, formatting and diff checks pass. PR is ready; current CI and review are running.",
+      "human_schema_approval": {
+        "at": "2026-09-07 20:05 UTC",
+        "reviewed_head": "aea68d8d08aee09f1a44dcd40333a0de230a7cf1",
+        "instruction": "I reviewed the schema; approve merge",
+        "current_schema_identical": true
+      }
     },
     {
       "number": 462,
@@ -3798,15 +3804,44 @@
       "github_state": "OPEN",
       "head": "aa5204593a6c13d2fc3536e79e48069a770bf1c4",
       "checked_at": "2026-09-07 20:00 UTC",
-      "checks": [],
-      "status": "All Gouge ranks and provenance corrected; CI and review running",
-      "next_action": "Complete current-head checks and actual review, then merge and record the required Spell reimport.",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "FAILURE"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "PENDING"
+        }
+      ],
+      "status": "Gouge corrections checked; CI blocked by the main Binding failure",
+      "next_action": "Integrate summon fix #470 after merge, then complete CI and current-head review.",
       "review_findings": [],
       "review_state": {
         "CodeRabbit": "PENDING",
         "coordinating": "COMPLETE"
       },
-      "review_note": "At aa52045 on a345555, all 359 ordinary importer tests and strict importer lint pass. Owned input confirms all five Gouge ranks use ModStun and now derive incapacitate; an unknown same-name spell remains a stun. Column 13 is included in the provenance table. Both review threads are resolved; CI and current-head review are running."
+      "review_note": "At aa52045 on a345555, all 359 ordinary importer tests and strict importer lint pass. Owned input confirms all five Gouge ranks use ModStun and now derive incapacitate; an unknown same-name spell remains a stun. Column 13 is included in the provenance table. Both review threads are resolved; CI and current-head review are running. Durable CI failed at the unchanged Binding corpse poll at line 326, matching #469. The implementer is waiting for #470 before rerunning."
     },
     {
       "number": 58,
@@ -4310,6 +4345,10 @@
     {
       "at": "2026-09-07 20:00 UTC",
       "text": "Spell rank fixes are published at aa52045. Item stats 12f7e3f passed actual review, but CI reproduced the main Binding corpse timing failure and waits for #470. Summon stale-callback and natural-expiry cases pass; the short observation window is being corrected. Account fixture signing keys are isolated and all five cases pass concurrently. Loot replay is rebased locally onto merged party cleanup with its schema unchanged."
+    },
+    {
+      "at": "2026-09-07 20:05 UTC",
+      "text": "The maintainer explicitly approved Loot replay #461 schema review. Confirmed the Module, schema, bindings, CLI pin and upgrade procedure are unchanged in integrated commit 034079a, marked the PR ready, and recorded approval on GitHub. All local Gateway integration gates pass. Spell repair and item stat CI both wait for the already-diagnosed Binding fixture fix in #470."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
