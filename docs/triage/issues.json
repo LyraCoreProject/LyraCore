@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-09-07 12:56 UTC",
+  "updated_at": "2026-09-07 13:04 UTC",
   "base_revision": "b4c17c481f66784fd24677f583e0368fc3ac8c95",
   "status_note": "77 open issues assessed; 12 closed issues retained for history. Finishing existing PRs and implementing the next independent checks.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
@@ -7,7 +7,8 @@
     "Finish current-head reviews for core PRs #438, #439 and #440.",
     "Implement #50 to catch Character state omitted from cleanup or Transfer.",
     "Finish CLI PR #56 for #398 and publish the core pin update.",
-    "Refresh every issue assessment and prepare the next independent tasks."
+    "Refresh every issue assessment and prepare the next independent tasks.",
+    "#105: repair suite dispatch and distinguish startup failures before relying on more Headless Client runs."
   ],
   "issues": [
     {
@@ -239,12 +240,13 @@
       "effort": 3,
       "confidence": "high",
       "disposition": "done",
-      "rationale": "PR #419 is merged. The reported lint backlog is now subject to blocking CI; closure needs current-main check evidence.",
-      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
+      "rationale": "PR #419 is merged. The blocking clippy, formatting and Rust jobs passed on main b4c17c4; the GitHub closure cites that run.",
+      "next_action": "Closed with the merged PR and passing main workflow as evidence.",
       "blockers": [],
       "evidence": [
-        "https://github.com/LyraCoreProject/LyraCore/issues/353",
-        ".github/workflows/rust.yml still uses continue-on-error for fmt and clippy."
+        "https://github.com/LyraCoreProject/LyraCore/pull/419",
+        "https://github.com/LyraCoreProject/LyraCore/actions/runs/34103823042",
+        ".github/workflows/rust.yml runs blocking formatting and clippy without continue-on-error."
       ],
       "related_prs": [
         419
@@ -796,13 +798,10 @@
       "gain": 5,
       "effort": 3,
       "confidence": "high",
-      "disposition": "dependency",
+      "disposition": "implementing",
       "rationale": "The current pin is still v0.1.0-alpha.3 at the exact reported commit. Its wire-suite.sh contains the broken relative calls, and no newer release exists. This undermines confidence in every live suite claim that uses the pin.",
-      "next_action": "Fix every scenario call to use ADAPTER_DIR, add subset arguments and a distinct spawn-failure summary in wire-harness, then publish a release and bump the LyraCore pin.",
-      "blockers": [
-        "The change must land and be released in LyraCoreProject/wire-harness before the core pin can move.",
-        "A maintainer must publish or approve the new harness release."
-      ],
+      "next_action": "Fix all scenario paths in wire-harness, prove dispatch from distinct roots and startup-failure accounting offline, then review a PR and update the released core pin.",
+      "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/105",
         "https://github.com/LyraCoreProject/wire-harness/blob/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore/wire-suite.sh",
@@ -813,7 +812,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/105",
       "updatedAt": "2026-08-11T08:20:54Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-6 Astra, Codex"
     },
     {
       "number": 104,
@@ -1613,12 +1612,11 @@
       "effort": 5,
       "confidence": "high",
       "disposition": "human",
-      "rationale": "Recent work closed two unauthenticated denial-of-service paths, and an open PR adds proof limits and Session expiry. Those changes cover part of the security section, but the issue also requires a named host, TLS and network policy, durable backup and restore, monitoring, restart practice, and a real Internet client drill. This is an Operator project rather than one source change.",
+      "rationale": "Pre-auth limits and Session Expiry shipped in merged PR #416. A public demo Realm still needs a named host, backup and restore procedures, operational ownership and an approved deployment.",
       "next_action": "Split the remaining work into a reviewed public-host runbook and reversible automation, then have an Operator name the host and approve the first deployment and restore drill.",
       "blockers": [
         "No named public host or deployment target is authorized.",
-        "Backup and restore behavior has not been demonstrated.",
-        "PR #416 is still under review."
+        "Backup and restore behavior has not been demonstrated."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/53. The issue spans host hardening, deployment, backups, monitoring, and real-client operation.",
@@ -1740,7 +1738,7 @@
       "effort": 1,
       "confidence": "medium",
       "disposition": "verify",
-      "rationale": "The Character disappearance Relay exists, but it converts character_anywhere read failures to an absent result. Its existing Architecture Tests inspect call names rather than proving deletion and Transfer outcomes. The original acceptance is not yet established by those tests.",
+      "rationale": "The Character disappearance Relay exists, but its current Architecture Tests check call names rather than proving deletion and Transfer outcomes. The generic read signature can fail, although the production cache read currently returns Ok. A source scan alone is insufficient closure evidence.",
       "next_action": "Verify the actual Character disappearance callback and its read-failure behavior before closure. Existing tests only scan its source; add behavior coverage for deletion and Transfer if needed.",
       "blockers": [],
       "evidence": [
@@ -2403,7 +2401,34 @@
       "owner": "GPT-5.6 Sol, PR completion agent",
       "status": "Open; fresh review audit assigned",
       "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
-      "head": "97ea5b2349dfb5e836b8bd87ca0c8d88e8e5d74e"
+      "head": "97ea5b2349dfb5e836b8bd87ca0c8d88e8e5d74e",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
     },
     {
       "number": 440,
@@ -2411,7 +2436,35 @@
       "title": "fix(gameobject): require opener for locked goobers",
       "owner": "GPT-5.6 Sol, PR completion agent",
       "status": "Open; fresh review audit assigned",
-      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending."
+      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
+      "head": "c668015c66bfae3e9928611f2a9e118850636914",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
     },
     {
       "number": 439,
@@ -2419,7 +2472,35 @@
       "title": "fix(loot): keep concurrent promotions on one live roll",
       "owner": "GPT-5.6 Sol, PR completion agent",
       "status": "Open; fresh review audit assigned",
-      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending."
+      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
+      "head": "7b11e682ee0581c47432d0d23539105dbbd69f5f",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
     },
     {
       "number": 56,
@@ -2427,7 +2508,79 @@
       "title": "fix(packages): count Package Deltas in trust review",
       "owner": "GPT-5.6 Sol, CLI completion agent",
       "status": "Open in lyracore-cli; review audit assigned",
-      "next_action": "Resolve review findings, verify CLI tests and MSRV, then publish the core pin update."
+      "next_action": "Resolve review findings, verify CLI tests and MSRV, then publish the core pin update.",
+      "head": "9830550c14af4049941a1931e09e2795d1cfe3ee",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "number": 444,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/444",
+      "title": "docs(triage): refresh issue order and resume PR ownership",
+      "owner": "GPT-6 Astra, Codex",
+      "status": "Addressed three CodeRabbit findings; durable CI rerun underway",
+      "next_action": "Refresh stale evidence and recorded heads, finish the failed-job retry, and verify the revised commit.",
+      "head": "a8d3dabd33d3766d0daf1a42ff30df66cae56047",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "number": 6,
+      "url": "https://github.com/LyraCoreProject/wire-harness/pull/6",
+      "title": "fix(suite): run scenarios from the adapter directory",
+      "owner": "GPT-6 Astra, Codex",
+      "status": "PR open; CI running",
+      "next_action": "Complete independent review and CI, then publish a release tag and core pin.",
+      "head": "9da18425cf099bcd66d1f193f7fabac44f174e9e",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "test (ubuntu-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test (macos-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "coverage",
+          "result": "SUCCESS"
+        }
+      ]
     }
   ],
   "history": [
@@ -2458,6 +2611,10 @@
     {
       "at": "2026-09-07 12:55 UTC",
       "text": "Current main passed all workflows. Closed shipped CI work and retired region work with linked evidence. Corrected #58 and #77: the binary installer and measured capacity targets are not proved by the existing source changes."
+    },
+    {
+      "at": "2026-09-07 13:04 UTC",
+      "text": "Opened wire-harness PR #6 for #105 after a failing path repro and 55 passing Rust tests. CodeRabbit found three stale report records; corrected CI evidence, the merged security dependency and missing PR heads."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
