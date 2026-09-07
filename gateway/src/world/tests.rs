@@ -668,11 +668,23 @@ struct InMemoryStore {
     // Test recorder: the tuple is `realm_loot_op`'s argument list verbatim.
     #[allow(clippy::type_complexity)]
     /// Recorded `realm_loot_op` calls — `(op, corpse_guid, slot, item_entry, actor_guid, vote,
-    /// deadline_micros, recipients, random_property_id)` — every arg the gateway's loot-roll
-    /// routing/relay passed. The
+    /// deadline_micros, recipients, promotion_source, source_roll_id)` — every arg the gateway's loot-roll routing/relay passed. The
     /// realm handle owns this; a world shard's staying empty is how a test tells "the vote/promotion
     /// went to the authority" from "it stayed shard-local".
-    realm_loot_ops: std::sync::Mutex<Vec<(u8, u64, u8, u32, u64, u8, i64, Vec<u64>, u32)>>,
+    realm_loot_ops: std::sync::Mutex<
+        Vec<(
+            u8,
+            u64,
+            u8,
+            u32,
+            u64,
+            u8,
+            i64,
+            Vec<u64>,
+            spacetimedb_sdk::Identity,
+            u64,
+        )>,
+    >,
     /// When set, `realm_loot_op` fails with this message.
     realm_loot_op_error: Option<String>,
     /// This WORLD SHARD's staging rolls `pending_local_rolls` answers — the relay's promotion
@@ -2740,7 +2752,9 @@ impl WorldStore for InMemoryStore {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
-        random_property_id: u32,
+        _random_property_id: u32,
+        promotion_source: spacetimedb_sdk::Identity,
+        source_roll_id: u64,
     ) -> Result<()> {
         self.rec("realm_loot_op");
         self.realm_loot_ops.lock().unwrap().push((
@@ -2752,7 +2766,8 @@ impl WorldStore for InMemoryStore {
             vote,
             deadline_micros,
             recipients,
-            random_property_id,
+            promotion_source,
+            source_roll_id,
         ));
         if let Some(e) = &self.realm_loot_op_error {
             return Err(anyhow!("{e}"));
@@ -2776,6 +2791,8 @@ impl WorldStore for InMemoryStore {
             vote,
             0,
             Vec::new(),
+            0,
+            spacetimedb_sdk::Identity::ZERO,
             0,
         )?;
         if let Some(failure) = &self.loot_action_failure {
@@ -2805,6 +2822,10 @@ impl WorldStore for InMemoryStore {
     fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()> {
         self.rec("clear_promoted_loot_roll");
         self.cleared_rolls.lock().unwrap().push(roll_id);
+        self.pending_rolls
+            .lock()
+            .unwrap()
+            .retain(|r| r.roll_id != roll_id);
         Ok(())
     }
 

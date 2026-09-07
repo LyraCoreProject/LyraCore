@@ -2952,6 +2952,8 @@ impl Coordinator {
         deadline_micros: i64,
         recipients: Vec<u64>,
         random_property_id: u32,
+        promotion_source: spacetimedb_sdk::Identity,
+        source_roll_id: u64,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -2965,7 +2967,9 @@ impl Coordinator {
                 vote,
                 deadline_micros,
                 recipients,
-                random_property_id
+                random_property_id,
+                promotion_source,
+                source_roll_id
             )
         )
     }
@@ -2990,6 +2994,8 @@ impl Coordinator {
                 vote,
                 0,
                 Vec::new(),
+                0,
+                spacetimedb_sdk::Identity::ZERO,
                 0
             )
         ))

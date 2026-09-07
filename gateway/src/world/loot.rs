@@ -106,6 +106,7 @@ pub struct PendingLootRoll {
     pub deadline_micros: i64,
     /// Every eligible voter, snapshotted at kill time (`game_loot_roll_vote`'s rows for this roll).
     pub recipients: Vec<u64>,
+    pub promotion_source: spacetimedb_sdk::Identity,
 }
 
 /// Route `CMSG_LOOT_ROLL` for the session that owns `self_guid`.
@@ -144,6 +145,8 @@ fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLoo
         roll.deadline_micros,
         roll.recipients.clone(),
         roll.random_property_id,
+        roll.promotion_source,
+        roll.roll_id,
     ) {
         Ok(()) => {
             if let Err(e) = shard.clear_promoted_loot_roll(roll.roll_id) {

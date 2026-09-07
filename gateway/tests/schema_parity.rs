@@ -464,7 +464,7 @@ parity_test!(parity_game_system_message_event, "game_system_message_event", lyra
 // realm-core's votes back — a drifted column here breaks that relay silently, not a client packet.
 parity_test!(parity_game_loot_roll, "game_loot_roll", lyracore_module::LootRoll, bindings::loot_roll_type::LootRoll, {
     id, corpse_guid, slot, item_entry, deadline_micros, resolved,
-    random_property_id,
+    random_property_id, promotion_source,
 });
 parity_test!(parity_game_loot_roll_vote, "game_loot_roll_vote", lyracore_module::LootRollVote, bindings::loot_roll_vote_type::LootRollVote, {
     id, roll_id, voter_guid, voted, vote, rolled,
