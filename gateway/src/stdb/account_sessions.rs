@@ -281,6 +281,124 @@ mod tests {
     use crate::config::GatewayConfig;
     use crate::durable_test_support::Standalone;
 
+    fn fenced_destination(
+        runtime: &tokio::runtime::Runtime,
+        cfg: GatewayConfig,
+        token: Token,
+        expires_micros: i64,
+    ) -> Result<(Standalone, Coordinator)> {
+        let mut fixture = Standalone::start("account-transfer-destination");
+        fixture.publish_module();
+        fixture.assert_call("claim_operator", &[]);
+        let destination = runtime.block_on(Coordinator::connect(&GatewayConfig {
+            stdb_uri: fixture.server().into(),
+            module_name: fixture.shard_name().into(),
+            coordinator_token: Some(fixture.owner_token()),
+            gateway_id: "account-transfer-destination".into(),
+            ..cfg
+        }))?;
+        call_reducer!(
+            destination.0.call_pipe().conn.reducers,
+            "fence_account",
+            fence_account_then(wire(token), "TEST".into(), 1, expires_micros)
+        )?;
+        Ok((fixture, destination))
+    }
+
+    fn assert_transfer_preserves_ownership(
+        runtime: &tokio::runtime::Runtime,
+        cfg: GatewayConfig,
+        fixture: &Standalone,
+        winner: &Coordinator,
+        old: &Coordinator,
+        second: Token,
+        expires_micros: i64,
+    ) {
+        let (destination_fixture, destination_raw) =
+            fenced_destination(runtime, cfg, second, expires_micros).unwrap();
+        let destination = Coordinator(
+            destination_raw.0.clone(),
+            destination_raw.1.clone(),
+            winner.2.clone(),
+        );
+        let stale_destination = Coordinator(
+            destination_raw.0.clone(),
+            destination_raw.1.clone(),
+            old.2.clone(),
+        );
+        let transfer_id = 7001;
+        winner
+            .begin_transfer(&crate::world::transfer::TransferPlan {
+                transfer_id,
+                character_guid: 1,
+                dest_map_id: 0,
+                dest_instance_id: 0,
+                dest_x: 100.0,
+                dest_y: 100.0,
+                dest_z: 20.0,
+                dest_o: 0.0,
+            })
+            .unwrap();
+        assert!(crate::durable_test_support::poll_until(
+            Duration::from_secs(5),
+            || winner.escrow_row(1).is_some()
+        ));
+        let escrow = winner.escrow_row(1).unwrap();
+        assert_eq!(escrow.transfer_id, transfer_id);
+        assert_eq!(escrow.character_guid, 1);
+        let refused = |result: Result<()>| {
+            let error = result.unwrap_err();
+            assert!(
+                error.to_string().contains("STALE_WORLD_SESSION"),
+                "{error:#}"
+            );
+        };
+        refused(stale_destination.import_character_blob(transfer_id, &escrow.blob));
+        assert!(destination_fixture
+            .query_rows("SELECT * FROM game_transfer_in")
+            .is_empty());
+        destination
+            .import_character_blob(transfer_id, &escrow.blob)
+            .unwrap();
+        let arrivals = destination_fixture.query_rows("SELECT * FROM game_transfer_in");
+        assert_eq!(arrivals[0]["transfer_id"], transfer_id.to_string());
+        assert_eq!(arrivals[0]["character_guid"], "1");
+        refused(old.confirm_import(transfer_id));
+        assert!(fixture
+            .query_rows("SELECT * FROM game_transfer_in")
+            .is_empty());
+        winner.confirm_import(transfer_id).unwrap();
+        refused(old.finish_transfer(transfer_id));
+        assert_eq!(
+            fixture
+                .query_rows("SELECT guid FROM game_character WHERE guid = 1")
+                .len(),
+            1
+        );
+        winner.finish_transfer(transfer_id).unwrap();
+        refused(stale_destination.release_transfer(transfer_id));
+        assert_eq!(
+            destination_fixture.query_rows("SELECT * FROM game_transfer_in"),
+            arrivals
+        );
+        destination.release_transfer(transfer_id).unwrap();
+        assert!(fixture
+            .query_rows("SELECT guid FROM game_character WHERE guid = 1")
+            .is_empty());
+        assert!(fixture
+            .query_rows("SELECT * FROM game_transfer_out")
+            .is_empty());
+        assert!(destination_fixture
+            .query_rows("SELECT * FROM game_transfer_in")
+            .is_empty());
+        assert_eq!(
+            destination_fixture
+                .query_rows("SELECT guid FROM game_character WHERE guid = 1")
+                .len(),
+            1
+        );
+    }
+
     #[test]
     #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
     fn independent_coordinators_preserve_the_winner_after_delayed_cleanup() {
@@ -402,111 +520,14 @@ mod tests {
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0]["generation"], second.generation.to_string());
         assert_eq!(claims[0]["closed"], "false");
-        let mut destination_fixture = Standalone::start("account-transfer-destination");
-        destination_fixture.publish_module();
-        destination_fixture.assert_call("claim_operator", &[]);
-        let destination_raw = runtime
-            .block_on(Coordinator::connect(&GatewayConfig {
-                stdb_uri: destination_fixture.server().into(),
-                module_name: destination_fixture.shard_name().into(),
-                coordinator_token: Some(destination_fixture.owner_token()),
-                gateway_id: "account-transfer-destination".into(),
-                ..cfg
-            }))
-            .unwrap();
-        (|| {
-            call_reducer!(
-                destination_raw.0.call_pipe().conn.reducers,
-                "fence_account",
-                fence_account_then(
-                    wire(second),
-                    "TEST".into(),
-                    1,
-                    claims[0]["expires_micros"].parse().unwrap()
-                )
-            )
-        })()
-        .unwrap();
-        let destination = Coordinator(
-            destination_raw.0.clone(),
-            destination_raw.1.clone(),
-            winner.2.clone(),
-        );
-        let stale_destination = Coordinator(
-            destination_raw.0.clone(),
-            destination_raw.1.clone(),
-            old.2.clone(),
-        );
-        let transfer_id = 7001;
-        winner
-            .begin_transfer(&crate::world::transfer::TransferPlan {
-                transfer_id,
-                character_guid: 1,
-                dest_map_id: 0,
-                dest_instance_id: 0,
-                dest_x: 100.0,
-                dest_y: 100.0,
-                dest_z: 20.0,
-                dest_o: 0.0,
-            })
-            .unwrap();
-        assert!(crate::durable_test_support::poll_until(
-            Duration::from_secs(5),
-            || winner.escrow_row(1).is_some()
-        ));
-        let escrow = winner.escrow_row(1).unwrap();
-        assert_eq!(escrow.transfer_id, transfer_id);
-        assert_eq!(escrow.character_guid, 1);
-        let refused = |result: Result<()>| {
-            let error = result.unwrap_err();
-            assert!(
-                error.to_string().contains("STALE_WORLD_SESSION"),
-                "{error:#}"
-            );
-        };
-        refused(stale_destination.import_character_blob(transfer_id, &escrow.blob));
-        assert!(destination_fixture
-            .query_rows("SELECT * FROM game_transfer_in")
-            .is_empty());
-        destination
-            .import_character_blob(transfer_id, &escrow.blob)
-            .unwrap();
-        let arrivals = destination_fixture.query_rows("SELECT * FROM game_transfer_in");
-        assert_eq!(arrivals[0]["transfer_id"], transfer_id.to_string());
-        assert_eq!(arrivals[0]["character_guid"], "1");
-        refused(old.confirm_import(transfer_id));
-        assert!(fixture
-            .query_rows("SELECT * FROM game_transfer_in")
-            .is_empty());
-        winner.confirm_import(transfer_id).unwrap();
-        refused(old.finish_transfer(transfer_id));
-        assert_eq!(
-            fixture
-                .query_rows("SELECT guid FROM game_character WHERE guid = 1")
-                .len(),
-            1
-        );
-        winner.finish_transfer(transfer_id).unwrap();
-        refused(stale_destination.release_transfer(transfer_id));
-        assert_eq!(
-            destination_fixture.query_rows("SELECT * FROM game_transfer_in"),
-            arrivals
-        );
-        destination.release_transfer(transfer_id).unwrap();
-        assert!(fixture
-            .query_rows("SELECT guid FROM game_character WHERE guid = 1")
-            .is_empty());
-        assert!(fixture
-            .query_rows("SELECT * FROM game_transfer_out")
-            .is_empty());
-        assert!(destination_fixture
-            .query_rows("SELECT * FROM game_transfer_in")
-            .is_empty());
-        assert_eq!(
-            destination_fixture
-                .query_rows("SELECT guid FROM game_character WHERE guid = 1")
-                .len(),
-            1
+        assert_transfer_preserves_ownership(
+            &runtime,
+            cfg,
+            &fixture,
+            &winner,
+            &old,
+            second,
+            claims[0]["expires_micros"].parse().unwrap(),
         );
         winner.release_session(second).unwrap();
         assert!(fixture
