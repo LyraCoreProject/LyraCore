@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-09-07 15:20 UTC",
+  "updated_at": "2026-09-07 15:26 UTC",
   "base_revision": "32aa004e0d2fe0921033bea77e3a85796e277dfd",
   "status_note": "69 open issues assessed; 20 closed issues retained for history. The prior PR queue is merged. Agents have resumed the Warlock quests, Character deletion cleanup and Random Property Tracer.",
   "monitoring_note": "Monitoring is active during this work session. CodeRabbit rate-limit notices do not satisfy review. After the window reopens, re-trigger review and wait for its result before merging. The report preserves next actions if the session stops; no unattended scheduler is installed.",
@@ -1864,9 +1864,9 @@
       "gain": 4,
       "effort": 5,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "Source data maps item 6928 to spell 7728 and item 6913 to spell 8674. Both use SendEvent and ActivateObject with spell focus 83. Current quest source-item reachability and item-use routing already exist. The remaining work must preserve the source-backed event behavior, focus Gate and objective credit. Quest turn-in also lacks reward-spell data, so the complete path needs a small durable catalogue and generated bindings.",
-      "next_action": "Finish recovered tests and independent review, open a draft PR and resolve CodeRabbit findings. Human schema review and ritual-circle client acceptance remain.",
+      "next_action": "Draft #455 is open. Finish current-head CI and CodeRabbit review. Human schema review and ritual-circle client acceptance remain.",
       "blockers": [
         "Human review of the concrete schema and binding change under docs/danger-zones.md section 1 before shipping.",
         "A real-client ritual-circle check after Module behavior passes."
@@ -1877,7 +1877,9 @@
         "Current pinned cmangos rows: item 6928 -> spell 7728 -> event 1131; item 6913 -> spell 8674 -> event 1134. Both spells use effects 61 and 86 with focus 83. The issue's suggested plain hostile-summon effect is not the source spell shape.",
         "Current quest importer omits RewSpell and RewSpellCast; the Module has no durable quest reward-spell catalogue. The draft must preserve their distinct source semantics."
       ],
-      "related_prs": [],
+      "related_prs": [
+        455
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/40",
       "updatedAt": "2026-08-11T08:16:06Z",
       "github_state": "open",
@@ -2502,11 +2504,14 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "SUCCESS"
+          "result": "UNAVAILABLE",
+          "platform_result": "SUCCESS",
+          "source": "GitHub reported SUCCESS for a rate-limit notice; no completed CodeRabbit review was delivered before this historical merge."
         }
       ],
       "github_state": "MERGED",
-      "merge_commit": "0b8631d400d9a445aec4fe1af5a80f87c83aee4b"
+      "merge_commit": "0b8631d400d9a445aec4fe1af5a80f87c83aee4b",
+      "review_note": "Merged by the prior session after coordinating review. CodeRabbit was rate-limited. This historical merge predates the explicit requirement to wait for CodeRabbit."
     },
     {
       "number": 439,
@@ -2755,10 +2760,13 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "SUCCESS"
+          "result": "UNAVAILABLE",
+          "platform_result": "SUCCESS",
+          "source": "GitHub reported SUCCESS for a rate-limit notice; no completed CodeRabbit review was delivered before this historical merge."
         }
       ],
-      "merge_commit": "533be16e04b097ef63c94a2ad362b00085104974"
+      "merge_commit": "533be16e04b097ef63c94a2ad362b00085104974",
+      "review_note": "Merged by the prior session after coordinating review. CodeRabbit was rate-limited. This historical merge predates the explicit requirement to wait for CodeRabbit."
     },
     {
       "number": 448,
@@ -2797,10 +2805,13 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "SUCCESS"
+          "result": "UNAVAILABLE",
+          "platform_result": "SUCCESS",
+          "source": "GitHub reported SUCCESS for a rate-limit notice; no completed CodeRabbit review was delivered before this historical merge."
         }
       ],
-      "merge_commit": "38a78b827b92cf4a231196df7352b1852c2722d8"
+      "merge_commit": "38a78b827b92cf4a231196df7352b1852c2722d8",
+      "review_note": "Merged by the prior session after coordinating review. CodeRabbit was rate-limited. This historical merge predates the explicit requirement to wait for CodeRabbit."
     },
     {
       "number": 7,
@@ -3196,11 +3207,24 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "SUCCESS"
+          "result": "UNAVAILABLE",
+          "platform_result": "SUCCESS",
+          "source": "GitHub reported SUCCESS for a rate-limit notice; no completed CodeRabbit review was delivered before this historical merge."
         }
       ],
       "merge_commit": "32aa004e0d2fe0921033bea77e3a85796e277dfd",
-      "review_note": "CodeRabbit reported its rate limit. Parent reviewed the exact one-line tag/SHA diff, upstream PR, release and fresh-clone evidence before merge; there were no review threads."
+      "review_note": "Merged by the prior session after coordinating review. CodeRabbit was rate-limited. This historical merge predates the explicit requirement to wait for CodeRabbit."
+    },
+    {
+      "number": 455,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/455",
+      "title": "fix(quests): complete the Warlock Binding encounters",
+      "owner": "GPT-6 Astra, Warlock recovery agent",
+      "status": "Draft; CI and CodeRabbit review in progress",
+      "next_action": "Resolve CI and review findings, then obtain human schema review. Keep client acceptance open.",
+      "head": "8cbd16dddea1ca1a44a4f7ddd03a2aff1c885065",
+      "github_state": "OPEN",
+      "checked_at": "2026-09-07 15:26 UTC"
     }
   ],
   "history": [
@@ -3339,6 +3363,10 @@
     {
       "at": "2026-09-07 15:20 UTC",
       "text": "Resumed ownership from the latest committed report and recovered unfinished local work. All earlier PRs are merged. Assigned #40, #46 and #31 to isolated agents. CodeRabbit rate limits now require waiting and an actual review before merge."
+    },
+    {
+      "at": "2026-09-07 15:26 UTC",
+      "text": "Opened Warlock draft #455 and report PR #456. CodeRabbit found four historical rate-limit statuses still recorded as SUCCESS; corrected them to unavailable while retaining the raw platform result and prior merge evidence. Surviving agents are still editing #31 and #46, so this session reviews those worktrees without editing them."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
