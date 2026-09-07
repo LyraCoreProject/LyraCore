@@ -137,6 +137,61 @@ fn a_missing_property_pool_does_not_leave_an_empty_loot_cursor() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn invalid_creature_drops_leave_valid_loot_at_slot_zero() {
+    let shard = fixture("property-mixed-creature");
+    shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
+    shard.assert_sql("DELETE FROM game_creature_spawn WHERE entry = 51000");
+    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
+    shard.assert_sql("DELETE FROM game_creature_loot WHERE creature_entry = 51000");
+    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false),(5090101,51000,5090052,10000,2,0,false)"));
+    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
+    let wolf = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000");
+    assert_eq!(wolf.len(), 1);
+    shard.assert_call("debug_apply_damage", &[&wolf[0]["guid"], "10", "1"]);
+    shard.assert_call("debug_kill_creature", &["1", &wolf[0]["guid"]]);
+    let loot =
+        shard.query_rows("SELECT slot,item_entry,count,random_property_id FROM game_corpse_loot");
+    assert_eq!(loot.len(), 1);
+    assert_eq!(loot[0]["slot"], "0");
+    assert_eq!(loot[0]["item_entry"], "5090052");
+    assert_eq!(loot[0]["count"], "2");
+    assert_eq!(loot[0]["random_property_id"], "0");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn invalid_chest_properties_preserve_valid_drops_and_finish_empty_fallbacks() {
+    let shard = fixture("property-mixed-chest");
+    shard.assert_sql("UPDATE game_world_entity SET x = 100, y = 100, z = 100 WHERE guid = 1");
+    shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
+    shard.assert_sql(&format!("INSERT INTO game_gameobject_loot (id,loot_id,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,5090100,{ITEM},10000,1,0,false),(5090101,5090100,5090052,10000,2,0,false)"));
+    for (entry, loot_id) in [("5090110", "5090100"), ("5090111", "0")] {
+        shard.assert_call(
+            "debug_spawn_gameobject",
+            &[
+                entry, "3", "0", ITEM, "0", "100", "100", "100", loot_id, "0", "0", "0",
+            ],
+        );
+        shard.assert_call("debug_use_gameobject_entry", &["1", entry]);
+        let chest = shard.query_rows(&format!(
+            "SELECT guid,state FROM game_gameobject WHERE template_entry = {entry}"
+        ));
+        assert_eq!(chest[0]["state"], "1");
+        let loot = shard.query_rows(&format!("SELECT slot,item_entry,count,random_property_id FROM game_corpse_loot WHERE corpse_guid = {}", chest[0]["guid"]));
+        if loot_id == "0" {
+            assert!(loot.is_empty());
+        } else {
+            assert_eq!(loot.len(), 1);
+            assert_eq!(loot[0]["slot"], "0");
+            assert_eq!(loot[0]["item_entry"], "5090052");
+            assert_eq!(loot[0]["count"], "2");
+            assert_eq!(loot[0]["random_property_id"], "0");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn large_imported_spirit_contributions_do_not_overflow_equipping() {
     let shard = fixture("property-spirit-bound");
     let base: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")[0]

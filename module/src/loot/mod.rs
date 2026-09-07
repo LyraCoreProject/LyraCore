@@ -480,17 +480,15 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
     }
 }
 
-/// Insert `winners` as sequential `game_corpse_loot` rows on `corpse_guid`, starting at slot 0, each
-/// freshly unclaimed (`reserved_for = 0`) and FFA (group-loot stamping happens AFTER this returns, in
-/// `apply_group_loot_rules` — never at insert time). The ONE insert loop [`roll_creature_loot`] and
-/// [`roll_pickpocket_loot`] used to each carry a copy of (the dedup).
-fn insert_corpse_rows(
+/// Insert valid drops at consecutive slots. Invalid property catalogues omit the affected item.
+/// Each row starts unclaimed and FFA; creature group rules are applied by the caller.
+pub(crate) fn insert_corpse_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,
     winners: Vec<(u32, u32, bool)>,
 ) -> bool {
-    let mut dropped = false;
-    for (slot, (item_entry, count, quest_only)) in winners.into_iter().enumerate() {
+    let mut inserted = 0;
+    for (item_entry, count, quest_only) in winners {
         let random_property_id = match crate::items::select_loot_property(ctx, item_entry) {
             Ok(id) => id,
             Err(reason) => {
@@ -501,7 +499,7 @@ fn insert_corpse_rows(
         ctx.db.game_corpse_loot().insert(CorpseLoot {
             id: 0,
             corpse_guid,
-            slot: slot as u8,
+            slot: inserted as u8,
             item_entry,
             count,
             quest_only,
@@ -513,9 +511,9 @@ fn insert_corpse_rows(
             withheld: false,
             random_property_id,
         });
-        dropped = true;
+        inserted += 1;
     }
-    dropped
+    inserted != 0
 }
 
 /// Roll a creature's loot table into `game_corpse_loot` rows on its corpse; returns whether anything

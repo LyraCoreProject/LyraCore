@@ -14,11 +14,9 @@ use std::collections::HashSet;
 
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
-use crate::game_corpse_loot;
 use crate::game_gameobject_loot; // CHEST data-driven loot table (work-item 210)
 use crate::game_player_skill; // GATHER skill-gate reads the gather skill row (accessor trait)
 use crate::game_world_entity;
-use crate::loot::CorpseLoot;
 use crate::nav::game_nav_chunk; // arm_pool's map-fence — neither is wildcard-exported at the crate root
 use crate::terrain::game_terrain_chunk;
 
@@ -796,42 +794,11 @@ pub(crate) fn apply_use_gameobject(
             } else {
                 Vec::new()
             };
-            let winners = crate::loot::roll_loot_rows_quest_aware(ctx, raw);
-            if winners.is_empty() {
-                if tmpl.data0 != 0 {
-                    ctx.db.game_corpse_loot().insert(CorpseLoot {
-                        id: 0,
-                        corpse_guid: go.guid,
-                        slot: 0,
-                        item_entry: tmpl.data0,
-                        count: 1,
-                        quest_only: false,
-                        reserved_for: 0,
-                        // GO/chest loot is never group-loot-gated (work-item 187 scoped to creature
-                        // corpses) — always the FFA defaults.
-                        designated_looter_guid: 0,
-                        master_only: false,
-                        withheld: false,
-                        random_property_id: crate::items::select_loot_property(ctx, tmpl.data0)?,
-                    });
-                }
-            } else {
-                for (slot, (item_entry, count, quest_only)) in winners.into_iter().enumerate() {
-                    ctx.db.game_corpse_loot().insert(CorpseLoot {
-                        id: 0,
-                        corpse_guid: go.guid,
-                        slot: slot as u8,
-                        item_entry,
-                        count,
-                        quest_only,
-                        reserved_for: 0,
-                        designated_looter_guid: 0,
-                        master_only: false,
-                        withheld: false,
-                        random_property_id: crate::items::select_loot_property(ctx, item_entry)?,
-                    });
-                }
+            let mut winners = crate::loot::roll_loot_rows_quest_aware(ctx, raw);
+            if winners.is_empty() && tmpl.data0 != 0 {
+                winners.push((tmpl.data0, 1, false));
             }
+            crate::loot::insert_corpse_rows(ctx, go.guid, winners);
             go.state = 1;
             ctx.db.game_gameobject().guid().update(go);
         }

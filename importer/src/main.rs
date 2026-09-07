@@ -3866,9 +3866,13 @@ fn build_dump_plan(
     //    the `import_creature_spawns` reducer (step 6), which clears every CREATURE entity + spawn
     //    and loads the new spawns with a valid `ctx.timestamp`.
     let mut stmts: Vec<String> = Vec::new();
-    if family_active(args, "items") {
-        stmts.extend(item_property::dump_sql(dump, args.dbc.as_deref())?);
-    }
+    let property_row_count = if family_active(args, "items") {
+        let (property_sql, row_count) = item_property::dump_sql(dump, args.dbc.as_deref())?;
+        stmts.extend(property_sql);
+        row_count
+    } else {
+        0
+    };
     push_world_content_statements(args, content, &mut stmts);
     push_quest_and_gameobject_statements(args, content, &mut stmts);
     push_creature_behaviour_statements(args, content, &mut stmts);
@@ -3889,7 +3893,13 @@ fn build_dump_plan(
         .map(|c| c.join(";"))
         .collect();
 
-    let stamps = family_stamps(args, content, globals_row_count, spellmeta_row_count);
+    let stamps = family_stamps(
+        args,
+        content,
+        property_row_count,
+        globals_row_count,
+        spellmeta_row_count,
+    );
 
     let eventai_definition_count = eventai.definition_count();
     let eventai_instruction_count = eventai.instruction_count();
@@ -5373,6 +5383,7 @@ fn push_global_statements(args: &Args, dump: &str, stmts: &mut Vec<String>) -> R
 fn family_stamps(
     args: &Args,
     content: MappedContent,
+    property_row_count: u64,
     globals_row_count: u64,
     spellmeta_row_count: u64,
 ) -> Vec<(&'static str, u64)> {
@@ -5401,7 +5412,7 @@ fn family_stamps(
         stamps.push(("creatures", templates.len() as u64));
     }
     if family_active(args, "items") {
-        stamps.push(("items", item_rows.len() as u64));
+        stamps.push(("items", item_rows.len() as u64 + property_row_count));
     }
     if family_active(args, "loot") {
         stamps.push((

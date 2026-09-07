@@ -171,7 +171,7 @@ fn spell_effects(slot: u8, spell: &EquipSpell) -> Result<Vec<Effect>> {
     Ok(mapped)
 }
 
-pub(crate) fn catalogue_sql(chain: &mut PatchChain) -> Result<(Vec<String>, BTreeSet<u32>)> {
+pub(crate) fn catalogue_sql(chain: &mut PatchChain) -> Result<(Vec<String>, BTreeSet<u32>, u64)> {
     let properties: ItemRandomProperties = dbc::read_table(chain)?;
     let enchantments: SpellItemEnchantment = dbc::read_table(chain)?;
     let spells = read_equip_spells(&chain.read_file("DBFilesClient\\Spell.dbc")?)?;
@@ -182,7 +182,7 @@ fn catalogue_rows_sql(
     properties: &ItemRandomProperties,
     enchantments: &SpellItemEnchantment,
     spells: &[EquipSpell],
-) -> Result<(Vec<String>, BTreeSet<u32>)> {
+) -> Result<(Vec<String>, BTreeSet<u32>, u64)> {
     for (name, count) in [
         ("ItemRandomProperties.dbc", properties.rows().len()),
         ("SpellItemEnchantment.dbc", enchantments.rows().len()),
@@ -304,6 +304,7 @@ fn catalogue_rows_sql(
         )?;
     }
     eprintln!("Random Properties: {} properties, {} normalized enchantment effects, including two authored compatibility entries", property_rows.len(), enchant_rows.len());
+    let row_count = (property_rows.len() + enchant_rows.len()) as u64;
     let ids = property_rows.keys().copied().collect();
     let mut sql = vec![
         "DELETE FROM game_item_random_property WHERE property_id > 0".into(),
@@ -321,7 +322,7 @@ fn catalogue_rows_sql(
         "id,enchant_id,effect_index,kind,amount,spell_id,school_mask",
         &enchant_rows.into_values().collect::<Vec<_>>(),
     );
-    Ok((sql, ids))
+    Ok((sql, ids, row_count))
 }
 
 fn insert_effect(rows: &mut BTreeMap<u64, String>, enchant_id: u32, effect: Effect) -> Result<()> {
@@ -378,7 +379,7 @@ pub(crate) fn template_pool(row: &[String]) -> Result<u32> {
         })
 }
 
-pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<String>> {
+pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<(Vec<String>, u64)> {
     let raw = parse_table(dump, "item_enchantment_template");
     let required: BTreeSet<u32> = parse_table(dump, "item_template")
         .iter()
@@ -388,13 +389,13 @@ pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<String>>
         .filter(|id| *id != 0)
         .collect();
     if raw.is_empty() && required.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
     let dir = dbc_dir.context(
         "Random Properties require --dbc to check pool and enchantment references before apply",
     )?;
     let mut chain = dbc::open_chain(std::path::Path::new(dir))?;
-    let (mut sql, properties) = catalogue_sql(&mut chain)?;
+    let (mut sql, properties, catalogue_row_count) = catalogue_sql(&mut chain)?;
     let mut rows = BTreeMap::new();
     let mut pools = BTreeSet::new();
     for row in raw {
@@ -423,6 +424,7 @@ pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<String>>
         rows.len(),
         pools.len()
     );
+    let row_count = catalogue_row_count + rows.len() as u64;
     sql.push("DELETE FROM game_item_property_weight WHERE id > 0".into());
     push_insert(
         &mut sql,
@@ -430,7 +432,7 @@ pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<String>>
         "id,pool_id,property_id,weight",
         &rows.into_values().collect::<Vec<_>>(),
     );
-    Ok(sql)
+    Ok((sql, row_count))
 }
 
 #[cfg(test)]
@@ -527,9 +529,14 @@ mod tests {
     #[test]
     fn catalogue_keeps_all_effect_slots_unknowns_and_compatibility_amounts() {
         let (properties, enchantments, spells) = catalogues();
-        let (sql, ids) = catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
+        let (sql, ids, row_count) =
+            catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
         let sql = sql.join("\n");
         assert_eq!(ids, BTreeSet::from([509_0001]));
+        assert_eq!(
+            row_count, 6,
+            "one property, three effects, two compatibility effects"
+        );
         for row in [
             "(5090001,5090002,0,0,'of the Fixture')",
             "(1303040512,5090002,0,3,7,0,0)",
@@ -543,11 +550,20 @@ mod tests {
     }
 
     #[test]
+    fn catalogue_row_count_does_not_parse_punctuation_in_suffixes() {
+        let (mut properties, enchantments, spells) = catalogues();
+        properties.rows[0].suffix.en_gb = "of the 'Fixture'),(another);".to_owned();
+        let (_, _, row_count) = catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
+        assert_eq!(row_count, 6);
+        assert_eq!(dump_sql("", None).unwrap(), (Vec::new(), 0));
+    }
+
+    #[test]
     fn absent_linked_spells_retain_the_source_reference_as_unknown() {
         let (properties, mut enchantments, spells) = catalogues();
         enchantments.rows[0].enchantment_type = [1, 3, 0];
         enchantments.rows[0].effect_arg = [509_0098, 509_0099, 0];
-        let (sql, _) = catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
+        let (sql, _, _) = catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
         let sql = sql.join("\n");
         assert!(sql.contains("(1303040512,5090002,0,0,7,5090098,0)"));
         assert!(sql.contains("(1303040576,5090002,64,0,9,5090099,0)"));

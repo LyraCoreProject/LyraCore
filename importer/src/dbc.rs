@@ -204,7 +204,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let (cbi_stmts, cbi_count) = char_base_info_sql(&mut chain)?;
     let (race_stmts, race_count) = race_info_sql(&races);
     let (si_stmts, si_count) = start_item_sql(&mut chain)?;
-    let (property_stmts, _) = crate::item_property::catalogue_sql(&mut chain)?;
+    let (property_stmts, _, _) = crate::item_property::catalogue_sql(&mut chain)?;
 
     // Areas / area triggers / graveyards (work-item 209): AreaTable.dbc → game_area, AreaTrigger.dbc
     // → game_area_trigger, WorldSafeLocs.dbc → game_graveyard. All small tables — load ALL rows (no
