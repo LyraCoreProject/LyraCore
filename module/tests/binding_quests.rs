@@ -247,6 +247,21 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
         let slot = inventory[0]["slot"].clone();
 
         node.assert_sql(&format!(
+            "UPDATE game_gameobject_template SET data1 = 2 WHERE entry = {FOCUS}"
+        ));
+        assert_refused(&node, "debug_use_item", &[PLAYER, &slot]);
+        assert!(summoned(&node, creature).is_empty());
+        assert_eq!(
+            node.query_rows(&format!(
+                "SELECT * FROM game_item_instance WHERE entry = {item}"
+            )),
+            inventory
+        );
+        node.assert_sql(&format!(
+            "UPDATE game_gameobject_template SET data1 = 10 WHERE entry = {FOCUS}"
+        ));
+
+        node.assert_sql(&format!(
             "UPDATE game_gameobject SET instance_id = 99 WHERE guid = {focus_guid}"
         ));
         assert_refused(&node, "debug_use_item", &[PLAYER, &slot]);

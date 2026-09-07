@@ -526,12 +526,8 @@ pub(crate) fn apply_item_use(
             "only mana users can use that",
         ));
     }
-    // Consume one unit FIRST — UNLESS the on-use spell is one of the permanent kinds (a recall trinket,
-    // a mount): `spell_keeps_item` is the data-driven exception to "using an item consumes it", keyed on
-    // the spell's effect kind, not a hardcoded item entry. Every other on-use spell consumes: the cast is
-    // the effect, and a failed cast still consumed the item, matching vanilla — a fizzled potion is gone.
-    // A REFUSED mount consumes nothing either way: the riding/combat/indoor/liquid gates all live in the
-    // cast core's read-only pre-spend sweep, and this branch never touched the stack to begin with.
+    // Reusable spells keep the item. Other casts consume one unit on admission;
+    // a Refusal from begin_cast rolls back this inventory change with the Durable Request.
     if !spell_keeps_item(ctx, spell_id) {
         if inst.stack_count > 1 {
             inst.stack_count -= 1;
