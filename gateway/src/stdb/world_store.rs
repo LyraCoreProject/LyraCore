@@ -492,6 +492,10 @@ impl WorldStore for Coordinator {
         self.effective_armor(guid)
     }
 
+    fn effective_magic_resistances(&self, guid: u64) -> [u32; 6] {
+        self.effective_magic_resistances(guid)
+    }
+
     fn pending_system_messages(&self, self_guid: u64) -> Vec<String> {
         self.system_messages_for(self_guid)
     }

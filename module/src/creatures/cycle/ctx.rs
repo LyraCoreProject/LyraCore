@@ -544,7 +544,14 @@ impl RegenSink for CtxWorld<'_> {
             .game_world_entity()
             .guid()
             .find(u.guid)
-            .map_or(u.health, |e| crate::combat::regen_entity_health(&e))
+            .map_or(u.health, |e| {
+                let health_per_five = crate::items::equipped_stat_bonus(
+                    self.ctx,
+                    e.guid,
+                    crate::items::EquipStat::HealthPerFive,
+                );
+                crate::combat::regen_entity_health(&e, health_per_five)
+            })
     }
     fn combat_healed_to(&self, u: &Recovering) -> Option<u32> {
         let pct = u32::try_from(crate::spell::combat_health_regen_pct(self.ctx, u.guid))
@@ -567,7 +574,12 @@ impl RegenSink for CtxWorld<'_> {
             .guid()
             .find(u.guid)
             .map_or(u.power, |e| {
-                crate::combat::regen_entity_power(&e, u.in_combat, now_ms)
+                let mana_per_five = crate::items::equipped_stat_bonus(
+                    self.ctx,
+                    e.guid,
+                    crate::items::EquipStat::ManaPerFive,
+                );
+                crate::combat::regen_entity_power(&e, u.in_combat, now_ms, mana_per_five)
             })
     }
     // ponytail: one row write per unit, where the old pass wrote health and power in two separate

@@ -101,6 +101,17 @@ pub(crate) fn select_loot_property(ctx: &ReducerContext, entry: u32) -> Result<u
 }
 
 pub(crate) fn enchant_stat(ctx: &ReducerContext, enchant_id: u32, stat_kind: u8) -> i32 {
+    enchant_stat_for_school(ctx, enchant_id, stat_kind, u32::MAX)
+}
+
+/// Sum one Stat Kind from an enchantment when its school applies to the requested spell. A zero
+/// `school_mask` is universal. Imported school-specific spell power carries its exact school bits.
+pub(crate) fn enchant_stat_for_school(
+    ctx: &ReducerContext,
+    enchant_id: u32,
+    stat_kind: u8,
+    school_mask: u32,
+) -> i32 {
     if enchant_id == 0 {
         return 0;
     }
@@ -108,11 +119,24 @@ pub(crate) fn enchant_stat(ctx: &ReducerContext, enchant_id: u32, stat_kind: u8)
         .game_item_enchantment()
         .by_enchant()
         .filter(enchant_id)
-        .filter(|row| row.kind != kind::UNKNOWN && row.kind == stat_kind)
+        .filter(|row| {
+            row.kind != kind::UNKNOWN
+                && row.kind == stat_kind
+                && (row.school_mask == 0 || row.school_mask & school_mask != 0)
+        })
         .fold(0i32, |sum, row| sum.saturating_add(row.amount))
 }
 
 pub(crate) fn property_stat(ctx: &ReducerContext, property_id: u32, stat_kind: u8) -> i32 {
+    property_stat_for_school(ctx, property_id, stat_kind, u32::MAX)
+}
+
+pub(crate) fn property_stat_for_school(
+    ctx: &ReducerContext,
+    property_id: u32,
+    stat_kind: u8,
+    school_mask: u32,
+) -> i32 {
     if property_id == 0 {
         return 0;
     }
@@ -130,7 +154,7 @@ pub(crate) fn property_stat(ctx: &ReducerContext, property_id: u32, stat_kind: u
         property.enchant_id_3,
     ]
     .into_iter()
-    .map(|id| enchant_stat(ctx, id, stat_kind))
+    .map(|id| enchant_stat_for_school(ctx, id, stat_kind, school_mask))
     .fold(0i32, i32::saturating_add)
 }
 
@@ -152,9 +176,26 @@ impl EquipStat {
             Self::Stamina => kind::STAMINA,
             Self::Intellect => kind::INTELLECT,
             Self::Spirit => kind::SPIRIT,
+            Self::Health => kind::HEALTH,
+            Self::Mana => kind::MANA,
+            Self::HolyResistance => kind::HOLY_RESISTANCE,
+            Self::FireResistance => kind::FIRE_RESISTANCE,
+            Self::NatureResistance => kind::NATURE_RESISTANCE,
+            Self::FrostResistance => kind::FROST_RESISTANCE,
+            Self::ShadowResistance => kind::SHADOW_RESISTANCE,
+            Self::ArcaneResistance => kind::ARCANE_RESISTANCE,
             Self::Crit => kind::CRIT,
             Self::Hit => kind::HIT,
             Self::Armor => kind::ARMOR,
+            Self::WeaponDamage => kind::WEAPON_DAMAGE,
+            Self::SpellPower => kind::SPELL_POWER,
+            Self::HealingPower => kind::HEALING_POWER,
+            Self::ManaPerFive => kind::MANA_PER_FIVE,
+            Self::HealthPerFive => kind::HEALTH_PER_FIVE,
+            Self::Defense => kind::DEFENSE,
+            Self::Dodge => kind::DODGE,
+            Self::Parry => kind::PARRY,
+            Self::Block => kind::BLOCK,
         }
     }
 }

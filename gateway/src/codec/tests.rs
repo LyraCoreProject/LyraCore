@@ -231,13 +231,13 @@ fn health_values_update_is_health_only_no_object_type() {
 
 #[test]
 fn resistance_values_is_unit_only_no_object_type() {
-    // Live armor (Demon Skin / gear): the EFFECTIVE-armor relay must be a Unit VALUES mask carrying ONLY
-    // UNIT_FIELD_RESISTANCES[0] (descriptor index 155 → bit 27 of mask block 4 → word 0x08000000), never
+    // Live armor and magic resistance must use a Unit VALUES mask carrying only
+    // UNIT_FIELD_RESISTANCES[0..=6], never
     // re-sending OBJECT_FIELD_TYPE (bit 2, value 0x09 = OBJECT|UNIT) whose re-send strips the PLAYER bit
     // → 5875 null+0x110 crash. Same dirty_reset discipline as build_health_values.
     let guid = (0xF130u64 << 48) | (620u64 << 24) | 1;
-    let armor = 0x1234u32; // 4660 — a recognizable LE pattern distinct from any mask word
-    let msg = build_resistance_values(guid, armor);
+    let resistances = [0x1234u32, 1, 2, 3, 4, 5, 6];
+    let msg = build_resistance_values(guid, resistances);
     match &msg.objects[0] {
         Object::Values { guid1, mask1 } => {
             assert_eq!(guid1.guid(), guid);
@@ -250,23 +250,28 @@ fn resistance_values_is_unit_only_no_object_type() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    // The update mask is the LAST thing written: block_count=5 (descriptor 155 lives in block 4), then 5
-    // mask words (only block 4 set = 0x08000000 = bit 27), then the armor value LE. A leaked
+    // The update mask is the last thing written: descriptors 155..=161 span blocks 4 and 5. A leaked
     // OBJECT_FIELD_TYPE would set bit 2 in block 0 and add a 0x09 value word ahead of the armor word, so
     // this exact-tail assertion fails in that case (guarding the crash regression).
     assert!(
         buf.ends_with(&[
-            0x05, // block_count = 5 (the mask spans blocks 0..=4)
+            0x06, // block_count = 6 (the mask spans blocks 0..=5)
             0, 0, 0, 0, // block 0 (NO OBJECT_FIELD_TYPE bit 2)
             0, 0, 0, 0, // block 1
             0, 0, 0, 0, // block 2
             0, 0, 0, 0, // block 3
-            0x00, 0x00, 0x00,
-            0x08, // block 4 = bit 27 only (descriptor 155 = UNIT_FIELD_RESISTANCES[0])
+            0x00, 0x00, 0x00, 0xf8, // block 4 = descriptors 155..=159
+            0x03, 0x00, 0x00, 0x00, // block 5 = descriptors 160..=161
             0x34, 0x12, 0x00, 0x00, // armor value 0x1234 LE
+            1, 0, 0, 0, // holy
+            2, 0, 0, 0, // fire
+            3, 0, 0, 0, // nature
+            4, 0, 0, 0, // frost
+            5, 0, 0, 0, // shadow
+            6, 0, 0, 0, // arcane
         ]),
-        "resistance VALUES must carry only index 155 (no OBJECT_FIELD_TYPE); tail was {:02x?}",
-        &buf[buf.len().saturating_sub(28)..]
+        "resistance VALUES must carry only indices 155..=161; tail was {:02x?}",
+        &buf[buf.len().saturating_sub(56)..]
     );
     // Belt-and-suspenders: the OBJECT_FIELD_TYPE value word (0x09 = OBJECT|UNIT) must be absent anywhere.
     let contains = |needle: &[u8]| buf.windows(needle.len()).any(|w| w == needle);
@@ -1098,7 +1103,9 @@ fn warrior_create_carries_skills_and_serializes() {
     // without Fury the client throws SpellBookFrame.lua:342 "invalid spell slot". The existing
     // CREATE tests only pattern-match, so SERIALIZE here to actually run the writer over the new
     // PLAYER_SKILL_INFO words (a malformed skill mask would otherwise slip past the suite).
-    let msg = build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[]).unwrap();
+    let mut entity = warrior_entity();
+    entity.magic_resistances = [1, 2, 3, 4, 5, 6];
+    let msg = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert!(!buf.is_empty());
@@ -1123,6 +1130,12 @@ fn warrior_create_carries_skills_and_serializes() {
             // EFFECTIVE armor (UNIT_FIELD_RESISTANCES[0]) is read from `entity.effective_armor` (base +
             // worn gear, folded at the self-login call site; the fixture has no gear → effective == base).
             assert_eq!(p.unit_normal_resistance(), Some(e.effective_armor as i32));
+            assert_eq!(p.unit_holy_resistance(), Some(1));
+            assert_eq!(p.unit_fire_resistance(), Some(2));
+            assert_eq!(p.unit_nature_resistance(), Some(3));
+            assert_eq!(p.unit_frost_resistance(), Some(4));
+            assert_eq!(p.unit_shadow_resistance(), Some(5));
+            assert_eq!(p.unit_arcane_resistance(), Some(6));
         }
         other => panic!("expected a Player CreateObject2, got {other:?}"),
     }

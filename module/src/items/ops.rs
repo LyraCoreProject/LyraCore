@@ -9,7 +9,7 @@ use spacetimedb::{Identity, ReducerContext, Table};
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
 
-use super::{enchant_stat, property_stat, refuse, select_property};
+use super::{refuse, select_property};
 use crate::game_character; // the durable char holds `class` (the live WorldEntity does not)
 use crate::game_corpse_loot; // the loot.rs accessor trait — re-exported at crate root (`pub use loot::*`)
 use crate::game_gameobject;
@@ -582,15 +582,50 @@ pub(crate) fn apply_item_use(
     .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail))
 }
 
-/// The total `which` bonus from every piece of gear `owner_guid` has EQUIPPED — the sum of
-/// `template_stat(.., which)` over the owner's item instances in the equipment region (slots 0..=18),
-/// each joined to its `game_item_template`. The gear twin of the spell module's `stat_bonus`/`combat_field_bonus`
-/// (which sum the matching auras): the combat module folds THIS alongside those aura sums into the same
-/// effective-* helper, so equipping a +stat piece is mechanically real (it moves the swing/dodge/
-/// mitigation/crit/hit readout) without any new readback. A CREATURE (or an unequipped player) has no
-/// equipped item rows → the sum is 0, so its readout is byte-identical to before (baseline-safe). An item
-/// whose template isn't loaded contributes 0 (a missing join never poisons the sum). [entity]
-pub(crate) fn equipped_stat_bonus(ctx: &ReducerContext, owner_guid: u64, which: EquipStat) -> i32 {
+/// One item's template, applied enchantment, and Random Property contribution to a Stat Kind.
+fn item_stat_bonus_for_school(
+    ctx: &ReducerContext,
+    item: &ItemInstance,
+    tmpl: &ItemTemplate,
+    which: EquipStat,
+    school_mask: u32,
+) -> i32 {
+    let (enchant, property) = if school_mask == u32::MAX {
+        (
+            super::enchant_stat(ctx, item.enchant_id, which.kind()),
+            super::property_stat(ctx, item.random_property_id, which.kind()),
+        )
+    } else {
+        (
+            super::enchant_stat_for_school(ctx, item.enchant_id, which.kind(), school_mask),
+            super::property_stat_for_school(
+                ctx,
+                item.random_property_id,
+                which.kind(),
+                school_mask,
+            ),
+        )
+    };
+    template_stat(tmpl, which)
+        .saturating_add(enchant)
+        .saturating_add(property)
+}
+
+pub(crate) fn item_stat_bonus(
+    ctx: &ReducerContext,
+    item: &ItemInstance,
+    tmpl: &ItemTemplate,
+    which: EquipStat,
+) -> i32 {
+    item_stat_bonus_for_school(ctx, item, tmpl, which, u32::MAX)
+}
+
+fn equipped_stat_bonus_for_school(
+    ctx: &ReducerContext,
+    owner_guid: u64,
+    which: EquipStat,
+    school_mask: u32,
+) -> i32 {
     let templates = ctx.db.game_item_template();
     ctx.db
         .game_item_instance()
@@ -606,13 +641,30 @@ pub(crate) fn equipped_stat_bonus(ctx: &ReducerContext, owner_guid: u64, which: 
             // the 13). `enchant_stat` is 0 for an unenchanted item (enchant_id 0) → byte-identical readout
             // for every existing/unenchanted piece (baseline-safe). A broken item already returned above, so
             // a broken-but-enchanted piece grants neither — the enchant rides the item's working state.
-            Some(
-                template_stat(&tmpl, which)
-                    .saturating_add(enchant_stat(ctx, i.enchant_id, which.kind()))
-                    .saturating_add(property_stat(ctx, i.random_property_id, which.kind())),
-            )
+            Some(item_stat_bonus_for_school(
+                ctx,
+                &i,
+                &tmpl,
+                which,
+                school_mask,
+            ))
         })
         .fold(0i32, i32::saturating_add)
+}
+
+/// Sum one Stat Kind across working items in the equipment region.
+pub(crate) fn equipped_stat_bonus(ctx: &ReducerContext, owner_guid: u64, which: EquipStat) -> i32 {
+    equipped_stat_bonus_for_school(ctx, owner_guid, which, u32::MAX)
+}
+
+/// The school-filtered form used by spell power. Effects with a zero school mask apply to every school.
+pub(crate) fn equipped_school_stat_bonus(
+    ctx: &ReducerContext,
+    owner_guid: u64,
+    which: EquipStat,
+    school_mask: u8,
+) -> i32 {
+    equipped_stat_bonus_for_school(ctx, owner_guid, which, u32::from(school_mask))
 }
 
 /// The pure per-item durability-loss formula `apply_death_durability_loss` applies to each equipped

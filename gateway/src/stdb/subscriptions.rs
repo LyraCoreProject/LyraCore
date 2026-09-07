@@ -1449,35 +1449,25 @@ pub(crate) fn aura_sync(
     let (opcode, body) = codec::build_values_update_raw(target_guid, &mask);
     Outbound::Raw { opcode, body }
 }
-// Live ARMOR on the character sheet (the operator's Demon Skin bug): a player's own
-// `A_MOD_RESISTANCE(armor)` aura applying or expiring must push `UNIT_FIELD_RESISTANCES[0]` — the
-// module keeps `e.armor` at BASE (combat folds the effective value on demand), so the sheet never
-// moves without this relay. Recompute the EFFECTIVE armor from this connection's CURRENT cache
-// (base + armor auras + gear — `effective_armor` reads the post-change set, so apply AND expire
-// both land the right value, exactly like `run_speed_packet`). Returns `None` unless `changed` is a
-// self armor aura, so ordinary buffs/debuffs don't spam the opcode. Self-scoped: the sheet shows
-// only your own armor, so no peer relay is needed.
+// A self resistance aura applies or expires after the entity CREATE. Recompute all seven effective
+// resistances from the coordinator's post-change cache and push the complete paperdoll group.
 pub(crate) fn armor_packet(
     coord: &Coordinator,
     changed: &Aura,
     self_guid: u64,
 ) -> Option<Outbound> {
     const A_MOD_RESISTANCE: u8 = 0xA1; // taxonomy A_MOD_RESISTANCE
-    const RESIST_ARMOR_MASK: u32 = 0x01; // taxonomy RESIST_ARMOR bit (eff_p0 is a school MASK)
+    const RESISTANCE_MASK: u32 = 0x7f;
     if changed.target_guid != self_guid
         || changed.eff_kind != A_MOD_RESISTANCE
-        || (changed.eff_p0 as u32 & RESIST_ARMOR_MASK) == 0
+        || (changed.eff_p0 as u32 & RESISTANCE_MASK) == 0
     {
         return None;
     }
-    // The entity row (the BASE armor term) lives only on the coordinator now — the
-    // per-player connection no longer subscribes `game_world_entity` at all. The
-    // coordinator's cache also carries the auras, the item instances and the item
-    // templates, so this fold is complete there in a way it never was on the player
-    // connection (which lost `game_item_template` to the connection reclaim).
+    // The coordinator owns the entity, aura, item-instance and item-catalogue caches needed by this fold.
     let guard = coord.0.coord();
     let db = &guard.conn.db;
-    let eff = super::armor::effective_armor(db, self_guid);
+    let eff = super::armor::effective_resistances(db, self_guid);
     // Carry the positive AURA portion alongside the total so the paperdoll renders the
     // green "(+N)" (Devotion Aura showed as plain white armor). Raw path — the positive
     // field has no gtker setter. Login self-corrects through this same relay (the SDK
@@ -3333,9 +3323,9 @@ fn append_final_item_slots(
 }
 
 fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<Outbound>) {
-    let armor = super::armor::effective_armor(db, self_guid);
+    let resistances = super::armor::effective_resistances(db, self_guid);
     out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-        Box::new(codec::build_resistance_values(self_guid, armor)),
+        Box::new(codec::build_resistance_values(self_guid, resistances)),
     )));
     if let Some(stats) = super::armor::sheet_stats(db, self_guid) {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
@@ -3520,7 +3510,7 @@ impl Coordinator {
         {
             let guard = self.0.coord();
             let db = &guard.conn.db;
-            let eff = super::armor::effective_armor(db, self_guid);
+            let eff = super::armor::effective_resistances(db, self_guid);
             let pos = super::armor::aura_armor_positive(db, self_guid);
             let sheet = super::armor::sheet_stats(db, self_guid);
             drop(guard);

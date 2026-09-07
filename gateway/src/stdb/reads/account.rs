@@ -196,6 +196,11 @@ impl Coordinator {
         super::super::armor::effective_armor(&guard.conn.db, guid)
     }
 
+    pub fn effective_magic_resistances(&self, guid: u64) -> [u32; 6] {
+        let guard = self.0.coord();
+        super::super::armor::effective_magic_resistances(&guard.conn.db, guid)
+    }
+
     /// The live entity's `max_health` from the privileged cache — 0 if not in world. Feeds the
     /// fall-damage flavor line; the module applies the authoritative damage itself.
     pub fn entity_max_health(&self, guid: u64) -> u32 {

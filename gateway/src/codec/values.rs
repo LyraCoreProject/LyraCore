@@ -303,24 +303,18 @@ pub fn build_max_vitals_values(
     })
 }
 
-/// Build a VALUES partial-update carrying `UNIT_FIELD_RESISTANCES[0]` — the "Armor" slot (descriptor
-/// index 155, read by the paperdoll via `UnitArmor`) — so the character sheet's Armor readout moves LIVE
-/// when an `A_MOD_RESISTANCE(armor)` aura applies/expires (e.g. Demon Skin) or armor gear is
-/// equipped/unequipped. `armor` is the gateway-computed EFFECTIVE armor (base + armor auras + gear; see
-/// `stdb::armor::effective_armor`), which equals the module's combat `effective_armor` — so the sheet
-/// shows exactly what physical mitigation uses. UNIT mask (armor is a UNIT field, like max-vitals) + the
-/// same `dirty_reset` discipline as `build_health_values` so the wire carries ONLY index 155 and never
-/// re-sends OBJECT_FIELD_TYPE (the 5875 null+0x110 crash trap).
-/// Build a VALUES partial-update carrying armor WITH its green "(+N)" split:
-/// `UNIT_FIELD_RESISTANCES[0]` = the effective TOTAL and `PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE[0]`
-/// (index 1187, PLAYER block) = the positive AURA portion the paperdoll colors green.
-/// TWO wrong guesses preceded this (live-found white armor both rounds): the buff-mods fields are
-/// NOT unit fields in 1.12 — unit-space 162 is UNIT_FIELD_BASE_MANA — they live in the PLAYER
-/// block, where gtker HAS a typed int setter. Player mask (self-only push; only your own sheet
-/// reads it), same dirty_reset discipline as every partial VALUES.
-pub fn build_armor_values(guid: u64, total: u32, pos_buff: u32) -> SMSG_UPDATE_OBJECT {
+/// Build a self-only VALUES update for all seven effective resistances. Armor also carries its positive
+/// aura split in `PLAYER_FIELD_RESISTANCEBUFFMODSPOSITIVE[0]` so the paperdoll colors that term green.
+/// This uses the same `dirty_reset` path as every partial VALUES update.
+pub fn build_armor_values(guid: u64, total: [u32; 7], pos_buff: u32) -> SMSG_UPDATE_OBJECT {
     player_values(guid, |p| {
-        p.set_unit_normal_resistance(total as i32);
+        p.set_unit_normal_resistance(total[0] as i32);
+        p.set_unit_holy_resistance(total[1] as i32);
+        p.set_unit_fire_resistance(total[2] as i32);
+        p.set_unit_nature_resistance(total[3] as i32);
+        p.set_unit_frost_resistance(total[4] as i32);
+        p.set_unit_shadow_resistance(total[5] as i32);
+        p.set_unit_arcane_resistance(total[6] as i32);
         p.set_player_field_resistancebuffmodspositive(pos_buff as i32);
     })
 }
@@ -396,9 +390,15 @@ pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_
     })
 }
 
-pub fn build_resistance_values(guid: u64, armor: u32) -> SMSG_UPDATE_OBJECT {
+pub fn build_resistance_values(guid: u64, total: [u32; 7]) -> SMSG_UPDATE_OBJECT {
     unit_values(guid, |unit| {
-        unit.set_unit_normal_resistance(armor as i32);
+        unit.set_unit_normal_resistance(total[0] as i32);
+        unit.set_unit_holy_resistance(total[1] as i32);
+        unit.set_unit_fire_resistance(total[2] as i32);
+        unit.set_unit_nature_resistance(total[3] as i32);
+        unit.set_unit_frost_resistance(total[4] as i32);
+        unit.set_unit_shadow_resistance(total[5] as i32);
+        unit.set_unit_arcane_resistance(total[6] as i32);
     })
 }
 
@@ -640,8 +640,11 @@ mod lint_tests {
             ("power", build_power_values(g, 0, 55)),
             ("target", build_target_values(g, 0xF130_0000_0000_0001)),
             ("max_vitals", build_max_vitals_values(g, 100, 0, 200)),
-            ("armor", build_armor_values(g, 60, 20)),
-            ("resistance", build_resistance_values(g, 40)),
+            ("armor", build_armor_values(g, [60, 0, 0, 0, 0, 0, 0], 20)),
+            (
+                "resistance",
+                build_resistance_values(g, [40, 0, 0, 0, 0, 0, 0]),
+            ),
             ("coinage", build_coinage_values(g, 900)),
             ("ammo", build_player_ammo_id_values(g, 2512)),
             (

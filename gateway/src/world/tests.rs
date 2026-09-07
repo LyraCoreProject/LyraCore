@@ -4292,6 +4292,7 @@ fn warrior_entity() -> codec::EntityView {
         npc_flags: 0,        // a player is not an NPC
         owner_guid: 0,       // not a summon
         effective_armor: 40, // agility 20 * 2 (base; no gear in the fixture → effective == base)
+        magic_resistances: [0; 6],
         // No hearthstone bind recorded for the test entity; fall back to login position.
         home_map: 0,
         home_zone: 0,

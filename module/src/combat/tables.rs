@@ -291,7 +291,7 @@ pub fn apply_offhand_penalty(min: u32, max: u32) -> (u32, u32) {
 /// from the unit, which are semantically distinct) so the "base + aura + gear, floored at 0" shape lives
 /// in ONE place. Pure — unit-tested.
 pub(crate) fn effective_stat(base: i32, aura: i32, gear: i32) -> u32 {
-    (base + aura + gear).max(0) as u32
+    (i64::from(base) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(u32::MAX)) as u32
 }
 
 /// Apply a crit-rating bonus to the flat `CRIT_BP` base: `CRIT_BP + bonus`, clamped to `[0, 10000]`
@@ -546,21 +546,54 @@ pub fn regen_power(
     in_combat: bool,
     mana_paused: bool,
 ) -> u32 {
+    regen_power_with_flat(
+        power_type,
+        current,
+        max,
+        spirit,
+        level,
+        PowerRegenTick {
+            in_combat,
+            mana_paused,
+            mana_per_five: 0,
+        },
+    )
+}
+
+struct PowerRegenTick {
+    in_combat: bool,
+    mana_paused: bool,
+    mana_per_five: i32,
+}
+
+fn regen_power_with_flat(
+    power_type: u8,
+    current: u32,
+    max: u32,
+    spirit: u32,
+    level: u32,
+    tick: PowerRegenTick,
+) -> u32 {
     use lyracore_shared::packing::power_type as pt;
     if max == 0 {
         return current;
     }
     match power_type {
         pt::MANA => {
-            if mana_paused {
+            if tick.mana_paused {
                 current
             } else {
-                (current + mana_regen_per_tick(spirit, level)).min(max)
+                apply_regen(
+                    current,
+                    max,
+                    mana_regen_per_tick(spirit, level),
+                    tick.mana_per_five,
+                )
             }
         }
-        pt::ENERGY => (current + ENERGY_TICK).min(max),
+        pt::ENERGY => current.saturating_add(ENERGY_TICK).min(max),
         pt::RAGE => {
-            if in_combat {
+            if tick.in_combat {
                 current
             } else {
                 current.saturating_sub(RAGE_DECAY_PER_TICK)
@@ -576,10 +609,32 @@ pub fn regen_power(
 /// `max == 0` yields no change. A spirit-0 unit (every creature today) still heals `level + 1` per
 /// tick — a small, sane amount that keeps the prior "recovers a bit out of combat" behavior.
 pub fn regen_health(current: u32, max: u32, spirit: u32, level: u32) -> u32 {
+    regen_health_with_flat(current, max, spirit, level, 0)
+}
+
+fn regen_health_with_flat(
+    current: u32,
+    max: u32,
+    spirit: u32,
+    level: u32,
+    health_per_five: i32,
+) -> u32 {
     if max == 0 {
         return current;
     }
-    (current + health_regen_per_tick(spirit, level)).min(max)
+    apply_regen(
+        current,
+        max,
+        health_regen_per_tick(spirit, level),
+        health_per_five,
+    )
+}
+
+/// Add a points-per-five-seconds item contribution to this four-second regeneration tick.
+fn apply_regen(current: u32, max: u32, base_tick: u32, per_five: i32) -> u32 {
+    let flat_tick = i128::from(per_five) * 4 / 5;
+    let tick = (i128::from(base_tick) + flat_tick).clamp(0, i128::from(u32::MAX)) as u32;
+    current.saturating_add(tick).min(max)
 }
 
 /// Entity-aware POWER-regen wrapper: reads `spirit`/`level`/power bar off the row so the `tick_creatures`
@@ -587,25 +642,33 @@ pub fn regen_health(current: u32, max: u32, spirit: u32, level: u32) -> u32 {
 /// and FSR derivation live here, not inline in the tick). Power type is byte 3 of `unit_bytes_0`.
 /// FSR gate: mana regen is paused when `now_ms < e.mana_regen_paused_until_ms` (stamped on every
 /// mana-spend in the cast path). Returns the new power value (the caller writes it back only if it changed).
-pub fn regen_entity_power(e: &WorldEntity, in_combat: bool, now_ms: u64) -> u32 {
+pub fn regen_entity_power(
+    e: &WorldEntity,
+    in_combat: bool,
+    now_ms: u64,
+    mana_per_five: i32,
+) -> u32 {
     let power_type = (e.unit_bytes_0 >> 24) as u8;
     let mana_paused = now_ms < e.mana_regen_paused_until_ms;
-    regen_power(
+    regen_power_with_flat(
         power_type,
         e.power,
         e.max_power,
         e.spirit,
         e.level,
-        in_combat,
-        mana_paused,
+        PowerRegenTick {
+            in_combat,
+            mana_paused,
+            mana_per_five,
+        },
     )
 }
 
 /// Entity-aware HEALTH-regen wrapper: reads `spirit`/`level` off the row so the `tick_creatures` health
 /// pass passes ONE entity. Returns the new health value (the caller writes it back). Callers gate on
 /// `health < max_health && !in_combat` before calling, as before.
-pub fn regen_entity_health(e: &WorldEntity) -> u32 {
-    regen_health(e.health, e.max_health, e.spirit, e.level)
+pub fn regen_entity_health(e: &WorldEntity, health_per_five: i32) -> u32 {
+    regen_health_with_flat(e.health, e.max_health, e.spirit, e.level, health_per_five)
 }
 
 /// Per-tick PARTIAL health regen DURING COMBAT: `combat_regen_pct%` of the normal out-of-combat
@@ -1262,11 +1325,11 @@ mod tests {
             5_000,
         );
         // Strictly inside the window → paused, no regen.
-        assert_eq!(regen_entity_power(&mage, false, 4_999), 100);
+        assert_eq!(regen_entity_power(&mage, false, 4_999, 0), 100);
         // Straddling the boundary: `now_ms == paused_until_ms` is NOT `<`, so the window has just cleared.
-        assert_eq!(regen_entity_power(&mage, false, 5_000), 100 + 26);
+        assert_eq!(regen_entity_power(&mage, false, 5_000, 0), 100 + 26);
         // Past the window, mid-combat → still regens (the FSR gate, not combat state, controls mana).
-        assert_eq!(regen_entity_power(&mage, true, 6_000), 100 + 26);
+        assert_eq!(regen_entity_power(&mage, true, 6_000, 0), 100 + 26);
 
         // A rage (warrior) entity ignores the FSR field entirely — reads its own power-type byte.
         let warrior = entity_for_regen(
@@ -1279,14 +1342,34 @@ mod tests {
             10,
             0,
         );
-        assert_eq!(regen_entity_power(&warrior, false, 0), 1000 - 50); // out of combat → decays
-        assert_eq!(regen_entity_power(&warrior, true, 0), 1000); // in combat → holds
+        assert_eq!(regen_entity_power(&warrior, false, 0, 0), 1000 - 50); // out of combat → decays
+        assert_eq!(regen_entity_power(&warrior, true, 0, 0), 1000); // in combat → holds
     }
 
     #[test]
     fn regen_entity_health_wrapper_reads_spirit_and_level_off_the_row() {
         let e = entity_for_regen(0, 100, 1000, 0, 0, 30, 10, 0);
-        assert_eq!(regen_entity_health(&e), 100 + (30 + 10 + 1)); // spirit + level + 1 per tick
+        assert_eq!(regen_entity_health(&e, 0), 100 + (30 + 10 + 1)); // spirit + level + 1 per tick
+    }
+
+    #[test]
+    fn points_per_five_are_converted_to_the_four_second_regen_tick() {
+        use lyracore_shared::packing::{power_type, unit_bytes_0};
+
+        let mage = entity_for_regen(
+            unit_bytes_0(1, 8, 0, power_type::MANA),
+            100,
+            1000,
+            100,
+            1000,
+            40,
+            10,
+            0,
+        );
+        assert_eq!(regen_entity_power(&mage, false, 0, 10), 134);
+        assert_eq!(regen_entity_health(&mage, 15), 163);
+        assert_eq!(regen_entity_power(&mage, false, 0, -40), 100);
+        assert_eq!(regen_entity_health(&mage, -100), 100);
     }
 
     #[test]

@@ -263,16 +263,8 @@ pub fn meets_required_level(player_level: u32, required_level: u8) -> bool {
     player_level >= required_level as u32
 }
 
-/// Which equip-stat an `equipped_stat_bonus` query sums across a unit's worn gear. A small typed enum
-/// (vs. raw stat ids) so the call site reads self-documentingly and the column pick is exhaustive-checked
-/// by the compiler. The five base attributes mirror the `UNIT_FIELD_STAT` order / the spell module's `STAT_*`; the
-/// combat ratings (`Crit`/`Hit`) mirror the `COMBAT_*` attack-table fields; `Armor` mirrors the
-/// `A_MOD_RESISTANCE(armor)` school. The variants compose with the aura sums in combat/ — each gear
-/// total is added ALONGSIDE the matching aura total into the same effective-* helper. `Stamina` and
-/// `Intellect` feed `recompute_vitals`'s max-health/max-mana derivation; `Spirit` is summable but not
-/// folded into any pool (no Spirit-driven derive exists yet), so it's kept for symmetry with the other
-/// four base attributes — hence `#[allow(dead_code)]` on the otherwise-unconstructed variant. [reference]
-#[allow(dead_code)]
+/// A Stat Kind summed across a unit's working equipped items. The typed projection keeps callers from
+/// passing raw imported codes and makes every supported family explicit. [reference]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum EquipStat {
     Strength,
@@ -280,9 +272,41 @@ pub(crate) enum EquipStat {
     Stamina,
     Intellect,
     Spirit,
+    Health,
+    Mana,
+    HolyResistance,
+    FireResistance,
+    NatureResistance,
+    FrostResistance,
+    ShadowResistance,
+    ArcaneResistance,
     Crit,
     Hit,
     Armor,
+    WeaponDamage,
+    SpellPower,
+    HealingPower,
+    ManaPerFive,
+    HealthPerFive,
+    Defense,
+    Dodge,
+    Parry,
+    Block,
+}
+
+impl EquipStat {
+    pub(crate) fn resistance_for_school(school_mask: u8) -> Option<Self> {
+        match school_mask.trailing_zeros() {
+            0 if school_mask != 0 => Some(Self::Armor),
+            1 => Some(Self::HolyResistance),
+            2 => Some(Self::FireResistance),
+            3 => Some(Self::NatureResistance),
+            4 => Some(Self::FrostResistance),
+            5 => Some(Self::ShadowResistance),
+            6 => Some(Self::ArcaneResistance),
+            _ => None,
+        }
+    }
 }
 
 /// This item template's contribution to one `EquipStat` — the single typed column the variant names.
@@ -297,9 +321,26 @@ pub(crate) fn template_stat(tmpl: &ItemTemplate, which: EquipStat) -> i32 {
         EquipStat::Stamina => tmpl.stat_stamina,
         EquipStat::Intellect => tmpl.stat_intellect,
         EquipStat::Spirit => tmpl.stat_spirit,
+        EquipStat::HolyResistance => tmpl.holy_res,
+        EquipStat::FireResistance => tmpl.fire_res,
+        EquipStat::NatureResistance => tmpl.nature_res,
+        EquipStat::FrostResistance => tmpl.frost_res,
+        EquipStat::ShadowResistance => tmpl.shadow_res,
+        EquipStat::ArcaneResistance => tmpl.arcane_res,
         EquipStat::Crit => tmpl.stat_crit,
         EquipStat::Hit => tmpl.stat_hit,
         EquipStat::Armor => tmpl.stat_armor,
+        EquipStat::Health
+        | EquipStat::Mana
+        | EquipStat::WeaponDamage
+        | EquipStat::SpellPower
+        | EquipStat::HealingPower
+        | EquipStat::ManaPerFive
+        | EquipStat::HealthPerFive
+        | EquipStat::Defense
+        | EquipStat::Dodge
+        | EquipStat::Parry
+        | EquipStat::Block => 0,
     }
 }
 
@@ -641,14 +682,40 @@ pub(crate) mod tests {
         t.stat_armor = 50;
         t.stat_crit = 100;
         t.stat_hit = 30;
+        t.holy_res = 1;
+        t.fire_res = 2;
+        t.nature_res = 3;
+        t.frost_res = 4;
+        t.shadow_res = 5;
+        t.arcane_res = 6;
         assert_eq!(template_stat(&t, EquipStat::Strength), 10);
         assert_eq!(template_stat(&t, EquipStat::Agility), 20);
         assert_eq!(template_stat(&t, EquipStat::Armor), 50);
         assert_eq!(template_stat(&t, EquipStat::Crit), 100);
         assert_eq!(template_stat(&t, EquipStat::Hit), 30);
+        assert_eq!(template_stat(&t, EquipStat::HolyResistance), 1);
+        assert_eq!(template_stat(&t, EquipStat::FireResistance), 2);
+        assert_eq!(template_stat(&t, EquipStat::NatureResistance), 3);
+        assert_eq!(template_stat(&t, EquipStat::FrostResistance), 4);
+        assert_eq!(template_stat(&t, EquipStat::ShadowResistance), 5);
+        assert_eq!(template_stat(&t, EquipStat::ArcaneResistance), 6);
         // An untouched column is 0 — the starter/loadout templates carry no stats, so they contribute 0.
         assert_eq!(template_stat(&t, EquipStat::Stamina), 0);
         assert_eq!(template_stat(&blank_template(25), EquipStat::Strength), 0);
+    }
+
+    #[test]
+    fn resistance_kind_uses_the_lowest_school_bit() {
+        assert_eq!(
+            EquipStat::resistance_for_school(1 << 2),
+            Some(EquipStat::FireResistance)
+        );
+        assert_eq!(
+            EquipStat::resistance_for_school((1 << 4) | (1 << 6)),
+            Some(EquipStat::FrostResistance)
+        );
+        assert_eq!(EquipStat::resistance_for_school(0), None);
+        assert_eq!(EquipStat::resistance_for_school(1 << 7), None);
     }
 
     /// Re-scoped (was `equipped_stat_sum_adds_across_pieces_and_is_zero_for_no_gear`): the original name

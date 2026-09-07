@@ -658,23 +658,37 @@ fn sum_active_auras(ctx: &ReducerContext, unit_guid: u64, pred: impl Fn(&Aura) -
         .sum()
 }
 
-/// The caster's **spell power** (a.k.a. healing power) — the caster-side scaling number folded into
-/// E_DAMAGE / E_HEAL magnitudes via `compose_magnitude`. Two additive sources:
+/// The caster's spell power, folded into E_DAMAGE magnitudes by `compose_magnitude`. It combines:
 ///   1. **INT ramp** — `int_spell_power(effective_int)`, where effective INT = the stored base
 ///      (`caster.intellect`) + every `A_MOD_STAT(INT)` aura (`stat_bonus(.., STAT_INT)`) + the INT summed
 ///      across EQUIPPED gear (`items::equipped_stat_bonus(.., Intellect)`). The ramp is 0 at/below the
 ///      starter floor (`INT_SPELL_POWER_BASE`), so the L2 player and every creature contribute 0.
-///   2. **Spell-power auras** — every `A_MOD_COMBAT(COMBAT_SPELL_POWER)` aura (`combat_field_bonus(..,
-///      COMBAT_SPELL_POWER)`), e.g. a seeded "Spell Power" buff. None present → 0.
+///   2. Every `A_MOD_COMBAT(COMBAT_SPELL_POWER)` aura.
+///   3. Spell Power from working equipped items whose school mask is universal or overlaps the spell.
 ///
-/// A caster that is not in the world returns 0. `school_mask` is RESERVED for later school-specific power
-/// (fire vs frost vs holy) — accepted now, school-agnostic for the slice, so the signature is stable when
-/// that lands. A caster with the starter INT and no spell-power aura sums to 0 → magnitudes are
-/// unchanged from the baseline (the explicit baseline gate). [entity]
+/// A caster that is not in the world returns 0. A caster with starter INT and no spell-power source
+/// keeps the baseline magnitude. [entity]
 pub(crate) fn spell_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> i32 {
-    let _ = school_mask; // reserved: school-agnostic for the slice (later: per-school power)
     int_spell_power(effective_intellect(ctx, caster_guid))
-        + combat_field_bonus(ctx, caster_guid, COMBAT_SPELL_POWER)
+        .saturating_add(combat_field_bonus(ctx, caster_guid, COMBAT_SPELL_POWER))
+        .saturating_add(crate::items::equipped_school_stat_bonus(
+            ctx,
+            caster_guid,
+            crate::items::EquipStat::SpellPower,
+            school_mask,
+        ))
+}
+
+/// Spell power for E_HEAL. General Spell Power applies, then school-matching Healing Power is added once.
+pub(crate) fn healing_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> i32 {
+    spell_power(ctx, caster_guid, school_mask).saturating_add(
+        crate::items::equipped_school_stat_bonus(
+            ctx,
+            caster_guid,
+            crate::items::EquipStat::HealingPower,
+            school_mask,
+        ),
+    )
 }
 
 /// The caster's EFFECTIVE Intellect: stored base (`caster.intellect`) + every `A_MOD_STAT(INT)` aura
@@ -689,9 +703,14 @@ pub(crate) fn effective_intellect(ctx: &ReducerContext, caster_guid: u64) -> i32
         .find(caster_guid)
         .map(|c| c.intellect as i32)
         .unwrap_or(0);
-    base_int
-        + stat_bonus(ctx, caster_guid, STAT_INT)
-        + crate::items::equipped_stat_bonus(ctx, caster_guid, crate::items::EquipStat::Intellect)
+    (i64::from(base_int)
+        + i64::from(stat_bonus(ctx, caster_guid, STAT_INT))
+        + i64::from(crate::items::equipped_stat_bonus(
+            ctx,
+            caster_guid,
+            crate::items::EquipStat::Intellect,
+        )))
+    .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 /// Sum a base-attribute bonus from active auras on `unit_guid`: every `A_MOD_STAT` aura whose frozen
@@ -719,12 +738,16 @@ pub(crate) fn stat_pct_bonus(ctx: &ReducerContext, unit_guid: u64, stat: u8) -> 
 /// Sum a resistance/armor bonus from active auras on `unit_guid`: every `A_MOD_RESISTANCE` aura whose
 /// frozen `eff_p0` school MASK overlaps `school_mask` (e.g. `RESIST_ARMOR` bit 0) contributes
 /// `amount × stacks`. The resistance twin of `stat_bonus` — the combat module folds this into a unit's
-/// EFFECTIVE armor before computing damage mitigation, so an armor buff actually softens incoming hits,
-/// not just a stored aura. Returns 0 for an un-buffed unit, so mitigation is unchanged without it. [entity]
+/// effective resistance before computing damage mitigation. The matching equipped resistance Stat Kind
+/// is added once; a multi-school spell uses its lowest school bit, matching the mitigation caller. [entity]
 pub(crate) fn resistance_bonus(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> i32 {
-    sum_active_auras(ctx, unit_guid, |a| {
+    let aura = sum_active_auras(ctx, unit_guid, |a| {
         a.eff_kind == A_MOD_RESISTANCE && (a.eff_p0 as u32 & school_mask as u32) != 0
-    })
+    });
+    let gear = crate::items::EquipStat::resistance_for_school(school_mask)
+        .map(|which| crate::items::equipped_stat_bonus(ctx, unit_guid, which))
+        .unwrap_or(0);
+    aura.saturating_add(gear)
 }
 
 // ===========================================================================================
@@ -752,7 +775,12 @@ pub(crate) fn rederive_pool(
     // Swap the base-attribute contribution for the effective one via SIGNED arithmetic so the result is a
     // TRUE no-op at bonus == 0 (from_eff == from_base) for ALL inputs — even a synthetic login_max smaller
     // than from_base (which a saturating_sub would wrongly floor to 0 and then inflate). Floored at 0.
-    (login_max as i64 - from_base as i64 + from_eff as i64).max(0) as u32
+    (i128::from(login_max) - i128::from(from_base) + i128::from(from_eff))
+        .clamp(0, i128::from(u32::MAX)) as u32
+}
+
+pub(crate) fn add_flat_pool_bonus(pool: u32, bonus: i32) -> u32 {
+    (i128::from(pool) + i128::from(bonus)).clamp(0, i128::from(u32::MAX)) as u32
 }
 
 /// True iff `effect` is an `A_MOD_STAT` aura that touches STAMINA or INTELLECT — the only stat changes

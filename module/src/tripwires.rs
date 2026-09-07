@@ -2085,7 +2085,7 @@ pub(crate) mod issue_reference_tripwire {
 /// deliberate residues. A conditional `cfg_attr` allowance does not count here.
 #[cfg(test)]
 pub(crate) mod dead_code_allowance_tripwire {
-    const EXPECTED_UNCONDITIONAL_ALLOWANCES: usize = 5;
+    const EXPECTED_UNCONDITIONAL_ALLOWANCES: usize = 4;
 
     fn unconditional_dead_code_allows(content: &str) -> Vec<usize> {
         let mut lines = Vec::new();
@@ -2105,7 +2105,7 @@ pub(crate) mod dead_code_allowance_tripwire {
     }
 
     #[test]
-    fn module_has_exactly_five_unconditional_dead_code_allowances() {
+    fn module_has_exactly_four_unconditional_dead_code_allowances() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
         super::character_owned_tripwire::collect_rs_files(&root, &mut files);

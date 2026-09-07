@@ -204,13 +204,17 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
     // — so a +Stamina chest/ring actually grows the health bar, not just a Mark-of-the-Wild
     // aura. Mirrors how combat's effective_strength folds aura + gear. No gear and no aura → 0, so the
     // pool stays byte-identical to the bare level curve (baseline-safe).
-    let sta_bonus = stat_bonus(ctx, unit_guid, STAT_STA)
-        + crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Stamina);
-    let new_max_health = rederive_pool(
-        login_max_health,
-        e.stamina,
-        sta_bonus,
-        crate::stats::hp_from_stamina,
+    let sta_bonus = stat_bonus(ctx, unit_guid, STAT_STA).saturating_add(
+        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Stamina),
+    );
+    let new_max_health = add_flat_pool_bonus(
+        rederive_pool(
+            login_max_health,
+            e.stamina,
+            sta_bonus,
+            crate::stats::hp_from_stamina,
+        ),
+        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Health),
     );
 
     // --- max_power from effective intellect (MANA classes only — rage/energy don't scale off INT) ---
@@ -219,13 +223,17 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
     let new_max_power = if is_mana {
         let login_max_power = crate::stats::max_power_for(ctx, race, class, e.level);
         // Aura INT + equipped INT, the mana twin of the stamina fold above.
-        let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT)
-            + crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect);
-        rederive_pool(
-            login_max_power,
-            e.intellect,
-            int_bonus,
-            crate::stats::mana_from_intellect,
+        let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT).saturating_add(
+            crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect),
+        );
+        add_flat_pool_bonus(
+            rederive_pool(
+                login_max_power,
+                e.intellect,
+                int_bonus,
+                crate::stats::mana_from_intellect,
+            ),
+            crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Mana),
         )
     } else {
         e.max_power // unchanged for rage/energy pools
@@ -292,10 +300,12 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let eff_agi = crate::combat::effective_agility(ctx, &e);
     let str_bonus = eff_str as i32 - e.strength as i32;
     let agi_bonus = eff_agi as i32 - e.agility as i32;
-    let sta_bonus = stat_bonus(ctx, unit_guid, STAT_STA)
-        + crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Stamina);
-    let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT)
-        + crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect);
+    let sta_bonus = stat_bonus(ctx, unit_guid, STAT_STA).saturating_add(
+        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Stamina),
+    );
+    let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT).saturating_add(
+        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect),
+    );
     // `recompute_vitals` (called first at every real call site) already folds Spirit's base+aura into
     // `e.spirit` — re-derive the SAME base curve so the sheet's bonus is `e.spirit - base`, never a
     // second copy of the aura/pct math.
