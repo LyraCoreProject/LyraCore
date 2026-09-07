@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-09-07 21:17 UTC",
-  "base_revision": "48ba8b397f6c9e84dc69571e4503b3960bca4021",
-  "status_note": "All 68 open issues have an assessment; 23 closed issues remain for history. Loot replay #461, party cleanup #463, summon fix #470, Spell repair #465 and the report source #467 are merged. The Headless Client party-suite repair is released as alpha11. Item stats and Account ownership are checking two final review fixes before publication.",
+  "updated_at": "2026-09-07 21:37 UTC",
+  "base_revision": "34e9a35420377dd2ec8dc1cae769fbbe22d1da80",
+  "status_note": "All 68 open issues have an assessment; 23 closed issues remain for history. Item stats #466, Spell repair #465, summon fix #470, party cleanup #463 and human-approved Loot replay #461 are merged. Headless Client alpha11 removes the global party reset. Account ownership is checking the combined main before publication and human schema review.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
   "focus": [
-    "Finish the reproduced positive-armor total overflow fix in item stats #466, then complete CI and review.",
-    "Complete Account ownership #471 Transfer fixes and final checks with alpha11 before human schema review.",
+    "Finish Account ownership #471 checks on the combined main, then publish and complete CI and actual review before human schema review.",
+    "Run Random Property tooltip and crafting acceptance with the real client in a named Realm.",
     "Run the eight Package-backed party scenarios once a compatible Module and Gateway pair is available.",
-    "Keep the maintained report and GitHub states aligned through final reviews."
+    "Preserve checked PR states, human approvals and remaining acceptance work in this report."
   ],
   "issues": [
     {
@@ -1494,7 +1494,7 @@
       "confidence": "high",
       "disposition": "implementing",
       "rationale": "The corruption exists whenever two Gateways serve one Account. A Realm-core Session generation and compare-by-generation logout is an ordinary consistency design. #69 may affect routing policy but does not need to block this invariant.",
-      "next_action": "Publish the checked distinct-ID Transfer fix, Account review corrections and alpha11 pin. Complete current-head CI and actual review, then request human schema review.",
+      "next_action": "Complete the combined checks on local candidate 7177b25, publish it and finish CI and actual review. Request human schema approval only after those gates pass.",
       "blockers": [
         "Human review before shipping the concrete Account ownership schema change."
       ],
@@ -2123,11 +2123,11 @@
       "gain": 4,
       "effort": 5,
       "confidence": "high",
-      "disposition": "review",
+      "disposition": "human",
       "rationale": "The Random Property Tracer merged in approved #462. It imports and preserves the selected property through item movement and client packets, and applies the existing EquipStat families. PR #466 adds the remaining Stat Kinds and is completing review corrections.",
-      "next_action": "Finish the positive armor-aura sum overflow correction, publish its checked rebase and complete #466 review. Live-client tooltip and craft-preview acceptance remains afterward.",
+      "next_action": "Verify imported suffix tooltips, SQL weight distribution and the craft preview with a real 1.12.1 client in a named Realm. The importer, roll, persistence, wire and Stat Kind implementations are merged.",
       "blockers": [
-        "A real-client tooltip check and approved Realm acceptance after the remaining Stat Kind work."
+        "Named imported acceptance Realm and real 1.12.1 client. No existing Realm update is authorized."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/31#issuecomment-5379512339",
@@ -2145,7 +2145,8 @@
         "The user reviewed and approved the concrete schema. PR #462 merged as 8a40989 after current-head checks and actual CodeRabbit review passed. The remaining Stat Kind agent is integrating onto this main revision.",
         "PR #466 is published at 4bc7d89. Its 1,499 Module and 1,303 Gateway unit tests, four Module durable Stat Kind fixtures, Gateway resistance fixture and strict lint pass. Root review found that item MP5 is incorrectly suppressed by the five-second casting pause. The implementer is correcting this and checking small flat regeneration values before merge.",
         "The implementer corrected MP5 during recent casting, small per-five values and aura resistance overflow. A CodeRabbit claim that armor omitted gear was false: the shared resistance fold already includes it. Parent review caught a resulting double count before publication; it was removed. A durable test is checking the exact armor total and damage reduction.",
-        "Final head 1be079d fixes MP5 during recent casting, low regeneration rates and aura resistance overflow. It counts armor once. All 1,501 Module and 1,303 Gateway unit tests, 119 Gateway integration/parity checks, four Module durable cases, one Gateway resistance case and strict lint pass. One proven local trace-path failure is excluded and retained in CI. The three CodeRabbit threads are resolved, including the withdrawn armor finding. Actual review on this head remains required."
+        "Final head 1be079d fixes MP5 during recent casting, low regeneration rates and aura resistance overflow. It counts armor once. All 1,501 Module and 1,303 Gateway unit tests, 119 Gateway integration/parity checks, four Module durable cases, one Gateway resistance case and strict lint pass. One proven local trace-path failure is excluded and retained in CI. The three CodeRabbit threads are resolved, including the withdrawn armor finding. Actual review on this head remains required.",
+        "Merged #466 as 34e9a35 after all seven checks and current-head CodeRabbit review passed. The final Gateway projection also saturates the positive armor-aura sum; its real durable regression reproduced signed overflow before the fix and passed afterward. Module source passed 1,501 unit tests and four durable Stat Kind cases. Final Gateway source passed 1,323 unit and 119 integration/parity checks, the resistance fixture, strict lint and preflight. Live-client acceptance remains separate."
       ],
       "related_prs": [
         462,
@@ -3883,13 +3884,13 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/466",
       "title": "feat(items): apply remaining random property stats",
       "owner": "Codex, final integration and review",
-      "head": "527606ec6b3c51f6f34074a56470cf58aee32ca0",
-      "github_state": "OPEN",
-      "checked_at": "2026-09-07 21:17 UTC",
+      "head": "0e9e855a8a2aa8b7c008aa4e98e0e0418d8af50a",
+      "github_state": "MERGED",
+      "checked_at": "2026-09-07 21:37 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "FAILURE"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -3916,16 +3917,15 @@
           "result": "SUCCESS"
         }
       ],
-      "status": "Published base reviewed; reproduced armor total overflow fixed locally",
-      "next_action": "Finish the positive armor-aura sum overflow correction, publish its checked rebase and complete #466 review. Live-client tooltip and craft-preview acceptance remains afterward.",
+      "status": "Merged after all seven checks and current-head review passed",
+      "next_action": "Complete. Issue #31 retains the real-client acceptance steps.",
       "review_state": {
         "CodeRabbit": "COMPLETE",
-        "coordinating": "IN_PROGRESS"
+        "coordinating": "COMPLETE"
       },
-      "review_findings": [
-        "Root reproduced signed overflow in the positive armor aura sum. The unsigned saturating correction passes its durable regression; final Gateway gates are running."
-      ],
-      "review_note": "Rebased 527606e passed 1,501 Module units, 1,323 Gateway units, 119 integration/parity tests, four Module durable cases, one Gateway resistance case, strict lint and preflight. Actual CodeRabbit review passed. Root then reproduced a separate positive armor-aura sum overflow in that Gateway case. Local 0e9e855 uses an unsigned saturating total and passes the regression. Final Gateway gates are running before publication."
+      "review_findings": [],
+      "review_note": "Merged #466 as 34e9a35 after all seven checks and current-head CodeRabbit review passed. The final Gateway projection also saturates the positive armor-aura sum; its real durable regression reproduced signed overflow before the fix and passed afterward. Module source passed 1,501 unit tests and four durable Stat Kind cases. Final Gateway source passed 1,323 unit and 119 integration/parity checks, the resistance fixture, strict lint and preflight. Live-client acceptance remains separate.",
+      "merge_commit": "34e9a35420377dd2ec8dc1cae769fbbe22d1da80"
     },
     {
       "number": 467,
@@ -4113,18 +4113,15 @@
       "head": "0f7c65572c8a66821e62e5417414d52db1ca98d3",
       "github_state": "OPEN",
       "checked_at": "2026-09-07 20:46 UTC",
-      "status": "Distinct-ID Transfer fix passes; final checked publication in progress",
-      "next_action": "Publish the checked distinct-ID Transfer fix, Account review corrections and alpha11 pin. Complete current-head CI and actual review, then request human schema review.",
+      "status": "Rebased cleanly onto merged item stats; combined final checks running",
+      "next_action": "Complete the combined checks on local candidate 7177b25, publish it and finish CI and actual review. Request human schema approval only after those gates pass.",
       "review_state": {
         "CodeRabbit": "CHANGES_REQUESTED",
         "coordinating": "IN_PROGRESS",
         "human_schema": "NOT_REQUESTED"
       },
-      "review_findings": [
-        "Publish the verified bound-Actor fix for four Transfer completion wrappers.",
-        "Complete the final alpha11 integration and current-head review."
-      ],
-      "review_note": "The final ownership path now has a real distinct-ID Transfer regression. Current owners complete Transfer 7001 for Character 1; all four stale completions are refused without changing durable rows. Bounded Account cleanup records committed batches of 64 and 1 through a transaction subscription, avoiding a transient polling assertion. Descriptor guidance, Shard errors, glossary and fixture mutex recovery are corrected. All prior combined gameplay proofs pass; the final head is completing checks before publication with alpha11.",
+      "review_findings": [],
+      "review_note": "The final ownership path now has a real distinct-ID Transfer regression. Current owners complete Transfer 7001 for Character 1; all four stale completions are refused without changing durable rows. Bounded Account cleanup records committed batches of 64 and 1 through a transaction subscription, avoiding a transient polling assertion. Descriptor guidance, Shard errors, glossary and fixture mutex recovery are corrected. All prior combined gameplay proofs pass; the final head is completing checks before publication with alpha11. Candidate 7177b25 includes main 34e9a35 and alpha11, with no integration conflict. Existing ownership and socket CI cases are retained; party-deletion and resistance projection cases are added. Combined unit, durable, binding, lint and preflight gates are running.",
       "checks": [
         {
           "name": "durable",
@@ -4478,6 +4475,10 @@
     {
       "at": "2026-09-07 21:17 UTC",
       "text": "Merged Spell repair #465 as 044b935 and closed #460 with Operator import instructions. Merged report #467 as 48ba8b3. Merged wire-harness #13 as 30a2dd2, released alpha11 and verified a fresh tag clone. The Package-backed #46 suite remains blocked by its missing compatible artifact. Root reproduced and corrected positive armor total overflow in #466. Account ownership now proves valid and stale Transfer completion with distinct ids before its final publication."
+    },
+    {
+      "at": "2026-09-07 21:37 UTC",
+      "text": "Merged #466 as 34e9a35 after all seven checks and current-head CodeRabbit review passed. Random Property implementation is complete; #31 retains real-client tooltip and craft-preview acceptance. Account ownership rebased cleanly as candidate 7177b25, retaining the reviewed Transfer fix and alpha11. Its final combined tests include the newly automated party-deletion and resistance cases."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
