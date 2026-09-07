@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-09-07 16:06 UTC",
+  "updated_at": "2026-09-07 16:15 UTC",
   "base_revision": "3455aa2ef1de7eb959909fa79d55f62a90925cba",
-  "status_note": "69 open issues have assessments; 20 closed issues remain for history. Codex has resumed ownership. Two implementation agents are recovering unfinished work, and a third agent is checking all open assessments against current evidence.",
+  "status_note": "All 69 open issues have been rechecked; 20 closed issues remain for history. Three isolated agents own Character deletion cleanup, the Random Property Tracer and Loot Roll replay prevention. Nine assessments changed after the audit.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
   "focus": [
-    "Finish Character deletion cleanup #46 and publish its checked PR.",
-    "Finish Random Property Tracer #31 and publish a tested draft for required human schema review.",
-    "Recheck all 69 open issue assessments and select the next unblocked work.",
-    "Keep Binding draft #455 ready for human schema review, with client acceptance retained on #40."
+    "Finish and review Character deletion cleanup #46, including failed cleanup and Transfer behavior.",
+    "Publish the tested Random Property Tracer #31 for human schema review, then extend the remaining stat families.",
+    "Implement stable Loot Roll promotion identity for #441 so delayed START cannot recreate a resolved roll.",
+    "Keep Binding draft #455 ready for human schema review; retain real-client acceptance on #40."
   ],
   "issues": [
     {
@@ -416,14 +416,13 @@
       "summary": "Resident creature movement now replays after CREATE. Motion-flush shedding and sensing cadence still need decisions.",
       "importance": 3,
       "gain": 4,
-      "effort": 3,
+      "effort": 2,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "Merged #450 resumes resident movement from its current point and remaining duration. The issue also describes delayed flushes under load and a four-second sensing cadence; those remain separate policy choices.",
-      "next_action": "Choose motion-flush shedding and sensing cadence after measuring current behavior. Complete the stock-client acceptance recording.",
+      "disposition": "verify",
+      "rationale": "PR #450 fixed resident movement replay. Measure and observe the remaining symptom before choosing shedding or sensing changes. There is no current implementation decision to block on, and remaining effort is lower than the report states.",
+      "next_action": "Observe current motion after merged #450. Record stock-client movement before changing queue shedding or sensing cadence.",
       "blockers": [
-        "Full closure needs a maintainer choice for motion-flush shedding and proximity sensing cadence.",
-        "The combined symptom still needs real-client acceptance."
+        "Controlled reproduction and stock-client acceptance of current movement."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/272",
@@ -431,7 +430,10 @@
         "gateway/src/stdb/world_view.rs: maybe_queue_motion_flush still drops a flush at egress depth while retaining the superseding pending map.",
         "module/src/creatures/ai.rs: SENSE_EVERY_N_TICKS remains 8 at a 500 ms movement tick.",
         "https://github.com/LyraCoreProject/LyraCore/pull/450",
-        "https://github.com/LyraCoreProject/LyraCore/issues/272#issuecomment-5572001403"
+        "https://github.com/LyraCoreProject/LyraCore/issues/272#issuecomment-5572001403",
+        "PR #450 resumes a resident creature spline from its current point and remaining duration.",
+        "The issue still combines queue shedding and an eight-tick sensing cadence, neither of which should change unless current behavior reproduces.",
+        "The latest issue comment requests stock-client acceptance after the merged fix."
       ],
       "related_prs": [
         450
@@ -472,19 +474,20 @@
       "gain": 3,
       "effort": 4,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "The implementation is absent and the prerequisites remain open. More seriously, current rollout docs route open-world vmaps to the two World Shards and skip the Instance Pool, contradicting the issue's map-0 account. Removing the Gate from this stale Spec would be unsafe.",
-      "next_action": "Rewrite the supported-map inventory and eligibility rule against the current World Import Profiles, then wait for corrected rollout and matching navigation-coverage Verification before removing the Gate.",
+      "disposition": "dependency",
+      "rationale": "The supported-map inventory follows the maintained World Import Profiles. Gate removal should wait on #184 and #195 evidence, but it does not need a separate preimplementation maintainer decision.",
+      "next_action": "Wait for rollout and navigation evidence from #184 and #195, then remove the global Gate using the supported World Import Profiles.",
       "blockers": [
-        "Issue 184 needs corrected rollout acceptance.",
-        "Issue 195 needs corrected matching navigation-coverage acceptance.",
-        "A maintainer must approve the supported-map inventory and emergency rollback rule."
+        "Verified rollout from #184 and matching navigation coverage from #195."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/198",
         "https://github.com/LyraCoreProject/LyraCore/pull/275",
         "module/src/vmap.rs: vmap_enabled still requires game_config.vmap_enabled and an active generation.",
-        "docs/vmap-rollout.md: current production destinations are alliance-eastern and alliance-kalimdor World Shards; the Instance Pool must receive no bounded-profile vmap generation."
+        "docs/vmap-rollout.md: current production destinations are alliance-eastern and alliance-kalimdor World Shards; the Instance Pool must receive no bounded-profile vmap generation.",
+        "docs/vmap-rollout.md is the current source for eligible World Shards and Instance Pool exclusion.",
+        "module/src/vmap.rs still has the global Gate, so no unsafe partial removal has occurred.",
+        "Issues #184 and #195 remain the real evidence dependencies."
       ],
       "related_prs": [
         192,
@@ -529,19 +532,20 @@
       "gain": 4,
       "effort": 2,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "PR 258 shipped preparation, finalization, matched-generation selection, and route-planner use. The latest comment says only rollout remains, but it predates the canonical profile change that moved open-world coverage to two World Shards and excluded the Instance Pool.",
-      "next_action": "Correct the rollout matrix to the current World Import Profiles, then prepare and finalize matching coverage on each eligible World Shard and record route and client Verification before enabling nav_coverage_enabled.",
+      "disposition": "human",
+      "rationale": "Keep the human acceptance disposition, but remove the supposed decision blocker. The current World Import Profiles determine eligible Shards; an agent can correct the checklist before rollout.",
+      "next_action": "Use current World Import Profiles for the coverage checklist, then prepare and select matching navigation coverage on approved World Shards.",
       "blockers": [
-        "The acceptance matrix must be updated for the current Eastern and Kalimdor World Shards.",
-        "Requires approved client data, named non-production or production targets, and human acceptance."
+        "Named-host authorization and route/collision acceptance."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/195",
         "https://github.com/LyraCoreProject/LyraCore/pull/258",
         "https://github.com/LyraCoreProject/LyraCore/pull/275",
         "module/src/vmap.rs: game_vmap_nav_coverage and its manifest are generation-scoped and finalized before selection.",
-        "module/src/nav.rs: route planning consumes coverage only when nav_coverage_enabled is on and the active generation has a matching manifest."
+        "module/src/nav.rs: route planning consumes coverage only when nav_coverage_enabled is on and the active generation has a matching manifest.",
+        "PR #258 shipped generation-scoped preparation and selection.",
+        "docs/vmap-rollout.md supplies the current destination model, while the issue comment predates it."
       ],
       "related_prs": [
         258,
@@ -559,18 +563,19 @@
       "gain": 4,
       "effort": 2,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "PR 192 shipped the source workflow. PR 275 later introduced the Eastern and Kalimdor World Import Profiles and changed the target matrix. The latest issue comment repeats the retired Instance Pool target, so following it would populate the wrong Shard.",
-      "next_action": "Replace the acceptance checklist with map 0 on the Eastern World Shard, map 1 on the Kalimdor World Shard, and an explicit open-world exclusion for the Instance Pool. Only then schedule operator Verification.",
+      "disposition": "human",
+      "rationale": "Keep the human rollout disposition, but remove the supposed maintainer decision. Current World Import Profiles already determine the corrected target matrix. Updating the checklist is routine maintenance before the authorized rollout.",
+      "next_action": "Use the current World Import Profiles to correct the rollout checklist, then collect named-host collision and client acceptance on the intended World Shards.",
       "blockers": [
-        "The issue and its latest comment contradict docs/vmap-rollout.md.",
-        "Any rollout requires a named host, approved client data, a maintenance window, and real-client acceptance."
+        "Named-host authorization for rollout and stock-client collision acceptance."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/184",
         "https://github.com/LyraCoreProject/LyraCore/pull/192",
         "https://github.com/LyraCoreProject/LyraCore/pull/275",
-        "docs/vmap-rollout.md: the canonical rollout uses both World Shards and says the Instance Pool must receive no bounded-profile generation."
+        "docs/vmap-rollout.md: the canonical rollout uses both World Shards and says the Instance Pool must receive no bounded-profile generation.",
+        "docs/vmap-rollout.md names the Eastern and Kalimdor World Shards and excludes the Instance Pool.",
+        "The issue body and old comment still name the retired map-0 destination matrix."
       ],
       "related_prs": [
         192,
@@ -731,19 +736,21 @@
       "gain": 5,
       "effort": 4,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "The prerequisite importer is merged and the runtime work is absent. The Spec now conflicts with active-generation eligibility: it expects dynamic doors to work on map 36 with no static chunks, while vmap_enabled returns false without an active generation. That decision affects the central Gate and must be settled first.",
-      "next_action": "Choose and document the map-36 eligibility rule. Then implement game_go_collider, lifecycle registration, transforms, state gating, and synthetic ray behavior against that rule.",
+      "disposition": "ready",
+      "rationale": "Map 36 does not need a product decision. Dynamic GameObject collision can have explicit eligibility from its instance-scoped collider registry while static vmap rays retain generation eligibility. Human schema review remains a shipping gate.",
+      "next_action": "Implement instance-scoped dynamic GameObject collider eligibility and ray merging. Keep static vmap generation eligibility separate.",
       "blockers": [
-        "Maintainer decision: dynamic-only generation or a separate dynamic-collision eligibility rule for the Instance Pool.",
-        "The chosen rule must stay consistent with issue 198's future per-map eligibility model."
+        "Human schema review before shipping; imported-door acceptance remains."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/113",
         "https://github.com/LyraCoreProject/LyraCore/pull/254",
         "module/src/go_model.rs: game_go_model stores imported local-space meshes, and comments name game_go_collider as the absent consumer.",
         "module/src/vmap.rs: vmap_enabled requires both the global Gate and an active static generation.",
-        "docs/vmap-rollout.md: bounded-profile vmaps skip the Instance Pool."
+        "docs/vmap-rollout.md: bounded-profile vmaps skip the Instance Pool.",
+        "Issue #113 already specifies the collider table, lifecycle, transforms, state Gate, ray merge, and tests.",
+        "module/src/vmap.rs ties static rays to an active static generation, while docs/vmap-rollout.md intentionally excludes the Instance Pool from bounded open-world generations.",
+        "The requested GameObject registry is instance-scoped and supplies its own data-presence condition, so it need not pretend map 36 has a static generation."
       ],
       "related_prs": [
         254
@@ -1217,17 +1224,20 @@
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "The row contains is_completion, is_interrupted, delay_ms, and is_proc_log alongside ordinary START and GO fields. The Gateway decodes them in ordered branches, while comments state which fields must be the only active signal. Typed signal constructors reduced literal duplication but do not enforce mutual exclusion. An additive kind would make the union explicit, but schema publication and generated bindings make this more than a local refactor, and the unused is_completion field needs a compatibility choice.",
-      "next_action": "Define an additive event-kind contract and compatibility for old rows, then implement constructor stamping and Gateway decoding. Schema changes need human review before shipping.",
+      "disposition": "ready",
+      "rationale": "Legacy decoding can treat the appended zero kind as the current field-derived form, while new constructors stamp explicit kinds. That is a bounded compatibility design. Human schema review belongs after the concrete change.",
+      "next_action": "Append an explicit event kind, stamp constructors and preserve legacy kind-zero decoding. Publish the tested schema change for human review.",
       "blockers": [
-        "Define old-row decoding and the is_completion compatibility policy."
+        "Human schema review before shipping."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/72. The issue inventories five logical signals and calls for an additive discriminator.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/spell/tables.rs#L329-L450. SpellCastEvent carries the boolean and zero-value conventions in one subscribed row.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/spell/tables.rs#L452-L490. Typed constructors centralize the neutral baseline but still rely on per-site field overrides.",
-        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/subscriptions.rs#L1238-L1295. Gateway decoding returns through ordered interruption, pushback, and proc-log branches."
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/subscriptions.rs#L1238-L1295. Gateway decoding returns through ordered interruption, pushback, and proc-log branches.",
+        "module/src/spell/tables.rs has typed constructors but still relies on mutually exclusive booleans.",
+        "gateway/src/stdb/subscriptions.rs decodes the signals through ordered branches, which supplies the legacy fallback.",
+        "docs/danger-zones.md permits an end-appended defaulted numeric column and requires review before shipping."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/72",
@@ -1242,19 +1252,20 @@
       "gain": 3,
       "effort": 5,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "item_guid_for keeps only 24 owner bits and reserves eight bits for a starting slot. next_item_guid then uses the owner's maximum GUID plus one without checking the low-byte boundary. Enough grants, splits, mail, trade, or inventory churn can enter the next owner's block, while owner GUIDs that differ above bit 24 share a block immediately. A primary-key collision can abort an inventory reducer, and cross-database transfer preserves these GUIDs as globally safe identifiers. Existing rows prevent a casual packing change.",
-      "next_action": "Choose a durable allocation scheme and live-row migration before implementation; define saturation behavior, preserve client-visible identifiers through transfer, and test allocation beyond 256 creations plus owners that share the low 24 bits.",
+      "disposition": "ready",
+      "rationale": "The allocator and migration require judgment, but agents can produce a concrete design and tested branch. Human review is required before a schema or migration change ships, not before design begins.",
+      "next_action": "Design a collision-free item allocator and migration for existing item identities. Prove saturation, Transfer preservation and namespace separation in a tested draft.",
       "blockers": [
-        "Existing item rows use the current packed format.",
-        "A durable per-owner serial or another globally unique allocation scheme must be selected.",
-        "The migration and rollback plan is undefined."
+        "Human review of the concrete migration before shipping."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/71. The issue identifies both block escape and low-24-bit owner aliasing.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L266-L286. item_guid_for masks the owner to 24 bits and next_item_guid increments the current maximum without a boundary check.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/ops.rs#L213-L228. Routine item storage repeatedly calls next_item_guid, so allocation is not limited to the initial slot set.",
-        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L248-L264. Cross-database transfer preserves item GUIDs because the code assumes they are already namespaced per Character."
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L248-L264. Cross-database transfer preserves item GUIDs because the code assumes they are already namespaced per Character.",
+        "items/tables.rs masks the owner to 24 bits and next_item_guid increments without enforcing the 256-value block.",
+        "docs/danger-zones.md requires human review before migration work ships; it does not reserve implementation design for a person.",
+        "The issue already supplies saturation, transfer identity, migration, and collision cases for a bounded design Ticket."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/71",
@@ -1480,18 +1491,20 @@
       "gain": 5,
       "effort": 4,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "One half of the issue is stale: each Gateway now derives the same synthetic owner identity from the Account. The more serious half remains. SessionEpochs is an AtomicU64 plus a process-local map, and disconnect cleanup trusts that local release result before logout. Two Gateways can therefore each believe their World Session is current and let an older socket remove the newer live Character. The issue should be narrowed to a Realm-core Session generation or lease.",
-      "next_action": "Rewrite the issue around a Realm-core-owned Session generation or lease, pass its token through login and logout, and add a two-Gateway test where the losing socket disconnects after the winner enters the world.",
+      "disposition": "ready",
+      "rationale": "The corruption exists whenever two Gateways serve one Account. A Realm-core Session generation and compare-by-generation logout is an ordinary consistency design. #69 may affect routing policy but does not need to block this invariant.",
+      "next_action": "Implement a Realm-core Session generation and refuse stale logout or takeover. Prove the losing World Session cannot clear the winning Session across two Gateways.",
       "blockers": [
-        "The durable lease and expiry semantics need a small design decision.",
-        "Issue #69 should state whether arbitrary Gateways may serve the same Account."
+        "Human review before shipping a concrete schema change; controlled two-Gateway acceptance remains."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/61. The issue identifies stale disconnect cleanup as a cross-process Character corruption path.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/account_sessions.rs#L18-L47. SessionEpochs remains process-local state.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/connection.rs#L2552-L2560. Coordinator claim_session and release_session delegate to that local map.",
-        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/world_store.rs#L227-L231. Bound identity is now deterministic per Account, so that part no longer differs between Gateway processes."
+        "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/gateway/src/stdb/world_store.rs#L227-L231. Bound identity is now deterministic per Account, so that part no longer differs between Gateway processes.",
+        "Issue #61 states the two-Gateway stale-disconnect corruption directly.",
+        "The maintained report already identifies a Realm-core-owned generation or lease and the losing-socket test as the bounded solution.",
+        "CODING_STANDARDS.md assigns realm-wide Session state to Realm-core and requires atomic Durable Requests."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/61",
@@ -1769,7 +1782,8 @@
         "https://github.com/LyraCoreProject/LyraCore/issues/46",
         "https://github.com/LyraCoreProject/LyraCore/pull/384",
         "Code fact: gateway/src/main.rs starts spawn_character_gone_relay, and gateway/src/stdb/subscriptions.rs leaves the realm-core party only when character_anywhere reports the Character absent from all Shards.",
-        "Coordinating review found callback/reconnect deadlocks and a sequential absence-scan race during Transfer; the implementation agent is fixing these before PR publication."
+        "Coordinating review found callback/reconnect deadlocks and a sequential absence-scan race during Transfer; the implementation agent is fixing these before PR publication.",
+        "Recovery copied the committed and unfinished source into a new worktree. Original tracked diffs stayed unchanged during capture."
       ],
       "related_prs": [
         384
@@ -2093,7 +2107,9 @@
         "Code fact: module/src/items/rules.rs still uses a fixed ENCHANTS list, no game_item_random_property or property-weight table exists, and Gateway loot, item, mail, and auction codecs write item_random_property_id as zero.",
         "2026-08-22 issue Spec: the Tracer already includes weighted selection; the second Ticket adds resistance, damage, avoidance, regeneration and spell/healing terms.",
         "Source preflight checked pinned CMaNGOS data and the local build-5875 client tables. Existing synthetic enchant IDs 7745 and 7748 do not collide with imported enchantments. Buyback, Mail, Escrow, Auction and Loot Roll paths must preserve the selected property; old opaque Transfer blobs need an explicit compatibility path.",
-        "Takeover review fixed partial inventory grants, empty catalogue import, and stat-sum overflow. Importer tests pass; Module checks, generated bindings, Gateway projection and private durable fixtures are in progress."
+        "Takeover review fixed partial inventory grants, empty catalogue import, and stat-sum overflow. Importer tests pass; Module checks, generated bindings, Gateway projection and private durable fixtures are in progress.",
+        "Recovery copied the committed and unfinished source into a new worktree. Original tracked diffs stayed unchanged during capture.",
+        "Coordinating review found repeated enchantment-catalogue scans in armor projection and overflow in the changed Spirit fold; the implementer is correcting both before publication."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/31",
@@ -2339,18 +2355,22 @@
       "number": 441,
       "summary": "A delayed START can recreate a resolved Loot Roll",
       "importance": 5,
-      "gain": 4,
+      "gain": 5,
       "effort": 4,
       "confidence": "high",
-      "disposition": "decision",
-      "rationale": "PR #439 deduplicates active rolls. Resolution deletes that identity. A durable generation must distinguish retries from a later valid kill before changing storage.",
-      "next_action": "Design a stable promotion identity and cleanup rule. Prove old START replay is refused while a later roll on the same corpse and slot succeeds.",
+      "disposition": "implementing",
+      "rationale": "PR #439 is merged, so the listed prerequisite is stale. Stable promotion identity and durable replay refusal are distributed idempotency work that an agent can design and implement. Human review is required only before a schema change ships.",
+      "next_action": "Choose a stable promotion identity and cleanup boundary, then prove resolved START replay cannot recreate active rolls while a later valid roll succeeds. Publish a tested draft if schema changes.",
       "blockers": [
-        "PR #439 must settle first; any schema change needs human review before shipping."
+        "Human review before shipping any concrete schema change."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/441",
-        "https://github.com/LyraCoreProject/LyraCore/pull/439"
+        "https://github.com/LyraCoreProject/LyraCore/pull/439",
+        "gateway/src/world/loot.rs promote_one sends START using corpse_guid and slot, then clears the staging row after success.",
+        "module/src/loot/rolls.rs insert_roll_rows deduplicates only against a live corpse and slot row, while cleanup_roll deletes the row and votes.",
+        "The issue provides the required replay, later-valid-roll, cleanup-boundary, and settlement-Gate tests.",
+        "PR #439 is already merged into the report base revision."
       ],
       "related_prs": [
         439
@@ -2358,7 +2378,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/441",
       "updatedAt": "2026-09-05T15:37:16Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-6 Astra, high effort, Loot Roll replay agent"
     }
   ],
   "pull_requests": [
@@ -3371,6 +3391,47 @@
       "merge_commit": "3455aa2ef1de7eb959909fa79d55f62a90925cba",
       "merged_at": "2026-09-07T15:46:30Z",
       "review_note": "All seven checks passed. CodeRabbit completed review through the recorded head with no unresolved findings; coordinating review is complete."
+    },
+    {
+      "number": 458,
+      "title": "docs(triage): resume issue ownership and PR monitoring",
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/458",
+      "owner": "Codex, coordinating agent",
+      "status": "Open; checks and review running",
+      "next_action": "Incorporate audit results and active assignments, then finish CI and actual CodeRabbit review.",
+      "head": "650bf7dba78d9faa66adcc6369659935ce96c4f0",
+      "github_state": "OPEN",
+      "checked_at": "2026-09-07 16:15 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
     }
   ],
   "history": [
@@ -3533,10 +3594,14 @@
     {
       "at": "2026-09-07 16:06 UTC",
       "text": "Resumed ownership at the existing Postplan URL. Refetched all issue states and confirmed Binding #455 has no unresolved review threads. Assigned isolated recovery of #46 to GPT-5.6 Sol at high effort and #31 to GPT-6 Astra at high effort. A Sol agent at medium effort is auditing every open assessment."
+    },
+    {
+      "at": "2026-09-07 16:15 UTC",
+      "text": "Completed a fresh audit of all 69 open issues. Nine assessments changed. Removed stale design blockers from #441, #61, #72 and #113; #71 can proceed to an agent-produced migration design. Assigned #441 to GPT-6 Astra at high effort. Report PR #458 is open. Parent review is checking failure recovery in #46 and item identity in #31."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
   "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "Refetched every issue state at 2026-09-07 16:06 UTC. The report covers all 69 open issues exactly once. A fresh issue-by-issue review is checking the existing assessments."
+  "audit_note": "Completed the issue-by-issue audit at 2026-09-07 16:15 UTC against main 3455aa2. Read all 69 open bodies and comments, retained unchanged source evidence, and corrected nine assessments. GitHub remains authoritative for current state."
 }
