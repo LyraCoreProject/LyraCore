@@ -1,17 +1,20 @@
 //! Source-scan tripwires: `lib.rs` used to open with "this is the thin index" while
 //! carrying 900+ lines of `#[cfg(test)]` scan machinery below its real index — pulled out here so
 //! that doc comment stays true. `#[cfg(test)] mod tripwires;` is `lib.rs`'s only mention of this
-//! file; every mod below is unchanged in what it enforces, only in where it lives.
+//! file.
 //!
-//! Six tripwires, in file order:
-//! - [`character_owned_tripwire`] — every character-keyed table has a `character_owned` sweep marker.
+//! Nine tripwires, in file order:
+//! - [`character_owned_tripwire`] — every table with a Character-capable guid field has a
+//!   `character_owned` sweep marker or an explicit exclusion.
 //! - [`build_scan_strip_tripwire`] — a commented-out marker invocation never registers.
 //! - [`partition_discipline_tripwire`] — no raw whole-table scan of a spatial table outside the
 //!   partition-scoped helpers, plus its extension (no module game logic reads a shard id).
 //! - [`character_fence_tripwire`] — no raw `game_character` lookup outside the by-guid chokepoint.
 //! - [`print_macro_tripwire`] — no print-family macro anywhere under `module/src` (new).
 //! - [`gc_reap_tripwire`] — every TTL-shaped event table is named in `gc.rs` (new).
+//! - [`grid_cell_tripwire`] — indexed cell fields are derived from their grid coordinates.
 //! - [`issue_reference_tripwire`] — no comment carries a tracker issue reference.
+//! - [`dead_code_allowance_tripwire`] — dead-code allowances stay confined to declared boundaries.
 //!
 //! `partition_discipline_tripwire::raw_scans` and `character_fence_tripwire::raw_lookups` used to
 //! be ~70-line near-clones — identical bound-handle walk-back, handle dedup, comment-line filtering
@@ -24,40 +27,149 @@
 
 /// ENFORCEMENT tripwire: `build.rs`'s codegen only registers tables that remembered to
 /// add a `character_owned` marker — it can't catch a table that forgot to. This test independently
-/// source-scans `src/**/*.rs` for `#[table]` structs carrying a `character_guid: u64`, `player_guid:
-/// u64`, or `owner_guid: u64` field (the three field-name conventions every existing character-owned
-/// table uses) and fails if the SAME FILE doesn't also contain a `character_owned` marker invocation.
-/// A handful of tables use one of those field names for something that is deliberately NOT durable
-/// character-owned data (transient combat rows, or the character's own identity/corpse row handled
-/// directly in `world::cascade_delete_character`); those are the explicit `EXEMPT_ACCESSORS` below —
-/// adding a new exemption should be rare and each one needs its own justifying comment, mirroring how
-/// `world.rs` already explains its 3 hardcoded (non-swept) deletes.
+/// source-scans `src/**/*.rs` for `#[table]` structs carrying a guid field that can name a Character.
+/// A table must have a `character_owned` marker that names or reads that exact accessor, or appear in
+/// `NOT_CHARACTER_OWNED` with a reason. This prevents one marker in a multi-table file from blessing
+/// unrelated tables. Type-specific fields such as `creature_guid` and `item_guid` cannot name a
+/// Character and are listed separately in `NON_UNIT_GUID_FIELDS`.
 #[cfg(test)]
 pub(crate) mod character_owned_tripwire {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    /// Accessor names that carry a `character_guid`/`player_guid`/`owner_guid` field but are
-    /// deliberately NOT swept via a `character_owned` marker:
-    /// - `game_world_entity`: the live entity IS the character (deleted directly); its `owner_guid`
-    ///   field is a transient PET-ownership pointer (which player owns this summoned creature), not a
-    ///   row owned BY a character.
-    /// - `game_corpse`: the character's own corpse row, deleted directly via the deterministic
-    ///   `corpse_guid_for(character_guid)` lookup (not a `by_owner`-style scan).
-    /// - `game_combo_point`: transient combat state (docs' "auras, combo points, lockouts, pending
-    ///   casts are exempt" carve-out) — dies with the live session, not the durable character.
-    /// - `game_auction`: realm-owned market value. Character deletion refuses while a seller owns
-    ///   an active Auction, because sweeping the row would destroy its item and deposit.
-    /// - `game_creature_quest_tap` and `game_creature_quest_tap_member`: creature-lifetime Loot Tag
-    ///   state. Combat end and despawn clear it; a Character leaving a party loses rights through
-    ///   current-membership resolution without deleting the creature's tag-time ceiling.
-    const EXEMPT_ACCESSORS: &[&str] = &[
-        "game_world_entity",
-        "game_corpse",
-        "game_combo_point",
-        "game_auction",
-        "game_creature_quest_tap",
-        "game_creature_quest_tap_member",
+    /// Guid fields whose name fixes a non-Character object kind. Every other `*_guid: u64` field is
+    /// treated as Character-capable. A new object-specific name fails closed until it is classified.
+    const NON_UNIT_GUID_FIELDS: &[&str] = &[
+        "corpse_guid",
+        "creature_guid",
+        "flag_guid",
+        "go_guid",
+        "item_guid",
+        "live_pet_guid",
+        "npc_guid",
+        "pet_guid",
+    ];
+
+    /// Tables with a Character-capable guid that deliberately do not belong to one Character.
+    /// Each reason states the row's actual owner or lifetime.
+    const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
+        (
+            &[
+                "game_auction",
+                "game_auction_bid_decision",
+                "game_auction_bid_hold",
+                "game_auction_hold",
+                "game_auction_operation_receipt",
+            ],
+            "realm-owned Auction value and protocol state",
+        ),
+        (
+            &["game_bot_invite_intent", "game_bot_transfer_intent"],
+            "short-lived intent consumed by the Gateway or event GC",
+        ),
+        (
+            &[
+                "game_channel_event",
+                "game_chat_event",
+                "game_combat_event",
+                "game_emote_event",
+                "game_group_event",
+                "game_roll_event",
+                "game_spell_cast_event",
+                "game_spell_impact_event",
+                "game_system_message_event",
+                "game_teleport_event",
+                "game_trade_event",
+                "game_whisper_event",
+                "game_xp_event",
+            ],
+            "short-lived Relay event reaped by event GC",
+        ),
+        (
+            &[
+                "game_creature_ai_movement_intent",
+                "game_creature_ai_relay_arrival",
+                "game_creature_ai_relay_run",
+                "game_creature_ai_summon_origin",
+                "game_creature_move_event",
+                "game_creature_quest_tap",
+                "game_creature_quest_tap_member",
+            ],
+            "creature-owned state cleared with its creature, engagement, or delivery",
+        ),
+        (
+            &[
+                "game_combo_point",
+                "game_dr_state",
+                "game_melee_attack",
+                "game_taunt_lock",
+                "game_threat",
+            ],
+            "transient combat state cleared when its engagement ends",
+        ),
+        (
+            &[
+                "game_dynamic_object",
+                "game_ground_area",
+                "game_pending_cast",
+                "game_pending_spell_impact",
+                "game_ranged_impact_schedule",
+                "game_resurrect_request",
+                "game_school_lockout",
+                "game_spell_cd",
+                "game_spell_cooldown",
+            ],
+            "transient spell state removed, consumed, or made inert by its deadline",
+        ),
+        (
+            &["game_corpse_loot", "game_corpse_loot_eligible"],
+            "corpse-owned loot state removed when the corpse decays",
+        ),
+        (
+            &["game_group"],
+            "Realm-core Group authority shared by all members",
+        ),
+        (
+            &["game_loot_roll_vote"],
+            "Loot Roll-owned vote snapshot resolved or removed with the roll",
+        ),
+        (
+            &["game_channel_member"],
+            "channel membership rebuilt by client join and leave requests",
+        ),
+        (&["game_gateway_session"], "live Session routing state"),
+        (
+            &["game_entity_motion_pending"],
+            "short-lived motion staging row drained by the next publish tick",
+        ),
+        (
+            &["game_movement_violation"],
+            "short-lived movement diagnostic reaped by event GC",
+        ),
+        (
+            &["game_character"],
+            "the root Character row deleted directly after its dependent state",
+        ),
+        (
+            &["game_corpse"],
+            "the Character's corpse is deleted directly through its deterministic corpse guid",
+        ),
+        (
+            &["game_entity_motion", "game_world_entity"],
+            "live unit state removed directly when the unit leaves the world",
+        ),
+        (
+            &[
+                "game_creature_spawn",
+                "game_creature_spline",
+                "game_encounter_spawn",
+            ],
+            "creature-owned spawn or movement state keyed by the creature guid",
+        ),
+        (
+            &["game_gameobject"],
+            "World GameObject state keyed by the GameObject's own guid",
+        ),
     ];
 
     /// Every `.rs` file that compiles into this crate: core `src/` plus each drop-in
@@ -100,26 +212,209 @@ pub(crate) mod character_owned_tripwire {
         }
     }
 
-    /// Extract every `#[table(accessor = NAME` ... its struct's field block, as `(accessor, fields_text)`.
-    /// A plain text scan (mirrors `build.rs`'s approach): find `#[table(`, pull the accessor name out of
-    /// the attribute, then find the following `struct ... { ... }` and take everything up to the matching
-    /// close brace (braces don't nest inside a plain field list here, so a naive depth counter is exact).
+    /// Replace comments, literals, and `#[cfg(test)]` items with spaces while preserving byte offsets
+    /// and newlines. The scanner can then use simple balanced-delimiter walks without accepting a
+    /// declaration that production never compiles.
+    fn production_code(content: &str) -> String {
+        fn blank(bytes: &mut [u8], start: usize, end: usize) {
+            for byte in &mut bytes[start..end] {
+                if *byte != b'\n' {
+                    *byte = b' ';
+                }
+            }
+        }
+
+        let source = content.as_bytes();
+        let mut code = source.to_vec();
+        let mut i = 0;
+        while i < source.len() {
+            if source[i..].starts_with(b"//") {
+                let end = source[i..]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map(|offset| i + offset)
+                    .unwrap_or(source.len());
+                blank(&mut code, i, end);
+                i = end;
+                continue;
+            }
+            if source[i..].starts_with(b"/*") {
+                let start = i;
+                i += 2;
+                let mut depth = 1usize;
+                while i < source.len() && depth > 0 {
+                    if source[i..].starts_with(b"/*") {
+                        depth += 1;
+                        i += 2;
+                    } else if source[i..].starts_with(b"*/") {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                blank(&mut code, start, i);
+                continue;
+            }
+            if source[i] == b'r' {
+                let mut quote = i + 1;
+                while source.get(quote) == Some(&b'#') {
+                    quote += 1;
+                }
+                if source.get(quote) == Some(&b'"') {
+                    let hashes = quote - i - 1;
+                    let start = i;
+                    i = quote + 1;
+                    while i < source.len() {
+                        if source[i] == b'"'
+                            && source.get(i + 1..i + 1 + hashes)
+                                == Some(&source[quote - hashes..quote])
+                        {
+                            i += 1 + hashes;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    blank(&mut code, start, i);
+                    continue;
+                }
+            }
+            if source[i] == b'"' {
+                let start = i;
+                i += 1;
+                while i < source.len() {
+                    match source[i] {
+                        b'\\' => i = (i + 2).min(source.len()),
+                        b'"' => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                blank(&mut code, start, i);
+                continue;
+            }
+            if source[i] == b'\'' {
+                // A lifetime starts with the same quote. Only mask the narrow Rust char-literal
+                // shapes: one byte or an escape followed by a closing quote.
+                let escaped = source.get(i + 1) == Some(&b'\\');
+                let close = if escaped { i + 3 } else { i + 2 };
+                if source.get(close) == Some(&b'\'') {
+                    blank(&mut code, i, close + 1);
+                    i = close + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+
+        let test_attr = b"#[cfg(test)]";
+        let mut search_from = 0usize;
+        while let Some(offset) = code[search_from..]
+            .windows(test_attr.len())
+            .position(|window| window == test_attr)
+        {
+            let test_start = search_from + offset;
+            let mut item_start = test_start;
+            loop {
+                let Some(end) = code[..item_start]
+                    .iter()
+                    .rposition(|byte| !byte.is_ascii_whitespace())
+                    .map(|position| position + 1)
+                else {
+                    break;
+                };
+                if code.get(end - 1) != Some(&b']') {
+                    break;
+                }
+
+                let mut depth = 0usize;
+                let mut attribute_start = None;
+                for position in (0..end).rev() {
+                    match code[position] {
+                        b']' => depth += 1,
+                        b'[' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                if position > 0 && code[position - 1] == b'#' {
+                                    attribute_start = Some(position - 1);
+                                }
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let Some(start) = attribute_start else {
+                    break;
+                };
+                item_start = start;
+            }
+
+            let mut cursor = test_start + test_attr.len();
+            while code.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+                cursor += 1;
+            }
+            while code.get(cursor..cursor + 2) == Some(b"#[") {
+                let Some(close) = code[cursor..].iter().position(|byte| *byte == b']') else {
+                    break;
+                };
+                cursor += close + 1;
+                while code.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+                    cursor += 1;
+                }
+            }
+            let semicolon = code[cursor..]
+                .iter()
+                .position(|byte| *byte == b';')
+                .map(|offset| cursor + offset);
+            let open = code[cursor..]
+                .iter()
+                .position(|byte| *byte == b'{')
+                .map(|offset| cursor + offset);
+            let item_end = match (semicolon, open) {
+                (Some(end), None) => end + 1,
+                (Some(end), Some(open)) if end < open => end + 1,
+                (_, Some(open)) => {
+                    let mut depth = 0i32;
+                    let mut end = code.len();
+                    for (offset, byte) in code[open..].iter().enumerate() {
+                        match byte {
+                            b'{' => depth += 1,
+                            b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    end = open + offset + 1;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    end
+                }
+                _ => code.len(),
+            };
+            blank(&mut code, item_start, item_end);
+            search_from = item_end;
+        }
+
+        String::from_utf8(code).expect("masking Rust source preserves UTF-8")
+    }
+
+    /// Extract every production `#[table(accessor = NAME` struct's field block as
+    /// `(accessor, fields_text)`.
     ///
     /// `pub(super)`: [`gc_reap_tripwire`] (a sibling in this same file) reuses this rather than
     /// re-walking every `#[table]` struct a third time.
     pub(super) fn extract_tables(content: &str) -> Vec<(String, String)> {
+        let code = production_code(content);
         let mut out = Vec::new();
         let mut search_from = 0usize;
-        while let Some(rel) = content[search_from..].find("#[table(") {
+        while let Some(rel) = code[search_from..].find("#[table(") {
             let attr_start = search_from + rel;
-            // Skip a `#[table(...)]` mention inside a `//`/`///`/`//!` comment (this doc-comment text
-            // itself, or `helpers.rs`'s explainer, describe the attribute without defining one) — only
-            // a line that isn't a comment is a real attribute.
-            if crate::test_scan::on_comment_line(content, attr_start) {
-                search_from = attr_start + "#[table(".len();
-                continue;
-            }
-            let attr_rest = &content[attr_start..];
+            let attr_rest = &code[attr_start..];
             let accessor = attr_rest
                 .find("accessor")
                 .and_then(|i| attr_rest[i..].find('=').map(|eq| i + eq + 1))
@@ -166,14 +461,106 @@ pub(crate) mod character_owned_tripwire {
         out
     }
 
-    fn has_character_owned_marker(content: &str) -> bool {
-        let marker = format!("{}{}", "character_owned", "!");
-        content.contains(&format!("{marker}(delete"))
-            || content.contains(&format!("{marker}(restamp"))
+    fn character_owned_markers(content: &str) -> Vec<String> {
+        let code = production_code(content);
+        let needle = format!("{}{}(", "character_owned", "!");
+        let mut markers = Vec::new();
+        let mut search_from = 0usize;
+        while let Some(offset) = code[search_from..].find(&needle) {
+            let start = search_from + offset;
+            let open = start + needle.len() - 1;
+            let mut depth = 0i32;
+            let mut end = None;
+            for (offset, byte) in code.as_bytes()[open..].iter().enumerate() {
+                match byte {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(open + offset + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let end = end.unwrap_or_else(|| panic!("unterminated character_owned marker"));
+            let marker = &code[start..end];
+            let kind = code[open + 1..].trim_start();
+            if kind.starts_with("delete") || kind.starts_with("restamp") {
+                markers.push(marker.to_string());
+            }
+            search_from = end;
+        }
+        markers
+    }
+
+    fn marker_covers_accessor(marker: &str, accessor: &str) -> bool {
+        fn contains_identifier(text: &str, identifier: &str) -> bool {
+            text.match_indices(identifier).any(|(start, _)| {
+                let before = text[..start]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+                let after = text[start + identifier.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+                before && after
+            })
+        }
+
+        contains_identifier(marker, &format!("sweep_delete_{accessor}"))
+            || contains_identifier(marker, &format!("sweep_restamp_{accessor}"))
+            || marker.contains(&format!(".{accessor}()"))
+    }
+
+    fn character_capable_guid_fields(fields: &str) -> Vec<&str> {
+        let tokens = fields
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>();
+        let mut guids = Vec::new();
+        for (index, token) in tokens.iter().enumerate() {
+            if !(token.ends_with("_guid") || *token == "guid")
+                || NON_UNIT_GUID_FIELDS.contains(token)
+            {
+                continue;
+            }
+            let is_u64 = tokens.get(index + 1) == Some(&"u64")
+                || (tokens.get(index + 1) == Some(&"Option")
+                    && tokens.get(index + 2) == Some(&"u64"));
+            if is_u64 && !guids.contains(token) {
+                guids.push(*token);
+            }
+        }
+        guids
+    }
+
+    fn unclassified_tables(content: &str) -> Vec<(String, Vec<String>)> {
+        let markers = character_owned_markers(content);
+        extract_tables(content)
+            .into_iter()
+            .filter_map(|(accessor, fields)| {
+                let guids = character_capable_guid_fields(&fields);
+                if guids.is_empty()
+                    || NOT_CHARACTER_OWNED
+                        .iter()
+                        .any(|(excluded, _)| excluded.contains(&accessor.as_str()))
+                    || markers
+                        .iter()
+                        .any(|marker| marker_covers_accessor(marker, &accessor))
+                {
+                    None
+                } else {
+                    Some((accessor, guids.into_iter().map(str::to_string).collect()))
+                }
+            })
+            .collect()
     }
 
     #[test]
-    fn every_character_keyed_table_has_a_character_owned_marker() {
+    fn every_character_capable_guid_table_is_classified() {
         let files = scanned_files();
 
         let mut missing = Vec::new();
@@ -187,30 +574,193 @@ pub(crate) mod character_owned_tripwire {
             }
             let content = fs::read_to_string(file)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
-            let tables = extract_tables(&content);
-            if tables.is_empty() {
-                continue;
-            }
-            let marker_present = has_character_owned_marker(&content);
-            for (accessor, fields) in &tables {
-                let is_character_keyed = fields.contains("character_guid: u64")
-                    || fields.contains("player_guid: u64")
-                    || fields.contains("owner_guid: u64");
-                if !is_character_keyed || EXEMPT_ACCESSORS.contains(&accessor.as_str()) {
-                    continue;
-                }
-                if !marker_present {
-                    missing.push(format!("{accessor} (in {})", file.display()));
-                }
+            for (accessor, guids) in unclassified_tables(&content) {
+                missing.push(format!("{accessor} ({guids:?}, in {})", file.display()));
             }
         }
 
         assert!(
             missing.is_empty(),
-            "character-keyed table(s) with no `character_owned` sweep marker in their file: {missing:?}\n\
-             Add a `crate::character_owned` `delete` marker invocation (and usually the `restamp` form \
-             too, see the macro doc at the top of lib.rs) next to the table, OR add the accessor to \
-             `EXEMPT_ACCESSORS` above with a comment justifying why it's intentionally unswept."
+            "table(s) with a Character-capable guid have no matching `character_owned` sweep marker \
+             or `NOT_CHARACTER_OWNED` classification: {missing:?}\n\
+             Add a `crate::character_owned` `delete` marker invocation (and usually the `restamp` \
+             form too, see the macro doc at the top of lib.rs), or add the accessor to \
+             `NOT_CHARACTER_OWNED` with its actual owner or lifetime."
+        );
+    }
+
+    #[test]
+    fn an_unclassified_target_guid_table_fails_the_scanner() {
+        let fixture = r#"
+            #[table(accessor = game_unclassified_target, public)]
+            pub struct UnclassifiedTarget {
+                #[primary_key]
+                pub id: u64,
+                pub target_guid: u64,
+            }
+        "#;
+
+        assert_eq!(
+            unclassified_tables(fixture),
+            vec![(
+                "game_unclassified_target".to_string(),
+                vec!["target_guid".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn an_unclassified_bare_guid_table_fails_the_scanner() {
+        let source = r#"
+            #[table(accessor = game_unclassified)]
+            pub struct Unclassified {
+                pub guid: u64,
+            }
+        "#;
+
+        assert_eq!(
+            unclassified_tables(source),
+            vec![("game_unclassified".to_owned(), vec!["guid".to_owned()])]
+        );
+    }
+
+    #[test]
+    fn a_marker_for_another_table_does_not_classify_the_target_table() {
+        let fixture = r#"
+            #[table(accessor = game_owned)]
+            pub struct Owned { pub character_guid: u64 }
+            crate::character_owned!(delete, fn sweep_delete_game_owned(ctx, character_guid) {
+                ctx.db.game_owned().character_guid().delete(character_guid);
+            });
+
+            #[table(accessor = game_unclassified_target)]
+            pub struct UnclassifiedTarget { pub target_guid: u64 }
+        "#;
+
+        assert_eq!(
+            unclassified_tables(fixture),
+            vec![(
+                "game_unclassified_target".to_string(),
+                vec!["target_guid".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn a_prefix_sharing_marker_does_not_classify_the_shorter_accessor() {
+        let fixture = r#"
+            #[table(accessor = game_owned)]
+            pub struct Owned { pub target_guid: u64 }
+
+            #[table(accessor = game_owned_extra)]
+            pub struct OwnedExtra { pub character_guid: u64 }
+            crate::character_owned!(delete, fn sweep_delete_game_owned_extra(ctx, character_guid) {
+                ctx.db.game_owned_extra().character_guid().delete(character_guid);
+            });
+        "#;
+
+        assert_eq!(
+            unclassified_tables(fixture),
+            vec![("game_owned".to_string(), vec!["target_guid".to_string()])]
+        );
+    }
+
+    #[test]
+    fn comments_and_literals_do_not_declare_tables() {
+        let fixture = r##"
+            // #[table(accessor = game_line_comment)]
+            // struct LineComment { target_guid: u64 }
+            /*
+            #[table(accessor = game_block_comment)]
+            struct BlockComment { target_guid: u64 }
+            */
+            const EXAMPLE: &str = "#[table(accessor = game_string)] struct StringTable { target_guid: u64 }";
+            const RAW_EXAMPLE: &str = r#"#[table(accessor = game_raw_string)]
+                struct RawStringTable { target_guid: u64 }"#;
+        "##;
+
+        assert!(unclassified_tables(fixture).is_empty());
+    }
+
+    #[test]
+    fn test_only_declarations_do_not_enter_the_census() {
+        let fixture = r#"
+            #[cfg(test)]
+            #[table(accessor = game_test_fixture)]
+            pub struct TestFixture {
+                #[primary_key]
+                pub target_guid: u64,
+            }
+        "#;
+
+        assert!(unclassified_tables(fixture).is_empty());
+    }
+
+    #[test]
+    fn a_table_attribute_before_cfg_test_does_not_attach_to_the_next_struct() {
+        let fixture = r#"
+            #[table(accessor = game_test_fixture)]
+            #[cfg(test)]
+            pub struct TestFixture { pub target_guid: u64 }
+
+            #[table(accessor = game_production)]
+            pub struct Production { pub source_guid: u64 }
+        "#;
+
+        assert_eq!(
+            unclassified_tables(fixture),
+            vec![("game_production".to_owned(), vec!["source_guid".to_owned()])]
+        );
+    }
+
+    #[test]
+    fn lifetimes_do_not_hide_following_table_declarations() {
+        let fixture = r#"
+            fn borrow<'a>(value: &'a str) -> &'a str { value }
+            #[table(accessor = game_after_lifetime)]
+            pub struct AfterLifetime { pub target_guid: u64 }
+        "#;
+
+        assert_eq!(
+            unclassified_tables(fixture),
+            vec![(
+                "game_after_lifetime".to_string(),
+                vec!["target_guid".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn exclusions_match_the_current_table_census_and_give_reasons() {
+        let mut candidates = Vec::new();
+        for file in scanned_files() {
+            if file.file_name().and_then(|name| name.to_str()) == Some("tripwires.rs") {
+                continue;
+            }
+            let content = fs::read_to_string(&file)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", file.display()));
+            for (accessor, fields) in extract_tables(&content) {
+                if !character_capable_guid_fields(&fields).is_empty() {
+                    candidates.push(accessor);
+                }
+            }
+        }
+
+        let mut stale_or_unreasoned = NOT_CHARACTER_OWNED
+            .iter()
+            .flat_map(|(accessors, reason)| {
+                accessors.iter().filter_map(|accessor| {
+                    (reason.trim().is_empty()
+                        || !candidates.iter().any(|candidate| candidate == accessor))
+                    .then_some(*accessor)
+                })
+            })
+            .collect::<Vec<_>>();
+        stale_or_unreasoned.sort_unstable();
+
+        assert!(
+            stale_or_unreasoned.is_empty(),
+            "stale or unreasoned `NOT_CHARACTER_OWNED` entries: {stale_or_unreasoned:?}"
         );
     }
 }
