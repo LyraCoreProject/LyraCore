@@ -104,6 +104,7 @@ fn auction_view(row: Auction) -> crate::codec::AuctionView {
         highest_bidder_guid: row.highest_bidder_guid,
         highest_bid: row.highest_bid,
         expires_at_micros: row.expires_at.to_micros_since_unix_epoch(),
+        random_property_id: row.random_property_id,
     }
 }
 
@@ -332,6 +333,7 @@ mod tests {
             item_durability: 10,
             item_enchant_id: 0,
             item_soulbound: false,
+            random_property_id: 0,
             start_bid: 1,
             buyout: 0,
             highest_bidder_guid: 0,

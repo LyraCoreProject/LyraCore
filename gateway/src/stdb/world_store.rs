@@ -1073,6 +1073,7 @@ impl WorldStore for Coordinator {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
+        random_property_id: u32,
     ) -> Result<()> {
         self.realm_loot_op(
             op,
@@ -1083,6 +1084,7 @@ impl WorldStore for Coordinator {
             vote,
             deadline_micros,
             recipients,
+            random_property_id,
         )
     }
 

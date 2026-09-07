@@ -68,6 +68,7 @@ impl EscrowLedger for FakeLedger {
             item_durability: e.item.durability,
             item_enchant_id: e.item.enchant_id,
             item_soulbound: e.item.soulbound,
+            random_property_id: e.item.random_property_id,
             cod: e.cod,
         })
     }
@@ -429,6 +430,7 @@ fn sword() -> ItemSnapshot {
         durability: 42,
         enchant_id: 7,
         soulbound: false,
+        random_property_id: 117,
     }
 }
 
@@ -1146,6 +1148,7 @@ fn a_soulbound_item_is_refused_at_send_and_stays_in_the_senders_bags() {
         ITEM_GUID,
         ItemSnapshot {
             soulbound: true,
+            random_property_id: 117,
             ..sword()
         },
     );

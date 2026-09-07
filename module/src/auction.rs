@@ -54,6 +54,8 @@ pub struct Auction {
     pub revision: u64,
     pub deposit_rate: u32,
     pub consignment_rate: u32,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 /// Source-shard value reserved by a sharded listing operation. An active operation receipt makes
@@ -83,6 +85,8 @@ pub struct AuctionHold {
     pub house: u32,
     pub deposit_rate: u32,
     pub consignment_rate: u32,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 /// Durable idempotency receipt. The full listing payload makes identical replay distinguishable
@@ -112,6 +116,8 @@ pub struct AuctionOperationReceipt {
     pub house: u32,
     pub deposit_rate: u32,
     pub consignment_rate: u32,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 /// Source-shard copper fence for one caller-identified bid. `outcome == 0` is pending; every
@@ -1166,6 +1172,7 @@ fn listing_from_hold(row: AuctionHold) -> PreparedListing {
             durability: row.item_durability,
             enchant_id: row.item_enchant_id,
             soulbound: row.item_soulbound,
+            random_property_id: row.random_property_id,
         },
         deposit: row.deposit,
         created_micros: row.created_micros,
@@ -1183,6 +1190,7 @@ fn hold_from_listing(listing: PreparedListing) -> AuctionHold {
         item_durability: listing.snapshot.durability,
         item_enchant_id: listing.snapshot.enchant_id,
         item_soulbound: listing.snapshot.soulbound,
+        random_property_id: listing.snapshot.random_property_id,
         start_bid: listing.request.terms.start_bid,
         buyout: listing.request.terms.buyout,
         duration_minutes: listing.request.terms.duration_minutes,
@@ -1219,6 +1227,7 @@ fn listing_from_receipt(row: AuctionOperationReceipt) -> ListingReceipt {
                 durability: row.item_durability,
                 enchant_id: row.item_enchant_id,
                 soulbound: row.item_soulbound,
+                random_property_id: row.random_property_id,
             },
             deposit: row.deposit,
             created_micros: row.created_micros,
@@ -1239,6 +1248,7 @@ fn receipt_from_listing(listing: PreparedListing, auction_id: u32) -> AuctionOpe
         item_durability: listing.snapshot.durability,
         item_enchant_id: listing.snapshot.enchant_id,
         item_soulbound: listing.snapshot.soulbound,
+        random_property_id: listing.snapshot.random_property_id,
         start_bid: listing.request.terms.start_bid,
         buyout: listing.request.terms.buyout,
         duration_minutes: listing.request.terms.duration_minutes,
@@ -1293,6 +1303,7 @@ fn insert_active_auction(ctx: &ReducerContext, listing: &PreparedListing) -> u32
         item_durability: listing.snapshot.durability,
         item_enchant_id: listing.snapshot.enchant_id,
         item_soulbound: listing.snapshot.soulbound,
+        random_property_id: listing.snapshot.random_property_id,
         start_bid: listing.request.terms.start_bid,
         buyout: listing.request.terms.buyout,
         highest_bidder_guid: 0,
@@ -1596,6 +1607,7 @@ impl BidMarket for CtxBidMarket<'_> {
                     durability: auction.item_durability,
                     enchant_id: auction.item_enchant_id,
                     soulbound: auction.item_soulbound,
+                    random_property_id: auction.random_property_id,
                 },
                 highest_bidder_guid: auction.highest_bidder_guid,
                 highest_bid: auction.highest_bid,
@@ -1986,6 +1998,7 @@ pub fn realm_auction_commit_listing(
     item_durability: u32,
     item_enchant_id: u32,
     item_soulbound: bool,
+    random_property_id: u32,
     house: u32,
     deposit_rate: u32,
     consignment_rate: u32,
@@ -2019,6 +2032,7 @@ pub fn realm_auction_commit_listing(
             durability: item_durability,
             enchant_id: item_enchant_id,
             soulbound: item_soulbound,
+            random_property_id,
         },
         deposit,
         created_micros,
@@ -2081,6 +2095,7 @@ pub fn realm_auction_refund_listing(
     item_durability: u32,
     item_enchant_id: u32,
     item_soulbound: bool,
+    random_property_id: u32,
     house: u32,
     deposit_rate: u32,
     consignment_rate: u32,
@@ -2103,6 +2118,7 @@ pub fn realm_auction_refund_listing(
             item_durability,
             item_enchant_id,
             item_soulbound,
+            random_property_id,
             house,
             deposit_rate,
             consignment_rate,
@@ -2386,6 +2402,7 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         item_durability: 17,
         item_enchant_id: 9,
         item_soulbound: false,
+        random_property_id: 117,
         start_bid: 100,
         buyout: 500,
         highest_bidder_guid: BUYOUT_FIXTURE_DISPLACED_GUID,
@@ -2490,6 +2507,7 @@ pub fn debug_verify_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), S
                 durability: 17,
                 enchant_id: 9,
                 soulbound: false,
+                random_property_id: 117,
             })
     {
         return Err("winner item mail changed".to_string());
@@ -2523,6 +2541,7 @@ const EXPIRY_FIXTURE_ITEM: crate::items::ItemSnapshot = crate::items::ItemSnapsh
     durability: 17,
     enchant_id: 9,
     soulbound: false,
+    random_property_id: 117,
 };
 
 /// Stage a valid winning-bid Auction whose one-shot schedule fires shortly after this transaction.
@@ -2576,6 +2595,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
             item_durability: EXPIRY_FIXTURE_ITEM.durability,
             item_enchant_id: EXPIRY_FIXTURE_ITEM.enchant_id,
             item_soulbound: EXPIRY_FIXTURE_ITEM.soulbound,
+            random_property_id: EXPIRY_FIXTURE_ITEM.random_property_id,
             start_bid: 100,
             buyout: 500,
             duration_minutes: 720,
@@ -2597,6 +2617,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         item_durability: EXPIRY_FIXTURE_ITEM.durability,
         item_enchant_id: EXPIRY_FIXTURE_ITEM.enchant_id,
         item_soulbound: EXPIRY_FIXTURE_ITEM.soulbound,
+        random_property_id: EXPIRY_FIXTURE_ITEM.random_property_id,
         start_bid: 100,
         buyout: 500,
         highest_bidder_guid: EXPIRY_FIXTURE_WINNER_GUID,
@@ -2792,6 +2813,7 @@ mod tests {
                 durability: 17,
                 enchant_id: 9,
                 soulbound: false,
+                random_property_id: 117,
             },
             sell_price: 100,
         }

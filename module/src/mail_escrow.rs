@@ -40,6 +40,8 @@ pub struct MailEscrow {
     pub item_soulbound: bool,
     #[default(0u32)]
     pub cod: u32,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 impl MailEscrow {
@@ -51,6 +53,7 @@ impl MailEscrow {
             durability: self.item_durability,
             enchant_id: self.item_enchant_id,
             soulbound: self.item_soulbound,
+            random_property_id: self.random_property_id,
         }
     }
 }
@@ -457,6 +460,7 @@ pub(crate) fn apply_fence<S: FenceSink>(
         item_durability: item.durability,
         item_enchant_id: item.enchant_id,
         item_soulbound: item.soulbound,
+        random_property_id: item.random_property_id,
         cod: letter.cod,
     });
     sink.arm_reaper();
@@ -565,6 +569,7 @@ pub(crate) fn apply_take_fence<S: TakeFenceSink>(
         item_durability: 0,
         item_enchant_id: 0,
         item_soulbound: false,
+        random_property_id: 0,
         cod: 0,
     });
     sink.arm_reaper();
@@ -634,6 +639,7 @@ pub(crate) fn apply_take_item_fence<S: TakeFenceSink>(
         item_durability: item.durability,
         item_enchant_id: item.enchant_id,
         item_soulbound: item.soulbound,
+        random_property_id: item.random_property_id,
         cod: 0,
     });
     sink.arm_reaper();
@@ -820,6 +826,7 @@ pub fn realm_mail_commit(
     item_durability: u32,
     item_enchant_id: u32,
     item_soulbound: bool,
+    random_property_id: u32,
     cod: u32,
     cod_mail_id: u64,
 ) -> Result<(), String> {
@@ -842,6 +849,7 @@ pub fn realm_mail_commit(
             durability: item_durability,
             enchant_id: item_enchant_id,
             soulbound: item_soulbound,
+            random_property_id,
         },
         cod_mail_id,
     )
@@ -903,6 +911,7 @@ pub fn realm_mail_item_payout(
     item_durability: u32,
     item_enchant_id: u32,
     item_soulbound: bool,
+    random_property_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     apply_item_payout(
@@ -916,6 +925,7 @@ pub fn realm_mail_item_payout(
             durability: item_durability,
             enchant_id: item_enchant_id,
             soulbound: item_soulbound,
+            random_property_id,
         },
     )
 }
@@ -1118,7 +1128,7 @@ mod tests {
                   sender_guid, &Letter { recipient_guid, subject, body, money, postage: 0, cod, \
                   }, &crate::items::ItemSnapshot { entry: item_entry, stack_count: \
                   item_stack_count, durability: item_durability, enchant_id: item_enchant_id, \
-                  soulbound: item_soulbound, }, cod_mail_id, ) }",
+                  soulbound: item_soulbound, random_property_id, }, cod_mail_id, ) }",
             ),
             (
                 "pub fn realm_mail_take_money_fence(",
@@ -1140,7 +1150,7 @@ mod tests {
                 "{ require_operator(ctx)?; apply_item_payout( &mut CtxDb { ctx }, escrow_id, \
                   payee_guid, mail_id, &crate::items::ItemSnapshot { entry: item_entry, \
                   stack_count: item_stack_count, durability: item_durability, enchant_id: \
-                  item_enchant_id, soulbound: item_soulbound, }, ) }",
+                  item_enchant_id, soulbound: item_soulbound, random_property_id, }, ) }",
             ),
             (
                 "pub fn realm_mail_confirm_delivery(",

@@ -381,7 +381,7 @@ pub(crate) fn apply_enchant_item(
         return Err("dead players cannot enchant".to_string());
     }
     // The enchant id must be a known, applyable enchant — a client can't stamp an arbitrary id.
-    if !crate::items::is_known_enchant(enchant_id) {
+    if !crate::items::is_known_enchant(ctx, enchant_id) {
         return Err(format!("unknown enchant {enchant_id}"));
     }
     let mut inst = crate::items::item_in_slot(ctx, guid, target_slot)

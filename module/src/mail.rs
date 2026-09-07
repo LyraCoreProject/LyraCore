@@ -25,6 +25,8 @@ pub struct Mail {
     pub cod: u32,
     pub was_read: bool,
     pub created_at: Timestamp,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 crate::character_owned!(delete, fn sweep_delete_game_mail(ctx, character_guid) {
     let mails = ctx.db.game_mail();
@@ -45,6 +47,7 @@ impl Mail {
             durability: self.item_durability,
             enchant_id: self.item_enchant_id,
             soulbound: self.item_soulbound,
+            random_property_id: self.random_property_id,
         }
     }
 }
@@ -130,6 +133,7 @@ pub(crate) fn insert_mail(
             item_durability: item.durability,
             item_enchant_id: item.enchant_id,
             item_soulbound: item.soulbound,
+            random_property_id: item.random_property_id,
             money,
             cod,
             was_read: false,
@@ -268,6 +272,7 @@ pub(crate) fn clear_mail_item(ctx: &ReducerContext, mail_id: u64) {
             item_durability: 0,
             item_enchant_id: 0,
             item_soulbound: false,
+            random_property_id: 0,
             ..row
         });
     }

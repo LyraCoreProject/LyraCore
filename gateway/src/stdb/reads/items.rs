@@ -48,6 +48,7 @@ impl Coordinator {
                     durability: i.durability,
                     max_durability: tmpl.max_durability,
                     container_slots: tmpl.container_slots,
+                    random_property_id: i.random_property_id,
                 })
             })
             .collect();
@@ -134,7 +135,13 @@ impl Coordinator {
                     .find(&l.item_entry)
                     .map(|t| t.display_id)
                     .unwrap_or(0);
-                (l.slot, l.item_entry, l.count, display_id)
+                (
+                    l.slot,
+                    l.item_entry,
+                    l.count,
+                    display_id,
+                    l.random_property_id,
+                )
             })
             .collect();
         items.sort_by_key(|(slot, ..)| *slot); // stable loot-slot order (SQL has no ORDER BY in 2.5)
@@ -159,7 +166,7 @@ impl Coordinator {
     }
 
     /// The player's buyback ring, newest-first: `(item_entry, stack_count, price)` ≤12.
-    pub fn buyback_ring(&self, player_guid: u64) -> Vec<(u32, u32, u32)> {
+    pub fn buyback_ring(&self, player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
         let mut rows: Vec<_> = db
@@ -169,7 +176,7 @@ impl Coordinator {
             .collect();
         rows.sort_by(|a, b| b.id.cmp(&a.id));
         rows.into_iter()
-            .map(|b| (b.item_entry, b.stack_count, b.price))
+            .map(|b| (b.item_entry, b.stack_count, b.price, b.random_property_id))
             .collect()
     }
 }

@@ -12,6 +12,9 @@ use spacetimedb::{log, ReducerContext, SpacetimeType};
 
 use super::TransferOut;
 
+#[path = "legacy_item_rows.rs"]
+mod legacy_item_rows;
+
 /// The subset of [`crate::CHARACTER_OWNED_TABLES`] marked **hot**: state the destination needs in
 /// the player's first frame (worn gear, castable abilities, trained skills, the action bar). The
 /// rest is **cold** — correct to stream in behind the loading screen.
@@ -131,10 +134,9 @@ pub struct ManifestEntry {
     pub hot: bool,
 }
 
-/// One manifest table's ROWS, serialized. `rows` is bsatn of that table's `Vec<Row>`,
-/// produced and consumed by the table's own `character_owned!(transfer, ..)` arm — the only code
-/// that knows the row type. Everything between the two arms treats it as opaque bytes, which is
-/// what lets ONE blob carry every table with zero per-table code in the protocol itself.
+/// One manifest table's rows, encoded as BSATN. Item-bearing tables use an explicit row-format
+/// suffix so an older Shard refuses data whose fields it cannot preserve. The schema manifest
+/// keeps the canonical table names. Untagged item rows are upgraded when old Escrow arrives.
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
 pub struct TableRows {
     pub table: String,
@@ -222,8 +224,15 @@ where
     if bytes.is_empty() {
         return Vec::new(); // the table had no rows for this character
     }
-    match spacetimedb::sats::bsatn::from_slice::<Vec<R>>(bytes) {
-        Ok(rows) => rows,
+    let mut remaining = bytes;
+    match spacetimedb::sats::bsatn::from_reader::<Vec<R>>(&mut remaining) {
+        Ok(rows) if remaining.is_empty() => rows,
+        Ok(_) => {
+            if outcome.is_ok() {
+                *outcome = Err("arriving rows contain trailing bytes".to_owned());
+            }
+            Vec::new()
+        }
         Err(e) => {
             if outcome.is_ok() {
                 *outcome = Err(format!("cannot deserialize arriving rows: {e}"));
@@ -291,7 +300,9 @@ pub(crate) fn export_rows_via<C>(
 
 /// The production binding of [`export_rows_via`]: this build's generated registry.
 pub(crate) fn export_rows(ctx: &ReducerContext, character_guid: u64) -> Vec<TableRows> {
-    export_rows_via(ctx, character_guid, crate::CHARACTER_OWNED_TRANSFERS)
+    let mut payload = export_rows_via(ctx, character_guid, crate::CHARACTER_OWNED_TRANSFERS);
+    legacy_item_rows::mark_current(&mut payload);
+    payload
 }
 
 /// Apply an arriving payload. Refuses (whole transaction aborts) on a table this build does not
@@ -367,10 +378,11 @@ pub(crate) fn import_rows(
     character_guid: u64,
     payload: &[TableRows],
 ) -> Result<(), String> {
+    let payload = legacy_item_rows::prepare(payload)?;
     import_rows_via(
         ctx,
         character_guid,
-        payload,
+        &payload,
         crate::CHARACTER_OWNED_TRANSFERS,
     )
 }

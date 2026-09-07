@@ -58,6 +58,7 @@ pub fn init(ctx: &ReducerContext) {
     seed_production_core(ctx);
     seed_map0_demo_content(ctx);
     seed_spell_registry(ctx);
+    crate::items::seed_compatibility_enchantments(ctx);
     seed_scheduler_arming(ctx);
 }
 

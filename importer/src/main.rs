@@ -54,6 +54,7 @@ mod dbc;
 mod eventai;
 mod eventai_presentation;
 mod go_model;
+mod item_property;
 mod nav;
 mod pack_client;
 mod package_delta;
@@ -409,6 +410,7 @@ mod it {
     pub const START_QUEST: usize = 110; // quest-starter link (work-item 213: 194 consumes)
     pub const SHEATH: usize = 113; // sheath posture, sent verbatim to the client (0=no stow, 1H sword=3,
                                    // shield=4 — opaque client indices, see items/tables.rs::sheath)
+    pub const RANDOM_PROPERTY: usize = 114;
     pub const BLOCK: usize = 115; // shield block value (CREATE TABLE: …RandomProperty(114), block(115), itemset(116))
     pub const MAX_DURABILITY: usize = 117;
     // BagFamily (work-item 213): bag-type restriction bitmask. Anchored right after the
@@ -3327,7 +3329,7 @@ fn build_items_and_loot(
         // non-shields) — makes imported shields actually block (combat::effective_block_value reads it).
         // restores_power (drink) is a Bool → bare true/false SQL literal (the is_negative Bool-SQL note).
         item_rows.push(format!(
-            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race})",
+            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property})",
             sheath = field(&row, it::SHEATH).parse::<u8>().unwrap_or(0),
             sp2 = field(&row, it::SPELLID_2).parse::<u32>().unwrap_or(0),
             spt2 = field(&row, it::SPELLTRIGGER_2).parse::<u8>().unwrap_or(0),
@@ -3354,6 +3356,7 @@ fn build_items_and_loot(
             delay = field(&row, it::DELAY),
             armor = field(&row, it::ARMOR),
             block = field(&row, it::BLOCK),
+            random_property = field(&row, it::RANDOM_PROPERTY).parse::<u32>().unwrap_or(0),
             allowed_class = allowed_class,
             allowed_race = allowed_race,
         ));
@@ -3862,6 +3865,9 @@ fn build_dump_plan(
     //    the `import_creature_spawns` reducer (step 6), which clears every CREATURE entity + spawn
     //    and loads the new spawns with a valid `ctx.timestamp`.
     let mut stmts: Vec<String> = Vec::new();
+    if family_active(args, "items") {
+        stmts.extend(item_property::dump_sql(dump, args.dbc.as_deref())?);
+    }
     push_world_content_statements(args, content, &mut stmts);
     push_quest_and_gameobject_statements(args, content, &mut stmts);
     push_creature_behaviour_statements(args, content, &mut stmts);
@@ -5047,7 +5053,7 @@ fn push_world_content_statements(args: &Args, content: MappedContent, stmts: &mu
         stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
         stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
         stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
-        push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race", item_rows);
+        push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property", item_rows);
         push_insert(
             stmts,
             "game_creature_loot",
@@ -6186,6 +6192,7 @@ mod tests {
         cols[it::MAX_DURABILITY] = "80".into();
         cols[it::BAG_FAMILY] = "6".into();
         cols[it::FOOD_TYPE] = "1".into();
+        cols[it::RANDOM_PROPERTY] = "5090100".into();
 
         let tuple = cols
             .join(",")
@@ -6197,7 +6204,7 @@ mod tests {
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
-            "(90001,4,1,'Ring of Fire Resistance',1234,3,5,40,30,80,1000,200,1,0,0,0,0,0,0,0,0,0,0,55,0,false,0,0,0,0,0,0,2,3,12,0,0,0,0,12345,1,12346,2,12347,0,165,150,69,3,7,512,999,777,6,1,1,1503,255)",
+            "(90001,4,1,'Ring of Fire Resistance',1234,3,5,40,30,80,1000,200,1,0,0,0,0,0,0,0,0,0,0,55,0,false,0,0,0,0,0,0,2,3,12,0,0,0,0,12345,1,12346,2,12347,0,165,150,69,3,7,512,999,777,6,1,1,1503,255,5090100)",
         );
     }
 
@@ -6236,7 +6243,7 @@ mod tests {
         assert_eq!(item_rows.len(), 1);
         assert_eq!(
             item_rows[0],
-            "(25,2,7,'Worn Shortsword',1521,0,21,1,1,35,100,20,1,1,3,1800,0,0,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0)",
+            "(25,2,7,'Worn Shortsword',1521,0,21,1,1,35,100,20,1,1,3,1800,0,0,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0)",
         );
     }
 
@@ -6257,7 +6264,7 @@ mod tests {
 
         assert_eq!(item_rows.len(), 1);
         assert!(
-            item_rows[0].ends_with(",2147483650,2147483652)"),
+            item_rows[0].ends_with(",2147483650,2147483652,0)"),
             "restrictive masks, including unknown high bits, must remain unsigned and verbatim"
         );
     }

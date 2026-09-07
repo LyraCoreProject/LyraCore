@@ -1,0 +1,158 @@
+mod support;
+
+use support::Standalone;
+
+const ITEM: &str = "5090050";
+const POOL: &str = "5090100";
+const PROPERTY: &str = "5090101";
+
+fn fixture(name: &str) -> Standalone {
+    let mut shard = Standalone::start(name);
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+    shard.assert_sql("INSERT INTO game_item_random_property (property_id,enchant_id_1,enchant_id_2,enchant_id_3,suffix) VALUES (5090101,5090103,0,0,'of the Fixture'),(5090102,0,0,0,'of the Other Fixture')");
+    shard.assert_sql("INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES (1303066368,5090103,0,3,7,0,0)");
+    shard.assert_sql("INSERT INTO game_item_property_weight (id,pool_id,property_id,weight) VALUES (5090100,5090100,5090101,10000)");
+    shard.assert_sql(&format!("UPDATE game_item_template SET random_property = {POOL}, stat_stamina = 0, bonding = 0 WHERE entry = {ITEM}"));
+    shard
+}
+
+fn max_health(shard: &Standalone) -> u32 {
+    shard.query_rows("SELECT max_health FROM game_world_entity WHERE guid = 1")[0]["max_health"]
+        .parse()
+        .unwrap()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it() {
+    let shard = fixture("property-loot");
+    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false)"));
+    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
+    shard.assert_call("debug_kill_nearest", &["1", "51000"]);
+    let loot = shard.query_rows(&format!(
+        "SELECT * FROM game_corpse_loot WHERE item_entry = {ITEM}"
+    ));
+    assert_eq!(loot.len(), 1);
+    assert_eq!(loot[0]["random_property_id"], PROPERTY);
+    shard.assert_sql(
+        "UPDATE game_item_property_weight SET property_id = 5090102 WHERE id = 5090100",
+    );
+    shard.assert_call(
+        "debug_take_loot",
+        &[
+            "1",
+            &format!("\"{}\"", loot[0]["corpse_guid"]),
+            &loot[0]["slot"],
+        ],
+    );
+    let item = shard.query_rows(&format!(
+        "SELECT * FROM game_item_instance WHERE owner_guid = 1 AND entry = {ITEM}"
+    ));
+    assert_eq!(item.len(), 1);
+    assert_eq!(item[0]["random_property_id"], PROPERTY);
+    let base = max_health(&shard);
+    shard.assert_call("debug_equip_item", &["1", &item[0]["slot"]]);
+    assert_eq!(
+        max_health(&shard),
+        base + 70,
+        "seven Stamina above the base curve adds 70 health"
+    );
+    shard.assert_sql(
+        "UPDATE game_item_instance SET enchant_id = 7748 WHERE owner_guid = 1 AND slot = 15",
+    );
+    shard.assert_call("debug_unequip_item", &["1", "15"]);
+    shard.assert_call("debug_equip_item", &["1", "23"]);
+    assert_eq!(
+        max_health(&shard),
+        base + 100,
+        "the existing +3 Stamina enchant adds to the property"
+    );
+    shard.assert_sql(
+        "UPDATE game_item_instance SET durability = 0 WHERE owner_guid = 1 AND slot = 15",
+    );
+    shard.assert_call("debug_unequip_item", &["1", "15"]);
+    shard.assert_call("debug_equip_item", &["1", "23"]);
+    assert_eq!(
+        max_health(&shard),
+        base,
+        "broken items grant neither overlay"
+    );
+}
+
+fn create_spell(shard: &Standalone) {
+    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090100,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)");
+    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360400,5090100,0,7,2,0,0.0,0,0,0.0,0,0,0,{ITEM},8,0,0,false)"));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn creation_is_atomic_even_when_the_spell_handles_a_full_inventory() {
+    let shard = fixture("property-create");
+    create_spell(&shard);
+    shard.assert_call("debug_grant_item", &["1", ITEM, "15"]);
+    let before = shard.query_rows(
+        "SELECT guid,stack_count,random_property_id FROM game_item_instance WHERE owner_guid = 1",
+    );
+    assert_eq!(before.len(), 15);
+    shard.assert_call("debug_cast_at", &["1", "5090100", "1"]);
+    assert_eq!(shard.query_rows("SELECT guid,stack_count,random_property_id FROM game_item_instance WHERE owner_guid = 1"), before);
+    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+    shard.assert_call("debug_cast_at", &["1", "5090100", "1"]);
+    let created =
+        shard.query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1");
+    assert_eq!(created.len(), 2);
+    assert!(created
+        .iter()
+        .all(|item| item["random_property_id"] == PROPERTY));
+    shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
+    let refused = shard.call("debug_grant_item", &["1", ITEM, "1"]);
+    assert!(!refused.status.success());
+    assert_eq!(
+        shard.query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1"),
+        created
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn splitting_and_moving_stacks_never_mix_properties() {
+    let shard = fixture("property-stacks");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_stack = 20 WHERE entry = {ITEM}"
+    ));
+    shard.assert_call("debug_grant_item", &["1", ITEM, "5"]);
+    shard.assert_call("debug_split_item", &["1", "23", "2", "24"]);
+    let split = shard.query_rows(
+        "SELECT stack_count,random_property_id FROM game_item_instance WHERE owner_guid = 1",
+    );
+    assert_eq!(split.len(), 2);
+    assert!(split
+        .iter()
+        .all(|item| item["random_property_id"] == PROPERTY));
+    shard.assert_sql(
+        "UPDATE game_item_property_weight SET property_id = 5090102 WHERE id = 5090100",
+    );
+    shard.assert_call("debug_grant_item", &["1", ITEM, "4"]);
+    shard.assert_call("debug_move_item", &["1", "25", "24"]);
+    assert_eq!(
+        shard
+            .query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1")
+            .len(),
+        3
+    );
+    shard.assert_call("debug_move_item", &["1", "25", "23"]);
+    let merged = shard.query_rows(
+        "SELECT stack_count,random_property_id FROM game_item_instance WHERE owner_guid = 1",
+    );
+    assert_eq!(merged.len(), 2);
+    assert!(merged
+        .iter()
+        .any(|item| item["random_property_id"] == PROPERTY && item["stack_count"] == "5"));
+    assert!(merged
+        .iter()
+        .any(|item| item["random_property_id"] == "5090102" && item["stack_count"] == "4"));
+}

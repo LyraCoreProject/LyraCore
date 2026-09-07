@@ -10,10 +10,8 @@
 //!     term is 0, which the on_aura relay corrects the instant a login-present aura inserts), and
 //!   - the aura / gear relays on the PER-PLAYER cache (base + auras + gear; all three tables subscribed).
 //!
-//! It mirrors `module::combat::effective_armor` term-for-term: `e.armor` base, `spell::resistance_bonus`
-//! (A_MOD_RESISTANCE armor auras, amount×stacks), `items::equipped_stat_bonus(Armor)` (worn `stat_armor`,
-//! broken-skip). No armor ENCHANT exists in the module (its `ENCHANTS` table is STR/STA only), so there is
-//! no enchant overlay term and the gateway matches the module exactly for armor.
+//! It mirrors the Module's armor fold, including catalogue effects for applied enchantments
+//! and Random Properties. The other character-sheet values below come directly from the Module.
 //!
 //! [`sheet_stats`] (the STR/AGI/STA/INT/SPI/AP/damage-range/crit half of the paperdoll, #517 + #532) is
 //! NOT a gateway-side fold like the Armor half above — it is a plain READ of
@@ -150,13 +148,42 @@ pub(crate) fn effective_armor(db: &RemoteTables, guid: u64) -> u32 {
                 .entry()
                 .find(&i.entry)
                 .map(|t| {
-                    gear_armor_contribution(i.slot, t.stat_armor, t.max_durability, i.durability)
-                        as i64
+                    let mut armor = t.stat_armor.saturating_add(enchant_armor(db, i.enchant_id));
+                    if i.random_property_id != 0 {
+                        if let Some(property) = db
+                            .game_item_random_property()
+                            .property_id()
+                            .find(&i.random_property_id)
+                        {
+                            let bonus = [
+                                property.enchant_id_1,
+                                property.enchant_id_2,
+                                property.enchant_id_3,
+                            ]
+                            .into_iter()
+                            .map(|id| enchant_armor(db, id))
+                            .fold(0i32, i32::saturating_add);
+                            armor = armor.saturating_add(bonus);
+                        }
+                    }
+                    gear_armor_contribution(i.slot, armor, t.max_durability, i.durability) as i64
                 })
                 .unwrap_or(0) // a missing template join never poisons the sum (matches the module)
         })
         .sum();
     (base + aura_sum + gear_sum).max(0) as u32
+}
+
+fn enchant_armor(db: &RemoteTables, enchant_id: u32) -> i32 {
+    if enchant_id == 0 {
+        return 0;
+    }
+    db.game_item_enchantment()
+        .iter()
+        .filter(|effect| {
+            effect.enchant_id == enchant_id && effect.kind == lyracore_shared::item_property::ARMOR
+        })
+        .fold(0i32, |sum, effect| sum.saturating_add(effect.amount))
 }
 
 #[cfg(test)]

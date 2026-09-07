@@ -73,6 +73,7 @@ pub struct OfferSlot {
     pub enchantment: u32,
     pub durability: u32,
     pub max_durability: u32,
+    pub random_property_id: u32,
 }
 
 /// Encode one side's whole offer for an `OFFER_*` event payload:
@@ -83,14 +84,15 @@ pub fn encode_offer(gold: u32, slots: &[OfferSlot]) -> String {
         .iter()
         .map(|s| {
             format!(
-                "{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{}",
                 s.trade_slot,
                 s.entry,
                 s.display_id,
                 s.stack_count,
                 s.enchantment,
                 s.durability,
-                s.max_durability
+                s.max_durability,
+                s.random_property_id
             )
         })
         .collect();
@@ -105,7 +107,7 @@ pub fn decode_offer(payload: &str) -> Option<(u32, Vec<OfferSlot>)> {
     let mut slots = Vec::new();
     for part in body.split(';').filter(|p| !p.is_empty()) {
         let f: Vec<&str> = part.split(',').collect();
-        if f.len() != 7 {
+        if f.len() != 7 && f.len() != 8 {
             return None;
         }
         slots.push(OfferSlot {
@@ -116,6 +118,7 @@ pub fn decode_offer(payload: &str) -> Option<(u32, Vec<OfferSlot>)> {
             enchantment: f[4].parse().ok()?,
             durability: f[5].parse().ok()?,
             max_durability: f[6].parse().ok()?,
+            random_property_id: f.get(7).map(|v| v.parse()).transpose().ok()?.unwrap_or(0),
         });
     }
     Some((gold, slots))
@@ -139,6 +142,7 @@ mod tests {
                 enchantment: 0,
                 durability: 0,
                 max_durability: 0,
+                random_property_id: 117,
             },
             OfferSlot {
                 trade_slot: 6,
@@ -148,6 +152,7 @@ mod tests {
                 enchantment: 2564,
                 durability: 34,
                 max_durability: 40,
+                random_property_id: 0,
             },
         ];
         let payload = encode_offer(1_2345, &slots);

@@ -103,6 +103,7 @@ pub(crate) fn item_template_view(t: ItemTemplate) -> crate::codec::ItemTemplateV
         bag_family: t.bag_family,
         allowed_class: t.allowed_class,
         allowed_race: t.allowed_race,
+        random_property: t.random_property,
     }
 }
 

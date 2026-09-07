@@ -58,6 +58,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     let createinfo = ctx.db.game_createinfo_spell().count();
 
     crate::seed::seed_spell_groups(ctx);
+    crate::items::seed_compatibility_enchantments(ctx);
     let spell_groups = ctx.db.game_spell_group().count();
 
     // The live stacking-family probe needs its four family members present on an already-migrated

@@ -86,6 +86,7 @@ impl Coordinator {
                     item_entry: r.item_entry,
                     deadline_micros: r.deadline_micros,
                     recipients,
+                    random_property_id: r.random_property_id,
                 }
             })
             .collect())

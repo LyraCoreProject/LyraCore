@@ -286,6 +286,7 @@ pub(crate) fn offer_slot_view(
         enchantment: inst.enchant_id,
         durability: inst.durability,
         max_durability: tmpl.max_durability,
+        random_property_id: inst.random_property_id,
     }
 }
 
@@ -1052,6 +1053,7 @@ mod tests {
             created_at: Timestamp::UNIX_EPOCH,
             enchant_id: 2564,
             soulbound: false,
+            random_property_id: 117,
         };
         assert_eq!(
             offer_slot_view(6, &inst, &tmpl),
@@ -1063,6 +1065,7 @@ mod tests {
                 enchantment: 2564,
                 durability: 34,
                 max_durability: 40,
+                random_property_id: 117,
             }
         );
     }

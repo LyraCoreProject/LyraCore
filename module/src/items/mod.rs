@@ -22,6 +22,7 @@
 mod economy;
 mod inventory;
 mod ops;
+mod properties;
 mod rules;
 mod tables;
 
@@ -42,5 +43,6 @@ pub(crate) fn refused(refusal: ItemRefusal) -> String {
 pub(crate) use economy::*; // the apply_* cores are pub(crate) (no pub items to re-export)
 pub(crate) use inventory::*; // ditto
 pub(crate) use ops::*; // ditto
+pub use properties::*;
 pub use rules::*;
 pub use tables::*;

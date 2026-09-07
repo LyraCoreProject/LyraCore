@@ -162,6 +162,7 @@ fn blank_item(entry: u32) -> ItemTemplate {
         food_type: 0,
         allowed_class: 0,
         allowed_race: 0,
+        random_property: 0,
     }
 }
 

@@ -303,41 +303,6 @@ pub(crate) fn template_stat(tmpl: &ItemTemplate, which: EquipStat) -> i32 {
     }
 }
 
-/// ENCHANTING (completing the 13) — the per-instance enchant overlay table. `(enchant_id, EquipStat,
-/// amount)`: an item carrying `enchant_id` adds `amount` to the named `EquipStat` ON TOP of its template
-/// stat. The same single-meaning model as `template_stat` (typed col → amount), so an enchant folds through
-/// the EXACT effective-* pipeline (combat swing/dodge/armor/crit/hit + the spell module's Stamina/Intellect → max
-/// HP/mana). A handful of low-rank enchants is enough for the alpha (the real `SpellItemEnchantment.dbc`
-/// import is DEFERRED). 0 (the column default) is the "no enchant" sentinel — never a row here, so an
-/// unenchanted item contributes 0 (baseline-safe). [reference]
-const ENCHANTS: &[(u32, EquipStat, i32)] = &[
-    // Two low-rank exemplar enchants spanning a server-VERIFIABLE stat each: a +Strength weapon enchant
-    // (moves the melee swing readout) and a +Stamina chest enchant (moves max-HP via recompute_vitals).
-    (7745, EquipStat::Strength, 3), // "Minor Strength"-style weapon enchant: a flat +3 STR (verify via debug_compute_swing)
-    (7748, EquipStat::Stamina, 3), // "Minor Stamina"-style chest enchant: a flat +3 STA (verify via recompute_vitals max-HP)
-];
-
-/// This enchant's contribution to one `EquipStat` (0 if it doesn't touch that stat, or the id is 0/unknown).
-/// Pure (no ctx) so the overlay arithmetic is unit-testable on plain values. Sums matching rows (an enchant
-/// id appears at most once per stat today, but summing keeps a future multi-stat enchant correct).
-/// `equipped_stat_bonus` adds this alongside `template_stat` for each equipped instance. [reference]
-pub(crate) fn enchant_stat(enchant_id: u32, which: EquipStat) -> i32 {
-    if enchant_id == 0 {
-        return 0; // the "no enchant" sentinel — never matches a row, short-circuit
-    }
-    ENCHANTS
-        .iter()
-        .filter(|(id, stat, _)| *id == enchant_id && *stat == which)
-        .map(|(_, _, amount)| *amount)
-        .sum()
-}
-
-/// Whether `enchant_id` is a known, applyable enchant (in the ENCHANTS table). Gates `enchant_item` so a
-/// player can't stamp an arbitrary id onto an instance. Pure — unit-tested. 0 is "none" → not applyable here.
-pub(crate) fn is_known_enchant(enchant_id: u32) -> bool {
-    enchant_id != 0 && ENCHANTS.iter().any(|(id, _, _)| *id == enchant_id)
-}
-
 /// The equipment slot an item in `from_slot` should EQUIP into, given its `inventory_type` and the
 /// player's current equipped set — the auto-resolve vanilla performs on a right-click-equip. Pure over
 /// the (resolved-slot, occupied-set) inputs so it's unit-testable. Returns `None` if the item isn't
@@ -664,6 +629,7 @@ pub(crate) mod tests {
             food_type: 0,
             allowed_class: crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
             allowed_race: crate::items::tables::ALL_PLAYABLE_RACE_MASK,
+            random_property: 0,
         }
     }
 
@@ -715,60 +681,6 @@ pub(crate) mod tests {
         let plain = [blank_template(25), blank_template(51)];
         assert_eq!(sum(&plain, EquipStat::Strength), 0);
         assert_eq!(sum(&plain, EquipStat::Hit), 0);
-    }
-
-    /// Re-scoped (was `enchant_overlay_adds_its_stat_on_top_of_the_template`): the name implied this pins
-    /// `equipped_stat_bonus`'s actual fold, but that fold runs over live equipped `ItemInstance` rows (a
-    /// ctx fn, not exercised here) — this test only hand-adds `template_stat + enchant_stat`, the two pure
-    /// pieces, to show the composition is sensible. What IS real and unit-tested here: `enchant_stat`
-    /// (7745 = +3 STR, 7748 = +3 STA, touching no other stat; id 0 and an unknown id add 0 to every stat)
-    /// and `is_known_enchant`'s validity gate.
-    #[test]
-    fn enchant_stat_adds_its_amount_on_top_of_a_hand_summed_template_stat() {
-        // A base weapon with +5 STR from its template; the +3 STR enchant (7745) lifts effective STR to +8.
-        let mut weapon = blank_template(3001);
-        weapon.stat_strength = 5;
-        let base = template_stat(&weapon, EquipStat::Strength);
-        assert_eq!(base, 5);
-        assert_eq!(
-            enchant_stat(7745, EquipStat::Strength),
-            3,
-            "the +STR weapon enchant adds 3"
-        );
-        assert_eq!(
-            base + enchant_stat(7745, EquipStat::Strength),
-            8,
-            "effective STR rose by the enchant"
-        );
-        // The +STR enchant touches ONLY Strength — it adds nothing to other stats.
-        assert_eq!(enchant_stat(7745, EquipStat::Stamina), 0);
-        assert_eq!(enchant_stat(7745, EquipStat::Agility), 0);
-        // The +STA chest enchant (7748) moves Stamina (→ max-HP via recompute_vitals), not Strength.
-        assert_eq!(enchant_stat(7748, EquipStat::Stamina), 3);
-        assert_eq!(enchant_stat(7748, EquipStat::Strength), 0);
-        // The "no enchant" sentinel (0) and any unknown id add 0 to EVERY stat → an unenchanted/legacy item
-        // reads byte-identical (baseline-safe). And only known ids are applyable.
-        for which in [
-            EquipStat::Strength,
-            EquipStat::Stamina,
-            EquipStat::Agility,
-            EquipStat::Armor,
-        ] {
-            assert_eq!(enchant_stat(0, which), 0, "enchant_id 0 = no overlay");
-            assert_eq!(
-                enchant_stat(99999, which),
-                0,
-                "an unknown enchant adds nothing"
-            );
-        }
-        assert!(
-            is_known_enchant(7745) && is_known_enchant(7748),
-            "the seeded enchants are applyable"
-        );
-        assert!(
-            !is_known_enchant(0) && !is_known_enchant(99999),
-            "0 and unknown ids are not applyable"
-        );
     }
 
     #[test]

@@ -409,6 +409,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
         designated_looter_guid: 0,
         master_only: false,
         withheld: false,
+        random_property_id: 0,
     });
     let tagless_xp = entity_xp(ctx, LOOT_TAG_FIXTURE_CHARACTER_B)?;
     if !crate::combat::kill_creature(ctx, tagless, Some(LOOT_TAG_FIXTURE_CHARACTER_B)) {
@@ -625,6 +626,7 @@ fn verify_corpse_loot_gates(
         designated_looter_guid: 0,
         master_only: false,
         withheld: false,
+        random_property_id: 0,
     });
     record_corpse_eligibility(
         ctx,
@@ -676,6 +678,7 @@ fn verify_corpse_loot_gates(
         designated_looter_guid: 0,
         master_only: false,
         withheld: false,
+        random_property_id: 0,
     });
     record_corpse_eligibility(ctx, solo_corpse, &[LOOT_TAG_FIXTURE_CHARACTER_A]);
     crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;

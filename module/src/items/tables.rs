@@ -197,6 +197,8 @@ pub struct ItemTemplate {
     pub allowed_class: u32,
     #[default(ALL_PLAYABLE_RACE_MASK)]
     pub allowed_race: u32,
+    #[default(0)]
+    pub random_property: u32,
 }
 
 /// A per-player owned item. Public but RLS-restricted to the owner (like `game_character`), so a
@@ -214,13 +216,7 @@ pub struct ItemInstance {
     pub stack_count: u32,
     pub durability: u32,
     pub created_at: Timestamp,
-    /// ENCHANTING (completing the 13): the per-instance enchant applied to THIS item (0 = none). A small
-    /// const table (`rules::ENCHANTS`) maps the id → (EquipStat, amount); `equipped_stat_bonus` adds that
-    /// amount alongside the template stat for an equipped enchanted piece, so an enchant is server-real
-    /// everywhere the effective-* pipeline reads (combat swing/dodge/armor/crit/hit + max-HP/mana). The
-    /// 5875 client caches item stats BY ENTRY, so the per-instance enchant glow/green-text is NOT
-    /// client-displayed — DEFERRED (launcher/addon territory). END-appended + `#[default(0)]` → additive
-    /// auto-migration (every existing row reads 0 = unenchanted, baseline-safe). [entity]
+    /// Applied enchantment, resolved through the item enchantment catalogue. Zero means none.
     #[default(0)]
     pub enchant_id: u32,
     /// Item binding state: true once this SPECIFIC instance has bound to its owner and cannot be
@@ -233,6 +229,8 @@ pub struct ItemInstance {
     /// unbound, baseline-safe). [entity]
     #[default(false)]
     pub soulbound: bool,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 // Character-owned sweeps: items are deleted on character delete, re-owned (identity re-stamp) on a
@@ -353,6 +351,8 @@ pub struct BuybackEntry {
     // trip. END-appended + `#[default(false)]` → auto-migrates.
     #[default(false)]
     pub soulbound: bool,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 // Character-owned sweep: the buyback ring is deleted (not re-owned) on character delete — there's no

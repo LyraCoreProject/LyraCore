@@ -286,7 +286,7 @@ struct InMemoryStore {
     item_templates: Vec<codec::ItemTemplateView>,
     /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
     /// fixture login replays no buyback tab.
-    buyback_ring: Vec<(u32, u32, u32)>,
+    buyback_ring: Vec<(u32, u32, u32, u32)>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
     npc_refuses: bool,
     /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
@@ -407,7 +407,7 @@ struct InMemoryStore {
     /// What `talent_grant_spell` returns (0 = passive talent → no SMSG_LEARNED_SPELL push).
     talent_grant: u32,
     /// What `talent_pane_sync` returns: (teach rank-spell, superseded prev, points remaining).
-    talent_pane: (u32, u32, u32),
+    talent_pane: (u32, u32, u32, u32),
     /// What `superseded_old_rank` returns for a trainer buy — the known previous rank a
     /// non-stacking chain's new rank replaces. `None` (derive-Default) mirrors "no known prior
     /// rank" -> a trainer buy pushes plain SMSG_LEARNED_SPELL.
@@ -878,6 +878,7 @@ impl InMemoryStore {
                 item_durability: item.durability,
                 item_enchant_id: item.enchant_id,
                 item_soulbound: item.soulbound,
+                random_property_id: item.random_property_id,
                 created_at_secs: 1_000,
                 ..Default::default()
             },
@@ -1465,6 +1466,7 @@ impl WorldStore for InMemoryStore {
                     durability: m.item_durability,
                     enchant_id: m.item_enchant_id,
                     soulbound: m.item_soulbound,
+                    random_property_id: m.random_property_id,
                 },
                 lyracore_shared::mail::cod_settlement(
                     m.cod,
@@ -1733,6 +1735,7 @@ impl WorldStore for InMemoryStore {
                 durability: m.item_durability,
                 enchant_id: m.item_enchant_id,
                 soulbound: m.item_soulbound,
+                random_property_id: m.random_property_id,
             };
             m.item_entry = 0;
             m.item_stack_count = 0;
@@ -1909,7 +1912,7 @@ impl WorldStore for InMemoryStore {
     ) -> Result<()> {
         Ok(())
     }
-    fn talent_pane_sync(&self, _character_guid: u64, _talent_id: u32) -> (u32, u32, u32) {
+    fn talent_pane_sync(&self, _character_guid: u64, _talent_id: u32) -> (u32, u32, u32, u32) {
         self.talent_pane
     }
     fn talent_points_spent(&self, _character_guid: u64) -> u32 {
@@ -2618,6 +2621,7 @@ impl WorldStore for InMemoryStore {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
+        random_property_id: u32,
     ) -> Result<()> {
         self.rec("realm_loot_op");
         self.realm_loot_ops.lock().unwrap().push((
@@ -2652,6 +2656,7 @@ impl WorldStore for InMemoryStore {
             vote,
             0,
             Vec::new(),
+            0,
         )?;
         if let Some(failure) = &self.loot_action_failure {
             return Err(anyhow!(failure.clone()));
@@ -3109,6 +3114,7 @@ impl QuestActionStore for InMemoryStore {
                     item.entry,
                     item.stack_count,
                     false,
+                    0,
                 )),
             )));
             tx.send(Outbound::Job(Box::new(move || relay)))
@@ -3141,7 +3147,7 @@ impl VendorActionStore for InMemoryStore {
         }
     }
 
-    fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32)> {
+    fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
         self.buyback_ring.clone()
     }
 
@@ -4685,6 +4691,7 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
             durability: 20,
             max_durability: 20,
             container_slots: 0,
+            random_property_id: 0,
         }],
         reputations: vec![(19, 3175, false)],
         ..tester_store(7)
@@ -6014,6 +6021,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
         durability: 20,
         max_durability: 20,
         container_slots: 0,
+        random_property_id: 0,
     };
     s.turn_in_reward_item = Some(reward_item.clone());
     let store = std::sync::Arc::new(s);
@@ -6053,6 +6061,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
                 reward_item.entry,
                 reward_item.stack_count,
                 false,
+                0,
             ),
         ))),
         framed(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(

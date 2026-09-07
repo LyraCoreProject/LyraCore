@@ -38,6 +38,7 @@ fn concurrent_promotions_preserve_one_roll_and_its_votes() {
         1,
         "concurrent START calls must share one live Loot Roll: {rolls:?}"
     );
+    assert_eq!(rolls[0]["random_property_id"], "117");
     let roll_id = &rolls[0]["id"];
     let initial_votes = standalone.query_rows("SELECT * FROM game_loot_roll_vote");
     assert_eq!(initial_votes.len(), 3);
@@ -63,6 +64,7 @@ fn concurrent_promotions_preserve_one_roll_and_its_votes() {
             "1",
             "0",
             "[]",
+            "0",
         ],
     );
     let voted = votes(&standalone);
@@ -104,6 +106,7 @@ fn promote(standalone: &Standalone, corpse: u64, slot: u8, item: u32, deadline: 
             "0",
             &deadline.to_string(),
             voters,
+            "117",
         ],
     );
 }

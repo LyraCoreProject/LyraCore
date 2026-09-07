@@ -40,6 +40,7 @@ impl Coordinator {
                     .unwrap_or(0),
                 item_enchant_id: m.item_enchant_id,
                 item_soulbound: m.item_soulbound,
+                random_property_id: m.random_property_id,
                 money: m.money,
                 cod: m.cod,
                 was_read: m.was_read,
@@ -83,6 +84,7 @@ impl Coordinator {
                     durability: e.item_durability,
                     enchant_id: e.item_enchant_id,
                     soulbound: e.item_soulbound,
+                    random_property_id: e.random_property_id,
                 },
                 cod: e.cod,
             })

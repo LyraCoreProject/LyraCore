@@ -420,7 +420,7 @@ fn loot_response_item_layout_is_full_vanilla() {
     // One item must serialize the FULL vanilla 22-byte layout (slot, id, count, display, 0,0, ty),
     // NOT gtker's short 6-byte form. Spot-check the offsets + total length.
     let guid = 0xF130_0000_0000_0001;
-    let (_op, body) = build_loot_response_raw(guid, 5, &[(0, 25, 2, 1542)]);
+    let (_op, body) = build_loot_response_raw(guid, 5, &[(0, 25, 2, 1542, 117)]);
     // envelope = 8 (guid) + 1 (method) + 4 (gold) + 1 (count) = 14; one item = 22 → 36 total.
     assert_eq!(
         body.len(),
@@ -445,6 +445,7 @@ fn loot_response_item_layout_is_full_vanilla() {
         1542,
         "display id"
     );
+    assert_eq!(u32::from_le_bytes(it[17..21].try_into().unwrap()), 117);
     assert_eq!(it[21], 0, "slot_type = TypeAllowLoot");
 }
 
@@ -452,10 +453,11 @@ fn loot_response_item_layout_is_full_vanilla() {
 
 #[test]
 fn loot_start_roll_carries_the_countdown_and_item() {
-    let m = build_loot_start_roll(0xF130_0000_0000_0007, 3, 1234, 60_000);
+    let m = build_loot_start_roll(0xF130_0000_0000_0007, 3, 1234, 60_000, 117);
     assert_eq!(m.creature.guid(), 0xF130_0000_0000_0007);
     assert_eq!(m.loot_slot, 3);
     assert_eq!(m.item, 1234);
+    assert_eq!(m.item_random_property_id, 117);
     assert_eq!(m.countdown_time, std::time::Duration::from_millis(60_000));
     // Round-trips through the real vanilla wire encode without error (opcode 0x02A1).
     let msg = ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(m));
@@ -489,6 +491,7 @@ fn loot_roll_carries_the_voter_item_and_vote() {
         87,
         vote_kind::NEED,
         false,
+        0,
     );
     assert_eq!(m.creature.guid(), 0xF130_0000_0000_0007);
     assert_eq!(m.loot_slot, 3);
@@ -497,14 +500,23 @@ fn loot_roll_carries_the_voter_item_and_vote() {
     assert_eq!(m.roll_number, 87);
     assert_eq!(m.vote, RollVote::Need);
     // A PASS vote's roll_number folds to the >127 sentinel regardless of the stored `rolled` (0).
-    let pass = build_loot_roll(0xF130_0000_0000_0007, 3, 55, 1234, 0, vote_kind::PASS, true);
+    let pass = build_loot_roll(
+        0xF130_0000_0000_0007,
+        3,
+        55,
+        1234,
+        0,
+        vote_kind::PASS,
+        true,
+        0,
+    );
     assert_eq!(pass.roll_number, 128);
     assert_eq!(pass.vote, RollVote::Pass);
 }
 
 #[test]
 fn loot_roll_won_carries_the_winner_roll_and_winning_tier() {
-    let m = build_loot_roll_won(0xF130_0000_0000_0007, 3, 1234, 55, 96, vote_kind::NEED);
+    let m = build_loot_roll_won(0xF130_0000_0000_0007, 3, 1234, 55, 96, vote_kind::NEED, 0);
     assert_eq!(m.looted_target.guid(), 0xF130_0000_0000_0007);
     assert_eq!(m.loot_slot, 3);
     assert_eq!(m.item, 1234);
@@ -512,7 +524,7 @@ fn loot_roll_won_carries_the_winner_roll_and_winning_tier() {
     assert_eq!(m.winning_roll, 96);
     assert_eq!(m.vote, RollVote::Need);
     // A greed-only contest reports Greed — the tier is threaded, not hardcoded.
-    let g = build_loot_roll_won(0xF130_0000_0000_0007, 3, 1234, 55, 42, vote_kind::GREED);
+    let g = build_loot_roll_won(0xF130_0000_0000_0007, 3, 1234, 55, 42, vote_kind::GREED, 0);
     assert_eq!(g.vote, RollVote::Greed);
 }
 
@@ -1664,6 +1676,7 @@ fn ring_of_fire_resistance() -> ItemTemplateView {
         bag_family: 6, // Herbs
         allowed_class: 0x8000_0002,
         allowed_race: 0x8000_0004,
+        random_property: 509_0100,
         ..Default::default()
     }
 }
@@ -1681,6 +1694,7 @@ fn item_query_response_carries_the_work_item_213_columns() {
     match ServerOpcodeMessage::read_unencrypted(&mut buf.as_slice()).unwrap() {
         ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(m) => {
             let found = m.found.expect("Ring of Fire Resistance must be found");
+            assert_eq!(found.random_property, 509_0100);
             assert_eq!(found.holy_resistance, 0);
             assert_eq!(found.fire_resistance, 12, "fire_res must reach the wire");
             assert_eq!(found.nature_resistance, 0);
@@ -1787,6 +1801,7 @@ fn item_create_object_is_item_typed_and_serializes() {
         durability: 20,
         max_durability: 20,
         container_slots: 0,
+        random_property_id: 509_0101,
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();
@@ -1803,6 +1818,7 @@ fn item_create_object_is_item_typed_and_serializes() {
             assert_eq!(it.item_owner(), Some(Guid::new(1)));
             assert_eq!(it.item_contained(), Some(Guid::new(1)));
             assert_eq!(it.item_maxdurability(), Some(20));
+            assert_eq!(it.item_random_properties_id(), Some(509_0101));
         }
         other => panic!("expected an Item CreateObject2, got {other:?}"),
     }
@@ -3573,6 +3589,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
         durability: 0,
         max_durability: 0,
         container_slots: 8, // an 8-slot bag
+        random_property_id: 509_0101,
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();
@@ -3590,6 +3607,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
                 "a bag must build a CONTAINER object"
             );
             assert_eq!(c.object_entry(), Some(5000));
+            assert_eq!(c.item_random_properties_id(), Some(509_0101));
             assert_eq!(c.item_owner(), Some(Guid::new(1)));
             assert_eq!(
                 c.container_num_slots(),
@@ -3678,15 +3696,17 @@ fn creature_query_response_maps_names_and_flags_and_serializes() {
 #[test]
 fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
     // Equip: the VALUES partial must carry PLAYER_VISIBLE_ITEM[15] = the item entry.
-    let msg = build_visible_item_values(1, 15, 25).expect("slot 15 (mainhand) is equipment");
+    let msg = build_visible_item_values(1, 15, 25, 117).expect("slot 15 (mainhand) is equipment");
     match &msg.objects[0] {
         Object::Values {
             mask1: UpdateMask::Player(p),
             ..
         } => {
+            assert!(p.object_type().is_none());
             let vi = p
                 .player_visible_item(VisibleItemIndex::Index15)
                 .expect("visible item set");
+            assert_eq!(vi.random_property_id, 117);
             assert_eq!(
                 vi.item, 25,
                 "the mainhand VISIBLE_ITEM must carry the equipped entry"
@@ -3695,7 +3715,7 @@ fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
         other => panic!("expected a Player Values update, got {other:?}"),
     }
     // Unequip: entry 0 is a real (zeroed) write, not a skipped update.
-    let cleared = build_visible_item_values(1, 15, 0).unwrap();
+    let cleared = build_visible_item_values(1, 15, 0, 0).unwrap();
     match &cleared.objects[0] {
         Object::Values {
             mask1: UpdateMask::Player(p),
@@ -3709,9 +3729,9 @@ fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
         other => panic!("expected a Player Values update, got {other:?}"),
     }
     // Non-equipment slots (backpack 23, bags 19, bag contents 120+) are None — no model residue.
-    assert!(build_visible_item_values(1, 23, 25).is_none());
-    assert!(build_visible_item_values(1, 19, 25).is_none());
-    assert!(build_visible_item_values(1, 120, 25).is_none());
+    assert!(build_visible_item_values(1, 23, 25, 0).is_none());
+    assert!(build_visible_item_values(1, 19, 25, 0).is_none());
+    assert!(build_visible_item_values(1, 120, 25, 0).is_none());
 }
 
 // ===========================================================================================
@@ -4065,5 +4085,20 @@ fn login_sequence_emits_a_current_realm_clock_not_the_old_hardcode() {
     assert!(
         (lower..=upper).contains(&emitted),
         "emitted datetime {emitted} must fall within [{lower}, {upper}], a couple of minutes around now"
+    );
+}
+
+#[test]
+fn item_push_and_mail_keep_the_instance_property() {
+    let push = build_item_push_result(1, 0, 23, 25, 1, false, 117);
+    assert_eq!(push.item_random_property_id, 117);
+    let mail = MailView {
+        item_entry: 25,
+        random_property_id: 117,
+        ..Default::default()
+    };
+    assert_eq!(
+        build_mail_list(&[mail], 0).mails[0].item_random_property_id,
+        117
     );
 }

@@ -1771,6 +1771,7 @@ fn sword() -> mail::AttachedItem {
         durability: 42,
         enchant_id: 7,
         soulbound: false,
+        random_property_id: 0,
     }
 }
 fn give_item(shard: &InMemoryStore, owner: u64, guid: u64, item: mail::AttachedItem) {
@@ -1860,6 +1861,7 @@ fn a_soulbound_attachment_is_refused_at_send_and_stays_in_the_senders_bags() {
         SWORD_GUID,
         mail::AttachedItem {
             soulbound: true,
+            random_property_id: 0,
             ..sword()
         },
     );

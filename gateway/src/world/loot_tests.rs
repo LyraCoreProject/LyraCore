@@ -93,6 +93,7 @@ fn an_unsharded_store_does_nothing_even_with_pending_rolls_on_a_connected_peer()
         item_entry: 1234,
         deadline_micros: 999,
         recipients: vec![GINGER],
+        random_property_id: 0,
     }];
     let store = InMemoryStore {
         peers: std::sync::Mutex::new(vec![peer.clone()]),
@@ -123,6 +124,7 @@ fn relay_tick_promotes_a_staging_roll_and_clears_it() {
         item_entry: 1234,
         deadline_micros: 999_999,
         recipients: vec![GINGER, TRIN],
+        random_property_id: 0,
     }];
     let mut watermark = 0u64;
     loot::relay_tick(world.as_ref(), &mut watermark);
@@ -206,6 +208,7 @@ fn a_leave_flushes_every_connected_shards_pending_rolls_before_the_disband_reach
         item_entry: 1234,
         deadline_micros: 999,
         recipients: vec![GINGER],
+        random_property_id: 0,
     }];
 
     // Vim leaving a 2-member party disbands it (vanilla: a party of one is no party) — the exact
@@ -256,6 +259,7 @@ fn a_non_disband_capable_op_never_flushes_pending_rolls() {
         item_entry: 1234,
         deadline_micros: 999,
         recipients: vec![GINGER],
+        random_property_id: 0,
     }];
     party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("the invite runs");
     assert!(

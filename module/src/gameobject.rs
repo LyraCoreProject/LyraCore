@@ -812,6 +812,7 @@ pub(crate) fn apply_use_gameobject(
                         designated_looter_guid: 0,
                         master_only: false,
                         withheld: false,
+                        random_property_id: crate::items::select_loot_property(ctx, tmpl.data0)?,
                     });
                 }
             } else {
@@ -827,6 +828,7 @@ pub(crate) fn apply_use_gameobject(
                         designated_looter_guid: 0,
                         master_only: false,
                         withheld: false,
+                        random_property_id: crate::items::select_loot_property(ctx, item_entry)?,
                     });
                 }
             }

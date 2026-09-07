@@ -260,6 +260,7 @@ pub trait WorldStore:
         _vote: u8,
         _deadline_micros: i64,
         _recipients: Vec<u64>,
+        _random_property_id: u32,
     ) -> Result<()> {
         Err(anyhow!("this store does not host realm-wide loot rolls"))
     }
@@ -282,6 +283,7 @@ pub trait WorldStore:
             vote,
             0,
             Vec::new(),
+            0,
         )?;
         Ok(LootActionStatus::Applied)
     }

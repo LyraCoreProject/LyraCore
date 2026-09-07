@@ -45,3 +45,5 @@ pub const ERR_ATTACK_TARGET_DEAD: &str = "target is dead";
 /// maps it to `SMSG_ATTACKSWING_CANT_ATTACK` so the client leaves stance cleanly. Shared so producer
 /// (module) and matcher (gateway) can't drift.
 pub const ERR_ATTACK_FRIENDLY: &str = "target is friendly";
+
+pub mod item_property;

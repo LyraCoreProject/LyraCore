@@ -562,6 +562,7 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
         food_type: 0,
         allowed_class: ALL_PLAYABLE_CLASS_MASK,
         allowed_race: ALL_PLAYABLE_RACE_MASK,
+        random_property: 0,
     }
 }
 

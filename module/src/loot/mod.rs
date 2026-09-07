@@ -121,6 +121,8 @@ pub struct CorpseLoot {
     /// a successful grant, or flipping `reserved_for` to the winner on an inventory-full fallback).
     #[default(false)]
     pub withheld: bool,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 /// A creature's loot-table entry: when an `creature_entry` creature dies, its rows roll for drops.
@@ -484,6 +486,13 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
 /// [`roll_pickpocket_loot`] used to each carry a copy of (the dedup).
 fn insert_corpse_rows(ctx: &ReducerContext, corpse_guid: u64, winners: Vec<(u32, u32, bool)>) {
     for (slot, (item_entry, count, quest_only)) in winners.into_iter().enumerate() {
+        let random_property_id = match crate::items::select_loot_property(ctx, item_entry) {
+            Ok(id) => id,
+            Err(reason) => {
+                spacetimedb::log::error!("loot item {item_entry}: {reason}");
+                continue;
+            }
+        };
         ctx.db.game_corpse_loot().insert(CorpseLoot {
             id: 0,
             corpse_guid,
@@ -497,6 +506,7 @@ fn insert_corpse_rows(ctx: &ReducerContext, corpse_guid: u64, winners: Vec<(u32,
             designated_looter_guid: 0,
             master_only: false,
             withheld: false,
+            random_property_id,
         });
     }
 }
@@ -648,6 +658,7 @@ pub(crate) fn clone_quest_loot_for_group(
     corpse_guid: u64,
     item_entry: u32,
     count: u32,
+    random_property_id: u32,
 ) {
     let Some(m) = crate::group::group_of(ctx, taker_guid) else {
         return;
@@ -689,6 +700,7 @@ pub(crate) fn clone_quest_loot_for_group(
             designated_looter_guid: 0,
             master_only: false,
             withheld: false,
+            random_property_id,
         });
     }
 }
@@ -702,6 +714,7 @@ pub(crate) fn clone_quest_loot_for_eligible(
     corpse_guid: u64,
     item_entry: u32,
     count: u32,
+    random_property_id: u32,
 ) {
     let others: Vec<(u64, bool)> = corpse_eligible_recipients(ctx, corpse_guid)
         .into_iter()
@@ -737,6 +750,7 @@ pub(crate) fn clone_quest_loot_for_eligible(
             designated_looter_guid: 0,
             master_only: false,
             withheld: false,
+            random_property_id,
         });
     }
 }
@@ -1189,6 +1203,7 @@ mod tests {
             designated_looter_guid: 0,
             master_only: false,
             withheld: false,
+            random_property_id: 0,
         };
         assert!(corpse_row.quest_only);
         assert_eq!(corpse_row.reserved_for, 42);
@@ -1203,6 +1218,7 @@ mod tests {
             designated_looter_guid: 7,
             master_only: true,
             withheld: true,
+            random_property_id: 0,
         };
         assert!(
             !shared_row.quest_only,
