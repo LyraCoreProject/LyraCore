@@ -1621,7 +1621,7 @@
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/53. The issue spans host hardening, deployment, backups, monitoring, and real-client operation.",
         "https://github.com/LyraCoreProject/LyraCore/pull/410. Merged pre-auth deadlines, bounded blocking capacity, and fixed-field world authentication decoding.",
-        "https://github.com/LyraCoreProject/LyraCore/pull/416. The open PR caps proof attempts and expires Session keys.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/416. The merged PR caps proof attempts and expires Session keys.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/deploy/systemd/spacetimedb-standalone.service. The repository contains a standalone SpacetimeDB service unit, but that is only one part of the requested operated realm."
       ],
       "related_prs": [
