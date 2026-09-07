@@ -95,6 +95,18 @@ fn claim_replay_recovers_a_lost_reply_without_reopening_closed_ownership() {
         shard.query_rows("SELECT generation,closed FROM game_account_fence")[0]["closed"],
         "false"
     );
+    shard.assert_call("close_account_fence", &[&second]);
+    shard.assert_call("release_account_claim", &[&second]);
+    shard.assert_call("delete_character", &["1", &support::actor("1")]);
+    assert!(shard
+        .query_rows("SELECT guid FROM game_character WHERE guid = 1")
+        .is_empty());
+    for table in ["game_account_claim", "game_account_fence"] {
+        let rows = shard.query_rows(&format!("SELECT generation,closed FROM {table}"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["generation"], "2");
+        assert_eq!(rows[0]["closed"], "true");
+    }
 }
 
 #[test]

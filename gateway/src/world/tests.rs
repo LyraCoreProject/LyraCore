@@ -10193,8 +10193,11 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
         .is_empty());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn closing_a_world_session_interrupts_a_full_socket_without_draining_its_queue() {
+    use std::os::fd::AsRawFd;
+
     let (_client, mut socket) = world_session_socket_pair();
     socket.set_nonblocking(true).unwrap();
     loop {
@@ -10212,13 +10215,34 @@ fn closing_a_world_session_interrupts_a_full_socket_without_draining_its_queue()
         body: vec![],
     })
     .unwrap();
+    let socket_fd = socket.as_raw_fd();
     let (started, ready) = std::sync::mpsc::channel();
     let (finished, result) = std::sync::mpsc::channel();
     let writer = std::thread::spawn(move || {
-        started.send(()).unwrap();
+        let task = std::fs::read_link("/proc/thread-self")
+            .expect("this Linux socket fixture requires /proc/thread-self");
+        started.send(task).unwrap();
         finished.send(socket.write_all(&[1; 65536])).unwrap();
     });
-    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    let task = ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    let syscall_path = std::path::Path::new("/proc").join(task).join("syscall");
+    assert!(
+        crate::durable_test_support::poll_until(Duration::from_secs(2), || {
+            let syscall = std::fs::read_to_string(&syscall_path)
+                .expect("this Linux socket fixture requires visibility of its writer's syscall");
+            let mut fields = syscall.split_whitespace();
+            let number = fields
+                .next()
+                .and_then(|value| value.parse::<libc::c_long>().ok());
+            let fd = fields
+                .next()
+                .and_then(|value| value.strip_prefix("0x"))
+                .and_then(|value| i32::from_str_radix(value, 16).ok());
+            matches!(number, Some(n) if n == libc::SYS_sendto || n == libc::SYS_write)
+                && fd == Some(socket_fd)
+        }),
+        "writer did not enter its blocked socket write"
+    );
     tx.close();
     assert!(result
         .recv_timeout(Duration::from_secs(2))
