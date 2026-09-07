@@ -599,6 +599,16 @@ pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpir
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    let expiries = ctx.db.game_creature_ai_summon_expiry();
+    let Some(current) = expiries.scheduled_id().find(expiry.scheduled_id) else {
+        return;
+    };
+    if current.creature_guid != expiry.creature_guid || current.life_seq != expiry.life_seq {
+        return;
+    }
+    // The scheduled row still holds its unique creature key during this transaction. Remove
+    // this check before inserting the next one; an obsolete callback must not remove a newer row.
+    expiries.scheduled_id().delete(expiry.scheduled_id);
     let Some(creature) = ctx.db.game_world_entity().guid().find(expiry.creature_guid) else {
         crate::creatures::reset_creature_lifecycle(ctx, expiry.creature_guid);
         return;
@@ -624,18 +634,16 @@ pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpir
     } else {
         next_check_ms(remaining_ms)
     };
-    ctx.db
-        .game_creature_ai_summon_expiry()
-        .insert(CreatureAiSummonExpiry {
-            scheduled_id: 0,
-            scheduled_at: schedule_after(ctx, delay_ms),
-            creature_guid: expiry.creature_guid,
-            lifetime_ms: expiry.lifetime_ms,
-            remaining_ms,
-            last_checked_ms: now_ms,
-            // Carried, not re-taken: the summon is the same life across its lifetime checks.
-            life_seq: expiry.life_seq,
-        });
+    expiries.insert(CreatureAiSummonExpiry {
+        scheduled_id: 0,
+        scheduled_at: schedule_after(ctx, delay_ms),
+        creature_guid: expiry.creature_guid,
+        lifetime_ms: expiry.lifetime_ms,
+        remaining_ms,
+        last_checked_ms: now_ms,
+        // Carried, not re-taken: the summon is the same life across its lifetime checks.
+        life_seq: expiry.life_seq,
+    });
 }
 
 fn despawn_temporary_summon(ctx: &ReducerContext, creature_guid: u64) {

@@ -163,6 +163,32 @@ fn assert_first_aggro(node: &Standalone, summon: &BTreeMap<String, String>) {
     );
 }
 
+fn assert_lifetime_checks_continue(node: &Standalone, summon: &BTreeMap<String, String>) {
+    let query = format!(
+        "SELECT * FROM game_creature_ai_summon_expiry WHERE creature_guid = {}",
+        summon["guid"]
+    );
+    let first = node
+        .query_rows(&query)
+        .into_iter()
+        .next()
+        .expect("living summon lost its expiry row");
+    for _ in 0..2 {
+        let previous = node.query_rows(&query).remove(0);
+        assert!(
+            poll_until(POLL_TIMEOUT, || node
+                .query_rows(&query)
+                .first()
+                .is_some_and(|current| current["scheduled_id"]
+                    != previous["scheduled_id"]
+                    && current["life_seq"] == first["life_seq"])),
+            "living summon stopped its lifetime checks: {:?}",
+            node.query_rows(&query)
+        );
+        assert_eq!(summoned(node, summon["entry"].parse().unwrap()).len(), 1);
+    }
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn binding_items_require_the_circle_and_complete_both_quest_variants_without_replacing_a_pet() {
@@ -293,6 +319,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
         let summon = &summons[0];
         assert_eq!(summon["owner_guid"], "0");
         assert_first_aggro(&node, summon);
+        assert_lifetime_checks_continue(&node, summon);
         assert_eq!(summon["faction_template"], "14");
         assert_eq!(summon["map_id"], location["map_id"]);
         assert_eq!(summon["instance_id"], location["instance_id"]);
@@ -323,13 +350,15 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
             summon["guid"]
         ));
         node.assert_call("gw_attack", &[PLAYER, &summon["guid"]]);
-        assert!(poll_until(POLL_TIMEOUT, || summoned(&node, creature)
+        let progress_query =
+            format!("SELECT * FROM game_character_quest WHERE quest_entry = {quest}");
+        assert!(poll_until(POLL_TIMEOUT, || node
+            .query_rows(&progress_query)
             .first()
-            .is_some_and(|summon| summon["dead"] == "true")));
-        let progress = node.query_rows(&format!(
-            "SELECT * FROM game_character_quest WHERE quest_entry = {quest}"
-        ));
+            .is_some_and(|row| row["counts"] == "1")));
+        let progress = node.query_rows(&progress_query);
         assert_eq!(progress[0]["counts"], "1");
+        assert!(poll_until(POLL_TIMEOUT, || summoned(&node, creature).is_empty()));
         assert_refused(&node, "debug_kill_creature", &[PLAYER, &summon["guid"]]);
         assert_eq!(
             node.query_rows(&format!(
