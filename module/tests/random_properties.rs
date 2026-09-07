@@ -114,15 +114,18 @@ fn create_spell(shard: &Standalone) {
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_missing_property_pool_does_not_leave_an_empty_loot_cursor() {
     let shard = fixture("property-missing-loot-pool");
+    shard.assert_sql(
+        "UPDATE game_creature_template SET money_min = 0, money_max = 0 WHERE entry = 51000",
+    );
     shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
     shard.assert_sql("DELETE FROM game_creature_loot WHERE creature_entry = 51000");
     shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
     shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false)"));
     shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
     let wolf = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000");
-    let guid = serde_json::to_string(&wolf[0]["guid"]).unwrap();
-    shard.assert_call("debug_apply_damage", &[&guid, "10", "1"]);
-    shard.assert_call("debug_kill_creature", &["1", &guid]);
+    let guid = &wolf[0]["guid"];
+    shard.assert_call("debug_apply_damage", &[guid, "10", "1"]);
+    shard.assert_call("debug_kill_creature", &["1", guid]);
     assert!(shard
         .query_rows("SELECT id FROM game_corpse_loot")
         .is_empty());
