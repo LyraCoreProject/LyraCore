@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Only the loot byte-match test needs gtker's typed loot response (the runtime path is raw).
 use wow_world_messages::vanilla::ServerMessage;
 use wow_world_messages::vanilla::{
-    EnvironmentalDamageType, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE, TimerType,
+    EnvironmentalDamageType, SMSG_LOOT_RESPONSE_LootMethod, TimerType, SMSG_LOOT_RESPONSE,
 };
 // Group loot methods: the vote-kind byte constants + wire RollVote enum.
 use lyracore_shared::loot_roll::vote_kind;
@@ -793,7 +793,9 @@ fn breath_mirror_timer_edges_roundtrip_on_the_vanilla_wire() {
     let mut stop_bytes = Vec::new();
     stop.write_unencrypted_server(&mut stop_bytes).unwrap();
     match ServerOpcodeMessage::read_unencrypted(&mut stop_bytes.as_slice()).unwrap() {
-        ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => assert_eq!(msg.timer, TimerType::Breath),
+        ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => {
+            assert_eq!(msg.timer, TimerType::Breath)
+        }
         other => panic!("expected SMSG_STOP_MIRROR_TIMER, got {other}"),
     }
 }
@@ -2064,7 +2066,11 @@ fn gossip_message_renders_imported_options_verbatim_with_a_trailing_farewell() {
     let opts = vec![
         opt(0, "Care for a chat?", gossip_option::GOSSIP),
         opt(1, "Let me see your goods.", gossip_option::VENDOR),
-        opt(0, "I'd like to stay here a while.", gossip_option::INNKEEPER),
+        opt(
+            0,
+            "I'd like to stay here a while.",
+            gossip_option::INNKEEPER,
+        ),
     ];
     let m = build_gossip_message(
         1,
@@ -3078,8 +3084,8 @@ fn active_taxi_mount_is_present_in_the_player_create_mask() {
         other => panic!("expected a Player CreateObject2, got {other:?}"),
     }
 
-    let unmounted = build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[])
-        .unwrap();
+    let unmounted =
+        build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[]).unwrap();
     match &unmounted.objects[0] {
         Object::CreateObject2 {
             mask2: UpdateMask::Player(player),
@@ -3443,11 +3449,27 @@ fn monster_move_facing_carries_the_angle_and_a_degenerate_single_point_spline() 
 
 #[test]
 fn taxi_move_writes_absolute_catmull_rom_points_byte_for_byte() {
-    let start = Vector3d { x: -9465.0, y: -1300.0, z: 50.0 };
+    let start = Vector3d {
+        x: -9465.0,
+        y: -1300.0,
+        z: 50.0,
+    };
     let points = vec![
-        Vector3d { x: -9460.0, y: -1298.0, z: 52.0 },
-        Vector3d { x: -9450.0, y: -1290.0, z: 54.0 },
-        Vector3d { x: -9440.0, y: -1280.0, z: 56.0 },
+        Vector3d {
+            x: -9460.0,
+            y: -1298.0,
+            z: 52.0,
+        },
+        Vector3d {
+            x: -9450.0,
+            y: -1290.0,
+            z: 54.0,
+        },
+        Vector3d {
+            x: -9440.0,
+            y: -1280.0,
+            z: 56.0,
+        },
     ];
     let (opcode, bytes) = build_taxi_move_raw(0xF00D, start, points.clone(), 12_345, 77).unwrap();
     assert_eq!(opcode, 0x00DD);

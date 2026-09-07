@@ -390,7 +390,10 @@ pub(crate) fn equipped_offhand_weapon_damage(
 /// ranged slot (17) — a bow/gun/crossbow (Auto Shot) or a wand (Shoot) — or `None` when nothing usable
 /// is equipped there. The ranged swing tick uses `delay_ms` as its swing interval and rolls damage from
 /// `[damage_min, damage_max]`. [entity]
-pub(crate) fn equipped_ranged_weapon(ctx: &ReducerContext, player_guid: u64) -> Option<(u32, u32, u32, u8)> {
+pub(crate) fn equipped_ranged_weapon(
+    ctx: &ReducerContext,
+    player_guid: u64,
+) -> Option<(u32, u32, u32, u8)> {
     weapon_profile_in_slot(ctx, player_guid, crate::items::equip_slot::RANGED)
 }
 
@@ -717,7 +720,6 @@ pub(crate) fn roll_money(ctx: &ReducerContext, min: u32, max: u32) -> u32 {
     }
     min + ctx.random::<u32>() % (max - min + 1)
 }
-
 
 #[cfg(test)]
 mod seal_tests {

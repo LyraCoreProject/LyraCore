@@ -5794,6 +5794,7 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
 /// PLACE, which is what carries the swing clock across a threat switch, and only this assertion
 /// says so. Re-bless a deliberate change here with the same care.
 #[test]
+#[allow(clippy::too_many_lines)] // One assertion per method the production adapter passes through.
 fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
     let src = include_str!("ctx.rs");
     for (signature, want) in [

@@ -51,7 +51,8 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     standalone.assert_call("realm_group_op", &["0", "3", "5", "0", "0"]);
     standalone.assert_sql("DELETE FROM game_group WHERE leader_guid = 3");
 
-    let valid_group_before = standalone.query_rows("SELECT * FROM game_group WHERE leader_guid = 1");
+    let valid_group_before =
+        standalone.query_rows("SELECT * FROM game_group WHERE leader_guid = 1");
     for args in [
         &["0", "1", "3", "0", "0"][..],
         &["1", "5", "0", "0", "0"][..],
@@ -223,7 +224,10 @@ fn build_module_bytes() -> Vec<u8> {
         .filter_map(|message| message["filenames"].as_array().cloned())
         .flatten()
         .filter_map(|filename| filename.as_str().map(PathBuf::from))
-        .find(|path| path.extension().is_some_and(|extension| extension == "wasm"))
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "wasm")
+        })
         .expect("Cargo did not report the built Module Wasm artifact");
     let bytes = std::fs::read(&wasm).expect("the Wasm preflight output is missing");
     assert!(bytes.starts_with(b"\0asm"), "the built module is not Wasm");

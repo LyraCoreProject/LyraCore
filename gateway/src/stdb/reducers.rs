@@ -1229,6 +1229,8 @@ impl Coordinator {
     /// Cast a GROUND-TARGETED spell at a clicked world point (`CMSG_CAST_SPELL` with a DEST_LOCATION —
     /// Flamestrike/Blizzard/Rain of Fire). Same per-account attribution as `cast_spell`; the `(x,y,z)` is
     /// the ground click so the module anchors the AoE/patch there.
+    // The ground point rides flat because it mirrors the `gw_cast_spell_at` reducer signature.
+    #[allow(clippy::too_many_arguments)]
     pub fn cast_spell_at(
         &self,
         _account_id: u64,

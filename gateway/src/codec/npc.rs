@@ -77,7 +77,7 @@ pub fn option_condition_holds(cond_type: u32, quest_taken: bool, quest_rewarded:
         gossip_condition::QUEST_TAKEN => quest_taken,
         gossip_condition::QUEST_REWARDED => quest_rewarded,
         gossip_condition::NEVER => false, // fail-closed placeholder (seasonal events don't exist here)
-        _ => true, // unrecognized → fail open, never silently hide an option
+        _ => true,                        // unrecognized → fail open, never silently hide an option
     }
 }
 

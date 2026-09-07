@@ -15,11 +15,11 @@
 mod accept;
 mod codec;
 mod config;
-mod fd_limit;
 #[cfg(test)]
 #[allow(dead_code)] // Shared commands are also used by Module integration tests.
 #[path = "../../module/tests/support/mod.rs"]
 mod durable_test_support;
+mod fd_limit;
 mod load_sample;
 mod logon;
 mod movement_batch_metrics;
@@ -151,7 +151,7 @@ async fn run() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
         logon.abort();
         world.abort();
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(feature = "dhat-heap"))]
     {

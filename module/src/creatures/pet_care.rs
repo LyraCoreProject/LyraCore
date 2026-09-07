@@ -349,9 +349,12 @@ mod tests {
         }
     }
 
+    /// One gate broken in an otherwise valid feed.
+    type BreakGate = Box<dyn Fn(&mut FeedEligibility)>;
+
     #[test]
     fn every_feed_gate_refuses_before_consumption() {
-        let cases: Vec<Box<dyn Fn(&mut FeedEligibility)>> = vec![
+        let cases: Vec<BreakGate> = vec![
             Box::new(|v| v.actor_is_player = false),
             Box::new(|v| v.item_owned = false),
             Box::new(|v| v.pet_exists = false),

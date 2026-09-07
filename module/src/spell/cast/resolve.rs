@@ -760,6 +760,7 @@ fn check_cast_gate_prefix(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)] // One gate per refusal a cast can hit.
 fn check_cast_gate_suffix(
     ctx: &ReducerContext,
     caster: &WorldEntity,

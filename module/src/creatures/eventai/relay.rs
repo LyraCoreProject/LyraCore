@@ -1382,6 +1382,7 @@ fn apply_leaf(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // One arm per relay leaf kind.
 fn apply_leaf_for_pair(
     ctx: &ReducerContext,
     run: &mut RelayRun,

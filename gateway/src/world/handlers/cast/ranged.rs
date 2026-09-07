@@ -75,7 +75,10 @@ fn refuse<St: CastStore + ?Sized>(
     );
     let outbound = vec![Outbound::Raw {
         opcode: OP_CAST_RESULT,
-        body: codec::build_cast_result_failed(spell, codec::cast_failure_reason_for(&e.to_string())),
+        body: codec::build_cast_result_failed(
+            spell,
+            codec::cast_failure_reason_for(&e.to_string()),
+        ),
     }];
     // A refused RETARGET drops the client's toggle on that failure result, so the still-firing OLD
     // loop has to go too — otherwise the server keeps shooting a target the client believes it
@@ -261,7 +264,10 @@ mod tests {
             "no CAST_RESULT(OK) and no GO: the activation is not a completed shot"
         );
         let start = spell_start(&outbound);
-        assert_eq!(start.timer, 0, "the wind-up is an attack timer, not a cast bar");
+        assert_eq!(
+            start.timer, 0,
+            "the wind-up is an attack timer, not a cast bar"
+        );
         assert_eq!(
             start
                 .targets
@@ -465,7 +471,10 @@ mod tests {
 
     #[test]
     fn the_lowest_slot_live_stack_wins() {
-        let store = armed_with(launcher(100, 2), vec![(9, 300, 20), (4, 201, 60), (2, 200, 0)]);
+        let store = armed_with(
+            launcher(100, 2),
+            vec![(9, 300, 20), (4, 201, 60), (2, 200, 0)],
+        );
 
         assert_eq!(
             activate_ammo(&store),

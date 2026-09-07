@@ -18,22 +18,17 @@ permissions:
 jobs:
   fmt:
     runs-on: ubuntu-latest
-    # Non-blocking: 61 files on main already fail this. Reformatting them is a separate change.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check formatting
-        continue-on-error: true
         run: cargo fmt --all -- --check
 
   clippy:
     runs-on: ubuntu-latest
-    # Non-blocking: lyracore-module, -gateway and -importer are red on main today. lyracore-shared
-    # and -package-delta are clean, so this flips to blocking once the other three are fixed.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run clippy
-        continue-on-error: true
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:

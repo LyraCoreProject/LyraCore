@@ -462,8 +462,9 @@ pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
         other => return Ok(AuctionActionOutcome::PassThrough(other)),
     };
     let auctioneer_guid = auctioneer.guid();
-    let Some((player_guid, interaction)) = auction_actor_interaction(store, player, auctioneer_guid)?
-        .filter(|(_, interaction)| !interaction.refuses_interaction)
+    let Some((player_guid, interaction)) =
+        auction_actor_interaction(store, player, auctioneer_guid)?
+            .filter(|(_, interaction)| !interaction.refuses_interaction)
     else {
         return Ok(AuctionActionOutcome::Handled {
             outbound: Vec::new(),

@@ -8,9 +8,9 @@
 
 use super::*;
 use wow_world_messages::vanilla::{
-    CMSG_ACCEPT_TRADE, CMSG_BEGIN_TRADE, CMSG_BUSY_TRADE, CMSG_CANCEL_TRADE,
-    CMSG_CLEAR_TRADE_ITEM, CMSG_IGNORE_TRADE, CMSG_INITIATE_TRADE, CMSG_SET_TRADE_GOLD,
-    CMSG_SET_TRADE_ITEM, CMSG_UNACCEPT_TRADE,
+    CMSG_ACCEPT_TRADE, CMSG_BEGIN_TRADE, CMSG_BUSY_TRADE, CMSG_CANCEL_TRADE, CMSG_CLEAR_TRADE_ITEM,
+    CMSG_IGNORE_TRADE, CMSG_INITIATE_TRADE, CMSG_SET_TRADE_GOLD, CMSG_SET_TRADE_ITEM,
+    CMSG_UNACCEPT_TRADE,
 };
 
 /// **AC: initiating a trade with a targeted player reaches the store with the wire's target.**
@@ -18,11 +18,9 @@ use wow_world_messages::vanilla::{
 fn initiate_trade_dispatches_with_the_wire_target_guid() {
     let store = std::sync::Arc::new(quest_store());
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_INITIATE_TRADE {
-        guid: Guid::new(2),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
+    CMSG_INITIATE_TRADE { guid: Guid::new(2) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
     drop(client); // every status rides the game_trade_event relay, no direct SMSG here
     server.join().unwrap();
     assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(1, 2)]);
@@ -34,11 +32,9 @@ fn initiate_trade_dispatches_with_the_wire_target_guid() {
 fn initiate_trade_dispatches_from_the_other_side_too() {
     let store = std::sync::Arc::new(quest_store());
     let (mut client, mut c_enc, _c_dec, server) = enter_world(store.clone(), 2);
-    CMSG_INITIATE_TRADE {
-        guid: Guid::new(1),
-    }
-    .write_encrypted_client(&mut client, &mut c_enc)
-    .unwrap();
+    CMSG_INITIATE_TRADE { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
     drop(client);
     server.join().unwrap();
     assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(2, 1)]);
@@ -52,11 +48,9 @@ fn the_handshake_flow_dispatches_initiate_then_begin_then_cancel() {
     let store = std::sync::Arc::new(quest_store());
 
     let (mut a, mut a_enc, _a_dec, a_server) = enter_world(store.clone(), 1);
-    CMSG_INITIATE_TRADE {
-        guid: Guid::new(2),
-    }
-    .write_encrypted_client(&mut a, &mut a_enc)
-    .unwrap();
+    CMSG_INITIATE_TRADE { guid: Guid::new(2) }
+        .write_encrypted_client(&mut a, &mut a_enc)
+        .unwrap();
     drop(a);
     a_server.join().unwrap();
 
@@ -108,9 +102,18 @@ fn offer_mutations_dispatch_with_wire_arguments() {
     .unwrap();
     drop(client);
     server.join().unwrap();
-    assert_eq!(store.set_trade_items.lock().unwrap().as_slice(), &[(1, 2, 23)]);
-    assert_eq!(store.cleared_trade_items.lock().unwrap().as_slice(), &[(1, 2)]);
-    assert_eq!(store.set_trade_golds.lock().unwrap().as_slice(), &[(1, 1_2345)]);
+    assert_eq!(
+        store.set_trade_items.lock().unwrap().as_slice(),
+        &[(1, 2, 23)]
+    );
+    assert_eq!(
+        store.cleared_trade_items.lock().unwrap().as_slice(),
+        &[(1, 2)]
+    );
+    assert_eq!(
+        store.set_trade_golds.lock().unwrap().as_slice(),
+        &[(1, 1_2345)]
+    );
 }
 
 /// **AC (#121): sub-bag items are out of scope, not mis-addressed** — a `CMSG_SET_TRADE_ITEM`
@@ -145,9 +148,13 @@ fn the_full_loop_dispatches_offer_and_dual_accept_in_order() {
     CMSG_INITIATE_TRADE { guid: Guid::new(2) }
         .write_encrypted_client(&mut a, &mut a_enc)
         .unwrap();
-    CMSG_SET_TRADE_ITEM { trade_slot: 0, bag: 255, slot: 23 }
-        .write_encrypted_client(&mut a, &mut a_enc)
-        .unwrap();
+    CMSG_SET_TRADE_ITEM {
+        trade_slot: 0,
+        bag: 255,
+        slot: 23,
+    }
+    .write_encrypted_client(&mut a, &mut a_enc)
+    .unwrap();
     CMSG_ACCEPT_TRADE { unknown1: 0 }
         .write_encrypted_client(&mut a, &mut a_enc)
         .unwrap();
@@ -158,9 +165,11 @@ fn the_full_loop_dispatches_offer_and_dual_accept_in_order() {
     CMSG_BEGIN_TRADE {}
         .write_encrypted_client(&mut b, &mut b_enc)
         .unwrap();
-    CMSG_SET_TRADE_GOLD { gold: wow_world_messages::vanilla::Gold::new(500) }
-        .write_encrypted_client(&mut b, &mut b_enc)
-        .unwrap();
+    CMSG_SET_TRADE_GOLD {
+        gold: wow_world_messages::vanilla::Gold::new(500),
+    }
+    .write_encrypted_client(&mut b, &mut b_enc)
+    .unwrap();
     CMSG_ACCEPT_TRADE { unknown1: 0 }
         .write_encrypted_client(&mut b, &mut b_enc)
         .unwrap();
@@ -168,8 +177,14 @@ fn the_full_loop_dispatches_offer_and_dual_accept_in_order() {
     b_server.join().unwrap();
 
     assert_eq!(store.initiated_trades.lock().unwrap().as_slice(), &[(1, 2)]);
-    assert_eq!(store.set_trade_items.lock().unwrap().as_slice(), &[(1, 0, 23)]);
-    assert_eq!(store.set_trade_golds.lock().unwrap().as_slice(), &[(2, 500)]);
+    assert_eq!(
+        store.set_trade_items.lock().unwrap().as_slice(),
+        &[(1, 0, 23)]
+    );
+    assert_eq!(
+        store.set_trade_golds.lock().unwrap().as_slice(),
+        &[(2, 500)]
+    );
     assert_eq!(store.accepted_trades.lock().unwrap().as_slice(), &[1, 2]);
 }
 
@@ -183,9 +198,11 @@ fn unaccept_and_post_accept_mutations_dispatch_for_the_acting_seat() {
     CMSG_ACCEPT_TRADE { unknown1: 0 }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    CMSG_SET_TRADE_GOLD { gold: wow_world_messages::vanilla::Gold::new(9) }
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
+    CMSG_SET_TRADE_GOLD {
+        gold: wow_world_messages::vanilla::Gold::new(9),
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
     CMSG_UNACCEPT_TRADE {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();

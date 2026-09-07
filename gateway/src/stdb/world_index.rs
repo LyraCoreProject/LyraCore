@@ -208,7 +208,9 @@ impl WorldIndex {
         // Matches the file-wide `.lock().unwrap()` discipline in `connection.rs`: a poisoned index
         // must degrade to a possibly-stale read, never take every future relay down with it.
         self.inner.lock().unwrap_or_else(|p| {
-            log::error!("world index lock poisoned (a prior panic in a critical section) — recovering");
+            log::error!(
+                "world index lock poisoned (a prior panic in a critical section) — recovering"
+            );
             p.into_inner()
         })
     }
@@ -503,11 +505,7 @@ impl WorldIndex {
     /// Every entity a viewer can see, with the shard whose cache holds each row — the login /
     /// world-entry sweep, and the inverse the differential test checks. O(25 + E) with cell scoping
     /// on; O(world) with `LYRACORE_AOI=0`.
-    pub fn visible_entities(
-        &self,
-        layer: EntityLayer,
-        session: SessionId,
-    ) -> Vec<(u64, ShardId)> {
+    pub fn visible_entities(&self, layer: EntityLayer, session: SessionId) -> Vec<(u64, ShardId)> {
         let inner = self.lock();
         let Some(anchor) = inner.viewer_cell.get(&session).copied() else {
             return Vec::new();
@@ -601,7 +599,9 @@ mod tests {
     /// AOI builders emit — `col = n`, `col >= n`, `col <= n`, joined by ` AND ` — and PANICS on
     /// anything else, so a future query shape cannot silently pass by being unparsed.
     fn sql_selects(query: &str, row: &Row) -> bool {
-        let (_, where_clause) = query.split_once(" WHERE ").expect("an AOI query has a WHERE");
+        let (_, where_clause) = query
+            .split_once(" WHERE ")
+            .expect("an AOI query has a WHERE");
         where_clause.split(" AND ").all(|term| {
             let mut parts = term.split_whitespace();
             let col = parts.next().expect("a column");
@@ -611,14 +611,19 @@ mod tests {
                 .expect("a literal")
                 .parse()
                 .expect("an integer literal");
-            assert!(parts.next().is_none(), "unexpected trailing token in `{term}`");
+            assert!(
+                parts.next().is_none(),
+                "unexpected trailing token in `{term}`"
+            );
             let actual: i64 = match col {
                 "map_id" => row.map_id as i64,
                 "instance_id" => row.instance_id as i64,
                 "grid_x" => row.gx as i64,
                 "grid_y" => row.gy as i64,
                 "cell" => grid_cell_id(row.gx, row.gy),
-                other => panic!("the oracle does not know column `{other}` — teach it or fix the query"),
+                other => {
+                    panic!("the oracle does not know column `{other}` — teach it or fix the query")
+                }
             };
             match op {
                 "=" => actual == literal,
@@ -823,7 +828,10 @@ mod tests {
             let delta = index.move_viewer_delta(1, to);
             let after = sql_visible(EntityLayer::WorldEntity, to, &rows);
             match delta {
-                None => assert_eq!(from, to, "a delta of None must mean the anchor did not move"),
+                None => assert_eq!(
+                    from, to,
+                    "a delta of None must mean the anchor did not move"
+                ),
                 Some(d) => {
                     for (layer, layer_delta) in [
                         (EntityLayer::WorldEntity, d.world_entities),
@@ -831,8 +839,7 @@ mod tests {
                     ] {
                         let entered: HashSet<u64> =
                             layer_delta.entered.iter().map(|(g, _)| *g).collect();
-                        let left: HashSet<u64> =
-                            layer_delta.left.iter().map(|(g, _)| *g).collect();
+                        let left: HashSet<u64> = layer_delta.left.iter().map(|(g, _)| *g).collect();
                         assert_eq!(
                             entered,
                             after.difference(&before).copied().collect::<HashSet<u64>>(),
@@ -862,7 +869,9 @@ mod tests {
             .neighbourhood()
             .map(|k| lyracore_shared::spatial::grid_cell_of_id(k.cell))
             .collect();
-        let want: HashSet<(i32, i32)> = (x0..=x1).flat_map(|x| (y0..=y1).map(move |y| (x, y))).collect();
+        let want: HashSet<(i32, i32)> = (x0..=x1)
+            .flat_map(|x| (y0..=y1).map(move |y| (x, y)))
+            .collect();
         assert_eq!(got, want);
         assert_eq!(got.len(), ((2 * BOX_HALF_SPAN + 1) as usize).pow(2));
         // Every neighbour keeps the partition — a leak here is a dungeon copy visible from the
@@ -972,8 +981,13 @@ mod tests {
         let index = WorldIndex::new(true);
         let a = CellKey::at(0, 0, 0, 0);
         index.add_viewer(1, a);
-        assert!(index.move_viewer_delta(1, a).is_none(), "same cell is not a recenter");
-        assert!(index.move_viewer_delta(1, CellKey::at(0, 0, 1, 0)).is_some());
+        assert!(
+            index.move_viewer_delta(1, a).is_none(),
+            "same cell is not a recenter"
+        );
+        assert!(index
+            .move_viewer_delta(1, CellKey::at(0, 0, 1, 0))
+            .is_some());
         assert_eq!(index.viewer_cell(1), Some(CellKey::at(0, 0, 1, 0)));
         // Only one anchor is ever held: walking away must not leave the session visible from the
         // cell it started in.
@@ -1007,12 +1021,17 @@ mod tests {
         index.upsert_entity(EntityLayer::WorldEntity, 3, CellKey::at(0, 77, 0, 0), 0, 0); // another instance
         index.upsert_entity(EntityLayer::WorldEntity, 4, CellKey::at(1, 0, 0, 0), 0, 0); // another map
         index.add_viewer(1, CellKey::at(0, 0, 0, 0));
-        assert_eq!(index_visible(&index, EntityLayer::WorldEntity, 1), HashSet::from([1, 2]));
+        assert_eq!(
+            index_visible(&index, EntityLayer::WorldEntity, 1),
+            HashSet::from([1, 2])
+        );
         assert_eq!(
             index.viewers_of(EntityLayer::WorldEntity, CellKey::at(0, 0, 900, 900)),
             vec![1]
         );
-        assert!(index.viewers_of(EntityLayer::WorldEntity, CellKey::at(0, 77, 0, 0)).is_empty());
+        assert!(index
+            .viewers_of(EntityLayer::WorldEntity, CellKey::at(0, 77, 0, 0))
+            .is_empty());
     }
 
     /// `can_see` is a point query and `visible_entities` is the set form of the same question —
@@ -1068,5 +1087,4 @@ mod tests {
         index.add_viewer(1, CellKey::at(0, 0, 0, 0));
         assert_eq!(index.stats(EntityLayer::WorldEntity), (3, 1, 2));
     }
-
 }

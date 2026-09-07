@@ -6,8 +6,8 @@ use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 use crate::{game_world_entity, world::WorldEntity};
 use lyracore_shared::env::{advance_breath, drowning_damage, FULL_AIR_MICROS};
 
-/// Vanilla's `Player::HandleDrowning` gives a player about one minute of air. Surfacing recovers
-/// the same bar over ten seconds; the slower recovery prevents brief surface bobs from resetting it.
+// Vanilla's `Player::HandleDrowning` gives a player about one minute of air. Surfacing recovers
+// the same bar over ten seconds; the slower recovery prevents brief surface bobs from resetting it.
 
 /// One active breath timer. This is deliberately non-spatial: the scheduled tick must iterate all
 /// rows, and spatial iteration would silently omit players outside the caller's subscribed slice.

@@ -13,6 +13,9 @@
 //!   - `subscriptions`: `PlayerSubscriptions`, viewer setup, and shared packet builders.
 //!   - `views`: row→view converters + the thin `RealmRow`/`AccountRow` mirrors.
 
+// The SpacetimeDB codegen writes one function per table subscription; several run past any
+// reasonable length ceiling and no edit here survives a regeneration.
+#[allow(clippy::too_many_lines)]
 pub mod bindings;
 
 mod account_sessions; // per-account session-epoch + live-socket registry, split out of `connection`
@@ -24,8 +27,8 @@ mod reads;
 mod reducers;
 pub(crate) mod subscriptions;
 mod views;
-mod world_store; // impl WorldStore for Coordinator (replaces the former WorldCoordinatorStore newtype)
 pub(crate) mod world_index;
+mod world_store; // impl WorldStore for Coordinator (replaces the former WorldCoordinatorStore newtype)
 pub(crate) mod world_view; // shared per-shard spatial, broadcast, private, and owner dispatch
 
 pub use connection::Coordinator;

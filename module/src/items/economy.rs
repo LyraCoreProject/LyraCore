@@ -77,7 +77,13 @@ fn npc_interaction_gate(
 /// must be alive with a live BANKER npc in reach.
 pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result<(), String> {
     use lyracore_shared::constants::npc_flags;
-    flagged_npc_in_reach_gate(ctx, player_guid, npc_flags::BANKER, "banker", "use the bank")
+    flagged_npc_in_reach_gate(
+        ctx,
+        player_guid,
+        npc_flags::BANKER,
+        "banker",
+        "use the bank",
+    )
 }
 
 /// The hearth-bind trust gate: binding a home needs a live INNKEEPER npc in reach.
