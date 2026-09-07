@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-09-07 21:37 UTC",
+  "updated_at": "2026-09-07 21:47 UTC",
   "base_revision": "34e9a35420377dd2ec8dc1cae769fbbe22d1da80",
   "status_note": "All 68 open issues have an assessment; 23 closed issues remain for history. Item stats #466, Spell repair #465, summon fix #470, party cleanup #463 and human-approved Loot replay #461 are merged. Headless Client alpha11 removes the global party reset. Account ownership is checking the combined main before publication and human schema review.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
@@ -3649,7 +3649,7 @@
         "human_schema": "APPROVED"
       },
       "review_findings": [],
-      "review_note": "The maintainer explicitly reviewed and approved the schema at aea68d8. The published integration 034079a has identical Module, bindings, CLI pin and upgrade procedure. All 1,323 Gateway unit tests, 119 integration/parity checks, strict all-target/all-feature lint, formatting and diff checks pass. PR is ready; current CI and review are running.",
+      "review_note": "The maintainer explicitly reviewed and approved the schema at aea68d8. The published integration 034079a has identical Module, bindings, CLI pin and upgrade procedure. All 1,323 Gateway unit tests, 119 integration/parity checks, strict all-target/all-feature lint, formatting and diff checks pass. All seven checks and current-head CodeRabbit review passed before merge 5f42e5a. The recorded human schema approval covers the unchanged Module and upgrade procedure.",
       "human_schema_approval": {
         "at": "2026-09-07 20:05 UTC",
         "reviewed_head": "aea68d8d08aee09f1a44dcd40333a0de230a7cf1",
@@ -3754,7 +3754,7 @@
       },
       "status": "Merged after all checks and current-head review passed",
       "next_action": "Complete the separate Headless Client suite acceptance for #46.",
-      "review_note": "Head d94bc1d preserves the original LEAVE failure if roster confirmation also fails, and repairs known groups while a failed Shard enumeration remains queued for retry. All 53 party tests, eight focused deletion checks and strict Gateway lint pass. CodeRabbit completed review on this head with no remaining finding. Durable CI is still running.",
+      "review_note": "Head d94bc1d preserves the original LEAVE failure if roster confirmation also fails, and repairs known groups while a failed Shard enumeration remains queued for retry. All 53 party tests, eight focused deletion checks and strict Gateway lint pass. CodeRabbit completed review on this head with no remaining finding. All seven checks, including durable CI, passed before merge a345555.",
       "merged_at": "2026-09-07T19:48:12Z",
       "merge_commit": "a345555b09623d4cf344106e31b0435a807357df"
     },
@@ -3852,7 +3852,7 @@
         "CodeRabbit": "COMPLETE",
         "coordinating": "COMPLETE"
       },
-      "review_note": "Local 8a8d26d uses all 19 location codes from the pinned target classification. Actual client data gains 170 corrected target pairs. All 360 ordinary importer tests, the source audit and strict lint pass. Root checked the classification and found no blocker.",
+      "review_note": "Final head 5ce7d39 passed all seven checks and current-head CodeRabbit review before merge 044b935. Its 360 ordinary importer tests, actual-source audits, strict lint and imported gameplay cases pass. The corrected target selection covers all 19 pinned location codes and repairs 170 additional source pairs.",
       "merge_commit": "044b93531ed6afe13202cd541d105d3d634d5b0d"
     },
     {
@@ -3972,7 +3972,7 @@
         "coordinating": "COMPLETE"
       },
       "review_findings": [],
-      "review_note": "The effective review-state correction is published and its review thread is resolved. Actual current-head review is rate-limited. Durable CI exposed the main-branch temporary-summon panic and transient corpse assertion; #470 fixes both before this report PR is refreshed.",
+      "review_note": "The earlier rate limit applied to 9f2b072. CodeRabbit later reviewed b8136d1 and requested the #470 merge revision; 22046ac added it. CodeRabbit then reported no actionable comments for the b8136d1-to-22046ac range and recorded final review coverage for 22046ac. All seven checks passed before merge 48ba8b3. Completion evidence: https://github.com/LyraCoreProject/LyraCore/pull/467#issuecomment-5574380209",
       "merge_commit": "48ba8b397f6c9e84dc69571e4503b3960bca4021"
     },
     {
@@ -4102,7 +4102,7 @@
         "coordinating": "COMPLETE"
       },
       "review_findings": [],
-      "review_note": "Published 47184b7 on merged Loot replay 5f42e5a. The stale-callback mutation reproduces the unique-key panic; the corrected durable regression and natural expiry pass. All 1,495 Module tests, 1,442 applicable Gateway tests, strict lint and 979 generated binding comparisons pass. Actual CodeRabbit review completed without actionable comments; durable CI remains pending.",
+      "review_note": "Published 47184b7 on merged Loot replay 5f42e5a. The stale-callback mutation reproduces the unique-key panic; the corrected durable regression and natural expiry pass. All 1,495 Module tests, 1,442 applicable Gateway tests, strict lint and 979 generated binding comparisons pass. Actual CodeRabbit review completed without actionable comments; all seven checks, including durable CI, passed before merge 3669dfb.",
       "merge_commit": "3669dfbc7f648fd098cb77317a44f76c8597e262"
     },
     {
@@ -4217,6 +4217,55 @@
       },
       "review_findings": [],
       "review_note": "All five independent review findings are corrected. The owned two-Shard deletion scenario passed twice with complete unrelated-party preservation. A fresh alpha11 clone matches the merge SHA and passes Actor and party-isolation contracts."
+    },
+    {
+      "number": 472,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/472",
+      "title": "docs(triage): record merged work and remaining acceptance",
+      "owner": "Codex",
+      "head": "32733005f2a31f8e2684c14ac6575c64673f7ad8",
+      "github_state": "OPEN",
+      "checked_at": "2026-09-07 21:47 UTC",
+      "status": "Merged-review notes corrected; updated snapshot completing checks",
+      "next_action": "Finish CI and actual review of this report snapshot, then merge.",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "PENDING"
+        }
+      ],
+      "review_state": {
+        "CodeRabbit": "CHANGES_REQUESTED",
+        "coordinating": "IN_PROGRESS"
+      },
+      "review_findings": [
+        "The stale #467 rate-limit note is corrected in this snapshot with actual review evidence."
+      ],
+      "review_note": "The published snapshot passed actual review except for a stale #467 note. The correction records its later completed review and also removes obsolete pending-CI wording from merged #461, #463 and #470. Historical merges that had no CodeRabbit review retain their UNAVAILABLE status."
     }
   ],
   "history": [
@@ -4479,6 +4528,10 @@
     {
       "at": "2026-09-07 21:37 UTC",
       "text": "Merged #466 as 34e9a35 after all seven checks and current-head CodeRabbit review passed. Random Property implementation is complete; #31 retains real-client tooltip and craft-preview acceptance. Account ownership rebased cleanly as candidate 7177b25, retaining the reviewed Transfer fix and alpha11. Its final combined tests include the newly automated party-deletion and resistance cases."
+    },
+    {
+      "at": "2026-09-07 21:47 UTC",
+      "text": "Report review found obsolete rate-limit wording for #467. Replaced it with the completed 22046ac review and its coverage evidence. Audited all merged PR notes and corrected old pending-CI wording for #461, #463 and #470, while preserving unavailable-review records for historical merges. Added report PR #472 to monitoring."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
