@@ -89,3 +89,16 @@ pub fn debug_verify_eventai_spell_guardian_cleanup(ctx: &ReducerContext) -> Resu
     }
     Ok(())
 }
+
+/// Create a replacement summon, deliver its prior life's callback, and leave a short-lived
+/// disengaged summon for the real scheduler to expire.
+#[reducer]
+pub fn debug_verify_eventai_summon_expiry(ctx: &ReducerContext) -> Result<(), String> {
+    let owner = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(FIXTURE_OWNER_GUID)
+        .ok_or_else(|| "fixture EventAI owner is unavailable".to_string())?;
+    crate::creatures::verify_summon_expiry_boundaries_for_debug(ctx, &owner, FIXTURE_OWNER_ENTRY)
+}

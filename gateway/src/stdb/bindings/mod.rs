@@ -257,6 +257,7 @@ pub mod debug_verify_combat_regen_reducer;
 pub mod debug_verify_eventai_quest_credit_fixture_reducer;
 pub mod debug_verify_eventai_revision_fixture_reducer;
 pub mod debug_verify_eventai_spell_guardian_cleanup_reducer;
+pub mod debug_verify_eventai_summon_expiry_reducer;
 pub mod debug_verify_lethal_damage_floor_fixture_reducer;
 pub mod debug_verify_loot_tag_fixture_reducer;
 pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
@@ -1235,6 +1236,7 @@ pub use debug_verify_combat_regen_reducer::debug_verify_combat_regen;
 pub use debug_verify_eventai_quest_credit_fixture_reducer::debug_verify_eventai_quest_credit_fixture;
 pub use debug_verify_eventai_revision_fixture_reducer::debug_verify_eventai_revision_fixture;
 pub use debug_verify_eventai_spell_guardian_cleanup_reducer::debug_verify_eventai_spell_guardian_cleanup;
+pub use debug_verify_eventai_summon_expiry_reducer::debug_verify_eventai_summon_expiry;
 pub use debug_verify_lethal_damage_floor_fixture_reducer::debug_verify_lethal_damage_floor_fixture;
 pub use debug_verify_loot_tag_fixture_reducer::debug_verify_loot_tag_fixture;
 pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
@@ -2648,6 +2650,7 @@ pub enum Reducer {
         expect_rule_state: bool,
     },
     DebugVerifyEventaiSpellGuardianCleanup,
+    DebugVerifyEventaiSummonExpiry,
     DebugVerifyLethalDamageFloorFixture {
         creature_guid: u64,
         expected_health: u32,
@@ -3773,6 +3776,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugVerifyEventaiSpellGuardianCleanup => {
                 "debug_verify_eventai_spell_guardian_cleanup"
             }
+            Reducer::DebugVerifyEventaiSummonExpiry => "debug_verify_eventai_summon_expiry",
             Reducer::DebugVerifyLethalDamageFloorFixture { .. } => {
                 "debug_verify_lethal_damage_floor_fixture"
             }
@@ -5199,6 +5203,8 @@ Reducer::DebugVerifyEventaiRevisionFixture{
                 expect_rule_state: expect_rule_state.clone(),
 }),
             Reducer::DebugVerifyEventaiSpellGuardianCleanup => __sats::bsatn::to_vec(&debug_verify_eventai_spell_guardian_cleanup_reducer::DebugVerifyEventaiSpellGuardianCleanupArgs {
+                }),
+Reducer::DebugVerifyEventaiSummonExpiry => __sats::bsatn::to_vec(&debug_verify_eventai_summon_expiry_reducer::DebugVerifyEventaiSummonExpiryArgs {
                 }),
 Reducer::DebugVerifyLethalDamageFloorFixture{
                 creature_guid,
