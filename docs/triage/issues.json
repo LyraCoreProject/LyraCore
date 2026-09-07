@@ -1,12 +1,12 @@
 {
-  "updated_at": "2026-09-07 14:31 UTC",
-  "base_revision": "6ccfe68e4cb226c5cac836fd309976b44ebb19cd",
-  "status_note": "71 open issues assessed; 18 closed issues retained for history. Movement replay and benchmark reporting are merged. Service checks, Warlock quests and the bank adapter are active.",
+  "updated_at": "2026-09-07 14:45 UTC",
+  "base_revision": "e26ffff05fd8938b4e2d5339e7224683b36af84d",
+  "status_note": "69 open issues assessed; 20 closed issues retained for history. Service verification and the bank adapter are merged and pinned. Warlock quests and dive adapter adoption are active.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
   "focus": [
-    "Complete core service pin #452 and bank adapter pin #453 through checks and review.",
-    "Finish The Binding #40 draft, including required human review of its table and appended EventAI instruction.",
-    "Implement dive adapter #142 with GPT-5.6 Sol at medium effort; keep live execution and calibration with the Operator."
+    "Complete the dive adapter release and core pin for #142 through checks and review.",
+    "Finish The Binding #40 draft and independent review, then obtain required human review of its table and appended EventAI instruction.",
+    "Keep Operator runs and stock-client acceptance explicit for #105, #137, #142 and #367."
   ],
   "issues": [
     {
@@ -292,19 +292,21 @@
       "gain": 3,
       "effort": 2,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "The CLI parser still splits physical lines. Continued directives can hide a conflicting Standalone service. The fix is testable without changing a host.",
-      "next_action": "Complete the core pin for merged CLI #57. Keep the issue open until adoption passes checks and review.",
+      "disposition": "done",
+      "rationale": "The former parser split physical lines, which could hide conflicting continued directives. The merged CLI parses logical lines, including continuation comments, and rejects conflicting units before host changes.",
+      "next_action": "Complete. CLI #57 is adopted by merged core pin #452.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/341",
-        "lyracore-cli/src/cmd/service.rs: UnitContract::parse iterates text.lines().",
-        "https://github.com/LyraCoreProject/lyracore-cli/pull/57"
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/57",
+        "https://github.com/LyraCoreProject/LyraCore/pull/452"
       ],
-      "related_prs": [],
+      "related_prs": [
+        452
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/341",
-      "updatedAt": "2026-08-26T11:12:02Z",
-      "github_state": "open",
+      "updatedAt": "2026-09-07T14:40:43Z",
+      "github_state": "closed",
       "owner": "GPT-5.6 Sol, high effort, CLI agent"
     },
     {
@@ -314,19 +316,21 @@
       "gain": 4,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "The current verifier reads ActiveState, LimitNOFILE and StandardError. It does not compare the effective ExecStart or name relevant drop-ins. A success report can therefore describe the wrong service.",
-      "next_action": "Complete the core pin for merged CLI #57. Keep the issue open until adoption passes checks and review.",
+      "disposition": "done",
+      "rationale": "The former verifier omitted effective command arguments and drop-in provenance. The merged CLI compares typed systemd ExecStart data with the tracked command, preserves argument boundaries and reports drop-ins on mismatch.",
+      "next_action": "Complete. CLI #57 is adopted by merged core pin #452.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/340",
-        "lyracore-cli/src/cmd/service.rs: verify omits ExecStart and DropInPaths.",
-        "https://github.com/LyraCoreProject/lyracore-cli/pull/57"
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/57",
+        "https://github.com/LyraCoreProject/LyraCore/pull/452"
       ],
-      "related_prs": [],
+      "related_prs": [
+        452
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/340",
-      "updatedAt": "2026-08-26T11:11:59Z",
-      "github_state": "open",
+      "updatedAt": "2026-09-07T14:40:42Z",
+      "github_state": "closed",
       "owner": "GPT-5.6 Sol, high effort, CLI agent"
     },
     {
@@ -605,14 +609,14 @@
     },
     {
       "number": 142,
-      "summary": "Drowning works in Module and Gateway tests, but there is no pinned Headless Client adapter for a complete dive cycle and no real-client calibration of the submerge threshold.",
+      "summary": "Drowning behavior and a Headless Client dive adapter are implemented. Core adoption, Operator execution and stock-client calibration remain.",
       "importance": 3,
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "implementing",
-      "rationale": "The code half shipped in PRs 150 and 166. The pinned wire-harness tree contains no drowning or breath adapter, so a bounded cross-repository implementation remains before the human pass.",
-      "next_action": "Implement protocol assertions for timer start, health loss, drowning log and timer stop, with offline checks. Leave the live run and head-height calibration with the Operator.",
+      "disposition": "review",
+      "rationale": "Wire-harness #10 is merged after parent review and green Ubuntu, macOS and coverage CI. The adapter checks breath start, expiry before damage, matching health loss and drowning logs, and breath stop after surfacing. Live timing and the submerge threshold remain unverified.",
+      "next_action": "Release the merged dive adapter and complete its core pin. Then run it on an approved development Realm and perform stock-client calibration.",
       "blockers": [
         "Completing the issue requires a wire-harness release and LyraCore pin bump.",
         "Submerge timing and mirror-bar rendering require a human with a stock client."
@@ -621,8 +625,8 @@
         "https://github.com/LyraCoreProject/LyraCore/issues/142",
         "https://github.com/LyraCoreProject/LyraCore/pull/150",
         "https://github.com/LyraCoreProject/LyraCore/pull/166",
-        "https://github.com/LyraCoreProject/wire-harness/tree/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore",
-        "module/src/breath.rs and gateway/src/codec/breath.rs: the durable timer behavior and start/stop packet builders exist."
+        "https://github.com/LyraCoreProject/wire-harness/pull/10",
+        "module/src/breath.rs and gateway/src/codec/breath.rs: durable timers and start/stop packet builders."
       ],
       "related_prs": [
         150,
@@ -660,29 +664,29 @@
     },
     {
       "number": 137,
-      "summary": "Bank storage and purchase behavior are implemented, but the pinned Headless Client has no end-to-end bank adapter and the stock-client window has not been checked.",
+      "summary": "Bank storage, slot purchase and the Headless Client bank adapter are implemented and pinned. Operator execution and the stock-client window check remain.",
       "importance": 3,
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "The parent and both blocking code issues are closed. Current Gateway paths cover activate, deposit, withdraw, and slot purchase, while the pinned adapter tree has no bank script.",
-      "next_action": "Finish wire-harness #9 through checks and review, then release and update the core pin. Operator execution and real-client window acceptance remain.",
+      "disposition": "human",
+      "rationale": "Wire-harness #9 and core pin #453 are merged. The adapter covers activation, deposit, reconnect persistence, withdrawal and slot purchase, with offline tests and protocol checks. It has not been run on an approved development Realm.",
+      "next_action": "Run the pinned bank adapter on an approved development Realm, then inspect the stock-client bank window, its 24 cells and the purchased slot.",
       "blockers": [
-        "Completing the issue requires a wire-harness release and LyraCore pin bump.",
-        "The final window and cell behavior require a human with a stock client."
+        "Operator access to an approved development Realm.",
+        "A human with a stock client must check the window and cell behavior."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/137",
-        "https://github.com/LyraCoreProject/LyraCore/pull/158",
-        "https://github.com/LyraCoreProject/LyraCore/pull/171",
-        "https://github.com/LyraCoreProject/wire-harness/tree/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore",
-        "gateway/src/world/handlers/bank.rs: all four requested client operations dispatch through the current Store.",
-        "https://github.com/LyraCoreProject/wire-harness/pull/9"
+        "https://github.com/LyraCoreProject/wire-harness/pull/9",
+        "https://github.com/LyraCoreProject/wire-harness/releases/tag/v0.1.0-alpha.7",
+        "https://github.com/LyraCoreProject/LyraCore/pull/453",
+        "gateway/src/world/handlers/bank.rs: all four requested client operations dispatch through the current Store."
       ],
       "related_prs": [
         158,
-        171
+        171,
+        453
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/137",
       "updatedAt": "2026-08-12T05:25:15Z",
@@ -2932,8 +2936,8 @@
       "url": "https://github.com/LyraCoreProject/lyracore-cli/pull/57",
       "title": "fix(service): verify the effective start command",
       "owner": "GPT-5.6 Sol, high effort, CLI agent",
-      "status": "Merged; core pin next",
-      "next_action": "Open and complete the core CLI pin for #340 and #341.",
+      "status": "Merged; #340 and #341 closed",
+      "next_action": "Complete. Core #452 adopts CLI #57.",
       "head": "94535c723ca9b3fc10c420bae5edc91c8b10bd0b",
       "github_state": "MERGED",
       "checks": [
@@ -2975,8 +2979,8 @@
       "url": "https://github.com/LyraCoreProject/wire-harness/pull/9",
       "title": "test(bank): add the full bank flow adapter",
       "owner": "GPT-5.6 Sol, medium effort, adapter agent",
-      "status": "Merged",
-      "next_action": "Reassess linked issues for remaining acceptance.",
+      "status": "Merged; bank adapter pinned",
+      "next_action": "Code delivery is complete. Issue #137 retains Operator and stock-client acceptance.",
       "head": "98c4e0ebd64fda247a4a75ebf72f9357b807572a",
       "github_state": "MERGED",
       "checks": [
@@ -3001,13 +3005,13 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/452",
       "title": "chore(cli): pin effective service verification",
       "owner": "GPT-5.6 Sol, high effort, CLI agent",
-      "status": "Checks and review running",
-      "next_action": "Finish current-head checks and review before parent merge.",
-      "github_state": "OPEN",
+      "status": "Merged; #340 and #341 closed",
+      "next_action": "Complete. Core #452 adopts CLI #57.",
+      "github_state": "MERGED",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -3023,7 +3027,7 @@
         },
         {
           "name": "test",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "wasm",
@@ -3031,24 +3035,25 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "PENDING"
+          "result": "SUCCESS"
         }
       ],
       "head": "186556e8117c942edfe7e11d199234d458f556a2",
-      "checked_at": "2026-09-07 14:31 UTC"
+      "checked_at": "2026-09-07 14:45 UTC",
+      "merge_commit": "a76684b2b913505f96cc4952114e78c7b34d6baa"
     },
     {
       "number": 453,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/453",
       "title": "test(bank): pin the bank acceptance adapter",
       "owner": "Codex",
-      "status": "Checks and review running",
-      "next_action": "Finish current-head checks and review before parent merge.",
-      "github_state": "OPEN",
+      "status": "Merged; bank adapter pinned",
+      "next_action": "Code delivery is complete. Issue #137 retains Operator and stock-client acceptance.",
+      "github_state": "MERGED",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -3060,11 +3065,11 @@
         },
         {
           "name": "clippy",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "test",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "wasm",
@@ -3072,11 +3077,38 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "PENDING"
+          "result": "SUCCESS"
         }
       ],
       "head": "04e5ac5e14b779e99474145e6a9a2b45172b3c15",
-      "checked_at": "2026-09-07 14:31 UTC"
+      "checked_at": "2026-09-07 14:45 UTC",
+      "merge_commit": "e26ffff05fd8938b4e2d5339e7224683b36af84d"
+    },
+    {
+      "number": 10,
+      "url": "https://github.com/LyraCoreProject/wire-harness/pull/10",
+      "title": "test(dive): add the breath and drowning flow",
+      "owner": "GPT-5.6 Sol, medium effort, adapter agent",
+      "status": "Merged; release and core pin next",
+      "next_action": "Release alpha.8 and complete the core pin; retain Operator and stock-client acceptance.",
+      "head": "6affc2eec40a7fee7c4a915e80a816f867de0614",
+      "github_state": "MERGED",
+      "merge_commit": "538423176c4b2a3dd1ba8eae1cc1ab1a1cc877cf",
+      "checked_at": "2026-09-07 14:45 UTC",
+      "checks": [
+        {
+          "name": "test (ubuntu-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test (macos-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "coverage",
+          "result": "SUCCESS"
+        }
+      ]
     }
   ],
   "history": [
@@ -3199,10 +3231,14 @@
     {
       "at": "2026-09-07 14:31 UTC",
       "text": "Report review found stale closed-issue rationales and an empty-URL crash; fixed both and checked other completed records. Released bank alpha.7 and opened core pin #453. Service pin #452 is open. Assigned the next ready adapter, #142, in a separate worktree."
+    },
+    {
+      "at": "2026-09-07 14:45 UTC",
+      "text": "Merged core service pin #452; #340 and #341 are closed. Merged bank pin #453 and kept #137 open for Operator and stock-client acceptance. Merged dive adapter wire-harness #10 after parent review and three passing CI checks; its owner is preparing the release and core pin. Corrected the report audit note and completed bank next actions after review."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
   "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "Refetched all issue states and timestamps. All 71 open issues have assessments; no new issues appeared. Updated closure timestamps in the 18 retained records. The latest changed discussion records resident movement completion in #272."
+  "audit_note": "Refetched all issue states and timestamps at 14:46 UTC. All 69 open issues have assessments; no new issues appeared. The 20 closed records retain their closure timestamps. Delivery changes are recorded in the history below."
 }
