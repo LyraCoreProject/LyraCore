@@ -2159,26 +2159,17 @@ pub(crate) fn group_event_outbound(
             }
         },
         roll_kind::ROLL_VOTE => match lyracore_shared::loot_roll::decode_vote(&row.payload) {
-            Some((
-                corpse_guid,
-                slot,
-                item_entry,
-                roll_number,
-                vote,
-                auto_pass,
-                random_property_id,
-            )) => Some(ServerOpcodeMessage::SMSG_LOOT_ROLL(Box::new(
-                codec::build_loot_roll(
-                    corpse_guid,
+            Some((corpse, slot, entry, number, vote, _auto_pass, property_id)) => Some(
+                ServerOpcodeMessage::SMSG_LOOT_ROLL(Box::new(codec::build_loot_roll(
+                    corpse,
                     slot,
                     row.other_guid,
-                    item_entry,
-                    roll_number,
+                    entry,
+                    number,
                     vote,
-                    auto_pass,
-                    random_property_id,
-                ),
-            ))),
+                    property_id,
+                ))),
+            ),
             None => {
                 log::warn!(
                     "loot ROLL_VOTE relay: unparseable payload {:?} (event {})",
@@ -2189,24 +2180,17 @@ pub(crate) fn group_event_outbound(
             }
         },
         roll_kind::ROLL_WON => match lyracore_shared::loot_roll::decode_won(&row.payload) {
-            Some((
-                corpse_guid,
-                slot,
-                item_entry,
-                winning_roll,
-                winning_vote,
-                random_property_id,
-            )) => Some(ServerOpcodeMessage::SMSG_LOOT_ROLL_WON(Box::new(
-                codec::build_loot_roll_won(
-                    corpse_guid,
+            Some((corpse, slot, entry, number, vote, property_id)) => Some(
+                ServerOpcodeMessage::SMSG_LOOT_ROLL_WON(Box::new(codec::build_loot_roll_won(
+                    corpse,
                     slot,
-                    item_entry,
+                    entry,
                     row.other_guid,
-                    winning_roll,
-                    winning_vote,
-                    random_property_id,
-                ),
-            ))),
+                    number,
+                    vote,
+                    property_id,
+                ))),
+            ),
             None => {
                 log::warn!(
                     "loot ROLL_WON relay: unparseable payload {:?} (event {})",

@@ -10,7 +10,7 @@ use wow_world_messages::vanilla::{
 /// `SMSG_LOOT_RESPONSE` opcode (vanilla 5875). Pinned against gtker in the byte-match test below.
 const SMSG_LOOT_RESPONSE_OPCODE: u16 = 0x0160;
 
-/// One lootable item for the loot window: `(slot, item_id, count, display_id)`. `display_id` is the
+/// One lootable item for the loot window: `(slot, item_id, count, display_id, random_property_id)`. `display_id` is the
 /// item's `ItemDisplayInfo` id (the gateway joins it from `game_item_template`); the client also
 /// queries the item (`CMSG_ITEM_QUERY_SINGLE`) for the name/tooltip (slice-1 path).
 pub type LootItemView = (u8, u32, u32, u32, u32);
@@ -120,10 +120,8 @@ pub(crate) fn wire_roll_number(vote: u8, rolled: u8) -> u8 {
     }
 }
 
-/// Build `SMSG_LOOT_ROLL` — one member's vote landing (relayed to every eligible member so live
-/// votes/roll numbers are visible party-wide, matching vanilla). `auto_pass` from the module's event
-/// payload is folded into the wire `roll_number` (see `wire_roll_number`) rather than carried as a
-/// separate field — the vanilla message has none.
+/// Project a member's vote to every eligible member. Vanilla represents both manual and
+/// automatic passes with the same `roll_number` sentinel.
 pub fn build_loot_roll(
     corpse_guid: u64,
     loot_slot: u8,
@@ -131,7 +129,6 @@ pub fn build_loot_roll(
     item_entry: u32,
     rolled: u8,
     vote: u8,
-    _auto_pass: bool,
     random_property_id: u32,
 ) -> SMSG_LOOT_ROLL {
     SMSG_LOOT_ROLL {

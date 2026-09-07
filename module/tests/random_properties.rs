@@ -31,6 +31,7 @@ fn max_health(shard: &Standalone) -> u32 {
 fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it() {
     let shard = fixture("property-loot");
     shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false)"));
+    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
     shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
     let wolf =
         shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false");
@@ -60,6 +61,7 @@ fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it()
     ));
     assert_eq!(item.len(), 1);
     assert_eq!(item[0]["random_property_id"], PROPERTY);
+    shard.assert_sql("UPDATE game_world_entity SET stamina = 22 WHERE guid = 1");
     let base = max_health(&shard);
     let base_spirit: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")
         [0]["spirit"]
@@ -106,6 +108,30 @@ fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it()
 fn create_spell(shard: &Standalone) {
     shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090100,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)");
     shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360400,5090100,0,7,2,0,0.0,0,0,0.0,0,0,0,{ITEM},8,0,0,false)"));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn large_imported_spirit_contributions_do_not_overflow_equipping() {
+    let shard = fixture("property-spirit-bound");
+    let base: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")[0]
+        ["spirit"]
+        .parse()
+        .unwrap();
+    shard.assert_sql("UPDATE game_item_enchantment SET amount = 2147483647 WHERE id = 1303066369");
+    shard.assert_call("debug_grant_item", &["1", ITEM, "1"]);
+    shard.assert_call("debug_equip_item", &["1", "23"]);
+    let spirit: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")[0]
+        ["spirit"]
+        .parse()
+        .unwrap();
+    assert_eq!(spirit, base + 2_147_483_647);
+    shard.assert_call("debug_unequip_item", &["1", "15"]);
+    let spirit: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")[0]
+        ["spirit"]
+        .parse()
+        .unwrap();
+    assert_eq!(spirit, base);
 }
 
 #[test]
@@ -234,4 +260,112 @@ fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
         assert_eq!(items[0]["durability"], "42");
         shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
     }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
+    let shard = fixture("property-buyback");
+    shard.assert_call("debug_spawn_at_feet", &["1", "51004", "1"]);
+    let vendor = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004");
+    for property in [PROPERTY, "0"] {
+        shard.assert_call("debug_grant_item", &["1", ITEM, "1"]);
+        shard.assert_sql(&format!(
+            "UPDATE game_item_instance SET random_property_id = {property} WHERE owner_guid = 1"
+        ));
+        shard.assert_call("debug_sell_item", &["1", &vendor[0]["guid"], "23"]);
+        let sold = shard.query_rows(
+            "SELECT random_property_id FROM game_character_buyback WHERE player_guid = 1",
+        );
+        assert_eq!(sold.len(), 1);
+        assert_eq!(sold[0]["random_property_id"], property);
+        shard.assert_sql(&format!(
+            "UPDATE game_item_template SET random_property = 5090199 WHERE entry = {ITEM}"
+        ));
+        shard.assert_call("gw_buyback_item", &["1", &vendor[0]["guid"], "0"]);
+        let restored = shard
+            .query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1");
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0]["random_property_id"], property);
+        assert!(shard
+            .query_rows("SELECT id FROM game_character_buyback WHERE player_guid = 1")
+            .is_empty());
+        shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+        shard.assert_sql(&format!(
+            "UPDATE game_item_template SET random_property = {POOL} WHERE entry = {ITEM}"
+        ));
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn auction_refund_replay_compares_the_saved_property() {
+    let shard = fixture("property-auction-refund");
+    let mut args = [
+        "5090140",
+        "1",
+        "5090141",
+        ITEM,
+        "1",
+        "42",
+        "7748",
+        "false",
+        PROPERTY,
+        "1",
+        "5",
+        "5",
+        "100",
+        "500",
+        "120",
+        "10",
+        "1",
+        "7200000001",
+    ];
+    shard.assert_call("realm_auction_refund_listing", &args);
+    shard.assert_call("realm_auction_refund_listing", &args);
+    let mails = shard.query_rows("SELECT random_property_id,item_enchant_id,item_durability,money FROM game_mail WHERE recipient_guid = 1");
+    assert_eq!(mails.len(), 1);
+    assert_eq!(mails[0]["random_property_id"], PROPERTY);
+    assert_eq!(mails[0]["item_enchant_id"], "7748");
+    assert_eq!(mails[0]["item_durability"], "42");
+    assert_eq!(mails[0]["money"], "10");
+    args[8] = "0";
+    assert!(!shard
+        .call("realm_auction_refund_listing", &args)
+        .status
+        .success());
+    assert_eq!(shard.query_rows("SELECT random_property_id,item_enchant_id,item_durability,money FROM game_mail WHERE recipient_guid = 1"), mails);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn cross_shard_transfer_imports_the_saved_item_property() {
+    let source = fixture("property-transfer-source");
+    source.assert_call("debug_grant_item", &["1", ITEM, "1"]);
+    source.assert_call(
+        "begin_transfer",
+        &["5090150", "1", "0", "0", "0", "0", "0", "0", "true"],
+    );
+    let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 5090150");
+    let mut destination = Standalone::start("property-transfer-destination");
+    destination.publish_module();
+    destination.assert_call("claim_operator", &[]);
+    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
+    destination.assert_call("import_character_blob", &["5090150", &blob]);
+    destination.assert_call("import_character_blob", &["5090150", &blob]);
+    let items = destination
+        .query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["random_property_id"], PROPERTY);
+    source.assert_call("confirm_import", &["5090150"]);
+    source.assert_call("finish_transfer", &["5090150"]);
+    destination.assert_call("release_transfer", &["5090150"]);
+    assert!(source
+        .query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1")
+        .is_empty());
+    assert_eq!(
+        destination
+            .query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1"),
+        items
+    );
 }

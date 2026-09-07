@@ -20,7 +20,7 @@ pub(crate) trait VendorActionStore: Send + Sync {
         count: u32,
     ) -> Result<()>;
 
-    /// The player's buyback ring, newest-first: `(item_entry, stack_count, price)` per entry (≤12).
+    /// The player's buyback ring, newest-first: `(item_entry, stack_count, price, random_property_id)` per entry (≤12).
     fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32, u32)>;
 
     /// Bag slot of the item instance with `item_guid`. Item guids are globally unique, so no
@@ -994,7 +994,12 @@ mod tests {
         codec::build_values_update_raw(PLAYER_GUID, &mask)
     }
 
-    fn expected_create(i: u16, entry: u32, stack_count: u32) -> ServerOpcodeMessage {
+    fn expected_create(
+        i: u16,
+        entry: u32,
+        stack_count: u32,
+        random_property_id: u32,
+    ) -> ServerOpcodeMessage {
         ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_create_object(
             &codec::ItemInstanceView {
                 guid: 0x4090_0000_0000_0000u64 | u64::from(i),
@@ -1005,15 +1010,15 @@ mod tests {
                 durability: 0,
                 max_durability: 0,
                 container_slots: 0,
-                random_property_id: 0,
+                random_property_id,
             },
         )))
     }
 
     fn assert_renders_ring(outbound: &[Outbound], ring: &[(u32, u32, u32, u32)]) {
         assert_eq!(outbound.len(), ring.len() + 1);
-        for (i, &(entry, count, _, _)) in ring.iter().enumerate() {
-            let expected = expected_create(i as u16, entry, count);
+        for (i, &(entry, count, _, property)) in ring.iter().enumerate() {
+            let expected = expected_create(i as u16, entry, count, property);
             assert!(
                 matches!(&outbound[i], Outbound::One(message) if *message == expected),
                 "ring slot {i} did not render its fabricated item"
@@ -1028,7 +1033,7 @@ mod tests {
 
     #[test]
     fn the_buyback_view_renders_one_fabricated_item_per_ring_entry_plus_the_descriptor_update() {
-        let ring = vec![(2589, 5, 120, 0), (4540, 1, 30, 0)];
+        let ring = vec![(2589, 5, 120, 117), (4540, 1, 30, 0)];
         let actions = InMemoryVendorActions {
             ring: ring.clone(),
             ..Default::default()

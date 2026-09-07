@@ -483,33 +483,16 @@ fn wire_roll_number_signals_pass_as_128_and_passes_a_real_roll_through() {
 
 #[test]
 fn loot_roll_carries_the_voter_item_and_vote() {
-    let m = build_loot_roll(
-        0xF130_0000_0000_0007,
-        3,
-        55,
-        1234,
-        87,
-        vote_kind::NEED,
-        false,
-        0,
-    );
+    let m = build_loot_roll(0xF130_0000_0000_0007, 3, 55, 1234, 87, vote_kind::NEED, 117);
     assert_eq!(m.creature.guid(), 0xF130_0000_0000_0007);
     assert_eq!(m.loot_slot, 3);
     assert_eq!(m.player.guid(), 55);
     assert_eq!(m.item, 1234);
     assert_eq!(m.roll_number, 87);
+    assert_eq!(m.item_random_property_id, 117);
     assert_eq!(m.vote, RollVote::Need);
     // A PASS vote's roll_number folds to the >127 sentinel regardless of the stored `rolled` (0).
-    let pass = build_loot_roll(
-        0xF130_0000_0000_0007,
-        3,
-        55,
-        1234,
-        0,
-        vote_kind::PASS,
-        true,
-        0,
-    );
+    let pass = build_loot_roll(0xF130_0000_0000_0007, 3, 55, 1234, 0, vote_kind::PASS, 117);
     assert_eq!(pass.roll_number, 128);
     assert_eq!(pass.vote, RollVote::Pass);
 }

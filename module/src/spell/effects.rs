@@ -233,11 +233,16 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
 
     // Regen and the character sheet read effective Spirit from the entity field.
     // Rebuild from the base curve, gear and auras before applying percent bonuses.
-    let base_spirit = crate::stats::base_attributes_for(ctx, race, class, e.level).4 as i32;
-    let spi_flat = stat_bonus(ctx, unit_guid, STAT_SPI)
-        + crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Spirit);
-    let spi_pct = stat_pct_bonus(ctx, unit_guid, STAT_SPI);
-    let new_spirit = (((base_spirit + spi_flat) * (100 + spi_pct)) / 100).max(0) as u32;
+    let base_spirit = i128::from(crate::stats::base_attributes_for(ctx, race, class, e.level).4);
+    let spi_flat = i128::from(stat_bonus(ctx, unit_guid, STAT_SPI))
+        + i128::from(crate::items::equipped_stat_bonus(
+            ctx,
+            unit_guid,
+            crate::items::EquipStat::Spirit,
+        ));
+    let spi_pct = i128::from(stat_pct_bonus(ctx, unit_guid, STAT_SPI));
+    let new_spirit =
+        (((base_spirit + spi_flat) * (100 + spi_pct)) / 100).clamp(0, i128::from(u32::MAX)) as u32;
 
     // No-op write skip: if nothing moved (the no-aura baseline), don't touch the row.
     if new_max_health == e.max_health && new_max_power == e.max_power && new_spirit == e.spirit {
@@ -294,8 +299,9 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     // `recompute_vitals` (called first at every real call site) already folds Spirit's base+aura into
     // `e.spirit` — re-derive the SAME base curve so the sheet's bonus is `e.spirit - base`, never a
     // second copy of the aura/pct math.
-    let base_spirit = crate::stats::base_attributes_for(ctx, race, class, e.level).4 as i32;
-    let spi_bonus = e.spirit as i32 - base_spirit;
+    let base_spirit = crate::stats::base_attributes_for(ctx, race, class, e.level).4;
+    let spi_bonus = (i64::from(e.spirit) - i64::from(base_spirit))
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
 
     let ap_base = crate::combat::melee_attack_power_for(class, eff_str, eff_agi, e.level);
     let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid) as i32;

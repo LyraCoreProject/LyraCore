@@ -96,7 +96,7 @@ fn spell_effects(slot: u8, spell: &SpellRow) -> Result<Vec<Effect>> {
                 index: slot * 64 + subeffect as u8 * 8 + expanded as u8,
                 kind,
                 amount,
-                spell_id: spell.id.id as u32,
+                spell_id: spell.id.id,
                 school_mask,
             });
         }
@@ -106,7 +106,7 @@ fn spell_effects(slot: u8, spell: &SpellRow) -> Result<Vec<Effect>> {
             index: slot * 64,
             kind: kind::UNKNOWN,
             amount: 0,
-            spell_id: spell.id.id as u32,
+            spell_id: spell.id.id,
             school_mask: 0,
         });
     }
@@ -134,16 +134,8 @@ fn catalogue_rows_sql(
             bail!("{name} contains no rows; item catalogues were not changed");
         }
     }
-    let spells: HashMap<_, _> = spells
-        .rows()
-        .iter()
-        .map(|row| (row.id.id as u32, row))
-        .collect();
-    let enchant_ids: BTreeSet<_> = enchantments
-        .rows()
-        .iter()
-        .map(|row| row.id.id as u32)
-        .collect();
+    let spells: HashMap<_, _> = spells.rows().iter().map(|row| (row.id.id, row)).collect();
+    let enchant_ids: BTreeSet<_> = enchantments.rows().iter().map(|row| row.id.id).collect();
     for (id, _, _) in kind::COMPATIBILITY_ENCHANTMENTS {
         if enchant_ids.contains(&id) {
             bail!("client enchantment {id} collides with an authored compatibility entry");
@@ -151,7 +143,7 @@ fn catalogue_rows_sql(
     }
     let mut property_rows = BTreeMap::new();
     for property in properties.rows() {
-        let id = property.id.id as u32;
+        let id = property.id.id;
         if id == 0 {
             bail!("Random Property ID zero is reserved for plain items");
         }
@@ -186,7 +178,7 @@ fn catalogue_rows_sql(
     }
     let mut enchant_rows = BTreeMap::new();
     for enchant in enchantments.rows() {
-        let enchant_id = enchant.id.id as u32;
+        let enchant_id = enchant.id.id;
         let mut effects = Vec::new();
         for slot in 0..3 {
             let source_kind = enchant.enchantment_type[slot];
@@ -365,7 +357,7 @@ pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<String>>
         }
         pools.insert(pool);
     }
-    for pool in required.difference(&pools) {
+    if let Some(pool) = required.difference(&pools).next() {
         bail!("item template references missing Property Pool {pool}");
     }
     eprintln!(

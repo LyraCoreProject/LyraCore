@@ -17,6 +17,7 @@
 //!   --dbc  <client Data/ dir>       client DBC extraction/checks (dbc.rs); add --spells for the
 //!                                   Spell.dbc importer (spell.rs) or --talents for the
 //!                                   TalentTab.dbc/Talent.dbc importer (talent.rs)
+//!                                   Required with --dump when items reference Random Properties.
 //!                                   [--packages <enabled packages root> reapplies every enabled
 //!                                    Package's Delta claims after the base spell rows are back;
 //!                                    without --apply it prints the plan and writes nothing —
