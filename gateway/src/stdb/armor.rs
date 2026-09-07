@@ -35,7 +35,7 @@ fn aura_resistance_contribution(
     school_bit: u32,
 ) -> i32 {
     if eff_kind == A_MOD_RESISTANCE && (eff_p0 as u32 & school_bit) != 0 {
-        amount * (stacks.max(1) as i32)
+        amount.saturating_mul(i32::from(stacks.max(1)))
     } else {
         0
     }
@@ -273,6 +273,14 @@ mod tests {
         assert_eq!(aura_armor_contribution(0xA1, 0x01, 160, 0), 160);
         // Stacking, negative (Sunder Armor-style): amount × stacks subtracts.
         assert_eq!(aura_armor_contribution(0xA1, 0x01, -90, 5), -450);
+        assert_eq!(
+            aura_armor_contribution(0xA1, 0x01, i32::MAX, u8::MAX),
+            i32::MAX
+        );
+        assert_eq!(
+            aura_armor_contribution(0xA1, 0x01, i32::MIN, u8::MAX),
+            i32::MIN
+        );
         // A school MASK that merely INCLUDES the armor bit still counts (mask test, not ==).
         assert_eq!(aura_armor_contribution(0xA1, 0x03, 50, 1), 50);
         // A non-armor school (eff_p0 == 0x02, e.g. holy) does NOT touch armor.

@@ -531,9 +531,9 @@ fn health_regen_per_tick(spirit: u32, level: u32) -> u32 {
 /// `max == 0` (creatures, which carry no power bar) yields no change. Power never exceeds `max` (the
 /// `.min(max)` cap) and never underflows (the `saturating_sub` on rage).
 ///
-/// FSR (Five-Second Rule): `mana_paused` is true for 5s after the caster last spent mana — regen is
-/// suppressed during that window IN OR OUT OF COMBAT (vanilla parity). After the window, mana regens
-/// regardless of combat state, matching vanilla's "wait 5s and regen mid-fight" mechanic.
+/// FSR (Five-Second Rule): `mana_paused` is true for 5s after the caster last spent mana. It pauses
+/// the spirit-derived term in or out of combat. Flat mana-per-five continues during the window.
+/// After the window, the spirit term resumes regardless of combat state.
 ///
 /// BASELINE-SAFETY: with `spirit == 0` a mana unit still regens `level/2 + 1` per tick when not
 /// paused; energy is unchanged by spirit; rage decays at the vanilla-approximate rate.
@@ -555,7 +555,7 @@ pub fn regen_power(
         PowerRegenTick {
             in_combat,
             mana_paused,
-            mana_per_five: 0,
+            mana_flat_tick: 0,
         },
     )
 }
@@ -563,7 +563,7 @@ pub fn regen_power(
 struct PowerRegenTick {
     in_combat: bool,
     mana_paused: bool,
-    mana_per_five: i32,
+    mana_flat_tick: i32,
 }
 
 fn regen_power_with_flat(
@@ -579,18 +579,16 @@ fn regen_power_with_flat(
         return current;
     }
     match power_type {
-        pt::MANA => {
+        pt::MANA => apply_regen(
+            current,
+            max,
             if tick.mana_paused {
-                current
+                0
             } else {
-                apply_regen(
-                    current,
-                    max,
-                    mana_regen_per_tick(spirit, level),
-                    tick.mana_per_five,
-                )
-            }
-        }
+                mana_regen_per_tick(spirit, level)
+            },
+            tick.mana_flat_tick,
+        ),
         pt::ENERGY => current.saturating_add(ENERGY_TICK).min(max),
         pt::RAGE => {
             if tick.in_combat {
@@ -617,7 +615,7 @@ fn regen_health_with_flat(
     max: u32,
     spirit: u32,
     level: u32,
-    health_per_five: i32,
+    health_flat_tick: i32,
 ) -> u32 {
     if max == 0 {
         return current;
@@ -626,14 +624,35 @@ fn regen_health_with_flat(
         current,
         max,
         health_regen_per_tick(spirit, level),
-        health_per_five,
+        health_flat_tick,
     )
 }
 
-/// Add a points-per-five-seconds item contribution to this four-second regeneration tick.
-fn apply_regen(current: u32, max: u32, base_tick: u32, per_five: i32) -> u32 {
-    let flat_tick = i128::from(per_five) * 4 / 5;
-    let tick = (i128::from(base_tick) + flat_tick).clamp(0, i128::from(u32::MAX)) as u32;
+/// The scheduled window covered by one regeneration pass.
+#[derive(Clone, Copy)]
+pub(crate) struct RegenWindow {
+    now_ms: u64,
+    elapsed_ms: u64,
+}
+
+impl RegenWindow {
+    pub(crate) fn new(now_ms: u64, elapsed_ms: u64) -> Self {
+        Self { now_ms, elapsed_ms }
+    }
+}
+
+/// Convert a points-per-five-seconds rate without losing low rates to per-tick truncation. The
+/// difference between cumulative quotients assigns each whole point to one deterministic window.
+fn per_five_in_window(per_five: i32, window: RegenWindow) -> i32 {
+    let previous_ms = window.now_ms.saturating_sub(window.elapsed_ms);
+    let accrued = |at_ms: u64| (i128::from(per_five) * i128::from(at_ms)).div_euclid(5_000);
+    let points = accrued(window.now_ms) - accrued(previous_ms);
+    points.clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32
+}
+
+fn apply_regen(current: u32, max: u32, base_tick: u32, flat_tick: i32) -> u32 {
+    let tick =
+        (i128::from(base_tick) + i128::from(flat_tick)).clamp(0, i128::from(u32::MAX)) as u32;
     current.saturating_add(tick).min(max)
 }
 
@@ -642,14 +661,14 @@ fn apply_regen(current: u32, max: u32, base_tick: u32, per_five: i32) -> u32 {
 /// and FSR derivation live here, not inline in the tick). Power type is byte 3 of `unit_bytes_0`.
 /// FSR gate: mana regen is paused when `now_ms < e.mana_regen_paused_until_ms` (stamped on every
 /// mana-spend in the cast path). Returns the new power value (the caller writes it back only if it changed).
-pub fn regen_entity_power(
+pub(crate) fn regen_entity_power(
     e: &WorldEntity,
     in_combat: bool,
-    now_ms: u64,
+    window: RegenWindow,
     mana_per_five: i32,
 ) -> u32 {
     let power_type = (e.unit_bytes_0 >> 24) as u8;
-    let mana_paused = now_ms < e.mana_regen_paused_until_ms;
+    let mana_paused = window.now_ms < e.mana_regen_paused_until_ms;
     regen_power_with_flat(
         power_type,
         e.power,
@@ -659,16 +678,25 @@ pub fn regen_entity_power(
         PowerRegenTick {
             in_combat,
             mana_paused,
-            mana_per_five,
+            mana_flat_tick: per_five_in_window(mana_per_five, window),
         },
     )
 }
 
 /// Entity-aware HEALTH-regen wrapper: reads `spirit`/`level` off the row so the `tick_creatures` health
-/// pass passes ONE entity. Returns the new health value (the caller writes it back). Callers gate on
-/// `health < max_health && !in_combat` before calling, as before.
-pub fn regen_entity_health(e: &WorldEntity, health_per_five: i32) -> u32 {
-    regen_health_with_flat(e.health, e.max_health, e.spirit, e.level, health_per_five)
+/// pass passes one entity. Returns the new health value for an out-of-combat unit.
+pub(crate) fn regen_entity_health(
+    e: &WorldEntity,
+    health_per_five: i32,
+    window: RegenWindow,
+) -> u32 {
+    regen_health_with_flat(
+        e.health,
+        e.max_health,
+        e.spirit,
+        e.level,
+        per_five_in_window(health_per_five, window),
+    )
 }
 
 /// Per-tick PARTIAL health regen DURING COMBAT: `combat_regen_pct%` of the normal out-of-combat
@@ -688,12 +716,29 @@ pub fn regen_health_in_combat(
     if max == 0 || combat_regen_pct == 0 {
         return current;
     }
-    let full_tick = health_regen_per_tick(spirit, level);
-    // Integer multiply then divide; the full_tick is already small (spirit+level+1 at low levels),
-    // so no overflow risk. A fractional result floors toward 0 (a 10% tick at `full_tick == 6` → 0
-    // rather than rounding up — that is expected: low-level troll regen is very slow in combat).
-    let partial = full_tick * combat_regen_pct / 100;
-    (current + partial).min(max)
+    let partial = (i128::from(health_regen_per_tick(spirit, level)) * i128::from(combat_regen_pct)
+        / 100)
+        .clamp(0, i128::from(u32::MAX)) as u32;
+    apply_regen(current, max, partial, 0)
+}
+
+/// Entity-aware in-combat health regeneration. Aura percentage applies only to natural recovery;
+/// item health-per-five remains active independently.
+pub(crate) fn regen_entity_health_in_combat(
+    e: &WorldEntity,
+    combat_regen_pct: u32,
+    health_per_five: i32,
+    window: RegenWindow,
+) -> u32 {
+    let partial =
+        (i128::from(health_regen_per_tick(e.spirit, e.level)) * i128::from(combat_regen_pct) / 100)
+            .clamp(0, i128::from(u32::MAX)) as u32;
+    apply_regen(
+        e.health,
+        e.max_health,
+        partial,
+        per_five_in_window(health_per_five, window),
+    )
 }
 
 #[cfg(test)]
@@ -1325,11 +1370,20 @@ mod tests {
             5_000,
         );
         // Strictly inside the window → paused, no regen.
-        assert_eq!(regen_entity_power(&mage, false, 4_999, 0), 100);
+        assert_eq!(
+            regen_entity_power(&mage, false, RegenWindow::new(4_999, 4_000), 0),
+            100
+        );
         // Straddling the boundary: `now_ms == paused_until_ms` is NOT `<`, so the window has just cleared.
-        assert_eq!(regen_entity_power(&mage, false, 5_000, 0), 100 + 26);
+        assert_eq!(
+            regen_entity_power(&mage, false, RegenWindow::new(5_000, 4_000), 0),
+            100 + 26
+        );
         // Past the window, mid-combat → still regens (the FSR gate, not combat state, controls mana).
-        assert_eq!(regen_entity_power(&mage, true, 6_000, 0), 100 + 26);
+        assert_eq!(
+            regen_entity_power(&mage, true, RegenWindow::new(6_000, 4_000), 0),
+            100 + 26
+        );
 
         // A rage (warrior) entity ignores the FSR field entirely — reads its own power-type byte.
         let warrior = entity_for_regen(
@@ -1342,14 +1396,23 @@ mod tests {
             10,
             0,
         );
-        assert_eq!(regen_entity_power(&warrior, false, 0, 0), 1000 - 50); // out of combat → decays
-        assert_eq!(regen_entity_power(&warrior, true, 0, 0), 1000); // in combat → holds
+        assert_eq!(
+            regen_entity_power(&warrior, false, RegenWindow::new(0, 4_000), 0),
+            1000 - 50
+        ); // out of combat → decays
+        assert_eq!(
+            regen_entity_power(&warrior, true, RegenWindow::new(0, 4_000), 0),
+            1000
+        ); // in combat → holds
     }
 
     #[test]
     fn regen_entity_health_wrapper_reads_spirit_and_level_off_the_row() {
         let e = entity_for_regen(0, 100, 1000, 0, 0, 30, 10, 0);
-        assert_eq!(regen_entity_health(&e, 0), 100 + (30 + 10 + 1)); // spirit + level + 1 per tick
+        assert_eq!(
+            regen_entity_health(&e, 0, RegenWindow::new(4_000, 4_000)),
+            100 + (30 + 10 + 1)
+        ); // spirit + level + 1 per tick
     }
 
     #[test]
@@ -1366,10 +1429,37 @@ mod tests {
             10,
             0,
         );
-        assert_eq!(regen_entity_power(&mage, false, 0, 10), 134);
-        assert_eq!(regen_entity_health(&mage, 15), 163);
-        assert_eq!(regen_entity_power(&mage, false, 0, -40), 100);
-        assert_eq!(regen_entity_health(&mage, -100), 100);
+        let window = RegenWindow::new(8_000, 4_000);
+        assert_eq!(regen_entity_power(&mage, false, window, 10), 134);
+        assert_eq!(regen_entity_health(&mage, 15, window), 163);
+        assert_eq!(regen_entity_power(&mage, false, window, -40), 100);
+        assert_eq!(regen_entity_health(&mage, -100, window), 100);
+
+        let low_rate_total: i32 = (4_000..=20_000)
+            .step_by(4_000)
+            .map(|now_ms| per_five_in_window(1, RegenWindow::new(now_ms, 4_000)))
+            .sum();
+        assert_eq!(low_rate_total, 4);
+    }
+
+    #[test]
+    fn flat_mana_regen_continues_during_the_five_second_rule() {
+        use lyracore_shared::packing::{power_type, unit_bytes_0};
+
+        let mage = entity_for_regen(
+            unit_bytes_0(1, 8, 0, power_type::MANA),
+            100,
+            1000,
+            100,
+            1000,
+            40,
+            10,
+            10_000,
+        );
+        assert_eq!(
+            regen_entity_power(&mage, false, RegenWindow::new(8_000, 4_000), 10),
+            108
+        );
     }
 
     #[test]
@@ -1538,6 +1628,15 @@ mod tests {
         assert_eq!(regen_health_in_combat(995, 1000, 50, 20, 100), 1000);
         // max=0 (no HP bar) → unchanged.
         assert_eq!(regen_health_in_combat(0, 0, 30, 10, 10), 0);
+    }
+
+    #[test]
+    fn flat_health_regen_continues_in_combat_without_a_percentage_aura() {
+        let e = entity_for_regen(0, 100, 1000, 0, 0, 30, 10, 0);
+        assert_eq!(
+            regen_entity_health_in_combat(&e, 0, 15, RegenWindow::new(8_000, 4_000)),
+            112
+        );
     }
 
     #[test]

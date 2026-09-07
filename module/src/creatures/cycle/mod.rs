@@ -333,8 +333,8 @@ pub(crate) trait RegenSink {
     fn recovering(&self, flagged: &[u64]) -> Vec<Recovering>;
     /// The health this unit recovers to out of combat, at its own spirit- and level-scaled rate.
     fn healed_to(&self, u: &Recovering) -> u32;
-    /// The health it recovers to WHILE FIGHTING, which only a combat-regen aura grants at all.
-    /// `None` is the ordinary answer: a unit in a fight heals nothing.
+    /// The health it recovers to while fighting through a combat-regen aura or flat item HP5.
+    /// `None` means the unit has neither source.
     fn combat_healed_to(&self, u: &Recovering) -> Option<u32>;
     /// The power it ticks to, up or down: mana once the five-second rule lapses, energy always,
     /// rage decaying out of combat.
@@ -1726,9 +1726,8 @@ fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Ho
 }
 
 /// REGENERATION — every unit recovers health and power once per sense firing. Out of combat a hurt
-/// unit heals freely; in a fight it heals only through a combat-regen aura, because fighting is what
-/// stops regeneration. That gate is the whole of the cycle's rule here — the RATES are
-/// `combat::tables`', and PLAYERS are candidates too, since nothing else ticks their bars.
+/// unit heals freely; in a fight only combat-regen auras and flat item HP5 remain active. The rates
+/// are `combat::tables`', and players are candidates too, since nothing else ticks their bars.
 ///
 /// It runs AFTER chase, so the gate sees a creature that closed on its victim this very firing and
 /// leaves it unhealed, and BEFORE rout and fear, whose legs it must not revert: only the two bars

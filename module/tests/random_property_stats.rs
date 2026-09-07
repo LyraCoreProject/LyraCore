@@ -129,6 +129,29 @@ fn direct_pools_and_regeneration_follow_working_equipment() {
     let regenerated = world_row(&shard);
     assert_eq!(regenerated["health"], "144");
     assert_eq!(regenerated["power"], "124");
+
+    shard.assert_sql("UPDATE game_world_entity SET power = 100, mana_regen_paused_until_ms = 9999999999999 WHERE guid = 1");
+    assert!(
+        poll_until(POLL_TIMEOUT, || world_row(&shard)["power"] != "100"),
+        "flat mana regeneration stopped during the five-second rule"
+    );
+    assert_eq!(world_row(&shard)["power"], "108");
+
+    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
+    let wolf = shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false")
+        .pop()
+        .unwrap()["guid"]
+        .clone();
+    shard.assert_sql(
+        "UPDATE game_world_entity SET health = 100, power = 100000, godmode = true WHERE guid = 1",
+    );
+    shard.assert_call("debug_engage", &[&wolf, "1"]);
+    assert!(
+        poll_until(POLL_TIMEOUT, || world_row(&shard)["health"] != "100"),
+        "flat health regeneration stopped in combat"
+    );
+    assert_eq!(world_row(&shard)["health"], "112");
 }
 
 #[test]
@@ -144,6 +167,7 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
             (11, 12, 16),
             (12, 14, 32),
             (13, 16, 64),
+            (14, 80, 0),
             (22, 4, 0),
             (23, 200, 0),
             (24, 300, 0),
@@ -151,7 +175,7 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
         ],
     );
     shard.assert_sql(&format!(
-        "UPDATE game_item_template SET random_property = {POOL}, holy_res = 1, fire_res = 2, nature_res = 3, frost_res = 4, shadow_res = 5, arcane_res = 6 WHERE entry = 50053"
+        "UPDATE game_item_template SET random_property = {POOL}, stat_armor = 920, holy_res = 1, fire_res = 2, nature_res = 3, frost_res = 4, shadow_res = 5, arcane_res = 6 WHERE entry = 50053"
     ));
     shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
     let wolf = shard
@@ -160,6 +184,7 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
         .unwrap()["guid"]
         .clone();
 
+    shard.assert_sql("UPDATE game_world_entity SET armor = 40 WHERE guid = 1");
     shard.assert_call("debug_compute_swing", &[&wolf, "1"]);
     let bare = readout(&shard, "swing");
     shard.assert_call("debug_equip_offhand", &["1", "50053"]);
@@ -178,6 +203,11 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
         bare["parry_bp"].parse::<u32>().unwrap() + 340
     );
     assert_eq!(equipped["block_bp"], "940");
+    assert_eq!(bare["mitigation_pct"], "7");
+    assert_eq!(
+        equipped["mitigation_pct"], "68",
+        "40 base + 920 template + 80 property armor must mitigate once"
+    );
 
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 10 WHERE guid = {wolf}"
@@ -211,6 +241,7 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
     assert_eq!(broken["dodge_bp"], bare["dodge_bp"]);
     assert_eq!(broken["parry_bp"], bare["parry_bp"]);
     assert_eq!(broken["block_bp"], "0");
+    assert_eq!(broken["mitigation_pct"], "3");
     shard.assert_call("debug_compute_spell", &[&wolf, "1", "5090211"]);
     assert_eq!(readout(&shard, "spell")["spell_hit_normal"], "100");
 }

@@ -235,11 +235,13 @@ pub(crate) fn effective_agility(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
 /// incoming hits. Clamped ≥0; no aura and no armor gear → the base value (mitigation byte-identical to
 /// before — baseline-safe). [entity]
 pub fn effective_armor(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
-    effective_stat(
-        e.armor as i32,
-        crate::spell::resistance_bonus(ctx, e.guid, crate::spell::RESIST_ARMOR),
-        0,
-    )
+    (i64::from(e.armor)
+        + i64::from(crate::spell::resistance_bonus(
+            ctx,
+            e.guid,
+            crate::spell::RESIST_ARMOR,
+        )))
+    .clamp(0, i64::from(u32::MAX)) as u32
 }
 
 /// A unit's EFFECTIVE shield BLOCK VALUE — the flat physical damage a blocked swing absorbs: the
