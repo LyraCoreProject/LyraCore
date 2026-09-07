@@ -2049,19 +2049,19 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
             ),
             (
                 "pub fn import_character_blob(",
-                "{ require_operator(ctx)?; crate::account_ownership::require_actor(ctx, request_actor)?; apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob) }",
+                "{ require_operator(ctx)?; require_transfer_actor(ctx, transfer_id, request_actor)?; let character_guid = decode_blob(transfer_id, &blob)?.character_guid; crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?; apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob) }",
             ),
             (
                 "pub fn confirm_import(",
-                "{ require_operator(ctx)?; crate::account_ownership::require_actor(ctx, request_actor)?; apply_confirm(&mut CtxShard { ctx }, transfer_id) }",
+                "{ require_operator(ctx)?; require_transfer_actor(ctx, transfer_id, request_actor)?; apply_confirm(&mut CtxShard { ctx }, transfer_id) }",
             ),
             (
                 "pub fn release_transfer(",
-                "{ require_operator(ctx)?; crate::account_ownership::require_actor(ctx, request_actor)?; apply_release(&mut CtxShard { ctx }, transfer_id) }",
+                "{ require_operator(ctx)?; require_transfer_actor(ctx, transfer_id, request_actor)?; apply_release(&mut CtxShard { ctx }, transfer_id) }",
             ),
             (
                 "pub fn finish_transfer(",
-                "{ require_operator(ctx)?; crate::account_ownership::require_actor(ctx, request_actor)?; apply_finish_step(&mut CtxShard { ctx }, transfer_id) }",
+                "{ require_operator(ctx)?; require_transfer_actor(ctx, transfer_id, request_actor)?; apply_finish_step(&mut CtxShard { ctx }, transfer_id) }",
             ),
             (
                 "pub fn reap_transfers(",

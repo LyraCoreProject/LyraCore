@@ -1150,6 +1150,31 @@ pub fn import_character(ctx: &ReducerContext, transfer_id: u64) -> Result<(), St
     Ok(())
 }
 
+fn require_transfer_actor(
+    ctx: &ReducerContext,
+    transfer_id: u64,
+    actor: crate::SessionActor,
+) -> Result<(), String> {
+    crate::account_ownership::require_actor(ctx, actor)?;
+    let character = ctx
+        .db
+        .game_transfer_out()
+        .transfer_id()
+        .find(transfer_id)
+        .map(|row| row.character_guid)
+        .or_else(|| {
+            ctx.db
+                .game_transfer_in()
+                .transfer_id()
+                .find(transfer_id)
+                .map(|row| row.character_guid)
+        });
+    if let Some(guid) = character {
+        crate::account_ownership::require_actor_for(ctx, actor, guid)?;
+    }
+    Ok(())
+}
+
 /// **Step 2, CROSS-DATABASE — commit the arrival copy from a blob the gateway carried here.**
 ///
 /// The same step as [`import_character`], for the deployment where the source's out-row is on
@@ -1171,7 +1196,9 @@ pub fn import_character_blob(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    require_transfer_actor(ctx, transfer_id, request_actor)?;
+    let character_guid = decode_blob(transfer_id, &blob)?.character_guid;
+    crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
     apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob)
 }
 
@@ -1336,7 +1363,7 @@ pub fn confirm_import(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    require_transfer_actor(ctx, transfer_id, request_actor)?;
     apply_confirm(&mut CtxShard { ctx }, transfer_id)
 }
 
@@ -1390,7 +1417,7 @@ pub fn release_transfer(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    require_transfer_actor(ctx, transfer_id, request_actor)?;
     apply_release(&mut CtxShard { ctx }, transfer_id)
 }
 
@@ -1423,7 +1450,7 @@ pub fn finish_transfer(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    require_transfer_actor(ctx, transfer_id, request_actor)?;
     apply_finish_step(&mut CtxShard { ctx }, transfer_id)
 }
 

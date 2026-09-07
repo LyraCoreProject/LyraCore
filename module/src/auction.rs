@@ -2050,6 +2050,25 @@ pub fn realm_auction_commit_listing(
         .map_err(|refusal| refused(refusal, "listing operation id conflict"))
 }
 
+fn require_listing_actor(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    actor: crate::SessionActor,
+) -> Result<(), String> {
+    crate::account_ownership::require_actor(ctx, actor)?;
+    let seller = CtxSource { ctx }
+        .hold(operation_id)
+        .map(|hold| hold.listing.request.seller_guid)
+        .or_else(|| {
+            <CtxSource<'_> as HoldSink>::receipt(&CtxSource { ctx }, operation_id)
+                .map(|receipt| receipt.listing.request.seller_guid)
+        });
+    if let Some(guid) = seller {
+        crate::account_ownership::require_actor_for(ctx, actor, guid)?;
+    }
+    Ok(())
+}
+
 /// Sharded listing phase 3: copy the matching realm receipt onto the source shard.
 #[reducer]
 pub fn realm_auction_confirm_listing(
@@ -2059,7 +2078,7 @@ pub fn realm_auction_confirm_listing(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    require_listing_actor(ctx, operation_id, request_actor)?;
     let listing = CtxSource { ctx }
         .hold(operation_id)
         .map(|hold| hold.listing)
@@ -2086,7 +2105,7 @@ pub fn realm_auction_settle_listing(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    require_listing_actor(ctx, operation_id, request_actor)?;
     settle_listing(&mut CtxSource { ctx }, operation_id)
         .map_err(|refusal| refused(refusal, "listing Hold is not confirmed"))
 }

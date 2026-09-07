@@ -10098,7 +10098,7 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
         (client, result)
     }
 
-    fn login(client: &mut UnixStream) {
+    fn login(client: &mut UnixStream) -> (EncrypterHalf, DecrypterHalf) {
         let (mut encrypt, mut decrypt) = client_handshake(client, "TEST", [7; 40]);
         CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
             .write_encrypted_client(&mut *client, &mut encrypt)
@@ -10108,7 +10108,7 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
                 ServerOpcodeMessage::read_encrypted(&mut *client, &mut decrypt).unwrap(),
                 ServerOpcodeMessage::SMSG_WEATHER(_)
             ) {
-                return;
+                return (encrypt, decrypt);
             }
         }
         panic!("World Session did not complete its entry batch");
@@ -10137,7 +10137,12 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
         gateway_id: "world-owner-a".into(),
         blocking_task_capacity: BlockingTaskCapacity::new(2),
     };
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
     let a = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
     let b = runtime
         .block_on(Coordinator::connect(&GatewayConfig {
@@ -10145,11 +10150,18 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
             ..cfg
         }))
         .unwrap();
+    let (release_pool, hold_pool) = std::sync::mpsc::channel();
+    let (pool_started, pool_ready) = std::sync::mpsc::channel();
+    runtime.spawn_blocking(move || {
+        pool_started.send(()).unwrap();
+        let _ = hold_pool.recv_timeout(Duration::from_secs(40));
+    });
+    pool_ready.recv_timeout(Duration::from_secs(2)).unwrap();
     let account = a.account_by_username("TEST").unwrap().unwrap().id;
     a.establish_session(account, &[7; 40], a.bound_identity(account).unwrap())
         .unwrap();
     let (mut first, first_done) = start(a, runtime.handle().clone());
-    login(&mut first);
+    let _first_cipher = login(&mut first);
 
     let (mut refused, refused_done) = start(b.clone(), runtime.handle().clone());
     let (mut encrypt, _) = client_handshake(&mut refused, "TEST", [7; 40]);
@@ -10168,7 +10180,10 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
 
     fixture.assert_sql("UPDATE game_account_claim SET expires_micros = 0");
     let (mut winner, winner_done) = start(b, runtime.handle().clone());
-    login(&mut winner);
+    let (mut winner_encrypt, mut winner_decrypt) = login(&mut winner);
+    let first_deadline = fixture.query_rows("SELECT expires_micros FROM game_account_claim")[0]
+        ["expires_micros"]
+        .clone();
     first_done
         .recv_timeout(Duration::from_secs(25))
         .expect("lost Account ownership must close the old World Session")
@@ -10180,12 +10195,35 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
         1
     );
     assert!(winner_done.try_recv().is_err());
-    winner.shutdown(std::net::Shutdown::Both).unwrap();
-    drop(winner);
+    assert!(
+        crate::durable_test_support::poll_until(Duration::from_secs(5), || fixture
+            .query_rows("SELECT expires_micros FROM game_account_claim")[0]["expires_micros"]
+            != first_deadline),
+        "the winning Account Claim must renew while the Tokio blocking pool is full"
+    );
+    CMSG_LOGOUT_REQUEST {}
+        .write_encrypted_client(&mut winner, &mut winner_encrypt)
+        .unwrap();
+    let mut logged_out = false;
+    for _ in 0..100 {
+        if read_raw_frame(&mut winner, &mut winner_decrypt).0
+            == lyracore_shared::opcodes::world::SMSG_LOGOUT_COMPLETE
+        {
+            logged_out = true;
+            break;
+        }
+    }
+    assert!(
+        logged_out,
+        "winning World Session must still process logout"
+    );
+    winner.shutdown(std::net::Shutdown::Write).unwrap();
     winner_done
         .recv_timeout(Duration::from_secs(10))
         .unwrap()
         .unwrap();
+    drop(winner);
+    release_pool.send(()).unwrap();
     assert!(fixture
         .query_rows("SELECT * FROM game_world_entity WHERE guid = 1")
         .is_empty());

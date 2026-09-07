@@ -99,7 +99,7 @@ impl Coordinator {
                 call_reducer!(
                     self.0.call_pipe().conn.reducers,
                     "gw_ack_taxi_reply",
-                    gw_ack_taxi_reply_then(character_guid, request_id)
+                    gw_ack_taxi_reply_then(self.session_actor(character_guid), request_id)
                 )?;
                 if !reply.accepted {
                     log::debug!(
@@ -3186,7 +3186,7 @@ mod taxi_reply_tests {
             .expect("taxi reply wait body");
         let observes = wait.find("taxi_reply_matches(").expect("validated reply");
         let acknowledges = wait
-            .find("gw_ack_taxi_reply_then(character_guid, request_id)")
+            .find("gw_ack_taxi_reply_then(self.session_actor(character_guid), request_id)")
             .expect("reply acknowledgement");
         assert!(observes < acknowledges);
     }

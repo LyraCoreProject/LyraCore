@@ -843,7 +843,6 @@ mod partition_discipline_tripwire {
 
     /// `(repo-relative path, allowed raw-scan count, why)`. One line of justification each.
     const WHITELIST: &[(&str, usize, &str)] = &[
-        ("module/src/account_ownership.rs", 2, "Account fencing reads ownership even during Transfer. These two reads only check the Account name before fencing or removing a live entity; Character rows and Transfer records remain intact."),
         // Diagnostics and harness code — never on a gameplay path. A split of the former single
         // `debug.rs` (budget 9, down from 12) into a directory; the 9 raw scans
         // landed in two of the seven files — same total, just split along the new file boundary.

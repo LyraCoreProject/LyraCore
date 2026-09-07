@@ -935,6 +935,18 @@ pub fn realm_mail_item_payout(
         },
     )
 }
+fn require_escrow_actor(
+    ctx: &ReducerContext,
+    escrow_id: u64,
+    actor: crate::SessionActor,
+) -> Result<(), String> {
+    crate::account_ownership::require_actor(ctx, actor)?;
+    if let Some(row) = ctx.db.game_mail_escrow().escrow_id().find(escrow_id) {
+        crate::account_ownership::require_actor_for(ctx, actor, row.sender_guid)?;
+    }
+    Ok(())
+}
+
 #[reducer]
 pub fn realm_mail_confirm_delivery(
     ctx: &ReducerContext,
@@ -942,7 +954,7 @@ pub fn realm_mail_confirm_delivery(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    require_escrow_actor(ctx, escrow_id, request_actor)?;
     apply_confirm(&mut CtxDb { ctx }, escrow_id)
 }
 #[reducer]
@@ -952,7 +964,7 @@ pub fn realm_mail_settle(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    require_escrow_actor(ctx, escrow_id, request_actor)?;
     apply_settle(&mut CtxDb { ctx }, escrow_id)
 }
 #[reducer]
@@ -1170,11 +1182,11 @@ mod tests {
             ),
             (
                 "pub fn realm_mail_confirm_delivery(",
-                "{ require_operator(ctx)?; crate::account_ownership::require_actor(ctx, request_actor)?; apply_confirm(&mut CtxDb { ctx }, escrow_id) }",
+                "{ require_operator(ctx)?; require_escrow_actor(ctx, escrow_id, request_actor)?; apply_confirm(&mut CtxDb { ctx }, escrow_id) }",
             ),
             (
                 "pub fn realm_mail_settle(",
-                "{ require_operator(ctx)?; crate::account_ownership::require_actor(ctx, request_actor)?; apply_settle(&mut CtxDb { ctx }, escrow_id) }",
+                "{ require_operator(ctx)?; require_escrow_actor(ctx, escrow_id, request_actor)?; apply_settle(&mut CtxDb { ctx }, escrow_id) }",
             ),
             (
                 "pub fn reap_mail_escrows(",

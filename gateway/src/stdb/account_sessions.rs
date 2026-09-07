@@ -187,13 +187,28 @@ impl Coordinator {
                 }
                 let coord = unbound.clone();
                 let token = owner.token;
-                match tokio::task::spawn_blocking(move || coord.renew_session(token)).await {
-                    Ok(Ok(expires)) => {
+                // World Sessions can occupy every Tokio blocking slot. Renewal must keep
+                // progressing independently of those long-lived readers.
+                let (reply, result) = tokio::sync::oneshot::channel();
+                let started = std::thread::Builder::new()
+                    .name("account-renewal".into())
+                    .spawn(move || {
+                        let _ = reply.send(coord.renew_session(token));
+                    });
+                let renewed = match started {
+                    Ok(_) => result
+                        .await
+                        .map_err(|error| anyhow!("Account renewal thread: {error}"))
+                        .and_then(|result| result),
+                    Err(error) => Err(anyhow!("start Account renewal thread: {error}")),
+                };
+                match renewed {
+                    Ok(expires) => {
                         owner.deadline.store(expires, Ordering::Release);
                     }
-                    result => {
+                    Err(error) => {
                         log::warn!(
-                            "Account {} generation {} lost ownership renewal: {result:?}",
+                            "Account {} generation {} lost ownership renewal: {error:#}",
                             token.account_id,
                             token.generation
                         );

@@ -300,7 +300,7 @@ fn remove_character(ctx: &ReducerContext, guid: u64, account_name: &str) {
         {
             return;
         }
-        crate::world::remove_from_world(ctx, entity.owner_identity);
+        crate::world::remove_live_character(ctx, entity);
     }
     ctx.db.game_gateway_session().entity_guid().delete(guid);
 }
@@ -355,6 +355,26 @@ pub(crate) fn require_actor(ctx: &ReducerContext, actor: SessionActor) -> Result
     } else {
         Ok(actor.guid)
     }
+}
+
+/// Completion requests must name the Character stored in the referenced durable operation.
+/// Operator recovery without a token still checks that Character's current ownership.
+pub(crate) fn require_actor_for(
+    ctx: &ReducerContext,
+    actor: SessionActor,
+    character_guid: u64,
+) -> Result<(), String> {
+    if actor.ownership.is_some() && actor.guid != character_guid {
+        return Err(STALE.into());
+    }
+    require_actor(
+        ctx,
+        SessionActor {
+            guid: character_guid,
+            ..actor
+        },
+    )
+    .map(|_| ())
 }
 
 /// Called from the existing Gateway lease schedule; one surviving Gateway cannot renew another

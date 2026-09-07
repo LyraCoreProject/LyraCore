@@ -120,6 +120,25 @@ fn a_new_generation_completes_partial_admission_and_fences_transfer_completion()
     fence(&destination, &second, &deadline);
     let old = actor(&first);
     let current = actor(&second);
+    for shard in [&source, &destination] {
+        shard.assert_call("provision_account", &["\"OTHER\"", "[]", "[]"]);
+    }
+    let other_account =
+        source.query_rows("SELECT id FROM game_account WHERE username = 'OTHER'")[0]["id"].clone();
+    source.assert_call("claim_account", &[&other_account, "2", "203"]);
+    let other_deadline = source.query_rows(&format!(
+        "SELECT expires_micros FROM game_account_claim WHERE account_id = {other_account}"
+    ))[0]["expires_micros"]
+        .clone();
+    let other_token =
+        format!(r#"{{"account_id":{other_account},"generation":1,"request_nonce":203}}"#);
+    let other = format!(r#"{{"guid":2,"ownership":{{"some":{other_token}}}}}"#);
+    for shard in [&source, &destination] {
+        shard.assert_call(
+            "fence_account",
+            &[&other_token, "\"OTHER\"", "2", &other_deadline],
+        );
+    }
     source.assert_call(
         "begin_transfer",
         &["1", &current, "0", "0", "100", "200", "20", "0", "true"],
@@ -128,6 +147,29 @@ fn a_new_generation_completes_partial_admission_and_fences_transfer_completion()
     let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
     destination.assert_call("import_character_blob", &["1", &blob, &current]);
     let arrival = destination.query_rows("SELECT * FROM game_transfer_in");
+    for unrelated in [&other[..], r#"{"guid":0,"ownership":null}"#] {
+        refused(
+            &destination,
+            "import_character_blob",
+            &["1", &blob, unrelated],
+            "STALE_WORLD_SESSION",
+        );
+        refused(
+            &destination,
+            "release_transfer",
+            &["1", unrelated],
+            "STALE_WORLD_SESSION",
+        );
+        for reducer in ["confirm_import", "finish_transfer"] {
+            refused(&source, reducer, &["1", unrelated], "STALE_WORLD_SESSION");
+        }
+        refused(
+            &source,
+            "set_character_shard",
+            &["1", "0", "0", unrelated],
+            "STALE_WORLD_SESSION",
+        );
+    }
     refused(
         &destination,
         "import_character_blob",
@@ -200,6 +242,12 @@ fn expired_account_ownership_is_reaped_while_another_gateway_keeps_its_lease_ali
         &[&actor(&first)],
         "STALE_WORLD_SESSION",
     );
+    refused(
+        &shard,
+        "gw_ack_taxi_reply",
+        &[&actor(&first), "1"],
+        "STALE_WORLD_SESSION",
+    );
     shard.assert_call("gw_heartbeat", &[]);
     assert!(support::poll_until(
         std::time::Duration::from_secs(20),
@@ -215,4 +263,80 @@ fn expired_account_ownership_is_reaped_while_another_gateway_keeps_its_lease_ali
     let second = token(2, 302);
     let deadline = claim(&shard, "302");
     fence(&shard, &second, &deadline);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn realm_core_party_requests_use_the_account_claim_without_a_world_shard_fence() {
+    let mut realm = Standalone::start("account-realm-party");
+    realm.publish_module();
+    realm.assert_call("claim_operator", &[]);
+    claim(&realm, "401");
+    let first = actor(&token(1, 401));
+    realm.assert_call("realm_group_op", &["0", &first, "2", "0", "0"]);
+    let invites = realm.query_rows("SELECT * FROM game_group_invite");
+    assert_eq!(invites.len(), 1);
+    realm.assert_sql("UPDATE game_account_claim SET expires_micros = 0");
+    claim(&realm, "402");
+    refused(
+        &realm,
+        "realm_group_op",
+        &["0", &first, "3", "0", "0"],
+        "STALE_WORLD_SESSION",
+    );
+    assert_eq!(realm.query_rows("SELECT * FROM game_group_invite"), invites);
+    let current = actor(&token(2, 402));
+    realm.assert_call("realm_group_op", &["0", &current, "3", "0", "0"]);
+    assert_eq!(realm.query_rows("SELECT * FROM game_group_invite").len(), 2);
+    assert!(realm
+        .query_rows("SELECT * FROM game_account_fence")
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn first_admission_cleans_each_legacy_character_with_a_shared_identity() {
+    let mut shard = Standalone::start("account-legacy-identity");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call(
+        "create_character",
+        &["1", "\"Legacy\"", "1", "1", "0", "0", "0", "0", "0", "0"],
+    );
+    let second = shard.query_rows("SELECT guid FROM game_character WHERE name = 'Legacy'")[0]
+        ["guid"]
+        .clone();
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_call("debug_spawn_player_entity", &[&second]);
+    let owners =
+        shard.query_rows("SELECT owner_identity FROM game_world_entity WHERE account_id = 1");
+    assert_eq!(owners.len(), 2);
+    assert_eq!(owners[0], owners[1]);
+    let other_entities =
+        shard.query_rows("SELECT guid FROM game_world_entity WHERE account_id = 0");
+    assert!(!other_entities.is_empty());
+    shard.assert_sql("UPDATE game_world_entity SET money = 123 WHERE guid = 1");
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET money = 456 WHERE guid = {second}"
+    ));
+    let deadline = claim(&shard, "501");
+    fence(&shard, &token(1, 501), &deadline);
+    assert!(shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE account_id = 1")
+        .is_empty());
+    assert_eq!(
+        shard.query_rows("SELECT guid FROM game_world_entity WHERE account_id = 0"),
+        other_entities
+    );
+    assert_eq!(
+        shard.query_rows("SELECT money FROM game_character WHERE guid = 1")[0]["money"],
+        "123"
+    );
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT money FROM game_character WHERE guid = {second}"
+        ))[0]["money"],
+        "456"
+    );
 }

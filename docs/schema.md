@@ -276,6 +276,12 @@ supply no token, and cannot act as a Character with an active Account Claim or A
 The tables and generated bindings must reach every configured Shard with the matching Gateway
 before serving World Sessions. The schema change requires human review under `danger-zones.md`.
 
+External Headless Client adapters must send the new `SessionActor` shape too. Cleanup for a running
+fixture Character carries the intended World Session's token. Null ownership deliberately refuses
+an active owner. Stop or log out that World Session first, or retain its token for the cleanup; do
+not refresh a stale cleanup token to target a replacement owner. Operator requests for a Character
+whose ownership has closed or expired can use null ownership.
+
 ### `game_map_region` / `game_region_assignment` (`module/src/region.rs:44,:67`)
 
 Both private, and **unused since #471** removed the region tier from the gateway (2026-08-08) —

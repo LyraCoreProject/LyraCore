@@ -2782,7 +2782,7 @@ pub enum Reducer {
         request_actor: SessionActor,
     },
     GwAckTaxiReply {
-        character_guid: u64,
+        request_actor: SessionActor,
         request_id: u64,
     },
     GwActivateTaxi {
@@ -5461,10 +5461,10 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 request_actor: request_actor.clone(),
 }),
             Reducer::GwAckTaxiReply{
-                character_guid,
+                request_actor,
                 request_id,
 }             => __sats::bsatn::to_vec(&gw_ack_taxi_reply_reducer::GwAckTaxiReplyArgs {
-                character_guid: character_guid.clone(),
+                request_actor: request_actor.clone(),
                 request_id: request_id.clone(),
 }),
             Reducer::GwActivateTaxi{

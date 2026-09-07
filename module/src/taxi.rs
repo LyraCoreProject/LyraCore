@@ -1227,10 +1227,11 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
 #[spacetimedb::reducer]
 pub fn gw_ack_taxi_reply(
     ctx: &ReducerContext,
-    character_guid: u64,
+    request_actor: crate::SessionActor,
     request_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let replies = ctx.db.game_taxi_service_reply();
     if replies
         .request_id()

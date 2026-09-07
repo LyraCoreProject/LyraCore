@@ -113,7 +113,7 @@ pub fn set_character_shard(
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
+    crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
     record_shard(ctx, character_guid, map_id, instance_id);
     Ok(())
 }
