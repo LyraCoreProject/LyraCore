@@ -33,12 +33,13 @@ fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
     );
 
     standalone.assert_sql("UPDATE game_character SET rested_xp = 1000 WHERE guid = 1");
+    // SQL row order does not identify the nearest creature. Keep this kill target unique.
+    standalone.assert_sql("DELETE FROM game_creature_spawn WHERE entry = 51000");
+    standalone.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
     standalone.assert_call("debug_spawn_at_feet", &["1", "51000", "1.0"]);
-    let creature = standalone
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
-        .pop()
-        .expect("the fixture creature exists")["guid"]
-        .clone();
+    let creatures = standalone.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000");
+    assert_eq!(creatures.len(), 1, "the kill target must be unique");
+    let creature = &creatures[0]["guid"];
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {creature}"
     ));

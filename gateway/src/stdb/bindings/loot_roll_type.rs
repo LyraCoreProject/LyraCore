@@ -14,6 +14,7 @@ pub struct LootRoll {
     pub deadline_micros: i64,
     pub resolved: bool,
     pub random_property_id: u32,
+    pub promotion_source: __sdk::Identity,
 }
 
 impl __sdk::InModule for LootRoll {
@@ -31,6 +32,7 @@ pub struct LootRollCols {
     pub deadline_micros: __sdk::__query_builder::Col<LootRoll, i64>,
     pub resolved: __sdk::__query_builder::Col<LootRoll, bool>,
     pub random_property_id: __sdk::__query_builder::Col<LootRoll, u32>,
+    pub promotion_source: __sdk::__query_builder::Col<LootRoll, __sdk::Identity>,
 }
 
 impl __sdk::__query_builder::HasCols for LootRoll {
@@ -44,6 +46,7 @@ impl __sdk::__query_builder::HasCols for LootRoll {
             deadline_micros: __sdk::__query_builder::Col::new(table_name, "deadline_micros"),
             resolved: __sdk::__query_builder::Col::new(table_name, "resolved"),
             random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
+            promotion_source: __sdk::__query_builder::Col::new(table_name, "promotion_source"),
         }
     }
 }

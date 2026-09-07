@@ -650,6 +650,7 @@ fn reconnect_reconciliation_removes_a_member_whose_delete_event_was_missed() {
 fn deleted_character_cleanup_flushes_pending_loot_before_leaving_realm_core() {
     let (_realm, world, instances, calls) = topology_after_vim_is_deleted();
     *instances.pending_rolls.lock().unwrap() = vec![loot::PendingLootRoll {
+        promotion_source: spacetimedb_sdk::Identity::from_byte_array([7; 32]),
         roll_id: 40,
         corpse_guid: 90,
         slot: 1,

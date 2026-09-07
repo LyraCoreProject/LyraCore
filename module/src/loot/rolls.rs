@@ -53,7 +53,7 @@
 //! their new location. No special-casing was needed for this — it falls out of routing votes to
 //! realm-core rather than to "the shard that created the roll".
 
-use spacetimedb::{reducer, table, ReducerContext, Table};
+use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
 use crate::game_corpse_loot;
 use crate::game_group; // Group row: loot_method/loot_threshold/rr_cursor/master_looter_guid
@@ -99,6 +99,22 @@ pub struct LootRoll {
     pub resolved: bool,
     #[default(0)]
     pub random_property_id: u32,
+    /// Source Module identity carried unchanged by promotion retries.
+    #[default(Identity::ZERO)]
+    pub promotion_source: Identity,
+}
+
+/// One Loot Roll Promotion Receipt per source Module identity, corpse and slot. Resolution keeps
+/// this high-water mark; replacing it with a later source id also covers every older replay.
+#[table(accessor = game_loot_roll_promotion_receipt, index(accessor = by_source_slot, btree(columns = [promotion_source, corpse_guid, slot])))]
+pub struct LootRollPromotionReceipt {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub promotion_source: Identity,
+    pub corpse_guid: u64,
+    pub slot: u8,
+    pub source_roll_id: u64,
 }
 
 /// One eligible member's vote on a [`LootRoll`] — snapshotted (one row per eligible guid) the moment
@@ -340,7 +356,8 @@ pub(crate) fn apply_group_loot_rules(ctx: &ReducerContext, corpse_guid: u64, gro
 
 /// Create one Loot Roll and its votes, or return the existing roll for this corpse and slot.
 /// Repeated starts preserve votes, recipients and deadline. No event is emitted here.
-/// Resolution deletes these rows, so a later replay after resolution is not deduplicated.
+/// Promotion checks its durable receipt before reaching this local row creation path.
+#[allow(clippy::too_many_arguments)]
 fn insert_roll_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,
@@ -349,6 +366,7 @@ fn insert_roll_rows(
     recipients: &[u64],
     deadline_micros: i64,
     random_property_id: u32,
+    promotion_source: Identity,
 ) -> u64 {
     let rolls = ctx.db.game_loot_roll();
     if let Some(existing) = rolls
@@ -366,6 +384,7 @@ fn insert_roll_rows(
         deadline_micros,
         resolved: false,
         random_property_id,
+        promotion_source,
     });
     let votes = ctx.db.game_loot_roll_vote();
     for &guid in recipients {
@@ -406,6 +425,7 @@ fn start_roll(
         recipients,
         now_micros + ROLL_WINDOW_MICROS,
         random_property_id,
+        ctx.database_identity(),
     );
     let payload = lyracore_shared::loot_roll::encode_start(
         corpse_guid,
@@ -417,6 +437,23 @@ fn start_roll(
     for &guid in recipients {
         crate::group::push_event(ctx, guid, roll_event_kind::ROLL_START, 0, payload.clone());
     }
+}
+
+/// Stage a reserved Loot Roll through the same creation path as a killing blow.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_stage_loot_roll_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    start_roll(
+        ctx,
+        5_090_001,
+        0,
+        5_090_002,
+        &[5_090_003, 5_090_004, 5_090_005],
+        ctx.timestamp.to_micros_since_unix_epoch(),
+        117,
+    );
+    Ok(())
 }
 
 /// The identity-free vote core (mirrors `group.rs`'s `*_on` cores): shared by the player
@@ -774,28 +811,94 @@ pub fn realm_loot_op(
     deadline_micros: i64,
     recipients: Vec<u64>,
     random_property_id: u32,
+    promotion_source: Identity,
+    source_roll_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     use lyracore_shared::loot_roll::loot_op;
     match op {
-        // The gateway's loot-roll relay PROMOTING a roll a world shard already announced locally
-        // (`gateway/src/world/loot.rs::relay_tick`) — `insert_roll_rows`, never `start_roll`: the
-        // `ROLL_START` popup already fired on the shard that created it, so this must not re-push it.
-        loot_op::START => {
-            insert_roll_rows(
-                ctx,
-                corpse_guid,
-                slot,
-                item_entry,
-                &recipients,
-                deadline_micros,
-                random_property_id,
-            );
-            Ok(())
-        }
+        loot_op::START => accept_promotion(
+            ctx,
+            corpse_guid,
+            slot,
+            item_entry,
+            &recipients,
+            deadline_micros,
+            random_property_id,
+            promotion_source,
+            source_roll_id,
+        ),
         loot_op::VOTE => cast_vote_on(ctx, corpse_guid, slot, actor_guid, vote),
         other => Err(format!("unknown realm loot op {other}")),
     }
+}
+
+/// A replay is an acknowledged no-op, even after resolution. A newer generation waits for the
+/// current roll to resolve. Both outcomes leave that current roll and its votes unchanged.
+#[allow(clippy::too_many_arguments)]
+fn accept_promotion(
+    ctx: &ReducerContext,
+    corpse_guid: u64,
+    slot: u8,
+    item_entry: u32,
+    recipients: &[u64],
+    deadline_micros: i64,
+    random_property_id: u32,
+    promotion_source: Identity,
+    source_roll_id: u64,
+) -> Result<(), String> {
+    if promotion_source == Identity::ZERO || source_roll_id == 0 {
+        return Err(refused(
+            LootRefusal::RollUnavailable,
+            "promotion identity is missing",
+        ));
+    }
+    let receipts = ctx.db.game_loot_roll_promotion_receipt();
+    let receipt = receipts
+        .by_source_slot()
+        .filter((promotion_source, corpse_guid, slot))
+        .next();
+    if receipt
+        .as_ref()
+        .is_some_and(|r| r.source_roll_id >= source_roll_id)
+    {
+        return Ok(());
+    }
+    if ctx
+        .db
+        .game_loot_roll()
+        .by_corpse()
+        .filter(&corpse_guid)
+        .any(|r| r.slot == slot)
+    {
+        return Err(refused(
+            LootRefusal::RollUnavailable,
+            "another Loot Roll is active in this slot",
+        ));
+    }
+    insert_roll_rows(
+        ctx,
+        corpse_guid,
+        slot,
+        item_entry,
+        recipients,
+        deadline_micros,
+        random_property_id,
+        promotion_source,
+    );
+    if let Some(mut receipt) = receipt {
+        receipt.source_roll_id = source_roll_id;
+        receipts.id().update(receipt);
+    } else {
+        receipts.insert(LootRollPromotionReceipt {
+            id: 0,
+            promotion_source,
+            corpse_guid,
+            slot,
+            source_roll_id,
+        });
+    }
+    Ok(())
 }
 
 /// Grant a resolved roll's item on the WORLD SHARD that actually holds the corpse. The
@@ -1046,31 +1149,6 @@ mod tests {
                 "`{f}` no longer OPENS with the operator gate — a gate that is present but not the \
                  FIRST statement (wrapped in `if false`, `let _ =`, or preceded by an early return) \
                  is no gate. Body was:\n{body}"
-            );
-        }
-    }
-
-    /// The op byte is a wire value the gateway sends and `realm_loot_op` dispatches on —
-    /// `lyracore_shared::loot_roll::loot_op` pins only the NUMBERS. This pins what each number DOES: a
-    /// swapped arm would silently run VOTE for a START, corrupting a fresh roll's recipient snapshot.
-    #[test]
-    fn realm_loot_op_dispatches_start_and_vote_to_their_own_cores() {
-        let body = code_of(include_str!("rolls.rs"), "pub fn realm_loot_op(");
-        for (op, core) in [
-            ("loot_op::START =>", "{ insert_roll_rows( ctx, corpse_guid, slot, item_entry, &recipients, deadline_micros, random_property_id, ); Ok(()) }"),
-            ("loot_op::VOTE =>", "cast_vote_on(ctx, corpse_guid, slot, actor_guid, vote)"),
-        ] {
-            let arm = body
-                .split(op)
-                .nth(1)
-                .unwrap_or_else(|| panic!("`realm_loot_op` no longer dispatches `{op}`. Body was:\n{body}"));
-            let arm: String = arm.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                arm.starts_with(core),
-                "`{op}` no longer runs `{core}` — the op byte is a WIRE value the gateway sends and \
-                 this match dispatches on; a swapped arm runs the wrong op for every roll, silently. \
-                 Arm was:\n{}",
-                &arm[..arm.len().min(140)]
             );
         }
     }

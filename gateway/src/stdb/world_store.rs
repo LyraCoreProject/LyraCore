@@ -1172,6 +1172,8 @@ impl WorldStore for Coordinator {
         deadline_micros: i64,
         recipients: Vec<u64>,
         random_property_id: u32,
+        promotion_source: spacetimedb_sdk::Identity,
+        source_roll_id: u64,
     ) -> Result<()> {
         self.realm_loot_op(
             op,
@@ -1183,6 +1185,8 @@ impl WorldStore for Coordinator {
             deadline_micros,
             recipients,
             random_property_id,
+            promotion_source,
+            source_roll_id,
         )
     }
 

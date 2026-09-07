@@ -230,6 +230,14 @@ Closing a Loot Window. Makes the Loot Source available to the next eligible loot
 **Loot Roll**:
 A group's roll on an item. Lives in Realm-core.
 
+**Loot Roll Promotion**:
+Copying a Loot Roll from its source staging row to Realm-core. Its identity is the source Module
+identity and the source row id. Retries preserve both values.
+
+**Loot Roll Promotion Receipt**:
+The greatest source row id accepted for one source Module identity, corpse guid and slot.
+Realm-core retains it after resolution so an older Loot Roll Promotion cannot recreate the roll.
+
 ### Mounts
 
 **Land Mount**:
