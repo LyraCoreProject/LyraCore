@@ -1,14 +1,15 @@
 {
-  "updated_at": "2026-09-07 19:08 UTC",
-  "base_revision": "88c93aeb9bfd1a34ca7f3d5cf2417406184bc2c7",
-  "status_note": "All 70 open issues have an assessment; 20 closed issues remain for history. Approved schemas #455 and #462 and fixture repair #468 are merged. Loot replay and Character cleanup pass all code checks and await full review. The Spell target correction passes its source and gameplay checks. Item regeneration and Account ownership continue; Headless Client argument compatibility is open as wire-harness #11.",
+  "updated_at": "2026-09-07 20:00 UTC",
+  "base_revision": "a345555b09623d4cf344106e31b0435a807357df",
+  "status_note": "All 71 open issues have an assessment; 20 closed issues remain for history. Party cleanup #463 is merged. Loot replay awaits human schema review and is integrating that merge. Spell corrections are published. Item stats passed review but need summon fix #470 to clear the main Binding test failure. Account ownership #471 is completing integrated checks and two-process acceptance.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
   "focus": [
-    "Complete current-head CI and review for Character cleanup #463, then merge.",
-    "Complete Loot Roll replay #461 review and CI, then request human review of its concrete schema.",
-    "Finish TARGET_NONE fallback in Spell repair #465 and verify the changed source outputs.",
-    "Verify item regeneration and exact armor totals in #466, then complete CI and review.",
-    "Complete Account ownership #61 with losing-socket, queued movement, Transfer and partial-admission checks."
+    "Complete the requested stale-callback and natural-expiry regressions in summon fix #470.",
+    "Await the requested human schema review of fully checked Loot Roll replay #461.",
+    "Finish Gouge rank and provenance corrections in Spell repair #465.",
+    "Complete current-head checks and review for item stats #466.",
+    "Finish Account ownership #471 with isolated fixtures and literal two-process acceptance, then request human schema review.",
+    "Remove the Headless Client suite party-reset workaround to finish #46."
   ],
   "issues": [
     {
@@ -1495,7 +1496,7 @@
       "confidence": "high",
       "disposition": "implementing",
       "rationale": "The corruption exists whenever two Gateways serve one Account. A Realm-core Session generation and compare-by-generation logout is an ordinary consistency design. #69 may affect routing policy but does not need to block this invariant.",
-      "next_action": "Finish blocked-writer socket shutdown, partial-admission, queued movement and Transfer checks; complete the broad reducer ABI checks and publish a tested draft.",
+      "next_action": "Complete integrated tests, strict gates, two-process acceptance, CI and actual review. Request human schema review only after the concrete final revision passes.",
       "blockers": [
         "Human review before shipping a concrete schema change; controlled two-Gateway acceptance remains."
       ],
@@ -1511,9 +1512,15 @@
         "A disposable Standalone with two independent Coordinators reproduced the current defect: both logins succeed, then delayed and repeated logout from the older Gateway deletes the newer Character entity. The test failed with zero live entities where one was required. Durable ownership implementation is in progress.",
         "The first durable replacement test now passes: a competing live claim is refused, an expired claim is replaced, and delayed old cleanup and a stale combat request leave the winning Character intact. The agent is integrating approved main and proving socket-loop, queued movement and Transfer cases.",
         "The encrypted World Session case refused a competing live claim and preserved the successor after expiry and old cleanup. Self-review found that an ownership-loss message could wait behind a blocked writer; the agent is replacing it with direct shutdown through an owned socket clone and testing that case before publication.",
-        "Cross-repository audit found three Headless Client shell calls still using bare guids. Compatible argument encoding and refusal-safe party cleanup are published in wire-harness #11 with four passing offline shell checks. The core implementation will include its reviewed release pin."
+        "Cross-repository audit found three Headless Client shell calls still using bare guids. Compatible argument encoding and refusal-safe party cleanup are published in wire-harness #11 with four passing offline shell checks. The core implementation will include its reviewed release pin.",
+        "The expiry fixture found that identity lookup can select the wrong live entity when legacy rows share an identity. The implementer is passing the already resolved Character entity into the shared logout body and testing duplicate identities. Renewal work also moves outside the blocking pool used by active World Sessions.",
+        "At 2f6b96d, all 1,496 Module, 1,302 Gateway and 351 importer unit tests pass, plus 156 shared tests and 121 Gateway integration/parity checks. Strict workspace lint passes. The encrypted World Session proof covers competing admission, old socket closure and renewal with a full Tokio blocking pool. Independent routing review found no missing immutable ownership token. Binding comparison and offline preflight are the remaining local gates.",
+        "Initial Rust CI passed. Durable CI failed before two fixtures connected because parallel Standalone launches could not read their signing key; three Account durable cases passed. The implementer is fixing fixture isolation and integrating a345555. All local unit, lint, formatting, 986-binding and offline preflight gates passed before publication. Private Account Claim/Fence tables and reducer argument changes require human schema review after checks pass.",
+        "The five Account durable cases pass with four concurrent test threads after private signing-key isolation. The integration with merged party cleanup retains SessionActor in the new Coordinator clone and deletion LEAVE path. A literal two-process smoke check is prepared on new owned Standalone fixtures."
       ],
-      "related_prs": [],
+      "related_prs": [
+        471
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/61",
       "updatedAt": "2026-08-11T08:22:29Z",
       "github_state": "open",
@@ -1781,9 +1788,9 @@
       "gain": 4,
       "effort": 3,
       "confidence": "medium",
-      "disposition": "review",
+      "disposition": "implementing",
       "rationale": "The Character deletion Relay is present, but it converts failed reads to absence before a direct Realm-core LEAVE. Its tests inspect source text. The current path also needs verification of Transfer/cache ordering and surviving party mirrors before the suite workaround can be removed.",
-      "next_action": "Complete current-head checks and actual CodeRabbit review, then merge. Keep suite and client acceptance on #46.",
+      "next_action": "Remove the Headless Client suite party-reset workaround, scope assertions to fixture parties and verify grouped deletion without a manual dissolve.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/46",
@@ -1797,7 +1804,9 @@
         "The final controlled two-Coordinator Transfer test passed in 45.68 seconds. Eight focused cleanup tests and 51 party tests passed. Full Gateway checks passed with one trace-path test excluded after reproducing the same failure on the unmodified base. Final review removed a persistent batching cursor that could skip members.",
         "Published PR #463 at 6fec452 after rebasing onto 94aa2da. The exact rebased head passed the private two-Coordinator test, 1,319 Gateway unit tests and 116 integration tests with the proven base trace-path failure excluded. Strict Gateway lint and formatting checks passed.",
         "CodeRabbit requested moving the durable callback fixture out of production lexical scans. The implementer also preserved the primary subscription failure when unsubscribe fails and simplified the Realm roster health read. These changes are committed locally and awaiting focused checks.",
-        "The three review findings are addressed and actual CodeRabbit review of d6cfa37 passed. Head 08cb0b2 adds merged Binding fixture #468 through rebase. Its Gateway and Module source trees match the checked implementation. Current-head durable CI and actual review remain pending."
+        "The three review findings are addressed and actual CodeRabbit review of d6cfa37 passed. Head 08cb0b2 adds merged Binding fixture #468 through rebase. Its Gateway and Module source trees match the checked implementation. Current-head durable CI and actual review remain pending.",
+        "Head d94bc1d preserves the original LEAVE failure if roster confirmation also fails, and repairs known groups while a failed Shard enumeration remains queued for retry. All 53 party tests, eight focused deletion checks and strict Gateway lint pass. CodeRabbit completed review on this head with no remaining finding. Durable CI is still running.",
+        "PR #463 merged as a345555 at 19:48 UTC after all seven checks and current-head CodeRabbit review passed. Issue stays open because wire-harness still globally resets parties between scenarios. Its remaining acceptance is assigned to the party implementer in an isolated worktree."
       ],
       "related_prs": [
         384,
@@ -2112,7 +2121,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "The Random Property Tracer merged in approved #462. It imports and preserves the selected property through item movement and client packets, and applies the existing EquipStat families. PR #466 adds the remaining Stat Kinds and is completing review corrections.",
-      "next_action": "Finish checks for MP5 during recent casting, combat HP5, small regeneration rates and armor counted once; rebase and complete CI and review.",
+      "next_action": "Integrate summon fix #470 after merge, then complete CI and review on the integrated branch.",
       "blockers": [
         "A real-client tooltip check and approved Realm acceptance after the remaining Stat Kind work."
       ],
@@ -2131,7 +2140,8 @@
         "Actual CodeRabbit review of 8b72ddf completed with no new findings, all seven checks passed, and the concrete schema review request was sent to the user. The remaining Stat Kind implementation connects maxima, six resistances, per-hand damage, defense and avoidance, scheduled regen, school-filtered damage and healing, plus client resistance fields. Its durable caller fixtures are running.",
         "The user reviewed and approved the concrete schema. PR #462 merged as 8a40989 after current-head checks and actual CodeRabbit review passed. The remaining Stat Kind agent is integrating onto this main revision.",
         "PR #466 is published at 4bc7d89. Its 1,499 Module and 1,303 Gateway unit tests, four Module durable Stat Kind fixtures, Gateway resistance fixture and strict lint pass. Root review found that item MP5 is incorrectly suppressed by the five-second casting pause. The implementer is correcting this and checking small flat regeneration values before merge.",
-        "The implementer corrected MP5 during recent casting, small per-five values and aura resistance overflow. A CodeRabbit claim that armor omitted gear was false: the shared resistance fold already includes it. Parent review caught a resulting double count before publication; it was removed. A durable test is checking the exact armor total and damage reduction."
+        "The implementer corrected MP5 during recent casting, small per-five values and aura resistance overflow. A CodeRabbit claim that armor omitted gear was false: the shared resistance fold already includes it. Parent review caught a resulting double count before publication; it was removed. A durable test is checking the exact armor total and damage reduction.",
+        "Final head 1be079d fixes MP5 during recent casting, low regeneration rates and aura resistance overflow. It counts armor once. All 1,501 Module and 1,303 Gateway unit tests, 119 Gateway integration/parity checks, four Module durable cases, one Gateway resistance case and strict lint pass. One proven local trace-path failure is excluded and retained in CI. The three CodeRabbit threads are resolved, including the withdrawn armor finding. Actual review on this head remains required."
       ],
       "related_prs": [
         462,
@@ -2385,7 +2395,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "PR #439 is merged, so the listed prerequisite is stale. Stable promotion identity and durable replay refusal are distributed idempotency work that an agent can design and implement. Human review is required only before a schema change ships.",
-      "next_action": "Complete current-head checks and actual CodeRabbit review, then request human schema review.",
+      "next_action": "Complete Gateway checks for the local integration with merged #463, publish the rebased branch and refresh review. Human approval of the unchanged schema remains pending.",
       "blockers": [
         "Human schema review under docs/danger-zones.md section 1 after current-head CI and review pass."
       ],
@@ -2402,7 +2412,8 @@
         "The separate CLI checkpoint checks actual table names and refuses the whole batch on legacy rolls, votes, withheld loot or unreadable state. All 722 CLI tests and Rust 1.85 checks pass; exact COUNT query output was verified on an owned fixture. A two-Shard baseline-to-current test proves settlement must finish before the upgrade and that the settled item and source sequence survive.",
         "lyracore-cli #58 merged as 5688972 after 722 local tests, Rust 1.85 checks and actual CodeRabbit review. The CLI refuses pending legacy rolls, votes and withheld loot before any publish. It requires Operator-enforced quiescence throughout the batch. Core integration pins reachable implementation d6601ec and is in progress.",
         "The rebased Loot Roll implementation preserves the approved property column before its new identity column. Full private generation produced 978 bindings. All six replay durable cases, 1,494 Module tests, 1,304 Gateway unit tests and 119 Gateway integration checks pass. A two-Shard 8a40989 upgrade proof preserved the settled item, property 117 and source sequence; old START arguments were refused.",
-        "The CLI checkpoint is integrated at d6601ec. Its previous review thread is resolved. Rebase aea68d8 includes merged Binding fixture #468; Module, Gateway and replay fixture trees are byte-identical to locally checked 6d62bc0. The two-Shard upgrade proof preserves item property 117 and settled inventory. Actual review on this new head is still required."
+        "The CLI checkpoint is integrated at d6601ec. Its previous review thread is resolved. Rebase aea68d8 includes merged Binding fixture #468; Module, Gateway and replay fixture trees are byte-identical to locally checked 6d62bc0. The two-Shard upgrade proof preserves item property 117 and settled inventory. Actual review on this new head is still required.",
+        "All seven checks and full CodeRabbit review passed at aea68d8. Requested human review of the appended default-ZERO source Identity, private permanent receipt table, reducer arguments, bindings and tested upgrade procedure. No approval is assumed."
       ],
       "related_prs": [
         439,
@@ -2423,7 +2434,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "Real-data checks found the general importer reads an equipment mask as an effect and shifts valid effects by one slot. This affects core spell behavior. The Random Property Tracer has a narrow corrected reader that can guide the broader repair.",
-      "next_action": "Complete current-head CI and actual review, then merge and close #460 with the required reimport steps recorded.",
+      "next_action": "Complete current-head checks and actual review, then merge and record the required Spell reimport.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/460",
@@ -2444,6 +2455,32 @@
       "updatedAt": "2026-09-07T16:37:00Z",
       "github_state": "open",
       "owner": "GPT-5.6 Sol, high effort, Spell target fix; Codex final review"
+    },
+    {
+      "number": 469,
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/469",
+      "summary": "Temporary summon lifetime callbacks collide with their retained unique row; a Binding quest poll also races corpse removal.",
+      "importance": 4,
+      "gain": 5,
+      "effort": 2,
+      "confidence": "high",
+      "disposition": "review",
+      "rationale": "Report-only CI on current main captured a unique-key panic in expire_eventai_summon. This can interrupt recurring lifetime checks. The same run exposed a transient dead-entity assertion in the Binding fixture. Both have an isolated implementation owner.",
+      "next_action": "Add the two durable regression cases, complete affected checks and current-head review, then merge.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/469",
+        "https://github.com/LyraCoreProject/LyraCore/actions/runs/34154396306",
+        "The uploaded Standalone log records DatastoreInsertBsatn errno 12 inside expire_eventai_summon at 19:10:22 UTC. Its replacement INSERT retains the unique creature_guid while the current row still exists.",
+        "The original Module failed with a living summon missing its expiry row; its owned log confirms the unique-key panic. The fix passes repeated lifetime checks, stable life_seq, durable quest credit and corpse removal. All 1,496 Module unit tests, strict all-target/all-feature lint, formatting and independent review pass. No schema change.",
+        "The original Module failed with a missing expiry row and an owned log confirms the unique-key panic. The fix and repeated lifetime checks pass all CI. CodeRabbit requested actual stale-callback and natural-expiry coverage from the issue acceptance criteria. A Sol implementer owns those additions."
+      ],
+      "related_prs": [
+        470
+      ],
+      "updatedAt": "2026-09-07T19:15:34Z",
+      "github_state": "open",
+      "owner": "GPT-5.6 Sol, high effort, expiry regression cases; Codex final review"
     }
   ],
   "pull_requests": [
@@ -3563,7 +3600,7 @@
       "head": "aea68d8d08aee09f1a44dcd40333a0de230a7cf1",
       "github_state": "OPEN",
       "owner": "Codex, coordinating PR review",
-      "checked_at": "2026-09-07 19:08 UTC",
+      "checked_at": "2026-09-07 19:44 UTC",
       "checks": [
         {
           "name": "durable",
@@ -3591,19 +3628,19 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "PENDING",
-          "platform_result": "PENDING"
+          "result": "SUCCESS"
         }
       ],
-      "status": "Draft; all code checks pass; full current-head review running",
-      "next_action": "Complete current-head checks and actual CodeRabbit review, then request human schema review.",
+      "status": "Human schema review pending; latest-main integration in local checks",
+      "next_action": "Complete Gateway checks for the local integration with merged #463, publish the rebased branch and refresh review. Human approval of the unchanged schema remains pending.",
       "review_state": {
-        "CodeRabbit": "PENDING",
+        "CodeRabbit": "COMPLETE",
         "coordinating": "COMPLETE",
-        "human_schema": "PENDING"
+        "human_schema": "REQUESTED"
       },
       "review_findings": [],
-      "review_note": "The CLI checkpoint is integrated at d6601ec. Its previous review thread is resolved. Rebase aea68d8 includes merged Binding fixture #468; Module, Gateway and replay fixture trees are byte-identical to locally checked 6d62bc0. The two-Shard upgrade proof preserves item property 117 and settled inventory. Actual review on this new head is still required."
+      "review_note": "All checks and full review passed on published aea68d8. The local rebase onto merged #463 leaves the Module, schema, bindings and upgrade procedure identical. Combined fixtures preserve nonzero item properties and source identity; the new party fixture now supplies its required source identity. Gateway tests and lint are running before publication.",
+      "local_head": "fc854d1"
     },
     {
       "number": 462,
@@ -3659,10 +3696,10 @@
       "number": 463,
       "title": "fix(gateway): clean up parties after Character deletion",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/463",
-      "github_state": "OPEN",
+      "github_state": "MERGED",
       "owner": "GPT-5.6 Sol, high effort, Character cleanup implementer",
-      "head": "08cb0b2fd1a9cdecef77ca41800880e44a7cd9ee",
-      "checked_at": "2026-09-07 19:08 UTC",
+      "head": "d94bc1d5bf7365e5bec118cbd98fab1d04b165ce",
+      "checked_at": "2026-09-07 19:51 UTC",
       "checks": [
         {
           "name": "durable",
@@ -3673,11 +3710,11 @@
           "result": "SUCCESS"
         },
         {
-          "name": "fmt",
+          "name": "clippy",
           "result": "SUCCESS"
         },
         {
-          "name": "clippy",
+          "name": "fmt",
           "result": "SUCCESS"
         },
         {
@@ -3690,18 +3727,19 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "PENDING",
-          "platform_result": "PENDING"
+          "result": "SUCCESS"
         }
       ],
       "review_findings": [],
       "review_state": {
-        "CodeRabbit": "PENDING",
+        "CodeRabbit": "COMPLETE",
         "coordinating": "COMPLETE"
       },
-      "status": "All code checks pass; full current-head review running",
-      "next_action": "Complete current-head checks and actual CodeRabbit review, then merge. Keep suite and client acceptance on #46.",
-      "review_note": "The three review findings are addressed and actual CodeRabbit review of d6cfa37 passed. Head 08cb0b2 adds merged Binding fixture #468 through rebase. Its Gateway and Module source trees match the checked implementation. Current-head durable CI and actual review remain pending."
+      "status": "Merged after all checks and current-head review passed",
+      "next_action": "Complete the separate Headless Client suite acceptance for #46.",
+      "review_note": "Head d94bc1d preserves the original LEAVE failure if roster confirmation also fails, and repairs known groups while a failed Shard enumeration remains queued for retry. All 53 party tests, eight focused deletion checks and strict Gateway lint pass. CodeRabbit completed review on this head with no remaining finding. Durable CI is still running.",
+      "merged_at": "2026-09-07T19:48:12Z",
+      "merge_commit": "a345555b09623d4cf344106e31b0435a807357df"
     },
     {
       "number": 464,
@@ -3758,47 +3796,17 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/465",
       "owner": "GPT-5.6 Sol, high effort, Spell target fix; Codex final review",
       "github_state": "OPEN",
-      "head": "74bfa369f4cd35b4575dc4bd2e56e9df79416e82",
-      "checked_at": "2026-09-07 19:08 UTC",
-      "checks": [
-        {
-          "name": "durable",
-          "result": "IN_PROGRESS"
-        },
-        {
-          "name": "build",
-          "result": "SUCCESS"
-        },
-        {
-          "name": "fmt",
-          "result": "SUCCESS"
-        },
-        {
-          "name": "clippy",
-          "result": "SUCCESS"
-        },
-        {
-          "name": "test",
-          "result": "SUCCESS"
-        },
-        {
-          "name": "wasm",
-          "result": "SUCCESS"
-        },
-        {
-          "name": "CodeRabbit",
-          "result": "PENDING",
-          "platform_result": "SUCCESS"
-        }
-      ],
-      "status": "TARGET_NONE correction verified and published; CI and review running",
-      "next_action": "Complete current-head CI and actual review, then merge and close #460 with the required reimport steps recorded.",
+      "head": "aa5204593a6c13d2fc3536e79e48069a770bf1c4",
+      "checked_at": "2026-09-07 20:00 UTC",
+      "checks": [],
+      "status": "All Gouge ranks and provenance corrected; CI and review running",
+      "next_action": "Complete current-head checks and actual review, then merge and record the required Spell reimport.",
       "review_findings": [],
       "review_state": {
         "CodeRabbit": "PENDING",
         "coordinating": "COMPLETE"
       },
-      "review_note": "Head 74bfa36 is based on merged #468. All 358 importer tests, actual-source TARGET_NONE checks, Binding source audit and three imported gameplay durable cases pass. Strict importer lint and formatting pass. The target correction changes 4,589 effect targets with no other field or key changes; unsupported scripted effects retain the runtime fallback."
+      "review_note": "At aa52045 on a345555, all 359 ordinary importer tests and strict importer lint pass. Owned input confirms all five Gouge ranks use ModStun and now derive incapacitate; an unknown same-name spell remains a stun. Column 13 is included in the provenance table. Both review threads are resolved; CI and current-head review are running."
     },
     {
       "number": 58,
@@ -3829,41 +3837,65 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/466",
       "title": "feat(items): apply remaining random property stats",
       "owner": "GPT-5.6 Sol, high effort, Stat Kind implementer",
-      "head": "4bc7d891aa1b4210aaa3a2a0137bf8f30cd06ae6",
+      "head": "12f7e3f98e838cabda16fcb971fdefa339a09889",
       "github_state": "OPEN",
-      "checked_at": "2026-09-07 18:20 UTC",
-      "checks": [],
-      "status": "Draft; regeneration corrections undergoing checks",
-      "next_action": "Finish checks for MP5 during recent casting, combat HP5, small regeneration rates and armor counted once; rebase and complete CI and review.",
-      "review_state": {
-        "CodeRabbit": "PENDING",
-        "coordinating": "CHANGES_REQUESTED"
-      },
-      "review_findings": [
-        "Item MP5 must continue while spirit regeneration pauses after casting.",
-        "Check small per-five values and the source health-regeneration combat rule."
+      "checked_at": "2026-09-07 20:00 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "FAILURE"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
       ],
-      "review_note": "The implementer corrected MP5 during recent casting, small per-five values and aura resistance overflow. A CodeRabbit claim that armor omitted gear was false: the shared resistance fold already includes it. Parent review caught a resulting double count before publication; it was removed. A durable test is checking the exact armor total and damage reduction."
+      "status": "Current-head review passed; blocked by the main Binding test failure",
+      "next_action": "Integrate summon fix #470 after merge, then complete CI and review on the integrated branch.",
+      "review_state": {
+        "CodeRabbit": "COMPLETE",
+        "coordinating": "COMPLETE"
+      },
+      "review_findings": [],
+      "review_note": "The substantive review of 1be079d found a second-query race in three regeneration assertions. Commit 12f7e3f checks expected values in the sampled row, and the affected durable case passes in 13.09 seconds. Formatting and diff checks pass. Its review thread is resolved; the new head is completing CI and review. Actual review of 12f7e3f completed without a finding. Durable CI failed in the unchanged Binding quest corpse poll at line 326, the same failure tracked in #469. Integration of #470 is required before retry."
     },
     {
       "number": 467,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/467",
       "title": "docs(triage): record schema merges and integration findings",
       "owner": "Codex",
-      "head": "96e81217fff3d21d896a37cf451545de98367102",
+      "head": "9f2b072a459f41ee09712c4cc0f55dfb664b2362",
       "github_state": "OPEN",
       "checked_at": "2026-09-07 18:56 UTC",
       "checks": [],
-      "status": "Review correction ready; durable CI running on preceding snapshot",
-      "next_action": "Commit the review-status correction and complete checks and review on that snapshot.",
+      "status": "Review-status correction published; CI exposed main summon-expiry failure",
+      "next_action": "Integrate the separate #469 fix, refresh this snapshot and complete CI and review.",
       "review_state": {
-        "CodeRabbit": "CHANGES_REQUESTED",
+        "CodeRabbit": "RATE_LIMITED",
         "coordinating": "COMPLETE"
       },
-      "review_findings": [
-        "Distinguish raw platform success from completed current-head CodeRabbit review."
-      ],
-      "review_note": "The source now records raw CodeRabbit platform results separately. Its effective check remains PENDING until an actual current-head review completes. This corrects the review finding on 96e8121."
+      "review_findings": [],
+      "review_note": "The effective review-state correction is published and its review thread is resolved. Actual current-head review is rate-limited. Durable CI exposed the main-branch temporary-summon panic and transient corpse assertion; #470 fixes both before this report PR is refreshed."
     },
     {
       "number": 468,
@@ -3919,18 +3951,131 @@
       "url": "https://github.com/LyraCoreProject/wire-harness/pull/11",
       "title": "fix(lyracore): encode Operator cleanup actors for durable ownership",
       "owner": "Codex, Headless Client adapter compatibility",
-      "head": "523aa6d5e72914e36a9d34d4e5f2dabc21469936",
-      "github_state": "OPEN",
-      "checked_at": "2026-09-07 19:08 UTC",
-      "status": "CI and review running",
-      "next_action": "Complete review and CI, merge and release, then include the tested pin in Account ownership #61.",
-      "checks": [],
+      "head": "bd6a238a3a82e8590fa483b000ee93208f4bf4a3",
+      "github_state": "MERGED",
+      "checked_at": "2026-09-07 19:20 UTC",
+      "status": "Merged and released as v0.1.0-alpha.9",
+      "next_action": "Include the verified alpha.9 pin in Account ownership #61.",
+      "checks": [
+        {
+          "name": "test (ubuntu-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test (macos-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "coverage",
+          "result": "SUCCESS"
+        }
+      ],
       "review_state": {
-        "CodeRabbit": "PENDING",
+        "CodeRabbit": "NOT_CONFIGURED",
         "coordinating": "COMPLETE"
       },
       "review_findings": [],
-      "review_note": "All four offline shell checks pass. Three party/Transfer cleanup calls now encode unowned SessionActor for the new schema and retain bare guids for older checkouts. A refused LEAVE stops before party mirror changes. No Realm was accessed."
+      "review_note": "Independent review caught and corrected the Transfer argument count before merge. All three CI checks and four offline shell checks pass. A fresh clone of alpha.9 resolves to the merged commit and passes the command-boundary check.",
+      "merge_commit": "ec6c65fd7ef96ea3772f6015446d07d1b4005859",
+      "merged_at": "2026-09-07T19:17:51Z"
+    },
+    {
+      "number": 470,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/470",
+      "title": "fix(creatures): retain temporary summon lifetime checks",
+      "head": "ec6341711ed3592518b2567927574ba58c812d15",
+      "owner": "GPT-5.6 Sol, high effort, expiry regression cases; Codex final review",
+      "github_state": "OPEN",
+      "checked_at": "2026-09-07 19:44 UTC",
+      "status": "All CI checks pass; two requested regression cases in progress",
+      "next_action": "Add the two durable regression cases, complete affected checks and current-head review, then merge.",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ],
+      "review_state": {
+        "CodeRabbit": "CHANGES_REQUESTED",
+        "coordinating": "COMPLETE"
+      },
+      "review_findings": [
+        "Prove an obsolete expiry callback cannot affect a replacement summon life.",
+        "Prove a living disengaged summon expires naturally."
+      ],
+      "review_note": "The original Module failed with a missing expiry row and an owned log confirms the unique-key panic. The fix and repeated lifetime checks pass all CI. CodeRabbit requested actual stale-callback and natural-expiry coverage from the issue acceptance criteria. A Sol implementer owns those additions. The new stale-callback verifier passes in a real transaction, and removing its row/life lookup reproduces the unique-key panic. Natural expiry also passes. Root identified a short sleep-based assertion window; the implementer is removing that timing race before final checks."
+    },
+    {
+      "number": 471,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/471",
+      "title": "fix(account): enforce ownership across Gateways",
+      "owner": "GPT-6 Astra, high effort, Account ownership implementer",
+      "head": "51590f62505b1eeb87f59809a464b00af3ec3c85",
+      "github_state": "OPEN",
+      "checked_at": "2026-09-07 19:51 UTC",
+      "status": "Private signing-key fixture fix passes; integrated checks and two-process acceptance running",
+      "next_action": "Complete integrated tests, strict gates, two-process acceptance, CI and actual review. Request human schema review only after the concrete final revision passes.",
+      "review_state": {
+        "CodeRabbit": "PENDING",
+        "coordinating": "COMPLETE",
+        "human_schema": "NOT_REQUESTED"
+      },
+      "review_findings": [],
+      "review_note": "Initial Rust CI passed. Durable CI failed before two fixtures connected because parallel Standalone launches could not read their signing key; three Account durable cases passed. The implementer is fixing fixture isolation and integrating a345555. All local unit, lint, formatting, 986-binding and offline preflight gates passed before publication. Private Account Claim/Fence tables and reducer argument changes require human schema review after checks pass. The startup cause is confirmed in pinned CLI 2.7.1: config-path does not isolate the signing-key directory. A private shared SigningKeys lifetime preserves cross-node token trust; all five Account cases now pass with four test threads. Latest-main integration preserves the SessionActor in the new party absence-reader and cleanup paths. Integrated checks and the literal two-process smoke check are running.",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "FAILURE"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "PENDING"
+        }
+      ]
     }
   ],
   "history": [
@@ -4141,10 +4286,34 @@
     {
       "at": "2026-09-07 19:08 UTC",
       "text": "Loot replay and Character cleanup passed all code checks. Spell target correction 74bfa36 passed actual-source and three gameplay durable cases. Published wire-harness #11 for Account ownership argument compatibility. Report review now separates raw CodeRabbit platform status from actual current-head review completion."
+    },
+    {
+      "at": "2026-09-07 19:12 UTC",
+      "text": "Requested human schema review for Loot replay #461 after all seven checks and full CodeRabbit review passed. Item stat corrections are published and locally checked at 1be079d; actual review is rate-limited. Headless Client compatibility #11 passes all three CI checks and has an independent reviewer."
+    },
+    {
+      "at": "2026-09-07 19:20 UTC",
+      "text": "Merged wire-harness #11 after independent review corrected Transfer argument count. Released and freshly verified alpha.9. Report CI exposed a current-main temporary-summon panic and corpse assertion race; filed #469 and started its isolated regression. Account review is binding completion requests to the referenced Character."
+    },
+    {
+      "at": "2026-09-07 19:28 UTC",
+      "text": "Published summon-expiry fix #470 at ec63417. The baseline regression and its owned log confirm the panic; the corrected lifetime and quest fixture passes. Module unit tests, strict lint and independent review pass. A separate read-only audit is checking Account token retention through Gateway routing and queues."
+    },
+    {
+      "at": "2026-09-07 19:44 UTC",
+      "text": "Party cleanup d94bc1d passed current-head CodeRabbit review after two failure-handling fixes. Spell repair and item stats have green code checks but still need substantive reviews. Summon expiry #470 passed CI; its reviewer requested stale-callback and natural-expiry cases, now assigned to Sol. Account ownership passed final source review and strict workspace lint."
+    },
+    {
+      "at": "2026-09-07 19:51 UTC",
+      "text": "Merged party cleanup #463 as a345555 after all checks and actual review passed. Item stats 12f7e3f fixes the reviewed regeneration assertion race and passes its affected durable case. Spell review found a missing column citation and incomplete Gouge rank correction. Account ownership draft #471 is published; CI exposed concurrent Standalone signing-key startup failures, and a literal two-process check is being prepared."
+    },
+    {
+      "at": "2026-09-07 20:00 UTC",
+      "text": "Spell rank fixes are published at aa52045. Item stats 12f7e3f passed actual review, but CI reproduced the main Binding corpse timing failure and waits for #470. Summon stale-callback and natural-expiry cases pass; the short observation window is being corrected. Account fixture signing keys are isolated and all five cases pass concurrently. Loot replay is rebased locally onto merged party cleanup with its schema unchanged."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
   "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "Completed the issue-by-issue audit of the 69 then-open issues at 2026-09-07 16:15 UTC. Added and assessed #460 at 16:40 UTC from direct source and client-data evidence. GitHub remains authoritative for current state."
+  "audit_note": "Completed the issue-by-issue audit of the 69 then-open issues at 2026-09-07 16:15 UTC. Added #460 from client-data evidence and #469 from current-main CI logs. GitHub remains authoritative for current state."
 }
