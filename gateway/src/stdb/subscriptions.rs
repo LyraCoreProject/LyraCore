@@ -20,7 +20,7 @@ use anyhow::Result;
 use spacetimedb_sdk::Table;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{Vector3d, WeatherChangeType};
 
@@ -834,6 +834,14 @@ pub(crate) fn offer_peer_create_for(
             Box::new(codec::build_pet_spells(row.guid, &spells)),
         )));
     }
+    let resident_creature_spline = db.game_creature_spline().guid().find(&row.guid);
+    append_resident_creature_after_create(
+        &mut out,
+        &viewer.created,
+        viewer.instance_id,
+        resident_creature_spline.as_ref(),
+        unix_now_micros(),
+    );
     if let Some(spline) = db
         .game_taxi_passenger_spline()
         .character_guid()
@@ -2614,6 +2622,53 @@ pub(crate) fn creature_leg_outbound(
             row.run,
         )),
     ))]
+}
+
+/// Append the still-current part of a resident creature leg to its CREATE work item.
+/// Live leg callbacks use [`creature_leg_outbound`] unchanged; a late viewer instead starts at the
+/// interpolated current point and receives only the remaining duration.
+fn append_resident_creature_after_create(
+    created_outbound: &mut Vec<Outbound>,
+    created: &Mutex<HashSet<u64>>,
+    viewer_instance_id: u64,
+    row: Option<&CreatureSpline>,
+    now_micros: u64,
+) {
+    let Some(row) = row else {
+        return;
+    };
+    if row.instance_id != viewer_instance_id {
+        return;
+    }
+    if row.facing {
+        created_outbound.extend(creature_leg_outbound(created, row));
+        return;
+    }
+
+    let duration_micros = u64::from(row.dur_ms) * 1_000;
+    let elapsed_micros = now_micros.saturating_sub(row.start_micros);
+    if duration_micros == 0 || elapsed_micros >= duration_micros {
+        return;
+    }
+
+    let elapsed_fraction = elapsed_micros as f64 / duration_micros as f64;
+    let current = |start: f32, destination: f32| {
+        (f64::from(start) + (f64::from(destination) - f64::from(start)) * elapsed_fraction) as f32
+    };
+    let mut remaining = row.clone();
+    remaining.sx = current(row.sx, row.dx);
+    remaining.sy = current(row.sy, row.dy);
+    remaining.sz = current(row.sz, row.dz);
+    remaining.dur_ms = (duration_micros - elapsed_micros).div_ceil(1_000) as u32;
+    created_outbound.extend(creature_leg_outbound(created, &remaining));
+}
+
+fn unix_now_micros() -> u64 {
+    let micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros();
+    micros.min(u128::from(u64::MAX)) as u64
 }
 
 /// One module-owned passenger route to self and observers. Ordinary player motion deliberately
@@ -6064,6 +6119,35 @@ mod tests {
         }
     }
 
+    fn creature_spline(guid: u64, start_micros: u64, dur_ms: u32) -> CreatureSpline {
+        CreatureSpline {
+            guid,
+            start_micros,
+            dur_ms,
+            sx: 10.0,
+            sy: 20.0,
+            sz: 30.0,
+            dx: 30.0,
+            dy: 40.0,
+            dz: 50.0,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            spline_id: 10,
+            run: true,
+            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
+            facing: false,
+            facing_angle: 0.0,
+        }
+    }
+
+    fn creature_create_outbound() -> Vec<Outbound> {
+        let mut creature = creature_entity();
+        creature.unit_bytes_0 = 0x0000_0101;
+        peer_create_outbound(&entity_view(creature, 0), &[], &[]).unwrap()
+    }
+
     #[test]
     fn taxi_spline_reaches_self_and_only_created_observers() {
         let row = taxi_row(42);
@@ -6094,6 +6178,131 @@ mod tests {
 
         assert!(matches!(outbound.first(), Some(Outbound::One(_))));
         assert!(matches!(outbound.get(1), Some(Outbound::Raw { opcode, .. }) if *opcode == 0x00DD));
+    }
+
+    #[test]
+    fn resident_creature_replay_follows_create_from_the_current_point() {
+        let guid = 99;
+        let created = Mutex::new(HashSet::from([guid]));
+        let row = creature_spline(guid, 1_000_000, 1_000);
+        let mut outbound = creature_create_outbound();
+
+        append_resident_creature_after_create(&mut outbound, &created, 0, Some(&row), 1_250_500);
+
+        let [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)), Outbound::One(ServerOpcodeMessage::SMSG_MONSTER_MOVE(movement))] =
+            outbound.as_slice()
+        else {
+            panic!("a resident creature needs CREATE followed by MONSTER_MOVE");
+        };
+        let [wow_world_messages::vanilla::Object::CreateObject2 { guid3, .. }] =
+            create.objects.as_slice()
+        else {
+            panic!("the first packet must create the resident creature");
+        };
+        assert_eq!(guid3.guid(), guid);
+        assert_eq!(movement.guid.guid(), guid);
+        assert!((movement.spline_point.x - 15.01).abs() < 0.0001);
+        assert!((movement.spline_point.y - 25.01).abs() < 0.0001);
+        assert!((movement.spline_point.z - 35.01).abs() < 0.0001);
+        assert_eq!(
+            movement.splines,
+            vec![Vector3d {
+                x: 30.0,
+                y: 40.0,
+                z: 50.0,
+            }]
+        );
+        assert_eq!(
+            movement.duration, 750,
+            "sub-millisecond remainder rounds up so replay cannot move faster than the durable leg"
+        );
+    }
+
+    #[test]
+    fn resident_creature_replay_skips_absent_expired_and_ineligible_legs() {
+        let guid = 99;
+        let row = creature_spline(guid, 1_000_000, 1_000);
+        let mut outbound = Vec::new();
+
+        append_resident_creature_after_create(
+            &mut outbound,
+            &Mutex::new(HashSet::from([guid])),
+            0,
+            None,
+            1_250_000,
+        );
+        append_resident_creature_after_create(
+            &mut outbound,
+            &Mutex::new(HashSet::new()),
+            0,
+            Some(&row),
+            1_250_000,
+        );
+        append_resident_creature_after_create(
+            &mut outbound,
+            &Mutex::new(HashSet::from([guid])),
+            1,
+            Some(&row),
+            1_250_000,
+        );
+        append_resident_creature_after_create(
+            &mut outbound,
+            &Mutex::new(HashSet::from([guid])),
+            0,
+            Some(&row),
+            2_000_000,
+        );
+
+        assert!(outbound.is_empty());
+    }
+
+    #[test]
+    fn resident_facing_replay_follows_create_even_after_its_timestamp() {
+        let guid = 99;
+        let created = Mutex::new(HashSet::from([guid]));
+        let mut row = creature_spline(guid, 1_000_000, 0);
+        row.facing = true;
+        row.facing_angle = 2.1;
+        let mut outbound = creature_create_outbound();
+
+        append_resident_creature_after_create(&mut outbound, &created, 0, Some(&row), 9_000_000);
+
+        let [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_)), Outbound::One(ServerOpcodeMessage::SMSG_MONSTER_MOVE(movement))] =
+            outbound.as_slice()
+        else {
+            panic!("a resident creature needs CREATE followed by its facing state");
+        };
+        assert_eq!(
+            movement.move_type,
+            wow_world_messages::vanilla::SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle {
+                angle: 2.1,
+            }
+        );
+    }
+
+    #[test]
+    fn peer_create_dispatch_admits_once_before_appending_resident_movement() {
+        let body = crate::test_scan::code_of(
+            include_str!("subscriptions.rs"),
+            "pub(crate) fn offer_peer_create_for(",
+        );
+        let body: String = body.split_whitespace().collect();
+        let gate = body.find("if!peer_create_gate(").unwrap();
+        let dedup = body
+            .find("if!viewer.created.lock().unwrap().insert(row.guid)")
+            .unwrap();
+        let create = body.find("build_peer_create(").unwrap();
+        let replay = body.find("append_resident_creature_after_create(").unwrap();
+
+        assert!(gate < dedup && dedup < create && create < replay);
+        assert!(body[gate..dedup].contains("{returnVec::new();}"));
+        assert!(body[dedup..create].contains("{returnVec::new();}"));
+        assert_eq!(
+            body.matches("append_resident_creature_after_create(")
+                .count(),
+            1,
+            "the admitted CREATE path must append resident movement exactly once"
+        );
     }
 
     /// A running-forward movement block plus the bytes the module would have stored for it.
