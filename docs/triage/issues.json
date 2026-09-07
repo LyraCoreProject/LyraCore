@@ -2940,6 +2940,31 @@
         {
           "name": "CodeRabbit",
           "result": "SUCCESS"
+        },
+        {
+          "name": "cargo test: 711 passed",
+          "result": "SUCCESS",
+          "source": "Implementer local check at 94535c723ca9b3fc10c420bae5edc91c8b10bd0b"
+        },
+        {
+          "name": "cargo +1.85 check",
+          "result": "SUCCESS",
+          "source": "Implementer local check at 94535c723ca9b3fc10c420bae5edc91c8b10bd0b"
+        },
+        {
+          "name": "cargo clippy --all-targets -- -D warnings",
+          "result": "SUCCESS",
+          "source": "Implementer local check at 94535c723ca9b3fc10c420bae5edc91c8b10bd0b"
+        },
+        {
+          "name": "rustfmt --check src/cmd/service.rs",
+          "result": "SUCCESS",
+          "source": "Implementer local check at 94535c723ca9b3fc10c420bae5edc91c8b10bd0b"
+        },
+        {
+          "name": "git diff --check origin/main",
+          "result": "SUCCESS",
+          "source": "Implementer local check at 94535c723ca9b3fc10c420bae5edc91c8b10bd0b"
         }
       ],
       "checked_at": "2026-09-07 14:28 UTC",
