@@ -1,12 +1,12 @@
 {
-  "updated_at": "2026-09-07 15:02 UTC",
+  "updated_at": "2026-09-07 15:19 UTC",
   "base_revision": "32aa004e0d2fe0921033bea77e3a85796e277dfd",
   "status_note": "69 open issues assessed; 20 closed issues retained for history. Service verification, bank and dive adapters are merged and pinned. Warlock quests and deleted-Character party cleanup are active.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
   "focus": [
-    "Finish The Binding #40 corrections and draft, then obtain required human review of its table and appended EventAI instruction.",
+    "Finish frozen-head Warlock #40 checks and draft, then obtain required human schema review.",
     "Implement deleted-Character party cleanup #46 with GPT-5.6 Sol at high effort.",
-    "Prepare random item properties #31 from the approved Spec and source preflight; keep Operator and stock-client acceptance separate."
+    "Implement Random Property Tracer #31 with GPT-6 Astra at high effort; keep its schema review and later stat-family work explicit."
   ],
   "issues": [
     {
@@ -1758,7 +1758,7 @@
       "summary": "A deleted Character previously left a realm-core party member row, but the Gateway now relays Character disappearance and removes membership only after the Character is absent from every Shard.",
       "importance": 4,
       "gain": 4,
-      "effort": 1,
+      "effort": 3,
       "confidence": "medium",
       "disposition": "implementing",
       "rationale": "The Character deletion Relay is present, but it converts failed reads to absence before a direct Realm-core LEAVE. Its tests inspect source text. The current path also needs verification of Transfer/cache ordering and surviving party mirrors before the suite workaround can be removed.",
@@ -1874,7 +1874,8 @@
         "https://github.com/LyraCoreProject/LyraCore/issues/40",
         "Code fact: importer/src/main.rs force-includes only the existing pet templates 416 and 1860; the Module has E_SUMMON_PET for persistent owned pets but no hostile ownerless summon effect for these quests.",
         "Current pinned cmangos rows: item 6928 -> spell 7728 -> event 1131; item 6913 -> spell 8674 -> event 1134. Both spells use effects 61 and 86 with focus 83. The issue's suggested plain hostile-summon effect is not the source spell shape.",
-        "Current quest importer omits RewSpell and RewSpellCast; the Module has no durable quest reward-spell catalogue. The draft must preserve their distinct source semantics."
+        "Current quest importer omits RewSpell and RewSpellCast; the Module has no durable quest reward-spell catalogue. The draft must preserve their distinct source semantics.",
+        "Independent review is clear at 81d5e0467a846ee99a8cc393ddf673383fa0186b. Frozen four-thread durable tests hit a shared optimized-Wasm file race. The same selection is running serially; the failing package_config group passed."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/40",
@@ -2076,22 +2077,24 @@
       "gain": 4,
       "effort": 5,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "This is the second-best ready feature candidate. The issue has a current two-Ticket Spec, the missing storage and packet fields are confirmed in code, and the first Tracer can establish one deterministic affix end to end without a design decision.",
-      "next_action": "Implement the Spec Tracer: import property data, select and persist the weighted property once, carry it through item packets and existing EquipStat folds, then add the remaining stat families in the second Ticket.",
+      "next_action": "Implement T1 in its isolated worktree, preserving existing enchant meanings and item state through all storage paths. Publish a tested draft for human schema review; T2 adds the remaining stat families.",
       "blockers": [
-        "A real-client tooltip check after the deterministic Tracer passes"
+        "Human review of the concrete schema and binding changes before shipping.",
+        "A real-client tooltip check and approved Realm acceptance after the Tracer and remaining stat-family work."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/31#issuecomment-5379512339",
         "Code fact: module/src/items/rules.rs still uses a fixed ENCHANTS list, no game_item_random_property or property-weight table exists, and Gateway loot, item, mail, and auction codecs write item_random_property_id as zero.",
-        "2026-08-22 issue Spec: the Tracer already includes weighted selection; the second Ticket adds resistance, damage, avoidance, regeneration and spell/healing terms."
+        "2026-08-22 issue Spec: the Tracer already includes weighted selection; the second Ticket adds resistance, damage, avoidance, regeneration and spell/healing terms.",
+        "Source preflight checked pinned CMaNGOS data and the local build-5875 client tables. Existing synthetic enchant IDs 7745 and 7748 do not collide with imported enchantments. Buyback, Mail, Escrow, Auction and Loot Roll paths must preserve the selected property; old opaque Transfer blobs need an explicit compatibility path."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/31",
       "updatedAt": "2026-08-22T09:18:51Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-6 Astra, high effort, Random Property Tracer agent"
     },
     {
       "number": 30,
@@ -3332,6 +3335,10 @@
     {
       "at": "2026-09-07 15:02 UTC",
       "text": "Merged dive pin #454 after all code checks passed and parent review verified its exact diff, release and clone evidence. CodeRabbit disclosed its rate limit. Kept #142 open for Operator and stock-client acceptance. Assigned #46 source behavior to a separate Sol agent at high effort; the Warlock reviewer remains on #40."
+    },
+    {
+      "at": "2026-09-07 15:19 UTC",
+      "text": "Assigned Random Property Tracer #31 to GPT-6 Astra at high effort after checking pinned source data and local client tables. Raised #46 effort for authoritative absence and destination-cache ordering. Warlock review is clear on the frozen commit; its serial durable run is separating a concurrent Wasm publication failure from gameplay checks. Parent owns the test-harness correction and Transfer format compatibility."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
