@@ -1585,7 +1585,7 @@ fn apply_heal(
     target_guid: u64,
     points: i32,
 ) -> u32 {
-    let sp = spell_power(ctx, caster_guid, hdr.school_mask);
+    let sp = healing_power(ctx, caster_guid, hdr.school_mask);
     let scaled = compose_magnitude(points, sp, SPELL_POWER_COEFF_PCT);
     apply_direct_heal(ctx, caster_guid, target_guid, scaled)
 }

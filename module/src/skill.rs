@@ -400,13 +400,15 @@ pub fn effective_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u
 }
 
 /// A unit's EFFECTIVE defense skill: the trained Defense value (else the `level*5` baseline) PLUS any
-/// `A_MOD_COMBAT(COMBAT_DEFENSE)` aura (e.g. the Anticipation talent). More defense raises
+/// `A_MOD_COMBAT(COMBAT_DEFENSE)` aura and Defense from working equipped items. More defense raises
 /// `skill_diff` against an attacker, so it tightens the attacker's miss/dodge/parry/block bands — a
-/// defender's avoidance goes up. No defense aura → exactly the trained/baseline value (baseline-safe). [entity]
+/// defender's avoidance. With neither source, this is exactly the trained or baseline value. [entity]
 pub fn effective_defense_skill(ctx: &ReducerContext, target: &WorldEntity) -> u32 {
     let base = skill_value_or_cap(ctx, target.guid, skill_line::DEFENSE, target.level);
-    let bonus = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
-    (base as i32 + bonus).max(0) as u32
+    let aura = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
+    let gear =
+        crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
+    (i64::from(base) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(u32::MAX)) as u32
 }
 
 /// The attack-table skill difference for a swing of `attacker` at `target`: the defender's defense skill

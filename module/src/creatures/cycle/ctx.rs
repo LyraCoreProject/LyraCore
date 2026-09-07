@@ -32,11 +32,16 @@ use crate::{
 
 /// `tick_creatures`' one call into the cycle. The adapter never leaves this module.
 pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
-    run_cycle(&mut CtxWorld { ctx }, tick)
+    let regen_window = crate::combat::RegenWindow::new(
+        tick.now_micros / 1_000,
+        (f64::from(tick.sense_secs) * 1_000.0).round() as u64,
+    );
+    run_cycle(&mut CtxWorld { ctx, regen_window }, tick)
 }
 
 struct CtxWorld<'a> {
     ctx: &'a ReducerContext,
+    regen_window: crate::combat::RegenWindow,
 }
 
 impl CtxWorld<'_> {
@@ -544,30 +549,46 @@ impl RegenSink for CtxWorld<'_> {
             .game_world_entity()
             .guid()
             .find(u.guid)
-            .map_or(u.health, |e| crate::combat::regen_entity_health(&e))
+            .map_or(u.health, |e| {
+                let health_per_five = crate::items::equipped_stat_bonus(
+                    self.ctx,
+                    e.guid,
+                    crate::items::EquipStat::HealthPerFive,
+                );
+                crate::combat::regen_entity_health(&e, health_per_five, self.regen_window)
+            })
     }
     fn combat_healed_to(&self, u: &Recovering) -> Option<u32> {
-        let pct = u32::try_from(crate::spell::combat_health_regen_pct(self.ctx, u.guid))
-            .ok()
-            .filter(|pct| *pct > 0)?;
+        let pct =
+            u32::try_from(crate::spell::combat_health_regen_pct(self.ctx, u.guid)).unwrap_or(0);
         let e = self.ctx.db.game_world_entity().guid().find(u.guid)?;
-        Some(crate::combat::regen_health_in_combat(
-            e.health,
-            e.max_health,
-            e.spirit,
-            e.level,
-            pct,
-        ))
+        let health_per_five = crate::items::equipped_stat_bonus(
+            self.ctx,
+            e.guid,
+            crate::items::EquipStat::HealthPerFive,
+        );
+        (pct > 0 || health_per_five != 0).then(|| {
+            crate::combat::regen_entity_health_in_combat(
+                &e,
+                pct,
+                health_per_five,
+                self.regen_window,
+            )
+        })
     }
     fn powered_to(&self, u: &Recovering) -> u32 {
-        let now_ms = (self.ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
         self.ctx
             .db
             .game_world_entity()
             .guid()
             .find(u.guid)
             .map_or(u.power, |e| {
-                crate::combat::regen_entity_power(&e, u.in_combat, now_ms)
+                let mana_per_five = crate::items::equipped_stat_bonus(
+                    self.ctx,
+                    e.guid,
+                    crate::items::EquipStat::ManaPerFive,
+                );
+                crate::combat::regen_entity_power(&e, u.in_combat, self.regen_window, mana_per_five)
             })
     }
     // ponytail: one row write per unit, where the old pass wrote health and power in two separate

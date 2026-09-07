@@ -89,6 +89,8 @@ pub struct EntityView {
     /// gear-folded value so the operator sees real worn armor on relog (auras self-correct via the on_aura
     /// relay). Matches the module's combat `effective_armor`, so the sheet equals the mitigation value.
     pub effective_armor: u32,
+    /// Holy, Fire, Nature, Frost, Shadow and Arcane resistance in descriptor order.
+    pub magic_resistances: [u32; 6],
     /// Persisted hearthstone / bind-point from `game_character.home_*`.  Zero-initialised for
     /// creature rows (which never build a `SMSG_BINDPOINTUPDATE`).
     pub home_map: u32,
@@ -362,6 +364,12 @@ pub fn build_create_object(
             // them the instant they insert. Part of the full CREATE mask (OBJECT_FIELD_TYPE belongs here),
             // so no dirty_reset concern.
             .set_unit_normal_resistance(entity.effective_armor as i32)
+            .set_unit_holy_resistance(entity.magic_resistances[0] as i32)
+            .set_unit_fire_resistance(entity.magic_resistances[1] as i32)
+            .set_unit_nature_resistance(entity.magic_resistances[2] as i32)
+            .set_unit_frost_resistance(entity.magic_resistances[3] as i32)
+            .set_unit_shadow_resistance(entity.magic_resistances[4] as i32)
+            .set_unit_arcane_resistance(entity.magic_resistances[5] as i32)
             // Weapon damage for the character sheet's Main-Hand panel. gtker's UpdatePlayer has no
             // default for these float/int fields, so leaving them unset makes the 5875 client read
             // uninitialized floats → "-1.#IND" (NaN) in the damage/DPS tooltip. Send the derived values.

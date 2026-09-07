@@ -102,6 +102,7 @@ fn enter_world<St: WorldStore + ?Sized>(
     // self-correct via the on_aura relay; combat mitigation is unchanged (the module still folds its
     // own effective_armor on demand — this only feeds the display descriptor).
     entity.effective_armor = store.effective_armor(character_guid);
+    entity.magic_resistances = store.effective_magic_resistances(character_guid);
     log::info!(
         "world: entering world guid={character_guid} -> entity at map {} ({:.1},{:.1},{:.1}); subscribing + sending login sequence + self-spawn",
         entity.map_id, entity.x, entity.y, entity.z

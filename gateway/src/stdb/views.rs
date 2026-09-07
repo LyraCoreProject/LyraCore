@@ -173,6 +173,7 @@ pub(crate) fn entity_view(e: WorldEntity, durable_zone: u32) -> crate::codec::En
         // your sheet only shows your own armor). The self-login CREATE overrides this with the gear-folded
         // value (`Coordinator::effective_armor`); the relays then keep it live.
         effective_armor: e.armor,
+        magic_resistances: [0; 6],
         owner_guid: e.owner_guid,
         // Home fields are not on the world-entity row; caller fills them in from game_character when
         // building the self-login sequence.  Peer/creature views never need these, so 0 is fine.

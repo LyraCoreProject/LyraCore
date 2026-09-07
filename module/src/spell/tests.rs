@@ -682,6 +682,13 @@ fn rederive_pool_is_noop_at_zero_and_curve_exact() {
     assert_eq!(rederive_pool(120, 20, 0, mana_from_intellect), 120); // no-op
 }
 
+#[test]
+fn direct_pool_bonus_clamps_at_imported_integer_boundaries() {
+    assert_eq!(add_flat_pool_bonus(100, 25), 125);
+    assert_eq!(add_flat_pool_bonus(100, -150), 0);
+    assert_eq!(add_flat_pool_bonus(u32::MAX, i32::MAX), u32::MAX);
+}
+
 /// The vitals-recompute gate: ONLY an A_MOD_STAT aura touching STA / INT / ALL moves a max pool.
 /// A +STR/+AGI/+SPI A_MOD_STAT, or any non-stat aura kind, must NOT trip the recompute (no work →
 /// the un-buffed unit keeps its login max). `STAT_ALL` (Mark of the Wild) counts (it includes STA+INT).

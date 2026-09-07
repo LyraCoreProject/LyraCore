@@ -487,6 +487,10 @@ pub trait WorldStore:
     /// folded here (they self-correct via the on_aura relay). Mirrors the module's combat `effective_armor`.
     fn effective_armor(&self, guid: u64) -> u32;
 
+    fn effective_magic_resistances(&self, _guid: u64) -> [u32; 6] {
+        [0; 6]
+    }
+
     /// Standing-derived reaction gate: does this NPC refuse `player_guid` its
     /// interaction WINDOW? Rep-bar factions refuse at Unfriendly-or-below standing; bar-less
     /// factions fall back to the FactionTemplate hostility masks. Fail-open on missing data.

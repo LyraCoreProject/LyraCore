@@ -20,14 +20,18 @@ use crate::{
 // folds::*`/`death::*`/`engage::*`/`swing::*`) so every symbol resolves the same as before the split.
 use super::*;
 
-/// Fold a defender combat-rating aura (`A_MOD_COMBAT(field)`, e.g. a talent) onto an attack-table band:
-/// `base + combat_field_bonus(target, field)`, clamped to `[0, 10000]` so the band never goes negative or
-/// past the full roll line. `bonus == 0` (no such aura) → exactly `base` (baseline-safe). NOTE: unlike the
-/// attacker AP/crit/hit folds (which sum aura + EQUIPPED-gear ratings), these defender ratings are
-/// aura-only for now — no gear sources parry/dodge/block rating yet, so only `combat_field_bonus`. [entity]
-fn fold_band(ctx: &ReducerContext, target_guid: u64, base: u32, field: u8) -> u32 {
-    (base as i32 + crate::spell::combat_field_bonus(ctx, target_guid, field)).clamp(0, 10_000)
-        as u32
+/// Fold aura and equipped-item rating onto one attack-table band.
+fn fold_band(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    base: u32,
+    field: u8,
+    gear: crate::items::EquipStat,
+) -> u32 {
+    (i64::from(base)
+        + i64::from(crate::spell::combat_field_bonus(ctx, target_guid, field))
+        + i64::from(crate::items::equipped_stat_bonus(ctx, target_guid, gear)))
+    .clamp(0, 10_000) as u32
 }
 
 /// `target`'s EFFECTIVE dodge chance (bp) vs a swing with skill difference `sd`: the agility-derived
@@ -39,6 +43,7 @@ pub fn effective_dodge_bp(ctx: &ReducerContext, target: &WorldEntity, sd: u32) -
         target.guid,
         dodge_chance_bp(effective_agility(ctx, target), sd),
         crate::spell::COMBAT_DODGE,
+        crate::items::EquipStat::Dodge,
     )
 }
 
@@ -51,6 +56,7 @@ pub fn effective_parry_bp(ctx: &ReducerContext, target: &WorldEntity, sd: u32) -
         target.guid,
         parry_chance_bp(sd),
         crate::spell::COMBAT_PARRY,
+        crate::items::EquipStat::Parry,
     )
 }
 
@@ -71,6 +77,7 @@ pub fn effective_block_bp(
             target.guid,
             block_chance_bp(sd),
             crate::spell::COMBAT_BLOCK,
+            crate::items::EquipStat::Block,
         )
     } else {
         0 // no shield → no block band (a block aura is inert without a shield)
@@ -228,11 +235,13 @@ pub(crate) fn effective_agility(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
 /// incoming hits. Clamped ≥0; no aura and no armor gear → the base value (mitigation byte-identical to
 /// before — baseline-safe). [entity]
 pub fn effective_armor(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
-    effective_stat(
-        e.armor as i32,
-        crate::spell::resistance_bonus(ctx, e.guid, crate::spell::RESIST_ARMOR),
-        crate::items::equipped_stat_bonus(ctx, e.guid, crate::items::EquipStat::Armor),
-    )
+    (i64::from(e.armor)
+        + i64::from(crate::spell::resistance_bonus(
+            ctx,
+            e.guid,
+            crate::spell::RESIST_ARMOR,
+        )))
+    .clamp(0, i64::from(u32::MAX)) as u32
 }
 
 /// A unit's EFFECTIVE shield BLOCK VALUE — the flat physical damage a blocked swing absorbs: the
@@ -353,12 +362,18 @@ fn weapon_profile_in_slot(
     if crate::items::item_is_broken(&tmpl, &inst) {
         return None; // a BROKEN weapon (has durability and it hit 0) gives no damage
     }
+    let bonus =
+        crate::items::item_stat_bonus(ctx, &inst, &tmpl, crate::items::EquipStat::WeaponDamage);
     Some((
-        tmpl.damage_min.round() as u32,
-        tmpl.damage_max.round() as u32,
+        add_weapon_damage(tmpl.damage_min, bonus),
+        add_weapon_damage(tmpl.damage_max, bonus),
         tmpl.delay_ms,
         tmpl.subclass,
     ))
+}
+
+fn add_weapon_damage(base: f32, bonus: i32) -> u32 {
+    (base.round() as i64 + i64::from(bonus)).clamp(0, i64::from(u32::MAX)) as u32
 }
 
 /// The player's equipped main-hand WEAPON damage profile `(damage_min, damage_max, delay_ms)`, or
@@ -719,6 +734,18 @@ pub(crate) fn roll_money(ctx: &ReducerContext, min: u32, max: u32) -> u32 {
         return 0;
     }
     min + ctx.random::<u32>() % (max - min + 1)
+}
+
+#[cfg(test)]
+mod weapon_damage_tests {
+    use super::add_weapon_damage;
+
+    #[test]
+    fn flat_weapon_damage_applies_after_template_rounding_and_clamps() {
+        assert_eq!(add_weapon_damage(10.6, 20), 31);
+        assert_eq!(add_weapon_damage(10.4, -20), 0);
+        assert_eq!(add_weapon_damage(u32::MAX as f32, i32::MAX), u32::MAX);
+    }
 }
 
 #[cfg(test)]
