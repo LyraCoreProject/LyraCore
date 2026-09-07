@@ -224,6 +224,23 @@ impl Standalone {
             .expect("failed to run SQL query")
     }
 
+    #[allow(dead_code)]
+    pub fn sql_anonymous(&self, query: &str) -> Output {
+        self.command()
+            .args([
+                "sql",
+                "-s",
+                &self.server,
+                "--anonymous",
+                "--format",
+                "text",
+                &self.database,
+                query,
+            ])
+            .output()
+            .expect("failed to run anonymous SQL query")
+    }
+
     fn command(&self) -> Command {
         let mut command = Command::new(&self.spacetime);
         command.args(["--config-path", self.cli_config.to_str().unwrap()]);

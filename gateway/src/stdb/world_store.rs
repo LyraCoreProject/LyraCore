@@ -15,6 +15,7 @@ use anyhow::{anyhow, Result};
 use wow_world_messages::vanilla::MovementInfo;
 
 use crate::codec;
+use crate::realm_core::SessionKey;
 use crate::world::{SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
 use super::bindings::GwMove;
@@ -1195,7 +1196,7 @@ impl crate::realm_core::RealmDb for Coordinator {
     fn account_by_username(&self, username: &str) -> Result<Option<AccountRow>> {
         self.account_by_username(username)
     }
-    fn session_key(&self, account_id: u64) -> Result<Option<[u8; 40]>> {
+    fn session_key(&self, account_id: u64) -> Result<Option<SessionKey>> {
         self.session_key(account_id)
     }
     fn bound_identity(&self, account_id: u64) -> Result<[u8; 32]> {

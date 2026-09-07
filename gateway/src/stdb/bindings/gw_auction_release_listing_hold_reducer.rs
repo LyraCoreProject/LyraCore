@@ -35,7 +35,11 @@ pub trait gw_auction_release_listing_hold {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_auction_release_listing_hold:gw_auction_release_listing_hold_then`] to run a callback after the reducer completes.
-    fn gw_auction_release_listing_hold(&self, operation_id: u64, seller_guid: u64) -> __sdk::Result<()> {
+    fn gw_auction_release_listing_hold(
+        &self,
+        operation_id: u64,
+        seller_guid: u64,
+    ) -> __sdk::Result<()> {
         self.gw_auction_release_listing_hold_then(operation_id, seller_guid, |_, _| {})
     }
 
