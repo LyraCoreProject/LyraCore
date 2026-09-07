@@ -62,9 +62,8 @@ jobs:
       - name: Check all Gateway bindings
         run: scripts/check-gateway-bindings.py
 
-      # Building the workspace Module once keeps the module-path publishers off a cold compile, and
-      # a build failure reports as a build failure rather than as a publish timeout. The typed taxi
-      # test builds and privately copies the exact Wasm artifact it inspects.
+      # Build failures report before any fixture starts. Each test process asks Cargo for the
+      # current artifact, caches its bytes, and publishes private copies through --bin-path.
       - name: Build the module wasm
         run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
 
