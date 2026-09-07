@@ -484,7 +484,12 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
 /// freshly unclaimed (`reserved_for = 0`) and FFA (group-loot stamping happens AFTER this returns, in
 /// `apply_group_loot_rules` — never at insert time). The ONE insert loop [`roll_creature_loot`] and
 /// [`roll_pickpocket_loot`] used to each carry a copy of (the dedup).
-fn insert_corpse_rows(ctx: &ReducerContext, corpse_guid: u64, winners: Vec<(u32, u32, bool)>) {
+fn insert_corpse_rows(
+    ctx: &ReducerContext,
+    corpse_guid: u64,
+    winners: Vec<(u32, u32, bool)>,
+) -> bool {
+    let mut dropped = false;
     for (slot, (item_entry, count, quest_only)) in winners.into_iter().enumerate() {
         let random_property_id = match crate::items::select_loot_property(ctx, item_entry) {
             Ok(id) => id,
@@ -508,7 +513,9 @@ fn insert_corpse_rows(ctx: &ReducerContext, corpse_guid: u64, winners: Vec<(u32,
             withheld: false,
             random_property_id,
         });
+        dropped = true;
     }
+    dropped
 }
 
 /// Roll a creature's loot table into `game_corpse_loot` rows on its corpse; returns whether anything
@@ -533,9 +540,7 @@ pub(crate) fn roll_creature_loot(
         .map(|r| (r.item_entry, r.chance_bp, r.count, r.group_id, r.quest_only))
         .collect();
     let winners = roll_loot_rows_quest_aware(ctx, raw);
-    let dropped = !winners.is_empty();
-    insert_corpse_rows(ctx, corpse_guid, winners);
-    dropped
+    insert_corpse_rows(ctx, corpse_guid, winners)
 }
 
 // ===========================================================================================
