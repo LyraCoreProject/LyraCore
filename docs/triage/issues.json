@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-09-07 16:35 UTC",
+  "updated_at": "2026-09-07 16:42 UTC",
   "base_revision": "627327f04aab8ceae9e021ef3450212dda40680c",
-  "status_note": "All 69 open issues have been rechecked; 20 closed issues remain for history. Three isolated agents own Character deletion cleanup, the Random Property Tracer and Loot Roll replay prevention. Nine assessments changed after the audit.",
+  "status_note": "All 70 open issues have an assessment; 20 closed issues remain for history. Three isolated agents own Character deletion cleanup, the Random Property Tracer and Loot Roll replay prevention. The Tracer uncovered a broader Spell importer defect, now tracked as #460.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
   "focus": [
     "Finish and review Character deletion cleanup #46, including failed cleanup and Transfer behavior.",
@@ -1776,7 +1776,7 @@
       "confidence": "medium",
       "disposition": "implementing",
       "rationale": "The Character deletion Relay is present, but it converts failed reads to absence before a direct Realm-core LEAVE. Its tests inspect source text. The current path also needs verification of Transfer/cache ordering and surviving party mirrors before the suite workaround can be removed.",
-      "next_action": "Complete the private Coordinator callback and Transfer regression, then finish Gateway checks and publish the cleanup PR. Keep suite workaround removal as a separate follow-up.",
+      "next_action": "Prove cleanup remains safe when another Gateway sees the source deletion before the destination insertion. Then complete the Coordinator fixture and full Gateway checks before publishing.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/46",
@@ -1784,7 +1784,8 @@
         "Code fact: gateway/src/main.rs starts spawn_character_gone_relay, and gateway/src/stdb/subscriptions.rs leaves the realm-core party only when character_anywhere reports the Character absent from all Shards.",
         "Coordinating review found callback/reconnect deadlocks and a sequential absence-scan race during Transfer; the implementation agent is fixing these before PR publication.",
         "Recovery copied the committed and unfinished source into a new worktree. Original tracked diffs stayed unchanged during capture.",
-        "Direct tests pass for unreadable Shards, unavailable Realm-core, Transfer preservation, failed LEAVE and mirror retries, lost replies and stale mirror repair. The actual Coordinator callback test remains in progress."
+        "Direct tests pass for unreadable Shards, unavailable Realm-core, Transfer preservation, failed LEAVE and mirror retries, lost replies and stale mirror repair. The actual Coordinator callback test remains in progress.",
+        "Further coordinating review found that local stable snapshots do not establish freshness across two Gateways. The implementer is addressing delayed destination observation before publication."
       ],
       "related_prs": [
         384
@@ -2382,6 +2383,28 @@
       "updatedAt": "2026-09-05T15:37:16Z",
       "github_state": "open",
       "owner": "GPT-6 Astra, high effort, Loot Roll replay agent"
+    },
+    {
+      "number": 460,
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/460",
+      "summary": "Shifted Spell columns corrupt general imported effects and can omit the third effect.",
+      "importance": 5,
+      "gain": 5,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "ready",
+      "rationale": "Real-data checks found the general importer reads an equipment mask as an effect and shifts valid effects by one slot. This affects core spell behavior. The Random Property Tracer has a narrow corrected reader that can guide the broader repair.",
+      "next_action": "Assign a bounded importer repair after an agent slot opens. Normalize all consumed build 5875 fields, test three effect slots, review real import output and affected durable gameplay, then publish and monitor a PR.",
+      "blockers": [],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/460",
+        "importer/src/spell.rs documents the missing InterruptFlags column but incorrectly claims effect arrays resynchronize. push_spell_effect_rows and resolve_effect_kind use the shifted named arrays.",
+        "Spell 7748 has raw effects [53,0,0] and inventory mask 1048608, while wow_dbc reads effects [1048608,53,0]. Spell 7747 has raw effect [6,0,0], aura [34,0,0], base points [14,0,0]; each named array is shifted by one slot."
+      ],
+      "related_prs": [],
+      "updatedAt": "2026-09-07T16:37:00Z",
+      "github_state": "open",
+      "owner": "Codex, queued assignment"
     }
   ],
   "pull_requests": [
@@ -3400,8 +3423,8 @@
       "title": "docs(triage): resume issue ownership and PR monitoring",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/458",
       "owner": "Codex, coordinating agent",
-      "status": "Merged; one review finding remains for the report correction",
-      "next_action": "Commit the corrected review status, publish it at the stable URL, and resolve the review thread after the correction lands.",
+      "status": "Merged; report correction is open in #459",
+      "next_action": "Merge correction PR #459 after its checks and reviews, then resolve the original review thread. The corrected report is already published.",
       "head": "da2140f545711063c490149217ad370c3fc08662",
       "github_state": "MERGED",
       "checked_at": "2026-09-07 16:35 UTC",
@@ -3441,9 +3464,57 @@
         "coordinating": "CORRECTION_PENDING"
       },
       "review_findings": [
-        "CodeRabbit found inconsistent review status in this report. This snapshot corrects the status; the follow-up PR and review thread remain open until the correction lands."
+        "CodeRabbit found inconsistent review status in the prior snapshot. Correction PR #459 contains the fix; the original thread remains open until #459 merges."
       ],
       "review_note": "All seven checks passed at da2140f. CodeRabbit completed review with one actionable report-state finding. The coordinating merge script continued after a failed review assertion and merged the PR with that thread unresolved. Validation and merge now run as separate steps."
+    },
+    {
+      "number": 459,
+      "title": "docs(triage): correct review status and record implementation progress",
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/459",
+      "owner": "Codex, coordinating agent",
+      "status": "Open; durable check running; completed CodeRabbit review has one clarification to address",
+      "next_action": "Record #459 explicitly as the correction PR, finish current-head checks and review, then merge and resolve the original #458 thread.",
+      "head": "8f789b143c25f95a4f9752c7ab568968bf4c563c",
+      "github_state": "OPEN",
+      "checked_at": "2026-09-07 16:42 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ],
+      "review_state": {
+        "CodeRabbit": "COMPLETE",
+        "coordinating": "COMPLETE"
+      },
+      "review_findings": [
+        "CodeRabbit asked which follow-up carries the correction. This snapshot names #459 explicitly; review-thread resolution remains pending."
+      ]
     }
   ],
   "history": [
@@ -3613,11 +3684,15 @@
     },
     {
       "at": "2026-09-07 16:35 UTC",
-      "text": "Merged report PR #458 after seven passing checks, but the merge script continued past a failed review assertion. One CodeRabbit finding remained about stale report status. Corrected the snapshot and separated validation from merge commands; the follow-up and original review thread still need completion. Loot replay has six passing durable checks, and real-data import caught and fixed the Random Property Spell reader offset."
+      "text": "Merged report PR #458 after seven passing checks, but the merge script continued past a failed review assertion. One CodeRabbit finding remained about stale report status. Corrected the snapshot and separated validation from merge commands; the correction later filed as #459 and the original review thread still need completion. Loot replay has six passing durable checks, and real-data import caught and fixed the Random Property Spell reader offset."
+    },
+    {
+      "at": "2026-09-07 16:40 UTC",
+      "text": "Opened correction PR #459 and filed #460 for the general Spell importer offset defect. The report now covers 70 open issues. Held Character cleanup for a newly identified ordering case across two Gateways."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
   "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "Completed the issue-by-issue audit at 2026-09-07 16:15 UTC against main 3455aa2. Read all 69 open bodies and comments, retained unchanged source evidence, and corrected nine assessments. GitHub remains authoritative for current state."
+  "audit_note": "Completed the issue-by-issue audit of the 69 then-open issues at 2026-09-07 16:15 UTC. Added and assessed #460 at 16:40 UTC from direct source and client-data evidence. GitHub remains authoritative for current state."
 }
