@@ -16,6 +16,8 @@ pub(super) struct RealmLootOpArgs {
     pub deadline_micros: i64,
     pub recipients: Vec<u64>,
     pub random_property_id: u32,
+    pub promotion_source: __sdk::Identity,
+    pub source_roll_id: u64,
 }
 
 impl From<RealmLootOpArgs> for super::Reducer {
@@ -30,6 +32,8 @@ impl From<RealmLootOpArgs> for super::Reducer {
             deadline_micros: args.deadline_micros,
             recipients: args.recipients,
             random_property_id: args.random_property_id,
+            promotion_source: args.promotion_source,
+            source_roll_id: args.source_roll_id,
         }
     }
 }
@@ -60,6 +64,8 @@ pub trait realm_loot_op {
         deadline_micros: i64,
         recipients: Vec<u64>,
         random_property_id: u32,
+        promotion_source: __sdk::Identity,
+        source_roll_id: u64,
     ) -> __sdk::Result<()> {
         self.realm_loot_op_then(
             op,
@@ -71,6 +77,8 @@ pub trait realm_loot_op {
             deadline_micros,
             recipients,
             random_property_id,
+            promotion_source,
+            source_roll_id,
             |_, _| {},
         )
     }
@@ -92,6 +100,8 @@ pub trait realm_loot_op {
         deadline_micros: i64,
         recipients: Vec<u64>,
         random_property_id: u32,
+        promotion_source: __sdk::Identity,
+        source_roll_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -111,6 +121,8 @@ impl realm_loot_op for super::RemoteReducers {
         deadline_micros: i64,
         recipients: Vec<u64>,
         random_property_id: u32,
+        promotion_source: __sdk::Identity,
+        source_roll_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -127,6 +139,8 @@ impl realm_loot_op for super::RemoteReducers {
                 deadline_micros,
                 recipients,
                 random_property_id,
+                promotion_source,
+                source_roll_id,
             },
             callback,
         )

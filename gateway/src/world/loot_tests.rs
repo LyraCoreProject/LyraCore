@@ -68,6 +68,7 @@ fn a_sharded_store_routes_the_vote_to_realm_core_with_the_authenticated_guid() {
             lyracore_shared::loot_roll::vote_kind::GREED,
             0,
             vec![],
+            0,
             spacetimedb_sdk::Identity::ZERO,
             0
         )],
@@ -145,6 +146,7 @@ fn relay_tick_promotes_a_staging_roll_and_clears_it() {
             0,
             999_999,
             vec![GINGER, TRIN],
+            0x1234_5678,
             SOURCE,
             77
         )],
@@ -179,6 +181,7 @@ fn a_refused_promotion_keeps_its_source_identity_and_staging_row_for_retry() {
         item_entry: 1234,
         deadline_micros: 999_999,
         recipients: vec![GINGER, TRIN],
+        random_property_id: 117,
         promotion_source: SOURCE,
     };
     *world.pending_rolls.lock().unwrap() = vec![pending.clone()];
@@ -190,8 +193,9 @@ fn a_refused_promotion_keeps_its_source_identity_and_staging_row_for_retry() {
     let attempts = realm.realm_loot_ops.lock().unwrap();
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0], attempts[1]);
-    assert_eq!(attempts[0].8, SOURCE);
-    assert_eq!(attempts[0].9, 78);
+    assert_eq!(attempts[0].8, 117);
+    assert_eq!(attempts[0].9, SOURCE);
+    assert_eq!(attempts[0].10, 78);
 }
 
 /// A resolved roll's winner is settled on EVERY connected world shard — the module's own `withheld`
@@ -268,6 +272,7 @@ fn a_leave_flushes_every_connected_shards_pending_rolls_before_the_disband_reach
             0,
             999,
             vec![GINGER],
+            0,
             SOURCE,
             99
         )],

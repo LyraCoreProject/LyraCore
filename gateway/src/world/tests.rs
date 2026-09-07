@@ -665,12 +665,9 @@ struct InMemoryStore {
     /// `"mover not in world"` — the module's answer for a packet that arrives after
     /// `teleport_player` despawned the entity, i.e. the tail of every cross-map port.
     movement_error: Option<String>,
-    // Test recorder: the tuple is `realm_loot_op`'s argument list verbatim.
+    /// Records every `realm_loot_op` argument in wire order. The Realm-core handle owns the
+    /// recorder so a test can distinguish authority routing from a Shard-local request.
     #[allow(clippy::type_complexity)]
-    /// Recorded `realm_loot_op` calls — `(op, corpse_guid, slot, item_entry, actor_guid, vote,
-    /// deadline_micros, recipients, promotion_source, source_roll_id)` — every arg the gateway's loot-roll routing/relay passed. The
-    /// realm handle owns this; a world shard's staying empty is how a test tells "the vote/promotion
-    /// went to the authority" from "it stayed shard-local".
     realm_loot_ops: std::sync::Mutex<
         Vec<(
             u8,
@@ -681,6 +678,7 @@ struct InMemoryStore {
             u8,
             i64,
             Vec<u64>,
+            u32,
             spacetimedb_sdk::Identity,
             u64,
         )>,
@@ -2752,7 +2750,7 @@ impl WorldStore for InMemoryStore {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
-        _random_property_id: u32,
+        random_property_id: u32,
         promotion_source: spacetimedb_sdk::Identity,
         source_roll_id: u64,
     ) -> Result<()> {
@@ -2766,6 +2764,7 @@ impl WorldStore for InMemoryStore {
             vote,
             deadline_micros,
             recipients,
+            random_property_id,
             promotion_source,
             source_roll_id,
         ));

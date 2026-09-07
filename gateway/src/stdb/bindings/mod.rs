@@ -235,6 +235,7 @@ pub mod debug_stage_auction_expiry_fixture_reducer;
 pub mod debug_stage_choice_reward_fixture_reducer;
 pub mod debug_stage_eventai_revision_fixture_reducer;
 pub mod debug_stage_lethal_damage_floor_fixture_reducer;
+pub mod debug_stage_loot_roll_fixture_reducer;
 pub mod debug_stage_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_stress_relay_reducer;
 pub mod debug_sweep_encounter_state_reducer;
@@ -451,6 +452,7 @@ pub mod game_levelup_event_table;
 pub mod game_live_pet_kind_table;
 pub mod game_lock_table;
 pub mod game_lock_type;
+pub mod game_loot_roll_promotion_receipt_table;
 pub mod game_loot_roll_table;
 pub mod game_loot_roll_vote_table;
 pub mod game_mail_delivery_table;
@@ -729,6 +731,7 @@ pub mod kill_credit_type;
 pub mod level_stats_type;
 pub mod levelup_event_type;
 pub mod live_pet_kind_type;
+pub mod loot_roll_promotion_receipt_type;
 pub mod loot_roll_type;
 pub mod loot_roll_vote_type;
 pub mod mail_delivery_type;
@@ -1210,6 +1213,7 @@ pub use debug_stage_auction_expiry_fixture_reducer::debug_stage_auction_expiry_f
 pub use debug_stage_choice_reward_fixture_reducer::debug_stage_choice_reward_fixture;
 pub use debug_stage_eventai_revision_fixture_reducer::debug_stage_eventai_revision_fixture;
 pub use debug_stage_lethal_damage_floor_fixture_reducer::debug_stage_lethal_damage_floor_fixture;
+pub use debug_stage_loot_roll_fixture_reducer::debug_stage_loot_roll_fixture;
 pub use debug_stage_ranged_lethal_damage_floor_fixture_reducer::debug_stage_ranged_lethal_damage_floor_fixture;
 pub use debug_stress_relay_reducer::debug_stress_relay;
 pub use debug_sweep_encounter_state_reducer::debug_sweep_encounter_state;
@@ -1426,6 +1430,7 @@ pub use game_levelup_event_table::*;
 pub use game_live_pet_kind_table::*;
 pub use game_lock_table::*;
 pub use game_lock_type::GameLock;
+pub use game_loot_roll_promotion_receipt_table::*;
 pub use game_loot_roll_table::*;
 pub use game_loot_roll_vote_table::*;
 pub use game_mail_delivery_table::*;
@@ -1704,6 +1709,7 @@ pub use kill_credit_type::KillCredit;
 pub use level_stats_type::LevelStats;
 pub use levelup_event_type::LevelupEvent;
 pub use live_pet_kind_type::LivePetKind;
+pub use loot_roll_promotion_receipt_type::LootRollPromotionReceipt;
 pub use loot_roll_type::LootRoll;
 pub use loot_roll_vote_type::LootRollVote;
 pub use mail_delivery_type::MailDelivery;
@@ -2566,6 +2572,7 @@ pub enum Reducer {
     DebugStageLethalDamageFloorFixture {
         creature_guid: u64,
     },
+    DebugStageLootRollFixture,
     DebugStageRangedLethalDamageFloorFixture {
         attacker_guid: u64,
         target_guid: u64,
@@ -3334,6 +3341,8 @@ pub enum Reducer {
         deadline_micros: i64,
         recipients: Vec<u64>,
         random_property_id: u32,
+        promotion_source: __sdk::Identity,
+        source_roll_id: u64,
     },
     RealmMailCommit {
         escrow_id: u64,
@@ -3732,6 +3741,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugStageLethalDamageFloorFixture { .. } => {
                 "debug_stage_lethal_damage_floor_fixture"
             }
+            Reducer::DebugStageLootRollFixture => "debug_stage_loot_roll_fixture",
             Reducer::DebugStageRangedLethalDamageFloorFixture { .. } => {
                 "debug_stage_ranged_lethal_damage_floor_fixture"
             }
@@ -5054,7 +5064,9 @@ Reducer::DebugStageChoiceRewardFixture{
 }             => __sats::bsatn::to_vec(&debug_stage_lethal_damage_floor_fixture_reducer::DebugStageLethalDamageFloorFixtureArgs {
                 creature_guid: creature_guid.clone(),
 }),
-            Reducer::DebugStageRangedLethalDamageFloorFixture{
+            Reducer::DebugStageLootRollFixture => __sats::bsatn::to_vec(&debug_stage_loot_roll_fixture_reducer::DebugStageLootRollFixtureArgs {
+                }),
+Reducer::DebugStageRangedLethalDamageFloorFixture{
                 attacker_guid,
                 target_guid,
                 damage,
@@ -6418,6 +6430,8 @@ Reducer::PrepareVmapNavCoverage{
                 deadline_micros,
                 recipients,
                 random_property_id,
+                promotion_source,
+                source_roll_id,
 }             => __sats::bsatn::to_vec(&realm_loot_op_reducer::RealmLootOpArgs {
                 op: op.clone(),
                 corpse_guid: corpse_guid.clone(),
@@ -6428,6 +6442,8 @@ Reducer::PrepareVmapNavCoverage{
                 deadline_micros: deadline_micros.clone(),
                 recipients: recipients.clone(),
                 random_property_id: random_property_id.clone(),
+                promotion_source: promotion_source.clone(),
+                source_roll_id: source_roll_id.clone(),
 }),
             Reducer::RealmMailCommit{
                 escrow_id,
@@ -6989,6 +7005,7 @@ pub struct DbUpdate {
     game_live_pet_kind: __sdk::TableUpdate<LivePetKind>,
     game_lock: __sdk::TableUpdate<GameLock>,
     game_loot_roll: __sdk::TableUpdate<LootRoll>,
+    game_loot_roll_promotion_receipt: __sdk::TableUpdate<LootRollPromotionReceipt>,
     game_loot_roll_vote: __sdk::TableUpdate<LootRollVote>,
     game_mail: __sdk::TableUpdate<Mail>,
     game_mail_delivery: __sdk::TableUpdate<MailDelivery>,
@@ -7577,6 +7594,11 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_loot_roll" => db_update
                     .game_loot_roll
                     .append(game_loot_roll_table::parse_table_update(table_update)?),
+                "game_loot_roll_promotion_receipt" => {
+                    db_update.game_loot_roll_promotion_receipt.append(
+                        game_loot_roll_promotion_receipt_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_loot_roll_vote" => db_update
                     .game_loot_roll_vote
                     .append(game_loot_roll_vote_table::parse_table_update(table_update)?),
@@ -8588,6 +8610,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_loot_roll = cache
             .apply_diff_to_table::<LootRoll>("game_loot_roll", &self.game_loot_roll)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_loot_roll_promotion_receipt = cache
+            .apply_diff_to_table::<LootRollPromotionReceipt>(
+                "game_loot_roll_promotion_receipt",
+                &self.game_loot_roll_promotion_receipt,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_loot_roll_vote = cache
             .apply_diff_to_table::<LootRollVote>("game_loot_roll_vote", &self.game_loot_roll_vote)
             .with_updates_by_pk(|row| &row.id);
@@ -9441,6 +9469,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_loot_roll" => db_update
                     .game_loot_roll
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_loot_roll_promotion_receipt" => db_update
+                    .game_loot_roll_promotion_receipt
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_loot_roll_vote" => db_update
                     .game_loot_roll_vote
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10186,6 +10217,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_loot_roll" => db_update
                     .game_loot_roll
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_loot_roll_promotion_receipt" => db_update
+                    .game_loot_roll_promotion_receipt
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_loot_roll_vote" => db_update
                     .game_loot_roll_vote
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10652,6 +10686,7 @@ pub struct AppliedDiff<'r> {
     game_live_pet_kind: __sdk::TableAppliedDiff<'r, LivePetKind>,
     game_lock: __sdk::TableAppliedDiff<'r, GameLock>,
     game_loot_roll: __sdk::TableAppliedDiff<'r, LootRoll>,
+    game_loot_roll_promotion_receipt: __sdk::TableAppliedDiff<'r, LootRollPromotionReceipt>,
     game_loot_roll_vote: __sdk::TableAppliedDiff<'r, LootRollVote>,
     game_mail: __sdk::TableAppliedDiff<'r, Mail>,
     game_mail_delivery: __sdk::TableAppliedDiff<'r, MailDelivery>,
@@ -11439,6 +11474,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<LootRoll>(
             "game_loot_roll",
             &self.game_loot_roll,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<LootRollPromotionReceipt>(
+            "game_loot_roll_promotion_receipt",
+            &self.game_loot_roll_promotion_receipt,
             event,
         );
         callbacks.invoke_table_row_callbacks::<LootRollVote>(
@@ -12729,6 +12769,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_live_pet_kind_table::register_table(client_cache);
         game_lock_table::register_table(client_cache);
         game_loot_roll_table::register_table(client_cache);
+        game_loot_roll_promotion_receipt_table::register_table(client_cache);
         game_loot_roll_vote_table::register_table(client_cache);
         game_mail_table::register_table(client_cache);
         game_mail_delivery_table::register_table(client_cache);
@@ -12975,6 +13016,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_live_pet_kind",
         "game_lock",
         "game_loot_roll",
+        "game_loot_roll_promotion_receipt",
         "game_loot_roll_vote",
         "game_mail",
         "game_mail_delivery",
