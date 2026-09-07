@@ -16,4 +16,4 @@
 # To bump: put the new tag + the commit it resolves to on the line below and commit it. See
 # `docs/development-cli.md` ("dev smoke") first — a bump is a behaviour change to every live wire
 # test.
-v0.1.0-alpha.3 219f8cd1670f4b783892388f110d233722892bb3
+v0.1.0-alpha.4 fcaabf9486a774611c1ee3d1a69710471c79c60a
