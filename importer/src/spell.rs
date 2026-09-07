@@ -119,6 +119,7 @@ const M_STUN: i32 = 1;
 const M_ROOT: i32 = 2;
 const M_FEAR: i32 = 3;
 const M_POLY: i32 = 4;
+const GOUGE_RANK_IDS: [u32; 5] = [1776, 1777, 8629, 11285, 11286];
 
 // p0_kind tags
 const P_NONE: u8 = 0;
@@ -1559,8 +1560,8 @@ fn resolve_effect_kind(
     } else {
         correct_script_effect_kind(name, kind)
     };
-    // Gouge uses the incapacitate family, although its client aura is ModStun.
-    let p0 = if s.id == 1776 && name == "Gouge" && kind == A_CONTROL {
+    // Every build 5875 Gouge rank uses the incapacitate family, although its client aura is ModStun.
+    let p0 = if GOUGE_RANK_IDS.contains(&s.id) && name == "Gouge" && kind == A_CONTROL {
         M_POLY
     } else {
         p0
@@ -2379,10 +2380,25 @@ mod tests {
     #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
     fn actual_spell_import_keeps_restored_effects_and_curated_rules() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
+        let source = open_spell_tables(Path::new(&dir)).unwrap();
+        for spell_id in [1776, 1777, 8629, 11285, 11286] {
+            let gouge = source
+                .spells
+                .iter()
+                .find(|spell| spell.id == spell_id)
+                .unwrap();
+            assert_eq!(gouge.name, "Gouge");
+            assert_eq!(gouge.effect[2], EFFECT_APPLY_AURA);
+            assert_eq!(
+                AuraMod::from_int(gouge.effect_aura[2]),
+                Ok(AuraMod::ModStun)
+            );
+        }
         let (rows, _, _) = build_spell_rows(
             Path::new(&dir),
             &[
-                17, 100, 139, 1459, 1776, 1784, 7728, 7747, 7748, 8674, 12051, 20598, 21082,
+                17, 100, 139, 1459, 1776, 1777, 1784, 7728, 7747, 7748, 8629, 8674, 11285, 11286,
+                12051, 20598, 21082,
             ],
             &[],
         )
@@ -2429,9 +2445,11 @@ mod tests {
             ),
             (0, A_MOD_HEALTH_POWER, 15)
         );
-        let gouge = effects(1776);
-        assert_eq!(gouge.len(), 3);
-        assert_eq!((gouge[2].kind, gouge[2].p0), (A_CONTROL, M_POLY));
+        for spell_id in [1776, 1777, 8629, 11285, 11286] {
+            let gouge = effects(spell_id);
+            assert_eq!(gouge.len(), 3);
+            assert_eq!((gouge[2].kind, gouge[2].p0), (A_CONTROL, M_POLY));
+        }
         let stealth = effects(1784);
         assert!(
             !rows
@@ -2624,6 +2642,39 @@ mod tests {
                 (2, E_TRIGGER, 21, 3, 3.5, 3000, 1013, 3),
             ]
         );
+    }
+
+    #[test]
+    fn every_gouge_rank_imports_incapacitate_while_other_mod_stuns_remain_stuns() {
+        let gouge = |id| Spell {
+            id,
+            name: "Gouge".into(),
+            effect: [0, 0, EFFECT_APPLY_AURA],
+            effect_aura: [0, 0, AuraMod::ModStun as u32],
+            implicit_target_a: [0, 0, 6],
+            ..Default::default()
+        };
+        let mut dbc = fixture_tables();
+        dbc.spells = [1776, 1777, 8629, 11285, 11286, 999_999]
+            .into_iter()
+            .map(gouge)
+            .collect();
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        for spell_id in [1776, 1777, 8629, 11285, 11286] {
+            let control = rows
+                .effects
+                .iter()
+                .find(|effect| effect.spell_id == spell_id)
+                .unwrap();
+            assert_eq!((control.kind, control.p0), (A_CONTROL, M_POLY));
+        }
+        let unrelated = rows
+            .effects
+            .iter()
+            .find(|effect| effect.spell_id == 999_999)
+            .unwrap();
+        assert_eq!((unrelated.kind, unrelated.p0), (A_CONTROL, M_STUN));
     }
 
     #[test]

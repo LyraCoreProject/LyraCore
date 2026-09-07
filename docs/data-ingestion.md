@@ -343,6 +343,7 @@ An extra field restores alignment at the localized name, column 120.
 |---|---|
 | ID, school, dispel, mechanic | 0, 1, 4, 5 |
 | Attributes, AttributesEx1, AttributesEx2, stance mask | 6, 7, 8, 11 |
+| Explicit target flags | 13 |
 | Required spell focus, cast time, recovery times | 15, 18, 19, 20 |
 | Aura interrupt, Proc mask, chance, charges | 22, 24, 25, 26 |
 | Maximum level, spell level, duration, power, cost, range, stack count | 27, 29, 30, 31, 32, 36, 39 |
