@@ -1,7 +1,6 @@
 mod support;
 
-use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use support::Standalone;
 
@@ -11,9 +10,9 @@ const MISSING_ACTOR: &str = "999999";
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
-    let wasm = build_module_bytes();
+    let wasm = support::module_bytes();
     let mut standalone = Standalone::start("typed-taxi-contracts");
-    standalone.publish_module_bytes(&wasm);
+    standalone.publish_module_bytes(wasm);
     assert_loot_boundary_failure(&standalone, ACTOR, "loot:boundary_operator_rejected");
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_spawn_player_entity", &[ACTOR]);
@@ -188,48 +187,4 @@ fn failed_text(reducer: &str, output: Output) -> String {
         "{reducer} unexpectedly succeeded: {text}"
     );
     text
-}
-
-fn build_module_bytes() -> Vec<u8> {
-    let module_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace = module_dir.parent().unwrap();
-    let output = Command::new("cargo")
-        .current_dir(workspace)
-        .args([
-            "build",
-            "--locked",
-            "--release",
-            "--target",
-            "wasm32-unknown-unknown",
-            "-p",
-            "lyracore-module",
-            "--features=debug_reducers",
-            "--message-format=json-render-diagnostics",
-        ])
-        .output()
-        .expect("failed to run the Wasm preflight build");
-    assert!(
-        output.status.success(),
-        "the Wasm preflight build failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let wasm = String::from_utf8(output.stdout)
-        .expect("Cargo artifact output was not UTF-8")
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter(|message| message["reason"] == "compiler-artifact")
-        .filter(|message| message["target"]["name"] == "lyracore_module")
-        .filter_map(|message| message["filenames"].as_array().cloned())
-        .flatten()
-        .filter_map(|filename| filename.as_str().map(PathBuf::from))
-        .find(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "wasm")
-        })
-        .expect("Cargo did not report the built Module Wasm artifact");
-    let bytes = std::fs::read(&wasm).expect("the Wasm preflight output is missing");
-    assert!(bytes.starts_with(b"\0asm"), "the built module is not Wasm");
-    bytes
 }

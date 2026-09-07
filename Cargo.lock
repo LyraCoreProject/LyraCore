@@ -1808,6 +1808,7 @@ dependencies = [
  "log",
  "lyracore-module",
  "lyracore-shared",
+ "serde_json",
  "spacetimedb-lib",
  "spacetimedb-sdk",
  "tokio",

@@ -1,3 +1,8 @@
+mod module_wasm;
+
+#[allow(unused_imports)] // Some integration targets do not publish a Module.
+pub use module_wasm::module_bytes;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -121,40 +126,26 @@ impl Standalone {
             .expect("private Owner Token is missing")
     }
 
-    #[allow(dead_code)] // Only the integration tests that publish a module use this.
+    #[allow(dead_code)] // Only the integration tests that publish a Module use this.
     pub fn publish_module(&mut self) {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let module_dir = workspace.join("module");
-        self.publish(
-            &[
-                "--module-path",
-                module_dir.to_str().unwrap(),
-                "--build-options=--features=debug_reducers",
-            ],
-            &[],
-        );
+        self.publish_module_bytes(module_bytes());
     }
 
-    /// Copy built Wasm bytes into this standalone's private directory and publish that copy.
-    #[allow(dead_code)] // Used by tests that build their own Wasm artifact.
+    /// Copy built Wasm bytes into this Standalone's private directory and publish that copy.
+    #[allow(dead_code)] // Used by tests that inspect the same artifact they publish.
     pub fn publish_module_bytes(&mut self, wasm: &[u8]) {
+        self.publish_bytes(wasm, &[]);
+    }
+
+    #[allow(dead_code)] // Used by tests that publish without an Owner Token.
+    pub fn publish_module_anonymous(&mut self) {
+        self.publish_bytes(module_bytes(), &["--anonymous"]);
+    }
+
+    fn publish_bytes(&mut self, wasm: &[u8], extra: &[&str]) {
         let path = self.data_dir.join("published-module.wasm");
         fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
-        self.publish(&["--bin-path", path.to_str().unwrap()], &[]);
-    }
-
-    #[allow(dead_code)] // Used when a developer's cached token is not valid for an isolated server.
-    pub fn publish_module_anonymous(&mut self) {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let module_dir = workspace.join("module");
-        self.publish(
-            &[
-                "--module-path",
-                module_dir.to_str().unwrap(),
-                "--build-options=--features=debug_reducers",
-            ],
-            &["--anonymous"],
-        );
+        self.publish(&["--bin-path", path.to_str().unwrap()], extra);
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
