@@ -131,6 +131,26 @@ fn abandon_and_reaccept(node: &Standalone, giver: &str, quest: u32, item: u32) {
     node.assert_call("debug_accept_quest", &[PLAYER, giver, &quest_arg]);
 }
 
+fn circle_radius_refuses_item_use(node: &Standalone, creature: u32, item: u32, slot: &str) {
+    let inventory = node.query_rows(&format!(
+        "SELECT * FROM game_item_instance WHERE entry = {item}"
+    ));
+    node.assert_sql(&format!(
+        "UPDATE game_gameobject_template SET data1 = 2 WHERE entry = {FOCUS}"
+    ));
+    assert_refused(node, "debug_use_item", &[PLAYER, slot]);
+    assert!(summoned(node, creature).is_empty());
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_item_instance WHERE entry = {item}"
+        )),
+        inventory
+    );
+    node.assert_sql(&format!(
+        "UPDATE game_gameobject_template SET data1 = 10 WHERE entry = {FOCUS}"
+    ));
+}
+
 fn assert_first_aggro(node: &Standalone, summon: &BTreeMap<String, String>) {
     assert_eq!(summon["target_guid"], PLAYER);
     node.assert_call("gw_attack", &[&summon["guid"], PLAYER]);
@@ -246,20 +266,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
         assert_eq!(inventory[0]["stack_count"], "1");
         let slot = inventory[0]["slot"].clone();
 
-        node.assert_sql(&format!(
-            "UPDATE game_gameobject_template SET data1 = 2 WHERE entry = {FOCUS}"
-        ));
-        assert_refused(&node, "debug_use_item", &[PLAYER, &slot]);
-        assert!(summoned(&node, creature).is_empty());
-        assert_eq!(
-            node.query_rows(&format!(
-                "SELECT * FROM game_item_instance WHERE entry = {item}"
-            )),
-            inventory
-        );
-        node.assert_sql(&format!(
-            "UPDATE game_gameobject_template SET data1 = 10 WHERE entry = {FOCUS}"
-        ));
+        circle_radius_refuses_item_use(&node, creature, item, &slot);
 
         node.assert_sql(&format!(
             "UPDATE game_gameobject SET instance_id = 99 WHERE guid = {focus_guid}"
