@@ -112,7 +112,7 @@ pub(crate) fn aura_armor_positive(db: &RemoteTables, guid: u64) -> u32 {
         .filter(|a| a.target_guid == guid)
         .map(|a| aura_armor_contribution(a.eff_kind, a.eff_p0, a.amount, a.stacks))
         .filter(|&c| c > 0)
-        .sum::<i32>() as u32
+        .fold(0u32, |total, amount| total.saturating_add(amount as u32))
 }
 
 /// Effective armor followed by Holy, Fire, Nature, Frost, Shadow and Arcane resistance.
@@ -262,6 +262,12 @@ mod tests {
         assert!(poll_until(POLL_TIMEOUT, || coordinator.effective_armor(1) == base));
         assert!(poll_until(POLL_TIMEOUT, || {
             coordinator.effective_magic_resistances(1) == [0; 6]
+        }));
+        shard.assert_call("debug_fill_aura_slots", &["1", "1", "false", "3"]);
+        shard.assert_sql("UPDATE game_aura SET eff_kind = 161, eff_p0 = 1, amount = 2147483647, stacks = 255 WHERE target_guid = 1");
+        assert!(poll_until(POLL_TIMEOUT, || {
+            let guard = coordinator.0.coord();
+            aura_armor_positive(&guard.conn.db, 1) == u32::MAX
         }));
     }
 
