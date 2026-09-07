@@ -90,6 +90,7 @@ def issue_row(issue, rank):
 def render(queue):
     issues = sorted(queue["issues"], key=order)
     assessed = sum(issue["disposition"] != "pending" for issue in issues)
+    open_count = sum(issue["github_state"] == "open" for issue in issues)
     rows = "".join(issue_row(issue, rank) for rank, issue in enumerate(issues, 1))
     options = "".join(
         f'<option value="{state}">{label}</option>' for state, label in STATES.items()
@@ -129,7 +130,8 @@ time{{font-variant-numeric:tabular-nums}}li{{margin:5px 0}}.notice{{border-left:
 </style></head><body>
 <header><h1>LyraCore issue order and delivery</h1>
 <p>Owner: Codex in the triage and delivery thread. Updated <time>{escape(queue["updated_at"])}</time>.
-{assessed} of {len(issues)} issues assessed. Source revision {escape(queue["base_revision"])}.</p>
+{assessed} of {len(issues)} issues assessed. {open_count} open on GitHub.
+Source revision {escape(queue["base_revision"])}.</p>
 <p>{escape(queue["status_note"])}</p></header>
 <nav aria-label="Report sections"><a href="#order">Issue order</a><a href="#reviews">PRs</a><a href="#maintenance">Ownership</a><a href="#changes">Updates</a></nav>
 <section><h2>Current work</h2><ul>{focus}</ul></section>
@@ -154,6 +156,7 @@ Retired or shipped proposals stay visible until their GitHub issues are resolved
 <p>Each implementer owns their PR until it merges or has a named blocker. Codex checks CI, CodeRabbit reviews,
 human comments and unresolved threads after each push. Accepted findings get a fix and fresh checks; disputed findings get a reasoned response.
 Rebase before opening a PR and recheck the reviewed commit before merge.</p>
+<p>{escape(queue["merge_policy"])}</p>
 <div class="scroll"><table><thead><tr><th>PR</th><th>Change</th><th>Owner</th><th>State</th><th>Next action</th></tr></thead><tbody>{pulls}</tbody></table></div></section>
 <section id="maintenance"><h2>Ownership and updates</h2>
 <p>This report is the working dispatch list. Codex updates the same published URL after triage, assignment,
