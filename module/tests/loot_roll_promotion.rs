@@ -327,7 +327,10 @@ fn staging_identity_survives_publish_and_old_cleanup_cannot_clear_a_later_roll()
     assert_eq!(source.query_rows("SELECT * FROM game_loot_roll")[0], first);
     promotion.send(&realm);
     assert_no_active_roll(&realm);
-    source.assert_call("clear_promoted_loot_roll", &[&first["id"], &support::actor("0")]);
+    source.assert_call(
+        "clear_promoted_loot_roll",
+        &[&first["id"], &support::actor("0")],
+    );
     assert_no_active_roll(&source);
     source.assert_call("debug_stage_loot_roll_fixture", &[]);
     let next = source.query_rows("SELECT * FROM game_loot_roll").remove(0);
@@ -337,7 +340,10 @@ fn staging_identity_survives_publish_and_old_cleanup_cannot_clear_a_later_roll()
     promotion.deadline = next["deadline_micros"].parse().unwrap();
     promotion.send(&realm);
     assert_eq!(votes(&realm).len(), 3);
-    source.assert_call("clear_promoted_loot_roll", &[&first["id"], &support::actor("0")]);
+    source.assert_call(
+        "clear_promoted_loot_roll",
+        &[&first["id"], &support::actor("0")],
+    );
     assert_eq!(source.query_rows("SELECT * FROM game_loot_roll")[0], next);
     assert_eq!(votes(&source).len(), 3);
 }
