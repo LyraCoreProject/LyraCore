@@ -1,12 +1,13 @@
 {
-  "updated_at": "2026-09-07 14:45 UTC",
-  "base_revision": "e26ffff05fd8938b4e2d5339e7224683b36af84d",
-  "status_note": "69 open issues assessed; 20 closed issues retained for history. Service verification and the bank adapter are merged and pinned. Warlock quests and dive adapter adoption are active.",
-  "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
+  "updated_at": "2026-09-07 15:20 UTC",
+  "base_revision": "32aa004e0d2fe0921033bea77e3a85796e277dfd",
+  "status_note": "69 open issues assessed; 20 closed issues retained for history. The prior PR queue is merged. Agents have resumed the Warlock quests, Character deletion cleanup and Random Property Tracer.",
+  "monitoring_note": "Monitoring is active during this work session. CodeRabbit rate-limit notices do not satisfy review. After the window reopens, re-trigger review and wait for its result before merging. The report preserves next actions if the session stops; no unattended scheduler is installed.",
   "focus": [
-    "Complete the dive adapter release and core pin for #142 through checks and review.",
-    "Finish The Binding #40 draft and independent review, then obtain required human review of its table and appended EventAI instruction.",
-    "Keep Operator runs and stock-client acceptance explicit for #105, #137, #142 and #367."
+    "Finish and review the recovered Warlock quest implementation for #40.",
+    "Prove Character deletion cleanup and Transfer behavior for #46, then remove the obsolete suite reset if the behavior passes.",
+    "Finish the recovered Random Property Tracer for #31, including generated bindings and durable verification.",
+    "Wait for actual CodeRabbit review before merging each new PR. Re-trigger after any rate-limit window."
   ],
   "issues": [
     {
@@ -609,31 +610,34 @@
     },
     {
       "number": 142,
-      "summary": "Drowning behavior and a Headless Client dive adapter are implemented. Core adoption, Operator execution and stock-client calibration remain.",
+      "summary": "Drowning behavior and the Headless Client dive adapter are merged and pinned. Operator execution and stock-client calibration remain.",
       "importance": 3,
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "Wire-harness #10 is merged after parent review and green Ubuntu, macOS and coverage CI. The adapter checks breath start, expiry before damage, matching health loss and drowning logs, and breath stop after surfacing. Live timing and the submerge threshold remain unverified.",
-      "next_action": "Release the merged dive adapter and complete its core pin. Then run it on an approved development Realm and perform stock-client calibration.",
+      "disposition": "human",
+      "rationale": "Wire-harness #10 and core pin #454 are merged. The adapter checks breath start, expiry before damage, matching health loss and drowning logs, and breath stop after surfacing. Protocol tests, offline adapter checks and CI passed. Live timing and the submerge threshold remain unverified.",
+      "next_action": "Run the pinned dive adapter on an approved development Realm with imported liquid coordinates, then verify the stock-client mirror bar, submerge threshold, partial dives, death and zone/Transfer behavior.",
       "blockers": [
-        "Completing the issue requires a wire-harness release and LyraCore pin bump.",
-        "Submerge timing and mirror-bar rendering require a human with a stock client."
+        "Operator access to an approved development Realm with suitable imported liquid coordinates.",
+        "A human with a stock client must calibrate head height and verify the mirror bar and related visual behavior."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/142",
         "https://github.com/LyraCoreProject/LyraCore/pull/150",
         "https://github.com/LyraCoreProject/LyraCore/pull/166",
         "https://github.com/LyraCoreProject/wire-harness/pull/10",
-        "module/src/breath.rs and gateway/src/codec/breath.rs: durable timers and start/stop packet builders."
+        "module/src/breath.rs and gateway/src/codec/breath.rs: durable timers and start/stop packet builders.",
+        "https://github.com/LyraCoreProject/wire-harness/releases/tag/v0.1.0-alpha.8",
+        "https://github.com/LyraCoreProject/LyraCore/pull/454"
       ],
       "related_prs": [
         150,
-        166
+        166,
+        454
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/142",
-      "updatedAt": "2026-08-13T05:28:29Z",
+      "updatedAt": "2026-09-07T15:07:00Z",
       "github_state": "open",
       "owner": "GPT-5.6 Sol, medium effort, adapter agent"
     },
@@ -689,7 +693,7 @@
         453
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/137",
-      "updatedAt": "2026-08-12T05:25:15Z",
+      "updatedAt": "2026-09-07T14:47:37Z",
       "github_state": "open",
       "owner": "GPT-5.6 Sol, medium effort, adapter agent"
     },
@@ -1755,11 +1759,11 @@
       "summary": "A deleted Character previously left a realm-core party member row, but the Gateway now relays Character disappearance and removes membership only after the Character is absent from every Shard.",
       "importance": 4,
       "gain": 4,
-      "effort": 1,
+      "effort": 3,
       "confidence": "medium",
-      "disposition": "verify",
-      "rationale": "The Character disappearance Relay exists, but its current Architecture Tests check call names rather than proving deletion and Transfer outcomes. The generic read signature can fail, although the production cache read currently returns Ok. A source scan alone is insufficient closure evidence.",
-      "next_action": "Verify the actual Character disappearance callback and its read-failure behavior before closure. Existing tests only scan its source; add behavior coverage for deletion and Transfer if needed.",
+      "disposition": "implementing",
+      "rationale": "The Character deletion Relay is present, but it converts failed reads to absence before a direct Realm-core LEAVE. Its tests inspect source text. The current path also needs verification of Transfer/cache ordering and surviving party mirrors before the suite workaround can be removed.",
+      "next_action": "Implement the prepared Gateway cleanup Ticket in an isolated worktree. Prove authoritative absence, Transfer preservation and surviving rosters before removing the suite-wide party reset.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/46",
@@ -1772,7 +1776,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/46",
       "updatedAt": "2026-08-11T08:22:10Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-5.6 Sol, Character deletion agent"
     },
     {
       "number": 45,
@@ -1862,7 +1866,7 @@
       "confidence": "high",
       "disposition": "implementing",
       "rationale": "Source data maps item 6928 to spell 7728 and item 6913 to spell 8674. Both use SendEvent and ActivateObject with spell focus 83. Current quest source-item reachability and item-use routing already exist. The remaining work must preserve the source-backed event behavior, focus Gate and objective credit. Quest turn-in also lacks reward-spell data, so the complete path needs a small durable catalogue and generated bindings.",
-      "next_action": "Prepare and test the complete ritual and reward-spell change as a draft PR. Obtain required human schema review before merge; retain ritual-circle visual acceptance.",
+      "next_action": "Finish recovered tests and independent review, open a draft PR and resolve CodeRabbit findings. Human schema review and ritual-circle client acceptance remain.",
       "blockers": [
         "Human review of the concrete schema and binding change under docs/danger-zones.md section 1 before shipping.",
         "A real-client ritual-circle check after Module behavior passes."
@@ -1877,7 +1881,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/40",
       "updatedAt": "2026-08-11T08:16:06Z",
       "github_state": "open",
-      "owner": "GPT-6 Astra, high effort, Warlock quest agent"
+      "owner": "GPT-6 Astra, Warlock recovery agent"
     },
     {
       "number": 39,
@@ -2073,21 +2077,24 @@
       "gain": 4,
       "effort": 5,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "This is the second-best ready feature candidate. The issue has a current two-Ticket Spec, the missing storage and packet fields are confirmed in code, and the first Tracer can establish one deterministic affix end to end without a design decision.",
-      "next_action": "Implement the Spec's Tracer Ticket first: import the minimum property data, persist one rolled property, and carry it through loot, inventory, mail, and auction packets; follow with the weighted generalization Ticket.",
+      "next_action": "Finish the existing Tracer implementation, regenerate bindings and verify durable item state. Then complete independent and CodeRabbit review; human schema and client review remain.",
       "blockers": [
-        "A real-client tooltip check after the deterministic Tracer passes"
+        "Human review of the concrete schema and binding changes before shipping.",
+        "A real-client tooltip check and approved Realm acceptance after the Tracer and remaining stat-family work."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/31#issuecomment-5379512339",
-        "Code fact: module/src/items/rules.rs still uses a fixed ENCHANTS list, no game_item_random_property or property-weight table exists, and Gateway loot, item, mail, and auction codecs write item_random_property_id as zero."
+        "Code fact: module/src/items/rules.rs still uses a fixed ENCHANTS list, no game_item_random_property or property-weight table exists, and Gateway loot, item, mail, and auction codecs write item_random_property_id as zero.",
+        "2026-08-22 issue Spec: the Tracer already includes weighted selection; the second Ticket adds resistance, damage, avoidance, regeneration and spell/healing terms.",
+        "Source preflight checked pinned CMaNGOS data and the local build-5875 client tables. Existing synthetic enchant IDs 7745 and 7748 do not collide with imported enchantments. Six additional durable item-copy rows must carry the selected property."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/31",
       "updatedAt": "2026-08-22T09:18:51Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-6 Astra, Random Property agent"
     },
     {
       "number": 30,
@@ -3089,8 +3096,8 @@
       "url": "https://github.com/LyraCoreProject/wire-harness/pull/10",
       "title": "test(dive): add the breath and drowning flow",
       "owner": "GPT-5.6 Sol, medium effort, adapter agent",
-      "status": "Merged; release and core pin next",
-      "next_action": "Release alpha.8 and complete the core pin; retain Operator and stock-client acceptance.",
+      "status": "Merged; dive adapter pinned",
+      "next_action": "Code delivery is complete. Issue #142 retains Operator and stock-client acceptance.",
       "head": "6affc2eec40a7fee7c4a915e80a816f867de0614",
       "github_state": "MERGED",
       "merge_commit": "538423176c4b2a3dd1ba8eae1cc1ab1a1cc877cf",
@@ -3109,6 +3116,91 @@
           "result": "SUCCESS"
         }
       ]
+    },
+    {
+      "number": 451,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/451",
+      "title": "docs(triage): record issue outcomes and current assignments",
+      "owner": "Codex",
+      "status": "Merged after checks and all five review threads resolved",
+      "next_action": "Complete. Report ownership continues in this thread.",
+      "head": "14331e22578d4f92e2a84e98a6a071db971fe03c",
+      "github_state": "MERGED",
+      "checked_at": "2026-09-07 14:59 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ],
+      "merge_commit": "6f42d5a18583326a1a133a7411772a9cf7367a8c"
+    },
+    {
+      "number": 454,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/454",
+      "title": "test(dive): pin the drowning acceptance adapter",
+      "owner": "GPT-5.6 Sol, medium effort, adapter agent",
+      "status": "Merged; dive adapter pinned",
+      "next_action": "Code delivery is complete. Issue #142 retains Operator and stock-client acceptance.",
+      "head": "4bf3a522fdd0d7c90aa9d5a3559b7e192f68d14b",
+      "github_state": "MERGED",
+      "checked_at": "2026-09-07 15:02 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ],
+      "merge_commit": "32aa004e0d2fe0921033bea77e3a85796e277dfd",
+      "review_note": "CodeRabbit reported its rate limit. Parent reviewed the exact one-line tag/SHA diff, upstream PR, release and fresh-clone evidence before merge; there were no review threads."
     }
   ],
   "history": [
@@ -3235,10 +3327,22 @@
     {
       "at": "2026-09-07 14:45 UTC",
       "text": "Merged core service pin #452; #340 and #341 are closed. Merged bank pin #453 and kept #137 open for Operator and stock-client acceptance. Merged dive adapter wire-harness #10 after parent review and three passing CI checks; its owner is preparing the release and core pin. Corrected the report audit note and completed bank next actions after review."
+    },
+    {
+      "at": "2026-09-07 14:59 UTC",
+      "text": "Merged report #451 after all seven checks passed and all five CodeRabbit threads were resolved. Dive alpha.8 is released and core pin #454 is finishing CI. Independent Warlock review found trainer dependency overgrant and source-item retention on abandon; both are being corrected. Prepared #46 behavior work and #31 Tickets, with a source preflight assigned."
+    },
+    {
+      "at": "2026-09-07 15:02 UTC",
+      "text": "Merged dive pin #454 after all code checks passed and parent review verified its exact diff, release and clone evidence. CodeRabbit disclosed its rate limit. Kept #142 open for Operator and stock-client acceptance. Assigned #46 source behavior to a separate Sol agent at high effort; the Warlock reviewer remains on #40."
+    },
+    {
+      "at": "2026-09-07 15:20 UTC",
+      "text": "Resumed ownership from the latest committed report and recovered unfinished local work. All earlier PRs are merged. Assigned #40, #46 and #31 to isolated agents. CodeRabbit rate limits now require waiting and an actual review before merge."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
   "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "Refetched all issue states and timestamps at 14:46 UTC. All 69 open issues have assessments; no new issues appeared. The 20 closed records retain their closure timestamps. Delivery changes are recorded in the history below."
+  "audit_note": "Refetched all issue states and timestamps at 2026-09-07 15:02 UTC. All 69 open issues have assessments; no new issues appeared. The 20 closed records retain their closure timestamps. Delivery changes are recorded in the history below."
 }
