@@ -936,6 +936,20 @@ fn resolve_target(target: i32, is_negative: bool) -> u8 {
     }
 }
 
+// Pinned SpellTargetInfoTable entries whose first target supplies a location. If the companion
+// target names a unit selection, that selection decides the Module's unit routing.
+const LOCATION_TARGET_CODES: [i32; 19] = [
+    9, 10, 17, 18, 22, 32, 39, 41, 42, 43, 44, 46, 47, 48, 49, 50, 53, 55, 63,
+];
+
+fn unit_selection_from_pair(target_a: i32, target_b: i32) -> i32 {
+    if (target_a == 0 || LOCATION_TARGET_CODES.contains(&target_a)) && target_b != 0 {
+        target_b
+    } else {
+        target_a
+    }
+}
+
 const TARGET_FLAG_UNIT: u32 = 0x0002;
 const TARGET_FLAG_UNIT_ENEMY: u32 = 0x0080;
 const TARGET_FLAG_UNIT_ALLY: u32 = 0x0100;
@@ -1679,11 +1693,7 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         compatible_header_target(s.effect[i], kind, s.targets, is_negative)
             .unwrap_or_else(|| supported_effect_default(s.effect[i], kind, is_negative))
     } else {
-        let selection = if matches!(target_a, 0 | 18 | 22) && target_b != 0 {
-            target_b
-        } else {
-            target_a
-        };
+        let selection = unit_selection_from_pair(target_a, target_b);
         resolve_target(selection, is_negative)
     };
     // These handlers operate on the caster or a ground location, regardless of unit selection.
@@ -2381,6 +2391,29 @@ mod tests {
     fn actual_spell_import_keeps_restored_effects_and_curated_rules() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
         let source = open_spell_tables(Path::new(&dir)).unwrap();
+        let new_location_companions = source
+            .spells
+            .iter()
+            .flat_map(|spell| {
+                (0..3).filter_map(move |slot| {
+                    let target_a = spell.implicit_target_a[slot];
+                    let target_b = spell.implicit_target_b[slot];
+                    (spell.effect[slot] != 0
+                        && LOCATION_TARGET_CODES.contains(&target_a)
+                        && target_b != 0
+                        && !matches!(target_a, 18 | 22))
+                    .then_some((spell.id, slot, target_a, target_b))
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut location_codes = new_location_companions
+            .iter()
+            .map(|(_, _, target_a, _)| *target_a)
+            .collect::<Vec<_>>();
+        location_codes.sort_unstable();
+        location_codes.dedup();
+        assert_eq!(new_location_companions.len(), 170);
+        assert_eq!(location_codes, [17, 46, 53]);
         for spell_id in [1776, 1777, 8629, 11285, 11286] {
             let gouge = source
                 .spells
@@ -2398,7 +2431,7 @@ mod tests {
             Path::new(&dir),
             &[
                 17, 100, 139, 1459, 1776, 1777, 1784, 7728, 7747, 7748, 8629, 8674, 11285, 11286,
-                12051, 20598, 21082,
+                12051, 17086, 17616, 18392, 20598, 21082,
             ],
             &[],
         )
@@ -2449,6 +2482,9 @@ mod tests {
             let gouge = effects(spell_id);
             assert_eq!(gouge.len(), 3);
             assert_eq!((gouge[2].kind, gouge[2].p0), (A_CONTROL, M_POLY));
+        }
+        for spell_id in [17086, 17616, 18392] {
+            assert_eq!(effects(spell_id)[0].target, T_AREA_ENEMY);
         }
         let stealth = effects(1784);
         assert!(
@@ -2786,6 +2822,21 @@ mod tests {
             rows.effects.iter().map(|e| e.target).collect::<Vec<_>>(),
             [T_TARGET_ALLY, T_AREA_ENEMY, T_TARGET_ALLY]
         );
+    }
+
+    #[test]
+    fn every_pinned_location_target_uses_its_companion_unit_selection() {
+        for target_a in LOCATION_TARGET_CODES {
+            assert_eq!(
+                resolve_target(unit_selection_from_pair(target_a, 6), true),
+                T_TARGET_ENEMY,
+                "location target {target_a} did not use its enemy companion"
+            );
+        }
+        assert_eq!(unit_selection_from_pair(0, 6), 6);
+        assert_eq!(unit_selection_from_pair(45, 6), 45);
+        assert_eq!(resolve_target(45, false), T_TARGET_ALLY);
+        assert_eq!(unit_selection_from_pair(26, 6), 26);
     }
 
     #[test]

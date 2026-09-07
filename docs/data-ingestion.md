@@ -359,13 +359,17 @@ The normalized input preserves all three slots and raw aura numbers. Unsupported
 `E_SCRIPTED`, and unsupported item enchantment effects remain Stat Kind 0.
 
 [Target definitions](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Spells/SpellTargetDefines.h)
-define 6 as enemy, 21 and 57 as friendly units, and 22 as the caster's source location. Location targets
-use the companion selection where present. Code 0 means no implicit target. For a `(0, 0)` pair, the
-importer uses compatible Spell header target flags, then the source effect's default target. An
-unsupported effect keeps the scripted fallback. The importer translates vanilla damage and movement
-interrupt bits into the Module's compact mask. Gouge's control and Stealth's speed penalty come from
-the third source effect. Their former synthetic additions are removed. The Human Spirit maps directly
-to its percentage aura. Evocation's existing periodic-mana correction now addresses source slot 0.
+define 6 as enemy and 21 and 57 as friendly units. The pinned
+[target classification](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Spells/SpellTargets.cpp)
+marks codes 9, 10, 17, 18, 22, 32, 39, 41 through 44, 46 through 50, 53, 55 and 63 as locations.
+When a location in target A has a companion target B, target B decides the Module's unit routing.
+Code 45 is a friendly chain unit and code 26 is a lock, so neither uses that rule. Code 0 means no
+implicit target. For a `(0, 0)` pair, the importer uses compatible Spell header target flags, then
+the source effect's default target. An unsupported effect keeps the scripted fallback. The importer
+translates vanilla damage and movement interrupt bits into the Module's compact mask. Gouge's control
+and Stealth's speed penalty come from the third source effect. Their former synthetic additions are
+removed. The Human Spirit maps directly to its percentage aura. Evocation's existing periodic-mana
+correction now addresses source slot 0.
 The authored seal marker and Power Word: Shield's linked Weakened Soul rule remain because their
 Module behavior is not an equivalent DBC effect.
 
