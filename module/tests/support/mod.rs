@@ -9,6 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -53,8 +54,43 @@ pub fn poll_until(timeout: Duration, mut probe: impl FnMut() -> bool) -> bool {
     }
 }
 
+struct SigningKeys {
+    directory: PathBuf,
+    startup: Mutex<()>,
+}
+
+impl Drop for SigningKeys {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn signing_keys() -> Arc<SigningKeys> {
+    static KEYS: Mutex<Weak<SigningKeys>> = Mutex::new(Weak::new());
+    let mut shared = KEYS.lock().unwrap();
+    if let Some(keys) = shared.upgrade() {
+        return keys;
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "lyracore-fixture-keys-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory).expect("failed to create private fixture signing-key directory");
+    let keys = Arc::new(SigningKeys {
+        directory,
+        startup: Mutex::new(()),
+    });
+    *shared = Arc::downgrade(&keys);
+    keys
+}
+
 pub struct Standalone {
     child: Child,
+    signing_keys: Arc<SigningKeys>,
     cli_config: PathBuf,
     address: String,
     data_dir: PathBuf,
@@ -87,9 +123,21 @@ impl Standalone {
         let spacetime = std::env::var_os("SPACETIME_BIN").unwrap_or_else(|| "spacetime".into());
         let address = format!("127.0.0.1:{port}");
         let server = format!("http://{address}");
-        let child = spawn_node(&spacetime, &cli_config, &address, &data_dir, &log_path);
+        // Nodes in one fixture must accept the same Owner Token. Keep their signing keys private
+        // and wait for the first node to finish creating the pair before another node reads it.
+        let signing_keys = signing_keys();
+        let startup = signing_keys.startup.lock().unwrap();
+        let child = spawn_node(
+            &spacetime,
+            &cli_config,
+            &address,
+            &data_dir,
+            &log_path,
+            &signing_keys.directory,
+        );
         let mut standalone = Self {
             child,
+            signing_keys: Arc::clone(&signing_keys),
             cli_config,
             address,
             data_dir,
@@ -100,6 +148,7 @@ impl Standalone {
             database: name,
         };
         standalone.wait_for_server();
+        drop(startup);
         standalone
     }
 
@@ -258,6 +307,7 @@ impl Standalone {
             &self.address,
             &self.data_dir,
             &self.log_path,
+            &self.signing_keys.directory,
         );
         self.wait_for_server();
     }
@@ -363,6 +413,7 @@ fn spawn_node(
     address: &str,
     data_dir: &Path,
     log_path: &Path,
+    signing_key_dir: &Path,
 ) -> Child {
     let log = OpenOptions::new()
         .create(true)
@@ -378,6 +429,8 @@ fn spawn_node(
             address,
             "--data-dir",
             data_dir.to_str().unwrap(),
+            "--jwt-key-dir",
+            signing_key_dir.to_str().unwrap(),
             "--in-memory",
             "--non-interactive",
         ])
