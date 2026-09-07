@@ -10,10 +10,10 @@ use wow_world_messages::vanilla::{
 /// `SMSG_LOOT_RESPONSE` opcode (vanilla 5875). Pinned against gtker in the byte-match test below.
 const SMSG_LOOT_RESPONSE_OPCODE: u16 = 0x0160;
 
-/// One lootable item for the loot window: `(slot, item_id, count, display_id)`. `display_id` is the
+/// One lootable item for the loot window: `(slot, item_id, count, display_id, random_property_id)`. `display_id` is the
 /// item's `ItemDisplayInfo` id (the gateway joins it from `game_item_template`); the client also
 /// queries the item (`CMSG_ITEM_QUERY_SINGLE`) for the name/tooltip (slice-1 path).
-pub type LootItemView = (u8, u32, u32, u32);
+pub type LootItemView = (u8, u32, u32, u32, u32);
 
 /// Build a RAW `SMSG_LOOT_RESPONSE` (slice 3 money + slice 4 items). RAW because gtker's typed
 /// `LootItem` is INCOMPLETE for vanilla 1.12 — it encodes only `index:u8 + item:u32 + ty:u8` (6
@@ -32,13 +32,13 @@ pub fn build_loot_response_raw(guid: u64, money: u32, items: &[LootItemView]) ->
     body.push(1u8); // loot_method = Corpse (SMSG_LOOT_RESPONSE_LootMethod::Corpse as_int)
     body.extend_from_slice(&money.to_le_bytes()); // gold: u32
     body.push(items.len() as u8); // amount_of_items: u8
-    for &(slot, item_id, count, display_id) in items {
+    for &(slot, item_id, count, display_id, random_property_id) in items {
         body.push(slot); // loot slot index: u8
         body.extend_from_slice(&item_id.to_le_bytes()); // item id (entry): u32
         body.extend_from_slice(&count.to_le_bytes()); // stack count: u32
         body.extend_from_slice(&display_id.to_le_bytes()); // ItemDisplayInfo id: u32
         body.extend_from_slice(&0u32.to_le_bytes()); // random_suffix: u32 (none)
-        body.extend_from_slice(&0u32.to_le_bytes()); // random_property_id: u32 (none)
+        body.extend_from_slice(&random_property_id.to_le_bytes());
         body.push(0u8); // slot_type = TypeAllowLoot (as_int 0)
     }
     (SMSG_LOOT_RESPONSE_OPCODE, body)
@@ -93,13 +93,14 @@ pub fn build_loot_start_roll(
     loot_slot: u8,
     item_entry: u32,
     countdown_ms: u32,
+    random_property_id: u32,
 ) -> SMSG_LOOT_START_ROLL {
     SMSG_LOOT_START_ROLL {
         creature: Guid::new(corpse_guid),
         loot_slot: loot_slot as u32,
         item: item_entry,
         item_random_suffix: 0,
-        item_random_property_id: 0,
+        item_random_property_id: random_property_id,
         countdown_time: std::time::Duration::from_millis(countdown_ms as u64),
     }
 }
@@ -119,10 +120,8 @@ pub(crate) fn wire_roll_number(vote: u8, rolled: u8) -> u8 {
     }
 }
 
-/// Build `SMSG_LOOT_ROLL` — one member's vote landing (relayed to every eligible member so live
-/// votes/roll numbers are visible party-wide, matching vanilla). `auto_pass` from the module's event
-/// payload is folded into the wire `roll_number` (see `wire_roll_number`) rather than carried as a
-/// separate field — the vanilla message has none.
+/// Project a member's vote to every eligible member. Vanilla represents both manual and
+/// automatic passes with the same `roll_number` sentinel.
 pub fn build_loot_roll(
     corpse_guid: u64,
     loot_slot: u8,
@@ -130,7 +129,7 @@ pub fn build_loot_roll(
     item_entry: u32,
     rolled: u8,
     vote: u8,
-    _auto_pass: bool,
+    random_property_id: u32,
 ) -> SMSG_LOOT_ROLL {
     SMSG_LOOT_ROLL {
         creature: Guid::new(corpse_guid),
@@ -138,7 +137,7 @@ pub fn build_loot_roll(
         player: Guid::new(voter_guid),
         item: item_entry,
         item_random_suffix: 0,
-        item_random_property_id: 0,
+        item_random_property_id: random_property_id,
         roll_number: wire_roll_number(vote, rolled),
         vote: wire_vote(vote),
     }
@@ -152,13 +151,14 @@ pub fn build_loot_roll_won(
     winning_player: u64,
     winning_roll: u8,
     winning_vote: u8,
+    random_property_id: u32,
 ) -> SMSG_LOOT_ROLL_WON {
     SMSG_LOOT_ROLL_WON {
         looted_target: Guid::new(corpse_guid),
         loot_slot: loot_slot as u32,
         item: item_entry,
         item_random_suffix: 0,
-        item_random_property_id: 0,
+        item_random_property_id: random_property_id,
         winning_player: Guid::new(winning_player),
         winning_roll,
         // The tier that actually won — a greed-only contest reports Greed, not Need

@@ -290,7 +290,7 @@ pub fn skill_slot_layout(class_b: u8, learned: &[(u32, u16, u16)]) -> Vec<(Skill
 pub fn build_create_object(
     entity: &EntityView,
     kind: CreateKind,
-    inventory: &[(u8, u64, u32)],
+    inventory: &[(u8, u64, u32, u32)],
     learned_skills: &[(u32, u16, u16)],
 ) -> Result<SMSG_UPDATE_OBJECT> {
     // race/class/gender/power are packed in unit_bytes_0 for both players and creatures (a creature
@@ -453,7 +453,7 @@ pub fn build_create_object(
         // For an EQUIPMENT slot (0..=18) also set PLAYER_VISIBLE_ITEM[slot] to the item ENTRY — that
         // descriptor is what makes the weapon/armor appear ON the 3D character model (slice-2). Both
         // are full-CREATE-mask fields (OBJECT_FIELD_TYPE belongs here), so no dirty_reset concern.
-        for &(slot, item_guid, entry) in inventory {
+        for &(slot, item_guid, entry, random_property_id) in inventory {
             if let Ok(s) = ItemSlot::try_from(slot) {
                 builder = builder.set_player_field_inv(s, Guid::new(item_guid));
             }
@@ -461,6 +461,7 @@ pub fn build_create_object(
                 builder = builder.set_player_visible_item(
                     VisibleItem {
                         item: entry,
+                        random_property_id,
                         ..Default::default()
                     },
                     vi_index,

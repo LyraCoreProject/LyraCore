@@ -121,6 +121,8 @@ pub struct CorpseLoot {
     /// a successful grant, or flipping `reserved_for` to the winner on an inventory-full fallback).
     #[default(false)]
     pub withheld: bool,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 /// A creature's loot-table entry: when an `creature_entry` creature dies, its rows roll for drops.
@@ -478,16 +480,26 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
     }
 }
 
-/// Insert `winners` as sequential `game_corpse_loot` rows on `corpse_guid`, starting at slot 0, each
-/// freshly unclaimed (`reserved_for = 0`) and FFA (group-loot stamping happens AFTER this returns, in
-/// `apply_group_loot_rules` — never at insert time). The ONE insert loop [`roll_creature_loot`] and
-/// [`roll_pickpocket_loot`] used to each carry a copy of (the dedup).
-fn insert_corpse_rows(ctx: &ReducerContext, corpse_guid: u64, winners: Vec<(u32, u32, bool)>) {
-    for (slot, (item_entry, count, quest_only)) in winners.into_iter().enumerate() {
+/// Insert valid drops at consecutive slots. Invalid property catalogues omit the affected item.
+/// Each row starts unclaimed and FFA; creature group rules are applied by the caller.
+pub(crate) fn insert_corpse_rows(
+    ctx: &ReducerContext,
+    corpse_guid: u64,
+    winners: Vec<(u32, u32, bool)>,
+) -> bool {
+    let mut inserted = 0;
+    for (item_entry, count, quest_only) in winners {
+        let random_property_id = match crate::items::select_loot_property(ctx, item_entry) {
+            Ok(id) => id,
+            Err(reason) => {
+                spacetimedb::log::error!("loot item {item_entry}: {reason}");
+                continue;
+            }
+        };
         ctx.db.game_corpse_loot().insert(CorpseLoot {
             id: 0,
             corpse_guid,
-            slot: slot as u8,
+            slot: inserted as u8,
             item_entry,
             count,
             quest_only,
@@ -497,8 +509,11 @@ fn insert_corpse_rows(ctx: &ReducerContext, corpse_guid: u64, winners: Vec<(u32,
             designated_looter_guid: 0,
             master_only: false,
             withheld: false,
+            random_property_id,
         });
+        inserted += 1;
     }
+    inserted != 0
 }
 
 /// Roll a creature's loot table into `game_corpse_loot` rows on its corpse; returns whether anything
@@ -523,9 +538,7 @@ pub(crate) fn roll_creature_loot(
         .map(|r| (r.item_entry, r.chance_bp, r.count, r.group_id, r.quest_only))
         .collect();
     let winners = roll_loot_rows_quest_aware(ctx, raw);
-    let dropped = !winners.is_empty();
-    insert_corpse_rows(ctx, corpse_guid, winners);
-    dropped
+    insert_corpse_rows(ctx, corpse_guid, winners)
 }
 
 // ===========================================================================================
@@ -648,6 +661,7 @@ pub(crate) fn clone_quest_loot_for_group(
     corpse_guid: u64,
     item_entry: u32,
     count: u32,
+    random_property_id: u32,
 ) {
     let Some(m) = crate::group::group_of(ctx, taker_guid) else {
         return;
@@ -689,6 +703,7 @@ pub(crate) fn clone_quest_loot_for_group(
             designated_looter_guid: 0,
             master_only: false,
             withheld: false,
+            random_property_id,
         });
     }
 }
@@ -702,6 +717,7 @@ pub(crate) fn clone_quest_loot_for_eligible(
     corpse_guid: u64,
     item_entry: u32,
     count: u32,
+    random_property_id: u32,
 ) {
     let others: Vec<(u64, bool)> = corpse_eligible_recipients(ctx, corpse_guid)
         .into_iter()
@@ -737,6 +753,7 @@ pub(crate) fn clone_quest_loot_for_eligible(
             designated_looter_guid: 0,
             master_only: false,
             withheld: false,
+            random_property_id,
         });
     }
 }
@@ -1189,6 +1206,7 @@ mod tests {
             designated_looter_guid: 0,
             master_only: false,
             withheld: false,
+            random_property_id: 0,
         };
         assert!(corpse_row.quest_only);
         assert_eq!(corpse_row.reserved_for, 42);
@@ -1203,6 +1221,7 @@ mod tests {
             designated_looter_guid: 7,
             master_only: true,
             withheld: true,
+            random_property_id: 0,
         };
         assert!(
             !shared_row.quest_only,

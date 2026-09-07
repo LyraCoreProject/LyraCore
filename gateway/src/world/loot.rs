@@ -101,6 +101,7 @@ pub struct PendingLootRoll {
     pub corpse_guid: u64,
     pub slot: u8,
     pub item_entry: u32,
+    pub random_property_id: u32,
     /// Preserved verbatim from the local row so promotion never restarts the 60s clock.
     pub deadline_micros: i64,
     /// Every eligible voter, snapshotted at kill time (`game_loot_roll_vote`'s rows for this roll).
@@ -142,6 +143,7 @@ fn promote_one(shard: &dyn WorldStore, realm: &dyn WorldStore, roll: &PendingLoo
         0,
         roll.deadline_micros,
         roll.recipients.clone(),
+        roll.random_property_id,
     ) {
         Ok(()) => {
             if let Err(e) = shard.clear_promoted_loot_roll(roll.roll_id) {

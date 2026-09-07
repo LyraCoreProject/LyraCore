@@ -20,8 +20,8 @@ pub(crate) trait VendorActionStore: Send + Sync {
         count: u32,
     ) -> Result<()>;
 
-    /// The player's buyback ring, newest-first: `(item_entry, stack_count, price)` per entry (≤12).
-    fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32)>;
+    /// The player's buyback ring, newest-first: `(item_entry, stack_count, price, random_property_id)` per entry (≤12).
+    fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32, u32)>;
 
     /// Bag slot of the item instance with `item_guid`. Item guids are globally unique, so no
     /// owner check is needed here — the module reducer enforces ownership on the repair call.
@@ -76,7 +76,7 @@ impl VendorActionStore for crate::stdb::Coordinator {
         )
     }
 
-    fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32)> {
+    fn buyback_slots(&self, player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
         crate::stdb::Coordinator::buyback_ring(self, player_guid)
     }
 
@@ -391,13 +391,13 @@ pub(crate) fn build_buyback_view_replay<St: VendorActionStore + ?Sized>(
     render_buyback_view(self_guid, &ring)
 }
 
-fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32)]) -> Vec<Outbound> {
+fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32, u32)]) -> Vec<Outbound> {
     let mut outbound = Vec::new();
     let mut mask = codec::update_mask::UpdateMaskValues::new();
     for i in 0..BUYBACK_SLOTS {
         let wire_slot = BUYBACK_WIRE_SLOT_BASE + i;
         let (fab_guid, price) = match ring.get(i as usize) {
-            Some(&(entry, count, price)) => {
+            Some(&(entry, count, price, random_property_id)) => {
                 let fab_guid = 0x4090_0000_0000_0000u64 | u64::from(i);
                 let view = codec::ItemInstanceView {
                     guid: fab_guid,
@@ -408,6 +408,7 @@ fn render_buyback_view(self_guid: u64, ring: &[(u32, u32, u32)]) -> Vec<Outbound
                     durability: 0,
                     max_durability: 0,
                     container_slots: 0,
+                    random_property_id,
                 };
                 outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                     Box::new(codec::build_item_create_object(&view)),
@@ -457,7 +458,7 @@ mod tests {
         stock_error: Option<String>,
         gate_error: Option<String>,
         buy_error: Option<String>,
-        ring: Vec<(u32, u32, u32)>,
+        ring: Vec<(u32, u32, u32, u32)>,
         item_slots: Vec<(u64, u8)>,
         repair_error: Option<String>,
         sell_error: Option<String>,
@@ -506,7 +507,7 @@ mod tests {
             }
         }
 
-        fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32)> {
+        fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
             self.ring.clone()
         }
 
@@ -887,7 +888,7 @@ mod tests {
 
     #[test]
     fn selling_an_item_resolves_its_guid_to_the_durable_slot_and_returns_the_buyback_view() {
-        let ring = vec![(2589, 1, 120)];
+        let ring = vec![(2589, 1, 120, 0)];
         let actions = InMemoryVendorActions {
             item_slots: vec![(ITEM, 30)],
             ring: ring.clone(),
@@ -979,11 +980,11 @@ mod tests {
 
     /// The descriptor half of the tab, rebuilt from the ring independently of the seam so the
     /// fabricated guids and the price/timestamp indices are pinned, not just echoed.
-    fn expected_values_update(ring: &[(u32, u32, u32)]) -> (u16, Vec<u8>) {
+    fn expected_values_update(ring: &[(u32, u32, u32, u32)]) -> (u16, Vec<u8>) {
         let mut mask = codec::update_mask::UpdateMaskValues::new();
         for i in 0..12u16 {
             let (fab_guid, price) = match ring.get(i as usize) {
-                Some(&(_, _, price)) => (0x4090_0000_0000_0000u64 | u64::from(i), price),
+                Some(&(_, _, price, _)) => (0x4090_0000_0000_0000u64 | u64::from(i), price),
                 None => (0, 0),
             };
             mask.set_u64(486 + (69 + i) * 2, fab_guid);
@@ -993,7 +994,12 @@ mod tests {
         codec::build_values_update_raw(PLAYER_GUID, &mask)
     }
 
-    fn expected_create(i: u16, entry: u32, stack_count: u32) -> ServerOpcodeMessage {
+    fn expected_create(
+        i: u16,
+        entry: u32,
+        stack_count: u32,
+        random_property_id: u32,
+    ) -> ServerOpcodeMessage {
         ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_create_object(
             &codec::ItemInstanceView {
                 guid: 0x4090_0000_0000_0000u64 | u64::from(i),
@@ -1004,14 +1010,15 @@ mod tests {
                 durability: 0,
                 max_durability: 0,
                 container_slots: 0,
+                random_property_id,
             },
         )))
     }
 
-    fn assert_renders_ring(outbound: &[Outbound], ring: &[(u32, u32, u32)]) {
+    fn assert_renders_ring(outbound: &[Outbound], ring: &[(u32, u32, u32, u32)]) {
         assert_eq!(outbound.len(), ring.len() + 1);
-        for (i, &(entry, count, _)) in ring.iter().enumerate() {
-            let expected = expected_create(i as u16, entry, count);
+        for (i, &(entry, count, _, property)) in ring.iter().enumerate() {
+            let expected = expected_create(i as u16, entry, count, property);
             assert!(
                 matches!(&outbound[i], Outbound::One(message) if *message == expected),
                 "ring slot {i} did not render its fabricated item"
@@ -1026,7 +1033,7 @@ mod tests {
 
     #[test]
     fn the_buyback_view_renders_one_fabricated_item_per_ring_entry_plus_the_descriptor_update() {
-        let ring = vec![(2589, 5, 120), (4540, 1, 30)];
+        let ring = vec![(2589, 5, 120, 117), (4540, 1, 30, 0)];
         let actions = InMemoryVendorActions {
             ring: ring.clone(),
             ..Default::default()
@@ -1039,7 +1046,7 @@ mod tests {
 
     #[test]
     fn a_full_ring_renders_all_thirteen_wire_slots_from_the_shared_base() {
-        let ring: Vec<(u32, u32, u32)> = (0..12).map(|i| (100 + i, 1, 10 * i)).collect();
+        let ring: Vec<(u32, u32, u32, u32)> = (0..12).map(|i| (100 + i, 1, 10 * i, 0)).collect();
         let actions = InMemoryVendorActions {
             ring: ring.clone(),
             ..Default::default()
@@ -1068,7 +1075,7 @@ mod tests {
 
     #[test]
     fn a_login_replay_of_a_persisted_ring_renders_it_like_an_in_session_refresh() {
-        let ring = vec![(2589, 5, 120)];
+        let ring = vec![(2589, 5, 120, 0)];
         let actions = InMemoryVendorActions {
             ring: ring.clone(),
             ..Default::default()
@@ -1121,7 +1128,7 @@ mod tests {
 
     #[test]
     fn a_successful_buyback_returns_the_full_rebuilt_view() {
-        let ring = vec![(2589, 5, 120), (4540, 1, 30)];
+        let ring = vec![(2589, 5, 120, 0), (4540, 1, 30, 0)];
         let actions = InMemoryVendorActions {
             ring: ring.clone(),
             ..Default::default()
@@ -1140,7 +1147,7 @@ mod tests {
     #[test]
     fn a_buyback_without_an_actor_falls_back_to_the_legacy_zero_actor_and_renders_no_view() {
         let actions = InMemoryVendorActions {
-            ring: vec![(2589, 5, 120)],
+            ring: vec![(2589, 5, 120, 0)],
             ..Default::default()
         };
         let player = VendorActionPlayer {

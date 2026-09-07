@@ -89,21 +89,34 @@ pub mod vote_kind {
 }
 
 /// Encode a `ROLL_START` payload: `corpse_guid,slot,item_entry,countdown_ms`.
-pub fn encode_start(corpse_guid: u64, slot: u8, item_entry: u32, countdown_ms: u32) -> String {
-    format!("{corpse_guid},{slot},{item_entry},{countdown_ms}")
+pub fn encode_start(
+    corpse_guid: u64,
+    slot: u8,
+    item_entry: u32,
+    countdown_ms: u32,
+    random_property_id: u32,
+) -> String {
+    format!("{corpse_guid},{slot},{item_entry},{countdown_ms},{random_property_id}")
 }
 
 /// Decode a `ROLL_START` payload back to `(corpse_guid, slot, item_entry, countdown_ms)`.
-pub fn decode_start(payload: &str) -> Option<(u64, u8, u32, u32)> {
+pub fn decode_start(payload: &str) -> Option<(u64, u8, u32, u32, u32)> {
     let mut p = payload.split(',');
     let corpse_guid: u64 = p.next()?.parse().ok()?;
     let slot: u8 = p.next()?.parse().ok()?;
     let item_entry: u32 = p.next()?.parse().ok()?;
     let countdown_ms: u32 = p.next()?.parse().ok()?;
+    let random_property_id = p.next().map(str::parse).transpose().ok()?.unwrap_or(0);
     if p.next().is_some() {
         return None; // trailing garbage — fail closed
     }
-    Some((corpse_guid, slot, item_entry, countdown_ms))
+    Some((
+        corpse_guid,
+        slot,
+        item_entry,
+        countdown_ms,
+        random_property_id,
+    ))
 }
 
 /// Encode a `ROLL_VOTE` payload: `corpse_guid,slot,item_entry,roll_number,vote_kind,auto_pass`.
@@ -116,15 +129,16 @@ pub fn encode_vote(
     roll_number: u8,
     vote: u8,
     auto_pass: bool,
+    random_property_id: u32,
 ) -> String {
     format!(
-        "{corpse_guid},{slot},{item_entry},{roll_number},{vote},{}",
+        "{corpse_guid},{slot},{item_entry},{roll_number},{vote},{},{random_property_id}",
         auto_pass as u8
     )
 }
 
 /// Decode a `ROLL_VOTE` payload back to `(corpse_guid, slot, item_entry, roll_number, vote_kind, auto_pass)`.
-pub fn decode_vote(payload: &str) -> Option<(u64, u8, u32, u8, u8, bool)> {
+pub fn decode_vote(payload: &str) -> Option<(u64, u8, u32, u8, u8, bool, u32)> {
     let mut p = payload.split(',');
     let corpse_guid: u64 = p.next()?.parse().ok()?;
     let slot: u8 = p.next()?.parse().ok()?;
@@ -132,10 +146,19 @@ pub fn decode_vote(payload: &str) -> Option<(u64, u8, u32, u8, u8, bool)> {
     let roll_number: u8 = p.next()?.parse().ok()?;
     let vote: u8 = p.next()?.parse().ok()?;
     let auto_pass = p.next()? == "1";
+    let random_property_id = p.next().map(str::parse).transpose().ok()?.unwrap_or(0);
     if p.next().is_some() {
         return None;
     }
-    Some((corpse_guid, slot, item_entry, roll_number, vote, auto_pass))
+    Some((
+        corpse_guid,
+        slot,
+        item_entry,
+        roll_number,
+        vote,
+        auto_pass,
+        random_property_id,
+    ))
 }
 
 /// Encode a `ROLL_WON` payload: `corpse_guid,slot,item_entry,winning_roll,winning_vote`. The
@@ -148,22 +171,31 @@ pub fn encode_won(
     item_entry: u32,
     winning_roll: u8,
     winning_vote: u8,
+    random_property_id: u32,
 ) -> String {
-    format!("{corpse_guid},{slot},{item_entry},{winning_roll},{winning_vote}")
+    format!("{corpse_guid},{slot},{item_entry},{winning_roll},{winning_vote},{random_property_id}")
 }
 
 /// Decode a `ROLL_WON` payload back to `(corpse_guid, slot, item_entry, winning_roll, winning_vote)`.
-pub fn decode_won(payload: &str) -> Option<(u64, u8, u32, u8, u8)> {
+pub fn decode_won(payload: &str) -> Option<(u64, u8, u32, u8, u8, u32)> {
     let mut p = payload.split(',');
     let corpse_guid: u64 = p.next()?.parse().ok()?;
     let slot: u8 = p.next()?.parse().ok()?;
     let item_entry: u32 = p.next()?.parse().ok()?;
     let winning_roll: u8 = p.next()?.parse().ok()?;
     let winning_vote: u8 = p.next()?.parse().ok()?;
+    let random_property_id = p.next().map(str::parse).transpose().ok()?.unwrap_or(0);
     if p.next().is_some() {
         return None;
     }
-    Some((corpse_guid, slot, item_entry, winning_roll, winning_vote))
+    Some((
+        corpse_guid,
+        slot,
+        item_entry,
+        winning_roll,
+        winning_vote,
+        random_property_id,
+    ))
 }
 
 /// Encode a `MASTER_LIST` payload: `corpse_guid|guid,guid,...` (the eligible-recipient set).
@@ -199,30 +231,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saved_properties_cross_events_and_old_events_stay_plain() {
+        assert_eq!(
+            decode_start(&encode_start(1, 2, 3, 4000, 117)),
+            Some((1, 2, 3, 4000, 117))
+        );
+        assert_eq!(decode_start("1,2,3,4000"), Some((1, 2, 3, 4000, 0)));
+        assert_eq!(
+            decode_vote(&encode_vote(1, 2, 3, 99, 1, false, 117)),
+            Some((1, 2, 3, 99, 1, false, 117))
+        );
+        assert_eq!(
+            decode_won(&encode_won(1, 2, 3, 99, 1, 117)),
+            Some((1, 2, 3, 99, 1, 117))
+        );
+    }
+
+    #[test]
     fn start_round_trips() {
-        let wire = encode_start(555, 2, 1234, 60_000);
-        assert_eq!(decode_start(&wire), Some((555, 2, 1234, 60_000)));
+        let wire = encode_start(555, 2, 1234, 60_000, 0);
+        assert_eq!(decode_start(&wire), Some((555, 2, 1234, 60_000, 0)));
     }
 
     #[test]
     fn start_fails_closed_on_garbage() {
         assert!(decode_start("").is_none());
         assert!(decode_start("1,2,3").is_none()); // missing countdown
-        assert!(decode_start("1,2,3,4,5").is_none()); // trailing garbage
+        assert!(decode_start("1,2,3,4,5,6").is_none()); // trailing garbage
         assert!(decode_start("x,2,3,4").is_none());
     }
 
     #[test]
     fn vote_round_trips_including_auto_pass() {
-        let wire = encode_vote(555, 2, 1234, 87, vote_kind::NEED, false);
+        let wire = encode_vote(555, 2, 1234, 87, vote_kind::NEED, false, 0);
         assert_eq!(
             decode_vote(&wire),
-            Some((555, 2, 1234, 87, vote_kind::NEED, false))
+            Some((555, 2, 1234, 87, vote_kind::NEED, false, 0))
         );
-        let auto = encode_vote(555, 2, 1234, 0, vote_kind::PASS, true);
+        let auto = encode_vote(555, 2, 1234, 0, vote_kind::PASS, true, 0);
         assert_eq!(
             decode_vote(&auto),
-            Some((555, 2, 1234, 0, vote_kind::PASS, true))
+            Some((555, 2, 1234, 0, vote_kind::PASS, true, 0))
         );
     }
 
@@ -237,10 +286,10 @@ mod tests {
 
     #[test]
     fn won_round_trips() {
-        let wire = encode_won(555, 2, 1234, 96, vote_kind::GREED);
+        let wire = encode_won(555, 2, 1234, 96, vote_kind::GREED, 0);
         assert_eq!(
             decode_won(&wire),
-            Some((555, 2, 1234, 96, vote_kind::GREED))
+            Some((555, 2, 1234, 96, vote_kind::GREED, 0))
         );
     }
 

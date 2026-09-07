@@ -111,7 +111,10 @@ fn enter_world<St: WorldStore + ?Sized>(
     // client already has), and the (slot, guid) pairs seed the player's PLAYER_FIELD_INV_SLOT
     // descriptors. Empty for a character that owns nothing — login is otherwise unchanged.
     let items = store.player_items(character_guid).unwrap_or_default();
-    let inventory: Vec<(u8, u64, u32)> = items.iter().map(|i| (i.slot, i.guid, i.entry)).collect();
+    let inventory: Vec<(u8, u64, u32, u32)> = items
+        .iter()
+        .map(|i| (i.slot, i.guid, i.entry, i.random_property_id))
+        .collect();
     let learned = store
         .player_learned_spells(character_guid)
         .unwrap_or_default();

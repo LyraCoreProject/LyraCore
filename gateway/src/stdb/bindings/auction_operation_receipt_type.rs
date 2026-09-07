@@ -25,6 +25,7 @@ pub struct AuctionOperationReceipt {
     pub house: u32,
     pub deposit_rate: u32,
     pub consignment_rate: u32,
+    pub random_property_id: u32,
 }
 
 impl __sdk::InModule for AuctionOperationReceipt {
@@ -53,6 +54,7 @@ pub struct AuctionOperationReceiptCols {
     pub house: __sdk::__query_builder::Col<AuctionOperationReceipt, u32>,
     pub deposit_rate: __sdk::__query_builder::Col<AuctionOperationReceipt, u32>,
     pub consignment_rate: __sdk::__query_builder::Col<AuctionOperationReceipt, u32>,
+    pub random_property_id: __sdk::__query_builder::Col<AuctionOperationReceipt, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for AuctionOperationReceipt {
@@ -77,6 +79,7 @@ impl __sdk::__query_builder::HasCols for AuctionOperationReceipt {
             house: __sdk::__query_builder::Col::new(table_name, "house"),
             deposit_rate: __sdk::__query_builder::Col::new(table_name, "deposit_rate"),
             consignment_rate: __sdk::__query_builder::Col::new(table_name, "consignment_rate"),
+            random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
         }
     }
 }

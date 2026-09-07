@@ -511,12 +511,14 @@ pub fn build_visible_item_values(
     player_guid: u64,
     slot: u8,
     entry: u32,
+    random_property_id: u32,
 ) -> Option<SMSG_UPDATE_OBJECT> {
     let vi_index = super::entity::visible_item_index(slot)?;
     Some(player_values(player_guid, |player| {
         player.set_player_visible_item(
             VisibleItem {
                 item: entry,
+                random_property_id,
                 ..Default::default()
             },
             vi_index,
@@ -658,7 +660,7 @@ mod lint_tests {
             ),
             (
                 "visible_item",
-                build_visible_item_values(g, 15, 25).unwrap(),
+                build_visible_item_values(g, 15, 25, 117).unwrap(),
             ),
             ("item", build_item_values(0x4000_0000_0000_0001, 5, 70)),
         ];

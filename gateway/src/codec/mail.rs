@@ -23,6 +23,7 @@ pub struct MailView {
     pub cod: u32,
     pub was_read: bool,
     pub created_at_secs: i64,
+    pub random_property_id: u32,
 }
 pub fn build_mail_list(mails: &[MailView], now_secs: i64) -> SMSG_MAIL_LIST_RESULT {
     SMSG_MAIL_LIST_RESULT {
@@ -39,7 +40,7 @@ pub fn build_mail_list(mails: &[MailView], now_secs: i64) -> SMSG_MAIL_LIST_RESU
                 stationery: 41,
                 item: m.item_entry,
                 item_enchant_id: m.item_enchant_id,
-                item_random_property_id: 0,
+                item_random_property_id: m.random_property_id,
                 item_suffix_factor: 0,
                 item_stack_size: m.item_stack_count.min(u8::MAX as u32) as u8,
                 item_spell_charges: 0,

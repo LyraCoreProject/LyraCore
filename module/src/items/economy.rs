@@ -323,6 +323,7 @@ pub(crate) fn apply_item_sell(
         stack_count: inst.stack_count,
         price: earned,
         soulbound: inst.soulbound,
+        random_property_id: inst.random_property_id,
     });
     instances.guid().delete(inst.guid);
     Ok(())
@@ -381,6 +382,7 @@ pub(crate) fn apply_buyback_item(
         &tmpl,
         entry.stack_count,
         entry.soulbound,
+        Some(entry.random_property_id),
     )?;
     buyback_tab.id().delete(entry.id);
     Ok(())
@@ -460,7 +462,7 @@ pub(crate) fn apply_buy_item(
     player.money = player.money.saturating_sub(cost);
     let owner_identity = player.owner_identity;
     ctx.db.game_world_entity().guid().update(player);
-    store_item(ctx, player_guid, owner_identity, &tmpl, count, false)
+    store_item(ctx, player_guid, owner_identity, &tmpl, count, false, None)
 }
 
 /// Repair the item in `slot` back to its template's `max_durability` — the FREE restore the harness

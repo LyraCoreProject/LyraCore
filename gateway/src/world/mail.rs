@@ -230,6 +230,7 @@ pub struct AttachedItem {
     pub durability: u32,
     pub enchant_id: u32,
     pub soulbound: bool,
+    pub random_property_id: u32,
 }
 
 impl AttachedItem {
@@ -381,6 +382,7 @@ pub(crate) fn take_item<St: WorldStore + ?Sized>(
         durability: row.item_durability,
         enchant_id: row.item_enchant_id,
         soulbound: row.item_soulbound,
+        random_property_id: row.random_property_id,
     };
     if item.is_empty() {
         return Err(TakeItemRefusal::Other(

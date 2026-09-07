@@ -1286,6 +1286,11 @@ fn equip_into(
     let e = crate::helpers::live_entity(ctx, character_guid)?;
     let guid = crate::items::item_guid_for(character_guid, slot);
     let tmpl = ctx.db.game_item_template().entry().find(item_entry);
+    let random_property_id = tmpl
+        .as_ref()
+        .map(|t| crate::items::select_property(ctx, t))
+        .transpose()?
+        .unwrap_or(0);
     let durability = tmpl.as_ref().map(|t| t.max_durability).unwrap_or(0);
     // This helper places the item DIRECTLY on the body (bypassing the pickup->equip two-step apply_item_move
     // drives), so either a BoP or a BoE template binds immediately here — mirroring "the item is now worn".
@@ -1295,6 +1300,9 @@ fn equip_into(
         .unwrap_or(false);
     let instances = ctx.db.game_item_instance();
     if let Some(mut inst) = instances.guid().find(guid) {
+        if inst.entry != item_entry {
+            inst.random_property_id = random_property_id;
+        }
         inst.entry = item_entry;
         inst.durability = durability;
         inst.soulbound = inst.soulbound || soulbound;
@@ -1311,6 +1319,7 @@ fn equip_into(
             created_at: ctx.timestamp,
             enchant_id: 0, // debug-granted item — unenchanted
             soulbound,
+            random_property_id,
         });
     }
     Ok(())

@@ -270,14 +270,14 @@ fn build_peer_create(
     viewer_guid: u64,
     row: &WorldEntity,
 ) -> Option<Vec<Outbound>> {
-    let inv: Vec<(u8, u64, u32)> =
+    let inv: Vec<(u8, u64, u32, u32)> =
         if row.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0 {
             coord
                 .player_items(row.guid)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|i| i.slot <= 18)
-                .map(|i| (i.slot, i.guid, i.entry))
+                .map(|i| (i.slot, i.guid, i.entry, i.random_property_id))
                 .collect()
         } else {
             Vec::new()
@@ -298,7 +298,7 @@ fn build_peer_create(
 /// could see it, so another aura callback cannot be relied on to supply them.
 fn peer_create_outbound(
     view: &codec::EntityView,
-    inventory: &[(u8, u64, u32)],
+    inventory: &[(u8, u64, u32, u32)],
     auras: &[Aura],
 ) -> Result<Vec<Outbound>> {
     let create = codec::build_create_object(view, CreateKind::Peer, inventory, &[])?;
@@ -2026,6 +2026,7 @@ fn trade_offer_extended(
             display_id: v.display_id,
             stack_count: v.stack_count,
             enchantment: v.enchantment,
+            item_random_properties_id: v.random_property_id,
             max_durability: v.max_durability,
             durability: v.durability,
             ..TradeSlot::default()
@@ -2139,11 +2140,15 @@ pub(crate) fn group_event_outbound(
             }
         },
         roll_kind::ROLL_START => match lyracore_shared::loot_roll::decode_start(&row.payload) {
-            Some((corpse_guid, slot, item_entry, countdown_ms)) => {
-                Some(ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(
-                    codec::build_loot_start_roll(corpse_guid, slot, item_entry, countdown_ms),
-                )))
-            }
+            Some((corpse_guid, slot, item_entry, countdown_ms, random_property_id)) => Some(
+                ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(codec::build_loot_start_roll(
+                    corpse_guid,
+                    slot,
+                    item_entry,
+                    countdown_ms,
+                    random_property_id,
+                ))),
+            ),
             None => {
                 log::warn!(
                     "loot ROLL_START relay: unparseable payload {:?} (event {})",
@@ -2154,15 +2159,15 @@ pub(crate) fn group_event_outbound(
             }
         },
         roll_kind::ROLL_VOTE => match lyracore_shared::loot_roll::decode_vote(&row.payload) {
-            Some((corpse_guid, slot, item_entry, roll_number, vote, auto_pass)) => Some(
+            Some((corpse, slot, entry, number, vote, _auto_pass, property_id)) => Some(
                 ServerOpcodeMessage::SMSG_LOOT_ROLL(Box::new(codec::build_loot_roll(
-                    corpse_guid,
+                    corpse,
                     slot,
                     row.other_guid,
-                    item_entry,
-                    roll_number,
+                    entry,
+                    number,
                     vote,
-                    auto_pass,
+                    property_id,
                 ))),
             ),
             None => {
@@ -2175,14 +2180,15 @@ pub(crate) fn group_event_outbound(
             }
         },
         roll_kind::ROLL_WON => match lyracore_shared::loot_roll::decode_won(&row.payload) {
-            Some((corpse_guid, slot, item_entry, winning_roll, winning_vote)) => Some(
+            Some((corpse, slot, entry, number, vote, property_id)) => Some(
                 ServerOpcodeMessage::SMSG_LOOT_ROLL_WON(Box::new(codec::build_loot_roll_won(
-                    corpse_guid,
+                    corpse,
                     slot,
-                    item_entry,
+                    entry,
                     row.other_guid,
-                    winning_roll,
-                    winning_vote,
+                    number,
+                    vote,
+                    property_id,
                 ))),
             ),
             None => {
@@ -3090,6 +3096,7 @@ fn item_gain_feedback(
     entry: u32,
     gained: u32,
     stack_add: bool,
+    random_property_id: u32,
 ) -> Vec<Outbound> {
     if gained == 0 {
         return Vec::new();
@@ -3102,6 +3109,7 @@ fn item_gain_feedback(
             entry,
             gained,
             stack_add,
+            random_property_id,
         )),
     ))];
     let wanted = db.game_character_quest().iter().any(|q| {
@@ -3147,6 +3155,7 @@ pub(crate) fn item_instance_insert_outbound(
         durability: row.durability,
         max_durability,
         container_slots,
+        random_property_id: row.random_property_id,
     };
     out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
         Box::new(codec::build_item_create_object(&view)),
@@ -3156,7 +3165,9 @@ pub(crate) fn item_instance_insert_outbound(
             Box::new(values),
         )));
     }
-    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, row.entry) {
+    if let Some(values) =
+        codec::build_visible_item_values(self_guid, row.slot, row.entry, row.random_property_id)
+    {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(values),
         )));
@@ -3182,6 +3193,7 @@ pub(crate) fn item_instance_insert_outbound(
         row.entry,
         row.stack_count,
         false,
+        row.random_property_id,
     ));
     if row.slot <= 18 {
         append_item_armor_and_sheet(db, self_guid, &mut out);
@@ -3201,7 +3213,7 @@ pub(crate) fn item_instance_delete_outbound(
             Box::new(values),
         )));
     }
-    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, 0) {
+    if let Some(values) = codec::build_visible_item_values(self_guid, row.slot, 0, 0) {
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(values),
         )));
@@ -3245,6 +3257,7 @@ pub(crate) fn item_instance_update_outbound(
             row.entry,
             row.stack_count - old.stack_count,
             true,
+            row.random_property_id,
         )
     } else {
         Vec::new()
@@ -3254,7 +3267,7 @@ pub(crate) fn item_instance_update_outbound(
             db.game_item_instance()
                 .iter()
                 .find(|item| item.owner_guid == self_guid && item.slot == slot)
-                .map(|item| (item.guid, item.entry))
+                .map(|item| (item.guid, item.entry, item.random_property_id))
         });
     }
     if old.stack_count != row.stack_count || old.durability != row.durability {
@@ -3282,32 +3295,34 @@ fn append_final_item_slots(
     old_slot: u8,
     new_slot: u8,
     out: &mut Vec<Outbound>,
-    item_in_slot: impl Fn(u8) -> Option<(u64, u32)>,
+    item_in_slot: impl Fn(u8) -> Option<(u64, u32, u32)>,
 ) {
     let old_item = item_in_slot(old_slot);
     let new_item = item_in_slot(new_slot).unwrap_or_default();
     let slots = old_item
         .is_none()
-        .then_some((old_slot, (0, 0)))
+        .then_some((old_slot, (0, 0, 0)))
         .into_iter()
         .chain([(new_slot, new_item)]);
-    for (slot, (guid, _)) in slots.clone() {
+    for (slot, (guid, _, _)) in slots.clone() {
         if let Some(values) = codec::build_inv_slot_values(self_guid, slot, guid) {
             out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(values),
             )));
         }
     }
-    for (slot, (_, entry)) in slots.clone() {
-        if let Some(values) = codec::build_visible_item_values(self_guid, slot, entry) {
+    for (slot, (_, entry, random_property_id)) in slots.clone() {
+        if let Some(values) =
+            codec::build_visible_item_values(self_guid, slot, entry, random_property_id)
+        {
             out.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(values),
             )));
         }
     }
-    for (slot, (guid, _)) in slots {
+    for (slot, (guid, _, _)) in slots {
         if let Some((bag_slot, slot_in_bag)) = bag_content_parts(slot) {
-            if let Some((bag_guid, _)) = item_in_slot(bag_slot) {
+            if let Some((bag_guid, _, _)) = item_in_slot(bag_slot) {
                 let (opcode, body) =
                     codec::build_container_slot_values(bag_guid, slot_in_bag, guid);
                 out.push(Outbound::Raw { opcode, body });
@@ -4294,6 +4309,7 @@ mod tests {
                 enchantment: 2564,
                 durability: 34,
                 max_durability: 40,
+                random_property_id: 0,
             }],
         );
         let event = |k: u8, p: &str| TradeEvent {
@@ -5264,7 +5280,7 @@ mod tests {
 
             let view = entity_view(entity, 0);
             let out =
-                peer_create_outbound(&view, &[(0, 700, 1337)], &index.on_target(0, view.guid))
+                peer_create_outbound(&view, &[(0, 700, 1337, 0)], &index.on_target(0, view.guid))
                     .unwrap();
             let [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)), Outbound::Raw { opcode, body }] =
                 out.as_slice()
@@ -5389,7 +5405,7 @@ mod tests {
             committed
                 .iter()
                 .find(|item| item.0 == slot)
-                .map(|item| (item.1, item.2))
+                .map(|item| (item.1, item.2, 0))
         };
         let mut outbound = Vec::new();
 
@@ -5444,7 +5460,7 @@ mod tests {
 
         let mut outbound = Vec::new();
         append_final_item_slots(7, 23, 0, &mut outbound, |slot| {
-            (slot == 0).then_some((202, 1337))
+            (slot == 0).then_some((202, 1337, 0))
         });
 
         let mut equipment = Vec::new();
@@ -5474,7 +5490,7 @@ mod tests {
 
         let mut outbound = Vec::new();
         append_final_item_slots(7, 23, 24, &mut outbound, |slot| {
-            (slot == 24).then_some((202, 1337))
+            (slot == 24).then_some((202, 1337, 0))
         });
 
         let mut source = Vec::new();

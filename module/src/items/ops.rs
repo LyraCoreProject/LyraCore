@@ -9,7 +9,7 @@ use spacetimedb::{Identity, ReducerContext, Table};
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
 
-use super::refuse;
+use super::{enchant_stat, property_stat, refuse, select_property};
 use crate::game_character; // the durable char holds `class` (the live WorldEntity does not)
 use crate::game_corpse_loot; // the loot.rs accessor trait — re-exported at crate root (`pub use loot::*`)
 use crate::game_gameobject;
@@ -19,8 +19,8 @@ use crate::game_world_entity; // gameobject (chest) loot source — apply_take_l
 
 use super::inventory::{first_free_backpack_slot, first_free_bag_slot, is_carried_slot};
 use super::rules::{
-    binds_on_grant, enchant_stat, equip_slot, meets_required_level, merge_amount,
-    resolve_equip_slot, template_stat, EquipStat,
+    binds_on_grant, equip_slot, meets_required_level, merge_amount, resolve_equip_slot,
+    template_stat, EquipStat,
 };
 use super::tables::{
     game_item_instance, game_item_template, item_guid_for, item_in_slot, item_is_broken,
@@ -53,6 +53,9 @@ pub(crate) fn grant_starter_item(ctx: &ReducerContext, owner_guid: u64, owner_id
         let Some(tmpl) = ctx.db.game_item_template().entry().find(entry) else {
             return;
         };
+        let Ok(random_property_id) = select_property(ctx, &tmpl) else {
+            return;
+        };
         instances.insert(ItemInstance {
             guid: item_guid_for(owner_guid, slot),
             entry: tmpl.entry,
@@ -66,6 +69,7 @@ pub(crate) fn grant_starter_item(ctx: &ReducerContext, owner_guid: u64, owner_id
             // BoP (bonding::BIND_ON_PICKUP) binds the instant it's granted — the starter kit is a
             // grant source like any other.
             soulbound: binds_on_grant(tmpl.bonding),
+            random_property_id,
         });
     };
     // Every character starts with a Hearthstone in the backpack (use it to recall to the bound home).
@@ -156,6 +160,16 @@ pub(crate) fn grant_item(
     item_entry: u32,
     count: u32,
 ) -> Result<(), String> {
+    grant_item_property(ctx, player_guid, item_entry, count, None)
+}
+
+pub(crate) fn grant_item_property(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    item_entry: u32,
+    count: u32,
+    property: Option<u32>,
+) -> Result<(), String> {
     let player = crate::helpers::live_entity(ctx, player_guid)
         .map_err(|_| "player not in world".to_string())?;
     let tmpl = ctx
@@ -171,14 +185,13 @@ pub(crate) fn grant_item(
         &tmpl,
         count.max(1),
         false,
+        property,
     )
 }
 
-/// Add `count` units of `tmpl` to `player_guid`'s backpack the way vanilla auto-store does (parity):
-/// TOP UP existing partial stacks of the same entry first (lowest slot first), then spill the remainder
-/// into free backpack slots (each new stack ≤ `max_stack`). `Err("inventory full")` if it can't all fit —
-/// the caller's reducer rolls back (so a buy that overflows un-charges). Shared by grant / buy / loot so a
-/// second food or arrow tops up the first stack instead of fragmenting, and a multi-stack grant spills.
+/// Add items to matching carried stacks, then free backpack or bag slots.
+/// Capacity and every Random Property are resolved before changing any item, so callers may
+/// handle an inventory-full Refusal without keeping a partial grant.
 pub(crate) fn store_item(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -186,39 +199,58 @@ pub(crate) fn store_item(
     tmpl: &ItemTemplate,
     mut count: u32,
     force_soulbound: bool,
+    preselected_property: Option<u32>,
 ) -> Result<(), String> {
+    if count == 0 {
+        return Ok(());
+    }
     let instances = ctx.db.game_item_instance();
     let max_stack = tmpl.max_stack.max(1);
-    // 1. Merge into existing partial stacks (only stackables have headroom; lowest slot first).
-    if max_stack > 1 {
-        let mut partials: Vec<ItemInstance> = instances
-            .by_owner_guid()
-            .filter(&player_guid)
-            // Carried stacks only — loot never merges into a banked stack.
-            .filter(|i| {
-                is_carried_slot(i.slot) && i.entry == tmpl.entry && i.stack_count < max_stack
-            })
-            .collect();
-        partials.sort_by_key(|i| i.slot);
-        for mut inst in partials {
-            if count == 0 {
-                break;
-            }
-            let add = merge_amount(count, inst.stack_count, max_stack);
-            inst.stack_count += add;
-            count -= add;
-            instances.guid().update(inst);
-        }
+    let random_property_id = preselected_property
+        .map(Ok)
+        .unwrap_or_else(|| select_property(ctx, tmpl))?;
+    let mut partials: Vec<ItemInstance> = instances
+        .by_owner_guid()
+        .filter(&player_guid)
+        .filter(|i| {
+            is_carried_slot(i.slot)
+                && i.entry == tmpl.entry
+                && i.random_property_id == random_property_id
+                && i.stack_count < max_stack
+        })
+        .collect();
+    partials.sort_by_key(|i| i.slot);
+    let remaining = partials.iter().fold(count, |left, item| {
+        left.saturating_sub(max_stack - item.stack_count)
+    });
+    let new_stacks = remaining.div_ceil(max_stack);
+    if new_stacks > super::inventory::count_free_inventory_slots(ctx, player_guid) {
+        return Err(lyracore_shared::mail::INVENTORY_FULL.to_owned());
     }
-    // 2. Spill the remainder into free slots: backpack first (23..=38), then equipped bags (in
-    //    bag-equip order 19..22). Both searches land in the same flat `game_item_instance` model;
-    //    the gateway routes items in the bag-content range (120..=191) via the container object.
-    while count > 0 {
-        let slot = free_slot(ctx, player_guid)?;
+    let mut properties = Vec::with_capacity(new_stacks as usize);
+    for index in 0..new_stacks {
+        properties.push(if index == 0 || preselected_property.is_some() {
+            random_property_id
+        } else {
+            select_property(ctx, tmpl)?
+        });
+    }
+    for mut item in partials {
+        let add = merge_amount(count, item.stack_count, max_stack);
+        if add == 0 {
+            break;
+        }
+        item.stack_count += add;
+        item.soulbound |= force_soulbound || binds_on_grant(tmpl.bonding);
+        count -= add;
+        instances.guid().update(item);
+    }
+    for random_property_id in properties {
+        // The capacity check counted these same slots, and reducers cannot interleave.
+        let slot = free_slot(ctx, player_guid).expect("preflight reserved a free item slot");
         let take = count.min(max_stack);
-        let new_guid = next_item_guid(ctx, player_guid, slot);
         instances.insert(ItemInstance {
-            guid: new_guid,
+            guid: next_item_guid(ctx, player_guid, slot),
             entry: tmpl.entry,
             owner_identity,
             owner_guid: player_guid,
@@ -226,13 +258,9 @@ pub(crate) fn store_item(
             stack_count: take,
             durability: tmpl.max_durability,
             created_at: ctx.timestamp,
-            enchant_id: 0, // freshly stored stack — unenchanted (enchants apply to equipped non-stackables)
-            // BoP binds the instant it's stored — covers every `store_item` caller (grant / buy / loot /
-            // buyback) uniformly, matching vanilla: a Bind-on-Pickup item binds regardless of source.
-            // `force_soulbound` preserves an already-bound instance's state across buyback: a BoE
-            // item bound before being sold must come back bound, not re-derived from the template
-            // alone.
+            enchant_id: 0,
             soulbound: force_soulbound || binds_on_grant(tmpl.bonding),
+            random_property_id,
         });
         count -= take;
     }
@@ -264,6 +292,7 @@ pub(crate) struct ItemSnapshot {
     pub durability: u32,
     pub enchant_id: u32,
     pub soulbound: bool,
+    pub random_property_id: u32,
 }
 
 impl ItemSnapshot {
@@ -280,6 +309,7 @@ impl From<&ItemInstance> for ItemSnapshot {
             durability: item.durability,
             enchant_id: item.enchant_id,
             soulbound: item.soulbound,
+            random_property_id: item.random_property_id,
         }
     }
 }
@@ -313,6 +343,7 @@ pub(crate) fn store_instance_state(
         // The recorded bind state, ORed with the template's grant-time rule — `store_item`'s
         // expression exactly, so an arriving item cannot end up less bound than a granted one.
         soulbound: snapshot.soulbound || binds_on_grant(tmpl.bonding),
+        random_property_id: snapshot.random_property_id,
     });
     Ok(())
 }
@@ -575,9 +606,13 @@ pub(crate) fn equipped_stat_bonus(ctx: &ReducerContext, owner_guid: u64, which: 
             // the 13). `enchant_stat` is 0 for an unenchanted item (enchant_id 0) → byte-identical readout
             // for every existing/unenchanted piece (baseline-safe). A broken item already returned above, so
             // a broken-but-enchanted piece grants neither — the enchant rides the item's working state.
-            Some(template_stat(&tmpl, which) + enchant_stat(i.enchant_id, which))
+            Some(
+                template_stat(&tmpl, which)
+                    .saturating_add(enchant_stat(ctx, i.enchant_id, which.kind()))
+                    .saturating_add(property_stat(ctx, i.random_property_id, which.kind())),
+            )
         })
-        .sum()
+        .fold(0i32, i32::saturating_add)
 }
 
 /// The pure per-item durability-loss formula `apply_death_durability_loss` applies to each equipped
@@ -739,6 +774,7 @@ pub(crate) fn apply_take_loot(
         &tmpl,
         row.count.max(1),
         false,
+        Some(row.random_property_id),
     )?;
     // Consume the loot: remove the row so a second take can't dupe it.
     let (item_entry, count) = (row.item_entry, row.count.max(1));
@@ -755,6 +791,7 @@ pub(crate) fn apply_take_loot(
                 corpse_guid,
                 item_entry,
                 count,
+                row.random_property_id,
             );
         } else {
             crate::loot::clone_quest_loot_for_group(
@@ -763,6 +800,7 @@ pub(crate) fn apply_take_loot(
                 corpse_guid,
                 item_entry,
                 count,
+                row.random_property_id,
             );
         }
     }

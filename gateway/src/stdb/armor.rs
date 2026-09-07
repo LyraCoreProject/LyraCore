@@ -1,33 +1,10 @@
-//! The gateway-side EFFECTIVE-armor fold (Approach B) for the character sheet's "Armor" readout
-//! (`UNIT_FIELD_RESISTANCES[0]`). The MODULE is left byte-identical: `module::combat::effective_armor`
-//! stays an on-demand combat fold and `e.armor` stays BASE (agility*2), so physical-mitigation is
-//! untouched. This recomputes the same EFFECTIVE value the sheet must DISPLAY — base armor + every
-//! `A_MOD_RESISTANCE(armor)` aura + the armor summed across equipped gear — purely from a connection's
-//! subscription cache, so no module change is needed to drive it live.
-//!
-//! The SAME fold runs at two sites with two caches:
-//!   - player CREATE on the COORDINATOR cache (base + gear; `game_aura` isn't in that cache → the aura
-//!     term is 0, which the on_aura relay corrects the instant a login-present aura inserts), and
-//!   - the aura / gear relays on the PER-PLAYER cache (base + auras + gear; all three tables subscribed).
-//!
-//! It mirrors `module::combat::effective_armor` term-for-term: `e.armor` base, `spell::resistance_bonus`
-//! (A_MOD_RESISTANCE armor auras, amount×stacks), `items::equipped_stat_bonus(Armor)` (worn `stat_armor`,
-//! broken-skip). No armor ENCHANT exists in the module (its `ENCHANTS` table is STR/STA only), so there is
-//! no enchant overlay term and the gateway matches the module exactly for armor.
-//!
-//! [`sheet_stats`] (the STR/AGI/STA/INT/SPI/AP/damage-range/crit half of the paperdoll, #517 + #532) is
-//! NOT a gateway-side fold like the Armor half above — it is a plain READ of
-//! `module::spell::recompute_sheet`'s output, END-appended onto `game_world_entity` (`sheet_*_bonus`/
-//! `sheet_ap_base`/`sheet_ap_mods`/`sheet_dmg_min`/`sheet_dmg_max`/`sheet_crit_bp` and the ranged
-//! attack-power/damage projection). Those columns
-//! already ride the player CREATE relay (the same row), so — unlike Armor — there is no
-//! coordinator-cache gap to patch: an aura present at login already shows on the very first CREATE, no
-//! on-aura re-push needed. Do NOT re-introduce a second aura/gear fold here for those numbers; extend
-//! `recompute_sheet` instead (that's the whole point of #517 — the previous gateway-only mirror never
-//! read `game_aura`, so no aura could ever move the sheet).
+//! Character-sheet armor from the coordinator's entity, aura, item and catalogue caches.
+//! The fold mirrors Module combat armor, including applied enchantments and Random Properties.
+//! Other character-sheet values come directly from the Module's derived entity fields.
 
 use super::bindings::*;
 use spacetimedb_sdk::Table;
+use std::collections::HashMap;
 
 /// Aura kind `A_MOD_RESISTANCE` — a direct resistance/armor bonus (e.g. Demon Skin). Mirrors
 /// `module::spell::taxonomy::A_MOD_RESISTANCE = 0xA1`.
@@ -140,28 +117,98 @@ pub(crate) fn effective_armor(db: &RemoteTables, guid: u64) -> u32 {
         .filter(|a| a.target_guid == guid)
         .map(|a| aura_armor_contribution(a.eff_kind, a.eff_p0, a.amount, a.stacks) as i64)
         .sum();
+    // The SDK exposes no non-unique enchantment index. Read the catalogue once per projection.
+    let mut enchantments = HashMap::<u32, i32>::new();
+    for effect in db.game_item_enchantment().iter().filter(|effect| {
+        effect.enchant_id != 0 && effect.kind == lyracore_shared::item_property::ARMOR
+    }) {
+        let total = enchantments.entry(effect.enchant_id).or_default();
+        *total = total.saturating_add(effect.amount);
+    }
+    let enchant_armor = |id| enchantments.get(&id).copied().unwrap_or(0);
     let templates = db.game_item_template();
-    let gear_sum: i64 = db
+    let gear_sum: i32 = db
         .game_item_instance()
         .iter()
-        .filter(|i| i.owner_guid == guid)
+        .filter(|i| i.owner_guid == guid && i.slot <= EQUIP_REGION_END)
         .map(|i| {
             templates
                 .entry()
                 .find(&i.entry)
                 .map(|t| {
-                    gear_armor_contribution(i.slot, t.stat_armor, t.max_durability, i.durability)
-                        as i64
+                    if t.max_durability > 0 && i.durability == 0 {
+                        return 0;
+                    }
+                    let mut armor = t.stat_armor.saturating_add(enchant_armor(i.enchant_id));
+                    if i.random_property_id != 0 {
+                        if let Some(property) = db
+                            .game_item_random_property()
+                            .property_id()
+                            .find(&i.random_property_id)
+                        {
+                            let bonus = [
+                                property.enchant_id_1,
+                                property.enchant_id_2,
+                                property.enchant_id_3,
+                            ]
+                            .into_iter()
+                            .map(&enchant_armor)
+                            .fold(0i32, i32::saturating_add);
+                            armor = armor.saturating_add(bonus);
+                        }
+                    }
+                    gear_armor_contribution(i.slot, armor, t.max_durability, i.durability)
                 })
                 .unwrap_or(0) // a missing template join never poisons the sum (matches the module)
         })
-        .sum();
-    (base + aura_sum + gear_sum).max(0) as u32
+        .fold(0i32, i32::saturating_add);
+    (base + aura_sum + i64::from(gear_sum)).max(0) as u32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+    fn armor_projection_adds_property_effects_only_while_the_item_is_worn_and_unbroken() {
+        use crate::accept::BlockingTaskCapacity;
+        use crate::config::GatewayConfig;
+        use crate::durable_test_support::{poll_until, Standalone, POLL_TIMEOUT};
+        use crate::stdb::Coordinator;
+
+        let mut shard = Standalone::start("property-armor");
+        shard.publish_module();
+        shard.assert_call("claim_operator", &[]);
+        shard.assert_call("debug_seed_scenario_fixtures", &[]);
+        shard.assert_call("debug_spawn_player_entity", &["1"]);
+        shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+        shard.assert_sql("UPDATE game_item_template SET stat_armor = 19 WHERE entry = 5090050");
+        shard.assert_sql("INSERT INTO game_item_random_property (property_id,enchant_id_1,enchant_id_2,enchant_id_3,suffix) VALUES (5090101,5090103,0,0,'of the Fixture')");
+        shard.assert_sql("INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES (1303066368,5090103,0,14,2,0,0),(1303066369,5090103,1,14,3,0,0),(1303066624,5090104,0,14,11,0,0)");
+        shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+        shard.assert_sql("UPDATE game_item_instance SET random_property_id = 5090101, enchant_id = 5090104 WHERE owner_guid = 1");
+        let base: u32 = shard.query_rows("SELECT armor FROM game_world_entity WHERE guid = 1")[0]
+            ["armor"]
+            .parse()
+            .unwrap();
+        let cfg = GatewayConfig {
+            logon_bind: "127.0.0.1:0".into(),
+            world_bind: "127.0.0.1:0".into(),
+            stdb_uri: shard.server().into(),
+            module_name: shard.shard_name().into(),
+            coordinator_token: Some(shard.owner_token()),
+            gateway_id: "property-armor-test".into(),
+            blocking_task_capacity: BlockingTaskCapacity::new(1),
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let coordinator = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
+        assert_eq!(coordinator.effective_armor(1), base);
+        shard.assert_call("debug_equip_item", &["1", "23"]);
+        assert!(poll_until(POLL_TIMEOUT, || coordinator.effective_armor(1) == base + 35));
+        shard.assert_sql("UPDATE game_item_instance SET durability = 0 WHERE owner_guid = 1");
+        assert!(poll_until(POLL_TIMEOUT, || coordinator.effective_armor(1) == base));
+    }
 
     #[test]
     fn armor_aura_contribution_matches_module_predicate() {

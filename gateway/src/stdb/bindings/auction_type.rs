@@ -27,6 +27,7 @@ pub struct Auction {
     pub revision: u64,
     pub deposit_rate: u32,
     pub consignment_rate: u32,
+    pub random_property_id: u32,
 }
 
 impl __sdk::InModule for Auction {
@@ -57,6 +58,7 @@ pub struct AuctionCols {
     pub revision: __sdk::__query_builder::Col<Auction, u64>,
     pub deposit_rate: __sdk::__query_builder::Col<Auction, u32>,
     pub consignment_rate: __sdk::__query_builder::Col<Auction, u32>,
+    pub random_property_id: __sdk::__query_builder::Col<Auction, u32>,
 }
 
 impl __sdk::__query_builder::HasCols for Auction {
@@ -89,6 +91,7 @@ impl __sdk::__query_builder::HasCols for Auction {
             revision: __sdk::__query_builder::Col::new(table_name, "revision"),
             deposit_rate: __sdk::__query_builder::Col::new(table_name, "deposit_rate"),
             consignment_rate: __sdk::__query_builder::Col::new(table_name, "consignment_rate"),
+            random_property_id: __sdk::__query_builder::Col::new(table_name, "random_property_id"),
         }
     }
 }

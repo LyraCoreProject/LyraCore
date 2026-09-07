@@ -20,6 +20,7 @@ pub struct AuctionView {
     pub highest_bidder_guid: u64,
     pub highest_bid: u32,
     pub expires_at_micros: i64,
+    pub random_property_id: u32,
 }
 
 pub fn build_auction_list_item(view: &AuctionView, now_micros: i64) -> AuctionListItem {
@@ -30,7 +31,7 @@ pub fn build_auction_list_item(view: &AuctionView, now_micros: i64) -> AuctionLi
         id: view.id,
         item: view.item_entry,
         item_enchantment: view.item_enchant_id,
-        item_random_property_id: 0,
+        item_random_property_id: view.random_property_id,
         item_suffix_factor: 0,
         item_count: view.item_stack_count,
         item_charges: 0,
@@ -103,6 +104,7 @@ mod tests {
             highest_bidder_guid: 20,
             highest_bid: 201,
             expires_at_micros: 3_500_000,
+            random_property_id: 509_0101,
         }
     }
 
@@ -112,7 +114,7 @@ mod tests {
         assert_eq!(mapped.id, 9);
         assert_eq!(mapped.item, 25);
         assert_eq!(mapped.item_enchantment, 7);
-        assert_eq!(mapped.item_random_property_id, 0);
+        assert_eq!(mapped.item_random_property_id, 509_0101);
         assert_eq!(mapped.item_suffix_factor, 0);
         assert_eq!(mapped.item_count, 2);
         assert_eq!(mapped.item_charges, 0);

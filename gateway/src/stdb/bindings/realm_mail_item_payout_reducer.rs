@@ -15,6 +15,7 @@ pub(super) struct RealmMailItemPayoutArgs {
     pub item_durability: u32,
     pub item_enchant_id: u32,
     pub item_soulbound: bool,
+    pub random_property_id: u32,
 }
 
 impl From<RealmMailItemPayoutArgs> for super::Reducer {
@@ -28,6 +29,7 @@ impl From<RealmMailItemPayoutArgs> for super::Reducer {
             item_durability: args.item_durability,
             item_enchant_id: args.item_enchant_id,
             item_soulbound: args.item_soulbound,
+            random_property_id: args.random_property_id,
         }
     }
 }
@@ -57,6 +59,7 @@ pub trait realm_mail_item_payout {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
     ) -> __sdk::Result<()> {
         self.realm_mail_item_payout_then(
             escrow_id,
@@ -67,6 +70,7 @@ pub trait realm_mail_item_payout {
             item_durability,
             item_enchant_id,
             item_soulbound,
+            random_property_id,
             |_, _| {},
         )
     }
@@ -87,6 +91,7 @@ pub trait realm_mail_item_payout {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -105,6 +110,7 @@ impl realm_mail_item_payout for super::RemoteReducers {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -120,6 +126,7 @@ impl realm_mail_item_payout for super::RemoteReducers {
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
+                random_property_id,
             },
             callback,
         )

@@ -18,6 +18,7 @@ pub(super) struct RealmMailCommitArgs {
     pub item_durability: u32,
     pub item_enchant_id: u32,
     pub item_soulbound: bool,
+    pub random_property_id: u32,
     pub cod: u32,
     pub cod_mail_id: u64,
 }
@@ -36,6 +37,7 @@ impl From<RealmMailCommitArgs> for super::Reducer {
             item_durability: args.item_durability,
             item_enchant_id: args.item_enchant_id,
             item_soulbound: args.item_soulbound,
+            random_property_id: args.random_property_id,
             cod: args.cod,
             cod_mail_id: args.cod_mail_id,
         }
@@ -70,6 +72,7 @@ pub trait realm_mail_commit {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
     ) -> __sdk::Result<()> {
@@ -85,6 +88,7 @@ pub trait realm_mail_commit {
             item_durability,
             item_enchant_id,
             item_soulbound,
+            random_property_id,
             cod,
             cod_mail_id,
             |_, _| {},
@@ -110,6 +114,7 @@ pub trait realm_mail_commit {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
 
@@ -133,6 +138,7 @@ impl realm_mail_commit for super::RemoteReducers {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
 
@@ -153,6 +159,7 @@ impl realm_mail_commit for super::RemoteReducers {
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
+                random_property_id,
                 cod,
                 cod_mail_id,
             },

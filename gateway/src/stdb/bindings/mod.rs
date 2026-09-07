@@ -441,7 +441,10 @@ pub mod game_instance_binding_type;
 pub mod game_instance_reaper_schedule_table;
 pub mod game_instance_table;
 pub mod game_instance_type;
+pub mod game_item_enchantment_table;
 pub mod game_item_instance_table;
+pub mod game_item_property_weight_table;
+pub mod game_item_random_property_table;
 pub mod game_item_template_table;
 pub mod game_level_stats_table;
 pub mod game_levelup_event_table;
@@ -716,7 +719,10 @@ pub mod install_guid_range_reducer;
 pub mod instance_reaper_schedule_type;
 pub mod instruction_selection_type;
 pub mod instruction_target_type;
+pub mod item_enchantment_type;
 pub mod item_instance_type;
+pub mod item_property_weight_type;
+pub mod item_random_property_type;
 pub mod item_template_type;
 pub mod kill_condition_type;
 pub mod kill_credit_type;
@@ -1410,7 +1416,10 @@ pub use game_instance_binding_type::GameInstanceBinding;
 pub use game_instance_reaper_schedule_table::*;
 pub use game_instance_table::*;
 pub use game_instance_type::GameInstance;
+pub use game_item_enchantment_table::*;
 pub use game_item_instance_table::*;
+pub use game_item_property_weight_table::*;
+pub use game_item_random_property_table::*;
 pub use game_item_template_table::*;
 pub use game_level_stats_table::*;
 pub use game_levelup_event_table::*;
@@ -1685,7 +1694,10 @@ pub use install_guid_range_reducer::install_guid_range;
 pub use instance_reaper_schedule_type::InstanceReaperSchedule;
 pub use instruction_selection_type::InstructionSelection;
 pub use instruction_target_type::InstructionTarget;
+pub use item_enchantment_type::ItemEnchantment;
 pub use item_instance_type::ItemInstance;
+pub use item_property_weight_type::ItemPropertyWeight;
+pub use item_random_property_type::ItemRandomProperty;
 pub use item_template_type::ItemTemplate;
 pub use kill_condition_type::KillCondition;
 pub use kill_credit_type::KillCredit;
@@ -3252,6 +3264,7 @@ pub enum Reducer {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
         house: u32,
         deposit_rate: u32,
         consignment_rate: u32,
@@ -3290,6 +3303,7 @@ pub enum Reducer {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
         house: u32,
         deposit_rate: u32,
         consignment_rate: u32,
@@ -3319,6 +3333,7 @@ pub enum Reducer {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
+        random_property_id: u32,
     },
     RealmMailCommit {
         escrow_id: u64,
@@ -3332,6 +3347,7 @@ pub enum Reducer {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
         cod: u32,
         cod_mail_id: u64,
     },
@@ -3363,6 +3379,7 @@ pub enum Reducer {
         item_durability: u32,
         item_enchant_id: u32,
         item_soulbound: bool,
+        random_property_id: u32,
     },
     RealmMailItemRoom {
         payee_guid: u64,
@@ -6269,6 +6286,7 @@ Reducer::PrepareVmapNavCoverage{
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
+                random_property_id,
                 house,
                 deposit_rate,
                 consignment_rate,
@@ -6287,6 +6305,7 @@ Reducer::PrepareVmapNavCoverage{
                 item_durability: item_durability.clone(),
                 item_enchant_id: item_enchant_id.clone(),
                 item_soulbound: item_soulbound.clone(),
+                random_property_id: random_property_id.clone(),
                 house: house.clone(),
                 deposit_rate: deposit_rate.clone(),
                 consignment_rate: consignment_rate.clone(),
@@ -6341,6 +6360,7 @@ Reducer::PrepareVmapNavCoverage{
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
+                random_property_id,
                 house,
                 deposit_rate,
                 consignment_rate,
@@ -6359,6 +6379,7 @@ Reducer::PrepareVmapNavCoverage{
                 item_durability: item_durability.clone(),
                 item_enchant_id: item_enchant_id.clone(),
                 item_soulbound: item_soulbound.clone(),
+                random_property_id: random_property_id.clone(),
                 house: house.clone(),
                 deposit_rate: deposit_rate.clone(),
                 consignment_rate: consignment_rate.clone(),
@@ -6396,6 +6417,7 @@ Reducer::PrepareVmapNavCoverage{
                 vote,
                 deadline_micros,
                 recipients,
+                random_property_id,
 }             => __sats::bsatn::to_vec(&realm_loot_op_reducer::RealmLootOpArgs {
                 op: op.clone(),
                 corpse_guid: corpse_guid.clone(),
@@ -6405,6 +6427,7 @@ Reducer::PrepareVmapNavCoverage{
                 vote: vote.clone(),
                 deadline_micros: deadline_micros.clone(),
                 recipients: recipients.clone(),
+                random_property_id: random_property_id.clone(),
 }),
             Reducer::RealmMailCommit{
                 escrow_id,
@@ -6418,6 +6441,7 @@ Reducer::PrepareVmapNavCoverage{
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
+                random_property_id,
                 cod,
                 cod_mail_id,
 }             => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
@@ -6432,6 +6456,7 @@ Reducer::PrepareVmapNavCoverage{
                 item_durability: item_durability.clone(),
                 item_enchant_id: item_enchant_id.clone(),
                 item_soulbound: item_soulbound.clone(),
+                random_property_id: random_property_id.clone(),
                 cod: cod.clone(),
                 cod_mail_id: cod_mail_id.clone(),
 }),
@@ -6479,6 +6504,7 @@ Reducer::PrepareVmapNavCoverage{
                 item_durability,
                 item_enchant_id,
                 item_soulbound,
+                random_property_id,
 }             => __sats::bsatn::to_vec(&realm_mail_item_payout_reducer::RealmMailItemPayoutArgs {
                 escrow_id: escrow_id.clone(),
                 payee_guid: payee_guid.clone(),
@@ -6488,6 +6514,7 @@ Reducer::PrepareVmapNavCoverage{
                 item_durability: item_durability.clone(),
                 item_enchant_id: item_enchant_id.clone(),
                 item_soulbound: item_soulbound.clone(),
+                random_property_id: random_property_id.clone(),
 }),
             Reducer::RealmMailItemRoom{
                 payee_guid,
@@ -6952,7 +6979,10 @@ pub struct DbUpdate {
     game_instance: __sdk::TableUpdate<GameInstance>,
     game_instance_binding: __sdk::TableUpdate<GameInstanceBinding>,
     game_instance_reaper_schedule: __sdk::TableUpdate<InstanceReaperSchedule>,
+    game_item_enchantment: __sdk::TableUpdate<ItemEnchantment>,
     game_item_instance: __sdk::TableUpdate<ItemInstance>,
+    game_item_property_weight: __sdk::TableUpdate<ItemPropertyWeight>,
+    game_item_random_property: __sdk::TableUpdate<ItemRandomProperty>,
     game_item_template: __sdk::TableUpdate<ItemTemplate>,
     game_level_stats: __sdk::TableUpdate<LevelStats>,
     game_levelup_event: __sdk::TableUpdate<LevelupEvent>,
@@ -7517,9 +7547,18 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_instance_reaper_schedule" => db_update.game_instance_reaper_schedule.append(
                     game_instance_reaper_schedule_table::parse_table_update(table_update)?,
                 ),
+                "game_item_enchantment" => db_update.game_item_enchantment.append(
+                    game_item_enchantment_table::parse_table_update(table_update)?,
+                ),
                 "game_item_instance" => db_update
                     .game_item_instance
                     .append(game_item_instance_table::parse_table_update(table_update)?),
+                "game_item_property_weight" => db_update.game_item_property_weight.append(
+                    game_item_property_weight_table::parse_table_update(table_update)?,
+                ),
+                "game_item_random_property" => db_update.game_item_random_property.append(
+                    game_item_random_property_table::parse_table_update(table_update)?,
+                ),
                 "game_item_template" => db_update
                     .game_item_template
                     .append(game_item_template_table::parse_table_update(table_update)?),
@@ -8510,9 +8549,27 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_instance_reaper_schedule,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_item_enchantment = cache
+            .apply_diff_to_table::<ItemEnchantment>(
+                "game_item_enchantment",
+                &self.game_item_enchantment,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_item_instance = cache
             .apply_diff_to_table::<ItemInstance>("game_item_instance", &self.game_item_instance)
             .with_updates_by_pk(|row| &row.guid);
+        diff.game_item_property_weight = cache
+            .apply_diff_to_table::<ItemPropertyWeight>(
+                "game_item_property_weight",
+                &self.game_item_property_weight,
+            )
+            .with_updates_by_pk(|row| &row.id);
+        diff.game_item_random_property = cache
+            .apply_diff_to_table::<ItemRandomProperty>(
+                "game_item_random_property",
+                &self.game_item_random_property,
+            )
+            .with_updates_by_pk(|row| &row.property_id);
         diff.game_item_template = cache
             .apply_diff_to_table::<ItemTemplate>("game_item_template", &self.game_item_template)
             .with_updates_by_pk(|row| &row.entry);
@@ -9354,8 +9411,17 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_instance_reaper_schedule" => db_update
                     .game_instance_reaper_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_item_enchantment" => db_update
+                    .game_item_enchantment
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_item_instance" => db_update
                     .game_item_instance
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_item_property_weight" => db_update
+                    .game_item_property_weight
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_item_random_property" => db_update
+                    .game_item_random_property
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_item_template" => db_update
                     .game_item_template
@@ -10090,8 +10156,17 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_instance_reaper_schedule" => db_update
                     .game_instance_reaper_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_item_enchantment" => db_update
+                    .game_item_enchantment
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_item_instance" => db_update
                     .game_item_instance
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_item_property_weight" => db_update
+                    .game_item_property_weight
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_item_random_property" => db_update
+                    .game_item_random_property
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_item_template" => db_update
                     .game_item_template
@@ -10567,7 +10642,10 @@ pub struct AppliedDiff<'r> {
     game_instance: __sdk::TableAppliedDiff<'r, GameInstance>,
     game_instance_binding: __sdk::TableAppliedDiff<'r, GameInstanceBinding>,
     game_instance_reaper_schedule: __sdk::TableAppliedDiff<'r, InstanceReaperSchedule>,
+    game_item_enchantment: __sdk::TableAppliedDiff<'r, ItemEnchantment>,
     game_item_instance: __sdk::TableAppliedDiff<'r, ItemInstance>,
+    game_item_property_weight: __sdk::TableAppliedDiff<'r, ItemPropertyWeight>,
+    game_item_random_property: __sdk::TableAppliedDiff<'r, ItemRandomProperty>,
     game_item_template: __sdk::TableAppliedDiff<'r, ItemTemplate>,
     game_level_stats: __sdk::TableAppliedDiff<'r, LevelStats>,
     game_levelup_event: __sdk::TableAppliedDiff<'r, LevelupEvent>,
@@ -11317,9 +11395,24 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_instance_reaper_schedule,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<ItemEnchantment>(
+            "game_item_enchantment",
+            &self.game_item_enchantment,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<ItemInstance>(
             "game_item_instance",
             &self.game_item_instance,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ItemPropertyWeight>(
+            "game_item_property_weight",
+            &self.game_item_property_weight,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<ItemRandomProperty>(
+            "game_item_random_property",
+            &self.game_item_random_property,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ItemTemplate>(
@@ -12626,7 +12719,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_instance_table::register_table(client_cache);
         game_instance_binding_table::register_table(client_cache);
         game_instance_reaper_schedule_table::register_table(client_cache);
+        game_item_enchantment_table::register_table(client_cache);
         game_item_instance_table::register_table(client_cache);
+        game_item_property_weight_table::register_table(client_cache);
+        game_item_random_property_table::register_table(client_cache);
         game_item_template_table::register_table(client_cache);
         game_level_stats_table::register_table(client_cache);
         game_levelup_event_table::register_table(client_cache);
@@ -12869,7 +12965,10 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_instance",
         "game_instance_binding",
         "game_instance_reaper_schedule",
+        "game_item_enchantment",
         "game_item_instance",
+        "game_item_property_weight",
+        "game_item_random_property",
         "game_item_template",
         "game_level_stats",
         "game_levelup_event",

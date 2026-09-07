@@ -75,6 +75,7 @@ pub(crate) fn apply_item_split(
     let entry = inst.entry;
     let owner_identity = inst.owner_identity;
     let durability = inst.durability;
+    let random_property_id = inst.random_property_id;
     let soulbound = inst.soulbound; // the split half carries the SAME binding state as its source stack
     instances.guid().update(inst);
     let new_guid = next_item_guid(ctx, player_guid, to_slot);
@@ -89,6 +90,7 @@ pub(crate) fn apply_item_split(
         created_at: ctx.timestamp,
         enchant_id: 0, // a split is only ever on a stackable (non-equippable) item → never enchanted
         soulbound,
+        random_property_id,
     });
     Ok(())
 }
@@ -257,7 +259,7 @@ pub(crate) fn apply_item_move(
         // MERGE only when dropping onto the SAME entry AND the item is stackable (max_stack > 1).
         // A missing template can't be merged (we can't know max_stack) — fall through to SWAP, which
         // needs no template, so the move never wedges on unseeded item data.
-        if dst.entry == src.entry {
+        if dst.entry == src.entry && dst.random_property_id == src.random_property_id {
             if let Some(tmpl) = ctx.db.game_item_template().entry().find(src.entry) {
                 if tmpl.max_stack > 1 {
                     let moved = merge_amount(src.stack_count, dst.stack_count, tmpl.max_stack);

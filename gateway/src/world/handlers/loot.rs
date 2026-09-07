@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn chest_use_precedes_generated_loot_and_opens_the_shared_window() {
         let mut store = InMemoryLootWindow::default();
-        store.items_by_viewer.insert(42, vec![(4, 117, 2, 321)]);
+        store.items_by_viewer.insert(42, vec![(4, 117, 2, 321, 0)]);
         let current_state = OpenLootState {
             target_guid: Some(11),
         };
@@ -1504,7 +1504,7 @@ mod tests {
             money: 25,
             ..Default::default()
         };
-        store.items_by_viewer.insert(42, vec![(3, 2589, 5, 200)]);
+        store.items_by_viewer.insert(42, vec![(3, 2589, 5, 200, 0)]);
 
         let outcome = dispatch_loot_window(
             &store,
@@ -1552,8 +1552,8 @@ mod tests {
     #[test]
     fn two_viewers_of_one_creature_receive_their_own_visible_items() {
         let mut store = InMemoryLootWindow::default();
-        store.items_by_viewer.insert(42, vec![(0, 6948, 1, 100)]);
-        store.items_by_viewer.insert(43, vec![(2, 2589, 5, 200)]);
+        store.items_by_viewer.insert(42, vec![(0, 6948, 1, 100, 0)]);
+        store.items_by_viewer.insert(43, vec![(2, 2589, 5, 200, 0)]);
 
         let first = dispatch_loot_window(
             &store,

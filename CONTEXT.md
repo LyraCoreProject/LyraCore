@@ -763,3 +763,70 @@ An agent-sized slice of an issue: one context window of work, kept local.
 
 **Tracer**:
 The first Ticket of an issue. Establishes the Seam or pattern the other Tickets copy, and blocks them.
+
+### Random properties
+
+**Random Property**:
+The suffix selected for one item instance at creation, held as `random_property_id`. Zero is a
+plain item. Moving an existing item preserves this value, including zero.
+_Avoid_: random enchant, item variant, roll
+
+**Property Pool**:
+The weighted set of Random Properties a template can produce, named by
+`game_item_template.random_property`. Members sort by property ID. The importer stores ClassicDB
+chance in exact hundredths and refuses more than two decimal places. Selection compares
+`input * total_weight < cumulative_weight * 10000` using widened integer arithmetic, for inputs
+0 through 9999. Thus each cumulative band endpoint rounds up. Both underweight and overweight
+pools use their full total. Very small weights can receive no input at this resolution.
+_Avoid_: random property group, suffix group
+
+**Suffix**:
+The name a Random Property adds to an item, such as "of the Bear". The Module keeps a copy for
+diagnosis. The client renders its own.
+_Avoid_: affix, postfix
+
+**Stat Kind**:
+An append-only code for an enchantment effect's contribution, independent of the client encoding.
+The importer retains unmapped effects as kind 0, which contributes nothing. Amounts are flat
+points, except crit, hit, dodge, parry and block, which use basis points, and regeneration, which
+uses points per five seconds. Spell power retains a school mask.
+_Avoid_: stat type, mod type, effect type
+
+| Code | Contribution |
+| --- | --- |
+| 0 | Unknown |
+| 1 | Strength |
+| 2 | Agility |
+| 3 | Stamina |
+| 4 | Intellect |
+| 5 | Spirit |
+| 6 | Health |
+| 7 | Mana |
+| 8 | Holy resistance |
+| 9 | Fire resistance |
+| 10 | Nature resistance |
+| 11 | Frost resistance |
+| 12 | Shadow resistance |
+| 13 | Arcane resistance |
+| 14 | Armor |
+| 15 | Weapon damage |
+| 16 | Spell power |
+| 17 | Healing power |
+| 18 | Mana per five seconds |
+| 19 | Health per five seconds |
+| 20 | Crit |
+| 21 | Hit |
+| 22 | Defense |
+| 23 | Dodge |
+| 24 | Parry |
+| 25 | Block |
+
+Each enchantment effect has key `(u64(enchant_id) << 8) | effect_index`. Indices reserve 64 positions
+per client enchantment slot. A referenced spell's three subeffects each reserve eight positions
+for expanded stats or schools. The index is `slot * 64 + subeffect * 8 + expansion`, from 0 through
+191. Direct effects use subeffect zero and expansion zero. `spell_id` retains the source spell
+reference even when the Stat Kind is unknown.
+
+Enchantment IDs 7745 and 7748 are authored compatibility entries, with +3 Strength and +3 Stamina.
+They preserve existing stored item meanings. They are not rows from the build 5875 client
+catalogue. The importer refuses a client catalogue that collides with either ID.

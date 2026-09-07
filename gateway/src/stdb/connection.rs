@@ -905,6 +905,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // owned-item instance. The coordinator authenticates as the module owner, which bypasses
         // RLS, so it reads all players' item rows (like game_character) to drive each login spawn.
         "SELECT * FROM game_item_template",
+        "SELECT * FROM game_item_random_property",
+        "SELECT * FROM game_item_enchantment",
         // Static spell headers — spell_cast_time() reads cast_time_ms via coord() so the
         // CMSG_CAST_SPELL handler can clear INSTANT casts synchronously.
         "SELECT * FROM game_spell",

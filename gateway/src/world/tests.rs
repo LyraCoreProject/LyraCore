@@ -286,7 +286,7 @@ struct InMemoryStore {
     item_templates: Vec<codec::ItemTemplateView>,
     /// The player's buyback ring as `(item_entry, stack_count, price)`; empty by default, so a
     /// fixture login replays no buyback tab.
-    buyback_ring: Vec<(u32, u32, u32)>,
+    buyback_ring: Vec<(u32, u32, u32, u32)>,
     /// 195: `npc_refuses_interaction` return — false (derive-Default) keeps every fixture NPC open.
     npc_refuses: bool,
     /// Spelled as a refusal so derive-Default (false) keeps every fixture trainer serving; the
@@ -878,6 +878,7 @@ impl InMemoryStore {
                 item_durability: item.durability,
                 item_enchant_id: item.enchant_id,
                 item_soulbound: item.soulbound,
+                random_property_id: item.random_property_id,
                 created_at_secs: 1_000,
                 ..Default::default()
             },
@@ -1465,6 +1466,7 @@ impl WorldStore for InMemoryStore {
                     durability: m.item_durability,
                     enchant_id: m.item_enchant_id,
                     soulbound: m.item_soulbound,
+                    random_property_id: m.random_property_id,
                 },
                 lyracore_shared::mail::cod_settlement(
                     m.cod,
@@ -1733,6 +1735,7 @@ impl WorldStore for InMemoryStore {
                 durability: m.item_durability,
                 enchant_id: m.item_enchant_id,
                 soulbound: m.item_soulbound,
+                random_property_id: m.random_property_id,
             };
             m.item_entry = 0;
             m.item_stack_count = 0;
@@ -2618,6 +2621,7 @@ impl WorldStore for InMemoryStore {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
+        _random_property_id: u32,
     ) -> Result<()> {
         self.rec("realm_loot_op");
         self.realm_loot_ops.lock().unwrap().push((
@@ -2652,6 +2656,7 @@ impl WorldStore for InMemoryStore {
             vote,
             0,
             Vec::new(),
+            0,
         )?;
         if let Some(failure) = &self.loot_action_failure {
             return Err(anyhow!(failure.clone()));
@@ -3109,6 +3114,7 @@ impl QuestActionStore for InMemoryStore {
                     item.entry,
                     item.stack_count,
                     false,
+                    0,
                 )),
             )));
             tx.send(Outbound::Job(Box::new(move || relay)))
@@ -3141,7 +3147,7 @@ impl VendorActionStore for InMemoryStore {
         }
     }
 
-    fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32)> {
+    fn buyback_slots(&self, _player_guid: u64) -> Vec<(u32, u32, u32, u32)> {
         self.buyback_ring.clone()
     }
 
@@ -4685,6 +4691,7 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
             durability: 20,
             max_durability: 20,
             container_slots: 0,
+            random_property_id: 0,
         }],
         reputations: vec![(19, 3175, false)],
         ..tester_store(7)
@@ -6014,6 +6021,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
         durability: 20,
         max_durability: 20,
         container_slots: 0,
+        random_property_id: 0,
     };
     s.turn_in_reward_item = Some(reward_item.clone());
     let store = std::sync::Arc::new(s);
@@ -6053,6 +6061,7 @@ fn quest_choose_reward_relays_inventory_before_completion_over_the_cipher() {
                 reward_item.entry,
                 reward_item.stack_count,
                 false,
+                0,
             ),
         ))),
         framed(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(
@@ -7102,7 +7111,8 @@ fn questgiver_gameobject_bypasses_the_chest_lifecycle() {
     s.gameobject_type = Some(lyracore_shared::constants::go_type::QUESTGIVER);
     s.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];
     s.quest_details = vec![detail_view(1234, "A Threat Within")];
-    s.corpse_loot_by_viewer.insert(1, vec![(0, 2589, 1, 200)]);
+    s.corpse_loot_by_viewer
+        .insert(1, vec![(0, 2589, 1, 200, 0)]);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -7152,7 +7162,7 @@ fn non_chest_gameobject_preserves_the_general_use_path() {
 fn chest_dispatch_opens_the_shared_window_and_tracks_its_target() {
     let mut s = quest_store();
     s.gameobject_type = Some(lyracore_shared::constants::go_type::CHEST);
-    s.corpse_loot_by_viewer.insert(1, vec![(4, 117, 2, 321)]);
+    s.corpse_loot_by_viewer.insert(1, vec![(4, 117, 2, 321, 0)]);
     let store = std::sync::Arc::new(s);
     let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
 
@@ -7757,7 +7767,7 @@ fn login_replays_a_persisted_buyback_ring_after_the_login_sequence() {
     // entry, then the raw descriptor update. (An EMPTY ring emits nothing — every other login test
     // reads the login sequence and then EOF, which is that case.)
     let store = std::sync::Arc::new(InMemoryStore {
-        buyback_ring: vec![(2589, 5, 120), (4540, 1, 30)],
+        buyback_ring: vec![(2589, 5, 120, 0), (4540, 1, 30, 0)],
         ..quest_store()
     });
     let (mut client, _c_enc, mut c_dec, server) = enter_world(store.clone(), 1);

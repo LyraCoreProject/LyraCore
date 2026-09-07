@@ -97,6 +97,8 @@ pub struct LootRoll {
     pub item_entry: u32,
     pub deadline_micros: i64,
     pub resolved: bool,
+    #[default(0)]
+    pub random_property_id: u32,
 }
 
 /// One eligible member's vote on a [`LootRoll`] — snapshotted (one row per eligible guid) the moment
@@ -308,7 +310,15 @@ pub(crate) fn apply_group_loot_rules(ctx: &ReducerContext, corpse_guid: u64, gro
                 ctx.db.game_corpse_loot().id().update(row);
             }
             GroupLootDecision::Roll => {
-                start_roll(ctx, corpse_guid, row.slot, row.item_entry, &recipients, now);
+                start_roll(
+                    ctx,
+                    corpse_guid,
+                    row.slot,
+                    row.item_entry,
+                    &recipients,
+                    now,
+                    row.random_property_id,
+                );
                 row.withheld = true;
                 ctx.db.game_corpse_loot().id().update(row);
             }
@@ -338,6 +348,7 @@ fn insert_roll_rows(
     item_entry: u32,
     recipients: &[u64],
     deadline_micros: i64,
+    random_property_id: u32,
 ) -> u64 {
     let rolls = ctx.db.game_loot_roll();
     if let Some(existing) = rolls
@@ -354,6 +365,7 @@ fn insert_roll_rows(
         item_entry,
         deadline_micros,
         resolved: false,
+        random_property_id,
     });
     let votes = ctx.db.game_loot_roll_vote();
     for &guid in recipients {
@@ -384,6 +396,7 @@ fn start_roll(
     item_entry: u32,
     recipients: &[u64],
     now_micros: i64,
+    random_property_id: u32,
 ) {
     insert_roll_rows(
         ctx,
@@ -392,12 +405,14 @@ fn start_roll(
         item_entry,
         recipients,
         now_micros + ROLL_WINDOW_MICROS,
+        random_property_id,
     );
     let payload = lyracore_shared::loot_roll::encode_start(
         corpse_guid,
         slot,
         item_entry,
         (ROLL_WINDOW_MICROS / 1000) as u32,
+        random_property_id,
     );
     for &guid in recipients {
         crate::group::push_event(ctx, guid, roll_event_kind::ROLL_START, 0, payload.clone());
@@ -456,6 +471,7 @@ pub(crate) fn cast_vote_on(
         my_rolled,
         vote,
         false,
+        roll.random_property_id,
     );
     for &guid in &recipients {
         crate::group::push_event(
@@ -524,7 +540,13 @@ pub(crate) fn settle_roll_grant(
         );
         return; // not a live roll's row on THIS database — see the doc above
     }
-    match crate::items::grant_item(ctx, winner_guid, row.item_entry, row.count.max(1)) {
+    match crate::items::grant_item_property(
+        ctx,
+        winner_guid,
+        row.item_entry,
+        row.count.max(1),
+        Some(row.random_property_id),
+    ) {
         Ok(()) => {
             loot.id().delete(row.id);
             super::refresh_lootable(ctx, corpse_guid);
@@ -597,6 +619,7 @@ fn resolve_roll(ctx: &ReducerContext, roll: &LootRoll, votes: &[LootRollVote], r
         roll.item_entry,
         winning_roll,
         winning_vote,
+        roll.random_property_id,
     );
     for &guid in recipients {
         crate::group::push_event(
@@ -708,6 +731,7 @@ pub(crate) fn force_resolve_rolls_for_disband(
                     roll.item_entry,
                     0,
                     lyracore_shared::loot_roll::vote_kind::NEED,
+                    roll.random_property_id,
                 );
                 crate::group::push_event(
                     ctx,
@@ -749,6 +773,7 @@ pub fn realm_loot_op(
     vote: u8,
     deadline_micros: i64,
     recipients: Vec<u64>,
+    random_property_id: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     use lyracore_shared::loot_roll::loot_op;
@@ -764,6 +789,7 @@ pub fn realm_loot_op(
                 item_entry,
                 &recipients,
                 deadline_micros,
+                random_property_id,
             );
             Ok(())
         }
@@ -839,8 +865,14 @@ pub(crate) fn apply_master_give(
             &format!("master-loot recipient {target_guid} is not in the world"),
         )
     })?;
-    crate::items::grant_item(ctx, target_guid, row.item_entry, row.count.max(1))
-        .map_err(master_delivery_error)?;
+    crate::items::grant_item_property(
+        ctx,
+        target_guid,
+        row.item_entry,
+        row.count.max(1),
+        Some(row.random_property_id),
+    )
+    .map_err(master_delivery_error)?;
     loot.id().delete(row.id);
     super::refresh_lootable(ctx, corpse_guid);
     Ok(())
@@ -1025,7 +1057,7 @@ mod tests {
     fn realm_loot_op_dispatches_start_and_vote_to_their_own_cores() {
         let body = code_of(include_str!("rolls.rs"), "pub fn realm_loot_op(");
         for (op, core) in [
-            ("loot_op::START =>", "{ insert_roll_rows( ctx, corpse_guid, slot, item_entry, &recipients, deadline_micros, ); Ok(()) }"),
+            ("loot_op::START =>", "{ insert_roll_rows( ctx, corpse_guid, slot, item_entry, &recipients, deadline_micros, random_property_id, ); Ok(()) }"),
             ("loot_op::VOTE =>", "cast_vote_on(ctx, corpse_guid, slot, actor_guid, vote)"),
         ] {
             let arm = body
@@ -1055,8 +1087,8 @@ mod tests {
             .find("if !row.withheld {")
             .expect("settle_roll_grant no longer gates on `row.withheld` — see this fn's own doc");
         let grant_at = body
-            .find("crate::items::grant_item(")
-            .expect("settle_roll_grant no longer calls grant_item at all");
+            .find("crate::items::grant_item_property(")
+            .expect("settle_roll_grant no longer calls grant_item_property");
         assert!(
             withheld_at < grant_at,
             "the `withheld` guard must run BEFORE `grant_item` — a guard added AFTER the grant \

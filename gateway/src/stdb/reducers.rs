@@ -375,6 +375,7 @@ impl Coordinator {
                 hold.item_durability,
                 hold.item_enchant_id,
                 hold.item_soulbound,
+                hold.random_property_id,
                 hold.house,
                 hold.deposit_rate,
                 hold.consignment_rate,
@@ -417,6 +418,7 @@ impl Coordinator {
                 hold.item_durability,
                 hold.item_enchant_id,
                 hold.item_soulbound,
+                hold.random_property_id,
                 hold.house,
                 hold.deposit_rate,
                 hold.consignment_rate,
@@ -2794,6 +2796,7 @@ impl Coordinator {
                 item.durability,
                 item.enchant_id,
                 item.soulbound,
+                item.random_property_id,
                 cod,
                 cod_source_mail_id
             )
@@ -2868,7 +2871,8 @@ impl Coordinator {
                 item.stack_count,
                 item.durability,
                 item.enchant_id,
-                item.soulbound
+                item.soulbound,
+                item.random_property_id
             )
         )
     }
@@ -2930,6 +2934,7 @@ impl Coordinator {
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
+        random_property_id: u32,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -2942,7 +2947,8 @@ impl Coordinator {
                 actor_guid,
                 vote,
                 deadline_micros,
-                recipients
+                recipients,
+                random_property_id
             )
         )
     }
@@ -2966,7 +2972,8 @@ impl Coordinator {
                 actor_guid,
                 vote,
                 0,
-                Vec::new()
+                Vec::new(),
+                0
             )
         ))
     }

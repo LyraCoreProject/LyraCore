@@ -79,6 +79,7 @@ pub struct ItemTemplateView {
     pub bag_family: u32,
     pub allowed_class: u32,
     pub allowed_race: u32,
+    pub random_property: u32,
 }
 
 /// An owned-item instance as the gateway reads it from `game_item_instance` (items slice-1),
@@ -96,6 +97,7 @@ pub struct ItemInstanceView {
     /// bags are sent as `ObjectType::Container` with `CONTAINER_FIELD_NUM_SLOTS` set so the client
     /// opens the bag window. Non-bags use `ObjectType::Item` as before (baseline-safe).
     pub container_slots: u8,
+    pub random_property_id: u32,
 }
 
 /// Build `SMSG_ITEM_QUERY_SINGLE_RESPONSE` so the client caches the item's name/tooltip/icon (the
@@ -241,6 +243,7 @@ pub fn build_item_query_response(
             // mangos column defaults to 100.0 for ALL items (only ranged weapons consult it); we don't
             // import per-item overrides, so send the universal vanilla default. [hunter Auto Shot fix]
             ranged_range_modification: 100.0,
+            random_property: t.random_property,
             ..Default::default()
         }),
     }
@@ -408,6 +411,7 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .set_object_guid(guid3)
             .set_object_entry(inst.entry as i32)
             .set_object_scale_x(1.0)
+            .set_item_random_properties_id(inst.random_property_id as i32)
             .set_item_owner(owner)
             .set_item_contained(owner)
             .set_item_stack_count(inst.stack_count.max(1) as i32)
@@ -430,6 +434,7 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .set_object_guid(guid3)
             .set_object_entry(inst.entry as i32)
             .set_object_scale_x(1.0)
+            .set_item_random_properties_id(inst.random_property_id as i32)
             .set_item_owner(owner)
             .set_item_contained(owner)
             .set_item_stack_count(inst.stack_count.max(1) as i32)
@@ -466,6 +471,7 @@ pub fn build_item_push_result(
     entry: u32,
     count: u32,
     stack_add: bool,
+    random_property_id: u32,
 ) -> SMSG_ITEM_PUSH_RESULT {
     SMSG_ITEM_PUSH_RESULT {
         guid: Guid::new(player_guid),
@@ -476,7 +482,7 @@ pub fn build_item_push_result(
         item_slot: if stack_add { 0xFFFF_FFFF } else { item_slot },
         item: entry,
         item_suffix_factor: 0,
-        item_random_property_id: 0,
+        item_random_property_id: random_property_id,
         item_count: count,
     }
 }
