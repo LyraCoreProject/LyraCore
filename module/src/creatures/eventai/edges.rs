@@ -593,10 +593,10 @@ mod eventai_gate_tripwire {
             "`place_summon` no longer pins the claim's own id as the summon's life number, so the \
              summon has no identity to Gate on. Body was:\n{place}"
         );
-        let expire = code_of(mobility, "pub fn expire_eventai_summon(");
+        let expire = code_of(mobility, "fn apply_summon_expiry(");
         assert!(
             expire.contains("life_seq: expiry.life_seq,"),
-            "`expire_eventai_summon` no longer carries the summon's life number across its \
+            "the summon expiry body no longer carries the summon's life number across its \
              re-insert, so a healthy summon changes identity on every lifetime check and its Relay \
              Runs are refused. Body was:\n{expire}"
         );

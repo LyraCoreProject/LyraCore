@@ -599,6 +599,20 @@ pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpir
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    apply_summon_expiry(ctx, expiry);
+}
+
+fn apply_summon_expiry(ctx: &ReducerContext, expiry: CreatureAiSummonExpiry) {
+    let expiries = ctx.db.game_creature_ai_summon_expiry();
+    let Some(current) = expiries.scheduled_id().find(expiry.scheduled_id) else {
+        return;
+    };
+    if current.creature_guid != expiry.creature_guid || current.life_seq != expiry.life_seq {
+        return;
+    }
+    // The scheduled row still holds its unique creature key during this transaction. Remove
+    // this check before inserting the next one; an obsolete callback must not remove a newer row.
+    expiries.scheduled_id().delete(expiry.scheduled_id);
     let Some(creature) = ctx.db.game_world_entity().guid().find(expiry.creature_guid) else {
         crate::creatures::reset_creature_lifecycle(ctx, expiry.creature_guid);
         return;
@@ -624,18 +638,84 @@ pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpir
     } else {
         next_check_ms(remaining_ms)
     };
-    ctx.db
+    expiries.insert(CreatureAiSummonExpiry {
+        scheduled_id: 0,
+        scheduled_at: schedule_after(ctx, delay_ms),
+        creature_guid: expiry.creature_guid,
+        lifetime_ms: expiry.lifetime_ms,
+        remaining_ms,
+        last_checked_ms: now_ms,
+        // Carried, not re-taken: the summon is the same life across its lifetime checks.
+        life_seq: expiry.life_seq,
+    });
+}
+
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn verify_summon_expiry_boundaries_for_debug(
+    ctx: &ReducerContext,
+    caster: &crate::WorldEntity,
+    entry: u32,
+) -> Result<(), String> {
+    let location = |lifetime_ms| SummonLocation {
+        x: caster.x + 2.0,
+        y: caster.y,
+        z: caster.z,
+        orientation: caster.orientation,
+        lifetime_ms,
+    };
+
+    let replaced_guid = place_temporary_summon(ctx, caster, entry, location(60_000))?;
+    let stale = ctx
+        .db
         .game_creature_ai_summon_expiry()
-        .insert(CreatureAiSummonExpiry {
-            scheduled_id: 0,
-            scheduled_at: schedule_after(ctx, delay_ms),
-            creature_guid: expiry.creature_guid,
-            lifetime_ms: expiry.lifetime_ms,
-            remaining_ms,
-            last_checked_ms: now_ms,
-            // Carried, not re-taken: the summon is the same life across its lifetime checks.
-            life_seq: expiry.life_seq,
-        });
+        .creature_guid()
+        .find(replaced_guid)
+        .ok_or_else(|| "fixture summon has no expiry callback".to_string())?;
+    despawn_temporary_summon(ctx, replaced_guid);
+
+    let replacement_sequence = claim_summon_sequence(ctx, 60_000);
+    let replacement_location = location(60_000);
+    let summoner = super::engine::unit_of(caster);
+    place_summon(
+        ctx,
+        replacement_sequence,
+        replaced_guid,
+        entry,
+        &replacement_location,
+        &summoner,
+    );
+    super::edges::eventai_on_summoned(ctx, caster.guid, replaced_guid, entry);
+    let replacement = ctx
+        .db
+        .game_creature_ai_summon_expiry()
+        .creature_guid()
+        .find(replaced_guid)
+        .ok_or_else(|| "replacement summon has no expiry callback".to_string())?;
+    if replacement.life_seq == stale.life_seq {
+        return Err("replacement summon reused the obsolete life number".to_string());
+    }
+
+    apply_summon_expiry(ctx, stale);
+    let retained = ctx
+        .db
+        .game_creature_ai_summon_expiry()
+        .creature_guid()
+        .find(replaced_guid)
+        .ok_or_else(|| "obsolete callback removed the replacement expiry".to_string())?;
+    if retained.scheduled_id != replacement.scheduled_id
+        || retained.life_seq != replacement.life_seq
+        || ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(replaced_guid)
+            .is_none()
+    {
+        return Err("obsolete callback changed the replacement summon".to_string());
+    }
+
+    place_temporary_summon(ctx, caster, entry, location(5_000))?;
+    Ok(())
 }
 
 fn despawn_temporary_summon(ctx: &ReducerContext, creature_guid: u64) {

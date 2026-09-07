@@ -42,6 +42,8 @@ pub(crate) use fixtures::seed_on_aggro_fixtures;
 pub(crate) use loader::replace_definition_for_debug;
 #[cfg(test)]
 pub(crate) use mobility::summon_lifetime_after;
+#[cfg(feature = "debug_reducers")]
+pub(crate) use mobility::verify_summon_expiry_boundaries_for_debug;
 pub(crate) use mobility::{drop_summon_expiry, ranged_posture, react_state};
 pub use mobility::{
     expire_eventai_summon, fire_eventai_forced_despawn, CreatureAiForcedDespawn,
