@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub struct GwMove {
-    pub actor_guid: u64,
+    pub actor: SessionActor,
     pub opcode: u16,
     pub movement_info: Vec<u8>,
     pub x: f32,

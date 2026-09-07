@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwResetTalentsArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub trainer_guid: u64,
 }
 
 impl From<GwResetTalentsArgs> for super::Reducer {
     fn from(args: GwResetTalentsArgs) -> Self {
         Self::GwResetTalents {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             trainer_guid: args.trainer_guid,
         }
     }
@@ -35,8 +37,12 @@ pub trait gw_reset_talents {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_reset_talents:gw_reset_talents_then`] to run a callback after the reducer completes.
-    fn gw_reset_talents(&self, actor_guid: u64, trainer_guid: u64) -> __sdk::Result<()> {
-        self.gw_reset_talents_then(actor_guid, trainer_guid, |_, _| {})
+    fn gw_reset_talents(
+        &self,
+        request_actor: SessionActor,
+        trainer_guid: u64,
+    ) -> __sdk::Result<()> {
+        self.gw_reset_talents_then(request_actor, trainer_guid, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_reset_talents` to run as soon as possible,
@@ -47,7 +53,7 @@ pub trait gw_reset_talents {
     ///  and its status can be observed with the `callback`.
     fn gw_reset_talents_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trainer_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +65,7 @@ pub trait gw_reset_talents {
 impl gw_reset_talents for super::RemoteReducers {
     fn gw_reset_talents_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trainer_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +74,7 @@ impl gw_reset_talents for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwResetTalentsArgs {
-                actor_guid,
+                request_actor,
                 trainer_guid,
             },
             callback,

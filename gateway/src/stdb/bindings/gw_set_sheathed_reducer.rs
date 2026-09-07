@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSetSheathedArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub state: u8,
 }
 
 impl From<GwSetSheathedArgs> for super::Reducer {
     fn from(args: GwSetSheathedArgs) -> Self {
         Self::GwSetSheathed {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             state: args.state,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_set_sheathed {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_set_sheathed:gw_set_sheathed_then`] to run a callback after the reducer completes.
-    fn gw_set_sheathed(&self, actor_guid: u64, state: u8) -> __sdk::Result<()> {
-        self.gw_set_sheathed_then(actor_guid, state, |_, _| {})
+    fn gw_set_sheathed(&self, request_actor: SessionActor, state: u8) -> __sdk::Result<()> {
+        self.gw_set_sheathed_then(request_actor, state, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_set_sheathed` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_set_sheathed {
     ///  and its status can be observed with the `callback`.
     fn gw_set_sheathed_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         state: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,14 +61,19 @@ pub trait gw_set_sheathed {
 impl gw_set_sheathed for super::RemoteReducers {
     fn gw_set_sheathed_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         state: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(GwSetSheathedArgs { actor_guid, state }, callback)
+        self.imp.invoke_reducer_with_callback(
+            GwSetSheathedArgs {
+                request_actor,
+                state,
+            },
+            callback,
+        )
     }
 }

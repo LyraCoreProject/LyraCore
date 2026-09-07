@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwDuelCancelArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub flag_guid: u64,
 }
 
 impl From<GwDuelCancelArgs> for super::Reducer {
     fn from(args: GwDuelCancelArgs) -> Self {
         Self::GwDuelCancel {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             flag_guid: args.flag_guid,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_duel_cancel {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_duel_cancel:gw_duel_cancel_then`] to run a callback after the reducer completes.
-    fn gw_duel_cancel(&self, actor_guid: u64, flag_guid: u64) -> __sdk::Result<()> {
-        self.gw_duel_cancel_then(actor_guid, flag_guid, |_, _| {})
+    fn gw_duel_cancel(&self, request_actor: SessionActor, flag_guid: u64) -> __sdk::Result<()> {
+        self.gw_duel_cancel_then(request_actor, flag_guid, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_duel_cancel` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_duel_cancel {
     ///  and its status can be observed with the `callback`.
     fn gw_duel_cancel_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         flag_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +61,7 @@ pub trait gw_duel_cancel {
 impl gw_duel_cancel for super::RemoteReducers {
     fn gw_duel_cancel_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         flag_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +70,7 @@ impl gw_duel_cancel for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwDuelCancelArgs {
-                actor_guid,
+                request_actor,
                 flag_guid,
             },
             callback,

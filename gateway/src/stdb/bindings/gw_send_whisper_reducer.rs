@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSendWhisperArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub target_name: String,
     pub message: String,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwSendWhisperArgs {
 impl From<GwSendWhisperArgs> for super::Reducer {
     fn from(args: GwSendWhisperArgs) -> Self {
         Self::GwSendWhisper {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             target_name: args.target_name,
             message: args.message,
         }
@@ -39,11 +41,11 @@ pub trait gw_send_whisper {
     /// /// Use [`gw_send_whisper:gw_send_whisper_then`] to run a callback after the reducer completes.
     fn gw_send_whisper(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_name: String,
         message: String,
     ) -> __sdk::Result<()> {
-        self.gw_send_whisper_then(actor_guid, target_name, message, |_, _| {})
+        self.gw_send_whisper_then(request_actor, target_name, message, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_send_whisper` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_send_whisper {
     ///  and its status can be observed with the `callback`.
     fn gw_send_whisper_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_name: String,
         message: String,
 
@@ -67,7 +69,7 @@ pub trait gw_send_whisper {
 impl gw_send_whisper for super::RemoteReducers {
     fn gw_send_whisper_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_name: String,
         message: String,
 
@@ -77,7 +79,7 @@ impl gw_send_whisper for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwSendWhisperArgs {
-                actor_guid,
+                request_actor,
                 target_name,
                 message,
             },

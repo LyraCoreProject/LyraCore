@@ -4,11 +4,13 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwAuctionConfirmBidRefundArgs {
     pub operation_id: u64,
-    pub bidder_guid: u64,
+    pub request_actor: SessionActor,
     pub auction_id: u32,
     pub house: u32,
     pub offer: u32,
@@ -19,7 +21,7 @@ impl From<GwAuctionConfirmBidRefundArgs> for super::Reducer {
     fn from(args: GwAuctionConfirmBidRefundArgs) -> Self {
         Self::GwAuctionConfirmBidRefund {
             operation_id: args.operation_id,
-            bidder_guid: args.bidder_guid,
+            request_actor: args.request_actor,
             auction_id: args.auction_id,
             house: args.house,
             offer: args.offer,
@@ -46,7 +48,7 @@ pub trait gw_auction_confirm_bid_refund {
     fn gw_auction_confirm_bid_refund(
         &self,
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auction_id: u32,
         house: u32,
         offer: u32,
@@ -54,7 +56,7 @@ pub trait gw_auction_confirm_bid_refund {
     ) -> __sdk::Result<()> {
         self.gw_auction_confirm_bid_refund_then(
             operation_id,
-            bidder_guid,
+            request_actor,
             auction_id,
             house,
             offer,
@@ -72,7 +74,7 @@ pub trait gw_auction_confirm_bid_refund {
     fn gw_auction_confirm_bid_refund_then(
         &self,
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auction_id: u32,
         house: u32,
         offer: u32,
@@ -88,7 +90,7 @@ impl gw_auction_confirm_bid_refund for super::RemoteReducers {
     fn gw_auction_confirm_bid_refund_then(
         &self,
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auction_id: u32,
         house: u32,
         offer: u32,
@@ -101,7 +103,7 @@ impl gw_auction_confirm_bid_refund for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             GwAuctionConfirmBidRefundArgs {
                 operation_id,
-                bidder_guid,
+                request_actor,
                 auction_id,
                 house,
                 offer,

@@ -4,11 +4,13 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmGroupOpArgs {
     pub op: u8,
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub target_guid: u64,
     pub arg_a: u8,
     pub arg_b: u8,
@@ -18,7 +20,7 @@ impl From<RealmGroupOpArgs> for super::Reducer {
     fn from(args: RealmGroupOpArgs) -> Self {
         Self::RealmGroupOp {
             op: args.op,
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             target_guid: args.target_guid,
             arg_a: args.arg_a,
             arg_b: args.arg_b,
@@ -44,12 +46,12 @@ pub trait realm_group_op {
     fn realm_group_op(
         &self,
         op: u8,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
     ) -> __sdk::Result<()> {
-        self.realm_group_op_then(op, actor_guid, target_guid, arg_a, arg_b, |_, _| {})
+        self.realm_group_op_then(op, request_actor, target_guid, arg_a, arg_b, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_group_op` to run as soon as possible,
@@ -61,7 +63,7 @@ pub trait realm_group_op {
     fn realm_group_op_then(
         &self,
         op: u8,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
@@ -76,7 +78,7 @@ impl realm_group_op for super::RemoteReducers {
     fn realm_group_op_then(
         &self,
         op: u8,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
@@ -88,7 +90,7 @@ impl realm_group_op for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             RealmGroupOpArgs {
                 op,
-                actor_guid,
+                request_actor,
                 target_guid,
                 arg_a,
                 arg_b,

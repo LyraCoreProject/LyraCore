@@ -4,16 +4,20 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct EvictInstancePopulationArgs {
     pub instance_id: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<EvictInstancePopulationArgs> for super::Reducer {
     fn from(args: EvictInstancePopulationArgs) -> Self {
         Self::EvictInstancePopulation {
             instance_id: args.instance_id,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -33,8 +37,12 @@ pub trait evict_instance_population {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`evict_instance_population:evict_instance_population_then`] to run a callback after the reducer completes.
-    fn evict_instance_population(&self, instance_id: u64) -> __sdk::Result<()> {
-        self.evict_instance_population_then(instance_id, |_, _| {})
+    fn evict_instance_population(
+        &self,
+        instance_id: u64,
+        request_actor: SessionActor,
+    ) -> __sdk::Result<()> {
+        self.evict_instance_population_then(instance_id, request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `evict_instance_population` to run as soon as possible,
@@ -46,6 +54,7 @@ pub trait evict_instance_population {
     fn evict_instance_population_then(
         &self,
         instance_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -57,12 +66,18 @@ impl evict_instance_population for super::RemoteReducers {
     fn evict_instance_population_then(
         &self,
         instance_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(EvictInstancePopulationArgs { instance_id }, callback)
+        self.imp.invoke_reducer_with_callback(
+            EvictInstancePopulationArgs {
+                instance_id,
+                request_actor,
+            },
+            callback,
+        )
     }
 }

@@ -4,11 +4,13 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmMailTakeMoneyFenceArgs {
     pub escrow_id: u64,
-    pub payee_guid: u64,
+    pub request_actor: SessionActor,
     pub mail_id: u64,
     pub expect_money: u32,
 }
@@ -17,7 +19,7 @@ impl From<RealmMailTakeMoneyFenceArgs> for super::Reducer {
     fn from(args: RealmMailTakeMoneyFenceArgs) -> Self {
         Self::RealmMailTakeMoneyFence {
             escrow_id: args.escrow_id,
-            payee_guid: args.payee_guid,
+            request_actor: args.request_actor,
             mail_id: args.mail_id,
             expect_money: args.expect_money,
         }
@@ -42,13 +44,13 @@ pub trait realm_mail_take_money_fence {
     fn realm_mail_take_money_fence(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         expect_money: u32,
     ) -> __sdk::Result<()> {
         self.realm_mail_take_money_fence_then(
             escrow_id,
-            payee_guid,
+            request_actor,
             mail_id,
             expect_money,
             |_, _| {},
@@ -64,7 +66,7 @@ pub trait realm_mail_take_money_fence {
     fn realm_mail_take_money_fence_then(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         expect_money: u32,
 
@@ -78,7 +80,7 @@ impl realm_mail_take_money_fence for super::RemoteReducers {
     fn realm_mail_take_money_fence_then(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         expect_money: u32,
 
@@ -89,7 +91,7 @@ impl realm_mail_take_money_fence for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             RealmMailTakeMoneyFenceArgs {
                 escrow_id,
-                payee_guid,
+                request_actor,
                 mail_id,
                 expect_money,
             },

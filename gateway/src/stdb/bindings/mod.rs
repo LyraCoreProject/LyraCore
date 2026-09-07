@@ -6,6 +6,8 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+pub mod account_claim_type;
+pub mod account_fence_type;
 pub mod account_type;
 pub mod activate_vmap_generation_reducer;
 pub mod active_taxi_flight_type;
@@ -51,11 +53,13 @@ pub mod character_talent_type;
 pub mod character_taxi_node_type;
 pub mod character_type;
 pub mod chat_event_type;
+pub mod claim_account_reducer;
 pub mod claim_bot_invite_intent_reducer;
 pub mod claim_guid_range_reducer;
 pub mod claim_operator_reducer;
 pub mod class_level_stats_type;
 pub mod clear_promoted_loot_roll_reducer;
+pub mod close_account_fence_reducer;
 pub mod combat_event_type;
 pub mod combo_point_type;
 pub mod confirm_import_reducer;
@@ -295,6 +299,7 @@ pub mod facing_condition_type;
 pub mod facing_instruction_type;
 pub mod faction_template_type;
 pub mod faction_type;
+pub mod fence_account_reducer;
 pub mod finalize_vmap_nav_coverage_reducer;
 pub mod finish_transfer_reducer;
 pub mod fire_eventai_forced_despawn_reducer;
@@ -306,6 +311,8 @@ pub mod friendly_aura_selection_type;
 pub mod friendly_crowd_control_condition_type;
 pub mod friendly_health_deficit_condition_type;
 pub mod friendly_missing_aura_condition_type;
+pub mod game_account_claim_table;
+pub mod game_account_fence_table;
 pub mod game_account_table;
 pub mod game_active_taxi_flight_table;
 pub mod game_addon_message_table;
@@ -875,9 +882,12 @@ pub mod relay_template_update_type;
 pub mod relay_terminate_type;
 pub mod relay_terminate_when_type;
 pub mod relay_world_state_type;
+pub mod release_account_claim_reducer;
 pub mod release_transfer_reducer;
 pub mod remove_aura_instruction_type;
 pub mod remove_guardians_instruction_type;
+pub mod renew_account_claim_reducer;
+pub mod renew_account_fence_reducer;
 pub mod rest_state_event_type;
 pub mod restore_taxi_fixture_reducer;
 pub mod resume_relay_arrival_reducer;
@@ -890,6 +900,7 @@ pub mod scale_selected_threat_instruction_type;
 pub mod school_lockout_type;
 pub mod script_type;
 pub mod server_config_type;
+pub mod session_actor_type;
 pub mod session_reaper_schedule_type;
 pub mod session_type;
 pub mod set_alpha_test_tools_enrollment_reducer;
@@ -979,12 +990,15 @@ pub mod walking_mode_type;
 pub mod weather_schedule_type;
 pub mod whisper_event_type;
 pub mod world_entity_type;
+pub mod world_session_token_type;
 pub mod world_state_name_type;
 pub mod world_state_type;
 pub mod xp_event_type;
 pub mod zone_weather_chance_type;
 pub mod zone_weather_type;
 
+pub use account_claim_type::AccountClaim;
+pub use account_fence_type::AccountFence;
 pub use account_type::Account;
 pub use activate_vmap_generation_reducer::activate_vmap_generation;
 pub use active_taxi_flight_type::ActiveTaxiFlight;
@@ -1030,11 +1044,13 @@ pub use character_talent_type::CharacterTalent;
 pub use character_taxi_node_type::CharacterTaxiNode;
 pub use character_type::Character;
 pub use chat_event_type::ChatEvent;
+pub use claim_account_reducer::claim_account;
 pub use claim_bot_invite_intent_reducer::claim_bot_invite_intent;
 pub use claim_guid_range_reducer::claim_guid_range;
 pub use claim_operator_reducer::claim_operator;
 pub use class_level_stats_type::ClassLevelStats;
 pub use clear_promoted_loot_roll_reducer::clear_promoted_loot_roll;
+pub use close_account_fence_reducer::close_account_fence;
 pub use combat_event_type::CombatEvent;
 pub use combo_point_type::ComboPoint;
 pub use confirm_import_reducer::confirm_import;
@@ -1274,6 +1290,7 @@ pub use facing_condition_type::FacingCondition;
 pub use facing_instruction_type::FacingInstruction;
 pub use faction_template_type::FactionTemplate;
 pub use faction_type::Faction;
+pub use fence_account_reducer::fence_account;
 pub use finalize_vmap_nav_coverage_reducer::finalize_vmap_nav_coverage;
 pub use finish_transfer_reducer::finish_transfer;
 pub use fire_eventai_forced_despawn_reducer::fire_eventai_forced_despawn;
@@ -1285,6 +1302,8 @@ pub use friendly_aura_selection_type::FriendlyAuraSelection;
 pub use friendly_crowd_control_condition_type::FriendlyCrowdControlCondition;
 pub use friendly_health_deficit_condition_type::FriendlyHealthDeficitCondition;
 pub use friendly_missing_aura_condition_type::FriendlyMissingAuraCondition;
+pub use game_account_claim_table::*;
+pub use game_account_fence_table::*;
 pub use game_account_table::*;
 pub use game_active_taxi_flight_table::*;
 pub use game_addon_message_table::*;
@@ -1854,9 +1873,12 @@ pub use relay_template_update_type::RelayTemplateUpdate;
 pub use relay_terminate_type::RelayTerminate;
 pub use relay_terminate_when_type::RelayTerminateWhen;
 pub use relay_world_state_type::RelayWorldState;
+pub use release_account_claim_reducer::release_account_claim;
 pub use release_transfer_reducer::release_transfer;
 pub use remove_aura_instruction_type::RemoveAuraInstruction;
 pub use remove_guardians_instruction_type::RemoveGuardiansInstruction;
+pub use renew_account_claim_reducer::renew_account_claim;
+pub use renew_account_fence_reducer::renew_account_fence;
 pub use rest_state_event_type::RestStateEvent;
 pub use restore_taxi_fixture_reducer::restore_taxi_fixture;
 pub use resume_relay_arrival_reducer::resume_relay_arrival;
@@ -1869,6 +1891,7 @@ pub use scale_selected_threat_instruction_type::ScaleSelectedThreatInstruction;
 pub use school_lockout_type::SchoolLockout;
 pub use script_type::Script;
 pub use server_config_type::ServerConfig;
+pub use session_actor_type::SessionActor;
 pub use session_reaper_schedule_type::SessionReaperSchedule;
 pub use session_type::Session;
 pub use set_alpha_test_tools_enrollment_reducer::set_alpha_test_tools_enrollment;
@@ -1958,6 +1981,7 @@ pub use walking_mode_type::WalkingMode;
 pub use weather_schedule_type::WeatherSchedule;
 pub use whisper_event_type::WhisperEvent;
 pub use world_entity_type::WorldEntity;
+pub use world_session_token_type::WorldSessionToken;
 pub use world_state_name_type::WorldStateName;
 pub use world_state_type::WorldState;
 pub use xp_event_type::XpEvent;
@@ -1989,7 +2013,7 @@ pub enum Reducer {
     ArmAllPools,
     BeginTransfer {
         transfer_id: u64,
-        character_guid: u64,
+        request_actor: SessionActor,
         dest_map_id: u32,
         dest_instance_id: u64,
         dest_x: f32,
@@ -1997,6 +2021,11 @@ pub enum Reducer {
         dest_z: f32,
         dest_o: f32,
         cross_database: bool,
+    },
+    ClaimAccount {
+        account_id: u64,
+        character_guid: u64,
+        request_nonce: u128,
     },
     ClaimBotInviteIntent {
         intent_id: u64,
@@ -2008,9 +2037,14 @@ pub enum Reducer {
     ClaimOperator,
     ClearPromotedLootRoll {
         roll_id: u64,
+        request_actor: SessionActor,
+    },
+    CloseAccountFence {
+        token: WorldSessionToken,
     },
     ConfirmImport {
         transfer_id: u64,
+        request_actor: SessionActor,
     },
     CreateCharacter {
         account_id: u64,
@@ -2683,7 +2717,7 @@ pub enum Reducer {
     },
     DeleteCharacter {
         account_id: u64,
-        character_guid: u64,
+        request_actor: SessionActor,
     },
     DiscardVmapGeneration {
         generation_id: u64,
@@ -2692,6 +2726,7 @@ pub enum Reducer {
         instance_id: u64,
         map_id: u32,
         party_id: u64,
+        request_actor: SessionActor,
     },
     EstablishSession {
         account_id: u64,
@@ -2700,6 +2735,7 @@ pub enum Reducer {
     },
     EvictInstancePopulation {
         instance_id: u64,
+        request_actor: SessionActor,
     },
     ExpireAuction {
         schedule: AuctionExpiry,
@@ -2707,11 +2743,18 @@ pub enum Reducer {
     ExpireEventaiSummon {
         expiry: CreatureAiSummonExpiry,
     },
+    FenceAccount {
+        token: WorldSessionToken,
+        account_name: String,
+        character_guid: u64,
+        expires_micros: i64,
+    },
     FinalizeVmapNavCoverage {
         generation_id: u64,
     },
     FinishTransfer {
         transfer_id: u64,
+        request_actor: SessionActor,
     },
     FireEventaiForcedDespawn {
         row: CreatureAiForcedDespawn,
@@ -2726,49 +2769,49 @@ pub enum Reducer {
         account_name: String,
     },
     GwAbandonQuest {
-        actor_guid: u64,
+        request_actor: SessionActor,
         quest_entry: u32,
     },
     GwAcceptGroupInvite {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwAcceptQuest {
-        actor_guid: u64,
+        request_actor: SessionActor,
         giver_guid: u64,
         quest_entry: u32,
     },
     GwAcceptTrade {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwAckTaxiReply {
         character_guid: u64,
         request_id: u64,
     },
     GwActivateTaxi {
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         source_client_node_id: u32,
         destination_client_node_id: u32,
         request_id: u64,
     },
     GwAddFriend {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwAddIgnore {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwArmTaxiFlight {
-        character_guid: u64,
+        request_actor: SessionActor,
     },
     GwAttack {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwAuctionBidLocal {
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auctioneer_guid: u64,
         auction_id: u32,
         house: u32,
@@ -2776,7 +2819,7 @@ pub enum Reducer {
     },
     GwAuctionConfirmBidRefund {
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auction_id: u32,
         house: u32,
         offer: u32,
@@ -2784,7 +2827,7 @@ pub enum Reducer {
     },
     GwAuctionFinishBid {
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auction_id: u32,
         house: u32,
         offer: u32,
@@ -2797,7 +2840,7 @@ pub enum Reducer {
     },
     GwAuctionHoldBid {
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auctioneer_guid: u64,
         auction_id: u32,
         house: u32,
@@ -2805,7 +2848,7 @@ pub enum Reducer {
     },
     GwAuctionHoldListing {
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
         item_guid: u64,
         auctioneer_guid: u64,
         house: u32,
@@ -2815,7 +2858,7 @@ pub enum Reducer {
     },
     GwAuctionListLocal {
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
         item_guid: u64,
         auctioneer_guid: u64,
         house: u32,
@@ -2825,63 +2868,63 @@ pub enum Reducer {
     },
     GwAuctionReleaseListingHold {
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
     },
     GwAutoBankItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         slot: u8,
     },
     GwBeginTrade {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwBindHome {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwBusyTrade {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwBuyBankSlot {
-        actor_guid: u64,
+        request_actor: SessionActor,
         banker_guid: u64,
     },
     GwBuyItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         vendor_guid: u64,
         item_entry: u32,
         count: u32,
     },
     GwBuybackItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         vendor_guid: u64,
         slot: u8,
     },
     GwCancelAura {
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
     },
     GwCancelCast {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwCancelTrade {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwCastAt {
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
         target_guid: u64,
     },
     GwCastItemTarget {
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
         slot: u8,
     },
     GwCastSpell {
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
         target_guid: u64,
     },
     GwCastSpellAt {
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
         target_guid: u64,
         x: f32,
@@ -2889,49 +2932,49 @@ pub enum Reducer {
         z: f32,
     },
     GwClearTradeItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         trade_slot: u8,
     },
     GwClientCommand {
-        actor_guid: u64,
+        request_actor: SessionActor,
         cmd: String,
         payload: String,
     },
     GwDelFriend {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwDelIgnore {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwDisenchant {
-        actor_guid: u64,
+        request_actor: SessionActor,
         slot: u8,
     },
     GwDuelAccept {
-        actor_guid: u64,
+        request_actor: SessionActor,
         flag_guid: u64,
     },
     GwDuelCancel {
-        actor_guid: u64,
+        request_actor: SessionActor,
         flag_guid: u64,
     },
     GwEnchantItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_slot: u8,
         enchant_id: u32,
     },
     GwEnterAreatrigger {
-        actor_guid: u64,
+        request_actor: SessionActor,
         trigger_id: u32,
     },
     GwEquipItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         from_slot: u8,
     },
     GwFish {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwForceZoneWeather {
         zone_id: u32,
@@ -2939,81 +2982,81 @@ pub enum Reducer {
         intensity: f32,
     },
     GwGmCommand {
-        actor_guid: u64,
+        request_actor: SessionActor,
         alpha_test_tools: bool,
         text: String,
     },
     GwGossipSelect {
-        actor_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
     },
     GwGroupDecline {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwGroupInvite {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwGroupLeave {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwGroupLootMethod {
-        actor_guid: u64,
+        request_actor: SessionActor,
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
     },
     GwGroupUninvite {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwHeartbeat,
     GwIgnoreTrade {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwInitiateTrade {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwInspect {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwJoinChannel {
-        actor_guid: u64,
+        request_actor: SessionActor,
         channel: String,
     },
     GwLearnTalent {
-        actor_guid: u64,
+        request_actor: SessionActor,
         talent_id: u32,
     },
     GwLeaveChannel {
-        actor_guid: u64,
+        request_actor: SessionActor,
         channel: String,
     },
     GwLeaveWorld {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwLootMasterGive {
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
     },
     GwLootMoney {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwLootRoll {
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
     },
     GwMoveItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         from_slot: u8,
         to_slot: u8,
     },
@@ -3021,7 +3064,7 @@ pub enum Reducer {
         moves: Vec<GwMove>,
     },
     GwMovementUpdate {
-        actor_guid: u64,
+        request_actor: SessionActor,
         opcode: u16,
         movement_info: Vec<u8>,
         x: f32,
@@ -3031,164 +3074,164 @@ pub enum Reducer {
         move_time_ms: u32,
     },
     GwOpenCreatureLoot {
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
     },
     GwOpenTaxi {
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         request_id: u64,
     },
     GwPartyChat {
-        actor_guid: u64,
+        request_actor: SessionActor,
         text: String,
     },
     GwPetCommand {
-        actor_guid: u64,
+        request_actor: SessionActor,
         data: u32,
         target_guid: u64,
     },
     GwPickLock {
-        actor_guid: u64,
+        request_actor: SessionActor,
         go_guid: u64,
     },
     GwPlayerLogin {
         account_id: u64,
-        character_guid: u64,
+        request_actor: SessionActor,
     },
     GwPushQuestToParty {
-        actor_guid: u64,
+        request_actor: SessionActor,
         quest_entry: u32,
     },
     GwRangedAttack {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         spell_id: u32,
     },
     GwReclaimCorpse {
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
     },
     GwRepairItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         slot: u8,
     },
     GwRepop {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwResetTalents {
-        actor_guid: u64,
+        request_actor: SessionActor,
         trainer_guid: u64,
     },
     GwRespondResurrect {
-        actor_guid: u64,
+        request_actor: SessionActor,
         accept: bool,
     },
     GwSellItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         vendor_guid: u64,
         slot: u8,
     },
     GwSendChannelMessage {
-        actor_guid: u64,
+        request_actor: SessionActor,
         channel: String,
         message: String,
     },
     GwSendChat {
-        actor_guid: u64,
+        request_actor: SessionActor,
         chat_type: u8,
         language: u8,
         message: String,
     },
     GwSendEmote {
-        actor_guid: u64,
+        request_actor: SessionActor,
         text_emote: u32,
         emote_anim: u32,
         target_guid: u64,
     },
     GwSendRoll {
-        actor_guid: u64,
+        request_actor: SessionActor,
         min_roll: u32,
         max_roll: u32,
     },
     GwSendWhisper {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_name: String,
         message: String,
     },
     GwSetActionButton {
-        actor_guid: u64,
+        request_actor: SessionActor,
         button: u8,
         action: u32,
         action_type: u8,
     },
     GwSetFactionAtWar {
-        actor_guid: u64,
+        request_actor: SessionActor,
         reputation_index: u32,
         at_war: bool,
     },
     GwSetSheathed {
-        actor_guid: u64,
+        request_actor: SessionActor,
         state: u8,
     },
     GwSetTarget {
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
     },
     GwSetTradeGold {
-        actor_guid: u64,
+        request_actor: SessionActor,
         copper: u32,
     },
     GwSetTradeItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         trade_slot: u8,
         inv_slot: u8,
     },
     GwSkin {
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
     },
     GwSpiritRes {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwStopAttack {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwTakeLoot {
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u8,
     },
     GwTaxiNodeStatus {
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         request_id: u64,
     },
     GwTrainerBuy {
-        actor_guid: u64,
+        request_actor: SessionActor,
         trainer_guid: u64,
         spell_id: u32,
     },
     GwTurnInQuest {
-        actor_guid: u64,
+        request_actor: SessionActor,
         giver_guid: u64,
         quest_entry: u32,
         reward_index: u32,
     },
     GwUnacceptTrade {
-        actor_guid: u64,
+        request_actor: SessionActor,
     },
     GwUnequipItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         from_slot: u8,
     },
     GwUseGameobject {
-        actor_guid: u64,
+        request_actor: SessionActor,
         go_guid: u64,
     },
     GwUseItem {
-        actor_guid: u64,
+        request_actor: SessionActor,
         slot: u8,
     },
     ImportCharacter {
@@ -3197,6 +3240,7 @@ pub enum Reducer {
     ImportCharacterBlob {
         transfer_id: u64,
         blob: Vec<u8>,
+        request_actor: SessionActor,
     },
     ImportCreatureAiDefinitions {
         packed: String,
@@ -3267,7 +3311,7 @@ pub enum Reducer {
     },
     RealmAuctionCommitListing {
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
         item_guid: u64,
         item_entry: u32,
         item_stack_count: u32,
@@ -3288,17 +3332,18 @@ pub enum Reducer {
     RealmAuctionConfirmListing {
         operation_id: u64,
         auction_id: u32,
+        request_actor: SessionActor,
     },
     RealmAuctionDecideBid {
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auction_id: u32,
         house: u32,
         offer: u32,
     },
     RealmAuctionRefundBid {
         operation_id: u64,
-        bidder_guid: u64,
+        request_actor: SessionActor,
         auction_id: u32,
         house: u32,
         offer: u32,
@@ -3306,7 +3351,7 @@ pub enum Reducer {
     },
     RealmAuctionRefundListing {
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
         item_guid: u64,
         item_entry: u32,
         item_stack_count: u32,
@@ -3326,10 +3371,11 @@ pub enum Reducer {
     },
     RealmAuctionSettleListing {
         operation_id: u64,
+        request_actor: SessionActor,
     },
     RealmGroupOp {
         op: u8,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
@@ -3339,7 +3385,7 @@ pub enum Reducer {
         corpse_guid: u64,
         slot: u8,
         item_entry: u32,
-        actor_guid: u64,
+        request_actor: SessionActor,
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
@@ -3349,7 +3395,7 @@ pub enum Reducer {
     },
     RealmMailCommit {
         escrow_id: u64,
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -3365,14 +3411,15 @@ pub enum Reducer {
     },
     RealmMailConfirmDelivery {
         escrow_id: u64,
+        request_actor: SessionActor,
     },
     RealmMailDelete {
-        recipient_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
     },
     RealmMailFence {
         escrow_id: u64,
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -3384,7 +3431,7 @@ pub enum Reducer {
     },
     RealmMailItemPayout {
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         item_entry: u32,
         item_stack_count: u32,
@@ -3394,24 +3441,24 @@ pub enum Reducer {
         random_property_id: u32,
     },
     RealmMailItemRoom {
-        payee_guid: u64,
+        request_actor: SessionActor,
     },
     RealmMailMarkRead {
-        recipient_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
     },
     RealmMailPayout {
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         amount: u32,
     },
     RealmMailReturn {
-        recipient_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
     },
     RealmMailSend {
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -3421,29 +3468,30 @@ pub enum Reducer {
     },
     RealmMailSettle {
         escrow_id: u64,
+        request_actor: SessionActor,
     },
     RealmMailTakeItem {
-        recipient_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
     },
     RealmMailTakeItemFence {
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         expect_entry: u32,
     },
     RealmMailTakeMoney {
-        recipient_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
     },
     RealmMailTakeMoneyFence {
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         expect_money: u32,
     },
     RealmWhisper {
-        sender_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         message: String,
         sender_is_ignored: bool,
@@ -3477,8 +3525,19 @@ pub enum Reducer {
         sessions: u32,
         gateway_key: u64,
     },
+    ReleaseAccountClaim {
+        token: WorldSessionToken,
+    },
     ReleaseTransfer {
         transfer_id: u64,
+        request_actor: SessionActor,
+    },
+    RenewAccountClaim {
+        token: WorldSessionToken,
+    },
+    RenewAccountFence {
+        token: WorldSessionToken,
+        expires_micros: i64,
     },
     RestoreTaxiFixture,
     ResumeRelayArrival {
@@ -3497,6 +3556,7 @@ pub enum Reducer {
         character_guid: u64,
         map_id: u32,
         instance_id: u64,
+        request_actor: SessionActor,
     },
     SetGmLevel {
         character_name: String,
@@ -3524,6 +3584,7 @@ pub enum Reducer {
         corpse_guid: u64,
         slot: u8,
         winner_guid: u64,
+        request_actor: SessionActor,
     },
     StageVmapGeneration {
         generation_id: u64,
@@ -3547,6 +3608,7 @@ pub enum Reducer {
         loot_threshold: u8,
         master_looter_guid: u64,
         members: Vec<u64>,
+        request_actor: SessionActor,
     },
     TickAuras {
         schedule: AuraSchedule,
@@ -3590,10 +3652,12 @@ impl __sdk::Reducer for Reducer {
             Reducer::ApplyPackageDeltas { .. } => "apply_package_deltas",
             Reducer::ArmAllPools => "arm_all_pools",
             Reducer::BeginTransfer { .. } => "begin_transfer",
+            Reducer::ClaimAccount { .. } => "claim_account",
             Reducer::ClaimBotInviteIntent { .. } => "claim_bot_invite_intent",
             Reducer::ClaimGuidRange { .. } => "claim_guid_range",
             Reducer::ClaimOperator => "claim_operator",
             Reducer::ClearPromotedLootRoll { .. } => "clear_promoted_loot_roll",
+            Reducer::CloseAccountFence { .. } => "close_account_fence",
             Reducer::ConfirmImport { .. } => "confirm_import",
             Reducer::CreateCharacter { .. } => "create_character",
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
@@ -3793,6 +3857,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::EvictInstancePopulation { .. } => "evict_instance_population",
             Reducer::ExpireAuction { .. } => "expire_auction",
             Reducer::ExpireEventaiSummon { .. } => "expire_eventai_summon",
+            Reducer::FenceAccount { .. } => "fence_account",
             Reducer::FinalizeVmapNavCoverage { .. } => "finalize_vmap_nav_coverage",
             Reducer::FinishTransfer { .. } => "finish_transfer",
             Reducer::FireEventaiForcedDespawn { .. } => "fire_eventai_forced_despawn",
@@ -3959,7 +4024,10 @@ impl __sdk::Reducer for Reducer {
             Reducer::ReapTransfers { .. } => "reap_transfers",
             Reducer::RecordRegionLoad { .. } => "record_region_load",
             Reducer::RecordShardLoad { .. } => "record_shard_load",
+            Reducer::ReleaseAccountClaim { .. } => "release_account_claim",
             Reducer::ReleaseTransfer { .. } => "release_transfer",
+            Reducer::RenewAccountClaim { .. } => "renew_account_claim",
+            Reducer::RenewAccountFence { .. } => "renew_account_fence",
             Reducer::RestoreTaxiFixture => "restore_taxi_fixture",
             Reducer::ResumeRelayArrival { .. } => "resume_relay_arrival",
             Reducer::ResumeRelayRun { .. } => "resume_relay_run",
@@ -4018,7 +4086,7 @@ impl __sdk::Reducer for Reducer {
                 }),
 Reducer::BeginTransfer{
                 transfer_id,
-                character_guid,
+                request_actor,
                 dest_map_id,
                 dest_instance_id,
                 dest_x,
@@ -4028,7 +4096,7 @@ Reducer::BeginTransfer{
                 cross_database,
 }             => __sats::bsatn::to_vec(&begin_transfer_reducer::BeginTransferArgs {
                 transfer_id: transfer_id.clone(),
-                character_guid: character_guid.clone(),
+                request_actor: request_actor.clone(),
                 dest_map_id: dest_map_id.clone(),
                 dest_instance_id: dest_instance_id.clone(),
                 dest_x: dest_x.clone(),
@@ -4036,6 +4104,15 @@ Reducer::BeginTransfer{
                 dest_z: dest_z.clone(),
                 dest_o: dest_o.clone(),
                 cross_database: cross_database.clone(),
+}),
+            Reducer::ClaimAccount{
+                account_id,
+                character_guid,
+                request_nonce,
+}             => __sats::bsatn::to_vec(&claim_account_reducer::ClaimAccountArgs {
+                account_id: account_id.clone(),
+                character_guid: character_guid.clone(),
+                request_nonce: request_nonce.clone(),
 }),
             Reducer::ClaimBotInviteIntent{
                 intent_id,
@@ -4053,13 +4130,22 @@ Reducer::BeginTransfer{
                 }),
 Reducer::ClearPromotedLootRoll{
                 roll_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&clear_promoted_loot_roll_reducer::ClearPromotedLootRollArgs {
                 roll_id: roll_id.clone(),
+                request_actor: request_actor.clone(),
+}),
+            Reducer::CloseAccountFence{
+                token,
+}             => __sats::bsatn::to_vec(&close_account_fence_reducer::CloseAccountFenceArgs {
+                token: token.clone(),
 }),
             Reducer::ConfirmImport{
                 transfer_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&confirm_import_reducer::ConfirmImportArgs {
                 transfer_id: transfer_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::CreateCharacter{
                 account_id,
@@ -5264,10 +5350,10 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::DeleteCharacter{
                 account_id,
-                character_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&delete_character_reducer::DeleteCharacterArgs {
                 account_id: account_id.clone(),
-                character_guid: character_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::DiscardVmapGeneration{
                 generation_id,
@@ -5278,10 +5364,12 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 instance_id,
                 map_id,
                 party_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&ensure_instance_reducer::EnsureInstanceArgs {
                 instance_id: instance_id.clone(),
                 map_id: map_id.clone(),
                 party_id: party_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::EstablishSession{
                 account_id,
@@ -5294,8 +5382,10 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::EvictInstancePopulation{
                 instance_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&evict_instance_population_reducer::EvictInstancePopulationArgs {
                 instance_id: instance_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::ExpireAuction{
                 schedule,
@@ -5307,6 +5397,17 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }             => __sats::bsatn::to_vec(&expire_eventai_summon_reducer::ExpireEventaiSummonArgs {
                 expiry: expiry.clone(),
 }),
+            Reducer::FenceAccount{
+                token,
+                account_name,
+                character_guid,
+                expires_micros,
+}             => __sats::bsatn::to_vec(&fence_account_reducer::FenceAccountArgs {
+                token: token.clone(),
+                account_name: account_name.clone(),
+                character_guid: character_guid.clone(),
+                expires_micros: expires_micros.clone(),
+}),
             Reducer::FinalizeVmapNavCoverage{
                 generation_id,
 }             => __sats::bsatn::to_vec(&finalize_vmap_nav_coverage_reducer::FinalizeVmapNavCoverageArgs {
@@ -5314,8 +5415,10 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::FinishTransfer{
                 transfer_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&finish_transfer_reducer::FinishTransferArgs {
                 transfer_id: transfer_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::FireEventaiForcedDespawn{
                 row,
@@ -5338,30 +5441,30 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 account_name: account_name.clone(),
 }),
             Reducer::GwAbandonQuest{
-                actor_guid,
+                request_actor,
                 quest_entry,
 }             => __sats::bsatn::to_vec(&gw_abandon_quest_reducer::GwAbandonQuestArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 quest_entry: quest_entry.clone(),
 }),
             Reducer::GwAcceptGroupInvite{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_accept_group_invite_reducer::GwAcceptGroupInviteArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwAcceptQuest{
-                actor_guid,
+                request_actor,
                 giver_guid,
                 quest_entry,
 }             => __sats::bsatn::to_vec(&gw_accept_quest_reducer::GwAcceptQuestArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 giver_guid: giver_guid.clone(),
                 quest_entry: quest_entry.clone(),
 }),
             Reducer::GwAcceptTrade{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_accept_trade_reducer::GwAcceptTradeArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwAckTaxiReply{
                 character_guid,
@@ -5371,54 +5474,54 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 request_id: request_id.clone(),
 }),
             Reducer::GwActivateTaxi{
-                character_guid,
+                request_actor,
                 npc_guid,
                 source_client_node_id,
                 destination_client_node_id,
                 request_id,
 }             => __sats::bsatn::to_vec(&gw_activate_taxi_reducer::GwActivateTaxiArgs {
-                character_guid: character_guid.clone(),
+                request_actor: request_actor.clone(),
                 npc_guid: npc_guid.clone(),
                 source_client_node_id: source_client_node_id.clone(),
                 destination_client_node_id: destination_client_node_id.clone(),
                 request_id: request_id.clone(),
 }),
             Reducer::GwAddFriend{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_add_friend_reducer::GwAddFriendArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwAddIgnore{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_add_ignore_reducer::GwAddIgnoreArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwArmTaxiFlight{
-                character_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_arm_taxi_flight_reducer::GwArmTaxiFlightArgs {
-                character_guid: character_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwAttack{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_attack_reducer::GwAttackArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwAuctionBidLocal{
                 operation_id,
-                bidder_guid,
+                request_actor,
                 auctioneer_guid,
                 auction_id,
                 house,
                 offer,
 }             => __sats::bsatn::to_vec(&gw_auction_bid_local_reducer::GwAuctionBidLocalArgs {
                 operation_id: operation_id.clone(),
-                bidder_guid: bidder_guid.clone(),
+                request_actor: request_actor.clone(),
                 auctioneer_guid: auctioneer_guid.clone(),
                 auction_id: auction_id.clone(),
                 house: house.clone(),
@@ -5426,14 +5529,14 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::GwAuctionConfirmBidRefund{
                 operation_id,
-                bidder_guid,
+                request_actor,
                 auction_id,
                 house,
                 offer,
                 deferred_refund,
 }             => __sats::bsatn::to_vec(&gw_auction_confirm_bid_refund_reducer::GwAuctionConfirmBidRefundArgs {
                 operation_id: operation_id.clone(),
-                bidder_guid: bidder_guid.clone(),
+                request_actor: request_actor.clone(),
                 auction_id: auction_id.clone(),
                 house: house.clone(),
                 offer: offer.clone(),
@@ -5441,7 +5544,7 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::GwAuctionFinishBid{
                 operation_id,
-                bidder_guid,
+                request_actor,
                 auction_id,
                 house,
                 offer,
@@ -5453,7 +5556,7 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 accepted_price,
 }             => __sats::bsatn::to_vec(&gw_auction_finish_bid_reducer::GwAuctionFinishBidArgs {
                 operation_id: operation_id.clone(),
-                bidder_guid: bidder_guid.clone(),
+                request_actor: request_actor.clone(),
                 auction_id: auction_id.clone(),
                 house: house.clone(),
                 offer: offer.clone(),
@@ -5466,14 +5569,14 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::GwAuctionHoldBid{
                 operation_id,
-                bidder_guid,
+                request_actor,
                 auctioneer_guid,
                 auction_id,
                 house,
                 offer,
 }             => __sats::bsatn::to_vec(&gw_auction_hold_bid_reducer::GwAuctionHoldBidArgs {
                 operation_id: operation_id.clone(),
-                bidder_guid: bidder_guid.clone(),
+                request_actor: request_actor.clone(),
                 auctioneer_guid: auctioneer_guid.clone(),
                 auction_id: auction_id.clone(),
                 house: house.clone(),
@@ -5481,7 +5584,7 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::GwAuctionHoldListing{
                 operation_id,
-                seller_guid,
+                request_actor,
                 item_guid,
                 auctioneer_guid,
                 house,
@@ -5490,7 +5593,7 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 duration_minutes,
 }             => __sats::bsatn::to_vec(&gw_auction_hold_listing_reducer::GwAuctionHoldListingArgs {
                 operation_id: operation_id.clone(),
-                seller_guid: seller_guid.clone(),
+                request_actor: request_actor.clone(),
                 item_guid: item_guid.clone(),
                 auctioneer_guid: auctioneer_guid.clone(),
                 house: house.clone(),
@@ -5500,7 +5603,7 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::GwAuctionListLocal{
                 operation_id,
-                seller_guid,
+                request_actor,
                 item_guid,
                 auctioneer_guid,
                 house,
@@ -5509,7 +5612,7 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 duration_minutes,
 }             => __sats::bsatn::to_vec(&gw_auction_list_local_reducer::GwAuctionListLocalArgs {
                 operation_id: operation_id.clone(),
-                seller_guid: seller_guid.clone(),
+                request_actor: request_actor.clone(),
                 item_guid: item_guid.clone(),
                 auctioneer_guid: auctioneer_guid.clone(),
                 house: house.clone(),
@@ -5519,113 +5622,113 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }),
             Reducer::GwAuctionReleaseListingHold{
                 operation_id,
-                seller_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_auction_release_listing_hold_reducer::GwAuctionReleaseListingHoldArgs {
                 operation_id: operation_id.clone(),
-                seller_guid: seller_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwAutoBankItem{
-                actor_guid,
+                request_actor,
                 slot,
 }             => __sats::bsatn::to_vec(&gw_auto_bank_item_reducer::GwAutoBankItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 slot: slot.clone(),
 }),
             Reducer::GwBeginTrade{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_begin_trade_reducer::GwBeginTradeArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwBindHome{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_bind_home_reducer::GwBindHomeArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwBusyTrade{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_busy_trade_reducer::GwBusyTradeArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwBuyBankSlot{
-                actor_guid,
+                request_actor,
                 banker_guid,
 }             => __sats::bsatn::to_vec(&gw_buy_bank_slot_reducer::GwBuyBankSlotArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 banker_guid: banker_guid.clone(),
 }),
             Reducer::GwBuyItem{
-                actor_guid,
+                request_actor,
                 vendor_guid,
                 item_entry,
                 count,
 }             => __sats::bsatn::to_vec(&gw_buy_item_reducer::GwBuyItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 vendor_guid: vendor_guid.clone(),
                 item_entry: item_entry.clone(),
                 count: count.clone(),
 }),
             Reducer::GwBuybackItem{
-                actor_guid,
+                request_actor,
                 vendor_guid,
                 slot,
 }             => __sats::bsatn::to_vec(&gw_buyback_item_reducer::GwBuybackItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 vendor_guid: vendor_guid.clone(),
                 slot: slot.clone(),
 }),
             Reducer::GwCancelAura{
-                actor_guid,
+                request_actor,
                 spell_id,
 }             => __sats::bsatn::to_vec(&gw_cancel_aura_reducer::GwCancelAuraArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 spell_id: spell_id.clone(),
 }),
             Reducer::GwCancelCast{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_cancel_cast_reducer::GwCancelCastArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwCancelTrade{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_cancel_trade_reducer::GwCancelTradeArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwCastAt{
-                actor_guid,
+                request_actor,
                 spell_id,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_cast_at_reducer::GwCastAtArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwCastItemTarget{
-                actor_guid,
+                request_actor,
                 spell_id,
                 slot,
 }             => __sats::bsatn::to_vec(&gw_cast_item_target_reducer::GwCastItemTargetArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 spell_id: spell_id.clone(),
                 slot: slot.clone(),
 }),
             Reducer::GwCastSpell{
-                actor_guid,
+                request_actor,
                 spell_id,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_cast_spell_reducer::GwCastSpellArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwCastSpellAt{
-                actor_guid,
+                request_actor,
                 spell_id,
                 target_guid,
                 x,
                 y,
                 z,
 }             => __sats::bsatn::to_vec(&gw_cast_spell_at_reducer::GwCastSpellAtArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 spell_id: spell_id.clone(),
                 target_guid: target_guid.clone(),
                 x: x.clone(),
@@ -5633,83 +5736,83 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 z: z.clone(),
 }),
             Reducer::GwClearTradeItem{
-                actor_guid,
+                request_actor,
                 trade_slot,
 }             => __sats::bsatn::to_vec(&gw_clear_trade_item_reducer::GwClearTradeItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 trade_slot: trade_slot.clone(),
 }),
             Reducer::GwClientCommand{
-                actor_guid,
+                request_actor,
                 cmd,
                 payload,
 }             => __sats::bsatn::to_vec(&gw_client_command_reducer::GwClientCommandArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 cmd: cmd.clone(),
                 payload: payload.clone(),
 }),
             Reducer::GwDelFriend{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_del_friend_reducer::GwDelFriendArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwDelIgnore{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_del_ignore_reducer::GwDelIgnoreArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwDisenchant{
-                actor_guid,
+                request_actor,
                 slot,
 }             => __sats::bsatn::to_vec(&gw_disenchant_reducer::GwDisenchantArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 slot: slot.clone(),
 }),
             Reducer::GwDuelAccept{
-                actor_guid,
+                request_actor,
                 flag_guid,
 }             => __sats::bsatn::to_vec(&gw_duel_accept_reducer::GwDuelAcceptArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 flag_guid: flag_guid.clone(),
 }),
             Reducer::GwDuelCancel{
-                actor_guid,
+                request_actor,
                 flag_guid,
 }             => __sats::bsatn::to_vec(&gw_duel_cancel_reducer::GwDuelCancelArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 flag_guid: flag_guid.clone(),
 }),
             Reducer::GwEnchantItem{
-                actor_guid,
+                request_actor,
                 target_slot,
                 enchant_id,
 }             => __sats::bsatn::to_vec(&gw_enchant_item_reducer::GwEnchantItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_slot: target_slot.clone(),
                 enchant_id: enchant_id.clone(),
 }),
             Reducer::GwEnterAreatrigger{
-                actor_guid,
+                request_actor,
                 trigger_id,
 }             => __sats::bsatn::to_vec(&gw_enter_areatrigger_reducer::GwEnterAreatriggerArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 trigger_id: trigger_id.clone(),
 }),
             Reducer::GwEquipItem{
-                actor_guid,
+                request_actor,
                 from_slot,
 }             => __sats::bsatn::to_vec(&gw_equip_item_reducer::GwEquipItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 from_slot: from_slot.clone(),
 }),
             Reducer::GwFish{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_fish_reducer::GwFishArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwForceZoneWeather{
                 zone_id,
@@ -5721,142 +5824,142 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 intensity: intensity.clone(),
 }),
             Reducer::GwGmCommand{
-                actor_guid,
+                request_actor,
                 alpha_test_tools,
                 text,
 }             => __sats::bsatn::to_vec(&gw_gm_command_reducer::GwGmCommandArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 alpha_test_tools: alpha_test_tools.clone(),
                 text: text.clone(),
 }),
             Reducer::GwGossipSelect{
-                actor_guid,
+                request_actor,
                 npc_guid,
                 option_id,
                 option_row_id,
 }             => __sats::bsatn::to_vec(&gw_gossip_select_reducer::GwGossipSelectArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 npc_guid: npc_guid.clone(),
                 option_id: option_id.clone(),
                 option_row_id: option_row_id.clone(),
 }),
             Reducer::GwGroupDecline{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_group_decline_reducer::GwGroupDeclineArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwGroupInvite{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_group_invite_reducer::GwGroupInviteArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwGroupLeave{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_group_leave_reducer::GwGroupLeaveArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwGroupLootMethod{
-                actor_guid,
+                request_actor,
                 loot_setting,
                 master_guid,
                 loot_threshold,
 }             => __sats::bsatn::to_vec(&gw_group_loot_method_reducer::GwGroupLootMethodArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 loot_setting: loot_setting.clone(),
                 master_guid: master_guid.clone(),
                 loot_threshold: loot_threshold.clone(),
 }),
             Reducer::GwGroupUninvite{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_group_uninvite_reducer::GwGroupUninviteArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwHeartbeat => __sats::bsatn::to_vec(&gw_heartbeat_reducer::GwHeartbeatArgs {
                 }),
 Reducer::GwIgnoreTrade{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_ignore_trade_reducer::GwIgnoreTradeArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwInitiateTrade{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_initiate_trade_reducer::GwInitiateTradeArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwInspect{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_inspect_reducer::GwInspectArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwJoinChannel{
-                actor_guid,
+                request_actor,
                 channel,
 }             => __sats::bsatn::to_vec(&gw_join_channel_reducer::GwJoinChannelArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 channel: channel.clone(),
 }),
             Reducer::GwLearnTalent{
-                actor_guid,
+                request_actor,
                 talent_id,
 }             => __sats::bsatn::to_vec(&gw_learn_talent_reducer::GwLearnTalentArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 talent_id: talent_id.clone(),
 }),
             Reducer::GwLeaveChannel{
-                actor_guid,
+                request_actor,
                 channel,
 }             => __sats::bsatn::to_vec(&gw_leave_channel_reducer::GwLeaveChannelArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 channel: channel.clone(),
 }),
             Reducer::GwLeaveWorld{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_leave_world_reducer::GwLeaveWorldArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwLootMasterGive{
-                actor_guid,
+                request_actor,
                 corpse_guid,
                 loot_slot,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_loot_master_give_reducer::GwLootMasterGiveArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 corpse_guid: corpse_guid.clone(),
                 loot_slot: loot_slot.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwLootMoney{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_loot_money_reducer::GwLootMoneyArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwLootRoll{
-                actor_guid,
+                request_actor,
                 corpse_guid,
                 loot_slot,
                 vote,
 }             => __sats::bsatn::to_vec(&gw_loot_roll_reducer::GwLootRollArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 corpse_guid: corpse_guid.clone(),
                 loot_slot: loot_slot.clone(),
                 vote: vote.clone(),
 }),
             Reducer::GwMoveItem{
-                actor_guid,
+                request_actor,
                 from_slot,
                 to_slot,
 }             => __sats::bsatn::to_vec(&gw_move_item_reducer::GwMoveItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 from_slot: from_slot.clone(),
                 to_slot: to_slot.clone(),
 }),
@@ -5866,7 +5969,7 @@ Reducer::GwIgnoreTrade{
                 moves: moves.clone(),
 }),
             Reducer::GwMovementUpdate{
-                actor_guid,
+                request_actor,
                 opcode,
                 movement_info,
                 x,
@@ -5875,7 +5978,7 @@ Reducer::GwIgnoreTrade{
                 o,
                 move_time_ms,
 }             => __sats::bsatn::to_vec(&gw_movement_update_reducer::GwMovementUpdateArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 opcode: opcode.clone(),
                 movement_info: movement_info.clone(),
                 x: x.clone(),
@@ -5885,289 +5988,289 @@ Reducer::GwIgnoreTrade{
                 move_time_ms: move_time_ms.clone(),
 }),
             Reducer::GwOpenCreatureLoot{
-                actor_guid,
+                request_actor,
                 corpse_guid,
 }             => __sats::bsatn::to_vec(&gw_open_creature_loot_reducer::GwOpenCreatureLootArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 corpse_guid: corpse_guid.clone(),
 }),
             Reducer::GwOpenTaxi{
-                character_guid,
+                request_actor,
                 npc_guid,
                 request_id,
 }             => __sats::bsatn::to_vec(&gw_open_taxi_reducer::GwOpenTaxiArgs {
-                character_guid: character_guid.clone(),
+                request_actor: request_actor.clone(),
                 npc_guid: npc_guid.clone(),
                 request_id: request_id.clone(),
 }),
             Reducer::GwPartyChat{
-                actor_guid,
+                request_actor,
                 text,
 }             => __sats::bsatn::to_vec(&gw_party_chat_reducer::GwPartyChatArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 text: text.clone(),
 }),
             Reducer::GwPetCommand{
-                actor_guid,
+                request_actor,
                 data,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_pet_command_reducer::GwPetCommandArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 data: data.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwPickLock{
-                actor_guid,
+                request_actor,
                 go_guid,
 }             => __sats::bsatn::to_vec(&gw_pick_lock_reducer::GwPickLockArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 go_guid: go_guid.clone(),
 }),
             Reducer::GwPlayerLogin{
                 account_id,
-                character_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_player_login_reducer::GwPlayerLoginArgs {
                 account_id: account_id.clone(),
-                character_guid: character_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwPushQuestToParty{
-                actor_guid,
+                request_actor,
                 quest_entry,
 }             => __sats::bsatn::to_vec(&gw_push_quest_to_party_reducer::GwPushQuestToPartyArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 quest_entry: quest_entry.clone(),
 }),
             Reducer::GwRangedAttack{
-                actor_guid,
+                request_actor,
                 target_guid,
                 spell_id,
 }             => __sats::bsatn::to_vec(&gw_ranged_attack_reducer::GwRangedAttackArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
                 spell_id: spell_id.clone(),
 }),
             Reducer::GwReclaimCorpse{
-                actor_guid,
+                request_actor,
                 corpse_guid,
 }             => __sats::bsatn::to_vec(&gw_reclaim_corpse_reducer::GwReclaimCorpseArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 corpse_guid: corpse_guid.clone(),
 }),
             Reducer::GwRepairItem{
-                actor_guid,
+                request_actor,
                 npc_guid,
                 slot,
 }             => __sats::bsatn::to_vec(&gw_repair_item_reducer::GwRepairItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 npc_guid: npc_guid.clone(),
                 slot: slot.clone(),
 }),
             Reducer::GwRepop{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_repop_reducer::GwRepopArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwResetTalents{
-                actor_guid,
+                request_actor,
                 trainer_guid,
 }             => __sats::bsatn::to_vec(&gw_reset_talents_reducer::GwResetTalentsArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 trainer_guid: trainer_guid.clone(),
 }),
             Reducer::GwRespondResurrect{
-                actor_guid,
+                request_actor,
                 accept,
 }             => __sats::bsatn::to_vec(&gw_respond_resurrect_reducer::GwRespondResurrectArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 accept: accept.clone(),
 }),
             Reducer::GwSellItem{
-                actor_guid,
+                request_actor,
                 vendor_guid,
                 slot,
 }             => __sats::bsatn::to_vec(&gw_sell_item_reducer::GwSellItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 vendor_guid: vendor_guid.clone(),
                 slot: slot.clone(),
 }),
             Reducer::GwSendChannelMessage{
-                actor_guid,
+                request_actor,
                 channel,
                 message,
 }             => __sats::bsatn::to_vec(&gw_send_channel_message_reducer::GwSendChannelMessageArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 channel: channel.clone(),
                 message: message.clone(),
 }),
             Reducer::GwSendChat{
-                actor_guid,
+                request_actor,
                 chat_type,
                 language,
                 message,
 }             => __sats::bsatn::to_vec(&gw_send_chat_reducer::GwSendChatArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 chat_type: chat_type.clone(),
                 language: language.clone(),
                 message: message.clone(),
 }),
             Reducer::GwSendEmote{
-                actor_guid,
+                request_actor,
                 text_emote,
                 emote_anim,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_send_emote_reducer::GwSendEmoteArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 text_emote: text_emote.clone(),
                 emote_anim: emote_anim.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwSendRoll{
-                actor_guid,
+                request_actor,
                 min_roll,
                 max_roll,
 }             => __sats::bsatn::to_vec(&gw_send_roll_reducer::GwSendRollArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 min_roll: min_roll.clone(),
                 max_roll: max_roll.clone(),
 }),
             Reducer::GwSendWhisper{
-                actor_guid,
+                request_actor,
                 target_name,
                 message,
 }             => __sats::bsatn::to_vec(&gw_send_whisper_reducer::GwSendWhisperArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_name: target_name.clone(),
                 message: message.clone(),
 }),
             Reducer::GwSetActionButton{
-                actor_guid,
+                request_actor,
                 button,
                 action,
                 action_type,
 }             => __sats::bsatn::to_vec(&gw_set_action_button_reducer::GwSetActionButtonArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 button: button.clone(),
                 action: action.clone(),
                 action_type: action_type.clone(),
 }),
             Reducer::GwSetFactionAtWar{
-                actor_guid,
+                request_actor,
                 reputation_index,
                 at_war,
 }             => __sats::bsatn::to_vec(&gw_set_faction_at_war_reducer::GwSetFactionAtWarArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 reputation_index: reputation_index.clone(),
                 at_war: at_war.clone(),
 }),
             Reducer::GwSetSheathed{
-                actor_guid,
+                request_actor,
                 state,
 }             => __sats::bsatn::to_vec(&gw_set_sheathed_reducer::GwSetSheathedArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 state: state.clone(),
 }),
             Reducer::GwSetTarget{
-                actor_guid,
+                request_actor,
                 target_guid,
 }             => __sats::bsatn::to_vec(&gw_set_target_reducer::GwSetTargetArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
 }),
             Reducer::GwSetTradeGold{
-                actor_guid,
+                request_actor,
                 copper,
 }             => __sats::bsatn::to_vec(&gw_set_trade_gold_reducer::GwSetTradeGoldArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 copper: copper.clone(),
 }),
             Reducer::GwSetTradeItem{
-                actor_guid,
+                request_actor,
                 trade_slot,
                 inv_slot,
 }             => __sats::bsatn::to_vec(&gw_set_trade_item_reducer::GwSetTradeItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 trade_slot: trade_slot.clone(),
                 inv_slot: inv_slot.clone(),
 }),
             Reducer::GwSkin{
-                actor_guid,
+                request_actor,
                 corpse_guid,
 }             => __sats::bsatn::to_vec(&gw_skin_reducer::GwSkinArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 corpse_guid: corpse_guid.clone(),
 }),
             Reducer::GwSpiritRes{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_spirit_res_reducer::GwSpiritResArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwStopAttack{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_stop_attack_reducer::GwStopAttackArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwTakeLoot{
-                actor_guid,
+                request_actor,
                 corpse_guid,
                 loot_slot,
 }             => __sats::bsatn::to_vec(&gw_take_loot_reducer::GwTakeLootArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 corpse_guid: corpse_guid.clone(),
                 loot_slot: loot_slot.clone(),
 }),
             Reducer::GwTaxiNodeStatus{
-                character_guid,
+                request_actor,
                 npc_guid,
                 request_id,
 }             => __sats::bsatn::to_vec(&gw_taxi_node_status_reducer::GwTaxiNodeStatusArgs {
-                character_guid: character_guid.clone(),
+                request_actor: request_actor.clone(),
                 npc_guid: npc_guid.clone(),
                 request_id: request_id.clone(),
 }),
             Reducer::GwTrainerBuy{
-                actor_guid,
+                request_actor,
                 trainer_guid,
                 spell_id,
 }             => __sats::bsatn::to_vec(&gw_trainer_buy_reducer::GwTrainerBuyArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 trainer_guid: trainer_guid.clone(),
                 spell_id: spell_id.clone(),
 }),
             Reducer::GwTurnInQuest{
-                actor_guid,
+                request_actor,
                 giver_guid,
                 quest_entry,
                 reward_index,
 }             => __sats::bsatn::to_vec(&gw_turn_in_quest_reducer::GwTurnInQuestArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 giver_guid: giver_guid.clone(),
                 quest_entry: quest_entry.clone(),
                 reward_index: reward_index.clone(),
 }),
             Reducer::GwUnacceptTrade{
-                actor_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&gw_unaccept_trade_reducer::GwUnacceptTradeArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::GwUnequipItem{
-                actor_guid,
+                request_actor,
                 from_slot,
 }             => __sats::bsatn::to_vec(&gw_unequip_item_reducer::GwUnequipItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 from_slot: from_slot.clone(),
 }),
             Reducer::GwUseGameobject{
-                actor_guid,
+                request_actor,
                 go_guid,
 }             => __sats::bsatn::to_vec(&gw_use_gameobject_reducer::GwUseGameobjectArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 go_guid: go_guid.clone(),
 }),
             Reducer::GwUseItem{
-                actor_guid,
+                request_actor,
                 slot,
 }             => __sats::bsatn::to_vec(&gw_use_item_reducer::GwUseItemArgs {
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 slot: slot.clone(),
 }),
             Reducer::ImportCharacter{
@@ -6178,9 +6281,11 @@ Reducer::GwIgnoreTrade{
             Reducer::ImportCharacterBlob{
                 transfer_id,
                 blob,
+                request_actor,
 }             => __sats::bsatn::to_vec(&import_character_blob_reducer::ImportCharacterBlobArgs {
                 transfer_id: transfer_id.clone(),
                 blob: blob.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::ImportCreatureAiDefinitions{
                 packed,
@@ -6297,7 +6402,7 @@ Reducer::PrepareVmapNavCoverage{
 }),
             Reducer::RealmAuctionCommitListing{
                 operation_id,
-                seller_guid,
+                request_actor,
                 item_guid,
                 item_entry,
                 item_stack_count,
@@ -6316,7 +6421,7 @@ Reducer::PrepareVmapNavCoverage{
                 expires_micros,
 }             => __sats::bsatn::to_vec(&realm_auction_commit_listing_reducer::RealmAuctionCommitListingArgs {
                 operation_id: operation_id.clone(),
-                seller_guid: seller_guid.clone(),
+                request_actor: request_actor.clone(),
                 item_guid: item_guid.clone(),
                 item_entry: item_entry.clone(),
                 item_stack_count: item_stack_count.clone(),
@@ -6337,33 +6442,35 @@ Reducer::PrepareVmapNavCoverage{
             Reducer::RealmAuctionConfirmListing{
                 operation_id,
                 auction_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&realm_auction_confirm_listing_reducer::RealmAuctionConfirmListingArgs {
                 operation_id: operation_id.clone(),
                 auction_id: auction_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::RealmAuctionDecideBid{
                 operation_id,
-                bidder_guid,
+                request_actor,
                 auction_id,
                 house,
                 offer,
 }             => __sats::bsatn::to_vec(&realm_auction_decide_bid_reducer::RealmAuctionDecideBidArgs {
                 operation_id: operation_id.clone(),
-                bidder_guid: bidder_guid.clone(),
+                request_actor: request_actor.clone(),
                 auction_id: auction_id.clone(),
                 house: house.clone(),
                 offer: offer.clone(),
 }),
             Reducer::RealmAuctionRefundBid{
                 operation_id,
-                bidder_guid,
+                request_actor,
                 auction_id,
                 house,
                 offer,
                 deferred_refund,
 }             => __sats::bsatn::to_vec(&realm_auction_refund_bid_reducer::RealmAuctionRefundBidArgs {
                 operation_id: operation_id.clone(),
-                bidder_guid: bidder_guid.clone(),
+                request_actor: request_actor.clone(),
                 auction_id: auction_id.clone(),
                 house: house.clone(),
                 offer: offer.clone(),
@@ -6371,7 +6478,7 @@ Reducer::PrepareVmapNavCoverage{
 }),
             Reducer::RealmAuctionRefundListing{
                 operation_id,
-                seller_guid,
+                request_actor,
                 item_guid,
                 item_entry,
                 item_stack_count,
@@ -6390,7 +6497,7 @@ Reducer::PrepareVmapNavCoverage{
                 expires_micros,
 }             => __sats::bsatn::to_vec(&realm_auction_refund_listing_reducer::RealmAuctionRefundListingArgs {
                 operation_id: operation_id.clone(),
-                seller_guid: seller_guid.clone(),
+                request_actor: request_actor.clone(),
                 item_guid: item_guid.clone(),
                 item_entry: item_entry.clone(),
                 item_stack_count: item_stack_count.clone(),
@@ -6410,18 +6517,20 @@ Reducer::PrepareVmapNavCoverage{
 }),
             Reducer::RealmAuctionSettleListing{
                 operation_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&realm_auction_settle_listing_reducer::RealmAuctionSettleListingArgs {
                 operation_id: operation_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::RealmGroupOp{
                 op,
-                actor_guid,
+                request_actor,
                 target_guid,
                 arg_a,
                 arg_b,
 }             => __sats::bsatn::to_vec(&realm_group_op_reducer::RealmGroupOpArgs {
                 op: op.clone(),
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
                 arg_a: arg_a.clone(),
                 arg_b: arg_b.clone(),
@@ -6431,7 +6540,7 @@ Reducer::PrepareVmapNavCoverage{
                 corpse_guid,
                 slot,
                 item_entry,
-                actor_guid,
+                request_actor,
                 vote,
                 deadline_micros,
                 recipients,
@@ -6443,7 +6552,7 @@ Reducer::PrepareVmapNavCoverage{
                 corpse_guid: corpse_guid.clone(),
                 slot: slot.clone(),
                 item_entry: item_entry.clone(),
-                actor_guid: actor_guid.clone(),
+                request_actor: request_actor.clone(),
                 vote: vote.clone(),
                 deadline_micros: deadline_micros.clone(),
                 recipients: recipients.clone(),
@@ -6453,7 +6562,7 @@ Reducer::PrepareVmapNavCoverage{
 }),
             Reducer::RealmMailCommit{
                 escrow_id,
-                sender_guid,
+                request_actor,
                 recipient_guid,
                 subject,
                 body,
@@ -6468,7 +6577,7 @@ Reducer::PrepareVmapNavCoverage{
                 cod_mail_id,
 }             => __sats::bsatn::to_vec(&realm_mail_commit_reducer::RealmMailCommitArgs {
                 escrow_id: escrow_id.clone(),
-                sender_guid: sender_guid.clone(),
+                request_actor: request_actor.clone(),
                 recipient_guid: recipient_guid.clone(),
                 subject: subject.clone(),
                 body: body.clone(),
@@ -6484,19 +6593,21 @@ Reducer::PrepareVmapNavCoverage{
 }),
             Reducer::RealmMailConfirmDelivery{
                 escrow_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&realm_mail_confirm_delivery_reducer::RealmMailConfirmDeliveryArgs {
                 escrow_id: escrow_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::RealmMailDelete{
-                recipient_guid,
+                request_actor,
                 mail_id,
 }             => __sats::bsatn::to_vec(&realm_mail_delete_reducer::RealmMailDeleteArgs {
-                recipient_guid: recipient_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
 }),
             Reducer::RealmMailFence{
                 escrow_id,
-                sender_guid,
+                request_actor,
                 recipient_guid,
                 subject,
                 body,
@@ -6507,7 +6618,7 @@ Reducer::PrepareVmapNavCoverage{
                 mail_id,
 }             => __sats::bsatn::to_vec(&realm_mail_fence_reducer::RealmMailFenceArgs {
                 escrow_id: escrow_id.clone(),
-                sender_guid: sender_guid.clone(),
+                request_actor: request_actor.clone(),
                 recipient_guid: recipient_guid.clone(),
                 subject: subject.clone(),
                 body: body.clone(),
@@ -6519,7 +6630,7 @@ Reducer::PrepareVmapNavCoverage{
 }),
             Reducer::RealmMailItemPayout{
                 escrow_id,
-                payee_guid,
+                request_actor,
                 mail_id,
                 item_entry,
                 item_stack_count,
@@ -6529,7 +6640,7 @@ Reducer::PrepareVmapNavCoverage{
                 random_property_id,
 }             => __sats::bsatn::to_vec(&realm_mail_item_payout_reducer::RealmMailItemPayoutArgs {
                 escrow_id: escrow_id.clone(),
-                payee_guid: payee_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
                 item_entry: item_entry.clone(),
                 item_stack_count: item_stack_count.clone(),
@@ -6539,37 +6650,37 @@ Reducer::PrepareVmapNavCoverage{
                 random_property_id: random_property_id.clone(),
 }),
             Reducer::RealmMailItemRoom{
-                payee_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&realm_mail_item_room_reducer::RealmMailItemRoomArgs {
-                payee_guid: payee_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::RealmMailMarkRead{
-                recipient_guid,
+                request_actor,
                 mail_id,
 }             => __sats::bsatn::to_vec(&realm_mail_mark_read_reducer::RealmMailMarkReadArgs {
-                recipient_guid: recipient_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
 }),
             Reducer::RealmMailPayout{
                 escrow_id,
-                payee_guid,
+                request_actor,
                 mail_id,
                 amount,
 }             => __sats::bsatn::to_vec(&realm_mail_payout_reducer::RealmMailPayoutArgs {
                 escrow_id: escrow_id.clone(),
-                payee_guid: payee_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
                 amount: amount.clone(),
 }),
             Reducer::RealmMailReturn{
-                recipient_guid,
+                request_actor,
                 mail_id,
 }             => __sats::bsatn::to_vec(&realm_mail_return_reducer::RealmMailReturnArgs {
-                recipient_guid: recipient_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
 }),
             Reducer::RealmMailSend{
-                sender_guid,
+                request_actor,
                 recipient_guid,
                 subject,
                 body,
@@ -6577,7 +6688,7 @@ Reducer::PrepareVmapNavCoverage{
                 cod,
                 item_guid,
 }             => __sats::bsatn::to_vec(&realm_mail_send_reducer::RealmMailSendArgs {
-                sender_guid: sender_guid.clone(),
+                request_actor: request_actor.clone(),
                 recipient_guid: recipient_guid.clone(),
                 subject: subject.clone(),
                 body: body.clone(),
@@ -6587,52 +6698,54 @@ Reducer::PrepareVmapNavCoverage{
 }),
             Reducer::RealmMailSettle{
                 escrow_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&realm_mail_settle_reducer::RealmMailSettleArgs {
                 escrow_id: escrow_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::RealmMailTakeItem{
-                recipient_guid,
+                request_actor,
                 mail_id,
 }             => __sats::bsatn::to_vec(&realm_mail_take_item_reducer::RealmMailTakeItemArgs {
-                recipient_guid: recipient_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
 }),
             Reducer::RealmMailTakeItemFence{
                 escrow_id,
-                payee_guid,
+                request_actor,
                 mail_id,
                 expect_entry,
 }             => __sats::bsatn::to_vec(&realm_mail_take_item_fence_reducer::RealmMailTakeItemFenceArgs {
                 escrow_id: escrow_id.clone(),
-                payee_guid: payee_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
                 expect_entry: expect_entry.clone(),
 }),
             Reducer::RealmMailTakeMoney{
-                recipient_guid,
+                request_actor,
                 mail_id,
 }             => __sats::bsatn::to_vec(&realm_mail_take_money_reducer::RealmMailTakeMoneyArgs {
-                recipient_guid: recipient_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
 }),
             Reducer::RealmMailTakeMoneyFence{
                 escrow_id,
-                payee_guid,
+                request_actor,
                 mail_id,
                 expect_money,
 }             => __sats::bsatn::to_vec(&realm_mail_take_money_fence_reducer::RealmMailTakeMoneyFenceArgs {
                 escrow_id: escrow_id.clone(),
-                payee_guid: payee_guid.clone(),
+                request_actor: request_actor.clone(),
                 mail_id: mail_id.clone(),
                 expect_money: expect_money.clone(),
 }),
             Reducer::RealmWhisper{
-                sender_guid,
+                request_actor,
                 target_guid,
                 message,
                 sender_is_ignored,
 }             => __sats::bsatn::to_vec(&realm_whisper_reducer::RealmWhisperArgs {
-                sender_guid: sender_guid.clone(),
+                request_actor: request_actor.clone(),
                 target_guid: target_guid.clone(),
                 message: message.clone(),
                 sender_is_ignored: sender_is_ignored.clone(),
@@ -6687,10 +6800,29 @@ Reducer::PrepareVmapNavCoverage{
                 sessions: sessions.clone(),
                 gateway_key: gateway_key.clone(),
 }),
+            Reducer::ReleaseAccountClaim{
+                token,
+}             => __sats::bsatn::to_vec(&release_account_claim_reducer::ReleaseAccountClaimArgs {
+                token: token.clone(),
+}),
             Reducer::ReleaseTransfer{
                 transfer_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&release_transfer_reducer::ReleaseTransferArgs {
                 transfer_id: transfer_id.clone(),
+                request_actor: request_actor.clone(),
+}),
+            Reducer::RenewAccountClaim{
+                token,
+}             => __sats::bsatn::to_vec(&renew_account_claim_reducer::RenewAccountClaimArgs {
+                token: token.clone(),
+}),
+            Reducer::RenewAccountFence{
+                token,
+                expires_micros,
+}             => __sats::bsatn::to_vec(&renew_account_fence_reducer::RenewAccountFenceArgs {
+                token: token.clone(),
+                expires_micros: expires_micros.clone(),
 }),
             Reducer::RestoreTaxiFixture => __sats::bsatn::to_vec(&restore_taxi_fixture_reducer::RestoreTaxiFixtureArgs {
                 }),
@@ -6718,10 +6850,12 @@ Reducer::ResumeRelayArrival{
                 character_guid,
                 map_id,
                 instance_id,
+                request_actor,
 }             => __sats::bsatn::to_vec(&set_character_shard_reducer::SetCharacterShardArgs {
                 character_guid: character_guid.clone(),
                 map_id: map_id.clone(),
                 instance_id: instance_id.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::SetGmLevel{
                 character_name,
@@ -6766,10 +6900,12 @@ Reducer::ResumeRelayArrival{
                 corpse_guid,
                 slot,
                 winner_guid,
+                request_actor,
 }             => __sats::bsatn::to_vec(&settle_loot_roll_reducer::SettleLootRollArgs {
                 corpse_guid: corpse_guid.clone(),
                 slot: slot.clone(),
                 winner_guid: winner_guid.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::StageVmapGeneration{
                 generation_id,
@@ -6806,6 +6942,7 @@ Reducer::ResumeRelayArrival{
                 loot_threshold,
                 master_looter_guid,
                 members,
+                request_actor,
 }             => __sats::bsatn::to_vec(&sync_group_mirror_reducer::SyncGroupMirrorArgs {
                 group_id: group_id.clone(),
                 leader_guid: leader_guid.clone(),
@@ -6813,6 +6950,7 @@ Reducer::ResumeRelayArrival{
                 loot_threshold: loot_threshold.clone(),
                 master_looter_guid: master_looter_guid.clone(),
                 members: members.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::TickAuras{
                 schedule,
@@ -6869,6 +7007,8 @@ Reducer::ResumeRelayArrival{
 #[doc(hidden)]
 pub struct DbUpdate {
     game_account: __sdk::TableUpdate<Account>,
+    game_account_claim: __sdk::TableUpdate<AccountClaim>,
+    game_account_fence: __sdk::TableUpdate<AccountFence>,
     game_active_taxi_flight: __sdk::TableUpdate<ActiveTaxiFlight>,
     game_addon_message: __sdk::TableUpdate<AddonMessage>,
     game_alpha_test_tools_enrollment: __sdk::TableUpdate<AlphaTestToolsEnrollment>,
@@ -7125,6 +7265,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_account" => db_update
                     .game_account
                     .append(game_account_table::parse_table_update(table_update)?),
+                "game_account_claim" => db_update
+                    .game_account_claim
+                    .append(game_account_claim_table::parse_table_update(table_update)?),
+                "game_account_fence" => db_update
+                    .game_account_fence
+                    .append(game_account_fence_table::parse_table_update(table_update)?),
                 "game_active_taxi_flight" => db_update.game_active_taxi_flight.append(
                     game_active_taxi_flight_table::parse_table_update(table_update)?,
                 ),
@@ -7944,6 +8090,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_account = cache
             .apply_diff_to_table::<Account>("game_account", &self.game_account)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_account_claim = cache
+            .apply_diff_to_table::<AccountClaim>("game_account_claim", &self.game_account_claim)
+            .with_updates_by_pk(|row| &row.account_id);
+        diff.game_account_fence = cache
+            .apply_diff_to_table::<AccountFence>("game_account_fence", &self.game_account_fence)
+            .with_updates_by_pk(|row| &row.account_id);
         diff.game_active_taxi_flight = cache
             .apply_diff_to_table::<ActiveTaxiFlight>(
                 "game_active_taxi_flight",
@@ -9052,6 +9204,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_account" => db_update
                     .game_account
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_account_claim" => db_update
+                    .game_account_claim
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_account_fence" => db_update
+                    .game_account_fence
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_active_taxi_flight" => db_update
                     .game_active_taxi_flight
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -9799,6 +9957,12 @@ impl __sdk::DbUpdate for DbUpdate {
             match &table_rows.table[..] {
                 "game_account" => db_update
                     .game_account
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_account_claim" => db_update
+                    .game_account_claim
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_account_fence" => db_update
+                    .game_account_fence
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_active_taxi_flight" => db_update
                     .game_active_taxi_flight
@@ -10548,6 +10712,8 @@ impl __sdk::DbUpdate for DbUpdate {
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
     game_account: __sdk::TableAppliedDiff<'r, Account>,
+    game_account_claim: __sdk::TableAppliedDiff<'r, AccountClaim>,
+    game_account_fence: __sdk::TableAppliedDiff<'r, AccountFence>,
     game_active_taxi_flight: __sdk::TableAppliedDiff<'r, ActiveTaxiFlight>,
     game_addon_message: __sdk::TableAppliedDiff<'r, AddonMessage>,
     game_alpha_test_tools_enrollment: __sdk::TableAppliedDiff<'r, AlphaTestToolsEnrollment>,
@@ -10809,6 +10975,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks: &mut __sdk::DbCallbacks<RemoteModule>,
     ) {
         callbacks.invoke_table_row_callbacks::<Account>("game_account", &self.game_account, event);
+        callbacks.invoke_table_row_callbacks::<AccountClaim>(
+            "game_account_claim",
+            &self.game_account_claim,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<AccountFence>(
+            "game_account_fence",
+            &self.game_account_fence,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<ActiveTaxiFlight>(
             "game_active_taxi_flight",
             &self.game_active_taxi_flight,
@@ -12634,6 +12810,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
         game_account_table::register_table(client_cache);
+        game_account_claim_table::register_table(client_cache);
+        game_account_fence_table::register_table(client_cache);
         game_active_taxi_flight_table::register_table(client_cache);
         game_addon_message_table::register_table(client_cache);
         game_alpha_test_tools_enrollment_table::register_table(client_cache);
@@ -12881,6 +13059,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "game_account",
+        "game_account_claim",
+        "game_account_fence",
         "game_active_taxi_flight",
         "game_addon_message",
         "game_alpha_test_tools_enrollment",

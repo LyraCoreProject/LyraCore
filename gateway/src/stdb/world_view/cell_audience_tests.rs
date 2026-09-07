@@ -1235,7 +1235,7 @@ fn aura_relays_never_scan_the_aura_cache() {
 
 fn queue_motion(batch: &super::super::movement_batch::MovementBatch, seq: u32) -> EntityMotion {
     batch.push(GwMove {
-        actor_guid: PLAYER_BASE,
+        actor: crate::stdb::bindings::SessionActor { guid: PLAYER_BASE, ownership: None },
         opcode: 0x00ee,
         movement_info: vec![],
         x: 0.0,

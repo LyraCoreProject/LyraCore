@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmMailSendArgs {
-    pub sender_guid: u64,
+    pub request_actor: SessionActor,
     pub recipient_guid: u64,
     pub subject: String,
     pub body: String,
@@ -19,7 +21,7 @@ pub(super) struct RealmMailSendArgs {
 impl From<RealmMailSendArgs> for super::Reducer {
     fn from(args: RealmMailSendArgs) -> Self {
         Self::RealmMailSend {
-            sender_guid: args.sender_guid,
+            request_actor: args.request_actor,
             recipient_guid: args.recipient_guid,
             subject: args.subject,
             body: args.body,
@@ -47,7 +49,7 @@ pub trait realm_mail_send {
     /// /// Use [`realm_mail_send:realm_mail_send_then`] to run a callback after the reducer completes.
     fn realm_mail_send(
         &self,
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -56,7 +58,7 @@ pub trait realm_mail_send {
         item_guid: u64,
     ) -> __sdk::Result<()> {
         self.realm_mail_send_then(
-            sender_guid,
+            request_actor,
             recipient_guid,
             subject,
             body,
@@ -75,7 +77,7 @@ pub trait realm_mail_send {
     ///  and its status can be observed with the `callback`.
     fn realm_mail_send_then(
         &self,
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -92,7 +94,7 @@ pub trait realm_mail_send {
 impl realm_mail_send for super::RemoteReducers {
     fn realm_mail_send_then(
         &self,
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -106,7 +108,7 @@ impl realm_mail_send for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             RealmMailSendArgs {
-                sender_guid,
+                request_actor,
                 recipient_guid,
                 subject,
                 body,

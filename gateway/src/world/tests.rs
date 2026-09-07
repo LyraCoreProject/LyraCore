@@ -1326,15 +1326,6 @@ impl WorldStore for InMemoryStore {
             None => Ok(PlayerSubscriptions::empty()),
         }
     }
-    fn logout(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
-        self.rec("logout");
-        self.logout_called
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        match &self.logout_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
         if let Some(error) = &self.character_read_error {
             return Err(anyhow!(error.clone()));
@@ -2201,13 +2192,18 @@ impl WorldStore for InMemoryStore {
         self.repopped.lock().unwrap().push(self_guid);
         Ok(())
     }
-    fn claim_session(&self, _account_id: u64) -> u64 {
-        1
+    fn claim_session(&self, account_id: u64, _character_guid: u64) -> Result<WorldSessionToken> {
+        Ok(WorldSessionToken { account_id, generation: 1, request_nonce: 1 })
     }
-    fn release_session(&self, _account_id: u64, _epoch: u64) -> bool {
-        // Default (false) = this session still owns the entity; `stale_session` simulates a newer
-        // login having superseded it (the session-epoch arbitration), so teardown must skip `logout`.
-        !self.stale_session
+    fn release_session(&self, _token: WorldSessionToken) -> Result<()> {
+        if self.stale_session { return Ok(()); }
+        self.rec("logout");
+        self.logout_called
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        match &self.logout_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
     }
     fn reclaim_corpse(&self, _account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
         self.reclaimed_corpses

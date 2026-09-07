@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwPetCommandArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub data: u32,
     pub target_guid: u64,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwPetCommandArgs {
 impl From<GwPetCommandArgs> for super::Reducer {
     fn from(args: GwPetCommandArgs) -> Self {
         Self::GwPetCommand {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             data: args.data,
             target_guid: args.target_guid,
         }
@@ -37,8 +39,13 @@ pub trait gw_pet_command {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_pet_command:gw_pet_command_then`] to run a callback after the reducer completes.
-    fn gw_pet_command(&self, actor_guid: u64, data: u32, target_guid: u64) -> __sdk::Result<()> {
-        self.gw_pet_command_then(actor_guid, data, target_guid, |_, _| {})
+    fn gw_pet_command(
+        &self,
+        request_actor: SessionActor,
+        data: u32,
+        target_guid: u64,
+    ) -> __sdk::Result<()> {
+        self.gw_pet_command_then(request_actor, data, target_guid, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_pet_command` to run as soon as possible,
@@ -49,7 +56,7 @@ pub trait gw_pet_command {
     ///  and its status can be observed with the `callback`.
     fn gw_pet_command_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         data: u32,
         target_guid: u64,
 
@@ -62,7 +69,7 @@ pub trait gw_pet_command {
 impl gw_pet_command for super::RemoteReducers {
     fn gw_pet_command_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         data: u32,
         target_guid: u64,
 
@@ -72,7 +79,7 @@ impl gw_pet_command for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwPetCommandArgs {
-                actor_guid,
+                request_actor,
                 data,
                 target_guid,
             },

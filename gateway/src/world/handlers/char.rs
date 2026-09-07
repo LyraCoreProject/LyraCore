@@ -91,7 +91,6 @@ fn enter_world<St: WorldStore + ?Sized>(
     store: &St,
     conn: &mut WorldConn,
     character_guid: u64,
-    session_epoch: u64,
     entry: codec::WorldEntry,
 ) -> Result<()> {
     conn.state = WorldState::CharSelect;
@@ -188,7 +187,6 @@ fn enter_world<St: WorldStore + ?Sized>(
     conn.state = WorldState::InWorld(InWorld {
         self_guid: character_guid,
         subs,
-        session_epoch,
         attacking_target: None,
         open_loot: OpenLootState::default(),
         ranged_repeat: false,
@@ -300,11 +298,14 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
         // CREATE_OBJECT2 as one contiguous batch (so an async peer event can't splice into it).
         ClientOpcodeMessage::CMSG_PLAYER_LOGIN(p) => {
             let character_guid = p.guid.guid();
-            // Claim this account's in-world session: become the current owner of the live entity so a
-            // stale earlier socket's teardown can't delete it out from under us. A world-port
-            // re-entry (below) reuses the EXISTING epoch instead — the session itself hasn't changed,
-            // only the map.
-            let session_epoch = store.claim_session(conn.account_id);
+            if conn.session_claim.is_some() {
+                return Err(anyhow::anyhow!("ACCOUNT_IN_USE"));
+            }
+            let token = store.claim_session(conn.account_id, character_guid)?;
+            conn.session_claim = Some(token);
+            if let Some(bound) = store.bind_session(token)? {
+                conn.home = Some(bound);
+            }
             // Multi-shard routing: pin this session to the shard that owns the character's
             // location BEFORE `player_login` runs, so the login reducer and viewer registration
             // land on the home shard — and so does every message after this one
@@ -317,8 +318,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 st,
                 conn,
                 character_guid,
-                session_epoch,
-                codec::WorldEntry::FreshLogin
+                        codec::WorldEntry::FreshLogin
             ))?;
         }
         // Cross-map teleport: the client's ack that it finished loading the map named
@@ -338,10 +338,10 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
         // session ownership changed, only the entity/map.
         ClientOpcodeMessage::MSG_MOVE_WORLDPORT_ACK => {
             let resume = match &conn.state {
-                WorldState::InWorld(iw) => Some((iw.self_guid, iw.session_epoch)),
+                WorldState::InWorld(iw) => Some(iw.self_guid),
                 WorldState::CharSelect => None,
             };
-            if let Some((character_guid, session_epoch)) = resume {
+            if let Some(character_guid) = resume {
                 // Gate on a REAL pending transfer: cross-map teleport
                 // despawns the entity until this ack; a live entity means no transfer is in
                 // flight and the ack is spurious — ignore it instead of re-entering the world.
@@ -386,8 +386,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                             st,
                             conn,
                             character_guid,
-                            session_epoch,
-                            codec::WorldEntry::WorldPort
+                                                codec::WorldEntry::WorldPort
                         ));
                     }
                     if let Err(e) = ported {

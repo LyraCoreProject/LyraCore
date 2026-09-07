@@ -4,12 +4,15 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct SettleLootRollArgs {
     pub corpse_guid: u64,
     pub slot: u8,
     pub winner_guid: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<SettleLootRollArgs> for super::Reducer {
@@ -18,6 +21,7 @@ impl From<SettleLootRollArgs> for super::Reducer {
             corpse_guid: args.corpse_guid,
             slot: args.slot,
             winner_guid: args.winner_guid,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -37,8 +41,14 @@ pub trait settle_loot_roll {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`settle_loot_roll:settle_loot_roll_then`] to run a callback after the reducer completes.
-    fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> __sdk::Result<()> {
-        self.settle_loot_roll_then(corpse_guid, slot, winner_guid, |_, _| {})
+    fn settle_loot_roll(
+        &self,
+        corpse_guid: u64,
+        slot: u8,
+        winner_guid: u64,
+        request_actor: SessionActor,
+    ) -> __sdk::Result<()> {
+        self.settle_loot_roll_then(corpse_guid, slot, winner_guid, request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `settle_loot_roll` to run as soon as possible,
@@ -52,6 +62,7 @@ pub trait settle_loot_roll {
         corpse_guid: u64,
         slot: u8,
         winner_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -65,6 +76,7 @@ impl settle_loot_roll for super::RemoteReducers {
         corpse_guid: u64,
         slot: u8,
         winner_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -75,6 +87,7 @@ impl settle_loot_roll for super::RemoteReducers {
                 corpse_guid,
                 slot,
                 winner_guid,
+                request_actor,
             },
             callback,
         )

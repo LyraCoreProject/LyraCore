@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSetFactionAtWarArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub reputation_index: u32,
     pub at_war: bool,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwSetFactionAtWarArgs {
 impl From<GwSetFactionAtWarArgs> for super::Reducer {
     fn from(args: GwSetFactionAtWarArgs) -> Self {
         Self::GwSetFactionAtWar {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             reputation_index: args.reputation_index,
             at_war: args.at_war,
         }
@@ -39,11 +41,11 @@ pub trait gw_set_faction_at_war {
     /// /// Use [`gw_set_faction_at_war:gw_set_faction_at_war_then`] to run a callback after the reducer completes.
     fn gw_set_faction_at_war(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         reputation_index: u32,
         at_war: bool,
     ) -> __sdk::Result<()> {
-        self.gw_set_faction_at_war_then(actor_guid, reputation_index, at_war, |_, _| {})
+        self.gw_set_faction_at_war_then(request_actor, reputation_index, at_war, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_set_faction_at_war` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_set_faction_at_war {
     ///  and its status can be observed with the `callback`.
     fn gw_set_faction_at_war_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         reputation_index: u32,
         at_war: bool,
 
@@ -67,7 +69,7 @@ pub trait gw_set_faction_at_war {
 impl gw_set_faction_at_war for super::RemoteReducers {
     fn gw_set_faction_at_war_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         reputation_index: u32,
         at_war: bool,
 
@@ -77,7 +79,7 @@ impl gw_set_faction_at_war for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwSetFactionAtWarArgs {
-                actor_guid,
+                request_actor,
                 reputation_index,
                 at_war,
             },

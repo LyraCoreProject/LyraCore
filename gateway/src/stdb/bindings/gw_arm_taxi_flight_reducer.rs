@@ -4,16 +4,18 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwArmTaxiFlightArgs {
-    pub character_guid: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<GwArmTaxiFlightArgs> for super::Reducer {
     fn from(args: GwArmTaxiFlightArgs) -> Self {
         Self::GwArmTaxiFlight {
-            character_guid: args.character_guid,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -33,8 +35,8 @@ pub trait gw_arm_taxi_flight {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_arm_taxi_flight:gw_arm_taxi_flight_then`] to run a callback after the reducer completes.
-    fn gw_arm_taxi_flight(&self, character_guid: u64) -> __sdk::Result<()> {
-        self.gw_arm_taxi_flight_then(character_guid, |_, _| {})
+    fn gw_arm_taxi_flight(&self, request_actor: SessionActor) -> __sdk::Result<()> {
+        self.gw_arm_taxi_flight_then(request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_arm_taxi_flight` to run as soon as possible,
@@ -45,7 +47,7 @@ pub trait gw_arm_taxi_flight {
     ///  and its status can be observed with the `callback`.
     fn gw_arm_taxi_flight_then(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,13 +58,13 @@ pub trait gw_arm_taxi_flight {
 impl gw_arm_taxi_flight for super::RemoteReducers {
     fn gw_arm_taxi_flight_then(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(GwArmTaxiFlightArgs { character_guid }, callback)
+            .invoke_reducer_with_callback(GwArmTaxiFlightArgs { request_actor }, callback)
     }
 }

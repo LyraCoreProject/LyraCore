@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwUseGameobjectArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub go_guid: u64,
 }
 
 impl From<GwUseGameobjectArgs> for super::Reducer {
     fn from(args: GwUseGameobjectArgs) -> Self {
         Self::GwUseGameobject {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             go_guid: args.go_guid,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_use_gameobject {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_use_gameobject:gw_use_gameobject_then`] to run a callback after the reducer completes.
-    fn gw_use_gameobject(&self, actor_guid: u64, go_guid: u64) -> __sdk::Result<()> {
-        self.gw_use_gameobject_then(actor_guid, go_guid, |_, _| {})
+    fn gw_use_gameobject(&self, request_actor: SessionActor, go_guid: u64) -> __sdk::Result<()> {
+        self.gw_use_gameobject_then(request_actor, go_guid, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_use_gameobject` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_use_gameobject {
     ///  and its status can be observed with the `callback`.
     fn gw_use_gameobject_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         go_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +61,7 @@ pub trait gw_use_gameobject {
 impl gw_use_gameobject for super::RemoteReducers {
     fn gw_use_gameobject_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         go_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +70,7 @@ impl gw_use_gameobject for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwUseGameobjectArgs {
-                actor_guid,
+                request_actor,
                 go_guid,
             },
             callback,

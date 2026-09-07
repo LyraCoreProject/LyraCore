@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwAutoBankItemArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub slot: u8,
 }
 
 impl From<GwAutoBankItemArgs> for super::Reducer {
     fn from(args: GwAutoBankItemArgs) -> Self {
         Self::GwAutoBankItem {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             slot: args.slot,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_auto_bank_item {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_auto_bank_item:gw_auto_bank_item_then`] to run a callback after the reducer completes.
-    fn gw_auto_bank_item(&self, actor_guid: u64, slot: u8) -> __sdk::Result<()> {
-        self.gw_auto_bank_item_then(actor_guid, slot, |_, _| {})
+    fn gw_auto_bank_item(&self, request_actor: SessionActor, slot: u8) -> __sdk::Result<()> {
+        self.gw_auto_bank_item_then(request_actor, slot, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_auto_bank_item` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_auto_bank_item {
     ///  and its status can be observed with the `callback`.
     fn gw_auto_bank_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         slot: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,14 +61,19 @@ pub trait gw_auto_bank_item {
 impl gw_auto_bank_item for super::RemoteReducers {
     fn gw_auto_bank_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         slot: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(GwAutoBankItemArgs { actor_guid, slot }, callback)
+        self.imp.invoke_reducer_with_callback(
+            GwAutoBankItemArgs {
+                request_actor,
+                slot,
+            },
+            callback,
+        )
     }
 }

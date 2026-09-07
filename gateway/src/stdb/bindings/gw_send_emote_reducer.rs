@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSendEmoteArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub text_emote: u32,
     pub emote_anim: u32,
     pub target_guid: u64,
@@ -16,7 +18,7 @@ pub(super) struct GwSendEmoteArgs {
 impl From<GwSendEmoteArgs> for super::Reducer {
     fn from(args: GwSendEmoteArgs) -> Self {
         Self::GwSendEmote {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             text_emote: args.text_emote,
             emote_anim: args.emote_anim,
             target_guid: args.target_guid,
@@ -41,12 +43,18 @@ pub trait gw_send_emote {
     /// /// Use [`gw_send_emote:gw_send_emote_then`] to run a callback after the reducer completes.
     fn gw_send_emote(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         text_emote: u32,
         emote_anim: u32,
         target_guid: u64,
     ) -> __sdk::Result<()> {
-        self.gw_send_emote_then(actor_guid, text_emote, emote_anim, target_guid, |_, _| {})
+        self.gw_send_emote_then(
+            request_actor,
+            text_emote,
+            emote_anim,
+            target_guid,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `gw_send_emote` to run as soon as possible,
@@ -57,7 +65,7 @@ pub trait gw_send_emote {
     ///  and its status can be observed with the `callback`.
     fn gw_send_emote_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         text_emote: u32,
         emote_anim: u32,
         target_guid: u64,
@@ -71,7 +79,7 @@ pub trait gw_send_emote {
 impl gw_send_emote for super::RemoteReducers {
     fn gw_send_emote_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         text_emote: u32,
         emote_anim: u32,
         target_guid: u64,
@@ -82,7 +90,7 @@ impl gw_send_emote for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwSendEmoteArgs {
-                actor_guid,
+                request_actor,
                 text_emote,
                 emote_anim,
                 target_guid,

@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwAcceptQuestArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub giver_guid: u64,
     pub quest_entry: u32,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwAcceptQuestArgs {
 impl From<GwAcceptQuestArgs> for super::Reducer {
     fn from(args: GwAcceptQuestArgs) -> Self {
         Self::GwAcceptQuest {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             giver_guid: args.giver_guid,
             quest_entry: args.quest_entry,
         }
@@ -39,11 +41,11 @@ pub trait gw_accept_quest {
     /// /// Use [`gw_accept_quest:gw_accept_quest_then`] to run a callback after the reducer completes.
     fn gw_accept_quest(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         giver_guid: u64,
         quest_entry: u32,
     ) -> __sdk::Result<()> {
-        self.gw_accept_quest_then(actor_guid, giver_guid, quest_entry, |_, _| {})
+        self.gw_accept_quest_then(request_actor, giver_guid, quest_entry, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_accept_quest` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_accept_quest {
     ///  and its status can be observed with the `callback`.
     fn gw_accept_quest_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         giver_guid: u64,
         quest_entry: u32,
 
@@ -67,7 +69,7 @@ pub trait gw_accept_quest {
 impl gw_accept_quest for super::RemoteReducers {
     fn gw_accept_quest_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         giver_guid: u64,
         quest_entry: u32,
 
@@ -77,7 +79,7 @@ impl gw_accept_quest for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwAcceptQuestArgs {
-                actor_guid,
+                request_actor,
                 giver_guid,
                 quest_entry,
             },

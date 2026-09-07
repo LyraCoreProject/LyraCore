@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSetActionButtonArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub button: u8,
     pub action: u32,
     pub action_type: u8,
@@ -16,7 +18,7 @@ pub(super) struct GwSetActionButtonArgs {
 impl From<GwSetActionButtonArgs> for super::Reducer {
     fn from(args: GwSetActionButtonArgs) -> Self {
         Self::GwSetActionButton {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             button: args.button,
             action: args.action,
             action_type: args.action_type,
@@ -41,12 +43,12 @@ pub trait gw_set_action_button {
     /// /// Use [`gw_set_action_button:gw_set_action_button_then`] to run a callback after the reducer completes.
     fn gw_set_action_button(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         button: u8,
         action: u32,
         action_type: u8,
     ) -> __sdk::Result<()> {
-        self.gw_set_action_button_then(actor_guid, button, action, action_type, |_, _| {})
+        self.gw_set_action_button_then(request_actor, button, action, action_type, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_set_action_button` to run as soon as possible,
@@ -57,7 +59,7 @@ pub trait gw_set_action_button {
     ///  and its status can be observed with the `callback`.
     fn gw_set_action_button_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         button: u8,
         action: u32,
         action_type: u8,
@@ -71,7 +73,7 @@ pub trait gw_set_action_button {
 impl gw_set_action_button for super::RemoteReducers {
     fn gw_set_action_button_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         button: u8,
         action: u32,
         action_type: u8,
@@ -82,7 +84,7 @@ impl gw_set_action_button for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwSetActionButtonArgs {
-                actor_guid,
+                request_actor,
                 button,
                 action,
                 action_type,

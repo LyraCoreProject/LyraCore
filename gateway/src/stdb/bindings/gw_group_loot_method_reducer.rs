@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwGroupLootMethodArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub loot_setting: u8,
     pub master_guid: u64,
     pub loot_threshold: u8,
@@ -16,7 +18,7 @@ pub(super) struct GwGroupLootMethodArgs {
 impl From<GwGroupLootMethodArgs> for super::Reducer {
     fn from(args: GwGroupLootMethodArgs) -> Self {
         Self::GwGroupLootMethod {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             loot_setting: args.loot_setting,
             master_guid: args.master_guid,
             loot_threshold: args.loot_threshold,
@@ -41,13 +43,13 @@ pub trait gw_group_loot_method {
     /// /// Use [`gw_group_loot_method:gw_group_loot_method_then`] to run a callback after the reducer completes.
     fn gw_group_loot_method(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
     ) -> __sdk::Result<()> {
         self.gw_group_loot_method_then(
-            actor_guid,
+            request_actor,
             loot_setting,
             master_guid,
             loot_threshold,
@@ -63,7 +65,7 @@ pub trait gw_group_loot_method {
     ///  and its status can be observed with the `callback`.
     fn gw_group_loot_method_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
@@ -77,7 +79,7 @@ pub trait gw_group_loot_method {
 impl gw_group_loot_method for super::RemoteReducers {
     fn gw_group_loot_method_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
@@ -88,7 +90,7 @@ impl gw_group_loot_method for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwGroupLootMethodArgs {
-                actor_guid,
+                request_actor,
                 loot_setting,
                 master_guid,
                 loot_threshold,

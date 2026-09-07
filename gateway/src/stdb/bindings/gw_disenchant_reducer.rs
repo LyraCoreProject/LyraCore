@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwDisenchantArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub slot: u8,
 }
 
 impl From<GwDisenchantArgs> for super::Reducer {
     fn from(args: GwDisenchantArgs) -> Self {
         Self::GwDisenchant {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             slot: args.slot,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_disenchant {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_disenchant:gw_disenchant_then`] to run a callback after the reducer completes.
-    fn gw_disenchant(&self, actor_guid: u64, slot: u8) -> __sdk::Result<()> {
-        self.gw_disenchant_then(actor_guid, slot, |_, _| {})
+    fn gw_disenchant(&self, request_actor: SessionActor, slot: u8) -> __sdk::Result<()> {
+        self.gw_disenchant_then(request_actor, slot, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_disenchant` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_disenchant {
     ///  and its status can be observed with the `callback`.
     fn gw_disenchant_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         slot: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,14 +61,19 @@ pub trait gw_disenchant {
 impl gw_disenchant for super::RemoteReducers {
     fn gw_disenchant_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         slot: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(GwDisenchantArgs { actor_guid, slot }, callback)
+        self.imp.invoke_reducer_with_callback(
+            GwDisenchantArgs {
+                request_actor,
+                slot,
+            },
+            callback,
+        )
     }
 }

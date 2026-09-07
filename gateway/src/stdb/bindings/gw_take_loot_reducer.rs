@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwTakeLootArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub corpse_guid: u64,
     pub loot_slot: u8,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwTakeLootArgs {
 impl From<GwTakeLootArgs> for super::Reducer {
     fn from(args: GwTakeLootArgs) -> Self {
         Self::GwTakeLoot {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             corpse_guid: args.corpse_guid,
             loot_slot: args.loot_slot,
         }
@@ -37,8 +39,13 @@ pub trait gw_take_loot {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_take_loot:gw_take_loot_then`] to run a callback after the reducer completes.
-    fn gw_take_loot(&self, actor_guid: u64, corpse_guid: u64, loot_slot: u8) -> __sdk::Result<()> {
-        self.gw_take_loot_then(actor_guid, corpse_guid, loot_slot, |_, _| {})
+    fn gw_take_loot(
+        &self,
+        request_actor: SessionActor,
+        corpse_guid: u64,
+        loot_slot: u8,
+    ) -> __sdk::Result<()> {
+        self.gw_take_loot_then(request_actor, corpse_guid, loot_slot, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_take_loot` to run as soon as possible,
@@ -49,7 +56,7 @@ pub trait gw_take_loot {
     ///  and its status can be observed with the `callback`.
     fn gw_take_loot_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u8,
 
@@ -62,7 +69,7 @@ pub trait gw_take_loot {
 impl gw_take_loot for super::RemoteReducers {
     fn gw_take_loot_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u8,
 
@@ -72,7 +79,7 @@ impl gw_take_loot for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwTakeLootArgs {
-                actor_guid,
+                request_actor,
                 corpse_guid,
                 loot_slot,
             },

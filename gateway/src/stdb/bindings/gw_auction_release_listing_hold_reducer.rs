@@ -4,18 +4,20 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwAuctionReleaseListingHoldArgs {
     pub operation_id: u64,
-    pub seller_guid: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<GwAuctionReleaseListingHoldArgs> for super::Reducer {
     fn from(args: GwAuctionReleaseListingHoldArgs) -> Self {
         Self::GwAuctionReleaseListingHold {
             operation_id: args.operation_id,
-            seller_guid: args.seller_guid,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -38,9 +40,9 @@ pub trait gw_auction_release_listing_hold {
     fn gw_auction_release_listing_hold(
         &self,
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
     ) -> __sdk::Result<()> {
-        self.gw_auction_release_listing_hold_then(operation_id, seller_guid, |_, _| {})
+        self.gw_auction_release_listing_hold_then(operation_id, request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_auction_release_listing_hold` to run as soon as possible,
@@ -52,7 +54,7 @@ pub trait gw_auction_release_listing_hold {
     fn gw_auction_release_listing_hold_then(
         &self,
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -64,7 +66,7 @@ impl gw_auction_release_listing_hold for super::RemoteReducers {
     fn gw_auction_release_listing_hold_then(
         &self,
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -73,7 +75,7 @@ impl gw_auction_release_listing_hold for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             GwAuctionReleaseListingHoldArgs {
                 operation_id,
-                seller_guid,
+                request_actor,
             },
             callback,
         )

@@ -66,12 +66,14 @@ pub(crate) use handlers::{
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
 pub(crate) use social::ContactOutcome;
-pub use store::WorldStore;
+pub use store::{WorldSessionToken, WorldStore};
 use transfer::{EscrowedTransfer, TransferPlan};
 
 /// One unit of outbound traffic for the single writer thread. A `Batch` is written contiguously so
 /// the login sequence + self-spawn can never be spliced by an async peer event mid-sequence.
 pub enum Outbound {
+    /// End the World Session after loss of durable Account ownership.
+    Close,
     One(ServerOpcodeMessage),
     Batch(Vec<ServerOpcodeMessage>),
     /// A pre-serialized packet body sent under a RAW opcode — the escape hatch past gtker's
@@ -293,8 +295,6 @@ pub struct InWorld {
     /// Shared-view lifetime guard. Its RAII `Drop` unregisters this viewer on logout or socket
     /// teardown, so a relogin cannot inherit the old routing entry.
     pub subs: PlayerSubscriptions,
-    /// In-world session epoch for the two-connection race arbitration (see `SessionEpochs`).
-    pub session_epoch: u64,
     /// The guid being melee auto-attacked (combat C1), so `CMSG_ATTACKSTOP` can name it. The
     /// authoritative engagement lives in `game_melee_attack`; this is protocol state.
     pub attacking_target: Option<u64>,
@@ -313,6 +313,8 @@ pub struct InWorld {
 /// sole writer of the socket (the header cipher is a stateful stream, so exactly one writer may
 /// advance it). NOT game state: the cipher is re-derivable from K on reconnect.
 pub struct WorldConn {
+    /// Retained before world entry so failed routing or admission is also cleaned up.
+    session_claim: Option<WorldSessionToken>,
     pub account_id: u64,
     /// Proof-validated, realm-wide Account name used for cross-database authority reads.
     pub account_name: String,
@@ -433,51 +435,19 @@ impl WorldConn {
         Ok(())
     }
 
-    /// Leave the world: `InWorld → CharSelect`, dropping the viewer registration (stops shared dispatch;
-    /// observers get `DESTROY` via the entity delete) and deleting the entity ONLY if THIS session
-    /// still owns it. A stale socket whose player already re-logged on a newer session declines the
-    /// `release_session` gate, so we don't vanish the live player (the cached PlayerConn shares one
-    /// identity — only the gateway can tell the sockets apart). Returns the `logout` result so
-    /// each call site keeps its own error policy: the socket-teardown path logs + swallows it (it is
-    /// already ending), while the graceful-logout arm propagates it (session-fatal, as before).
-    /// A no-op (`Ok`) when already in `CharSelect`. Call sites that ack the client (graceful logout)
-    /// send their SMSG batch BEFORE calling this.
+    /// Leave the world and release the matching durable Account claim, including failed entry.
     fn leave_world<St: WorldStore + ?Sized>(&mut self, store: &St) -> Result<()> {
-        if let WorldState::InWorld(InWorld {
-            subs,
-            session_epoch,
-            self_guid,
-            ..
-        }) = std::mem::replace(&mut self.state, WorldState::CharSelect)
-        {
-            drop(subs);
-            let account_id = self.account_id;
-            // The `logout` reducer must delete the entity on the shard it LIVES on, so this
-            // runs on the home shard like every other player-scoped call. Session epochs are
-            // gateway-local and shared across shards, so the same-identity arbitration above is unaffected.
-            let outcome = on_home_shard!(self, store, |st| {
-                if st.release_session(account_id, session_epoch) {
-                    st.logout(account_id, self_guid)
-                } else {
-                    log::debug!(
-                        "world: skipping stale logout for account {account_id} \
-                         (superseded by a newer session)"
-                    );
-                    Ok(())
-                }
-            });
-            // RELEASE the home-shard pin: the socket stays open at character select, and
-            // everything served there — char enum/create/delete — is REALM-scoped (`game_account` /
-            // `game_character` live on the default database). A pin left over from the character we
-            // just logged out of would serve the character list off the instance shard, which is
-            // empty: the player would see no characters at all, and a create/delete would write to
-            // the wrong database. Cleared even when `logout` failed — the state transition above
-            // already happened, so the session is at character select either way.
-            self.home = None;
-            outcome?;
-        }
-        Ok(())
+        let previous = std::mem::replace(&mut self.state, WorldState::CharSelect);
+        drop(previous);
+        let outcome = if let Some(token) = self.session_claim.take() {
+            on_home_shard!(self, store, |st| st.release_session(token))
+        } else {
+            Ok(())
+        };
+        self.home = None;
+        outcome
     }
+
 }
 
 /// How often a queued connection re-checks whether it has been admitted. Cheap — one mutex
@@ -636,6 +606,7 @@ fn world_handshake_with_queue_and_deadline<
 
     Ok(Some((
         WorldConn {
+            session_claim: None,
             account_id,
             account_name: username,
             decrypt,
@@ -764,7 +735,7 @@ impl WriterTrace {
             // Jobs are expanded before the trace sees them (`spawn_writer`), so this arm is
             // unreachable for a real frame; it exists so a future caller cannot silently skip the
             // ring by wrapping a packet in a job.
-            Outbound::Job(_) => {}
+            Outbound::Job(_) | Outbound::Close => {}
         }
     }
 
@@ -878,6 +849,7 @@ fn spawn_writer<S: DuplexStream>(
                     t.record(&out);
                 }
                 let res = match out {
+                    Outbound::Close => Err(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "Account ownership lost")),
                     Outbound::One(m) => {
                         log::debug!("OUT {m}"); // SMSG variant name → crash attribution (tail 'OUT SMSG_*')
                         m.write_encrypted_server(&mut wsock, &mut encrypt)
@@ -1127,12 +1099,12 @@ fn handle_addon_message<St: WorldStore + ?Sized>(store: &St, conn: &WorldConn, t
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
         return;
     };
-    if let Err(e) = store.client_command(
+    if let Err(e) = on_home_shard!(conn, store, |st| st.client_command(
         conn.account_id,
         social::self_guid(conn).unwrap_or(0),
         cmd.clone(),
         payload,
-    ) {
+    )) {
         log::info!(
             "addon bridge: command {cmd:?} from account {} failed: {e:#}",
             conn.account_id

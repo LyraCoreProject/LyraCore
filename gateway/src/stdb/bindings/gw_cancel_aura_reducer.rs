@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwCancelAuraArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub spell_id: u32,
 }
 
 impl From<GwCancelAuraArgs> for super::Reducer {
     fn from(args: GwCancelAuraArgs) -> Self {
         Self::GwCancelAura {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             spell_id: args.spell_id,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_cancel_aura {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_cancel_aura:gw_cancel_aura_then`] to run a callback after the reducer completes.
-    fn gw_cancel_aura(&self, actor_guid: u64, spell_id: u32) -> __sdk::Result<()> {
-        self.gw_cancel_aura_then(actor_guid, spell_id, |_, _| {})
+    fn gw_cancel_aura(&self, request_actor: SessionActor, spell_id: u32) -> __sdk::Result<()> {
+        self.gw_cancel_aura_then(request_actor, spell_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_cancel_aura` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_cancel_aura {
     ///  and its status can be observed with the `callback`.
     fn gw_cancel_aura_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +61,7 @@ pub trait gw_cancel_aura {
 impl gw_cancel_aura for super::RemoteReducers {
     fn gw_cancel_aura_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +70,7 @@ impl gw_cancel_aura for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwCancelAuraArgs {
-                actor_guid,
+                request_actor,
                 spell_id,
             },
             callback,

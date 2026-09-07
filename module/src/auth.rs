@@ -6,7 +6,7 @@ use spacetimedb::{
 };
 
 use crate::items::game_item_instance; // monotonic-guid: don't reuse a guid that still owns items
-use crate::{game_char_base_info, game_character, game_start_position, Character};
+use crate::{game_char_base_info, game_character, game_start_position, game_world_entity, Character};
 
 // ===========================================================================================
 //  Account / auth tables [session] — PRIVATE
@@ -1187,9 +1187,10 @@ pub fn create_character(
 pub fn delete_character(
     ctx: &ReducerContext,
     account_id: u64,
-    character_guid: u64,
+    request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let c = ctx
         .db
         .game_character()
@@ -1215,6 +1216,9 @@ pub fn delete_character(
     }
     if crate::auction::character_has_auction_value(ctx, character_guid) {
         return Err("CHAR_HAS_AUCTION_VALUE".to_string());
+    }
+    if ctx.db.game_world_entity().guid().find(character_guid).is_some() {
+        return Err("CHAR_IN_WORLD".into());
     }
     crate::world::cascade_delete_character(ctx, character_guid);
     Ok(())

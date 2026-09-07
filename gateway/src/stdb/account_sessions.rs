@@ -1,88 +1,229 @@
-//! `SessionEpochs` — entity-ownership arbitration between two sockets on one account, pure
-//! code-motion split out of `connection.rs`. Depends on no `spacetimedb_sdk`: pure sync-primitive
-//! bookkeeping, not connection wiring. (`AccountSessions`, the live-socket refcount behind
-//! releasing per-player connections, died with them — #483.)
+//! Realm-core Account claims and their World Shard fences.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use anyhow::{anyhow, Result};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Per-account "current in-world session" tracking. The world gateway opens one TCP session per
-/// socket, but the account is ONE actor across reconnects — so when a stale
-/// socket finally tears down and asks the module to delete the player's entity, the module can't
-/// tell it apart from a newer session that re-logged in on the same account, and would delete the
-/// LIVE player. Each `player_login` claims a fresh epoch (becoming the current owner of the entity);
-/// teardown deletes the entity only if its epoch is still current. The gateway must arbitrate this
-/// because the distinction (which socket) only exists here, not in the module.
-#[derive(Default)]
-pub(crate) struct SessionEpochs {
-    next: AtomicU64,
-    current: Mutex<HashMap<u64, u64>>,
+use super::bindings::*;
+use super::connection::{call_reducer, Coordinator};
+use crate::world::{Outbound, SessionTx, WorldSessionToken as Token};
+
+pub(crate) struct SessionOwnership {
+    token: Token,
+    character_guid: u64,
+    deadline: AtomicI64,
+    closed: AtomicBool,
+    lost: Mutex<Option<SessionTx>>,
 }
 
-impl SessionEpochs {
-    /// The current-epoch map, recovering a poisoned lock (matches `connection.rs`'s
-    /// `.lock().unwrap()` discipline, e.g. `coord()`/`call_pipe()`) — a stale read beats poisoning
-    /// every future claim/release for every account on the shard.
-    fn current(&self) -> std::sync::MutexGuard<'_, HashMap<u64, u64>> {
-        self.current.lock().unwrap_or_else(|p| {
-            log::error!(
-                "session-epoch lock poisoned (a prior panic in a critical section) — recovering"
-            );
-            p.into_inner()
-        })
+fn wire(token: Token) -> WorldSessionToken {
+    WorldSessionToken {
+        account_id: token.account_id,
+        generation: token.generation,
+        request_nonce: token.request_nonce,
     }
+}
 
-    /// Claim a fresh epoch for `account_id` and make it current.
-    pub(crate) fn claim(&self, account_id: u64) -> u64 {
-        let epoch = self.next.fetch_add(1, Ordering::Relaxed);
-        self.current().insert(account_id, epoch);
-        epoch
-    }
+fn utc_micros() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|time| time.as_micros().min(i64::MAX as u128) as i64).unwrap_or(i64::MAX)
+}
 
-    /// Release `epoch`; returns true iff it was still the current epoch (caller owns the entity, so
-    /// it's safe to delete it on logout), false if a newer login superseded it (do NOT delete).
-    pub(crate) fn release(&self, account_id: u64, epoch: u64) -> bool {
-        let mut current = self.current();
-        if current.get(&account_id) == Some(&epoch) {
-            current.remove(&account_id);
-            true
-        } else {
-            false
+impl SessionOwnership {
+    fn lose(&self) {
+        self.closed.store(true, Ordering::Release);
+        if let Some(tx) = self.lost.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            let _ = tx.send(Outbound::Close);
         }
     }
 }
 
-#[cfg(test)]
-mod session_epoch_tests {
-    use super::SessionEpochs;
-
-    #[test]
-    fn newer_login_supersedes_a_stale_session() {
-        let s = SessionEpochs::default();
-        let acct = 42;
-        let a = s.claim(acct); // socket A enters the world
-        let b = s.claim(acct); // socket B re-logs on the same account, superseding A
-        assert_ne!(a, b);
-        // A's late teardown must NOT delete the entity — B owns it now (the bug this fixes).
-        assert!(
-            !s.release(acct, a),
-            "a superseded epoch must not own the entity"
-        );
-        // B's teardown does own it and deletes once; a double release is a no-op.
-        assert!(s.release(acct, b), "the current epoch owns the entity");
-        assert!(
-            !s.release(acct, b),
-            "releasing an already-released epoch is a no-op"
-        );
+impl Coordinator {
+    pub(crate) fn session_actor(&self, guid: u64) -> SessionActor {
+        SessionActor {
+            guid: if guid == 0 { self.2.as_ref().map_or(0, |owner| owner.character_guid) } else { guid },
+            ownership: self.2.as_ref().map(|owner| wire(owner.token)),
+        }
     }
 
+    pub(crate) fn watch_session(&self, tx: SessionTx) {
+        if let Some(owner) = &self.2 {
+            *owner.lost.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
+            if owner.closed.load(Ordering::Acquire) || owner.deadline.load(Ordering::Acquire) <= utc_micros() {
+                owner.lose();
+            }
+        }
+    }
+
+    fn claim_receipt(&self, token: Option<Token>, account_id: u64, nonce: u128) -> Result<AccountClaim> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let row = self.0.coord().conn.db.game_account_claim().account_id().find(&account_id);
+            if let Some(row) = row.filter(|row| row.request_nonce == nonce
+                && token.is_none_or(|t| t.generation == row.generation)) {
+                if row.closed || row.expires_micros <= utc_micros() {
+                    return Err(anyhow!("STALE_WORLD_SESSION"));
+                }
+                return Ok(row);
+            }
+            if Instant::now() >= deadline { return Err(anyhow!("Account claim receipt was not visible within 3s")); }
+            std::thread::sleep(Duration::from_millis(15));
+        }
+    }
+
+    pub fn claim_session(&self, account_id: u64, character_guid: u64) -> Result<Token> {
+        let shards = self.configured_world_shards()?;
+        let name = self.0.coord().conn.db.game_account().id().find(&account_id)
+            .ok_or_else(|| anyhow!("no Account {account_id} on {}", self.shard_name()))?.username;
+        let owns_character = shards.iter().any(|shard| {
+            shard.character_row(character_guid).is_some_and(|character| {
+                shard.0.coord().conn.db.game_account().id().find(&character.account_id)
+                    .is_some_and(|account| account.username == name)
+            })
+        });
+        if !owns_character { return Err(anyhow!("Character does not belong to Account")); }
+        let realm = self.realm_core()?;
+        let realm_account = realm.account_by_username(&name)?
+            .ok_or_else(|| anyhow!("no Account {name} on Realm-core"))?;
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).map_err(|error| anyhow!("Account request nonce: {error}"))?;
+        let nonce = u128::from_le_bytes(bytes).max(1);
+        call_reducer!(realm.0.call_pipe().conn.reducers, "claim_account",
+            claim_account_then(realm_account.id, character_guid, nonce))?;
+        let receipt = realm.claim_receipt(None, realm_account.id, nonce)?;
+        let token = Token { account_id: receipt.account_id, generation: receipt.generation, request_nonce: nonce };
+        for shard in shards {
+            call_reducer!(shard.0.call_pipe().conn.reducers, "fence_account",
+                fence_account_then(wire(token), name.clone(), character_guid, receipt.expires_micros))?;
+        }
+        // No renewal is started for an incomplete admission. Its claim expires so another
+        // generation can finish fencing Shards that the interrupted attempt did not reach.
+        Ok(token)
+    }
+
+    pub(crate) fn bind_session(&self, token: Token) -> Result<Coordinator> {
+        let receipt = self.realm_core()?.claim_receipt(Some(token), token.account_id, token.request_nonce)?;
+        let owner = Arc::new(SessionOwnership {
+            token, character_guid: receipt.character_guid,
+            deadline: AtomicI64::new(receipt.expires_micros), closed: AtomicBool::new(false),
+            lost: Mutex::new(None),
+        });
+        let weak = Arc::downgrade(&owner);
+        let mut unbound = self.clone();
+        unbound.2 = None;
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| anyhow!("Account renewal runtime: {error}"))?;
+        runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                let Some(owner) = weak.upgrade() else { break; };
+                if owner.closed.load(Ordering::Acquire) { break; }
+                let coord = unbound.clone();
+                let token = owner.token;
+                match tokio::task::spawn_blocking(move || coord.renew_session(token)).await {
+                    Ok(Ok(expires)) => { owner.deadline.store(expires, Ordering::Release); }
+                    result => {
+                        log::warn!("Account {} generation {} lost ownership renewal: {result:?}", token.account_id, token.generation);
+                        owner.lose();
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(Coordinator(self.0.clone(), self.1.clone(), Some(owner)))
+    }
+
+    fn renew_session(&self, token: Token) -> Result<i64> {
+        let realm = self.realm_core()?;
+        let prior = realm.claim_receipt(Some(token), token.account_id, token.request_nonce)?.expires_micros;
+        call_reducer!(realm.0.call_pipe().conn.reducers, "renew_account_claim",
+            renew_account_claim_then(wire(token)))?;
+        let visible_until = Instant::now() + Duration::from_secs(3);
+        let receipt = loop {
+            let receipt = realm.claim_receipt(Some(token), token.account_id, token.request_nonce)?;
+            if receipt.expires_micros > prior { break receipt; }
+            if Instant::now() >= visible_until { return Err(anyhow!("Account renewal receipt was not visible within 3s")); }
+            std::thread::sleep(Duration::from_millis(15));
+        };
+        for shard in self.configured_world_shards()? {
+            call_reducer!(shard.0.call_pipe().conn.reducers, "renew_account_fence",
+                renew_account_fence_then(wire(token), receipt.expires_micros))?;
+        }
+        Ok(receipt.expires_micros)
+    }
+
+    pub fn release_session(&self, token: Token) -> Result<()> {
+        if let Some(owner) = &self.2 {
+            owner.closed.store(true, Ordering::Release);
+            owner.lost.lock().unwrap_or_else(|p| p.into_inner()).take();
+        }
+        for shard in self.configured_world_shards()? {
+            call_reducer!(shard.0.call_pipe().conn.reducers, "close_account_fence",
+                close_account_fence_then(wire(token)))?;
+        }
+        let realm = self.realm_core()?;
+        call_reducer!(realm.0.call_pipe().conn.reducers, "release_account_claim",
+            release_account_claim_then(wire(token)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::accept::BlockingTaskCapacity;
+    use crate::config::GatewayConfig;
+    use crate::durable_test_support::Standalone;
+
     #[test]
-    fn distinct_accounts_are_independent() {
-        let s = SessionEpochs::default();
-        let e1 = s.claim(1);
-        let e2 = s.claim(2);
-        assert!(s.release(1, e1));
-        assert!(s.release(2, e2));
+    #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+    fn independent_coordinators_preserve_the_winner_after_delayed_cleanup() {
+        for name in ["LYRACORE_SHARD_MAP", "LYRACORE_SHARD_MAP_FILE", "LYRACORE_REALM_CORE"] {
+            assert!(std::env::var_os(name).is_none(), "unset {name} for this private fixture");
+        }
+        let mut fixture = Standalone::start("account-ownership");
+        fixture.publish_module();
+        fixture.assert_call("claim_operator", &[]);
+        fixture.assert_call("gw_heartbeat", &[]);
+        let cfg = GatewayConfig {
+            logon_bind: "127.0.0.1:0".into(), world_bind: "127.0.0.1:0".into(),
+            stdb_uri: fixture.server().into(), module_name: fixture.shard_name().into(),
+            coordinator_token: Some(fixture.owner_token()), gateway_id: "account-ownership-a".into(),
+            blocking_task_capacity: BlockingTaskCapacity::new(2),
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let a = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
+        let b = runtime.block_on(Coordinator::connect(&GatewayConfig {
+            gateway_id: "account-ownership-b".into(), ..cfg
+        })).unwrap();
+        let account_id = a.account_by_username("TEST").unwrap().unwrap().id;
+        let identity = a.bound_identity(account_id).unwrap();
+        assert_eq!(b.bound_identity(account_id).unwrap(), identity);
+        a.establish_session(account_id, &[7; 40], identity).unwrap();
+        let first = a.claim_session(account_id, 1).unwrap();
+        let old = a.bind_session(first).unwrap();
+        old.player_login(account_id, 1).unwrap();
+        assert!(b.claim_session(account_id, 1).unwrap_err().to_string().contains("ACCOUNT_IN_USE"));
+        assert_eq!(fixture.query_rows("SELECT * FROM game_world_entity WHERE guid = 1").len(), 1);
+
+        // Hold A's cleanup while its Realm claim expires. The World Shard still has A's old
+        // generation, which B must advance before entering.
+        fixture.assert_sql(&format!("UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = {}", first.account_id));
+        let second = b.claim_session(account_id, 1).unwrap();
+        assert!(second.generation > first.generation);
+        let winner = b.bind_session(second).unwrap();
+        winner.player_login(account_id, 1).unwrap();
+        old.release_session(first).unwrap();
+        old.release_session(first).unwrap();
+        let stale = old.stop_attack(account_id, 1).unwrap_err();
+        assert!(stale.to_string().contains("STALE_WORLD_SESSION"), "{stale:#}");
+        let entities = fixture.query_rows("SELECT * FROM game_world_entity WHERE guid = 1");
+        assert_eq!(entities.len(), 1, "delayed cleanup deleted the winner's Character");
+        let claims = fixture.query_rows("SELECT * FROM game_account_claim");
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0]["generation"], second.generation.to_string());
+        assert_eq!(claims[0]["closed"], "false");
+        winner.release_session(second).unwrap();
+        assert!(fixture.query_rows("SELECT * FROM game_world_entity WHERE guid = 1").is_empty());
     }
 }

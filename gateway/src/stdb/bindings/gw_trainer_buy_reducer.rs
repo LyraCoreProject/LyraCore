@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwTrainerBuyArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub trainer_guid: u64,
     pub spell_id: u32,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwTrainerBuyArgs {
 impl From<GwTrainerBuyArgs> for super::Reducer {
     fn from(args: GwTrainerBuyArgs) -> Self {
         Self::GwTrainerBuy {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             trainer_guid: args.trainer_guid,
             spell_id: args.spell_id,
         }
@@ -39,11 +41,11 @@ pub trait gw_trainer_buy {
     /// /// Use [`gw_trainer_buy:gw_trainer_buy_then`] to run a callback after the reducer completes.
     fn gw_trainer_buy(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trainer_guid: u64,
         spell_id: u32,
     ) -> __sdk::Result<()> {
-        self.gw_trainer_buy_then(actor_guid, trainer_guid, spell_id, |_, _| {})
+        self.gw_trainer_buy_then(request_actor, trainer_guid, spell_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_trainer_buy` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_trainer_buy {
     ///  and its status can be observed with the `callback`.
     fn gw_trainer_buy_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trainer_guid: u64,
         spell_id: u32,
 
@@ -67,7 +69,7 @@ pub trait gw_trainer_buy {
 impl gw_trainer_buy for super::RemoteReducers {
     fn gw_trainer_buy_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trainer_guid: u64,
         spell_id: u32,
 
@@ -77,7 +79,7 @@ impl gw_trainer_buy for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwTrainerBuyArgs {
-                actor_guid,
+                request_actor,
                 trainer_guid,
                 spell_id,
             },

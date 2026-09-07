@@ -129,7 +129,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_taxi_node_status",
-            gw_taxi_node_status_then(character_guid, npc_guid, request_id)
+            gw_taxi_node_status_then(self.session_actor(character_guid), npc_guid, request_id)
         )?;
         Ok(self
             .await_taxi_reply(
@@ -159,7 +159,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_open_taxi",
-            gw_open_taxi_then(character_guid, npc_guid, request_id)
+            gw_open_taxi_then(self.session_actor(character_guid), npc_guid, request_id)
         )?;
         Ok(self
             .await_taxi_reply(
@@ -195,13 +195,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_activate_taxi",
-            gw_activate_taxi_then(
-                character_guid,
-                npc_guid,
-                source_client_node_id,
-                destination_client_node_id,
-                request_id
-            )
+            gw_activate_taxi_then(self.session_actor(character_guid), npc_guid, source_client_node_id, destination_client_node_id, request_id)
         )?;
         let reply = self
             .await_taxi_reply(
@@ -220,7 +214,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_arm_taxi_flight",
-            gw_arm_taxi_flight_then(character_guid)
+            gw_arm_taxi_flight_then(self.session_actor(character_guid))
         )
     }
 
@@ -328,16 +322,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_auction_list_local",
-            gw_auction_list_local_then(
-                operation_id,
-                request.actor_guid,
-                request.item_guid,
-                request.auctioneer_guid,
-                request.house_id,
-                request.start_bid,
-                request.buyout,
-                request.duration_minutes
-            )
+            gw_auction_list_local_then(operation_id, self.session_actor(request.actor_guid), request.item_guid, request.auctioneer_guid, request.house_id, request.start_bid, request.buyout, request.duration_minutes)
         )
     }
 
@@ -349,16 +334,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_auction_hold_listing",
-            gw_auction_hold_listing_then(
-                operation_id,
-                request.actor_guid,
-                request.item_guid,
-                request.auctioneer_guid,
-                request.house_id,
-                request.start_bid,
-                request.buyout,
-                request.duration_minutes
-            )
+            gw_auction_hold_listing_then(operation_id, self.session_actor(request.actor_guid), request.item_guid, request.auctioneer_guid, request.house_id, request.start_bid, request.buyout, request.duration_minutes)
         )
     }
 
@@ -368,7 +344,7 @@ impl Coordinator {
             "realm_auction_commit_listing",
             realm_auction_commit_listing_then(
                 hold.operation_id,
-                hold.seller_guid,
+                self.session_actor(hold.seller_guid),
                 hold.item_guid,
                 hold.item_entry,
                 hold.item_stack_count,
@@ -393,7 +369,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_auction_confirm_listing",
-            realm_auction_confirm_listing_then(operation_id, auction_id)
+            realm_auction_confirm_listing_then(operation_id, auction_id, self.session_actor(0))
         )
     }
 
@@ -401,7 +377,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_auction_settle_listing",
-            realm_auction_settle_listing_then(operation_id)
+            realm_auction_settle_listing_then(operation_id, self.session_actor(0))
         )
     }
 
@@ -411,7 +387,7 @@ impl Coordinator {
             "realm_auction_refund_listing",
             realm_auction_refund_listing_then(
                 hold.operation_id,
-                hold.seller_guid,
+                self.session_actor(hold.seller_guid),
                 hold.item_guid,
                 hold.item_entry,
                 hold.item_stack_count,
@@ -436,7 +412,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_auction_release_listing_hold",
-            gw_auction_release_listing_hold_then(hold.operation_id, hold.seller_guid)
+            gw_auction_release_listing_hold_then(hold.operation_id, self.session_actor(hold.seller_guid))
         )
     }
 
@@ -580,14 +556,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_auction_bid_local",
-            gw_auction_bid_local_then(
-                operation_id,
-                request.actor_guid,
-                request.auctioneer_guid,
-                request.auction_id,
-                request.house_id,
-                request.offer
-            )
+            gw_auction_bid_local_then(operation_id, self.session_actor(request.actor_guid), request.auctioneer_guid, request.auction_id, request.house_id, request.offer)
         )
     }
 
@@ -599,14 +568,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_auction_hold_bid",
-            gw_auction_hold_bid_then(
-                operation_id,
-                request.actor_guid,
-                request.auctioneer_guid,
-                request.auction_id,
-                request.house_id,
-                request.offer
-            )
+            gw_auction_hold_bid_then(operation_id, self.session_actor(request.actor_guid), request.auctioneer_guid, request.auction_id, request.house_id, request.offer)
         )
     }
 
@@ -614,13 +576,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_auction_decide_bid",
-            realm_auction_decide_bid_then(
-                hold.operation_id,
-                hold.bidder_guid,
-                hold.auction_id,
-                hold.house,
-                hold.offer
-            )
+            realm_auction_decide_bid_then(hold.operation_id, self.session_actor(hold.bidder_guid), hold.auction_id, hold.house, hold.offer)
         )
     }
 
@@ -637,19 +593,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_auction_finish_bid",
-            gw_auction_finish_bid_then(
-                hold.operation_id,
-                hold.bidder_guid,
-                hold.auction_id,
-                hold.house,
-                hold.offer,
-                decision.outcome,
-                decision.revision,
-                decision.result_bidder_guid,
-                decision.result_bid,
-                decision.minimum_increment,
-                decision.accepted_price
-            )
+            gw_auction_finish_bid_then(hold.operation_id, self.session_actor(hold.bidder_guid), hold.auction_id, hold.house, hold.offer, decision.outcome, decision.revision, decision.result_bidder_guid, decision.result_bid, decision.minimum_increment, decision.accepted_price)
         )
     }
 
@@ -657,14 +601,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_auction_refund_bid",
-            realm_auction_refund_bid_then(
-                hold.operation_id,
-                hold.bidder_guid,
-                hold.auction_id,
-                hold.house,
-                hold.offer,
-                hold.deferred_refund
-            )
+            realm_auction_refund_bid_then(hold.operation_id, self.session_actor(hold.bidder_guid), hold.auction_id, hold.house, hold.offer, hold.deferred_refund)
         )
     }
 
@@ -672,14 +609,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "gw_auction_confirm_bid_refund",
-            gw_auction_confirm_bid_refund_then(
-                hold.operation_id,
-                hold.bidder_guid,
-                hold.auction_id,
-                hold.house,
-                hold.offer,
-                hold.deferred_refund
-            )
+            gw_auction_confirm_bid_refund_then(hold.operation_id, self.session_actor(hold.bidder_guid), hold.auction_id, hold.house, hold.offer, hold.deferred_refund)
         )
     }
 
@@ -784,7 +714,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_player_login",
-            gw_player_login_then(account_id, character_guid)
+            gw_player_login_then(account_id, self.session_actor(character_guid))
         )?;
 
         // The reducer committed; the row propagates to the owner cache asynchronously. Poll
@@ -947,7 +877,7 @@ impl Coordinator {
         let result = call_reducer!(
             self.0.call_pipe().conn.reducers,
             "delete_character",
-            delete_character_then(account_id, character_guid)
+            delete_character_then(account_id, self.session_actor(character_guid))
         );
         Ok(match result {
             Ok(()) => CharDeleteOutcome::Success,
@@ -1016,7 +946,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "set_character_shard",
-            set_character_shard_then(character_guid, map_id, instance_id)
+            set_character_shard_then(character_guid, map_id, instance_id, self.session_actor(character_guid))
         )
     }
 
@@ -1030,7 +960,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_set_target",
-            gw_set_target_then(actor_guid, target_guid)
+            gw_set_target_then(self.session_actor(actor_guid), target_guid)
         )
     }
 
@@ -1045,7 +975,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_inspect",
-            gw_inspect_then(actor_guid, target_guid)
+            gw_inspect_then(self.session_actor(actor_guid), target_guid)
         )
     }
 
@@ -1065,7 +995,7 @@ impl Coordinator {
         legacy_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_use_gameobject",
-            gw_use_gameobject_then(actor_guid, go_guid)
+            gw_use_gameobject_then(self.session_actor(actor_guid), go_guid)
         ))
     }
 
@@ -1083,7 +1013,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_enter_areatrigger",
-            gw_enter_areatrigger_then(actor_guid, trigger_id)
+            gw_enter_areatrigger_then(self.session_actor(actor_guid), trigger_id)
         )
     }
 
@@ -1102,7 +1032,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_client_command",
-            gw_client_command_then(actor_guid, cmd, payload)
+            gw_client_command_then(self.session_actor(actor_guid), cmd, payload)
         )
     }
 
@@ -1116,7 +1046,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_attack",
-            gw_attack_then(actor_guid, target_guid)
+            gw_attack_then(self.session_actor(actor_guid), target_guid)
         )
     }
 
@@ -1137,7 +1067,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_pet_command",
-            gw_pet_command_then(actor_guid, data, target_guid)
+            gw_pet_command_then(self.session_actor(actor_guid), data, target_guid)
         )
     }
 
@@ -1158,7 +1088,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_ranged_attack",
-            gw_ranged_attack_then(actor_guid, target_guid, spell_id)
+            gw_ranged_attack_then(self.session_actor(actor_guid), target_guid, spell_id)
         )
     }
 
@@ -1171,7 +1101,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_stop_attack",
-            gw_stop_attack_then(actor_guid)
+            gw_stop_attack_then(self.session_actor(actor_guid))
         )
     }
 
@@ -1184,7 +1114,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_set_sheathed",
-            gw_set_sheathed_then(actor_guid, state)
+            gw_set_sheathed_then(self.session_actor(actor_guid), state)
         )
     }
 
@@ -1205,7 +1135,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_cast_spell",
-            gw_cast_spell_then(actor_guid, spell_id, target_guid)
+            gw_cast_spell_then(self.session_actor(actor_guid), spell_id, target_guid)
         )
     }
 
@@ -1224,7 +1154,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_cast_item_target",
-            gw_cast_item_target_then(actor_guid, spell_id, slot)
+            gw_cast_item_target_then(self.session_actor(actor_guid), spell_id, slot)
         )
     }
 
@@ -1250,7 +1180,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_cast_spell_at",
-            gw_cast_spell_at_then(actor_guid, spell_id, target_guid, x, y, z)
+            gw_cast_spell_at_then(self.session_actor(actor_guid), spell_id, target_guid, x, y, z)
         )
     }
 
@@ -1264,7 +1194,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_cancel_aura",
-            gw_cancel_aura_then(actor_guid, spell_id)
+            gw_cancel_aura_then(self.session_actor(actor_guid), spell_id)
         )
     }
 
@@ -1278,7 +1208,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_cancel_cast",
-            gw_cancel_cast_then(actor_guid)
+            gw_cancel_cast_then(self.session_actor(actor_guid))
         )
     }
 
@@ -1297,7 +1227,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_send_chat",
-            gw_send_chat_then(actor_guid, chat_type, language, message)
+            gw_send_chat_then(self.session_actor(actor_guid), chat_type, language, message)
         )
     }
 
@@ -1310,7 +1240,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_join_channel",
-            gw_join_channel_then(actor_guid, channel)
+            gw_join_channel_then(self.session_actor(actor_guid), channel)
         )
     }
 
@@ -1323,7 +1253,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_leave_channel",
-            gw_leave_channel_then(actor_guid, channel)
+            gw_leave_channel_then(self.session_actor(actor_guid), channel)
         )
     }
 
@@ -1342,7 +1272,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_send_channel_message",
-            gw_send_channel_message_then(actor_guid, channel, message)
+            gw_send_channel_message_then(self.session_actor(actor_guid), channel, message)
         )
     }
 
@@ -1361,7 +1291,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_send_emote",
-            gw_send_emote_then(actor_guid, text_emote, emote_anim, target_guid)
+            gw_send_emote_then(self.session_actor(actor_guid), text_emote, emote_anim, target_guid)
         )
     }
 
@@ -1379,7 +1309,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_send_roll",
-            gw_send_roll_then(actor_guid, min_roll, max_roll)
+            gw_send_roll_then(self.session_actor(actor_guid), min_roll, max_roll)
         )
     }
 
@@ -1397,7 +1327,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_send_whisper",
-            gw_send_whisper_then(actor_guid, target_player, message)
+            gw_send_whisper_then(self.session_actor(actor_guid), target_player, message)
         )
     }
 
@@ -1416,7 +1346,7 @@ impl Coordinator {
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_party_chat",
-            gw_party_chat_then(actor_guid, message)
+            gw_party_chat_then(self.session_actor(actor_guid), message)
         ))
     }
 
@@ -1456,7 +1386,7 @@ impl Coordinator {
         coord
             .conn
             .reducers
-            .gw_gm_command_then(actor_guid, alpha_test_tools, text, move |_ctx, status| {
+            .gw_gm_command_then(self.session_actor(actor_guid), alpha_test_tools, text, move |_ctx, status| {
                 callback_completion.finish(
                     call_id,
                     match status {
@@ -1494,7 +1424,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_push_quest_to_party",
-            gw_push_quest_to_party_then(actor_guid, quest_id)
+            gw_push_quest_to_party_then(self.session_actor(actor_guid), quest_id)
         )
     }
 
@@ -1512,7 +1442,7 @@ impl Coordinator {
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_invite",
-            gw_group_invite_then(actor_guid, target_guid)
+            gw_group_invite_then(self.session_actor(actor_guid), target_guid)
         ))
     }
 
@@ -1530,7 +1460,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_initiate_trade",
-            gw_initiate_trade_then(actor_guid, target_guid)
+            gw_initiate_trade_then(self.session_actor(actor_guid), target_guid)
         )
     }
 
@@ -1543,7 +1473,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_begin_trade",
-            gw_begin_trade_then(actor_guid)
+            gw_begin_trade_then(self.session_actor(actor_guid))
         )
     }
 
@@ -1556,7 +1486,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_cancel_trade",
-            gw_cancel_trade_then(actor_guid)
+            gw_cancel_trade_then(self.session_actor(actor_guid))
         )
     }
 
@@ -1568,7 +1498,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_duel_accept",
-            gw_duel_accept_then(actor_guid, flag_guid)
+            gw_duel_accept_then(self.session_actor(actor_guid), flag_guid)
         )
     }
 
@@ -1580,7 +1510,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_duel_cancel",
-            gw_duel_cancel_then(actor_guid, flag_guid)
+            gw_duel_cancel_then(self.session_actor(actor_guid), flag_guid)
         )
     }
 
@@ -1599,7 +1529,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_set_trade_item",
-            gw_set_trade_item_then(actor_guid, trade_slot, inv_slot)
+            gw_set_trade_item_then(self.session_actor(actor_guid), trade_slot, inv_slot)
         )
     }
 
@@ -1617,7 +1547,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_clear_trade_item",
-            gw_clear_trade_item_then(actor_guid, trade_slot)
+            gw_clear_trade_item_then(self.session_actor(actor_guid), trade_slot)
         )
     }
 
@@ -1630,7 +1560,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_set_trade_gold",
-            gw_set_trade_gold_then(actor_guid, copper)
+            gw_set_trade_gold_then(self.session_actor(actor_guid), copper)
         )
     }
 
@@ -1643,7 +1573,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_accept_trade",
-            gw_accept_trade_then(actor_guid)
+            gw_accept_trade_then(self.session_actor(actor_guid))
         )
     }
 
@@ -1656,7 +1586,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_unaccept_trade",
-            gw_unaccept_trade_then(actor_guid)
+            gw_unaccept_trade_then(self.session_actor(actor_guid))
         )
     }
 
@@ -1669,7 +1599,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_busy_trade",
-            gw_busy_trade_then(actor_guid)
+            gw_busy_trade_then(self.session_actor(actor_guid))
         )
     }
 
@@ -1682,7 +1612,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_ignore_trade",
-            gw_ignore_trade_then(actor_guid)
+            gw_ignore_trade_then(self.session_actor(actor_guid))
         )
     }
 
@@ -1696,7 +1626,7 @@ impl Coordinator {
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_accept_group_invite",
-            gw_accept_group_invite_then(actor_guid)
+            gw_accept_group_invite_then(self.session_actor(actor_guid))
         ))
     }
 
@@ -1709,7 +1639,7 @@ impl Coordinator {
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_decline",
-            gw_group_decline_then(actor_guid)
+            gw_group_decline_then(self.session_actor(actor_guid))
         ))
     }
 
@@ -1722,7 +1652,7 @@ impl Coordinator {
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_leave",
-            gw_group_leave_then(actor_guid)
+            gw_group_leave_then(self.session_actor(actor_guid))
         ))
     }
 
@@ -1740,7 +1670,7 @@ impl Coordinator {
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_uninvite",
-            gw_group_uninvite_then(actor_guid, target_guid)
+            gw_group_uninvite_then(self.session_actor(actor_guid), target_guid)
         ))
     }
 
@@ -1763,7 +1693,7 @@ impl Coordinator {
         party_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_group_loot_method",
-            gw_group_loot_method_then(actor_guid, loot_setting, master_guid, loot_threshold)
+            gw_group_loot_method_then(self.session_actor(actor_guid), loot_setting, master_guid, loot_threshold)
         ))
     }
 
@@ -1784,7 +1714,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_gossip_select",
-            gw_gossip_select_then(actor_guid, npc_guid, option_id, option_row_id)
+            gw_gossip_select_then(self.session_actor(actor_guid), npc_guid, option_id, option_row_id)
         )
     }
 
@@ -1802,7 +1732,7 @@ impl Coordinator {
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_add_friend",
-            gw_add_friend_then(actor_guid, target_guid)
+            gw_add_friend_then(self.session_actor(actor_guid), target_guid)
         ))
     }
 
@@ -1820,7 +1750,7 @@ impl Coordinator {
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_del_friend",
-            gw_del_friend_then(actor_guid, target_guid)
+            gw_del_friend_then(self.session_actor(actor_guid), target_guid)
         ))
     }
 
@@ -1838,7 +1768,7 @@ impl Coordinator {
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_add_ignore",
-            gw_add_ignore_then(actor_guid, target_guid)
+            gw_add_ignore_then(self.session_actor(actor_guid), target_guid)
         ))
     }
 
@@ -1856,7 +1786,7 @@ impl Coordinator {
         contact_outcome(call_reducer!(
             coord.conn.reducers,
             "gw_del_ignore",
-            gw_del_ignore_then(actor_guid, target_guid)
+            gw_del_ignore_then(self.session_actor(actor_guid), target_guid)
         ))
     }
 
@@ -1875,7 +1805,7 @@ impl Coordinator {
         strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_money",
-            gw_loot_money_then(actor_guid, target_guid)
+            gw_loot_money_then(self.session_actor(actor_guid), target_guid)
         ))
     }
 
@@ -1893,7 +1823,7 @@ impl Coordinator {
         strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_open_creature_loot",
-            gw_open_creature_loot_then(actor_guid, corpse_guid)
+            gw_open_creature_loot_then(self.session_actor(actor_guid), corpse_guid)
         ))
     }
 
@@ -1915,7 +1845,7 @@ impl Coordinator {
         strict_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_take_loot",
-            gw_take_loot_then(actor_guid, corpse_guid, loot_slot)
+            gw_take_loot_then(self.session_actor(actor_guid), corpse_guid, loot_slot)
         ))
     }
 
@@ -1932,7 +1862,7 @@ impl Coordinator {
         legacy_loot_request_status(call_reducer!(
             coord.conn.reducers,
             "gw_skin",
-            gw_skin_then(actor_guid, corpse_guid)
+            gw_skin_then(self.session_actor(actor_guid), corpse_guid)
         ))
     }
 
@@ -1954,7 +1884,7 @@ impl Coordinator {
         loot_action_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_roll",
-            gw_loot_roll_then(actor_guid, corpse_guid, loot_slot, vote)
+            gw_loot_roll_then(self.session_actor(actor_guid), corpse_guid, loot_slot, vote)
         ))
     }
 
@@ -1975,7 +1905,7 @@ impl Coordinator {
         loot_action_status(call_reducer!(
             coord.conn.reducers,
             "gw_loot_master_give",
-            gw_loot_master_give_then(actor_guid, corpse_guid, loot_slot, target_guid)
+            gw_loot_master_give_then(self.session_actor(actor_guid), corpse_guid, loot_slot, target_guid)
         ))
     }
 
@@ -1987,7 +1917,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_disenchant",
-            gw_disenchant_then(actor_guid, slot)
+            gw_disenchant_then(self.session_actor(actor_guid), slot)
         )
     }
 
@@ -2005,7 +1935,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_enchant_item",
-            gw_enchant_item_then(actor_guid, slot, enchant_id)
+            gw_enchant_item_then(self.session_actor(actor_guid), slot, enchant_id)
         )
     }
 
@@ -2027,7 +1957,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_buy_item",
-            gw_buy_item_then(actor_guid, vendor_guid, item_entry, count)
+            gw_buy_item_then(self.session_actor(actor_guid), vendor_guid, item_entry, count)
         )
     }
 
@@ -2049,7 +1979,7 @@ impl Coordinator {
         let result: Result<()> = call_reducer!(
             coord.conn.reducers,
             "gw_trainer_buy",
-            gw_trainer_buy_then(actor_guid, trainer_guid, spell_id)
+            gw_trainer_buy_then(self.session_actor(actor_guid), trainer_guid, spell_id)
         );
         match result {
             Ok(()) => Ok(crate::world::TrainerBuyOutcome::Learned),
@@ -2070,7 +2000,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_buy_bank_slot",
-            gw_buy_bank_slot_then(actor_guid, banker_guid)
+            gw_buy_bank_slot_then(self.session_actor(actor_guid), banker_guid)
         )
     }
 
@@ -2082,7 +2012,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_learn_talent",
-            gw_learn_talent_then(actor_guid, talent_id)
+            gw_learn_talent_then(self.session_actor(actor_guid), talent_id)
         )
     }
 
@@ -2102,7 +2032,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_reset_talents",
-            gw_reset_talents_then(actor_guid, trainer_guid)
+            gw_reset_talents_then(self.session_actor(actor_guid), trainer_guid)
         )
     }
 
@@ -2113,7 +2043,7 @@ impl Coordinator {
             return Err(anyhow!("fish: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(coord.conn.reducers, "gw_fish", gw_fish_then(actor_guid))
+        call_reducer!(coord.conn.reducers, "gw_fish", gw_fish_then(self.session_actor(actor_guid)))
     }
 
     /// Pick Lock: unlock the locked GameObject `go_guid` over the coordinator connection (so the
@@ -2127,7 +2057,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_pick_lock",
-            gw_pick_lock_then(actor_guid, go_guid)
+            gw_pick_lock_then(self.session_actor(actor_guid), go_guid)
         )
     }
 
@@ -2148,7 +2078,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_set_action_button",
-            gw_set_action_button_then(actor_guid, button, action, action_type)
+            gw_set_action_button_then(self.session_actor(actor_guid), button, action, action_type)
         )
     }
 
@@ -2169,7 +2099,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_set_faction_at_war",
-            gw_set_faction_at_war_then(actor_guid, reputation_index, at_war)
+            gw_set_faction_at_war_then(self.session_actor(actor_guid), reputation_index, at_war)
         )
     }
 
@@ -2191,7 +2121,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_sell_item",
-            gw_sell_item_then(actor_guid, vendor_guid, slot)
+            gw_sell_item_then(self.session_actor(actor_guid), vendor_guid, slot)
         )
     }
 
@@ -2209,7 +2139,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_buyback_item",
-            gw_buyback_item_then(actor_guid, vendor_guid, slot)
+            gw_buyback_item_then(self.session_actor(actor_guid), vendor_guid, slot)
         )
     }
 
@@ -2230,7 +2160,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_repair_item",
-            gw_repair_item_then(actor_guid, npc_guid, slot)
+            gw_repair_item_then(self.session_actor(actor_guid), npc_guid, slot)
         )
     }
 
@@ -2250,7 +2180,7 @@ impl Coordinator {
         item_action(call_reducer!(
             coord.conn.reducers,
             "gw_equip_item",
-            gw_equip_item_then(actor_guid, from_slot)
+            gw_equip_item_then(self.session_actor(actor_guid), from_slot)
         ))
     }
 
@@ -2269,7 +2199,7 @@ impl Coordinator {
         item_action(call_reducer!(
             coord.conn.reducers,
             "gw_unequip_item",
-            gw_unequip_item_then(actor_guid, from_slot)
+            gw_unequip_item_then(self.session_actor(actor_guid), from_slot)
         ))
     }
 
@@ -2289,7 +2219,7 @@ impl Coordinator {
         item_action(call_reducer!(
             coord.conn.reducers,
             "gw_use_item",
-            gw_use_item_then(actor_guid, slot)
+            gw_use_item_then(self.session_actor(actor_guid), slot)
         ))
     }
 
@@ -2304,7 +2234,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_bind_home",
-            gw_bind_home_then(actor_guid)
+            gw_bind_home_then(self.session_actor(actor_guid))
         )
     }
 
@@ -2324,7 +2254,7 @@ impl Coordinator {
         item_action(call_reducer!(
             coord.conn.reducers,
             "gw_move_item",
-            gw_move_item_then(actor_guid, from_slot, to_slot)
+            gw_move_item_then(self.session_actor(actor_guid), from_slot, to_slot)
         ))
     }
 
@@ -2339,7 +2269,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_auto_bank_item",
-            gw_auto_bank_item_then(actor_guid, slot)
+            gw_auto_bank_item_then(self.session_actor(actor_guid), slot)
         )
     }
 
@@ -2361,7 +2291,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_accept_quest",
-            gw_accept_quest_then(actor_guid, giver_guid, quest_id)
+            gw_accept_quest_then(self.session_actor(actor_guid), giver_guid, quest_id)
         )
     }
 
@@ -2384,7 +2314,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_turn_in_quest",
-            gw_turn_in_quest_then(actor_guid, giver_guid, quest_id, reward_index)
+            gw_turn_in_quest_then(self.session_actor(actor_guid), giver_guid, quest_id, reward_index)
         )
     }
 
@@ -2398,7 +2328,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_abandon_quest",
-            gw_abandon_quest_then(actor_guid, quest_id)
+            gw_abandon_quest_then(self.session_actor(actor_guid), quest_id)
         )
     }
 
@@ -2409,7 +2339,7 @@ impl Coordinator {
             return Err(anyhow!("repop: actor_guid unresolved"));
         }
         let coord = self.0.call_pipe();
-        call_reducer!(coord.conn.reducers, "gw_repop", gw_repop_then(actor_guid))
+        call_reducer!(coord.conn.reducers, "gw_repop", gw_repop_then(self.session_actor(actor_guid)))
     }
 
     /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5) over the coordinator connection.
@@ -2426,7 +2356,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_reclaim_corpse",
-            gw_reclaim_corpse_then(actor_guid, corpse_guid)
+            gw_reclaim_corpse_then(self.session_actor(actor_guid), corpse_guid)
         )
     }
 
@@ -2445,7 +2375,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_respond_resurrect",
-            gw_respond_resurrect_then(actor_guid, accept)
+            gw_respond_resurrect_then(self.session_actor(actor_guid), accept)
         )
     }
 
@@ -2465,24 +2395,7 @@ impl Coordinator {
         call_reducer!(
             coord.conn.reducers,
             "gw_spirit_res",
-            gw_spirit_res_then(actor_guid)
-        )
-    }
-
-    /// Explicit logout (Phase 7): call the `logout` reducer over the coordinator connection so the
-    /// module removes the live `game_world_entity` row. That delete fires every in-range observer's
-    /// `game_world_entity` on_delete → `SMSG_DESTROY_OBJECT`, so the peer vanishes. Required because
-    /// the player's SDK connection is cached/reused and does NOT drop when the game client's TCP
-    /// socket closes (so the module's `on_disconnect` would not otherwise fire).
-    pub fn logout(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        if actor_guid == 0 {
-            return Err(anyhow!("logout: actor_guid unresolved"));
-        }
-        let coord = self.0.call_pipe();
-        call_reducer!(
-            coord.conn.reducers,
-            "gw_leave_world",
-            gw_leave_world_then(actor_guid)
+            gw_spirit_res_then(self.session_actor(actor_guid))
         )
     }
 
@@ -2499,17 +2412,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "begin_transfer",
-            begin_transfer_then(
-                plan.transfer_id,
-                plan.character_guid,
-                plan.dest_map_id,
-                plan.dest_instance_id,
-                plan.dest_x,
-                plan.dest_y,
-                plan.dest_z,
-                plan.dest_o,
-                true, // cross_database — this wrapper only ever drives a two-database move
-            )
+            begin_transfer_then(plan.transfer_id, self.session_actor(plan.character_guid), plan.dest_map_id, plan.dest_instance_id, plan.dest_x, plan.dest_y, plan.dest_z, plan.dest_o, true)
         )
     }
 
@@ -2519,7 +2422,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "import_character_blob",
-            import_character_blob_then(transfer_id, blob.to_vec())
+            import_character_blob_then(transfer_id, blob.to_vec(), self.session_actor(transfer_id))
         )
     }
 
@@ -2529,7 +2432,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "confirm_import",
-            confirm_import_then(transfer_id)
+            confirm_import_then(transfer_id, self.session_actor(transfer_id))
         )
     }
 
@@ -2538,7 +2441,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "finish_transfer",
-            finish_transfer_then(transfer_id)
+            finish_transfer_then(transfer_id, self.session_actor(transfer_id))
         )
     }
 
@@ -2547,7 +2450,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "release_transfer",
-            release_transfer_then(transfer_id)
+            release_transfer_then(transfer_id, self.session_actor(transfer_id))
         )
     }
 
@@ -2557,7 +2460,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "ensure_instance",
-            ensure_instance_then(instance_id, map_id, party_id)
+            ensure_instance_then(instance_id, map_id, party_id, self.session_actor(0))
         )
     }
 
@@ -2566,7 +2469,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "evict_instance_population",
-            evict_instance_population_then(instance_id)
+            evict_instance_population_then(instance_id, self.session_actor(0))
         )
     }
 
@@ -2609,7 +2512,7 @@ impl Coordinator {
         party_outcome(call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_group_op",
-            realm_group_op_then(op, actor_guid, target_guid, arg_a, arg_b)
+            realm_group_op_then(op, self.session_actor(actor_guid), target_guid, arg_a, arg_b)
         ))
     }
 
@@ -2649,7 +2552,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_whisper",
-            realm_whisper_then(sender_guid, target_guid, message, sender_is_ignored)
+            realm_whisper_then(self.session_actor(sender_guid), target_guid, message, sender_is_ignored)
         )
     }
 
@@ -2661,7 +2564,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_mark_read",
-            realm_mail_mark_read_then(recipient_guid, mail_id)
+            realm_mail_mark_read_then(self.session_actor(recipient_guid), mail_id)
         )
     }
 
@@ -2670,7 +2573,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_delete",
-            realm_mail_delete_then(recipient_guid, mail_id)
+            realm_mail_delete_then(self.session_actor(recipient_guid), mail_id)
         )
     }
 
@@ -2681,7 +2584,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_return",
-            realm_mail_return_then(recipient_guid, mail_id)
+            realm_mail_return_then(self.session_actor(recipient_guid), mail_id)
         )
     }
 
@@ -2706,15 +2609,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_send",
-            realm_mail_send_then(
-                sender_guid,
-                recipient_guid,
-                subject,
-                body,
-                money,
-                cod,
-                item_guid
-            )
+            realm_mail_send_then(self.session_actor(sender_guid), recipient_guid, subject, body, money, cod, item_guid)
         )
     }
 
@@ -2724,7 +2619,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_take_money",
-            realm_mail_take_money_then(recipient_guid, mail_id)
+            realm_mail_take_money_then(self.session_actor(recipient_guid), mail_id)
         )
     }
 
@@ -2734,7 +2629,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_take_item",
-            realm_mail_take_item_then(recipient_guid, mail_id)
+            realm_mail_take_item_then(self.session_actor(recipient_guid), mail_id)
         )
     }
 
@@ -2745,7 +2640,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_item_room",
-            realm_mail_item_room_then(payee_guid)
+            realm_mail_item_room_then(self.session_actor(payee_guid))
         )
     }
 
@@ -2768,18 +2663,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_fence",
-            realm_mail_fence_then(
-                escrow_id,
-                sender_guid,
-                recipient_guid,
-                subject,
-                body,
-                money,
-                postage,
-                item_guid,
-                cod,
-                cod_source_mail_id
-            )
+            realm_mail_fence_then(escrow_id, self.session_actor(sender_guid), recipient_guid, subject, body, money, postage, item_guid, cod, cod_source_mail_id)
         )
     }
 
@@ -2803,7 +2687,7 @@ impl Coordinator {
             "realm_mail_commit",
             realm_mail_commit_then(
                 escrow_id,
-                sender_guid,
+                self.session_actor(sender_guid),
                 recipient_guid,
                 subject,
                 body,
@@ -2832,7 +2716,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_take_money_fence",
-            realm_mail_take_money_fence_then(escrow_id, payee_guid, mail_id, expect_money)
+            realm_mail_take_money_fence_then(escrow_id, self.session_actor(payee_guid), mail_id, expect_money)
         )
     }
 
@@ -2848,7 +2732,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_payout",
-            realm_mail_payout_then(escrow_id, payee_guid, mail_id, amount)
+            realm_mail_payout_then(escrow_id, self.session_actor(payee_guid), mail_id, amount)
         )
     }
 
@@ -2864,7 +2748,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_take_item_fence",
-            realm_mail_take_item_fence_then(escrow_id, payee_guid, mail_id, expect_entry)
+            realm_mail_take_item_fence_then(escrow_id, self.session_actor(payee_guid), mail_id, expect_entry)
         )
     }
 
@@ -2882,7 +2766,7 @@ impl Coordinator {
             "realm_mail_item_payout",
             realm_mail_item_payout_then(
                 escrow_id,
-                payee_guid,
+                self.session_actor(payee_guid),
                 mail_id,
                 item.entry,
                 item.stack_count,
@@ -2900,7 +2784,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_confirm_delivery",
-            realm_mail_confirm_delivery_then(escrow_id)
+            realm_mail_confirm_delivery_then(escrow_id, self.session_actor(0))
         )
     }
 
@@ -2909,7 +2793,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "realm_mail_settle",
-            realm_mail_settle_then(escrow_id)
+            realm_mail_settle_then(escrow_id, self.session_actor(0))
         )
     }
 
@@ -2920,14 +2804,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "sync_group_mirror",
-            sync_group_mirror_then(
-                roster.group_id,
-                roster.leader_guid,
-                roster.loot_method,
-                roster.loot_threshold,
-                roster.master_looter_guid,
-                roster.members.clone(),
-            )
+            sync_group_mirror_then(roster.group_id, roster.leader_guid, roster.loot_method, roster.loot_threshold, roster.master_looter_guid, roster.members.clone(), self.session_actor(0))
         )
     }
 
@@ -2963,7 +2840,7 @@ impl Coordinator {
                 corpse_guid,
                 slot,
                 item_entry,
-                actor_guid,
+                self.session_actor(actor_guid),
                 vote,
                 deadline_micros,
                 recipients,
@@ -2990,7 +2867,7 @@ impl Coordinator {
                 corpse_guid,
                 slot,
                 0,
-                actor_guid,
+                self.session_actor(actor_guid),
                 vote,
                 0,
                 Vec::new(),
@@ -3009,7 +2886,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "settle_loot_roll",
-            settle_loot_roll_then(corpse_guid, slot, winner_guid)
+            settle_loot_roll_then(corpse_guid, slot, winner_guid, self.session_actor(0))
         )
     }
 
@@ -3019,7 +2896,7 @@ impl Coordinator {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "clear_promoted_loot_roll",
-            clear_promoted_loot_roll_then(roll_id)
+            clear_promoted_loot_roll_then(roll_id, self.session_actor(0))
         )
     }
 }

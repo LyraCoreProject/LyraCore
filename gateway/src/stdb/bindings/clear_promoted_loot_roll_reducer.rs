@@ -4,16 +4,20 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct ClearPromotedLootRollArgs {
     pub roll_id: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<ClearPromotedLootRollArgs> for super::Reducer {
     fn from(args: ClearPromotedLootRollArgs) -> Self {
         Self::ClearPromotedLootRoll {
             roll_id: args.roll_id,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -33,8 +37,12 @@ pub trait clear_promoted_loot_roll {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`clear_promoted_loot_roll:clear_promoted_loot_roll_then`] to run a callback after the reducer completes.
-    fn clear_promoted_loot_roll(&self, roll_id: u64) -> __sdk::Result<()> {
-        self.clear_promoted_loot_roll_then(roll_id, |_, _| {})
+    fn clear_promoted_loot_roll(
+        &self,
+        roll_id: u64,
+        request_actor: SessionActor,
+    ) -> __sdk::Result<()> {
+        self.clear_promoted_loot_roll_then(roll_id, request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `clear_promoted_loot_roll` to run as soon as possible,
@@ -46,6 +54,7 @@ pub trait clear_promoted_loot_roll {
     fn clear_promoted_loot_roll_then(
         &self,
         roll_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -57,12 +66,18 @@ impl clear_promoted_loot_roll for super::RemoteReducers {
     fn clear_promoted_loot_roll_then(
         &self,
         roll_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(ClearPromotedLootRollArgs { roll_id }, callback)
+        self.imp.invoke_reducer_with_callback(
+            ClearPromotedLootRollArgs {
+                roll_id,
+                request_actor,
+            },
+            callback,
+        )
     }
 }

@@ -4,6 +4,8 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmLootOpArgs {
@@ -11,7 +13,7 @@ pub(super) struct RealmLootOpArgs {
     pub corpse_guid: u64,
     pub slot: u8,
     pub item_entry: u32,
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub vote: u8,
     pub deadline_micros: i64,
     pub recipients: Vec<u64>,
@@ -27,7 +29,7 @@ impl From<RealmLootOpArgs> for super::Reducer {
             corpse_guid: args.corpse_guid,
             slot: args.slot,
             item_entry: args.item_entry,
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             vote: args.vote,
             deadline_micros: args.deadline_micros,
             recipients: args.recipients,
@@ -59,7 +61,7 @@ pub trait realm_loot_op {
         corpse_guid: u64,
         slot: u8,
         item_entry: u32,
-        actor_guid: u64,
+        request_actor: SessionActor,
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
@@ -72,7 +74,7 @@ pub trait realm_loot_op {
             corpse_guid,
             slot,
             item_entry,
-            actor_guid,
+            request_actor,
             vote,
             deadline_micros,
             recipients,
@@ -95,7 +97,7 @@ pub trait realm_loot_op {
         corpse_guid: u64,
         slot: u8,
         item_entry: u32,
-        actor_guid: u64,
+        request_actor: SessionActor,
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
@@ -116,7 +118,7 @@ impl realm_loot_op for super::RemoteReducers {
         corpse_guid: u64,
         slot: u8,
         item_entry: u32,
-        actor_guid: u64,
+        request_actor: SessionActor,
         vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
@@ -134,7 +136,7 @@ impl realm_loot_op for super::RemoteReducers {
                 corpse_guid,
                 slot,
                 item_entry,
-                actor_guid,
+                request_actor,
                 vote,
                 deadline_micros,
                 recipients,

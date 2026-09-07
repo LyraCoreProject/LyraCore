@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSetTradeItemArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub trade_slot: u8,
     pub inv_slot: u8,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwSetTradeItemArgs {
 impl From<GwSetTradeItemArgs> for super::Reducer {
     fn from(args: GwSetTradeItemArgs) -> Self {
         Self::GwSetTradeItem {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             trade_slot: args.trade_slot,
             inv_slot: args.inv_slot,
         }
@@ -39,11 +41,11 @@ pub trait gw_set_trade_item {
     /// /// Use [`gw_set_trade_item:gw_set_trade_item_then`] to run a callback after the reducer completes.
     fn gw_set_trade_item(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trade_slot: u8,
         inv_slot: u8,
     ) -> __sdk::Result<()> {
-        self.gw_set_trade_item_then(actor_guid, trade_slot, inv_slot, |_, _| {})
+        self.gw_set_trade_item_then(request_actor, trade_slot, inv_slot, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_set_trade_item` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_set_trade_item {
     ///  and its status can be observed with the `callback`.
     fn gw_set_trade_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trade_slot: u8,
         inv_slot: u8,
 
@@ -67,7 +69,7 @@ pub trait gw_set_trade_item {
 impl gw_set_trade_item for super::RemoteReducers {
     fn gw_set_trade_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trade_slot: u8,
         inv_slot: u8,
 
@@ -77,7 +79,7 @@ impl gw_set_trade_item for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwSetTradeItemArgs {
-                actor_guid,
+                request_actor,
                 trade_slot,
                 inv_slot,
             },

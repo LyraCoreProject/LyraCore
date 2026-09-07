@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwLeaveChannelArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub channel: String,
 }
 
 impl From<GwLeaveChannelArgs> for super::Reducer {
     fn from(args: GwLeaveChannelArgs) -> Self {
         Self::GwLeaveChannel {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             channel: args.channel,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_leave_channel {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_leave_channel:gw_leave_channel_then`] to run a callback after the reducer completes.
-    fn gw_leave_channel(&self, actor_guid: u64, channel: String) -> __sdk::Result<()> {
-        self.gw_leave_channel_then(actor_guid, channel, |_, _| {})
+    fn gw_leave_channel(&self, request_actor: SessionActor, channel: String) -> __sdk::Result<()> {
+        self.gw_leave_channel_then(request_actor, channel, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_leave_channel` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_leave_channel {
     ///  and its status can be observed with the `callback`.
     fn gw_leave_channel_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         channel: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +61,7 @@ pub trait gw_leave_channel {
 impl gw_leave_channel for super::RemoteReducers {
     fn gw_leave_channel_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         channel: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +70,7 @@ impl gw_leave_channel for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwLeaveChannelArgs {
-                actor_guid,
+                request_actor,
                 channel,
             },
             callback,

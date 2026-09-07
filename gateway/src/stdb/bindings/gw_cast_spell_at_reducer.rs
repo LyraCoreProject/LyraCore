@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwCastSpellAtArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub spell_id: u32,
     pub target_guid: u64,
     pub x: f32,
@@ -18,7 +20,7 @@ pub(super) struct GwCastSpellAtArgs {
 impl From<GwCastSpellAtArgs> for super::Reducer {
     fn from(args: GwCastSpellAtArgs) -> Self {
         Self::GwCastSpellAt {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             spell_id: args.spell_id,
             target_guid: args.target_guid,
             x: args.x,
@@ -45,14 +47,14 @@ pub trait gw_cast_spell_at {
     /// /// Use [`gw_cast_spell_at:gw_cast_spell_at_then`] to run a callback after the reducer completes.
     fn gw_cast_spell_at(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
         target_guid: u64,
         x: f32,
         y: f32,
         z: f32,
     ) -> __sdk::Result<()> {
-        self.gw_cast_spell_at_then(actor_guid, spell_id, target_guid, x, y, z, |_, _| {})
+        self.gw_cast_spell_at_then(request_actor, spell_id, target_guid, x, y, z, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_cast_spell_at` to run as soon as possible,
@@ -63,7 +65,7 @@ pub trait gw_cast_spell_at {
     ///  and its status can be observed with the `callback`.
     fn gw_cast_spell_at_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
         target_guid: u64,
         x: f32,
@@ -79,7 +81,7 @@ pub trait gw_cast_spell_at {
 impl gw_cast_spell_at for super::RemoteReducers {
     fn gw_cast_spell_at_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         spell_id: u32,
         target_guid: u64,
         x: f32,
@@ -92,7 +94,7 @@ impl gw_cast_spell_at for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwCastSpellAtArgs {
-                actor_guid,
+                request_actor,
                 spell_id,
                 target_guid,
                 x,

@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwOpenTaxiArgs {
-    pub character_guid: u64,
+    pub request_actor: SessionActor,
     pub npc_guid: u64,
     pub request_id: u64,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwOpenTaxiArgs {
 impl From<GwOpenTaxiArgs> for super::Reducer {
     fn from(args: GwOpenTaxiArgs) -> Self {
         Self::GwOpenTaxi {
-            character_guid: args.character_guid,
+            request_actor: args.request_actor,
             npc_guid: args.npc_guid,
             request_id: args.request_id,
         }
@@ -39,11 +41,11 @@ pub trait gw_open_taxi {
     /// /// Use [`gw_open_taxi:gw_open_taxi_then`] to run a callback after the reducer completes.
     fn gw_open_taxi(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         request_id: u64,
     ) -> __sdk::Result<()> {
-        self.gw_open_taxi_then(character_guid, npc_guid, request_id, |_, _| {})
+        self.gw_open_taxi_then(request_actor, npc_guid, request_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_open_taxi` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_open_taxi {
     ///  and its status can be observed with the `callback`.
     fn gw_open_taxi_then(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         request_id: u64,
 
@@ -67,7 +69,7 @@ pub trait gw_open_taxi {
 impl gw_open_taxi for super::RemoteReducers {
     fn gw_open_taxi_then(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         request_id: u64,
 
@@ -77,7 +79,7 @@ impl gw_open_taxi for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwOpenTaxiArgs {
-                character_guid,
+                request_actor,
                 npc_guid,
                 request_id,
             },

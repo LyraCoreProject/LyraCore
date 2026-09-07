@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwPushQuestToPartyArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub quest_entry: u32,
 }
 
 impl From<GwPushQuestToPartyArgs> for super::Reducer {
     fn from(args: GwPushQuestToPartyArgs) -> Self {
         Self::GwPushQuestToParty {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             quest_entry: args.quest_entry,
         }
     }
@@ -35,8 +37,12 @@ pub trait gw_push_quest_to_party {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_push_quest_to_party:gw_push_quest_to_party_then`] to run a callback after the reducer completes.
-    fn gw_push_quest_to_party(&self, actor_guid: u64, quest_entry: u32) -> __sdk::Result<()> {
-        self.gw_push_quest_to_party_then(actor_guid, quest_entry, |_, _| {})
+    fn gw_push_quest_to_party(
+        &self,
+        request_actor: SessionActor,
+        quest_entry: u32,
+    ) -> __sdk::Result<()> {
+        self.gw_push_quest_to_party_then(request_actor, quest_entry, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_push_quest_to_party` to run as soon as possible,
@@ -47,7 +53,7 @@ pub trait gw_push_quest_to_party {
     ///  and its status can be observed with the `callback`.
     fn gw_push_quest_to_party_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         quest_entry: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +65,7 @@ pub trait gw_push_quest_to_party {
 impl gw_push_quest_to_party for super::RemoteReducers {
     fn gw_push_quest_to_party_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         quest_entry: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +74,7 @@ impl gw_push_quest_to_party for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwPushQuestToPartyArgs {
-                actor_guid,
+                request_actor,
                 quest_entry,
             },
             callback,

@@ -122,6 +122,7 @@ pub fn reap_gateway_leases(
     if ctx.sender() != ctx.database_identity() {
         return Err("scheduler only".to_string());
     }
+    crate::account_ownership::reap_account_fences(ctx);
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     // Collect first: the loops delete from the tables they walk.
     let dead: Vec<GatewayLease> = ctx
@@ -181,7 +182,7 @@ fn actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, St
 #[allow(clippy::too_many_arguments)]
 pub fn gw_movement_update(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     opcode: u16,
     movement_info: Vec<u8>,
     x: f32,
@@ -191,6 +192,7 @@ pub fn gw_movement_update(
     move_time_ms: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     if crate::taxi::movement_is_suppressed(ctx, actor_guid) {
         return Ok(());
     }
@@ -202,7 +204,7 @@ pub fn gw_movement_update(
 /// `gw_movement_update` argument list with the actor made explicit per entry.
 #[derive(spacetimedb::SpacetimeType)]
 pub struct GwMove {
-    pub actor_guid: u64,
+    pub actor: crate::SessionActor,
     pub opcode: u16,
     pub movement_info: Vec<u8>,
     pub x: f32,
@@ -219,10 +221,10 @@ fn apply_movement_batch(
     mut apply: impl FnMut(GwMove) -> Result<(), String>,
 ) {
     for movement in moves {
-        if suppressed(movement.actor_guid) {
+        if suppressed(movement.actor.guid) {
             continue;
         }
-        let actor_guid = movement.actor_guid;
+        let actor_guid = movement.actor.guid;
         if let Err(error) = apply(movement) {
             spacetimedb::log::debug!(
                 "gw_movement_batch: move for {} rejected: {error}",
@@ -246,7 +248,8 @@ pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(),
         moves,
         |actor_guid| crate::taxi::movement_is_suppressed(ctx, actor_guid),
         |m| {
-            let mover = actor(ctx, m.actor_guid)?;
+            let actor_guid = crate::account_ownership::require_actor(ctx, m.actor)?;
+            let mover = actor(ctx, actor_guid)?;
             crate::world::apply_movement_update(
                 ctx,
                 mover,
@@ -273,8 +276,9 @@ pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(),
 
 /// [`crate::actor::attack`] behind the gateway gate — melee auto-attack engage.
 #[reducer]
-pub fn gw_attack(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
+pub fn gw_attack(ctx: &ReducerContext, request_actor: crate::SessionActor, target_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::attack(ctx, actor_guid, target_guid)
 }
@@ -283,11 +287,12 @@ pub fn gw_attack(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Res
 #[reducer]
 pub fn gw_cast_at(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::cast_at(ctx, actor_guid, spell_id, target_guid)
 }
@@ -298,7 +303,7 @@ pub fn gw_cast_at(
 #[reducer]
 pub fn gw_cast_spell_at(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     spell_id: u32,
     target_guid: u64,
     x: f32,
@@ -306,6 +311,7 @@ pub fn gw_cast_spell_at(
     z: f32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let caster = actor(ctx, actor_guid)?;
     crate::spell::apply_cast_spell_at(ctx, &caster, spell_id, target_guid, x, y, z)
 }
@@ -339,11 +345,12 @@ fn loot_operator_error(detail: String) -> String {
 #[reducer]
 pub fn gw_take_loot(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     corpse_guid: u64,
     loot_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
     crate::actor::take_loot(ctx, actor_guid, corpse_guid, loot_slot)
 }
@@ -353,10 +360,11 @@ pub fn gw_take_loot(
 #[reducer]
 pub fn gw_open_creature_loot(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     corpse_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
     crate::actor::open_creature_loot(ctx, actor_guid, corpse_guid)
 }
@@ -365,19 +373,21 @@ pub fn gw_open_creature_loot(
 #[reducer]
 pub fn gw_ranged_attack(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::ranged_attack(ctx, actor_guid, target_guid, spell_id)
 }
 
 /// [`crate::actor::stop_attack`] behind the gateway gate — disarm the actor's outgoing swing.
 #[reducer]
-pub fn gw_stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_stop_attack(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::stop_attack(ctx, actor_guid)
 }
@@ -385,8 +395,9 @@ pub fn gw_stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
 /// [`crate::world::apply_set_sheathed`] behind the gateway gate — the `CMSG_SETSHEATHED` a client
 /// sends on `Z`. `state` is raw client input and is range-checked in the apply fn, not here.
 #[reducer]
-pub fn gw_set_sheathed(ctx: &ReducerContext, actor_guid: u64, state: u8) -> Result<(), String> {
+pub fn gw_set_sheathed(ctx: &ReducerContext, request_actor: crate::SessionActor, state: u8) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let actor = actor(ctx, actor_guid)?;
     crate::world::apply_set_sheathed(ctx, actor, state)
 }
@@ -395,11 +406,12 @@ pub fn gw_set_sheathed(ctx: &ReducerContext, actor_guid: u64, state: u8) -> Resu
 #[reducer]
 pub fn gw_accept_quest(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     giver_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::accept_quest(ctx, actor_guid, giver_guid, quest_entry)
 }
@@ -408,12 +420,13 @@ pub fn gw_accept_quest(
 #[reducer]
 pub fn gw_turn_in_quest(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     giver_guid: u64,
     quest_entry: u32,
     reward_index: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::turn_in_quest(ctx, actor_guid, giver_guid, quest_entry, reward_index)
 }
@@ -434,8 +447,9 @@ fn item_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntit
 
 /// [`crate::actor::use_item`] behind the gateway gate.
 #[reducer]
-pub fn gw_use_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {
+pub fn gw_use_item(ctx: &ReducerContext, request_actor: crate::SessionActor, slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     item_actor(ctx, actor_guid)?;
     crate::actor::use_item(ctx, actor_guid, slot).map_err(crate::items::refused)
 }
@@ -445,11 +459,12 @@ pub fn gw_use_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<()
 #[reducer]
 pub fn gw_cast_item_target(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     spell_id: u32,
     slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::cast_item_target(ctx, actor_guid, spell_id, slot)
 }
@@ -458,10 +473,11 @@ pub fn gw_cast_item_target(
 #[reducer]
 pub fn gw_loot_money(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
     crate::actor::loot_money(ctx, actor_guid, target_guid)
 }
@@ -470,12 +486,13 @@ pub fn gw_loot_money(
 #[reducer]
 pub fn gw_buy_item(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     vendor_guid: u64,
     item_entry: u32,
     count: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::buy_item(ctx, actor_guid, vendor_guid, item_entry, count)
 }
@@ -484,19 +501,21 @@ pub fn gw_buy_item(
 #[reducer]
 pub fn gw_sell_item(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     vendor_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::sell_item(ctx, actor_guid, vendor_guid, slot)
 }
 
 /// [`crate::actor::equip_item`] behind the gateway gate.
 #[reducer]
-pub fn gw_equip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> Result<(), String> {
+pub fn gw_equip_item(ctx: &ReducerContext, request_actor: crate::SessionActor, from_slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     item_actor(ctx, actor_guid)?;
     crate::actor::equip_item(ctx, actor_guid, from_slot).map_err(crate::items::refused)
 }
@@ -505,10 +524,11 @@ pub fn gw_equip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> Re
 #[reducer]
 pub fn gw_use_gameobject(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     go_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
     crate::actor::use_gameobject(ctx, actor_guid, go_guid)
 }
@@ -531,11 +551,12 @@ fn trainer_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
 #[reducer]
 pub fn gw_trainer_buy(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     trainer_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     trainer_actor(ctx, actor_guid)?;
     crate::actor::trainer_buy(ctx, actor_guid, trainer_guid, spell_id)
 }
@@ -544,34 +565,38 @@ pub fn gw_trainer_buy(
 #[reducer]
 pub fn gw_respond_resurrect(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     accept: bool,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::respond_resurrect(ctx, actor_guid, accept)
 }
 
 /// [`crate::actor::repop`] behind the gateway gate — a dead actor releases to the graveyard.
 #[reducer]
-pub fn gw_repop(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_repop(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::repop(ctx, actor_guid)
 }
 
 /// [`crate::actor::spirit_res`] behind the gateway gate — ghost res at the spirit healer.
 #[reducer]
-pub fn gw_spirit_res(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_spirit_res(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::spirit_res(ctx, actor_guid)
 }
 
 /// [`crate::actor::accept_group_invite`] behind the gateway gate.
 #[reducer]
-pub fn gw_accept_group_invite(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_accept_group_invite(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
     crate::actor::accept_group_invite(ctx, actor_guid)
 }
@@ -581,10 +606,11 @@ pub fn gw_accept_group_invite(ctx: &ReducerContext, actor_guid: u64) -> Result<(
 #[reducer]
 pub fn gw_set_target(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let player = actor(ctx, actor_guid)?;
     crate::world::apply_set_target(ctx, player, target_guid)
 }
@@ -593,12 +619,13 @@ pub fn gw_set_target(
 #[reducer]
 pub fn gw_send_chat(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     chat_type: u8,
     language: u8,
     message: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = actor(ctx, actor_guid)?;
     crate::chat::apply_send_chat(ctx, sender, chat_type, language, message)
 }
@@ -607,12 +634,13 @@ pub fn gw_send_chat(
 #[reducer]
 pub fn gw_send_emote(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     text_emote: u32,
     emote_anim: u32,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = actor(ctx, actor_guid)?;
     crate::chat::apply_send_emote(ctx, sender, text_emote, emote_anim, target_guid)
 }
@@ -633,9 +661,10 @@ pub fn gw_send_emote(
 pub fn gw_player_login(
     ctx: &ReducerContext,
     account_id: u64,
-    character_guid: u64,
+    request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let account = ctx
         .db
         .game_account()
@@ -675,8 +704,9 @@ pub fn gw_player_login(
 /// Resolves the entity WITHOUT the in-transit fence — a leave must always succeed, and a
 /// mid-transfer character has no live entity to remove anyway (the lookup just misses).
 #[reducer]
-pub fn gw_leave_world(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_leave_world(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     if let Some(entity) = ctx.db.game_world_entity().guid().find(actor_guid) {
         crate::world::remove_from_world(ctx, entity.owner_identity);
     }
@@ -695,11 +725,12 @@ pub fn gw_leave_world(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
 #[reducer]
 pub fn gw_send_roll(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     min_roll: u32,
     max_roll: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let roller = actor(ctx, actor_guid)?;
     crate::chat::apply_send_roll(ctx, roller, min_roll, max_roll)
 }
@@ -708,19 +739,21 @@ pub fn gw_send_roll(
 #[reducer]
 pub fn gw_send_whisper(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_name: String,
     message: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = actor(ctx, actor_guid)?;
     crate::chat::apply_send_whisper(ctx, sender, target_name, message)
 }
 
 /// [`crate::chat::apply_party_chat`] with the speaker named by guid — `/p`.
 #[reducer]
-pub fn gw_party_chat(ctx: &ReducerContext, actor_guid: u64, text: String) -> Result<(), String> {
+pub fn gw_party_chat(ctx: &ReducerContext, request_actor: crate::SessionActor, text: String) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = group_actor(ctx, actor_guid)?;
     crate::chat::apply_party_chat(ctx, sender, text)
 }
@@ -729,10 +762,11 @@ pub fn gw_party_chat(ctx: &ReducerContext, actor_guid: u64, text: String) -> Res
 #[reducer]
 pub fn gw_join_channel(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     channel: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = actor(ctx, actor_guid)?;
     crate::chat::apply_join_channel(ctx, sender, channel)
 }
@@ -741,10 +775,11 @@ pub fn gw_join_channel(
 #[reducer]
 pub fn gw_leave_channel(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     channel: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = actor(ctx, actor_guid)?;
     crate::chat::apply_leave_channel(ctx, sender, channel)
 }
@@ -753,11 +788,12 @@ pub fn gw_leave_channel(
 #[reducer]
 pub fn gw_send_channel_message(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     channel: String,
     message: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = actor(ctx, actor_guid)?;
     crate::chat::apply_send_channel_message(ctx, sender, channel, message)
 }
@@ -780,10 +816,11 @@ fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
 #[reducer]
 pub fn gw_add_friend(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::add_contact(ctx, sender, target_guid, false)
 }
@@ -792,10 +829,11 @@ pub fn gw_add_friend(
 #[reducer]
 pub fn gw_del_friend(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::remove_contact(ctx, sender, target_guid, false)
 }
@@ -804,10 +842,11 @@ pub fn gw_del_friend(
 #[reducer]
 pub fn gw_add_ignore(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::add_contact(ctx, sender, target_guid, true)
 }
@@ -816,10 +855,11 @@ pub fn gw_add_ignore(
 #[reducer]
 pub fn gw_del_ignore(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::remove_contact(ctx, sender, target_guid, true)
 }
@@ -846,18 +886,20 @@ fn group_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEnti
 #[reducer]
 pub fn gw_group_invite(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
     crate::group::invite_core(ctx, actor_guid, target_guid)
 }
 
 /// [`crate::group::decline_invite_for`] with the decliner named by guid.
 #[reducer]
-pub fn gw_group_decline(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_group_decline(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
     crate::group::decline_invite_for(ctx, actor_guid)
 }
@@ -867,18 +909,20 @@ pub fn gw_group_decline(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Str
 #[reducer]
 pub fn gw_initiate_trade(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_initiate_trade(ctx, acting, target_guid)
 }
 
 /// [`crate::trade::apply_begin_trade`] — the proposed target's client answered; open both windows.
 #[reducer]
-pub fn gw_begin_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_begin_trade(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_begin_trade(ctx, acting)
 }
@@ -886,8 +930,9 @@ pub fn gw_begin_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
 /// [`crate::trade::apply_cancel_trade`] — tear the actor's Trade Session down, `TradeCanceled` to
 /// both parties.
 #[reducer]
-pub fn gw_cancel_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_cancel_trade(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_cancel_trade(ctx, acting)
 }
@@ -897,11 +942,12 @@ pub fn gw_cancel_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Stri
 #[reducer]
 pub fn gw_set_trade_item(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     trade_slot: u8,
     inv_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_set_trade_item(ctx, acting, trade_slot, inv_slot)
 }
@@ -910,18 +956,20 @@ pub fn gw_set_trade_item(
 #[reducer]
 pub fn gw_clear_trade_item(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     trade_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_clear_trade_item(ctx, acting, trade_slot)
 }
 
 /// [`crate::trade::apply_set_trade_gold`] — `copper` is the offered amount.
 #[reducer]
-pub fn gw_set_trade_gold(ctx: &ReducerContext, actor_guid: u64, copper: u32) -> Result<(), String> {
+pub fn gw_set_trade_gold(ctx: &ReducerContext, request_actor: crate::SessionActor, copper: u32) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_set_trade_gold(ctx, acting, copper)
 }
@@ -929,40 +977,45 @@ pub fn gw_set_trade_gold(ctx: &ReducerContext, actor_guid: u64, copper: u32) -> 
 /// [`crate::trade::apply_accept_trade`] — accept the current offer; dual-accept runs the Trade
 /// Commit.
 #[reducer]
-pub fn gw_accept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_accept_trade(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_accept_trade(ctx, acting)
 }
 
 /// [`crate::trade::apply_unaccept_trade`] — withdraw an accept.
 #[reducer]
-pub fn gw_unaccept_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_unaccept_trade(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_unaccept_trade(ctx, acting)
 }
 
 /// [`crate::trade::apply_busy_trade`] — decline a proposal as busy.
 #[reducer]
-pub fn gw_busy_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_busy_trade(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_busy_trade(ctx, acting)
 }
 
 /// [`crate::trade::apply_ignore_trade`] — decline a proposal via ignore.
 #[reducer]
-pub fn gw_ignore_trade(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_ignore_trade(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
     crate::trade::apply_ignore_trade(ctx, acting)
 }
 
 /// The challenged character accepts the Duel identified by the client-supplied arbiter flag.
 #[reducer]
-pub fn gw_duel_accept(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) -> Result<(), String> {
+pub fn gw_duel_accept(ctx: &ReducerContext, request_actor: crate::SessionActor, flag_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::duel::accept_duel(ctx, actor_guid, flag_guid);
     Ok(())
@@ -970,8 +1023,9 @@ pub fn gw_duel_accept(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) -> 
 
 /// Cancel the Duel identified by the client-supplied arbiter flag. Forged/stale flags are no-ops.
 #[reducer]
-pub fn gw_duel_cancel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) -> Result<(), String> {
+pub fn gw_duel_cancel(ctx: &ReducerContext, request_actor: crate::SessionActor, flag_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::duel::cancel_duel(ctx, actor_guid, flag_guid);
     Ok(())
@@ -979,8 +1033,9 @@ pub fn gw_duel_cancel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64) -> 
 
 /// [`crate::group::leave_group_for`] with the leaver named by guid.
 #[reducer]
-pub fn gw_group_leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_group_leave(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
     crate::group::leave_group_for(ctx, actor_guid)
 }
@@ -989,10 +1044,11 @@ pub fn gw_group_leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), Strin
 #[reducer]
 pub fn gw_group_uninvite(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
     crate::group::uninvite_from_group(ctx, actor_guid, target_guid)
 }
@@ -1001,12 +1057,13 @@ pub fn gw_group_uninvite(
 #[reducer]
 pub fn gw_group_loot_method(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     loot_setting: u8,
     master_guid: u64,
     loot_threshold: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
     crate::group::set_loot_method_for(ctx, actor_guid, loot_setting, master_guid, loot_threshold)
 }
@@ -1015,10 +1072,11 @@ pub fn gw_group_loot_method(
 #[reducer]
 pub fn gw_push_quest_to_party(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     quest_entry: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::quest::apply_push_quest_to_party(ctx, actor_guid, quest_entry)
 }
@@ -1031,11 +1089,12 @@ pub fn gw_push_quest_to_party(
 #[reducer]
 pub fn gw_move_item(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     from_slot: u8,
     to_slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     item_actor(ctx, actor_guid)?;
     crate::items::apply_item_move(ctx, actor_guid, from_slot, to_slot)
         .map_err(crate::items::refused)
@@ -1043,8 +1102,9 @@ pub fn gw_move_item(
 
 /// [`crate::items::apply_unequip_item`] with the owner named by guid.
 #[reducer]
-pub fn gw_unequip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> Result<(), String> {
+pub fn gw_unequip_item(ctx: &ReducerContext, request_actor: crate::SessionActor, from_slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     item_actor(ctx, actor_guid)?;
     crate::items::apply_unequip_item(ctx, actor_guid, from_slot).map_err(crate::items::refused)
 }
@@ -1053,8 +1113,9 @@ pub fn gw_unequip_item(ctx: &ReducerContext, actor_guid: u64, from_slot: u8) -> 
 /// click to withdraw, `CMSG_AUTOBANK_ITEM` / `CMSG_AUTOSTORE_BANK_ITEM`. The direction is inferred
 /// from `slot` in the module.
 #[reducer]
-pub fn gw_auto_bank_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {
+pub fn gw_auto_bank_item(ctx: &ReducerContext, request_actor: crate::SessionActor, slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::items::apply_auto_bank_item(ctx, actor_guid, slot)
 }
@@ -1063,11 +1124,12 @@ pub fn gw_auto_bank_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Res
 #[reducer]
 pub fn gw_buyback_item(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     vendor_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::items::apply_buyback_item(ctx, actor_guid, vendor_guid, slot)
 }
@@ -1076,11 +1138,12 @@ pub fn gw_buyback_item(
 #[reducer]
 pub fn gw_repair_item(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     npc_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::items::apply_player_repair(ctx, actor_guid, npc_guid, slot)
 }
@@ -1090,10 +1153,11 @@ pub fn gw_repair_item(
 #[reducer]
 pub fn gw_buy_bank_slot(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     banker_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::items::buy_bank_slot_result(crate::items::apply_buy_bank_slot(
         ctx,
@@ -1104,8 +1168,9 @@ pub fn gw_buy_bank_slot(
 
 /// [`crate::professions::apply_disenchant`] with the enchanter named by guid.
 #[reducer]
-pub fn gw_disenchant(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {
+pub fn gw_disenchant(ctx: &ReducerContext, request_actor: crate::SessionActor, slot: u8) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::professions::apply_disenchant(ctx, actor_guid, slot)
 }
@@ -1114,19 +1179,21 @@ pub fn gw_disenchant(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<
 #[reducer]
 pub fn gw_enchant_item(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_slot: u8,
     enchant_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::professions::apply_enchant_item(ctx, actor_guid, target_slot, enchant_id)
 }
 
 /// [`crate::professions::apply_fish`] with the fisher named by guid.
 #[reducer]
-pub fn gw_fish(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_fish(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::professions::apply_fish(ctx, actor_guid)
 }
@@ -1134,8 +1201,9 @@ pub fn gw_fish(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
 /// [`crate::world::set_home`] with the binder named by guid — the innkeeper hearth bind. The bind
 /// names no NPC, so ungated it would let any client hearth anywhere on the map.
 #[reducer]
-pub fn gw_bind_home(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_bind_home(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::items::innkeeper_access_gate(ctx, actor_guid)?;
     crate::world::set_home(ctx, actor_guid);
@@ -1148,8 +1216,9 @@ pub fn gw_bind_home(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String>
 
 /// [`crate::professions::skin_corpse`] with the skinner named by guid.
 #[reducer]
-pub fn gw_skin(ctx: &ReducerContext, actor_guid: u64, corpse_guid: u64) -> Result<(), String> {
+pub fn gw_skin(ctx: &ReducerContext, request_actor: crate::SessionActor, corpse_guid: u64) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
     crate::professions::skin_corpse(ctx, actor_guid, corpse_guid)
 }
@@ -1158,12 +1227,13 @@ pub fn gw_skin(ctx: &ReducerContext, actor_guid: u64, corpse_guid: u64) -> Resul
 #[reducer]
 pub fn gw_loot_roll(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     corpse_guid: u64,
     loot_slot: u32,
     vote: u8,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
     crate::loot::cast_vote_on(ctx, corpse_guid, loot_slot as u8, actor_guid, vote)
 }
@@ -1172,12 +1242,13 @@ pub fn gw_loot_roll(
 #[reducer]
 pub fn gw_loot_master_give(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     corpse_guid: u64,
     loot_slot: u8,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx).map_err(loot_operator_error)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
     crate::loot::apply_master_give(ctx, actor_guid, corpse_guid, loot_slot, target_guid)
 }
@@ -1192,27 +1263,30 @@ pub fn gw_loot_master_give(
 #[reducer]
 pub fn gw_cast_spell(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let caster = actor(ctx, actor_guid)?;
     crate::spell::do_cast_spell(ctx, caster, spell_id, target_guid)
 }
 
 /// [`crate::spell::do_cancel_cast`] with the caster named by guid.
 #[reducer]
-pub fn gw_cancel_cast(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
+pub fn gw_cancel_cast(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let caster = actor(ctx, actor_guid)?;
     crate::spell::do_cancel_cast(ctx, caster)
 }
 
 /// [`crate::spell::do_cancel_aura`] with the aura's owner named by guid.
 #[reducer]
-pub fn gw_cancel_aura(ctx: &ReducerContext, actor_guid: u64, spell_id: u32) -> Result<(), String> {
+pub fn gw_cancel_aura(ctx: &ReducerContext, request_actor: crate::SessionActor, spell_id: u32) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::spell::do_cancel_aura(ctx, actor_guid, spell_id)
 }
@@ -1225,20 +1299,22 @@ pub fn gw_cancel_aura(ctx: &ReducerContext, actor_guid: u64, spell_id: u32) -> R
 #[reducer]
 pub fn gw_gossip_select(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     npc_guid: u64,
     option_id: u32,
     option_row_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::world::apply_gossip_select(ctx, actor_guid, npc_guid, option_id, option_row_id)
 }
 
 /// [`crate::world::apply_inspect`] with the inspector named by guid.
 #[reducer]
-pub fn gw_inspect(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Result<(), String> {
+pub fn gw_inspect(ctx: &ReducerContext, request_actor: crate::SessionActor, target_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let inspector = actor(ctx, actor_guid)?;
     crate::world::apply_inspect(ctx, inspector, target_guid)
 }
@@ -1248,10 +1324,11 @@ pub fn gw_inspect(ctx: &ReducerContext, actor_guid: u64, target_guid: u64) -> Re
 #[reducer]
 pub fn gw_learn_talent(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     talent_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let learner = actor(ctx, actor_guid)?;
     crate::talent::do_learn_talent(ctx, actor_guid, learner.owner_identity, talent_id).map(|_| ())
 }
@@ -1261,18 +1338,20 @@ pub fn gw_learn_talent(
 #[reducer]
 pub fn gw_reset_talents(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     trainer_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::talent::do_reset_talents(ctx, actor_guid, trainer_guid).map(|_| ())
 }
 
 /// [`crate::gameobject::apply_pick_lock`] with the picker named by guid.
 #[reducer]
-pub fn gw_pick_lock(ctx: &ReducerContext, actor_guid: u64, go_guid: u64) -> Result<(), String> {
+pub fn gw_pick_lock(ctx: &ReducerContext, request_actor: crate::SessionActor, go_guid: u64) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::gameobject::apply_pick_lock(ctx, actor_guid, go_guid)
 }
@@ -1281,12 +1360,13 @@ pub fn gw_pick_lock(ctx: &ReducerContext, actor_guid: u64, go_guid: u64) -> Resu
 #[reducer]
 pub fn gw_set_action_button(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     button: u8,
     action: u32,
     action_type: u8,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let character = actor(ctx, actor_guid)?;
     crate::action_bar::apply_set_action_button(ctx, character, button, action, action_type)
 }
@@ -1295,11 +1375,12 @@ pub fn gw_set_action_button(
 #[reducer]
 pub fn gw_set_faction_at_war(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     reputation_index: u32,
     at_war: bool,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let player = actor(ctx, actor_guid)?;
     crate::reputation::apply_set_faction_at_war(ctx, player, reputation_index, at_war)
 }
@@ -1308,10 +1389,11 @@ pub fn gw_set_faction_at_war(
 #[reducer]
 pub fn gw_abandon_quest(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     quest_entry: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::quest::apply_abandon_quest(ctx, actor_guid, quest_entry)
 }
@@ -1322,10 +1404,11 @@ pub fn gw_abandon_quest(
 #[reducer]
 pub fn gw_reclaim_corpse(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     _corpse_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let player = actor(ctx, actor_guid)?;
     crate::corpse::apply_reclaim_corpse(ctx, player)
 }
@@ -1334,10 +1417,11 @@ pub fn gw_reclaim_corpse(
 #[reducer]
 pub fn gw_enter_areatrigger(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     trigger_id: u32,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::quest::apply_enter_areatrigger(ctx, actor_guid, trigger_id);
     Ok(())
@@ -1347,11 +1431,12 @@ pub fn gw_enter_areatrigger(
 #[reducer]
 pub fn gw_pet_command(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     data: u32,
     target_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::creatures::apply_pet_command(ctx, actor_guid, data, target_guid)
 }
@@ -1362,11 +1447,12 @@ pub fn gw_pet_command(
 #[reducer]
 pub fn gw_client_command(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     cmd: String,
     payload: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::bridge::apply_client_command(ctx, actor_guid, &cmd, &payload)
 }
@@ -1377,11 +1463,12 @@ pub fn gw_client_command(
 #[reducer]
 pub fn gw_gm_command(
     ctx: &ReducerContext,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     alpha_test_tools: bool,
     text: String,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let caller = actor(ctx, actor_guid)?;
     crate::gm::apply_gm_command(ctx, caller, alpha_test_tools, text)
 }
@@ -1403,7 +1490,7 @@ mod tests {
 
     fn movement(actor_guid: u64, opcode: u16, x: f32, move_time_ms: u32, body: &[u8]) -> GwMove {
         GwMove {
-            actor_guid,
+            actor: crate::SessionActor { guid: actor_guid, ownership: None },
             opcode,
             movement_info: body.to_vec(),
             x,
@@ -1416,7 +1503,7 @@ mod tests {
 
     fn apply_model(states: &mut HashMap<u64, MotionState>, movement: GwMove) -> Result<(), String> {
         let state = states
-            .get_mut(&movement.actor_guid)
+            .get_mut(&movement.actor.guid)
             .ok_or_else(|| "mover not in world".to_string())?;
         if crate::world::movement_is_accepted(
             state.move_time_ms,

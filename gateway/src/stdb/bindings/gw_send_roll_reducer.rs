@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSendRollArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub min_roll: u32,
     pub max_roll: u32,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwSendRollArgs {
 impl From<GwSendRollArgs> for super::Reducer {
     fn from(args: GwSendRollArgs) -> Self {
         Self::GwSendRoll {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             min_roll: args.min_roll,
             max_roll: args.max_roll,
         }
@@ -37,8 +39,13 @@ pub trait gw_send_roll {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_send_roll:gw_send_roll_then`] to run a callback after the reducer completes.
-    fn gw_send_roll(&self, actor_guid: u64, min_roll: u32, max_roll: u32) -> __sdk::Result<()> {
-        self.gw_send_roll_then(actor_guid, min_roll, max_roll, |_, _| {})
+    fn gw_send_roll(
+        &self,
+        request_actor: SessionActor,
+        min_roll: u32,
+        max_roll: u32,
+    ) -> __sdk::Result<()> {
+        self.gw_send_roll_then(request_actor, min_roll, max_roll, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_send_roll` to run as soon as possible,
@@ -49,7 +56,7 @@ pub trait gw_send_roll {
     ///  and its status can be observed with the `callback`.
     fn gw_send_roll_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         min_roll: u32,
         max_roll: u32,
 
@@ -62,7 +69,7 @@ pub trait gw_send_roll {
 impl gw_send_roll for super::RemoteReducers {
     fn gw_send_roll_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         min_roll: u32,
         max_roll: u32,
 
@@ -72,7 +79,7 @@ impl gw_send_roll for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwSendRollArgs {
-                actor_guid,
+                request_actor,
                 min_roll,
                 max_roll,
             },

@@ -4,11 +4,14 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmAuctionConfirmListingArgs {
     pub operation_id: u64,
     pub auction_id: u32,
+    pub request_actor: SessionActor,
 }
 
 impl From<RealmAuctionConfirmListingArgs> for super::Reducer {
@@ -16,6 +19,7 @@ impl From<RealmAuctionConfirmListingArgs> for super::Reducer {
         Self::RealmAuctionConfirmListing {
             operation_id: args.operation_id,
             auction_id: args.auction_id,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -39,8 +43,9 @@ pub trait realm_auction_confirm_listing {
         &self,
         operation_id: u64,
         auction_id: u32,
+        request_actor: SessionActor,
     ) -> __sdk::Result<()> {
-        self.realm_auction_confirm_listing_then(operation_id, auction_id, |_, _| {})
+        self.realm_auction_confirm_listing_then(operation_id, auction_id, request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_auction_confirm_listing` to run as soon as possible,
@@ -53,6 +58,7 @@ pub trait realm_auction_confirm_listing {
         &self,
         operation_id: u64,
         auction_id: u32,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -65,6 +71,7 @@ impl realm_auction_confirm_listing for super::RemoteReducers {
         &self,
         operation_id: u64,
         auction_id: u32,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -74,6 +81,7 @@ impl realm_auction_confirm_listing for super::RemoteReducers {
             RealmAuctionConfirmListingArgs {
                 operation_id,
                 auction_id,
+                request_actor,
             },
             callback,
         )

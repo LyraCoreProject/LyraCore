@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmMailMarkReadArgs {
-    pub recipient_guid: u64,
+    pub request_actor: SessionActor,
     pub mail_id: u64,
 }
 
 impl From<RealmMailMarkReadArgs> for super::Reducer {
     fn from(args: RealmMailMarkReadArgs) -> Self {
         Self::RealmMailMarkRead {
-            recipient_guid: args.recipient_guid,
+            request_actor: args.request_actor,
             mail_id: args.mail_id,
         }
     }
@@ -35,8 +37,8 @@ pub trait realm_mail_mark_read {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`realm_mail_mark_read:realm_mail_mark_read_then`] to run a callback after the reducer completes.
-    fn realm_mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> __sdk::Result<()> {
-        self.realm_mail_mark_read_then(recipient_guid, mail_id, |_, _| {})
+    fn realm_mail_mark_read(&self, request_actor: SessionActor, mail_id: u64) -> __sdk::Result<()> {
+        self.realm_mail_mark_read_then(request_actor, mail_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_mail_mark_read` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait realm_mail_mark_read {
     ///  and its status can be observed with the `callback`.
     fn realm_mail_mark_read_then(
         &self,
-        recipient_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +61,7 @@ pub trait realm_mail_mark_read {
 impl realm_mail_mark_read for super::RemoteReducers {
     fn realm_mail_mark_read_then(
         &self,
-        recipient_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +70,7 @@ impl realm_mail_mark_read for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             RealmMailMarkReadArgs {
-                recipient_guid,
+                request_actor,
                 mail_id,
             },
             callback,

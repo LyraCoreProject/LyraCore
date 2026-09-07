@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwMoveItemArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub from_slot: u8,
     pub to_slot: u8,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwMoveItemArgs {
 impl From<GwMoveItemArgs> for super::Reducer {
     fn from(args: GwMoveItemArgs) -> Self {
         Self::GwMoveItem {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             from_slot: args.from_slot,
             to_slot: args.to_slot,
         }
@@ -37,8 +39,13 @@ pub trait gw_move_item {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_move_item:gw_move_item_then`] to run a callback after the reducer completes.
-    fn gw_move_item(&self, actor_guid: u64, from_slot: u8, to_slot: u8) -> __sdk::Result<()> {
-        self.gw_move_item_then(actor_guid, from_slot, to_slot, |_, _| {})
+    fn gw_move_item(
+        &self,
+        request_actor: SessionActor,
+        from_slot: u8,
+        to_slot: u8,
+    ) -> __sdk::Result<()> {
+        self.gw_move_item_then(request_actor, from_slot, to_slot, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_move_item` to run as soon as possible,
@@ -49,7 +56,7 @@ pub trait gw_move_item {
     ///  and its status can be observed with the `callback`.
     fn gw_move_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         from_slot: u8,
         to_slot: u8,
 
@@ -62,7 +69,7 @@ pub trait gw_move_item {
 impl gw_move_item for super::RemoteReducers {
     fn gw_move_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         from_slot: u8,
         to_slot: u8,
 
@@ -72,7 +79,7 @@ impl gw_move_item for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwMoveItemArgs {
-                actor_guid,
+                request_actor,
                 from_slot,
                 to_slot,
             },

@@ -793,9 +793,9 @@ pub fn ensure_instance(
     ctx: &ReducerContext,
     instance_id: u64,
     map_id: u32,
-    party_id: u64,
-) -> Result<(), String> {
+    party_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     if instance_id == 0 {
         return Err("instance 0 is the open world — it is never mirrored".to_string());
     }
@@ -827,8 +827,9 @@ pub fn ensure_instance(
 ///
 /// Operator-gated.
 #[reducer]
-pub fn evict_instance_population(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
+pub fn evict_instance_population(ctx: &ReducerContext, instance_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     if instance_id == 0 {
         return Err("instance 0 is the open world — it is never evicted".to_string());
     }

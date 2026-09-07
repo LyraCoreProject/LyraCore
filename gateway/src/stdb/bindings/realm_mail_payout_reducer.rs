@@ -4,11 +4,13 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmMailPayoutArgs {
     pub escrow_id: u64,
-    pub payee_guid: u64,
+    pub request_actor: SessionActor,
     pub mail_id: u64,
     pub amount: u32,
 }
@@ -17,7 +19,7 @@ impl From<RealmMailPayoutArgs> for super::Reducer {
     fn from(args: RealmMailPayoutArgs) -> Self {
         Self::RealmMailPayout {
             escrow_id: args.escrow_id,
-            payee_guid: args.payee_guid,
+            request_actor: args.request_actor,
             mail_id: args.mail_id,
             amount: args.amount,
         }
@@ -42,11 +44,11 @@ pub trait realm_mail_payout {
     fn realm_mail_payout(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         amount: u32,
     ) -> __sdk::Result<()> {
-        self.realm_mail_payout_then(escrow_id, payee_guid, mail_id, amount, |_, _| {})
+        self.realm_mail_payout_then(escrow_id, request_actor, mail_id, amount, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_mail_payout` to run as soon as possible,
@@ -58,7 +60,7 @@ pub trait realm_mail_payout {
     fn realm_mail_payout_then(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         amount: u32,
 
@@ -72,7 +74,7 @@ impl realm_mail_payout for super::RemoteReducers {
     fn realm_mail_payout_then(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        request_actor: SessionActor,
         mail_id: u64,
         amount: u32,
 
@@ -83,7 +85,7 @@ impl realm_mail_payout for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             RealmMailPayoutArgs {
                 escrow_id,
-                payee_guid,
+                request_actor,
                 mail_id,
                 amount,
             },

@@ -951,7 +951,7 @@ impl ReapSink for CtxShard<'_> {
 pub fn begin_transfer(
     ctx: &ReducerContext,
     transfer_id: u64,
-    character_guid: u64,
+    request_actor: crate::SessionActor,
     dest_map_id: u32,
     dest_instance_id: u64,
     dest_x: f32,
@@ -961,6 +961,7 @@ pub fn begin_transfer(
     cross_database: bool,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     if crate::taxi::is_in_flight(ctx, character_guid) {
         return Err("PLAYER_IN_TAXI_FLIGHT".to_string());
     }
@@ -1166,9 +1167,9 @@ pub fn import_character(ctx: &ReducerContext, transfer_id: u64) -> Result<(), St
 pub fn import_character_blob(
     ctx: &ReducerContext,
     transfer_id: u64,
-    blob: Vec<u8>,
-) -> Result<(), String> {
+    blob: Vec<u8>, request_actor: crate::SessionActor, ) -> Result<(), String> {
     require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob)
 }
 
@@ -1327,8 +1328,9 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
 /// unattested cross-database escrow can never be rolled back (see [`reap_transfers`]), so a driver
 /// that dies before attesting leaves a recoverable frozen character rather than a lost one.
 #[reducer]
-pub fn confirm_import(ctx: &ReducerContext, transfer_id: u64) -> Result<(), String> {
+pub fn confirm_import(ctx: &ReducerContext, transfer_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
     require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_confirm(&mut CtxShard { ctx }, transfer_id)
 }
 
@@ -1376,8 +1378,9 @@ pub(crate) fn apply_confirm<S: ShardLedger>(sink: &mut S, transfer_id: u64) -> R
 /// same id, i.e. the same-database deployment, where `finish_transfer` is the correct call and
 /// dropping the in-row alone would strand the out-row and unfreeze nothing.
 #[reducer]
-pub fn release_transfer(ctx: &ReducerContext, transfer_id: u64) -> Result<(), String> {
+pub fn release_transfer(ctx: &ReducerContext, transfer_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
     require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_release(&mut CtxShard { ctx }, transfer_id)
 }
 
@@ -1404,8 +1407,9 @@ pub(crate) fn apply_release<S: ShardLedger>(sink: &mut S, transfer_id: u64) -> R
 /// character at the destination. REFUSES while the in-row is absent: that guard is what makes
 /// "zero durable copies" unreachable.
 #[reducer]
-pub fn finish_transfer(ctx: &ReducerContext, transfer_id: u64) -> Result<(), String> {
+pub fn finish_transfer(ctx: &ReducerContext, transfer_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
     require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_finish_step(&mut CtxShard { ctx }, transfer_id)
 }
 
