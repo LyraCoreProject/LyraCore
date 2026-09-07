@@ -384,24 +384,21 @@ fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
     (tmpl.spellid_1 != 0 && tmpl.spelltrigger_1 == 0).then_some(tmpl.spellid_1)
 }
 
-/// Does the on-use `spell_id` leave its item in the bag? The data-driven twin of `spell_restores_power`'s
-/// mana gate: `apply_item_use` reads this to skip the stack-consumption every OTHER on-use spell takes.
-/// Two kinds qualify today, both keyed on the SPELL's effect kind rather than an item-entry allowlist, so
-/// any future recall trinket or mount is reusable with zero code:
-///
-/// - `E_RECALL_HOME` (0x1F) — the Hearthstone's shape. A recall trinket is never used up.
-/// - `A_MOUNTED` — a mount item, via `mount::spell_is_mount`, the one place that classification lives.
-///   Vanilla mounts are permanent bag items, not one-shot potions.
-///
-/// Reads `game_spell_effect` by `by_spell` — `true` if ANY effect carries one of the kinds. [entity]
+/// Recall items, mounts and hostile summon quest items remain in the bag after use.
+/// The effect kind is the authority; the quest item is also needed for retries.
 fn spell_keeps_item(ctx: &ReducerContext, spell_id: u32) -> bool {
-    let recalls_home = ctx
+    let reusable_effect = ctx
         .db
         .game_spell_effect()
         .by_spell()
         .filter(&spell_id)
-        .any(|e| e.kind == crate::spell::E_RECALL_HOME);
-    recalls_home || crate::mount::spell_is_mount(ctx, spell_id)
+        .any(|e| {
+            matches!(
+                e.kind,
+                crate::spell::E_RECALL_HOME | crate::spell::E_SUMMON_HOSTILE
+            )
+        });
+    reusable_effect || crate::mount::spell_is_mount(ctx, spell_id)
 }
 
 /// Is `entry` a BANDAGE AND is its cooldown debuff (`RECENTLY_BANDAGED_SPELL`) currently live on the
@@ -529,12 +526,8 @@ pub(crate) fn apply_item_use(
             "only mana users can use that",
         ));
     }
-    // Consume one unit FIRST — UNLESS the on-use spell is one of the permanent kinds (a recall trinket,
-    // a mount): `spell_keeps_item` is the data-driven exception to "using an item consumes it", keyed on
-    // the spell's effect kind, not a hardcoded item entry. Every other on-use spell consumes: the cast is
-    // the effect, and a failed cast still consumed the item, matching vanilla — a fizzled potion is gone.
-    // A REFUSED mount consumes nothing either way: the riding/combat/indoor/liquid gates all live in the
-    // cast core's read-only pre-spend sweep, and this branch never touched the stack to begin with.
+    // Reusable spells keep the item. Other casts consume one unit on admission;
+    // a Refusal from begin_cast rolls back this inventory change with the Durable Request.
     if !spell_keeps_item(ctx, spell_id) {
         if inst.stack_count > 1 {
             inst.stack_count -= 1;

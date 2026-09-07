@@ -771,6 +771,12 @@ fn check_cast_gate_suffix(
     level: u8,
 ) -> Result<(), String> {
     let caster_guid = caster.guid;
+    for effect in effects
+        .iter()
+        .filter(|effect| effect.kind == E_SUMMON_HOSTILE)
+    {
+        crate::creatures::check_hostile_summon(ctx, caster, hdr, effect)?;
+    }
 
     // Level gate: a CHARACTER cannot cast a rank above its level. Pairs with the trainer level-gate so a
     // higher rank is both UNBUYABLE and UNCASTABLE until you level up — the leveling spine. Keyed on the
@@ -1195,6 +1201,25 @@ fn begin_cast_with_admission(
         .spell_id()
         .find(spell_id)
         .ok_or_else(|| format!("unknown spell {spell_id}"))?;
+
+    let caster = crate::helpers::live_entity(ctx, caster_guid)?;
+    let mut effects: Vec<SpellEffect> = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .collect();
+    effects.sort_by_key(|effect| (effect.kind != E_INTERRUPT, effect.effect_index));
+    check_cast_gates_with_admission(
+        ctx,
+        &caster,
+        &hdr,
+        &effects,
+        target_guid,
+        spell_id,
+        level,
+        admission == CreatureSpellCasterAdmission::DeadCreatureCallback,
+    )?;
 
     // A NEW cast breaks any channel already in progress (vanilla: casting interrupts your channel). Fired
     // here at the cast ENTRY so it covers both the instant and the timed branch — and BEFORE the new

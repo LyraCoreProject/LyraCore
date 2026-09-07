@@ -14,6 +14,7 @@
 mod ai;
 pub(crate) mod cycle;
 mod eventai;
+mod hostile_summon;
 mod hunter_pet;
 mod pet;
 mod pet_care;
@@ -24,6 +25,7 @@ pub(crate) mod tick;
 
 pub use ai::*;
 pub use eventai::*;
+pub(crate) use hostile_summon::{check_hostile_summon, summon_hostile};
 pub use hunter_pet::*;
 pub use pet::*;
 pub use pet_care::*;

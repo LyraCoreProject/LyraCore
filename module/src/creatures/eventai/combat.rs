@@ -346,6 +346,23 @@ pub(super) fn execute<W: EventAiWorld>(
     choice: u64,
 ) -> ActionResult {
     match instruction {
+        CreatureInstruction::AttackStart(target) => {
+            let Some(selected) = unit_target(world, context, *target, None, choice) else {
+                return ActionResult::Refused;
+            };
+            if selected == context.creature_guid
+                || world
+                    .eventai_unit(context.creature_guid)
+                    .is_none_or(|actor| actor.dead)
+            {
+                return ActionResult::Refused;
+            }
+            if world.eventai_start_attack(context.creature_guid, selected) {
+                ActionResult::Applied
+            } else {
+                ActionResult::Refused
+            }
+        }
         CreatureInstruction::Emote(emote) => {
             let Some(target_guid) = unit_target(world, context, emote.target, None, choice) else {
                 return ActionResult::Refused;

@@ -506,29 +506,27 @@ pub(super) fn place_relay_summon(
         .game_world_entity()
         .guid()
         .find(summoner_guid)
-        .map(|entity| super::EventAiUnit {
-            guid: entity.guid,
-            entry: entity.entry,
-            x: entity.x,
-            y: entity.y,
-            z: entity.z,
-            map_id: entity.map_id,
-            instance_id: entity.instance_id,
-            zone_id: entity.zone_id,
-            health: entity.health,
-            max_health: entity.max_health,
-            power: entity.power,
-            max_power: entity.max_power,
-            power_type: (entity.unit_bytes_0 >> 24) as u8,
-            level: entity.level,
-            faction_template: entity.faction_template,
-            dead: entity.dead,
-            is_player: entity.is_player(),
-            orientation: entity.orientation,
-            owner_guid: entity.owner_guid,
-        })
-        .filter(|unit| !unit.is_player && !unit.dead)
+        .filter(|unit| !unit.is_player() && !unit.dead)
         .ok_or_else(|| format!("relay summoner {summoner_guid} is unavailable"))?;
+    let guid = place_temporary_summon(ctx, &summoner, entry, location)?;
+    if active {
+        set_active_object(ctx, guid, true)?;
+    }
+    if run_by_default {
+        super::movement::apply_relay_walking(ctx, guid, super::RelayForcedMovement::Run)?;
+    }
+    Ok(guid)
+}
+
+/// Place a temporary creature through the shared summon identity, origin and expiry lifecycle.
+pub(crate) fn place_temporary_summon(
+    ctx: &ReducerContext,
+    caster: &crate::WorldEntity,
+    entry: u32,
+    location: SummonLocation,
+) -> Result<u64, String> {
+    let summoner_guid = caster.guid;
+    let summoner = super::engine::unit_of(caster);
     if ctx
         .db
         .game_creature_template()
@@ -536,29 +534,23 @@ pub(super) fn place_relay_summon(
         .find(entry)
         .is_none()
     {
-        return Err(format!("relay summon template {entry} is missing"));
+        return Err(format!("summon template {entry} is missing"));
     }
     if ![location.x, location.y, location.z, location.orientation]
         .into_iter()
         .all(f32::is_finite)
     {
-        return Err("relay summon location must be finite".to_string());
+        return Err("summon location must be finite".to_string());
     }
     let sequence = claim_summon_sequence(ctx, location.lifetime_ms);
-    let guid = summon_guid(entry, sequence)
-        .ok_or_else(|| "relay summon sequence is unavailable".to_string())?;
+    let guid =
+        summon_guid(entry, sequence).ok_or_else(|| "summon sequence is unavailable".to_string())?;
     if ctx.db.game_world_entity().guid().find(guid).is_some() {
         release_summon_sequence(ctx, sequence);
-        return Err(format!("relay summon guid {guid} is already live"));
+        return Err(format!("summon guid {guid} is already live"));
     }
     place_summon(ctx, sequence, guid, entry, &location, &summoner);
     super::edges::eventai_on_summoned(ctx, summoner_guid, guid, entry);
-    if active {
-        set_active_object(ctx, guid, true)?;
-    }
-    if run_by_default {
-        super::movement::apply_relay_walking(ctx, guid, super::RelayForcedMovement::Run)?;
-    }
     Ok(guid)
 }
 

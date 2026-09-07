@@ -2145,6 +2145,20 @@ impl EventAiWorld for Scenario {
         EngageSink::engage(self, summon_guid, target_guid, Pull::Assisted);
     }
 
+    fn eventai_start_attack(&mut self, creature_guid: u64, target_guid: u64) -> bool {
+        if let Some(fight) = self
+            .fights
+            .borrow_mut()
+            .iter_mut()
+            .find(|fight| fight.attacker == creature_guid)
+        {
+            fight.victim = target_guid;
+            return true;
+        }
+        EngageSink::engage(self, creature_guid, target_guid, Pull::Noticed);
+        true
+    }
+
     fn eventai_remove_aura(&mut self, target_guid: u64, spell_id: u32) -> bool {
         if self.eventai_unit(target_guid).is_none() {
             return false;

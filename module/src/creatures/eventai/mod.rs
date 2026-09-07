@@ -40,7 +40,6 @@ pub(crate) use engine::{evaluate, EventAiWorld};
 pub(crate) use fixtures::seed_on_aggro_fixtures;
 #[cfg(feature = "debug_reducers")]
 pub(crate) use loader::replace_definition_for_debug;
-pub(crate) use mobility::summon_life_seq;
 #[cfg(test)]
 pub(crate) use mobility::summon_lifetime_after;
 pub(crate) use mobility::{drop_summon_expiry, ranged_posture, react_state};
@@ -50,6 +49,7 @@ pub use mobility::{
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use mobility::{mark_summon_origin_for_debug, remove_guardians};
+pub(crate) use mobility::{place_temporary_summon, summon_life_seq};
 pub(crate) use model::*;
 pub use movement::{CreatureAiMovementIntent, CreatureAiMovementPathWaypoint};
 use presentation::import_verified_rajaxx_spawn_protection;

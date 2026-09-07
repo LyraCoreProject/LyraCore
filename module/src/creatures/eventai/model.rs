@@ -616,6 +616,7 @@ pub enum CreatureInstruction {
     SetFacing(FacingInstruction),
     NotifyEncounter(NotifyEncounterInstruction),
     StartRelay(StartRelayInstruction),
+    AttackStart(InstructionTarget),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

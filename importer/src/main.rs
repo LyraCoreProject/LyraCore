@@ -484,6 +484,8 @@ mod qt {
     pub const REW_REP_FACTION1: usize = 88; // ..=92 RewRepFaction1..5 (we model 2 slots; +1 = faction2)
     pub const REW_REP_VALUE1: usize = 93; // ..=97 RewRepValue1..5 (parallel to the faction cols; +1 = value2)
     pub const REW_OR_REQ_MONEY: usize = 98; // >0 = reward copper, <0 = required copper (clamp ≥ 0)
+    pub const REW_SPELL: usize = 100; // reward display, also the cast when RewSpellCast is zero
+    pub const REW_SPELL_CAST: usize = 101; // overrides the reward cast
     pub const REW_MONEY_MAX_LEVEL: usize = 99; // cmangos RewMoneyMaxLevel (col 99, right after 98); /0.6 = authentic quest XP
 }
 mod qr {
@@ -651,6 +653,10 @@ fn go_template_row(
         ),
         GO_BUTTON => (
             format!("({entry},{GO_BUTTON},{disp},{n},0,0,0,0,0,{data1},{size})"),
+            None,
+        ),
+        8 => (
+            format!("({entry},8,{disp},{n},{data0},{data1},0,0,0,0,{size})"),
             None,
         ),
         other => (
@@ -2468,6 +2474,7 @@ struct QuestEtl {
     objectives: Vec<String>,
     cast_objectives: Vec<String>,
     reward_items: Vec<String>,
+    reward_spells: Vec<String>,
     reward_choices: Vec<String>,
     relations: Vec<String>,
     // GAMEOBJECT giver relations (work-item 041: GO 68 "Wanted Poster" starts q176 Wanted: Hogger,
@@ -2803,6 +2810,20 @@ fn build_quests(
     let mut objective_rows: Vec<String> = Vec::new();
     let mut cast_objective_rows: Vec<String> = Vec::new();
     let mut reward_item_rows: Vec<String> = Vec::new();
+    let mut reward_spell_rows = Vec::new();
+    // Single LearnSpell wrappers have no other reward behavior to preserve.
+    let reward_learn_spells: HashMap<u32, u32> = parse_table(dump, "spell_template")
+        .into_iter()
+        .filter_map(|row| {
+            let wrapper = field(&row, 0).parse().ok()?;
+            let effects: Vec<_> = (0..3).filter(|&i| field(&row, 61 + i) != "0").collect();
+            if effects.len() != 1 || field(&row, 61 + effects[0]) != "36" {
+                return None;
+            }
+            let learned: u32 = field(&row, 109 + effects[0]).parse().ok()?;
+            (learned != 0).then_some((wrapper, learned))
+        })
+        .collect();
     let mut reward_choice_rows: Vec<String> = Vec::new();
     let mut reward_item_entries: HashSet<u64> = HashSet::new();
     let mut req_item_entries: HashSet<u64> = HashSet::new();
@@ -2822,6 +2843,16 @@ fn build_quests(
             continue;
         }
         valid_quests.insert(entry);
+        let reward_cast: u32 = field(&row, qt::REW_SPELL_CAST).parse().unwrap_or(0);
+        let reward_cast = if reward_cast != 0 {
+            reward_cast
+        } else {
+            field(&row, qt::REW_SPELL).parse().unwrap_or(0)
+        };
+        if let Some(learned) = reward_learn_spells.get(&reward_cast) {
+            reward_spell_rows.push(format!("({entry},{learned})"));
+        }
+
         let min_level: u32 = field(&row, qt::MIN_LEVEL).parse().unwrap_or(0);
         let quest_level: i64 = field(&row, qt::QUEST_LEVEL).parse().unwrap_or(0);
         let money: i64 = field(&row, qt::REW_OR_REQ_MONEY).parse().unwrap_or(0);
@@ -3076,6 +3107,7 @@ fn build_quests(
         objectives: objective_rows,
         cast_objectives: cast_objective_rows,
         reward_items: reward_item_rows,
+        reward_spells: reward_spell_rows,
         reward_choices: reward_choice_rows,
         relations: creature_quest_rows,
         go_relations: go_quest_rows,
@@ -4135,14 +4167,9 @@ fn resolve_scope_entries(
     spawns: &[CreatureSpawnRow],
 ) -> Result<ScopeEntries> {
     let mut entries: std::collections::HashSet<u64> = spawns.iter().map(|s| s.1).collect();
-    // PET/SUMMON templates (Tier 3b): a summoned pet (Warlock's Imp = entry 416) has NO world spawn, so it
-    // is never in the geographic slice above — yet its game_creature_template row MUST exist for the
-    // E_SUMMON_PET handler to build the pet entity. Force-include the pet entries so their templates import
-    // from cmangos creature_template even without a placed spawn. Additive (no spawn is added — pets are
-    // spawned at runtime by the summon, not seeded). Extend this list as more pets ship (Succubus 1863,
-    // Felhunter 417). [Tier 3b]
-    const PET_TEMPLATE_ENTRIES: &[u64] = &[416, 1860]; // Imp (688) + Voidwalker (697).
-    entries.extend(PET_TEMPLATE_ENTRIES.iter().copied());
+    // Spell summons have no placed spawn. Include the pet rewards and both Binding objectives.
+    const SUMMON_TEMPLATE_ENTRIES: &[u64] = &[416, 1860, 1863, 5676, 5677];
+    entries.extend(SUMMON_TEMPLATE_ENTRIES.iter().copied());
     // Forced-creature template safety net: the spawn-loop gate above already keeps a force-listed
     // entry's placed spawns, whether the profile owns it or the legacy flag extends the scope.
     // But a giver with NO `creature` row (a pure-summon/instanced NPC) produces zero spawns — extend
@@ -5160,6 +5187,13 @@ fn push_quest_and_gameobject_statements(
         stmts.push("DELETE FROM game_quest_objective WHERE id > 0".into());
         stmts.push("DELETE FROM game_quest_cast_objective WHERE id > 0".into());
         stmts.push("DELETE FROM game_quest_reward_item WHERE id > 0".into());
+        stmts.push("DELETE FROM game_quest_reward_spell WHERE quest_entry > 0".into());
+        push_insert(
+            stmts,
+            "game_quest_reward_spell",
+            "quest_entry,spell_id",
+            &quests.reward_spells,
+        );
         stmts.push("DELETE FROM game_quest_reward_choice WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_quest WHERE id > 0".into());
         stmts.push("DELETE FROM game_gameobject_quest WHERE id > 0".into());
@@ -5830,12 +5864,11 @@ mod tests {
             "(1731,25,259,'Copper Vein',2770,1,186,300,100,0,0.5)"
         );
         assert_eq!(gather_loot, None);
-        // QUESTGIVER + an INERT type both fall through to the all-zero catch-all arm (11 cols). An
-        // absent dump size arrives here as 0 and stays 0.
+        // A quest giver has no type payload. A spell focus preserves its id and radius.
         let (qg_row, _) = go_template_row(4000, GO_QUESTGIVER, 50, "Wanted Poster", 1, 2, 0.0);
         assert_eq!(qg_row, "(4000,2,50,'Wanted Poster',0,0,0,0,0,0,0)");
         let (inert_row, _) = go_template_row(5000, 8, 60, "Spell Focus", 3, 4, 1.75);
-        assert_eq!(inert_row, "(5000,8,60,'Spell Focus',0,0,0,0,0,0,1.75)");
+        assert_eq!(inert_row, "(5000,8,60,'Spell Focus',3,4,0,0,0,0,1.75)");
     }
 
     #[test]
@@ -7952,6 +7985,124 @@ mod tests {
 
         assert_eq!(factions.get("299"), Some(&"32"));
         assert_eq!(factions.get("100"), Some(&"14"));
+    }
+
+    #[test]
+    fn binding_quests_import_source_items_objectives_and_learned_rewards() {
+        let mut quest_rows = Vec::new();
+        let mut wrapper_rows = Vec::new();
+        let mut item_rows = Vec::new();
+        for (quest, item, objective, wrapper, learned) in [
+            (1689, 6928, 5676, 11520, 697),
+            (1739, 6913, 5677, 11519, 712),
+        ] {
+            let mut row = vec!["0".to_string(); 102];
+            row[0] = quest.to_string();
+            row[30] = "'The Binding'".to_string();
+            row[27] = item.to_string();
+            row[28] = "1".to_string();
+            row[56] = objective.to_string();
+            row[60] = "1".to_string();
+            row[100] = learned.to_string();
+            row[101] = wrapper.to_string();
+            quest_rows.push(format!("({})", row.join(",")));
+            let mut spell = vec!["0".to_string(); 112];
+            spell[0] = wrapper.to_string();
+            spell[61] = "36".to_string();
+            spell[109] = learned.to_string();
+            wrapper_rows.push(format!("({})", spell.join(",")));
+            let mut item_row = vec!["0".to_string(); 128];
+            item_row[it::ENTRY] = item.to_string();
+            item_row[it::NAME] = "'Binding item'".to_string();
+            item_row[it::SPELLID_1] = if item == 6928 { "7728" } else { "8674" }.to_string();
+            item_rows.push(format!("({})", item_row.join(",")));
+        }
+        let dump =
+            format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+            INSERT INTO `creature_template` VALUES {}; \
+            INSERT INTO `creature_questrelation` VALUES (100,1689),(100,1739); \
+            INSERT INTO `quest_template` VALUES {}; \
+            INSERT INTO `spell_template` VALUES {}; INSERT INTO `item_template` VALUES {};",
+            [100, 5676, 5677, 1863].map(|entry| creature_template_row(entry, 0)).join(","),
+            quest_rows.join(","),
+            wrapper_rows.join(","),
+            item_rows.join(",")
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).unwrap();
+        let rewards = plan
+            .stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_quest_reward_spell"))
+            .unwrap();
+        assert!(rewards.contains("(1689,697)"));
+        assert!(rewards.contains("(1739,712)"));
+        assert!(!rewards.contains("11520"));
+        assert!(!rewards.contains("11519"));
+        let objectives = plan
+            .stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_quest_objective"))
+            .unwrap();
+        assert!(objectives.contains(",1689,0,0,5676,1)"));
+        assert!(objectives.contains(",1739,0,0,5677,1)"));
+        let items = plan
+            .stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_item_template"))
+            .unwrap();
+        assert!(items.contains("(6928,"));
+        assert!(items.contains("(6913,"));
+        assert!(items.contains(",7728,0,"));
+        assert!(items.contains(",8674,0,"));
+        let creatures = plan
+            .stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_creature_template"))
+            .unwrap();
+        for entry in [5676, 5677, 1863] {
+            assert!(creatures.contains(&format!("({entry},")));
+        }
+        let focus = go_template_row(5_091_040, 8, 1, "Focus", 83, 10, 1.0).0;
+        assert!(focus.contains(",83,10,0,0,0,0,1)"));
+    }
+
+    #[test]
+    fn quest_reward_cast_precedence_and_single_learn_effect_are_preserved() {
+        let mut quests = Vec::new();
+        for (quest, reward, cast) in [
+            (5091041, 50941, 0),
+            (5091042, 50941, 50942),
+            (5091043, 50941, 50943),
+        ] {
+            let mut row = vec!["0".to_string(); 102];
+            row[0] = quest.to_string();
+            row[30] = "'Reward fixture'".into();
+            row[100] = reward.to_string();
+            row[101] = cast.to_string();
+            quests.push(format!("({})", row.join(",")));
+        }
+        let mut spells = Vec::new();
+        for (spell, learned, other_effect) in
+            [(50941, 50944, 0), (50942, 50945, 0), (50943, 50946, 2)]
+        {
+            let mut row = vec!["0".to_string(); 112];
+            row[0] = spell.to_string();
+            row[61] = "36".into();
+            row[62] = other_effect.to_string();
+            row[109] = learned.to_string();
+            spells.push(format!("({})", row.join(",")));
+        }
+        let dump = format!("INSERT INTO `creature_questrelation` VALUES (51940,5091041),(51940,5091042),(51940,5091043); INSERT INTO `quest_template` VALUES {}; INSERT INTO `spell_template` VALUES {};", quests.join(","), spells.join(","));
+        let empty = std::collections::HashSet::new();
+        let quests = build_quests(
+            &dump,
+            &std::collections::HashSet::from([51940]),
+            &empty,
+            &empty,
+            &empty,
+        );
+        assert_eq!(quests.reward_spells, ["(5091041,50944)", "(5091042,50945)"]);
     }
 
     /// A minimal `quest_template` INSERT tuple wide enough to reach `qt::REW_MONEY_MAX_LEVEL` (col 99):

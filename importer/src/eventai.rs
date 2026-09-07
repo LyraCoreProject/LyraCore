@@ -4594,6 +4594,21 @@ fn map_action(
         ACTION_TEXT | ACTION_TEXT_NEW => {
             map_speech_action(action, kind, rule_id, slot, broadcasts, relays)
         }
+        ACTION_ATTACK_START if action[2..] == [0, 0] => {
+            let target = map_target(action[1]).map_err(|failure| vec![failure])?;
+            Ok(NativeAction {
+                encoded: format!("attack-start:{target}"),
+                raw_kind: kind,
+                raw_target: Some(action[1]),
+                raw_cast_flags: None,
+                threat_percent: None,
+                dependencies: Vec::new(),
+                texts: Vec::new(),
+                summon_entry: None,
+                summon_location: None,
+                normalizations: Vec::new(),
+            })
+        }
         ACTION_EMOTE => Ok(NativeAction {
             encoded: format!("emote:{}:self", action[1]),
             raw_kind: kind,
@@ -6894,6 +6909,40 @@ mod tests {
             "999".to_string(),
             "source_runtime_missing_text_template_no_effect".to_string(),
         ));
+        let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
+        assert!(manifest.is_apply_ready(), "{}", manifest.render());
+    }
+
+    #[test]
+    fn binding_startup_rules_keep_faction_then_attack_the_summoner() {
+        // classic-db cd0c426a3b2ff56dd518bf009025299468e60fdb startup actions.
+        let source = parse(&dump(&[
+            rule(
+                567602,
+                5676,
+                EVENT_TIMER_GENERIC,
+                100,
+                0,
+                [1000, 1000, 0, 0, 0, 0],
+                [[2, 14, 0, 0], [55, 11, 0, 0], [0; 4]],
+            ),
+            rule(
+                567701,
+                5677,
+                EVENT_SPAWNED,
+                100,
+                0,
+                [0; 6],
+                [[2, 14, 0, 0], [55, 11, 0, 0], [0; 4]],
+            ),
+        ]));
+        let entries = HashSet::from([5676, 5677]);
+        let plan = source.assemble(&entries, &HashMap::new(), &entries);
+        assert_eq!(plan.definition_rows.len(), 2);
+        for row in &plan.definition_rows {
+            assert!(row.ends_with("faction:14+attack-start:spawner"), "{row}");
+        }
+        let profile = fixture_profile(&plan);
         let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
         assert!(manifest.is_apply_ready(), "{}", manifest.render());
     }

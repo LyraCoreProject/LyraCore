@@ -68,6 +68,18 @@ const E_OPEN_LOCK: u8 = 0x1D; // OPEN LOCK (Pick Lock 1804, work-item 119): gate
 const E_DUEL: u8 = 0x22; // Duel (raw effect 83): p0 is the duel-flag gameobject template entry
 const E_DISENCHANT: u8 = 0x18; // DISENCHANT (real Disenchant 13262, work-item 282): gateway-intercepted, routed to the disenchant reducer by kind. Mapped from raw vanilla effect 99 (SPELL_EFFECT_DISENCHANT); no params (the module validates + yields dust by item). Lockstep with the module taxonomy (module/src/spell/taxonomy.rs E_DISENCHANT).
 const E_DISMOUNT: u8 = 0x23; // remove the target's active land mount (Dazed's mount-removal half): translated from a raw DISPEL_MECHANIC effect (108) whose misc value names the mount mechanic (21) — see `dismount_effect_kind` below. No params. Lockstep with module taxonomy.
+const E_SUMMON_HOSTILE: u8 = 0x24; // temporary ownerless summon; p0 = creature entry, p1 = required spell focus, header duration = lifetime
+
+// cmangos/classic-db cd0c426a3b2ff56dd518bf009025299468e60fdb:
+// spell_template 7728/8674 send events 1131/1134; dbscripts_on_event summons
+// 5676/5677 for 360000 ms. Their creature_ai_scripts set faction 14 and attack the summoner.
+fn binding_summon_entry(spell_id: u32, effect: i32, event: u32, focus: u32) -> Option<i32> {
+    match (spell_id, effect, event, focus) {
+        (7728, 61, 1131, 83) => Some(5676),
+        (8674, 61, 1134, 83) => Some(5677),
+        _ => None,
+    }
+}
 
 // aura effects (high bit set)
 const A_PERIODIC_DAMAGE: u8 = 0x90;
@@ -118,7 +130,7 @@ const P_COMBAT_FIELD: u8 = 5;
 const P_SPEED_KIND: u8 = 6;
 const P_FLAG: u8 = 7;
 const P_ITEM_ENTRY: u8 = 8;
-const P_ENTRY: u8 = 9; // p0 is a game_creature_template entry (E_SUMMON_PET — the summoned pet's creature entry)
+const P_ENTRY: u8 = 9; // p0 is a game_creature_template entry
 const P_SPELLMOD_OP: u8 = 11; // p0 is a SpellModOp (A_SPELLMOD_*)
 const P_PCT_MAX_POWER: u8 = 12; // the effect's `amount` is a PERCENT of the caster's max power (Evocation); aura_apply converts it to an absolute per-tick (lockstep with module taxonomy)
 const P_GAMEOBJECT_ENTRY: u8 = 13; // p0 is a game_gameobject_template entry (E_DUEL)
@@ -1407,6 +1419,20 @@ fn push_spell_header_row(
         proc_chance,
         proc_charges,
     });
+    if binding_summon_entry(
+        spell_id,
+        s.effect[0],
+        s.effect_misc_value[0],
+        s.requires_spell_focus.id,
+    )
+    .is_some()
+    {
+        let row = spell_rows
+            .last_mut()
+            .expect("the spell header was just inserted");
+        row.duration_ms = 360_000;
+        row.cooldown_ms = 180_000;
+    }
     cov.spells += 1;
 
     // Allowlist diagnostics: one header line per requested spell so the operator sees the full
@@ -1514,6 +1540,16 @@ fn push_spell_effect_rows(
             per_level,
             period_ms,
         } = resolve_effect_kind(s, i, header, creature_displays, cov);
+        let binding_entry = binding_summon_entry(
+            spell_id,
+            effect_id,
+            s.effect_misc_value[i],
+            s.requires_spell_focus.id,
+        );
+        let (kind, p0, p0_kind) = match binding_entry {
+            Some(entry) => (E_SUMMON_HOSTILE, entry, P_ENTRY),
+            None => (kind, p0, p0_kind),
+        };
         let target = resolve_effect_target(s, i, kind, header);
         // Evocation (12051): a channeled 8s self-buff that restores a PERCENT of max mana every 2s
         // (~60% over the channel). Its DBC effects are inert markers (a +1500% ModPowerRegenPercent →
@@ -1557,7 +1593,9 @@ fn push_spell_effect_rows(
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
-        let p1 = if kind == E_POWER_BURN {
+        let p1 = if kind == E_SUMMON_HOSTILE {
+            s.requires_spell_focus.id as i32
+        } else if kind == E_POWER_BURN {
             power_burn_ratio_bp(s.effect_multiple_values[i])
         } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
             // 264: the affected-spell FAMILY MASK (DBC EffectItemType) — matched at fold time
@@ -1825,7 +1863,7 @@ fn resolve_effect_target(
         // ignores the resolved target. Force T_SELF so `select_targets` yields the caster (the
         // summon fires exactly once) AND the faction gate is bypassed (a self-cast imposes no
         // faction constraint), so casting it while an enemy is selected still summons the pet.
-        E_SUMMON_PET => T_SELF,
+        E_SUMMON_PET | E_SUMMON_HOSTILE => T_SELF,
         E_DUEL => T_TARGET_ANY,
         E_TAME_CREATURE => T_TARGET_ENEMY,
         _ => target,
@@ -2170,6 +2208,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_NEXT_SWING => "E_NEXT_SWING",
         E_SET_STANCE => "E_SET_STANCE",
         E_SUMMON_PET => "E_SUMMON_PET",
+        E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
         E_TAME_CREATURE => "E_TAME_CREATURE",
         E_FEED_PET => "E_FEED_PET",
@@ -3425,5 +3464,105 @@ mod tests {
                                                         // bit0 on regardless of the raw flags — untouched by the mount masking.
         assert_eq!(aura_interrupt_bits(0, 1776), 0x1);
         assert_eq!(aura_interrupt_bits(0, 458), 0); // a mount id is NOT on the force-on list
+    }
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+    use wow_dbc::vanilla_tables::spell::SpellKey;
+    use wow_dbc::vanilla_tables::spell_cast_times::{SpellCastTimesKey, SpellCastTimesRow};
+    use wow_dbc::vanilla_tables::spell_focus_object::SpellFocusObjectKey;
+    use wow_dbc::vanilla_tables::spell_range::SpellRangeRow;
+
+    fn source_spell(spell_id: u32, event: u32) -> wow_dbc::vanilla_tables::spell::SpellRow {
+        let mut bytes = b"WDBC".to_vec();
+        for value in [1u32, 173, 692, 1] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.resize(20 + 692 + 1, 0);
+        let mut row = DbcSpell::read(&mut bytes.as_slice())
+            .unwrap()
+            .rows
+            .remove(0);
+        row.id = SpellKey::new(spell_id);
+        row.requires_spell_focus = SpellFocusObjectKey::new(83);
+        row.effect = [61, 86, 0];
+        row.effect_misc_value = [event, 1, 0];
+        row.implicit_target_a = [0, 40, 0];
+        row.casting_time_index = SpellCastTimesKey::new(7);
+        row.speed = f32::from_bits(7);
+        row
+    }
+
+    #[test]
+    fn binding_source_events_import_one_hostile_summon_and_keep_the_focus() {
+        // Facts from classic-db cd0c426a3b2ff56dd518bf009025299468e60fdb,
+        // spell_template and dbscripts_on_event. This fixture contains no client archive bytes.
+        for (spell_id, event, entry) in [(7728, 1131, 5676), (8674, 1134, 5677)] {
+            let row = source_spell(spell_id, event);
+            let dbc = SpellDbc {
+                spells: DbcSpell { rows: vec![] },
+                cast_times: SpellCastTimes {
+                    rows: vec![SpellCastTimesRow {
+                        id: SpellCastTimesKey::new(7),
+                        base: 10_000,
+                        per_level_increase: 0,
+                        minimum: 0,
+                    }],
+                },
+                ranges: SpellRange {
+                    rows: vec![SpellRangeRow {
+                        id: SpellRangeKey::new(7),
+                        range_min: 0.0,
+                        range_max: 10.0,
+                        flags: 0,
+                        display_name: row.name.clone(),
+                        display_name_short: row.name.clone(),
+                    }],
+                },
+                durations: SpellDuration { rows: vec![] },
+                radii: SpellRadius { rows: vec![] },
+            };
+            let mut acc = SpellAccumulator::default();
+            let allow = std::collections::HashSet::new();
+            let header = push_spell_header_row(&row, &dbc, &allow, &mut acc);
+            push_spell_effect_rows(&row, &header, &dbc, &BTreeMap::new(), &allow, &mut acc);
+            let summons: Vec<_> = acc
+                .effect_rows
+                .iter()
+                .filter(|e| e.kind == E_SUMMON_HOSTILE)
+                .collect();
+            assert_eq!(summons.len(), 1);
+            assert_eq!(
+                (
+                    summons[0].p0,
+                    summons[0].p0_kind,
+                    summons[0].p1,
+                    summons[0].target
+                ),
+                (entry, P_ENTRY, 83, T_SELF)
+            );
+            assert_eq!(acc.spell_rows[0].cast_time_ms, 10_000);
+            assert_eq!(acc.spell_rows[0].range_yd, 10);
+            assert_eq!(acc.spell_rows[0].duration_ms, 360_000);
+            assert_eq!(acc.spell_rows[0].cooldown_ms, 180_000);
+            assert_eq!(acc.effect_rows[1].kind, E_SCRIPTED);
+        }
+    }
+
+    #[test]
+    fn unrelated_events_and_owned_pet_effects_are_not_binding_summons() {
+        for (spell, effect, event, focus) in [
+            (688, 56, 416, 0),
+            (7728, 61, 1134, 83),
+            (8674, 61, 1134, 43),
+            (999, 61, 1131, 83),
+            (7728, 86, 1131, 83),
+        ] {
+            assert_eq!(binding_summon_entry(spell, effect, event, focus), None);
+        }
+        assert_eq!(instant_effect_to_kind(56), E_SUMMON_PET);
+        assert_eq!(resolve_instant_params(E_SUMMON_PET, 416, 0), (416, P_ENTRY));
     }
 }
