@@ -7868,6 +7868,34 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires pinned LYRACORE_CLASSIC_DB_SQL and build 5875 LYRACORE_TEST_DBC"]
+    fn pinned_items_plan_counts_templates_and_property_catalogues() {
+        let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
+        let dbc = std::env::var("LYRACORE_TEST_DBC").unwrap();
+        let dump = read_dump(&path).unwrap();
+        let args = parse_args_from([
+            "--dump",
+            path.as_str(),
+            "--dbc",
+            dbc.as_str(),
+            "--world-profile",
+            "alliance-eastern",
+            "--family",
+            "items",
+        ])
+        .unwrap();
+        let plan = build_dump_plan(&dump, &args, &None, &None).unwrap();
+        let (templates, properties, enchantments, pool_members) = (17_718, 2_012, 1_685, 27_892);
+        assert_eq!(
+            plan.stamps,
+            vec![(
+                "items",
+                templates + properties + enchantments + pool_members
+            )]
+        );
+    }
+
+    #[test]
     #[ignore = "requires LYRACORE_CLASSIC_DB_SQL pointing at the pinned decompressed SQL or gzip"]
     fn pinned_alliance_single_plan_is_apply_ready_with_relay_static_dependencies() {
         let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
