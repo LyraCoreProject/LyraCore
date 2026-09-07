@@ -1,13 +1,14 @@
 {
-  "updated_at": "2026-09-05 07:03 UTC",
-  "base_revision": "b1c0f9400a31a2522b9385f6870a9eb8f8f92c76",
-  "status_note": "All 88 issues are assessed. Aura rollback and fixture cast protection are merged. Motion diagnostics are merged; the reported long-running freeze remains unverified. The second wave is underway.",
+  "updated_at": "2026-09-07 13:04 UTC",
+  "base_revision": "b4c17c481f66784fd24677f583e0368fc3ac8c95",
+  "status_note": "77 open issues assessed; 12 closed issues retained for history. Finishing existing PRs and implementing the next independent checks.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
   "focus": [
-    "#63: prevent duplicate active loot-roll promotion and preserve existing votes.",
-    "#367: enforce the existing lock Gate before GOOBER effects.",
-    "#398: count generated Package Deltas in CLI Trust Review, then update the core pin.",
-    "#80: complete teleport cleanup review. Maintain the report and drive each PR through CI and comments."
+    "Finish current-head reviews for core PRs #438, #439 and #440.",
+    "Implement #50 to catch Character state omitted from cleanup or Transfer.",
+    "Finish CLI PR #56 for #398 and publish the core pin update.",
+    "Refresh every issue assessment and prepare the next independent tasks.",
+    "#105: repair suite dispatch and distinguish startup failures before relying on more Headless Client runs."
   ],
   "issues": [
     {
@@ -19,7 +20,7 @@
       "confidence": "high",
       "disposition": "done",
       "rationale": "A creature death can remove a due aura before the scheduler advances its old snapshot. The fix advances only rows that still exist, so death and unrelated periodic effects commit together.",
-      "next_action": "Merged after coordinating review and passing CI. No remaining acceptance check for this issue.",
+      "next_action": "Closed on GitHub. Preserve the recorded implementation evidence.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/425",
@@ -33,7 +34,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/425",
       "updatedAt": "2026-09-04T06:20:59Z",
       "github_state": "closed",
-      "owner": "GPT-6, Codex"
+      "owner": "Codex"
     },
     {
       "number": 424,
@@ -68,7 +69,7 @@
       "confidence": "high",
       "disposition": "done",
       "rationale": "The shared creature identifier policy exists on main through PR #405. The casts entry points do not consistently apply it, so this small fix protects fixtures and Package testing.",
-      "next_action": "Merged in PR #434. Coordinating review caught partial-update and retarget-away bypasses; durable regressions now prove both are refused.",
+      "next_action": "Closed on GitHub. Preserve the recorded implementation evidence.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/404",
@@ -82,7 +83,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/404",
       "updatedAt": "2026-09-03T08:19:36Z",
       "github_state": "closed",
-      "owner": "GPT-5.6 Sol, Package Delta agent"
+      "owner": "Codex"
     },
     {
       "number": 399,
@@ -91,9 +92,9 @@
       "gain": 3,
       "effort": 1,
       "confidence": "high",
-      "disposition": "verify",
+      "disposition": "done",
       "rationale": "Current CLI main reads target provenance before resolving client data. The script-only no-op test already runs without client data. The original control-flow complaint appears fixed by the replay work.",
-      "next_action": "Run the empty-inventory/no-client regression against the pinned CLI, then close with evidence if it passes.",
+      "next_action": "Closed on GitHub. Preserve the recorded implementation evidence.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/399",
@@ -107,7 +108,7 @@
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/399",
       "updatedAt": "2026-09-02T18:01:19Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -117,20 +118,21 @@
       "gain": 4,
       "effort": 2,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "Runtime Script names already landed in CLI PR #55. The remaining Datascript line falsely says nothing reads them. It obscures what an Operator installs.",
-      "next_action": "Implement generated Package Delta counts in an isolated CLI worktree. Test through fake adapters, publish the CLI PR, then make a core pin PR after reviewed merge.",
+      "next_action": "Fix CLI PR #56 to count all Package Delta Import Families, then verify fake-adapter tests, complete review and publish a core pin PR.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/398",
         "lyracore-cli/src/cmd/packages/review.rs: render still prints the stale datascripts line.",
-        "https://github.com/LyraCoreProject/lyracore-cli/pull/55"
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/55",
+        "https://github.com/LyraCoreProject/lyracore-cli/pull/56"
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/398",
       "updatedAt": "2026-09-03T07:36:06Z",
       "github_state": "open",
-      "owner": "GPT-5.6 Sol, CLI review agent"
+      "owner": "GPT-5.6 Sol, CLI completion agent"
     },
     {
       "number": 373,
@@ -166,10 +168,8 @@
       "confidence": "high",
       "disposition": "ready",
       "rationale": "Subscribed-table parity leaves other generated definitions unchecked. A reproducible generation check would catch drift before unrelated schema work encounters it.",
-      "next_action": "Build a deterministic offline generation check using the documented exceptions, after the active CI cleanup settles.",
-      "blockers": [
-        "Coordinate workflow changes with active PRs #419 and #426."
-      ],
+      "next_action": "Build a deterministic offline generation check using the documented exceptions. The prerequisite CI PRs are merged.",
+      "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/368",
         "gateway/tests/schema_parity.rs checks subscribed tables.",
@@ -191,19 +191,21 @@
       "gain": 4,
       "effort": 2,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "The Defias Cannon can trigger without its required item. Current GOOBER dispatch skips locked_shut, while CHEST and DOOR/BUTTON apply it.",
-      "next_action": "Prove locked refusal has no effects, then apply the existing lock Gate and verify unlocked and lockless use.",
+      "next_action": "Complete the current-head review audit of PR #440, fix valid findings, and check CI. Preserve any remaining live-client acceptance.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/367",
         "module/src/gameobject.rs: apply_use_gameobject GOOBER arm directly invokes quest credit."
       ],
-      "related_prs": [],
+      "related_prs": [
+        440
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/367",
       "updatedAt": "2026-08-28T12:22:50Z",
       "github_state": "open",
-      "owner": "GPT-5.6 Sol, GOOBER agent"
+      "owner": "GPT-5.6 Sol, PR completion agent"
     },
     {
       "number": 366,
@@ -237,22 +239,21 @@
       "gain": 5,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "PR #419 already implements the cleanup and blocking checks. Its branch conflicts with current main and is under active review in another worktree.",
-      "next_action": "Monitor the existing owner, rebase after the other open PRs, and require fresh blocking checks.",
-      "blockers": [
-        "Existing PR #419 must rebase after the earlier open PRs."
-      ],
+      "disposition": "done",
+      "rationale": "PR #419 is merged. The blocking clippy, formatting and Rust jobs passed on main b4c17c4; the GitHub closure cites that run.",
+      "next_action": "Closed with the merged PR and passing main workflow as evidence.",
+      "blockers": [],
       "evidence": [
-        "https://github.com/LyraCoreProject/LyraCore/issues/353",
-        ".github/workflows/rust.yml still uses continue-on-error for fmt and clippy."
+        "https://github.com/LyraCoreProject/LyraCore/pull/419",
+        "https://github.com/LyraCoreProject/LyraCore/actions/runs/34103823042",
+        ".github/workflows/rust.yml runs blocking formatting and clippy without continue-on-error."
       ],
       "related_prs": [
         419
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/353",
       "updatedAt": "2026-08-28T12:23:40Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -262,12 +263,10 @@
       "gain": 5,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "The claim that no workflows exist is stale. Rust tests and wasm checks now run; formatting and clippy remain advisory until PR #419. PR #426 adds durable tests.",
-      "next_action": "Finish the existing CI PRs and record which preflight coverage remains before closing this umbrella issue.",
-      "blockers": [
-        "PR #419 and PR #426 are already owned and under review."
-      ],
+      "disposition": "done",
+      "rationale": "PRs #419 and #426 are merged. Reassess the original checklist against current workflows rather than starting another workflow.",
+      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
+      "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/346",
         ".github/workflows/rust.yml",
@@ -279,7 +278,7 @@
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/346",
       "updatedAt": "2026-08-28T12:23:39Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -799,13 +798,10 @@
       "gain": 5,
       "effort": 3,
       "confidence": "high",
-      "disposition": "dependency",
+      "disposition": "implementing",
       "rationale": "The current pin is still v0.1.0-alpha.3 at the exact reported commit. Its wire-suite.sh contains the broken relative calls, and no newer release exists. This undermines confidence in every live suite claim that uses the pin.",
-      "next_action": "Fix every scenario call to use ADAPTER_DIR, add subset arguments and a distinct spawn-failure summary in wire-harness, then publish a release and bump the LyraCore pin.",
-      "blockers": [
-        "The change must land and be released in LyraCoreProject/wire-harness before the core pin can move.",
-        "A maintainer must publish or approve the new harness release."
-      ],
+      "next_action": "Fix all scenario paths in wire-harness, prove dispatch from distinct roots and startup-failure accounting offline, then review a PR and update the released core pin.",
+      "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/105",
         "https://github.com/LyraCoreProject/wire-harness/blob/219f8cd1670f4b783892388f110d233722892bb3/adapters/lyracore/wire-suite.sh",
@@ -816,7 +812,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/105",
       "updatedAt": "2026-08-11T08:20:54Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-6 Astra, Codex"
     },
     {
       "number": 104,
@@ -1017,7 +1013,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "The exact outlier remains in current code. teleport_player drops only game_entity_motion_pending, then deletes game_world_entity in the cross-map branch. Other teardown paths delete the public motion row.",
-      "next_action": "Coordinating review and all CI checks passed. CodeRabbit is rate-limited; request its review after the window reopens at about 07:18 UTC.",
+      "next_action": "Complete the current-head review audit of PR #438, fix valid findings, and check CI. Preserve any remaining live-client acceptance.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/80",
@@ -1030,7 +1026,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/80",
       "updatedAt": "2026-08-11T08:19:03Z",
       "github_state": "open",
-      "owner": "GPT-5.6 Sol, teleport agent"
+      "owner": "GPT-5.6 Sol, PR completion agent"
     },
     {
       "number": 79,
@@ -1089,15 +1085,17 @@
     },
     {
       "number": 77,
-      "summary": "The reported per-Character AOI query cost and roughly 525-seat result describe the retired connection model, while its follow-up concerns are tracked by narrower capacity issues.",
+      "summary": "The old connection model is retired; the stated capacity target is unmeasured",
       "importance": 4,
       "gain": 5,
       "effort": 1,
       "confidence": "high",
-      "disposition": "superseded",
-      "rationale": "The Gateway now uses shared per-Shard Coordinators, an in-memory viewer index, call pipes, and batched movement. Issue 88 records 1,735 seats after batching, contradicting the original ceiling. The remaining blocking-thread cap is documented and bounded under issue 76's work.",
-      "next_action": "Close this broad diagnosis as superseded by issues 76, 82, 86, and 88. Keep future capacity work tied to fresh acceptance runs rather than its old numbers.",
-      "blockers": [],
+      "disposition": "verify",
+      "rationale": "Shared Coordinator connections and movement batching change the reported bottlenecks. The issue still requires a comparable run beyond roughly 525 seated Characters and a movement-cost breakdown. Code changes alone cannot satisfy that result.",
+      "next_action": "Use #59 to record the current seated capacity and movement cost on comparable hardware. Update or close this parent from that measured result.",
+      "blockers": [
+        "Fresh current-revision capacity evidence from #59."
+      ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/77",
         "https://github.com/LyraCoreProject/LyraCore/issues/81",
@@ -1121,9 +1119,9 @@
       "gain": 4,
       "effort": 1,
       "confidence": "high",
-      "disposition": "superseded",
+      "disposition": "done",
       "rationale": "Current code and PR 410 go beyond the original acceptance criteria by sharing a non-waiting capacity across both listeners. The title's old 477 and 535 observations remain historical evidence, not an open implementation request.",
-      "next_action": "Close the issue against the current configuration, startup log, architecture documentation, and PR 410 admission bound. Track new capacity failures from fresh measurements in narrower issues.",
+      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/76",
@@ -1137,7 +1135,7 @@
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/76",
       "updatedAt": "2026-08-11T08:18:45Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -1199,10 +1197,12 @@
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "decision",
       "rationale": "The row contains is_completion, is_interrupted, delay_ms, and is_proc_log alongside ordinary START and GO fields. The Gateway decodes them in ordered branches, while comments state which fields must be the only active signal. Typed signal constructors reduced literal duplication but do not enforce mutual exclusion. An additive kind would make the union explicit, but schema publication and generated bindings make this more than a local refactor, and the unused is_completion field needs a compatibility choice.",
-      "next_action": "Approve an additive event-kind contract and is_completion policy, then stamp every constructor, regenerate Gateway bindings, switch decoding to the kind, and publish all fixture databases before removing reliance on the old fields.",
-      "blockers": [],
+      "next_action": "Define an additive event-kind contract and compatibility for old rows, then implement constructor stamping and Gateway decoding. Schema changes need human review before shipping.",
+      "blockers": [
+        "Define old-row decoding and the is_completion compatibility policy."
+      ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/72. The issue inventories five logical signals and calls for an additive discriminator.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/spell/tables.rs#L329-L450. SpellCastEvent carries the boolean and zero-value conventions in one subscribed row.",
@@ -1249,9 +1249,9 @@
       "gain": 5,
       "effort": 1,
       "confidence": "high",
-      "disposition": "superseded",
+      "disposition": "done",
       "rationale": "The issue's product goal, showing Sharding out of the box, is shipped in an evolved form. dev up publishes Eastern Kingdoms, Kalimdor, an Instance Pool, and Realm-core, so contributors exercise both continental and instance routing. The same docs explicitly record removal of the second Elwynn database and walkable Northshire seam. Keeping the exact original issue open would reverse a later Operator decision.",
-      "next_action": "Close as shipped in revised form: retain the four-database fixture and cite the documented retirement of the Northshire region seam.",
+      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/70. The requested outcome is a sharded default fixture with a region seam and continent split.",
@@ -1266,7 +1266,7 @@
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/70",
       "updatedAt": "2026-08-11T08:22:48Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -1434,9 +1434,9 @@
       "gain": 4,
       "effort": 3,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "The current Gateway still promotes a staging roll on Realm-core and only then clears the World Shard copy. Both periodic and synchronous promotion paths can run in different Gateway processes. Realm-core's game_loot_roll has only an auto-increment primary key and insert_roll_rows always inserts a new roll and vote set. Module reducers serialize calls, so an idempotent Realm-core check or a compatible uniqueness key can close the race at its authoritative side.",
-      "next_action": "A private concurrent START test reproduced two rolls and now passes with one complete vote set. Finish validation and review. Delayed replay after a resolved roll is deleted remains a separate lifecycle gap.",
+      "next_action": "Complete the current-head review audit of PR #439, fix valid findings, and check CI. Preserve any remaining live-client acceptance.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/63. The issue gives the two-Gateway race and requires exactly one durable roll and vote set.",
@@ -1444,11 +1444,13 @@
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/loot/rolls.rs#L45-L78. game_loot_roll has no unique corpse_guid and slot key.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/loot/rolls.rs#L326-L355. insert_roll_rows unconditionally inserts a new roll and a new vote row per recipient."
       ],
-      "related_prs": [],
+      "related_prs": [
+        439
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/63",
       "updatedAt": "2026-08-11T08:17:48Z",
       "github_state": "open",
-      "owner": "GPT-6 Astra, loot-roll agent"
+      "owner": "GPT-5.6 Sol, PR completion agent"
     },
     {
       "number": 61,
@@ -1532,14 +1534,14 @@
     },
     {
       "number": 58,
-      "summary": "The curl-to-shell local bootstrap is already present as install.sh and is the documented first-run path.",
+      "summary": "The source installer shipped; the requested binary installer did not",
       "importance": 3,
       "gain": 4,
       "effort": 1,
       "confidence": "high",
-      "disposition": "superseded",
-      "rationale": "The repository root contains a POSIX installer with the exact raw-GitHub curl command. It checks prerequisites, offers user-local tool installs, clones the repository, installs the checkout-resolving CLI launcher, and points the user to lyracore dev up. README and quickstart both lead with it. The implementation evolved from fetching a Gateway binary to a source-first, pinned-CLI checkout, but it satisfies the bootstrap outcome.",
-      "next_action": "Close as shipped under the current source-first installer; optionally record one clean Linux and one clean macOS smoke before closure.",
+      "disposition": "decision",
+      "rationale": "install.sh clones the source and installs a pinned CLI launcher. The original issue instead requires both CLI and Gateway binaries in the installation folder. Treating the source-first flow as full completion would hide that difference.",
+      "next_action": "Decide whether the supported source installation replaces this binary-distribution request. If binary distribution remains wanted, define supported targets and release artifacts before implementation.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/58. The requested outcome is a curl bootstrap into a working local LyraCore checkout.",
@@ -1560,9 +1562,9 @@
       "gain": 1,
       "effort": 3,
       "confidence": "high",
-      "disposition": "superseded",
+      "disposition": "done",
       "rationale": "Abrupt range-leave presentation and repeated crossings were properties of the removed Northshire-to-Elwynn region handoff. Current fixture Shard crossings are escrowed continent or instance transfers, not an overlapping walkable view merge. Keeping this issue open implies an active feature that the current topology deliberately removed.",
-      "next_action": "Close with the region tier retirement; restore or rewrite the issue only if a walkable region seam returns.",
+      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/56. The issue is scoped to range-leave behavior and repeated crossings at a walkable seam.",
@@ -1572,7 +1574,7 @@
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/56",
       "updatedAt": "2026-08-11T08:17:17Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -1610,17 +1612,16 @@
       "effort": 5,
       "confidence": "high",
       "disposition": "human",
-      "rationale": "Recent work closed two unauthenticated denial-of-service paths, and an open PR adds proof limits and Session expiry. Those changes cover part of the security section, but the issue also requires a named host, TLS and network policy, durable backup and restore, monitoring, restart practice, and a real Internet client drill. This is an Operator project rather than one source change.",
+      "rationale": "Pre-auth limits and Session Expiry shipped in merged PR #416. A public demo Realm still needs a named host, backup and restore procedures, operational ownership and an approved deployment.",
       "next_action": "Split the remaining work into a reviewed public-host runbook and reversible automation, then have an Operator name the host and approve the first deployment and restore drill.",
       "blockers": [
         "No named public host or deployment target is authorized.",
-        "Backup and restore behavior has not been demonstrated.",
-        "PR #416 is still under review."
+        "Backup and restore behavior has not been demonstrated."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/53. The issue spans host hardening, deployment, backups, monitoring, and real-client operation.",
         "https://github.com/LyraCoreProject/LyraCore/pull/410. Merged pre-auth deadlines, bounded blocking capacity, and fixed-field world authentication decoding.",
-        "https://github.com/LyraCoreProject/LyraCore/pull/416. The open PR caps proof attempts and expires Session keys.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/416. The merged PR caps proof attempts and expires Session keys.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/deploy/systemd/spacetimedb-standalone.service. The repository contains a standalone SpacetimeDB service unit, but that is only one part of the requested operated realm."
       ],
       "related_prs": [
@@ -1639,9 +1640,9 @@
       "gain": 4,
       "effort": 1,
       "confidence": "high",
-      "disposition": "superseded",
+      "disposition": "done",
       "rationale": "The issue targets ensure_away and fold_home_shard, neither of which exists. The Gateway now keeps shared Shard connections and selects visible peers through WorldView. ViewerGates carries the viewer's ghost state, and peer creation consults ghost and stealth state before sending CREATE. A later merged fix also restores a peer's aura state when stealth ends.",
-      "next_action": "Close the issue as superseded by the shared connection model and the current visibility gates; retain the existing WorldView coverage.",
+      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/51. The requested changes name the removed ensure_away and away-feed design.",
@@ -1655,7 +1656,7 @@
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/51",
       "updatedAt": "2026-08-11T08:22:18Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -1665,7 +1666,7 @@
       "gain": 4,
       "effort": 2,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "The source scanner still recognizes only character_guid, player_guid, and owner_guid. Existing manual cleanup for aura, melee, threat, and combo state shows that unit-keyed tables remain a real transfer blind spot. This is a localized Architecture Test change that prevents future cross-database state loss without changing runtime behavior.",
       "next_action": "Extend character_owned_tripwire to inventory unit-guid columns and require each discovered table to have character_owned markers or an explicit exclusion with a reason; add a scanner fixture that fails on an unclassified target_guid table.",
       "blockers": [],
@@ -1679,7 +1680,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/50",
       "updatedAt": "2026-08-11T08:16:50Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-5.6 Sol, ownership check agent"
     },
     {
       "number": 49,
@@ -1688,9 +1689,9 @@
       "gain": 1,
       "effort": 5,
       "confidence": "high",
-      "disposition": "superseded",
+      "disposition": "done",
       "rationale": "The fixture and production topology no longer activate region assignments. Current documentation explicitly retires the walkable region seam and keeps continental and instance routing. Building the requested editor now would put a large UI around inert topology data. Shard load telemetry can support a smaller future operations surface after #73 selects one.",
-      "next_action": "Close this issue as retired with the region tier; file a smaller load-telemetry issue only after #73 chooses the CLI or remote console surface.",
+      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
       "blockers": [
         "The region tier was retired.",
         "Issue #73 has not selected an operations surface."
@@ -1704,7 +1705,7 @@
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/49",
       "updatedAt": "2026-08-11T08:22:15Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -1714,9 +1715,9 @@
       "gain": 1,
       "effort": 1,
       "confidence": "high",
-      "disposition": "superseded",
+      "disposition": "done",
       "rationale": "The repository removed sub-map regions and mid-walk warm handoff. All recorded angle tests also passed before that removal, so further work on the old hysteresis design would target code that no longer exists.",
-      "next_action": "Close the issue with links to the retired region-sharding design and current architecture.",
+      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/48",
@@ -1726,7 +1727,7 @@
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/48",
       "updatedAt": "2026-08-11T08:16:42Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -1735,10 +1736,10 @@
       "importance": 4,
       "gain": 4,
       "effort": 1,
-      "confidence": "high",
+      "confidence": "medium",
       "disposition": "verify",
-      "rationale": "PR #384 implements the missing cleanup while preserving Transfer safety. The workaround named in the issue is no longer present, so this open issue appears stale and needs a focused regression check before closure.",
-      "next_action": "Run the existing party cleanup and Transfer tests against main, then close the issue if both pass.",
+      "rationale": "The Character disappearance Relay exists, but its current Architecture Tests check call names rather than proving deletion and Transfer outcomes. The generic read signature can fail, although the production cache read currently returns Ok. A source scan alone is insufficient closure evidence.",
+      "next_action": "Verify the actual Character disappearance callback and its read-failure behavior before closure. Existing tests only scan its source; add behavior coverage for deletion and Transfer if needed.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/46",
@@ -1760,9 +1761,9 @@
       "gain": 2,
       "effort": 1,
       "confidence": "high",
-      "disposition": "superseded",
+      "disposition": "done",
       "rationale": "PR #421 removed the fan-out pattern that motivated the table-collapse decision. Its 2,000-Character benchmark reduced queued jobs from 4,000,000 to 336,124 in the distributed case, so the proposed comparison would measure an obsolete architecture.",
-      "next_action": "Close the issue as superseded by PR #421 and retain future performance work under a benchmark that exercises the current viewer-audience path.",
+      "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/45",
@@ -1774,7 +1775,7 @@
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/45",
       "updatedAt": "2026-08-11T08:16:28Z",
-      "github_state": "open",
+      "github_state": "closed",
       "owner": "Codex"
     },
     {
@@ -1972,7 +1973,7 @@
       "confidence": "high",
       "disposition": "decision",
       "rationale": "PR #397 closed the package API and lint slice, and the cross-repository CLI workflow is established. The unresolved Server manifest is a product and deployment design choice, while issue #58 and fresh-machine verification are separate executable slices.",
-      "next_action": "Decide the minimum Server manifest contract, then delegate issue #58 and a separate fresh-machine Gate in the lyracore-cli repository before returning here for the pin bump.",
+      "next_action": "Decide the minimum deployment manifest and binary-distribution contract. #58 has a source installer but its requested binary distribution is unresolved.",
       "blockers": [
         "A decision on the Server manifest contract",
         "Open issue #58 for the installer",
@@ -2290,6 +2291,31 @@
       "updatedAt": "2026-08-24T07:48:15Z",
       "github_state": "open",
       "owner": "Codex"
+    },
+    {
+      "number": 441,
+      "summary": "A delayed START can recreate a resolved Loot Roll",
+      "importance": 5,
+      "gain": 4,
+      "effort": 4,
+      "confidence": "high",
+      "disposition": "decision",
+      "rationale": "PR #439 deduplicates active rolls. Resolution deletes that identity. A durable generation must distinguish retries from a later valid kill before changing storage.",
+      "next_action": "Design a stable promotion identity and cleanup rule. Prove old START replay is refused while a later roll on the same corpse and slot succeeds.",
+      "blockers": [
+        "PR #439 must settle first; any schema change needs human review before shipping."
+      ],
+      "evidence": [
+        "https://github.com/LyraCoreProject/LyraCore/issues/441",
+        "https://github.com/LyraCoreProject/LyraCore/pull/439"
+      ],
+      "related_prs": [
+        439
+      ],
+      "url": "https://github.com/LyraCoreProject/LyraCore/issues/441",
+      "updatedAt": "2026-09-05T15:37:16Z",
+      "github_state": "open",
+      "owner": "Codex"
     }
   ],
   "pull_requests": [
@@ -2298,27 +2324,27 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/426",
       "title": "ci(module): run the durable test suite and drop its fixed sleeps",
       "owner": "Existing PR review owner; Codex monitors",
-      "status": "Durable CI failed on current head",
-      "next_action": "Existing owner fixes the durable CI failure and refreshes review.",
-      "head": "3677964044969f8012e05f6963a312f9ec7d222f"
+      "status": "Merged",
+      "next_action": "Complete. Reassess linked issues for any remaining acceptance.",
+      "head": "87664f92a802d8100d952d38b94490ea04973ff5"
     },
     {
       "number": 419,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/419",
       "title": "ci: make fmt and clippy blocking, and clear the workspace to match",
       "owner": "Existing PR review owner; Codex monitors",
-      "status": "Test failed on current head",
-      "next_action": "Existing owner fixes the failing test and rebases after the other changes.",
-      "head": "bdb9d00843a72eb163baeff4847182710dbde22d"
+      "status": "Merged",
+      "next_action": "Complete. Reassess linked issues for any remaining acceptance.",
+      "head": "b24a5c2f06c141e31cd6fb7c5d2e2d2072fd19dc"
     },
     {
       "number": 416,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/416",
       "title": "fix(logon): cap proof attempts per peer and expire session keys",
       "owner": "Existing PR review owner; Codex monitors",
-      "status": "Current CI passed; security and human review remain",
-      "next_action": "Existing owner handles security review. The new schema requires human review before shipping.",
-      "head": "27b8cb8af8232711b77b6eddb338b7c95c0631a0"
+      "status": "Merged",
+      "next_action": "Complete. Reassess linked issues for any remaining acceptance.",
+      "head": "39e454c488066d4711936942187e09363caf8b07"
     },
     {
       "number": 415,
@@ -2326,15 +2352,16 @@
       "title": "refactor(auction): let the Module own the auctioneer interaction Gate",
       "owner": "Existing PR review owner; Codex monitors",
       "status": "Merged",
-      "next_action": "Complete; preserve the reviewed result."
+      "next_action": "Complete. Reassess linked issues for any remaining acceptance.",
+      "head": "f0aed9b2ba3cf2380996b75dd369b36555cad4fb"
     },
     {
       "number": 434,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/434",
       "title": "Protect fixture creatures from cast Claims",
       "owner": "GPT-5.6 Sol, Package Delta agent",
-      "status": "Merged; all CI checks passed",
-      "next_action": "Complete. Coordinating review passed with no unresolved findings.",
+      "status": "Merged",
+      "next_action": "Complete. Reassess linked issues for any remaining acceptance.",
       "head": "1b120cc85e741188bee221c2bab973f2f555f3da",
       "merge_commit": "2365075fdb0b110ad4bd56668f8c629fdfb5d14a"
     },
@@ -2343,8 +2370,8 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/435",
       "title": "Keep periodic deaths from rolling back the aura tick",
       "owner": "GPT-6, Codex",
-      "status": "Merged; all CI checks passed",
-      "next_action": "Complete. Coordinating review passed with no unresolved findings.",
+      "status": "Merged",
+      "next_action": "Complete. Reassess linked issues for any remaining acceptance.",
       "head": "7ef874dbf22cc5944433f2834b98af8eef531361",
       "merge_commit": "8f3a8a78b69f701bb078cf54920722785d27c9af"
     },
@@ -2353,27 +2380,207 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/436",
       "title": "Maintain the issue order and delivery report",
       "owner": "GPT-6, Codex",
-      "status": "Addressing CodeRabbit publisher finding",
-      "next_action": "Pin the local publisher and lock its dependencies, update the report, then finish review and CI."
+      "status": "Merged",
+      "next_action": "Complete. Reassess linked issues for any remaining acceptance.",
+      "head": "7a63f5dd86eb2336b64df5de28ed97f3249b9202"
     },
     {
       "number": 437,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/437",
       "title": "Measure motion delivery at each Shard callback",
       "owner": "GPT-6 Astra, motion diagnosis agent",
-      "status": "Merged; CI and review passed",
-      "next_action": "Diagnostic fix complete. Issue #424 remains open until the reported freeze is reproduced and resolved.",
+      "status": "Merged",
+      "next_action": "Complete. Reassess linked issues for any remaining acceptance.",
       "head": "4ec3ecd47b4e43854d48e696c1e54521e1160f24",
       "merge_commit": "b1c0f9400a31a2522b9385f6870a9eb8f8f92c76"
     },
     {
       "number": 438,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/438",
-      "title": "Remove public motion after cross-map teleport",
-      "owner": "GPT-5.6 Sol, teleport agent",
-      "status": "CI and coordinating review passed; CodeRabbit rate-limited",
-      "next_action": "Request CodeRabbit review after 07:18 UTC and resolve any findings before merge.",
-      "head": "97ea5b2349dfb5e836b8bd87ca0c8d88e8e5d74e"
+      "title": "fix(world): remove motion after cross-map teleport",
+      "owner": "GPT-5.6 Sol, PR completion agent",
+      "status": "Open; fresh review audit assigned",
+      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
+      "head": "97ea5b2349dfb5e836b8bd87ca0c8d88e8e5d74e",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "number": 440,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/440",
+      "title": "fix(gameobject): require opener for locked goobers",
+      "owner": "GPT-5.6 Sol, PR completion agent",
+      "status": "Open; fresh review audit assigned",
+      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
+      "head": "c668015c66bfae3e9928611f2a9e118850636914",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "number": 439,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/439",
+      "title": "fix(loot): keep concurrent promotions on one live roll",
+      "owner": "GPT-5.6 Sol, PR completion agent",
+      "status": "Open; fresh review audit assigned",
+      "next_action": "Read all reviews and threads, address valid findings, and verify current-head CI. Merge policy pending.",
+      "head": "7b11e682ee0581c47432d0d23539105dbbd69f5f",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "number": 56,
+      "url": "https://github.com/LyraCoreProject/lyracore-cli/pull/56",
+      "title": "fix(packages): count Package Deltas in trust review",
+      "owner": "GPT-5.6 Sol, CLI completion agent",
+      "status": "Open in lyracore-cli; review audit assigned",
+      "next_action": "Resolve review findings, verify CLI tests and MSRV, then publish the core pin update.",
+      "head": "9830550c14af4049941a1931e09e2795d1cfe3ee",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "number": 444,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/444",
+      "title": "docs(triage): refresh issue order and resume PR ownership",
+      "owner": "GPT-6 Astra, Codex",
+      "status": "Addressed three CodeRabbit findings; durable CI rerun underway",
+      "next_action": "Refresh stale evidence and recorded heads, finish the failed-job retry, and verify the revised commit.",
+      "head": "a8d3dabd33d3766d0daf1a42ff30df66cae56047",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "number": 6,
+      "url": "https://github.com/LyraCoreProject/wire-harness/pull/6",
+      "title": "fix(suite): run scenarios from the adapter directory",
+      "owner": "GPT-6 Astra, Codex",
+      "status": "PR open; CI running",
+      "next_action": "Complete independent review and CI, then publish a release tag and core pin.",
+      "head": "9da18425cf099bcd66d1f193f7fabac44f174e9e",
+      "checked_at": "2026-09-07 13:04 UTC",
+      "checks": [
+        {
+          "name": "test (ubuntu-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test (macos-latest)",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "coverage",
+          "result": "SUCCESS"
+        }
+      ]
     }
   ],
   "history": [
@@ -2396,8 +2603,22 @@
     {
       "at": "2026-09-05 07:03 UTC",
       "text": "Merged #435 aura rollback, #434 fixture cast protection and #437 motion diagnostics after review and green CI. Kept #424 open because the long-running freeze is unverified. Assigned #63, #367 and #398. CodeRabbit found the report publisher was unpinned; replacing it with a locked local dependency."
+    },
+    {
+      "at": "2026-09-07 12:53 UTC",
+      "text": "Resumed report ownership. Refreshed 86 open issues, recorded new lifecycle issue #441, and found four existing PRs to complete. Assigned isolated review, ownership-check and CLI work."
+    },
+    {
+      "at": "2026-09-07 12:55 UTC",
+      "text": "Current main passed all workflows. Closed shipped CI work and retired region work with linked evidence. Corrected #58 and #77: the binary installer and measured capacity targets are not proved by the existing source changes."
+    },
+    {
+      "at": "2026-09-07 13:04 UTC",
+      "text": "Opened wire-harness PR #6 for #105 after a failing path repro and 55 passing Rust tests. CodeRabbit found three stale report records; corrected CI evidence, the merged security dependency and missing PR heads."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
-  "report_url": "https://1u1gh8ximdga.postplan.dev"
+  "report_url": "https://1u1gh8ximdga.postplan.dev",
+  "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
+  "audit_note": "Fetched every open issue with comments. All retained open issue timestamps match the previous assessment; #441 is new. Reviewed intervening main changes and corrected stale implementation, closure and acceptance claims."
 }
