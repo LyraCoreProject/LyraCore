@@ -2681,7 +2681,7 @@ impl Coordinator {
                         "World Shard {db} has no healthy Coordinator subscription"
                     ));
                 }
-                Ok((db, Coordinator(inner, self.1.clone())))
+                Ok((db, Coordinator(inner, self.1.clone(), self.2.clone())))
             })
             .collect()
     }

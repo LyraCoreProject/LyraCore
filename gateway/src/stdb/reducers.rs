@@ -2669,7 +2669,7 @@ impl Coordinator {
             "realm_group_op",
             realm_group_op_then(
                 lyracore_shared::group::realm_op::LEAVE,
-                character_guid,
+                self.session_actor(character_guid),
                 0,
                 0,
                 0
