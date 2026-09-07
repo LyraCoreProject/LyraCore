@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-09-07 15:31 UTC",
+  "updated_at": "2026-09-07 15:33 UTC",
   "base_revision": "32aa004e0d2fe0921033bea77e3a85796e277dfd",
   "status_note": "69 open issues assessed; 20 closed issues retained for history. The prior PR queue is merged. Agents have resumed the Warlock quests, Character deletion cleanup and Random Property Tracer.",
   "monitoring_note": "Monitoring is active during this work session. CodeRabbit rate-limit notices do not satisfy review. After the window reopens, re-trigger review and wait for its result before merging. The report preserves next actions if the session stops; no unattended scheduler is installed.",
@@ -3226,7 +3226,91 @@
       "next_action": "Resolve CI and review findings, then obtain human schema review. Keep client acceptance open.",
       "head": "8cbd16dddea1ca1a44a4f7ddd03a2aff1c885065",
       "github_state": "OPEN",
-      "checked_at": "2026-09-07 15:26 UTC"
+      "checked_at": "2026-09-07 15:33 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "PENDING",
+          "source": "Full review requested; awaiting a completed review on this head."
+        }
+      ],
+      "review_state": {
+        "CodeRabbit": "PENDING",
+        "coordinating": "IN_PROGRESS",
+        "human_schema": "PENDING"
+      },
+      "review_findings": []
+    },
+    {
+      "number": 457,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/457",
+      "title": "test(module): isolate concurrent fixture Wasm artifacts",
+      "owner": "Prior orchestrator, private-Wasm correction",
+      "status": "CI and independent review in progress",
+      "next_action": "Resolve coordinating and CodeRabbit findings, then recheck current CI before merge.",
+      "head": "91c5745bed7a82536449b4670889a59b7e1020f4",
+      "checked_at": "2026-09-07 15:33 UTC",
+      "github_state": "OPEN",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "PENDING",
+          "source": "Full review requested; awaiting a completed review on this head."
+        }
+      ],
+      "review_state": {
+        "CodeRabbit": "PENDING",
+        "coordinating": "IN_PROGRESS"
+      },
+      "review_findings": []
     }
   ],
   "history": [
