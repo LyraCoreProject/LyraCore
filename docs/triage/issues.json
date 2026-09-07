@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-09-07 18:56 UTC",
+  "updated_at": "2026-09-07 19:08 UTC",
   "base_revision": "88c93aeb9bfd1a34ca7f3d5cf2417406184bc2c7",
-  "status_note": "All 70 open issues have an assessment; 20 closed issues remain for history. Approved schemas #455 and #462 are merged. Binding fixture repair #468 is merged. Loot replay and Character cleanup are rebased and completing CI. Spell targeting and item regeneration review fixes are in progress. Account ownership passes its first two-Gateway regression; socket and stale-request checks continue.",
+  "status_note": "All 70 open issues have an assessment; 20 closed issues remain for history. Approved schemas #455 and #462 and fixture repair #468 are merged. Loot replay and Character cleanup pass all code checks and await full review. The Spell target correction passes its source and gameplay checks. Item regeneration and Account ownership continue; Headless Client argument compatibility is open as wire-harness #11.",
   "monitoring_note": "Codex monitors PR checks and review comments during this active session. Implementers own fixes after publication; Codex owns final review and merge. Actual CodeRabbit review is required, including after rate limits. No unattended scheduler is installed; this report preserves the next actions between sessions.",
   "focus": [
     "Complete current-head CI and review for Character cleanup #463, then merge.",
@@ -1510,7 +1510,8 @@
         "Local T1 and T2 Tickets establish the two-Gateway ownership path and integration checks. Design review requires tokens on queued movement, gameplay, cleanup and Transfer requests. Every configured Shard must acknowledge the new generation before admission; an unavailable Shard therefore prevents admission.",
         "A disposable Standalone with two independent Coordinators reproduced the current defect: both logins succeed, then delayed and repeated logout from the older Gateway deletes the newer Character entity. The test failed with zero live entities where one was required. Durable ownership implementation is in progress.",
         "The first durable replacement test now passes: a competing live claim is refused, an expired claim is replaced, and delayed old cleanup and a stale combat request leave the winning Character intact. The agent is integrating approved main and proving socket-loop, queued movement and Transfer cases.",
-        "The encrypted World Session case refused a competing live claim and preserved the successor after expiry and old cleanup. Self-review found that an ownership-loss message could wait behind a blocked writer; the agent is replacing it with direct shutdown through an owned socket clone and testing that case before publication."
+        "The encrypted World Session case refused a competing live claim and preserved the successor after expiry and old cleanup. Self-review found that an ownership-loss message could wait behind a blocked writer; the agent is replacing it with direct shutdown through an owned socket clone and testing that case before publication.",
+        "Cross-repository audit found three Headless Client shell calls still using bare guids. Compatible argument encoding and refusal-safe party cleanup are published in wire-harness #11 with four passing offline shell checks. The core implementation will include its reviewed release pin."
       ],
       "related_prs": [],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/61",
@@ -2110,7 +2111,7 @@
       "effort": 5,
       "confidence": "high",
       "disposition": "review",
-      "rationale": "The Random Property Tracer is complete in tested draft #462. It imports and preserves the selected property through item movement and the client packets, and applies the existing EquipStat families. The remaining Stat Kinds now have a separate implementation owner.",
+      "rationale": "The Random Property Tracer merged in approved #462. It imports and preserves the selected property through item movement and client packets, and applies the existing EquipStat families. PR #466 adds the remaining Stat Kinds and is completing review corrections.",
       "next_action": "Finish checks for MP5 during recent casting, combat HP5, small regeneration rates and armor counted once; rebase and complete CI and review.",
       "blockers": [
         "A real-client tooltip check and approved Realm acceptance after the remaining Stat Kind work."
@@ -2422,7 +2423,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "Real-data checks found the general importer reads an equipment mask as an effect and shifts valid effects by one slot. This affects core spell behavior. The Random Property Tracer has a narrow corrected reader that can guide the broader repair.",
-      "next_action": "Finish TARGET_NONE fallback, compare actual imported effects, rerun affected checks and rebase onto merged #468.",
+      "next_action": "Complete current-head CI and actual review, then merge and close #460 with the required reimport steps recorded.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/460",
@@ -2434,7 +2435,8 @@
         "The unstacked branch preserves Binding quest required-focus column 15 and hostile summon effects. It passes 357 importer tests and the actual-source audit. A durable Gouge fixture used a spell with a random miss chance; the revised fixture verifies guaranteed shared-pipeline damage with scheduled aura expiry disabled. Final checks are running.",
         "Published unstacked #465 at 32ac5c8. All final local importer checks and three imported gameplay cases pass. CI found a main integration gap: Binding quest fixture INSERT has 58 fields after the approved item template grew to 59. Codex owns adding its default-zero property column and rerunning the durable case.",
         "The Binding quest durable case passed after the fixture column correction. Published that one-line main repair separately as #468. CodeRabbit found that source TARGET_NONE remains conflated with caster; an implementer is checking actual source effects and the smallest correct fallback before changes.",
-        "The Binding fixture repair merged as #468. The implementer now owns the source target correction. Source TARGET_NONE must use compatible explicit target flags or its effect default, rather than caster. Actual source examples include Bear Form secondary effects and Slime."
+        "The Binding fixture repair merged as #468. The implementer now owns the source target correction. Source TARGET_NONE must use compatible explicit target flags or its effect default, rather than caster. Actual source examples include Bear Form secondary effects and Slime.",
+        "Head 74bfa36 is based on merged #468. All 358 importer tests, actual-source TARGET_NONE checks, Binding source audit and three imported gameplay durable cases pass. Strict importer lint and formatting pass. The target correction changes 4,589 effect targets with no other field or key changes; unsupported scripted effects retain the runtime fallback."
       ],
       "related_prs": [
         465
@@ -3561,11 +3563,11 @@
       "head": "aea68d8d08aee09f1a44dcd40333a0de230a7cf1",
       "github_state": "OPEN",
       "owner": "Codex, coordinating PR review",
-      "checked_at": "2026-09-07 18:56 UTC",
+      "checked_at": "2026-09-07 19:08 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -3589,10 +3591,11 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "SUCCESS"
+          "result": "PENDING",
+          "platform_result": "PENDING"
         }
       ],
-      "status": "Draft; integrated and locally checked; CI and current-head review pending",
+      "status": "Draft; all code checks pass; full current-head review running",
       "next_action": "Complete current-head checks and actual CodeRabbit review, then request human schema review.",
       "review_state": {
         "CodeRabbit": "PENDING",
@@ -3659,11 +3662,11 @@
       "github_state": "OPEN",
       "owner": "GPT-5.6 Sol, high effort, Character cleanup implementer",
       "head": "08cb0b2fd1a9cdecef77ca41800880e44a7cd9ee",
-      "checked_at": "2026-09-07 18:56 UTC",
+      "checked_at": "2026-09-07 19:08 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -3687,7 +3690,8 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "SUCCESS"
+          "result": "PENDING",
+          "platform_result": "PENDING"
         }
       ],
       "review_findings": [],
@@ -3695,7 +3699,7 @@
         "CodeRabbit": "PENDING",
         "coordinating": "COMPLETE"
       },
-      "status": "Review fixes verified; rebased onto shared fixture repair; CI running",
+      "status": "All code checks pass; full current-head review running",
       "next_action": "Complete current-head checks and actual CodeRabbit review, then merge. Keep suite and client acceptance on #46.",
       "review_note": "The three review findings are addressed and actual CodeRabbit review of d6cfa37 passed. Head 08cb0b2 adds merged Binding fixture #468 through rebase. Its Gateway and Module source trees match the checked implementation. Current-head durable CI and actual review remain pending."
     },
@@ -3754,12 +3758,12 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/465",
       "owner": "GPT-5.6 Sol, high effort, Spell target fix; Codex final review",
       "github_state": "OPEN",
-      "head": "49cf8c664d35ee818ec9b66481a1d8e2d4aabfe0",
-      "checked_at": "2026-09-07 18:36 UTC",
+      "head": "74bfa369f4cd35b4575dc4bd2e56e9df79416e82",
+      "checked_at": "2026-09-07 19:08 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "FAILURE"
+          "result": "IN_PROGRESS"
         },
         {
           "name": "build",
@@ -3783,19 +3787,18 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "PENDING"
+          "result": "PENDING",
+          "platform_result": "SUCCESS"
         }
       ],
-      "status": "TARGET_NONE fallback correction in progress",
-      "next_action": "Finish TARGET_NONE fallback, compare actual imported effects, rerun affected checks and rebase onto merged #468.",
-      "review_findings": [
-        "Keep source TARGET_NONE distinct from caster and apply its correct fallback."
-      ],
+      "status": "TARGET_NONE correction verified and published; CI and review running",
+      "next_action": "Complete current-head CI and actual review, then merge and close #460 with the required reimport steps recorded.",
+      "review_findings": [],
       "review_state": {
-        "CodeRabbit": "CHANGES_REQUESTED",
+        "CodeRabbit": "PENDING",
         "coordinating": "COMPLETE"
       },
-      "review_note": "The Binding fixture repair merged as #468. The implementer now owns the source target correction. Source TARGET_NONE must use compatible explicit target flags or its effect default, rather than caster. Actual source examples include Bear Form secondary effects and Slime."
+      "review_note": "Head 74bfa36 is based on merged #468. All 358 importer tests, actual-source TARGET_NONE checks, Binding source audit and three imported gameplay durable cases pass. Strict importer lint and formatting pass. The target correction changes 4,589 effect targets with no other field or key changes; unsupported scripted effects retain the runtime fallback."
     },
     {
       "number": 58,
@@ -3847,18 +3850,20 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/467",
       "title": "docs(triage): record schema merges and integration findings",
       "owner": "Codex",
-      "head": "f9edef2ed4cd3f9c183a1398a37dc559b9f012b6",
+      "head": "96e81217fff3d21d896a37cf451545de98367102",
       "github_state": "OPEN",
       "checked_at": "2026-09-07 18:56 UTC",
       "checks": [],
-      "status": "Snapshot refresh ready for commit and rebase",
-      "next_action": "Publish this refreshed snapshot, integrate #468, then obtain current-head CI and review.",
+      "status": "Review correction ready; durable CI running on preceding snapshot",
+      "next_action": "Commit the review-status correction and complete checks and review on that snapshot.",
       "review_state": {
-        "CodeRabbit": "COMPLETE",
+        "CodeRabbit": "CHANGES_REQUESTED",
         "coordinating": "COMPLETE"
       },
-      "review_findings": [],
-      "review_note": "Actual review passed on f9edef2. Its durable failure was the shared Binding fixture now fixed in main. This report records the newer snapshot before committing and rebasing it."
+      "review_findings": [
+        "Distinguish raw platform success from completed current-head CodeRabbit review."
+      ],
+      "review_note": "The source now records raw CodeRabbit platform results separately. Its effective check remains PENDING until an actual current-head review completes. This corrects the review finding on 96e8121."
     },
     {
       "number": 468,
@@ -3908,6 +3913,24 @@
       "review_note": "All seven checks and actual CodeRabbit review passed before merge. The corrected Binding fixture had also passed its local durable case.",
       "merge_commit": "88c93aeb9bfd1a34ca7f3d5cf2417406184bc2c7",
       "merged_at": "2026-09-07T18:47:57Z"
+    },
+    {
+      "number": 11,
+      "url": "https://github.com/LyraCoreProject/wire-harness/pull/11",
+      "title": "fix(lyracore): encode Operator cleanup actors for durable ownership",
+      "owner": "Codex, Headless Client adapter compatibility",
+      "head": "523aa6d5e72914e36a9d34d4e5f2dabc21469936",
+      "github_state": "OPEN",
+      "checked_at": "2026-09-07 19:08 UTC",
+      "status": "CI and review running",
+      "next_action": "Complete review and CI, merge and release, then include the tested pin in Account ownership #61.",
+      "checks": [],
+      "review_state": {
+        "CodeRabbit": "PENDING",
+        "coordinating": "COMPLETE"
+      },
+      "review_findings": [],
+      "review_note": "All four offline shell checks pass. Three party/Transfer cleanup calls now encode unowned SessionActor for the new schema and retain bare guids for older checkouts. A refused LEAVE stops before party mirror changes. No Realm was accessed."
     }
   ],
   "history": [
@@ -4114,6 +4137,10 @@
     {
       "at": "2026-09-07 18:56 UTC",
       "text": "Merged Binding fixture #468 after all seven checks and actual review passed. Rebased Loot replay #461 and Character cleanup #463 onto it. Item review corrected regeneration and discarded a false armor finding before publication. Account ownership is completing blocked-writer and stale-request coverage."
+    },
+    {
+      "at": "2026-09-07 19:08 UTC",
+      "text": "Loot replay and Character cleanup passed all code checks. Spell target correction 74bfa36 passed actual-source and three gameplay durable cases. Published wire-harness #11 for Account ownership argument compatibility. Report review now separates raw CodeRabbit platform status from actual current-head review completion."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
