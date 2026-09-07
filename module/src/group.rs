@@ -1054,6 +1054,7 @@ pub fn realm_group_op(
 /// decisions, and decisions belong to the authority. An empty `members` is the disband/last-member
 /// case and deletes the group row.
 #[reducer]
+#[allow(clippy::too_many_arguments)] // The roster and initiating Actor are the reducer wire contract.
 pub fn sync_group_mirror(
     ctx: &ReducerContext,
     group_id: u64,

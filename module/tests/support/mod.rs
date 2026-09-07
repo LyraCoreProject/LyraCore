@@ -436,6 +436,13 @@ fn unquote(value: &str) -> String {
         .to_string()
 }
 
+/// An Operator request for a fixture Character without a World Session.
+#[allow(dead_code)]
+pub fn actor(guid: &str) -> String {
+    let guid: u64 = guid.parse().expect("fixture Character guid");
+    format!(r#"{{"guid":{guid},"ownership":null}}"#)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,11 +477,4 @@ mod tests {
         }));
         assert_eq!(calls.get(), 1);
     }
-}
-
-/// An Operator request for a fixture Character without a World Session.
-#[allow(dead_code)]
-pub fn actor(guid: &str) -> String {
-    let guid: u64 = guid.parse().expect("fixture Character guid");
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
