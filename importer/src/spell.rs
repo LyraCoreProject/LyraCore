@@ -2467,15 +2467,24 @@ mod tests {
     #[test]
     #[ignore = "requires LYRACORE_TEST_DBC, SpacetimeDB 2.7.1 and the Wasm toolchain"]
     fn actual_imported_gouge_control_ends_on_damage() {
-        let (shard, _, wolf) = imported_spell_fixture(&[686, 1776]);
+        let (shard, _, wolf) = imported_spell_fixture(&[1776]);
+        shard.assert_sql("DELETE FROM game_aura_schedule");
         shard.assert_call("debug_cast_at", &["1", "1776", &wolf]);
         let control =
             shard.query_rows("SELECT effect_id, eff_p0 FROM game_aura WHERE spell_id = 1776");
         assert_eq!(control.len(), 1);
         assert_eq!(control[0]["effect_id"], "7106");
         assert_eq!(control[0]["eff_p0"], "4");
-        shard.assert_sql("DELETE FROM game_spell_cooldown");
-        shard.assert_call("debug_cast_at", &["1", "686", &wolf]);
+        let health = || {
+            shard.query_rows(&format!(
+                "SELECT health FROM game_world_entity WHERE guid = {wolf}"
+            ))[0]["health"]
+                .parse::<u32>()
+                .unwrap()
+        };
+        let before = health();
+        shard.assert_call("debug_apply_damage", &[&wolf, "10", "1"]);
+        assert_eq!(health(), before - 10);
         assert!(shard
             .query_rows("SELECT id FROM game_aura WHERE spell_id = 1776")
             .is_empty());
