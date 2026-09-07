@@ -656,7 +656,6 @@ pub mod gw_inspect_reducer;
 pub mod gw_join_channel_reducer;
 pub mod gw_learn_talent_reducer;
 pub mod gw_leave_channel_reducer;
-pub mod gw_leave_world_reducer;
 pub mod gw_loot_master_give_reducer;
 pub mod gw_loot_money_reducer;
 pub mod gw_loot_roll_reducer;
@@ -1647,7 +1646,6 @@ pub use gw_inspect_reducer::gw_inspect;
 pub use gw_join_channel_reducer::gw_join_channel;
 pub use gw_learn_talent_reducer::gw_learn_talent;
 pub use gw_leave_channel_reducer::gw_leave_channel;
-pub use gw_leave_world_reducer::gw_leave_world;
 pub use gw_loot_master_give_reducer::gw_loot_master_give;
 pub use gw_loot_money_reducer::gw_loot_money;
 pub use gw_loot_roll_reducer::gw_loot_roll;
@@ -3036,9 +3034,6 @@ pub enum Reducer {
         request_actor: SessionActor,
         channel: String,
     },
-    GwLeaveWorld {
-        request_actor: SessionActor,
-    },
     GwLootMasterGive {
         request_actor: SessionActor,
         corpse_guid: u64,
@@ -3921,7 +3916,6 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwJoinChannel { .. } => "gw_join_channel",
             Reducer::GwLearnTalent { .. } => "gw_learn_talent",
             Reducer::GwLeaveChannel { .. } => "gw_leave_channel",
-            Reducer::GwLeaveWorld { .. } => "gw_leave_world",
             Reducer::GwLootMasterGive { .. } => "gw_loot_master_give",
             Reducer::GwLootMoney { .. } => "gw_loot_money",
             Reducer::GwLootRoll { .. } => "gw_loot_roll",
@@ -5919,11 +5913,6 @@ Reducer::GwIgnoreTrade{
 }             => __sats::bsatn::to_vec(&gw_leave_channel_reducer::GwLeaveChannelArgs {
                 request_actor: request_actor.clone(),
                 channel: channel.clone(),
-}),
-            Reducer::GwLeaveWorld{
-                request_actor,
-}             => __sats::bsatn::to_vec(&gw_leave_world_reducer::GwLeaveWorldArgs {
-                request_actor: request_actor.clone(),
 }),
             Reducer::GwLootMasterGive{
                 request_actor,

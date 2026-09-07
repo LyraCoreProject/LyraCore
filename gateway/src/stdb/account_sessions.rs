@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::bindings::*;
 use super::connection::{call_reducer, Coordinator};
-use crate::world::{Outbound, SessionTx, WorldSessionToken as Token};
+use crate::world::{SessionTx, WorldSessionToken as Token};
 
 pub(crate) struct SessionOwnership {
     token: Token,
@@ -26,15 +26,17 @@ fn wire(token: Token) -> WorldSessionToken {
 }
 
 fn utc_micros() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH)
-        .map(|time| time.as_micros().min(i64::MAX as u128) as i64).unwrap_or(i64::MAX)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|time| time.as_micros().min(i64::MAX as u128) as i64)
+        .unwrap_or(i64::MAX)
 }
 
 impl SessionOwnership {
     fn lose(&self) {
         self.closed.store(true, Ordering::Release);
         if let Some(tx) = self.lost.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            let _ = tx.send(Outbound::Close);
+            tx.close();
         }
     }
 }
@@ -42,7 +44,11 @@ impl SessionOwnership {
 impl Coordinator {
     pub(crate) fn session_actor(&self, guid: u64) -> SessionActor {
         SessionActor {
-            guid: if guid == 0 { self.2.as_ref().map_or(0, |owner| owner.character_guid) } else { guid },
+            guid: if guid == 0 {
+                self.2.as_ref().map_or(0, |owner| owner.character_guid)
+            } else {
+                guid
+            },
             ownership: self.2.as_ref().map(|owner| wire(owner.token)),
         }
     }
@@ -50,52 +56,104 @@ impl Coordinator {
     pub(crate) fn watch_session(&self, tx: SessionTx) {
         if let Some(owner) = &self.2 {
             *owner.lost.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
-            if owner.closed.load(Ordering::Acquire) || owner.deadline.load(Ordering::Acquire) <= utc_micros() {
+            if owner.closed.load(Ordering::Acquire)
+                || owner.deadline.load(Ordering::Acquire) <= utc_micros()
+            {
                 owner.lose();
             }
         }
     }
 
-    fn claim_receipt(&self, token: Option<Token>, account_id: u64, nonce: u128) -> Result<AccountClaim> {
+    fn claim_receipt(
+        &self,
+        token: Option<Token>,
+        account_id: u64,
+        nonce: u128,
+    ) -> Result<AccountClaim> {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            let row = self.0.coord().conn.db.game_account_claim().account_id().find(&account_id);
-            if let Some(row) = row.filter(|row| row.request_nonce == nonce
-                && token.is_none_or(|t| t.generation == row.generation)) {
+            let row = self
+                .0
+                .coord()
+                .conn
+                .db
+                .game_account_claim()
+                .account_id()
+                .find(&account_id);
+            if let Some(row) = row.filter(|row| {
+                row.request_nonce == nonce && token.is_none_or(|t| t.generation == row.generation)
+            }) {
                 if row.closed || row.expires_micros <= utc_micros() {
                     return Err(anyhow!("STALE_WORLD_SESSION"));
                 }
                 return Ok(row);
             }
-            if Instant::now() >= deadline { return Err(anyhow!("Account claim receipt was not visible within 3s")); }
+            if Instant::now() >= deadline {
+                return Err(anyhow!("Account claim receipt was not visible within 3s"));
+            }
             std::thread::sleep(Duration::from_millis(15));
         }
     }
 
     pub fn claim_session(&self, account_id: u64, character_guid: u64) -> Result<Token> {
         let shards = self.configured_world_shards()?;
-        let name = self.0.coord().conn.db.game_account().id().find(&account_id)
-            .ok_or_else(|| anyhow!("no Account {account_id} on {}", self.shard_name()))?.username;
+        let name = self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_account()
+            .id()
+            .find(&account_id)
+            .ok_or_else(|| anyhow!("no Account {account_id} on {}", self.shard_name()))?
+            .username;
         let owns_character = shards.iter().any(|shard| {
-            shard.character_row(character_guid).is_some_and(|character| {
-                shard.0.coord().conn.db.game_account().id().find(&character.account_id)
-                    .is_some_and(|account| account.username == name)
-            })
+            shard
+                .character_row(character_guid)
+                .is_some_and(|character| {
+                    shard
+                        .0
+                        .coord()
+                        .conn
+                        .db
+                        .game_account()
+                        .id()
+                        .find(&character.account_id)
+                        .is_some_and(|account| account.username == name)
+                })
         });
-        if !owns_character { return Err(anyhow!("Character does not belong to Account")); }
+        if !owns_character {
+            return Err(anyhow!("Character does not belong to Account"));
+        }
         let realm = self.realm_core()?;
-        let realm_account = realm.account_by_username(&name)?
+        let realm_account = realm
+            .account_by_username(&name)?
             .ok_or_else(|| anyhow!("no Account {name} on Realm-core"))?;
         let mut bytes = [0u8; 16];
         getrandom::fill(&mut bytes).map_err(|error| anyhow!("Account request nonce: {error}"))?;
         let nonce = u128::from_le_bytes(bytes).max(1);
-        call_reducer!(realm.0.call_pipe().conn.reducers, "claim_account",
-            claim_account_then(realm_account.id, character_guid, nonce))?;
+        call_reducer!(
+            realm.0.call_pipe().conn.reducers,
+            "claim_account",
+            claim_account_then(realm_account.id, character_guid, nonce)
+        )?;
         let receipt = realm.claim_receipt(None, realm_account.id, nonce)?;
-        let token = Token { account_id: receipt.account_id, generation: receipt.generation, request_nonce: nonce };
+        let token = Token {
+            account_id: receipt.account_id,
+            generation: receipt.generation,
+            request_nonce: nonce,
+        };
         for shard in shards {
-            call_reducer!(shard.0.call_pipe().conn.reducers, "fence_account",
-                fence_account_then(wire(token), name.clone(), character_guid, receipt.expires_micros))?;
+            call_reducer!(
+                shard.0.call_pipe().conn.reducers,
+                "fence_account",
+                fence_account_then(
+                    wire(token),
+                    name.clone(),
+                    character_guid,
+                    receipt.expires_micros
+                )
+            )?;
         }
         // No renewal is started for an incomplete admission. Its claim expires so another
         // generation can finish fencing Shards that the interrupted attempt did not reach.
@@ -103,27 +161,42 @@ impl Coordinator {
     }
 
     pub(crate) fn bind_session(&self, token: Token) -> Result<Coordinator> {
-        let receipt = self.realm_core()?.claim_receipt(Some(token), token.account_id, token.request_nonce)?;
+        let receipt =
+            self.realm_core()?
+                .claim_receipt(Some(token), token.account_id, token.request_nonce)?;
         let owner = Arc::new(SessionOwnership {
-            token, character_guid: receipt.character_guid,
-            deadline: AtomicI64::new(receipt.expires_micros), closed: AtomicBool::new(false),
+            token,
+            character_guid: receipt.character_guid,
+            deadline: AtomicI64::new(receipt.expires_micros),
+            closed: AtomicBool::new(false),
             lost: Mutex::new(None),
         });
         let weak = Arc::downgrade(&owner);
         let mut unbound = self.clone();
         unbound.2 = None;
-        let runtime = tokio::runtime::Handle::try_current().map_err(|error| anyhow!("Account renewal runtime: {error}"))?;
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|error| anyhow!("Account renewal runtime: {error}"))?;
         runtime.spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(15)).await;
-                let Some(owner) = weak.upgrade() else { break; };
-                if owner.closed.load(Ordering::Acquire) { break; }
+                let Some(owner) = weak.upgrade() else {
+                    break;
+                };
+                if owner.closed.load(Ordering::Acquire) {
+                    break;
+                }
                 let coord = unbound.clone();
                 let token = owner.token;
                 match tokio::task::spawn_blocking(move || coord.renew_session(token)).await {
-                    Ok(Ok(expires)) => { owner.deadline.store(expires, Ordering::Release); }
+                    Ok(Ok(expires)) => {
+                        owner.deadline.store(expires, Ordering::Release);
+                    }
                     result => {
-                        log::warn!("Account {} generation {} lost ownership renewal: {result:?}", token.account_id, token.generation);
+                        log::warn!(
+                            "Account {} generation {} lost ownership renewal: {result:?}",
+                            token.account_id,
+                            token.generation
+                        );
                         owner.lose();
                         break;
                     }
@@ -135,19 +208,32 @@ impl Coordinator {
 
     fn renew_session(&self, token: Token) -> Result<i64> {
         let realm = self.realm_core()?;
-        let prior = realm.claim_receipt(Some(token), token.account_id, token.request_nonce)?.expires_micros;
-        call_reducer!(realm.0.call_pipe().conn.reducers, "renew_account_claim",
-            renew_account_claim_then(wire(token)))?;
+        let prior = realm
+            .claim_receipt(Some(token), token.account_id, token.request_nonce)?
+            .expires_micros;
+        call_reducer!(
+            realm.0.call_pipe().conn.reducers,
+            "renew_account_claim",
+            renew_account_claim_then(wire(token))
+        )?;
         let visible_until = Instant::now() + Duration::from_secs(3);
         let receipt = loop {
-            let receipt = realm.claim_receipt(Some(token), token.account_id, token.request_nonce)?;
-            if receipt.expires_micros > prior { break receipt; }
-            if Instant::now() >= visible_until { return Err(anyhow!("Account renewal receipt was not visible within 3s")); }
+            let receipt =
+                realm.claim_receipt(Some(token), token.account_id, token.request_nonce)?;
+            if receipt.expires_micros > prior {
+                break receipt;
+            }
+            if Instant::now() >= visible_until {
+                return Err(anyhow!("Account renewal receipt was not visible within 3s"));
+            }
             std::thread::sleep(Duration::from_millis(15));
         };
         for shard in self.configured_world_shards()? {
-            call_reducer!(shard.0.call_pipe().conn.reducers, "renew_account_fence",
-                renew_account_fence_then(wire(token), receipt.expires_micros))?;
+            call_reducer!(
+                shard.0.call_pipe().conn.reducers,
+                "renew_account_fence",
+                renew_account_fence_then(wire(token), receipt.expires_micros)
+            )?;
         }
         Ok(receipt.expires_micros)
     }
@@ -158,12 +244,18 @@ impl Coordinator {
             owner.lost.lock().unwrap_or_else(|p| p.into_inner()).take();
         }
         for shard in self.configured_world_shards()? {
-            call_reducer!(shard.0.call_pipe().conn.reducers, "close_account_fence",
-                close_account_fence_then(wire(token)))?;
+            call_reducer!(
+                shard.0.call_pipe().conn.reducers,
+                "close_account_fence",
+                close_account_fence_then(wire(token))
+            )?;
         }
         let realm = self.realm_core()?;
-        call_reducer!(realm.0.call_pipe().conn.reducers, "release_account_claim",
-            release_account_claim_then(wire(token)))
+        call_reducer!(
+            realm.0.call_pipe().conn.reducers,
+            "release_account_claim",
+            release_account_claim_then(wire(token))
+        )
     }
 }
 
@@ -177,25 +269,38 @@ mod tests {
     #[test]
     #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
     fn independent_coordinators_preserve_the_winner_after_delayed_cleanup() {
-        for name in ["LYRACORE_SHARD_MAP", "LYRACORE_SHARD_MAP_FILE", "LYRACORE_REALM_CORE"] {
-            assert!(std::env::var_os(name).is_none(), "unset {name} for this private fixture");
+        for name in [
+            "LYRACORE_SHARD_MAP",
+            "LYRACORE_SHARD_MAP_FILE",
+            "LYRACORE_REALM_CORE",
+        ] {
+            assert!(
+                std::env::var_os(name).is_none(),
+                "unset {name} for this private fixture"
+            );
         }
         let mut fixture = Standalone::start("account-ownership");
         fixture.publish_module();
         fixture.assert_call("claim_operator", &[]);
         fixture.assert_call("gw_heartbeat", &[]);
         let cfg = GatewayConfig {
-            logon_bind: "127.0.0.1:0".into(), world_bind: "127.0.0.1:0".into(),
-            stdb_uri: fixture.server().into(), module_name: fixture.shard_name().into(),
-            coordinator_token: Some(fixture.owner_token()), gateway_id: "account-ownership-a".into(),
+            logon_bind: "127.0.0.1:0".into(),
+            world_bind: "127.0.0.1:0".into(),
+            stdb_uri: fixture.server().into(),
+            module_name: fixture.shard_name().into(),
+            coordinator_token: Some(fixture.owner_token()),
+            gateway_id: "account-ownership-a".into(),
             blocking_task_capacity: BlockingTaskCapacity::new(2),
         };
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _entered = runtime.enter();
         let a = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
-        let b = runtime.block_on(Coordinator::connect(&GatewayConfig {
-            gateway_id: "account-ownership-b".into(), ..cfg
-        })).unwrap();
+        let b = runtime
+            .block_on(Coordinator::connect(&GatewayConfig {
+                gateway_id: "account-ownership-b".into(),
+                ..cfg
+            }))
+            .unwrap();
         let account_id = a.account_by_username("TEST").unwrap().unwrap().id;
         let identity = a.bound_identity(account_id).unwrap();
         assert_eq!(b.bound_identity(account_id).unwrap(), identity);
@@ -203,27 +308,100 @@ mod tests {
         let first = a.claim_session(account_id, 1).unwrap();
         let old = a.bind_session(first).unwrap();
         old.player_login(account_id, 1).unwrap();
-        assert!(b.claim_session(account_id, 1).unwrap_err().to_string().contains("ACCOUNT_IN_USE"));
-        assert_eq!(fixture.query_rows("SELECT * FROM game_world_entity WHERE guid = 1").len(), 1);
+        assert!(matches!(
+            b.delete_character(account_id, 1).unwrap(),
+            crate::codec::CharDeleteOutcome::Failed
+        ));
+        assert_eq!(
+            fixture
+                .query_rows("SELECT guid FROM game_character WHERE guid = 1")
+                .len(),
+            1
+        );
+        let queued_before_takeover = GwMove {
+            actor: old.session_actor(1),
+            opcode: lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16,
+            movement_info: vec![],
+            x: 500.0,
+            y: 100.0,
+            z: 20.0,
+            o: 0.0,
+            move_time_ms: 200,
+        };
+        assert!(b
+            .claim_session(account_id, 1)
+            .unwrap_err()
+            .to_string()
+            .contains("ACCOUNT_IN_USE"));
+        assert_eq!(
+            fixture
+                .query_rows("SELECT * FROM game_world_entity WHERE guid = 1")
+                .len(),
+            1
+        );
 
         // Hold A's cleanup while its Realm claim expires. The World Shard still has A's old
         // generation, which B must advance before entering.
-        fixture.assert_sql(&format!("UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = {}", first.account_id));
+        fixture.assert_sql(&format!(
+            "UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = {}",
+            first.account_id
+        ));
         let second = b.claim_session(account_id, 1).unwrap();
         assert!(second.generation > first.generation);
         let winner = b.bind_session(second).unwrap();
         winner.player_login(account_id, 1).unwrap();
         old.release_session(first).unwrap();
         old.release_session(first).unwrap();
+        let batch = super::super::movement_batch::MovementBatch::new();
+        batch.push(GwMove {
+            actor: winner.session_actor(1),
+            x: 100.0,
+            move_time_ms: 100,
+            ..queued_before_takeover.clone()
+        });
+        batch.push(queued_before_takeover);
+        let failures = batch.drain(|moves| {
+            call_reducer!(
+                winner.0.call_pipe().conn.reducers,
+                "gw_movement_batch",
+                gw_movement_batch_then(moves)
+            )
+        });
+        assert!(failures.is_empty());
+        let entity =
+            fixture.query_rows("SELECT x,last_move_ms FROM game_world_entity WHERE guid = 1");
+        assert_eq!(entity[0]["x"].parse::<f32>().unwrap(), 100.0);
+        assert_eq!(entity[0]["last_move_ms"], "100");
+        for result in [
+            old.import_character_blob(1, &[]),
+            old.confirm_import(1),
+            old.finish_transfer(1),
+            old.release_transfer(1),
+        ] {
+            let refusal = result.unwrap_err();
+            assert!(
+                refusal.to_string().contains("STALE_WORLD_SESSION"),
+                "{refusal:#}"
+            );
+        }
         let stale = old.stop_attack(account_id, 1).unwrap_err();
-        assert!(stale.to_string().contains("STALE_WORLD_SESSION"), "{stale:#}");
+        assert!(
+            stale.to_string().contains("STALE_WORLD_SESSION"),
+            "{stale:#}"
+        );
         let entities = fixture.query_rows("SELECT * FROM game_world_entity WHERE guid = 1");
-        assert_eq!(entities.len(), 1, "delayed cleanup deleted the winner's Character");
+        assert_eq!(
+            entities.len(),
+            1,
+            "delayed cleanup deleted the winner's Character"
+        );
         let claims = fixture.query_rows("SELECT * FROM game_account_claim");
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0]["generation"], second.generation.to_string());
         assert_eq!(claims[0]["closed"], "false");
         winner.release_session(second).unwrap();
-        assert!(fixture.query_rows("SELECT * FROM game_world_entity WHERE guid = 1").is_empty());
+        assert!(fixture
+            .query_rows("SELECT * FROM game_world_entity WHERE guid = 1")
+            .is_empty());
     }
 }

@@ -72,8 +72,6 @@ use transfer::{EscrowedTransfer, TransferPlan};
 /// One unit of outbound traffic for the single writer thread. A `Batch` is written contiguously so
 /// the login sequence + self-spawn can never be spliced by an async peer event mid-sequence.
 pub enum Outbound {
-    /// End the World Session after loss of durable Account ownership.
-    Close,
     One(ServerOpcodeMessage),
     Batch(Vec<ServerOpcodeMessage>),
     /// A pre-serialized packet body sent under a RAW opcode — the escape hatch past gtker's
@@ -147,9 +145,29 @@ pub const EGRESS_SHED_DEPTH: usize = 512;
 pub struct SessionTx {
     tx: Sender<Outbound>,
     depth: Arc<AtomicUsize>,
+    close_socket: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl SessionTx {
+    fn bind_socket<S: DuplexStream>(&mut self, socket: S) {
+        let socket = std::sync::Mutex::new(socket);
+        self.close_socket = Some(Arc::new(move || {
+            let socket = socket
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Err(error) = socket.shutdown_both() {
+                log::warn!("World Session socket shutdown failed: {error}");
+            }
+        }));
+    }
+
+    /// Close both socket directions even when the writer is blocked or its queue is full.
+    pub(crate) fn close(&self) {
+        if let Some(close) = &self.close_socket {
+            close();
+        }
+    }
+
     /// Enqueue one outbound unit. Same signature as `mpsc::Sender::send`, so existing call sites
     /// read identically; the only addition is the depth accounting. Incremented BEFORE the send so
     /// the depth can never read low while an item is on the queue, and rolled back when the send
@@ -190,6 +208,7 @@ pub fn session_channel() -> (SessionTx, Receiver<Outbound>, Arc<AtomicUsize>) {
         SessionTx {
             tx,
             depth: depth.clone(),
+            close_socket: None,
         },
         rx,
         depth,
@@ -261,7 +280,7 @@ pub const MOVE_ACTIVITY_FLOOR: u64 = 100;
 pub static MOVE_SUBMITTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The connection's world-phase sub-state. Encodes the in-world invariant in the TYPE: the relay
-/// subscriptions, the combat/loot targets, and the session epoch exist ONLY while in-world, so the
+/// subscriptions and combat/loot targets exist only while in-world, so the
 /// dispatch arms match on the state instead of guarding scattered `Option`s. `CMSG_PLAYER_LOGIN`
 /// moves `CharSelect → InWorld`; logout / socket teardown moves back, dropping `InWorld` and its
 /// shared-view registration via `PlayerSubscriptions`.
@@ -447,7 +466,6 @@ impl WorldConn {
         self.home = None;
         outcome
     }
-
 }
 
 /// How often a queued connection re-checks whether it has been admitted. Cheap — one mutex
@@ -735,7 +753,7 @@ impl WriterTrace {
             // Jobs are expanded before the trace sees them (`spawn_writer`), so this arm is
             // unreachable for a real frame; it exists so a future caller cannot silently skip the
             // ring by wrapping a packet in a job.
-            Outbound::Job(_) | Outbound::Close => {}
+            Outbound::Job(_) => {}
         }
     }
 
@@ -760,7 +778,14 @@ impl WriterTrace {
     /// the wire harness's own crash-dump shape so the two files sit next to each other for a
     /// diff. Best-effort: a dump failing must never be why the writer thread panics.
     fn dump(&self, account_id: u64, reason: &str) {
-        let dir = std::path::Path::new("/tmp/gw-writer-crash");
+        self.dump_to(
+            std::path::Path::new("/tmp/gw-writer-crash"),
+            account_id,
+            reason,
+        );
+    }
+
+    fn dump_to(&self, dir: &std::path::Path, account_id: u64, reason: &str) {
         if let Err(e) = std::fs::create_dir_all(dir) {
             log::warn!("writer trace: could not create {}: {e}", dir.display());
             return;
@@ -849,7 +874,6 @@ fn spawn_writer<S: DuplexStream>(
                     t.record(&out);
                 }
                 let res = match out {
-                    Outbound::Close => Err(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "Account ownership lost")),
                     Outbound::One(m) => {
                         log::debug!("OUT {m}"); // SMSG variant name → crash attribution (tail 'OUT SMSG_*')
                         m.write_encrypted_server(&mut wsock, &mut encrypt)
@@ -989,7 +1013,12 @@ fn run_world_session_with_queue_and_deadline<
     let wsock = stream
         .try_clone()
         .map_err(|e| anyhow!("clone world socket for writer: {e}"))?;
-    let (tx, rx, depth) = session_channel();
+    let (mut tx, rx, depth) = session_channel();
+    tx.bind_socket(
+        stream
+            .try_clone()
+            .map_err(|error| anyhow!("clone World Session shutdown socket: {error}"))?,
+    );
     let writer = spawn_writer(wsock, encrypt, rx, depth, conn.account_id)?;
 
     let result = (|| -> Result<()> {

@@ -936,13 +936,21 @@ pub fn realm_mail_item_payout(
     )
 }
 #[reducer]
-pub fn realm_mail_confirm_delivery(ctx: &ReducerContext, escrow_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
+pub fn realm_mail_confirm_delivery(
+    ctx: &ReducerContext,
+    escrow_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_confirm(&mut CtxDb { ctx }, escrow_id)
 }
 #[reducer]
-pub fn realm_mail_settle(ctx: &ReducerContext, escrow_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
+pub fn realm_mail_settle(
+    ctx: &ReducerContext,
+    escrow_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_settle(&mut CtxDb { ctx }, escrow_id)
@@ -1126,13 +1134,13 @@ mod tests {
             ),
             (
                 "pub fn realm_mail_fence(",
-                "{ require_operator(ctx)?; apply_fence( &mut CtxDb { ctx }, escrow_id, \
+                "{ require_operator(ctx)?; let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_fence( &mut CtxDb { ctx }, escrow_id, \
                   sender_guid, Letter { recipient_guid, subject, body, money, postage, cod, }, \
                   item_guid, mail_id, ) }",
             ),
             (
                 "pub fn realm_mail_commit(",
-                "{ require_operator(ctx)?; apply_commit( &mut CtxDb { ctx }, escrow_id, \
+                "{ require_operator(ctx)?; let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_commit( &mut CtxDb { ctx }, escrow_id, \
                   sender_guid, &Letter { recipient_guid, subject, body, money, postage: 0, cod, \
                   }, &crate::items::ItemSnapshot { entry: item_entry, stack_count: \
                   item_stack_count, durability: item_durability, enchant_id: item_enchant_id, \
@@ -1140,33 +1148,33 @@ mod tests {
             ),
             (
                 "pub fn realm_mail_take_money_fence(",
-                "{ require_operator(ctx)?; apply_take_fence( &mut CtxDb { ctx }, escrow_id, \
+                "{ require_operator(ctx)?; let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_take_fence( &mut CtxDb { ctx }, escrow_id, \
                   payee_guid, mail_id, expect_money, ) }",
             ),
             (
                 "pub fn realm_mail_payout(",
-                "{ require_operator(ctx)?; apply_payout(&mut CtxDb { ctx }, escrow_id, \
+                "{ require_operator(ctx)?; let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_payout(&mut CtxDb { ctx }, escrow_id, \
                   payee_guid, mail_id, amount) }",
             ),
             (
                 "pub fn realm_mail_take_item_fence(",
-                "{ require_operator(ctx)?; apply_take_item_fence( &mut CtxDb { ctx }, \
+                "{ require_operator(ctx)?; let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_take_item_fence( &mut CtxDb { ctx }, \
                   escrow_id, payee_guid, mail_id, expect_entry, ) }",
             ),
             (
                 "pub fn realm_mail_item_payout(",
-                "{ require_operator(ctx)?; apply_item_payout( &mut CtxDb { ctx }, escrow_id, \
+                "{ require_operator(ctx)?; let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?; apply_item_payout( &mut CtxDb { ctx }, escrow_id, \
                   payee_guid, mail_id, &crate::items::ItemSnapshot { entry: item_entry, \
                   stack_count: item_stack_count, durability: item_durability, enchant_id: \
                   item_enchant_id, soulbound: item_soulbound, random_property_id, }, ) }",
             ),
             (
                 "pub fn realm_mail_confirm_delivery(",
-                "{ require_operator(ctx)?; apply_confirm(&mut CtxDb { ctx }, escrow_id) }",
+                "{ require_operator(ctx)?; crate::account_ownership::require_actor(ctx, request_actor)?; apply_confirm(&mut CtxDb { ctx }, escrow_id) }",
             ),
             (
                 "pub fn realm_mail_settle(",
-                "{ require_operator(ctx)?; apply_settle(&mut CtxDb { ctx }, escrow_id) }",
+                "{ require_operator(ctx)?; crate::account_ownership::require_actor(ctx, request_actor)?; apply_settle(&mut CtxDb { ctx }, escrow_id) }",
             ),
             (
                 "pub fn reap_mail_escrows(",

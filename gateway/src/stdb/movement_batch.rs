@@ -104,7 +104,10 @@ mod tests {
 
     fn movement(actor_guid: u64) -> GwMove {
         GwMove {
-            actor: super::super::bindings::SessionActor { guid: actor_guid, ownership: None },
+            actor: super::super::bindings::SessionActor {
+                guid: actor_guid,
+                ownership: None,
+            },
             opcode: 0x00ee,
             movement_info: vec![actor_guid as u8],
             x: actor_guid as f32,

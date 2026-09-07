@@ -477,7 +477,10 @@ pub fn realm_mail_take_money(
     apply_take_money(ctx, recipient_guid, mail_id)
 }
 #[reducer]
-pub fn realm_mail_item_room(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
+pub fn realm_mail_item_room(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     if crate::helpers::acting_entity_by_guid(ctx, payee_guid).is_none() {

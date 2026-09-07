@@ -959,7 +959,10 @@ pub trait WorldStore:
     fn claim_session(&self, account_id: u64, character_guid: u64) -> Result<WorldSessionToken>;
 
     /// Bind subsequent requests to this World Session. A Fake can retain its existing handle.
-    fn bind_session(&self, _token: WorldSessionToken) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+    fn bind_session(
+        &self,
+        _token: WorldSessionToken,
+    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
         Ok(None)
     }
 

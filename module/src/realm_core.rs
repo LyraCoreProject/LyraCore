@@ -109,7 +109,9 @@ pub fn set_character_shard(
     ctx: &ReducerContext,
     character_guid: u64,
     map_id: u32,
-    instance_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
+    instance_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     record_shard(ctx, character_guid, map_id, instance_id);

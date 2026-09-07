@@ -104,7 +104,7 @@ fn focus_loss_cancels_cast(node: &Standalone, spell: u32, creature: u32, slot: &
 
 fn abandon_and_reaccept(node: &Standalone, giver: &str, quest: u32, item: u32) {
     let quest_arg = quest.to_string();
-    node.assert_call("gw_abandon_quest", &[PLAYER, &quest_arg]);
+    node.assert_call("gw_abandon_quest", &[&support::actor(PLAYER), &quest_arg]);
     assert!(node
         .query_rows(&format!(
             "SELECT * FROM game_item_instance WHERE entry = {item}"
@@ -114,7 +114,7 @@ fn abandon_and_reaccept(node: &Standalone, giver: &str, quest: u32, item: u32) {
         "UPDATE game_quest_template SET src_item_count = 0 WHERE entry = {quest}"
     ));
     node.assert_call("debug_accept_quest", &[PLAYER, giver, &quest_arg]);
-    node.assert_call("gw_abandon_quest", &[PLAYER, &quest_arg]);
+    node.assert_call("gw_abandon_quest", &[&support::actor(PLAYER), &quest_arg]);
     assert!(node
         .query_rows(&format!(
             "SELECT * FROM game_item_instance WHERE entry = {item}"
@@ -124,7 +124,7 @@ fn abandon_and_reaccept(node: &Standalone, giver: &str, quest: u32, item: u32) {
     node.assert_sql(&format!(
         "DELETE FROM game_item_instance WHERE entry = {item}"
     ));
-    node.assert_call("gw_abandon_quest", &[PLAYER, &quest_arg]);
+    node.assert_call("gw_abandon_quest", &[&support::actor(PLAYER), &quest_arg]);
     node.assert_sql(&format!(
         "UPDATE game_quest_template SET src_item_count = 1 WHERE entry = {quest}"
     ));
@@ -153,7 +153,7 @@ fn circle_radius_refuses_item_use(node: &Standalone, creature: u32, item: u32, s
 
 fn assert_first_aggro(node: &Standalone, summon: &BTreeMap<String, String>) {
     assert_eq!(summon["target_guid"], PLAYER);
-    node.assert_call("gw_attack", &[&summon["guid"], PLAYER]);
+    node.assert_call("gw_attack", &[&support::actor(&summon["guid"]), PLAYER]);
     assert_eq!(
         node.query_rows(&format!(
             "SELECT phase FROM game_creature_ai_state WHERE creature_guid = {}",
@@ -349,7 +349,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
             "UPDATE game_world_entity SET health = 1 WHERE guid = {}",
             summon["guid"]
         ));
-        node.assert_call("gw_attack", &[PLAYER, &summon["guid"]]);
+        node.assert_call("gw_attack", &[&support::actor(PLAYER), &summon["guid"]]);
         let progress_query =
             format!("SELECT * FROM game_character_quest WHERE quest_entry = {quest}");
         assert!(poll_until(POLL_TIMEOUT, || node

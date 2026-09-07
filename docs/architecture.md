@@ -124,6 +124,21 @@ Request to the Character's Home Shard. The Module combines that value with the C
 and applies the final Gate. World-shard Account rows are not authority, and the Gateway keeps no
 Character authority projection.
 
+Account ownership is durable. `stdb/account_sessions.rs` obtains an Account Claim from Realm-core,
+installs its Account Fence on every configured World Shard, and binds the resulting World Session
+Token to the Store. Claims last 60 seconds and renew every 15 seconds. A live claim refuses a second
+login. Renewal failure closes the old socket; the Module already refuses expired or superseded
+requests, including queued movement, mail, auctions, party operations and Transfer completions.
+Release closes matching Shard fences and removes their Character before closing the Realm-core
+claim. Delayed cleanup cannot close a newer generation. Bound identity remains deterministic.
+
+Account admission requires every configured World Shard and Instance Pool to be available. The
+Character-to-Shard index is a hint; fencing only its current answer would leave an in-flight Transfer
+able to create a second live copy elsewhere. A partial admission starts no renewal. After its claim
+expires, another generation can finish fencing all Shards. Completed fences retain their generation
+so delayed delivery cannot reopen them. The Module's existing Gateway lease schedule removes
+Characters whose Account Fence expires. Gateway routing preserves the bound token across Transfer.
+
 ---
 
 ## 3. The realm is several databases

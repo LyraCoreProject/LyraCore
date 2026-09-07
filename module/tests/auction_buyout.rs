@@ -14,7 +14,13 @@ fn real_realm_reducer_commits_exact_buyout_mail_before_the_next_transaction() {
         (
             "realm_auction_decide_bid",
             // operation_id, bidder_guid, auction_id, house, offer — the fixture lists in house 1.
-            &["5090050", "5090051", "5090050", "1", "900"][..],
+            &[
+                "5090050",
+                r#"{"guid":5090051,"ownership":null}"#,
+                "5090050",
+                "1",
+                "900",
+            ][..],
         ),
         ("debug_verify_auction_buyout_fixture", &[][..]),
     ] {

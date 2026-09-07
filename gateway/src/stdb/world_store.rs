@@ -880,11 +880,18 @@ impl WorldStore for Coordinator {
         self.repop(account_id, self_guid)
     }
 
-    fn claim_session(&self, account_id: u64, character_guid: u64) -> Result<crate::world::WorldSessionToken> {
+    fn claim_session(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+    ) -> Result<crate::world::WorldSessionToken> {
         self.claim_session(account_id, character_guid)
     }
 
-    fn bind_session(&self, token: crate::world::WorldSessionToken) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+    fn bind_session(
+        &self,
+        token: crate::world::WorldSessionToken,
+    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
         Ok(Some(std::sync::Arc::new(self.bind_session(token)?)))
     }
 
@@ -1480,7 +1487,7 @@ mod routing_call_site_tests {
              the world database's stale auth cache\" ) })?; \
              let inner = self .1 .conns .get(db) \
              .ok_or_else(|| anyhow!(\"auth database {db} missing from the coordinator set\"))?; \
-             Ok(Coordinator(inner.clone(), self.1.clone()))"
+             Ok(Coordinator(inner.clone(), self.1.clone(), self.2.clone()))"
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");

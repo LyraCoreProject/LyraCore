@@ -2193,10 +2193,16 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
     fn claim_session(&self, account_id: u64, _character_guid: u64) -> Result<WorldSessionToken> {
-        Ok(WorldSessionToken { account_id, generation: 1, request_nonce: 1 })
+        Ok(WorldSessionToken {
+            account_id,
+            generation: 1,
+            request_nonce: 1,
+        })
     }
     fn release_session(&self, _token: WorldSessionToken) -> Result<()> {
-        if self.stale_session { return Ok(()); }
+        if self.stale_session {
+            return Ok(());
+        }
         self.rec("logout");
         self.logout_called
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -10069,4 +10075,153 @@ fn cancel_cast_dispatches_for_the_caller() {
     drop(client);
     server.join().unwrap();
     assert_eq!(store.cancelled_casts.lock().unwrap().as_slice(), &[1]);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
+    use crate::accept::BlockingTaskCapacity;
+    use crate::config::GatewayConfig;
+    use crate::durable_test_support::Standalone;
+    use crate::stdb::Coordinator;
+
+    fn start(
+        coord: Coordinator,
+        runtime: tokio::runtime::Handle,
+    ) -> (UnixStream, std::sync::mpsc::Receiver<Result<()>>) {
+        let (client, server) = world_session_socket_pair();
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _entered = runtime.enter();
+            let _ = done.send(run_world_session(server, &coord));
+        });
+        (client, result)
+    }
+
+    fn login(client: &mut UnixStream) {
+        let (mut encrypt, mut decrypt) = client_handshake(client, "TEST", [7; 40]);
+        CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+            .write_encrypted_client(&mut *client, &mut encrypt)
+            .unwrap();
+        for _ in 0..100 {
+            if matches!(
+                ServerOpcodeMessage::read_encrypted(&mut *client, &mut decrypt).unwrap(),
+                ServerOpcodeMessage::SMSG_WEATHER(_)
+            ) {
+                return;
+            }
+        }
+        panic!("World Session did not complete its entry batch");
+    }
+
+    for name in [
+        "LYRACORE_SHARD_MAP",
+        "LYRACORE_SHARD_MAP_FILE",
+        "LYRACORE_REALM_CORE",
+    ] {
+        assert!(
+            std::env::var_os(name).is_none(),
+            "unset {name} for this private fixture"
+        );
+    }
+    let mut fixture = Standalone::start("account-world-sessions");
+    fixture.publish_module();
+    fixture.assert_call("claim_operator", &[]);
+    fixture.assert_call("gw_heartbeat", &[]);
+    let cfg = GatewayConfig {
+        logon_bind: "127.0.0.1:0".into(),
+        world_bind: "127.0.0.1:0".into(),
+        stdb_uri: fixture.server().into(),
+        module_name: fixture.shard_name().into(),
+        coordinator_token: Some(fixture.owner_token()),
+        gateway_id: "world-owner-a".into(),
+        blocking_task_capacity: BlockingTaskCapacity::new(2),
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let a = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
+    let b = runtime
+        .block_on(Coordinator::connect(&GatewayConfig {
+            gateway_id: "world-owner-b".into(),
+            ..cfg
+        }))
+        .unwrap();
+    let account = a.account_by_username("TEST").unwrap().unwrap().id;
+    a.establish_session(account, &[7; 40], a.bound_identity(account).unwrap())
+        .unwrap();
+    let (mut first, first_done) = start(a, runtime.handle().clone());
+    login(&mut first);
+
+    let (mut refused, refused_done) = start(b.clone(), runtime.handle().clone());
+    let (mut encrypt, _) = client_handshake(&mut refused, "TEST", [7; 40]);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut refused, &mut encrypt)
+        .unwrap();
+    let refusal = refused_done
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        refusal.to_string().contains("ACCOUNT_IN_USE"),
+        "{refusal:#}"
+    );
+    assert!(first_done.try_recv().is_err());
+
+    fixture.assert_sql("UPDATE game_account_claim SET expires_micros = 0");
+    let (mut winner, winner_done) = start(b, runtime.handle().clone());
+    login(&mut winner);
+    first_done
+        .recv_timeout(Duration::from_secs(25))
+        .expect("lost Account ownership must close the old World Session")
+        .unwrap();
+    assert_eq!(
+        fixture
+            .query_rows("SELECT * FROM game_world_entity WHERE guid = 1")
+            .len(),
+        1
+    );
+    assert!(winner_done.try_recv().is_err());
+    winner.shutdown(std::net::Shutdown::Both).unwrap();
+    drop(winner);
+    winner_done
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    assert!(fixture
+        .query_rows("SELECT * FROM game_world_entity WHERE guid = 1")
+        .is_empty());
+}
+
+#[test]
+fn closing_a_world_session_interrupts_a_full_socket_without_draining_its_queue() {
+    let (_client, mut socket) = world_session_socket_pair();
+    socket.set_nonblocking(true).unwrap();
+    loop {
+        match socket.write(&[0; 65536]) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("fill owned socket: {error}"),
+        }
+    }
+    socket.set_nonblocking(false).unwrap();
+    let (mut tx, queued, _) = session_channel();
+    tx.bind_socket(socket.try_clone().unwrap());
+    tx.send(Outbound::Raw {
+        opcode: 0,
+        body: vec![],
+    })
+    .unwrap();
+    let (started, ready) = std::sync::mpsc::channel();
+    let (finished, result) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        finished.send(socket.write_all(&[1; 65536])).unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    tx.close();
+    assert!(result
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    assert!(matches!(queued.try_recv().unwrap(), Outbound::Raw { .. }));
+    writer.join().unwrap();
 }

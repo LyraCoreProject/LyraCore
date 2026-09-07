@@ -46,11 +46,8 @@ pub(crate) struct ShardSet {
     /// db name → that database's coordinator connection. Always contains the default database;
     /// an extra shard that failed to connect is ABSENT (routing then degrades to the default).
     conns: HashMap<String, Arc<CoordinatorInner>>,
-    /// The gateway-wide shared area-of-interest view — the cell index plus the viewer
-    /// registry that every shard's coordinator dispatch routes through. Shard-INDEPENDENT for the
-    /// same reason `sessions` is: it answers a question about SESSIONS, and guids are globally
-    /// unique across databases (realm-core hands each shard a disjoint guid range), so one index
-    /// spans the whole realm.
+    /// Realm-wide delivery bookkeeping. Globally allocated guids let one viewer index span
+    /// all configured Shards; durable Account Claims own World Session authority.
     world: Arc<super::world_view::WorldView>,
     /// Coalesce row-delete and reconnect requests behind one off-pump reconciliation worker.
     pub(crate) party_reconciliation_requested: AtomicBool,
@@ -2697,16 +2694,23 @@ impl Coordinator {
 
     /// Account admission requires every configured World Shard, including an unavailable one.
     pub(crate) fn configured_world_shards(&self) -> Result<Vec<Coordinator>> {
-        self.1.map.shards().into_iter().map(|name| {
-            let inner = self.1.conns.get(&name)
-                .ok_or_else(|| anyhow!("Account admission requires unavailable Shard {name}"))?;
-            if !inner.coord().is_healthy() {
-                return Err(anyhow!("Account admission requires unavailable Shard {name}"));
-            }
-            Ok(Coordinator(inner.clone(), self.1.clone(), self.2.clone()))
-        }).collect()
+        self.1
+            .map
+            .shards()
+            .into_iter()
+            .map(|name| {
+                let inner = self.1.conns.get(&name).ok_or_else(|| {
+                    anyhow!("Account admission requires unavailable Shard {name}")
+                })?;
+                if !inner.coord().is_healthy() {
+                    return Err(anyhow!(
+                        "Account admission requires unavailable Shard {name}"
+                    ));
+                }
+                Ok(Coordinator(inner.clone(), self.1.clone(), self.2.clone()))
+            })
+            .collect()
     }
-
 }
 
 /// Why the SDK connection builds (`connect_blocking`, the call pipes) run on threads the

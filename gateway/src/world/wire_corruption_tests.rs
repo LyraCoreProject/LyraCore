@@ -279,9 +279,18 @@ fn writer_trace_dump_writes_a_file_with_the_traced_frames() {
     trace.push(0x00EE, 31, 0xDEAD_BEEF_0000_0001);
     trace.push(0x0130, 6, 0xDEAD_BEEF_0000_0002);
     const ACCOUNT: u64 = 0x0FFF_FFFF_F209_0000; // won't collide with a real bench account id
-    trace.dump(ACCOUNT, "test-induced dump, not a real session end");
+    let dir = std::env::temp_dir().join(format!(
+        "lyracore-writer-trace-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    trace.dump_to(&dir, ACCOUNT, "test-induced dump, not a real session end");
 
-    let path = format!("/tmp/gw-writer-crash/{ACCOUNT}.txt");
+    let path = dir.join(format!("{ACCOUNT}.txt"));
     let contents = std::fs::read_to_string(&path).expect("dump must write a readable file");
     assert!(
         contents.contains("opcode=0x00EE"),
@@ -295,7 +304,8 @@ fn writer_trace_dump_writes_a_file_with_the_traced_frames() {
         contents.contains("test-induced dump"),
         "missing the end reason: {contents}"
     );
-    let _ = std::fs::remove_file(&path); // leave /tmp clean for a real repro's dumps
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir(dir).unwrap();
 }
 
 /// Hardening (the actual fix): an `Outbound::Raw` body that overflows the u16 frame-size

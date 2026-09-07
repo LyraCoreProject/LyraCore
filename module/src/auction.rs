@@ -2055,7 +2055,9 @@ pub fn realm_auction_commit_listing(
 pub fn realm_auction_confirm_listing(
     ctx: &ReducerContext,
     operation_id: u64,
-    auction_id: u32, request_actor: crate::SessionActor, ) -> Result<(), String> {
+    auction_id: u32,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     let listing = CtxSource { ctx }
@@ -2078,7 +2080,11 @@ pub fn realm_auction_confirm_listing(
 
 /// Sharded listing phase 4: delete the Hold only after the source has matching receipt evidence.
 #[reducer]
-pub fn realm_auction_settle_listing(ctx: &ReducerContext, operation_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
+pub fn realm_auction_settle_listing(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     settle_listing(&mut CtxSource { ctx }, operation_id)

@@ -145,6 +145,18 @@ The Module's record that an Account is logged in on a Character.
 The Gateway's per-connection loop for one client on the world port.
 _Avoid_: session (unqualified, when meaning the connection)
 
+**Account Claim**:
+Realm-core's time-limited ownership of an Account by one World Session. A live claim refuses a
+competing login. Each replacement advances the retained generation.
+
+**Account Fence**:
+A World Shard's retained Account Claim generation. Admission installs it on every configured World
+Shard. The Module checks it in the transaction that acts on the Character.
+
+**World Session Token**:
+The Realm-core Account id, claim generation and request nonce carried by a bound Store and each
+queued Durable Request. It preserves ownership across Transfer without changing bound identity.
+
 **Pre-auth I/O Deadline**:
 The absolute budget from socket acceptance until the peer proves itself: 10 s on the logon port and
 15 s on the world port. It bounds reads and writes, and an independent watchdog closes the socket

@@ -245,10 +245,10 @@ include!(concat!(env!("OUT_DIR"), "/package_mods.rs"));
 // HOOK_EVENTS catalog, plus the map-scoped encounter authority registry.
 include!(concat!(env!("OUT_DIR"), "/package_registries.rs"));
 
+mod account_ownership;
 mod action_bar;
 mod actor;
 mod auction;
-mod account_ownership;
 mod auth;
 mod breath;
 mod breath_relay;
@@ -366,9 +366,9 @@ mod weather;
 mod world;
 mod xp;
 
+pub use account_ownership::*;
 pub use action_bar::*;
 pub use auction::*;
-pub use account_ownership::*;
 pub use auth::*;
 pub use breath::*;
 pub use breath_relay::BreathRelayEvent; // gateway schema-parity relay

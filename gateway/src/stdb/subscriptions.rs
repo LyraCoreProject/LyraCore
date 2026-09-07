@@ -6429,7 +6429,6 @@ mod tests {
                 v.len()
             ),
             Outbound::Job(_) => panic!("peer motion must be encoded by the time it is queued"),
-            Outbound::Close => panic!("peer motion must not close the World Session"),
         }
         assert!(rx.try_recv().is_err(), "exactly one packet per motion row");
     }

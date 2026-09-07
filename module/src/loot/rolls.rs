@@ -911,7 +911,9 @@ pub fn settle_loot_roll(
     ctx: &ReducerContext,
     corpse_guid: u64,
     slot: u8,
-    winner_guid: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
+    winner_guid: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     settle_roll_grant(ctx, corpse_guid, slot, winner_guid);
@@ -923,7 +925,11 @@ pub fn settle_loot_roll(
 /// resolved roll already used, called here for an UNRESOLVED one that just changed which database is
 /// authoritative for it.
 #[reducer]
-pub fn clear_promoted_loot_roll(ctx: &ReducerContext, roll_id: u64, request_actor: crate::SessionActor, ) -> Result<(), String> {
+pub fn clear_promoted_loot_roll(
+    ctx: &ReducerContext,
+    roll_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     cleanup_roll(ctx, roll_id);

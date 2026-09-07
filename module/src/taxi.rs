@@ -1132,7 +1132,10 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
 }
 
 #[spacetimedb::reducer]
-pub fn gw_arm_taxi_flight(ctx: &ReducerContext, request_actor: crate::SessionActor) -> Result<(), String> {
+pub fn gw_arm_taxi_flight(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     arm_taxi_flight(ctx, character_guid);

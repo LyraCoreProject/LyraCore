@@ -1061,7 +1061,9 @@ pub fn sync_group_mirror(
     loot_method_setting: u8,
     loot_threshold: u8,
     master_looter_guid: u64,
-    members: Vec<u64>, request_actor: crate::SessionActor, ) -> Result<(), String> {
+    members: Vec<u64>,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     if group_id == 0 {
