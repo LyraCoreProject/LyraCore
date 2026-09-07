@@ -1,12 +1,12 @@
 {
-  "updated_at": "2026-09-07 14:28 UTC",
+  "updated_at": "2026-09-07 14:31 UTC",
   "base_revision": "6ccfe68e4cb226c5cac836fd309976b44ebb19cd",
   "status_note": "71 open issues assessed; 18 closed issues retained for history. Movement replay and benchmark reporting are merged. Service checks, Warlock quests and the bank adapter are active.",
   "monitoring_note": "Monitoring is active while this work session runs. The JSON source and published report preserve the next actions for a resumed session. No unattended scheduler has been installed.",
   "focus": [
-    "Adopt merged CLI #57 for service parsing #341 and effective command #340 through a checked core pin.",
-    "Finish and test The Binding #40 draft for required human schema review.",
-    "Finish bank adapter wire-harness #9 through review, release and core adoption; keep live execution with the Operator."
+    "Complete core service pin #452 and bank adapter pin #453 through checks and review.",
+    "Finish The Binding #40 draft, including required human review of its table and appended EventAI instruction.",
+    "Implement dive adapter #142 with GPT-5.6 Sol at medium effort; keep live execution and calibration with the Operator."
   ],
   "issues": [
     {
@@ -60,18 +60,18 @@
     },
     {
       "number": 404,
-      "summary": "Package casts can change fixture creatures",
+      "summary": "Package casts now protect fixture creatures.",
       "importance": 4,
       "gain": 4,
       "effort": 1,
       "confidence": "high",
       "disposition": "done",
-      "rationale": "The shared creature identifier policy exists on main through PR #405. The casts entry points do not consistently apply it, so this small fix protects fixtures and Package testing.",
+      "rationale": "The cast entry points did not consistently apply the shared creature identifier policy. Merged #434 protects fixture creatures across cast declarations, including partial updates.",
       "next_action": "Closed on GitHub. Preserve the recorded implementation evidence.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/404",
-        "crates/lyracore-package-delta/src/delta.rs: creature_template calls check_claimable_creature_entry; creature_cast and creature_spell use separate constructors.",
+        "Merged #434 applies the creature identifier policy to creature_cast and creature_spell declarations, including partial updates.",
         "https://github.com/LyraCoreProject/LyraCore/pull/403",
         "https://github.com/LyraCoreProject/LyraCore/pull/434"
       ],
@@ -169,7 +169,7 @@
       "effort": 3,
       "confidence": "high",
       "disposition": "done",
-      "rationale": "Subscribed-table parity leaves other generated definitions unchecked. A reproducible generation check would catch drift before unrelated schema work encounters it.",
+      "rationale": "Subscribed-table parity left other generated definitions unchecked. Merged #448 adds reproducible full binding generation and comparison, so CI now catches that drift.",
       "next_action": "Complete. Merged #448 generates and compares every Gateway binding file, with documented normalization. Its baseline contained 967 files.",
       "blockers": [],
       "evidence": [
@@ -268,7 +268,7 @@
       "effort": 3,
       "confidence": "high",
       "disposition": "done",
-      "rationale": "PRs #419 and #426 are merged. Reassess the original checklist against current workflows rather than starting another workflow.",
+      "rationale": "Merged #419 and #426 supply the repository checks required by the original checklist. Current workflow evidence is recorded in the closure comment.",
       "next_action": "Closed with current-source evidence. See the GitHub triage comment.",
       "blockers": [],
       "evidence": [
@@ -610,9 +610,9 @@
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "ready",
+      "disposition": "implementing",
       "rationale": "The code half shipped in PRs 150 and 166. The pinned wire-harness tree contains no drowning or breath adapter, so a bounded cross-repository implementation remains before the human pass.",
-      "next_action": "Add the LyraCore dive adapter in wire-harness with no stored credentials, then release and bump the pin. Run it on an approved development Realm before calibrating the real client.",
+      "next_action": "Implement the dive adapter after bank #9. Prove timer start, health loss, drowning log and timer stop offline; leave the live run and head-height calibration with the Operator.",
       "blockers": [
         "Completing the issue requires a wire-harness release and LyraCore pin bump.",
         "Submerge timing and mirror-bar rendering require a human with a stock client."
@@ -631,7 +631,7 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/142",
       "updatedAt": "2026-08-13T05:28:29Z",
       "github_state": "open",
-      "owner": "Codex"
+      "owner": "GPT-5.6 Sol, medium effort, adapter agent"
     },
     {
       "number": 138,
@@ -1023,12 +1023,12 @@
       "effort": 1,
       "confidence": "high",
       "disposition": "done",
-      "rationale": "The exact outlier remains in current code. teleport_player drops only game_entity_motion_pending, then deletes game_world_entity in the cross-map branch. Other teardown paths delete the public motion row.",
+      "rationale": "Before #438, cross-map teleport removed staged motion and the live entity but left public motion behind. The merged cleanup removes both motion forms with the entity; the durable regression proves the result.",
       "next_action": "Complete. PR #438 merged after the durable regression, all other checks and review passed.",
       "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/80",
-        "module/src/world.rs: teleport_player calls motion::drop_pending before branching, but the cross-map branch deletes only the world entity after combat and stealth cleanup.",
+        "Before #438, module/src/world.rs removed staged motion but left the public motion row during cross-map teleport.",
         "module/src/helpers.rs and module/src/creatures/tick/lifecycle.rs: the standard entity cleanup contract includes game_entity_motion and game_creature_spline.",
         "https://github.com/LyraCoreProject/LyraCore/pull/438#issuecomment-5571147620"
       ],
@@ -1447,7 +1447,7 @@
       "effort": 3,
       "confidence": "high",
       "disposition": "done",
-      "rationale": "The current Gateway still promotes a staging roll on Realm-core and only then clears the World Shard copy. Both periodic and synchronous promotion paths can run in different Gateway processes. Realm-core's game_loot_roll has only an auto-increment primary key and insert_roll_rows always inserts a new roll and vote set. Module reducers serialize calls, so an idempotent Realm-core check or a compatible uniqueness key can close the race at its authoritative side.",
+      "rationale": "Concurrent Gateway promotions could insert duplicate active Loot Rolls and vote sets on Realm-core. Merged #439 makes the authoritative insertion reuse the existing active roll and preserve its votes. Post-resolution replay remains a separate decision in #441.",
       "next_action": "Complete. Concurrent-promotion SQL acceptance passed in merged #439. Post-resolution replay remains in #441.",
       "blockers": [],
       "evidence": [
@@ -1680,7 +1680,7 @@
       "effort": 3,
       "confidence": "high",
       "disposition": "done",
-      "rationale": "Unit-shaped and bare guid columns need a complete ownership classification. The implementation also needs table-specific marker matching and source masking, so the effort is larger than the initial estimate. The Architecture Test prevents Character state omissions during cleanup or Transfer without changing runtime behavior.",
+      "rationale": "Merged #445 classifies unit-shaped and bare guid columns, matches table-specific ownership markers and excludes comments and test code. Its Architecture Test catches Character state omissions during cleanup or Transfer.",
       "next_action": "Complete. The Architecture Test covers the wider field census and rejects missing ownership markers or explicit exclusions.",
       "blockers": [],
       "evidence": [
@@ -2950,10 +2950,10 @@
       "url": "https://github.com/LyraCoreProject/wire-harness/pull/9",
       "title": "test(bank): add the full bank flow adapter",
       "owner": "GPT-5.6 Sol, medium effort, adapter agent",
-      "status": "Parent review passed; CI running",
-      "next_action": "Complete checks/review, release, then adopt in core. Keep #137 open for live acceptance.",
+      "status": "Merged",
+      "next_action": "Reassess linked issues for remaining acceptance.",
       "head": "98c4e0ebd64fda247a4a75ebf72f9357b807572a",
-      "github_state": "OPEN",
+      "github_state": "MERGED",
       "checks": [
         {
           "name": "test (ubuntu-latest)",
@@ -2968,7 +2968,90 @@
           "result": "SUCCESS"
         }
       ],
-      "checked_at": "2026-09-07 14:28 UTC"
+      "checked_at": "2026-09-07 14:31 UTC",
+      "merge_commit": "e812f530e807723dbdd83433e649b8bb0c1eb5ec"
+    },
+    {
+      "number": 452,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/452",
+      "title": "chore(cli): pin effective service verification",
+      "owner": "GPT-5.6 Sol, high effort, CLI agent",
+      "status": "Checks and review running",
+      "next_action": "Finish current-head checks and review before parent merge.",
+      "github_state": "OPEN",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "PENDING"
+        }
+      ],
+      "head": "186556e8117c942edfe7e11d199234d458f556a2",
+      "checked_at": "2026-09-07 14:31 UTC"
+    },
+    {
+      "number": 453,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/453",
+      "title": "test(bank): pin the bank acceptance adapter",
+      "owner": "Codex",
+      "status": "Checks and review running",
+      "next_action": "Finish current-head checks and review before parent merge.",
+      "github_state": "OPEN",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "test",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "PENDING"
+        }
+      ],
+      "head": "04e5ac5e14b779e99474145e6a9a2b45172b3c15",
+      "checked_at": "2026-09-07 14:31 UTC"
     }
   ],
   "history": [
@@ -3087,6 +3170,10 @@
     {
       "at": "2026-09-07 14:28 UTC",
       "text": "Merged CLI #57 after 711 tests and final-head CodeRabbit review passed. The owner is preparing its core pin. Bank adapter #9 is open after parent review corrected setup failures and partial VALUES handling; no live acceptance run was claimed."
+    },
+    {
+      "at": "2026-09-07 14:31 UTC",
+      "text": "Report review found stale closed-issue rationales and an empty-URL crash; fixed both and checked other completed records. Released bank alpha.7 and opened core pin #453. Service pin #452 is open. Assigned the next ready adapter, #142, in a separate worktree."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
