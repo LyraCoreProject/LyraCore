@@ -10,7 +10,7 @@ use support::Standalone;
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and waits for the five-minute session reaper"]
 fn logon_renews_expired_sessions_and_the_scheduler_reaps_only_expired_rows() {
-    let standalone = Standalone::start("session-expiry");
+    let mut standalone = Standalone::start("session-expiry");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     assert!(standalone

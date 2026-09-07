@@ -10,7 +10,7 @@ use support::Standalone;
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI, the Wasm toolchain, and the dungeons Package installed (lyracore packages add dungeons)"]
 fn deadmines_choreography_reaches_package_owned_outcomes() {
-    let standalone = Standalone::start("deadmines-package");
+    let mut standalone = Standalone::start("deadmines-package");
     standalone.publish_module_anonymous();
     standalone.assert_call_anonymous("debug_deadmines_begin", &[]);
     standalone.assert_call_anonymous("debug_deadmines_rhahkzor_falls", &[]);

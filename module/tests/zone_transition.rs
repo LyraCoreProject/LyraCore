@@ -34,7 +34,7 @@ type SqlRow = BTreeMap<String, String>;
 fn accepted_movement_across_a_zone_boundary_updates_the_live_and_durable_zone_once() {
     assert_distinct_cells();
 
-    let standalone = Standalone::start("zone-transition");
+    let mut standalone = Standalone::start("zone-transition");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     import_areas(&standalone);
