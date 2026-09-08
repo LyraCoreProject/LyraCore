@@ -210,12 +210,13 @@ pub(crate) fn flush_pending_promotions<St: WorldStore + ?Sized>(
 ///
 /// `won_watermark` advances only after every settlement in the batch succeeds on every Shard.
 /// A failure leaves the result available to retry while its Realm-core event still exists.
-/// The Module makes repeated settlement harmless during that event's lifetime.
+/// A successful grant removes the original loot row, and the Module ignores rows that are not
+/// withheld. These guards cannot distinguish a later loot row with the same corpse GUID and slot.
 ///
 /// Both directions are BEST-EFFORT, deliberately, the same posture `party::sync_mirrors` documents:
 /// realm-core has already committed (a promoted roll exists there, or a roll has already resolved)
 /// by the time either loop runs, so a failed relay step must not undo or re-litigate that — it just
-/// leaves the affected shard's local state stale until the next tick.
+/// leaves the affected Shard's local state stale. Settlement retries still need the outcome event.
 ///
 /// Ordinary promotion latency (a roll NOT caught by [`flush_pending_promotions`]) is bounded by this
 /// function's own caller's poll interval, not by anything in here — see this module's doc for why
