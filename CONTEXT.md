@@ -200,6 +200,31 @@ the correct authority. Reaped on the shared event TTL, so it is a request, never
 `game_bot_invite_intent`, which kept its name through the change that gave it a second operation.
 _Avoid_: invite intent, group request, party order
 
+**Bot Controller**:
+The durable selector for Legacy, RecordOnly, Cohort, or Frozen behavior. RecordOnly records decisions
+and authorizes no bot gameplay. Frozen cancels Foreground Actions and authorizes no new bot gameplay.
+
+**Bot Objective**:
+A retained purpose with its destination, stage, deadline, catalog revision, and verified progress.
+Tactical interruption does not replace the objective.
+
+**Foreground Action**:
+The single movement or cast retained by one Bot Controller generation.
+
+**Candidate**:
+A proposed action identified by its action, target, spell, reason, and Bot Objective identity.
+
+**Strategy**:
+A composition of typed triggers, defaults, and integer priorities used to select Candidates.
+
+**Sessionless Action Consent**:
+A Character-owned core projection of a Package's controller selection. An absent row permits legacy
+behavior. Each selection updates consent and clears unclaimed Group Intents in one transaction,
+including a same-value selection. Automatic group answers and Group Intent claims require admission
+on the owning World Shard. Suppression leaves a pending invitation unanswered. An action admitted
+before a later selection may still finish on Realm-core. Admission and membership are separate
+transactions across Shards. Consent travels with the Character on Transfer and is deleted with it.
+
 **Home Shard**:
 The shard that currently holds a Character's row.
 

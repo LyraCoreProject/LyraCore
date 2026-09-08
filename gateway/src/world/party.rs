@@ -232,84 +232,37 @@ pub(crate) fn live_anywhere<St: WorldStore + ?Sized>(store: &St, guid: u64) -> b
     store.entity_in_world(guid) || store.world_stores().iter().any(|s| s.entity_in_world(guid))
 }
 
-/// Is `guid` in the world with **nobody at the keyboard** — i.e. a session-less playerbot?
-///
-/// It is a live `game_world_entity` AND `game_character.online == false`: the exact pair of facts
-/// the group slice had to separate, read together. The module writes them in ONE transaction —
-/// `player_login` sets the session flag in the same transaction that inserts the entity, and the
-/// logout persist clears it in the same transaction that removes it (`module/src/world.rs`) — while
-/// a playerbot is in the split state for its whole life, because `playerbots_spawn` materialises
-/// the entity through `build_player_entity` and never runs `player_login`.
-///
-/// **BOTH READS COME OFF THE SAME DATABASE, and that is the whole correctness argument.** The
-/// atomicity above is per-database, so pairing a UNION over the entity tables with a first-hit-wins
-/// [`presence`] over `game_character` compares two different shards' answers — and a stale character
-/// row on any OTHER connected shard then reads a live, logged-in player as session-less. That is not
-/// hypothetical: `init` seeds character guid 1 ("Tester") into EVERY database it is published to, so
-/// on the three-database stack a player logged in as guid 1 on `lyracore` also has an
-/// `online = false` row sitting on `lyracore-instances` — and an inviter standing inside a dungeon
-/// resolves the flag off that copy. Answering an invite for a real player is an impersonation, so the
-/// session flag is read on the shard that actually HOLDS the live entity, and nowhere else (caught
-/// in the bot-invite fix's own adversarial review). No row there at all ⇒ not session-less: this
-/// refuses rather than guesses.
-///
-/// Why the gateway asks at all: a bot has no client, so nothing answers the group-invite dialog for
-/// it. On a SINGLE-database gateway the module answers in-transaction — `invite_core` fires the
-/// `on_group_invite` hook and the playerbots package accepts through it — but this slice moved the
-/// invite onto REALM-CORE, where `pkg_playerbots_bot` is empty, so that hook is a no-op there and a
-/// player's invite to a bot hung until the 2-minute GC (observed live 2026-07-26). The gateway is
-/// the only party that can see both databases, so it is the only party that can notice.
-///
-/// `pkg_playerbots_bot` itself is not an option: it is a PRIVATE package table, so the gateway has no
-/// subscription to it (and giving the routing layer a package dependency to answer a question the
-/// public tables already answer would be the wrong trade).
-///
-/// The predicate is "session-less live entity", not "row in the playerbots table", so it also answers
-/// TRUE for a character materialised by `debug_spawn_player_entity` — a durable row with a live entity
-/// and no session. That is deliberate: such a character has no client either, so nobody else can
-/// answer its dialog. It is stated because `debug_reducers` IS published live, so "only playerbots
-/// reach this" would be false.
-pub(crate) fn session_less_in_world<St: WorldStore + ?Sized>(store: &St, guid: u64) -> bool {
-    // The asking handle first (the shard most targets are on), then every other connected one — the
-    // same order + short-circuit `presence`/`resolve_by_name` use, except that here finding the
-    // ENTITY is what selects whose session flag to trust.
+/// Route admission to the World Shard that reports the live entity. The acknowledged operation
+/// checks current Session ownership and consent there, even if that presence read was stale.
+fn admit_sessionless_answer<St: WorldStore + ?Sized>(
+    store: &St,
+    guid: u64,
+) -> Result<PartyOutcome> {
     if store.entity_in_world(guid) {
-        return matches!(store.character_presence(guid), Ok(Some((false, ..))));
+        return store.admit_sessionless_group_action(guid);
     }
-    for shard in store.world_stores() {
-        if shard.entity_in_world(guid) {
-            return matches!(shard.character_presence(guid), Ok(Some((false, ..))));
-        }
+    if let Some(shard) = store
+        .world_stores()
+        .into_iter()
+        .find(|shard| shard.entity_in_world(guid))
+    {
+        return shard.admit_sessionless_group_action(guid);
     }
-    false
+    Ok(PartyOutcome::Refused(GroupRefusal::ActorUnavailable))
 }
 
-/// Answer the pending invite of a session-less playerbot, on the database that holds it.
-///
-/// Cadence: none — this runs SYNCHRONOUSLY inside the invite op, so there is no new scheduled tick,
-/// no poll, and no staggering to tune. (The original bug report asked for a staggered window on the
-/// playerbots goal tick; a poll there would have read the shard's own `game_group_invite`, which on
-/// a sharded deployment is never written — the invite lives on realm-core.)
-///
-/// The bot acts as ITSELF: `realm_group_op`'s `actor` slot carries the bot's own guid for both the
-/// accept and the decline, never the inviter's — the impersonation hazard this slice already hit once.
-///
-/// A refusal DECLINES rather than walking away. Every accept gate in the module
-/// ([`GroupRefusal::AlreadyInGroup`], [`GroupRefusal::GroupFull`],
-/// [`GroupRefusal::InviterUnavailable`]) rolls its transaction back and leaves
-/// the invite row standing — so ignoring the refusal would leave the dialog hanging, which is
-/// indistinguishable from the bug this fixes. The decline consumes the invite and pushes
-/// `SMSG_GROUP_DECLINE` at the inviter.
-///
-/// Best-effort, like the mirror push: the player's invite has already committed on the authority, and
-/// a bot that could not join must not turn the player's own invite into an error.
-///
-// Note: no bot-side policy is consulted, because there is none to consult — the bot-to-bot path
-// (`brain.rs`'s `playerbots_auto_accept`) accepts any invite to any bot, and the party-cap /
-// one-pending-invite gates it relies on live in `accept_invite_for`, which runs here too.
+/// Admit the automatic answer on the owning World Shard, then apply party rules on Realm-core.
+/// Suppression or unavailable admission leaves the invite untouched. Admission and membership
+/// commit on separate Shards, so a later controller selection cannot recall an admitted answer.
 fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn WorldStore, guid: u64) {
-    if !session_less_in_world(store, guid) {
-        return; // a real player's own client answers its own dialog
+    let admission = admit_sessionless_answer(store, guid);
+    match admission {
+        Ok(PartyOutcome::Ran) => {}
+        Ok(PartyOutcome::Refused(_)) => return,
+        Err(error) => {
+            log::warn!("party: session-less {guid} admission unavailable: {error:#}");
+            return;
+        }
     }
     let joined = match realm.realm_group_op(realm_op::ACCEPT, guid, 0, 0, 0) {
         Ok(PartyOutcome::Ran) => {
@@ -319,11 +272,11 @@ fn answer_for_session_less<St: WorldStore + ?Sized>(store: &St, realm: &dyn Worl
         Ok(PartyOutcome::Refused(refusal)) => format!("{refusal:?}"),
         Err(e) => format!("{e:#}"),
     };
-    log::info!("party: session-less {guid} cannot join ({joined}) — declining explicitly");
+    log::info!("party: session-less {guid} cannot join ({joined}), declining explicitly");
     match realm.realm_group_op(realm_op::DECLINE, guid, 0, 0, 0) {
         Ok(PartyOutcome::Ran) => {}
         outcome => log::warn!(
-            "party: session-less {guid} could neither join nor decline ({outcome:?}) — the \
+            "party: session-less {guid} could neither join nor decline ({outcome:?}). The \
              inviter's dialog stands until realm-core's invite GC reaps it"
         ),
     }
@@ -436,8 +389,10 @@ pub(crate) fn run_bot_invite_intent<St: WorldStore>(
     inviter_guid: u64,
     target_guid: u64,
 ) -> Result<PartyOutcome> {
-    if !store.claim_bot_invite_intent(intent_id)? {
-        return Ok(PartyOutcome::Ran);
+    match store.claim_bot_invite_intent(intent_id)? {
+        PartyOutcome::Ran => {}
+        PartyOutcome::Refused(GroupRefusal::IntentAlreadyClaimed) => return Ok(PartyOutcome::Ran),
+        refusal @ PartyOutcome::Refused(_) => return Ok(refusal),
     }
     match op {
         bot_op::INVITE => run_bot_invite(store, inviter_guid, target_guid),

@@ -1073,8 +1073,15 @@ impl WorldStore for Coordinator {
             .collect()
     }
 
-    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<bool> {
+    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<crate::world::party::PartyOutcome> {
         self.claim_bot_invite_intent(intent_id)
+    }
+
+    fn admit_sessionless_group_action(
+        &self,
+        character_guid: u64,
+    ) -> Result<crate::world::party::PartyOutcome> {
+        self.admit_sessionless_group_action(character_guid)
     }
 
     fn realm_group_op(

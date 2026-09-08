@@ -553,6 +553,11 @@ struct InMemoryStore {
     /// Unclaimed bot invite intent ids on this World Shard. Two concurrent consumers share this
     /// collection, matching the Module table both Gateways call into.
     bot_invite_intents: std::sync::Mutex<Vec<u64>>,
+    /// Current consent returned by the owned admission seam, independent of presence reads.
+    sessionless_admission: std::sync::Mutex<std::collections::HashMap<u64, GroupRefusal>>,
+    sessionless_admission_unavailable: std::sync::Mutex<Vec<u64>>,
+    suppress_after_admission: std::sync::Mutex<Vec<u64>>,
+    bot_intent_claim_refusals: std::sync::Mutex<std::collections::HashMap<u64, GroupRefusal>>,
     /// The AUTHORITATIVE party state, when this handle is the realm-core one. Shared with
     /// nobody — a realm handle owns exactly one of these, and every shard reads its own `mirror`.
     party: std::sync::Arc<std::sync::Mutex<FakeParty>>,
@@ -2445,13 +2450,61 @@ impl WorldStore for InMemoryStore {
             .collect()
     }
 
-    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<bool> {
+    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<PartyOutcome> {
+        if let Some(refusal) = self
+            .bot_intent_claim_refusals
+            .lock()
+            .unwrap()
+            .get(&intent_id)
+        {
+            return Ok(PartyOutcome::Refused(*refusal));
+        }
         let mut intents = self.bot_invite_intents.lock().unwrap();
         let Some(index) = intents.iter().position(|id| *id == intent_id) else {
-            return Ok(false);
+            return Ok(PartyOutcome::Refused(GroupRefusal::IntentAlreadyClaimed));
         };
         intents.swap_remove(index);
-        Ok(true)
+        Ok(PartyOutcome::Ran)
+    }
+
+    fn admit_sessionless_group_action(&self, character_guid: u64) -> Result<PartyOutcome> {
+        self.rec("admit_sessionless_group_action");
+        if self
+            .sessionless_admission_unavailable
+            .lock()
+            .unwrap()
+            .contains(&character_guid)
+        {
+            anyhow::bail!("World Shard admission unavailable");
+        }
+        if let Some(refusal) = self
+            .sessionless_admission
+            .lock()
+            .unwrap()
+            .get(&character_guid)
+        {
+            return Ok(PartyOutcome::Refused(*refusal));
+        }
+        if !self.entity_in_world(character_guid)
+            || !matches!(
+                self.character_presence(character_guid),
+                Ok(Some((false, ..)))
+            )
+        {
+            return Ok(PartyOutcome::Refused(GroupRefusal::ActorUnavailable));
+        }
+        if self
+            .suppress_after_admission
+            .lock()
+            .unwrap()
+            .contains(&character_guid)
+        {
+            self.sessionless_admission
+                .lock()
+                .unwrap()
+                .insert(character_guid, GroupRefusal::ActionSuppressed);
+        }
+        Ok(PartyOutcome::Ran)
     }
 
     /// The module's `realm_group_op`, modelled: the rules the ROUTING depends on, applied to the

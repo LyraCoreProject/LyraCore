@@ -55,21 +55,22 @@ fn taxi_reply_matches(
 }
 
 impl Coordinator {
-    /// Delete one subscribed bot invite intent on this World Shard. A missing row is the expected
-    /// result for every losing Gateway callback, while transport and other Module failures remain
-    /// caller-visible.
-    pub fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<bool> {
-        match call_reducer!(
+    /// Claim and admit a Group Intent in one World Shard transaction.
+    pub fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<PartyOutcome> {
+        party_outcome(call_reducer!(
             self.0.call_pipe().conn.reducers,
             "claim_bot_invite_intent",
             claim_bot_invite_intent_then(intent_id)
-        ) {
-            Ok(()) => Ok(true),
-            Err(error) if group_refusal(&error) == Some(GroupRefusal::IntentAlreadyClaimed) => {
-                Ok(false)
-            }
-            Err(error) => Err(error),
-        }
+        ))
+    }
+
+    /// Wait for the owning World Shard's current consent Gate, without subscription readback.
+    pub fn admit_sessionless_group_action(&self, character_guid: u64) -> Result<PartyOutcome> {
+        party_outcome(call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "admit_sessionless_group_action",
+            admit_sessionless_group_action_then(character_guid)
+        ))
     }
 
     fn await_taxi_reply(
