@@ -1387,9 +1387,11 @@ pub(crate) fn repair_lesser_heal_target(ctx: &ReducerContext) -> u64 {
         return 0;
     };
     let effects = ctx.db.game_spell_effect();
-    let Some(mut effect) = effects.id().find(2050u64 << 2) else {
+    let mut spell_effects: Vec<_> = effects.by_spell().filter(&2050u32).take(2).collect();
+    if spell_effects.len() != 1 {
         return 0;
-    };
+    }
+    let mut effect = spell_effects.pop().unwrap();
     if !legacy_lesser_heal_header(&spell) || !legacy_lesser_heal_effect(&effect) {
         return 0;
     }

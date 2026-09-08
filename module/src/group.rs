@@ -497,12 +497,29 @@ pub struct PartyFacts {
     pub members: Vec<PartyMemberFacts>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartyFactsUnavailable {
+    pub group_id: u64,
+}
+
 /// Read one Character's local durable party mirror and current member facts. Membership remains
 /// useful when a member has no live entity on this Shard, so those facts are nullable.
 #[cfg_attr(not(has_packages), allow(dead_code))]
-pub fn party_facts(ctx: &ReducerContext, character_guid: u64) -> Option<PartyFacts> {
-    let member = group_of(ctx, character_guid)?;
-    let group = ctx.db.game_group().group_id().find(member.group_id)?;
+pub fn party_facts(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<Option<PartyFacts>, PartyFactsUnavailable> {
+    let Some(member) = group_of(ctx, character_guid) else {
+        return Ok(None);
+    };
+    let group =
+        ctx.db
+            .game_group()
+            .group_id()
+            .find(member.group_id)
+            .ok_or(PartyFactsUnavailable {
+                group_id: member.group_id,
+            })?;
     let members = members_of(ctx, member.group_id)
         .into_iter()
         .map(|member| {
@@ -527,11 +544,11 @@ pub fn party_facts(ctx: &ReducerContext, character_guid: u64) -> Option<PartyFac
             }
         })
         .collect();
-    Some(PartyFacts {
+    Ok(Some(PartyFacts {
         group_id: member.group_id,
         leader_guid: group.leader_guid,
         members,
-    })
+    }))
 }
 
 /// Resolve a membership and its required parent for mutation cores. `Ok(None)` means the

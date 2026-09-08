@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const HEAL: &str = "5090100";
+const CHANNEL_HEAL: &str = "5090104";
 
 fn record_inputs(node: &Standalone) {
     let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -82,6 +83,30 @@ fn position(node: &Standalone, guid: &str) -> (f32, f32) {
     (row["x"].parse().unwrap(), row["y"].parse().unwrap())
 }
 
+fn health(node: &Standalone, guid: &str) -> u32 {
+    node.query_rows(&format!(
+        "SELECT health FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["health"]
+        .parse()
+        .unwrap()
+}
+
+fn movement_leg_finished(node: &Standalone, guid: &str) -> bool {
+    let rows = node.query_rows(&format!(
+        "SELECT start_micros, dur_ms FROM game_creature_spline WHERE guid = {guid}"
+    ));
+    let Some(row) = rows.first() else {
+        return true;
+    };
+    let finish =
+        row["start_micros"].parse::<u64>().unwrap() + row["dur_ms"].parse::<u64>().unwrap() * 1_000;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as u64;
+    now >= finish
+}
+
 fn fixture(name: &str) -> (Standalone, Vec<String>) {
     let mut node = Standalone::start(name);
     node.publish_module();
@@ -157,6 +182,26 @@ fn priest_follows_a_moving_human_leader_without_pulling() {
         ))
         .is_empty());
     evidence(&node, "follow");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn missing_group_parent_holds_the_companion_objective() {
+    let (node, bots) = fixture("playerbots-companion-party-unavailable");
+    let priest = &bots[0];
+    select(&node, priest, "cohort");
+    due(&node, priest);
+    let before = runner(&node, priest);
+    assert!(before["objective"].contains("companion"));
+    node.assert_call("playerbots_fixture_companion_remove_group", &[]);
+    due(&node, priest);
+    let held = runner(&node, priest);
+    assert_eq!(held["objective_sequence"], before["objective_sequence"]);
+    assert_eq!(held["objective"], before["objective"]);
+    assert!(held["chosen"].contains("partyUnavailable"), "{held:?}");
+    assert!(held["last_outcome"].contains("partyFactsUnavailable"));
+    assert!(held["foreground"].contains("none"));
+    evidence(&node, "party-unavailable-hold");
 }
 
 #[test]
@@ -278,37 +323,85 @@ fn low_health_at_the_reached_leader_uses_recovery_instead_of_holding() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn targeted_cast_gates_match_and_preserve_explicit_exemptions() {
-    let (node, bots) = fixture("playerbots-companion-gates");
+fn casting_position_retains_one_injured_ally_across_movement_legs() {
+    let (node, bots) = fixture("playerbots-companion-target-retention");
+    let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
+    node.assert_call("playerbots_fixture_companion_health", &[leader, "40"]);
+    node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
+    node.assert_call("playerbots_fixture_companion_health", &[ally, "30"]);
+    select(&node, priest, "cohort");
+    due(&node, priest);
+    let first = runner(&node, priest);
+    assert!(first["chosen"].contains("castingPosition"), "{first:?}");
+    assert!(first["chosen"].contains(ally));
+    assert!(first["companion_heal_target_guid"].contains(ally));
+
+    node.assert_call("playerbots_fixture_companion_health", &[leader, "10"]);
+    for _ in 0..3 {
+        assert!(poll_until(POLL_TIMEOUT, || movement_leg_finished(
+            &node, priest
+        )));
+        due(&node, priest);
+        let retained = runner(&node, priest);
+        assert!(
+            retained["chosen"].contains("castingPosition"),
+            "{retained:?}"
+        );
+        assert!(retained["chosen"].contains(ally), "{retained:?}");
+        assert!(retained["companion_heal_target_guid"].contains(ally));
+    }
+
+    node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
+    due(&node, priest);
+    let replaced = runner(&node, priest);
+    assert!(replaced["companion_heal_target_guid"].contains(leader));
+    assert!(replaced["chosen"].contains(leader), "{replaced:?}");
+    evidence(&node, "target-retention");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn unsupported_channel_does_not_hide_a_supported_learned_heal() {
+    let (node, bots) = fixture("playerbots-companion-mixed-heals");
+    let (priest, ally) = (&bots[0], &bots[2]);
+    node.assert_call("playerbots_fixture_companion_mixed_heals", &[priest]);
+    node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
+    select(&node, priest, "cohort");
+    due(&node, priest);
+    let state = runner(&node, priest);
+    assert!(state["chosen"].contains(HEAL), "{state:?}");
+    assert!(!state["chosen"].contains(CHANNEL_HEAL), "{state:?}");
+    let pending = node.query_rows(&format!(
+        "SELECT spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {priest}"
+    ));
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["spell_id"], HEAL);
+    assert_eq!(pending[0]["target_guid"], *ally);
+    evidence(&node, "mixed-heal-capabilities");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn poor_range_selects_the_injured_allys_casting_position() {
+    let (node, bots) = fixture("playerbots-companion-range");
     let (priest, ally) = (&bots[0], &bots[2]);
     node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
     select(&node, priest, "cohort");
     due(&node, priest);
-    let range = runner(&node, priest);
-    assert!(range["chosen"].contains("castingPosition"), "{range:?}");
-    assert!(range["chosen"].contains(ally));
-    evidence(&node, "range-prerequisite");
-    select(&node, priest, "frozen");
-
-    node.assert_call("debug_set_nav_enabled", &["true"]);
-    node.assert_call("playerbots_fixture_companion_wall", &[priest, ally]);
-    select(&node, priest, "cohort");
-    due(&node, priest);
     let state = runner(&node, priest);
     assert!(state["chosen"].contains("castingPosition"), "{state:?}");
     assert!(state["chosen"].contains(ally));
-    let movement = node.query_rows(&format!(
-        "SELECT outcome FROM pkg_playerbots_action WHERE character_guid = {priest}"
-    ));
-    assert!(
-        movement.iter().any(|row| {
-            row["outcome"].contains("blocked") || row["outcome"].contains("partial")
-        }),
-        "{movement:?}"
-    );
-    evidence(&node, "los-prerequisite");
-    select(&node, priest, "frozen");
+    evidence(&node, "range-prerequisite");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn targeted_los_gate_matches_client_and_bot_casts() {
+    let (node, bots) = fixture("playerbots-companion-los-parity");
+    let (priest, ally) = (&bots[0], &bots[2]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    node.assert_call("playerbots_fixture_companion_wall", &[priest, ally]);
     node.assert_call("playerbots_fixture_cast", &[priest, ally]);
     let bot_refusal = node.query_rows(&format!(
         "SELECT outcome FROM pkg_playerbots_action WHERE character_guid = {priest}"
@@ -327,21 +420,28 @@ fn targeted_cast_gates_match_and_preserve_explicit_exemptions() {
         String::from_utf8_lossy(&client.stderr)
     );
     assert!(client_text.contains("line of sight"), "{client_text}");
+    evidence(&node, "los-client-bot-parity");
+}
 
-    let before = node.query_rows(&format!(
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn unlearned_actor_heal_refuses_without_cast_power_or_cooldown_state() {
+    let (node, bots) = fixture("playerbots-companion-unlearned");
+    let (priest, ally) = (&bots[0], &bots[2]);
+    let power = node.query_rows(&format!(
         "SELECT power FROM game_world_entity WHERE guid = {priest}"
     ))[0]["power"]
         .clone();
     node.assert_call("playerbots_fixture_companion_forget_heal", &[priest]);
     node.assert_call("playerbots_fixture_cast", &[priest, ally]);
-    let unlearned = node.query_rows(&format!(
+    let action = node.query_rows(&format!(
         "SELECT outcome FROM pkg_playerbots_action WHERE character_guid = {priest}"
     ));
     assert!(
-        unlearned
+        action
             .iter()
             .any(|row| row["outcome"].contains("unlearnedSpell")),
-        "{unlearned:?}"
+        "{action:?}"
     );
     assert!(node
         .query_rows(&format!(
@@ -357,94 +457,102 @@ fn targeted_cast_gates_match_and_preserve_explicit_exemptions() {
         node.query_rows(&format!(
             "SELECT power FROM game_world_entity WHERE guid = {priest}"
         ))[0]["power"],
-        before
+        power
     );
+    evidence(&node, "unlearned-atomic-refusal");
+}
 
-    node.assert_call("playerbots_fixture_companion_learn_heal", &[priest]);
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn explicit_self_target_bypasses_targeted_los_and_completes() {
+    let (node, bots) = fixture("playerbots-companion-self-cast");
+    let priest = &bots[0];
     node.assert_call("playerbots_fixture_companion_health", &[priest, "25"]);
-    let self_before = node.query_rows(&format!(
-        "SELECT health FROM game_world_entity WHERE guid = {priest}"
-    ))[0]["health"]
-        .parse::<u32>()
-        .unwrap();
+    let before = health(&node, priest);
     node.assert_call(
         "playerbots_fixture_companion_client_cast",
         &[priest, priest],
-    );
-    assert_eq!(
-        node.query_rows(&format!(
-            "SELECT target_guid FROM game_pending_cast WHERE caster_guid = {priest}"
-        ))[0]["target_guid"],
-        *priest
     );
     assert!(poll_until(POLL_TIMEOUT, || node
         .query_rows(&format!(
             "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
         ))
         .is_empty()));
-    assert!(
-        node.query_rows(&format!(
-            "SELECT health FROM game_world_entity WHERE guid = {priest}"
-        ))[0]["health"]
-            .parse::<u32>()
-            .unwrap()
-            > self_before
-    );
-    evidence(&node, "client-self-exemption-complete");
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    node.assert_call("playerbots_fixture_companion_client_cast", &[priest, "0"]);
-    assert!(!node
-        .query_rows(&format!(
-            "SELECT * FROM game_pending_cast WHERE caster_guid = {priest}"
-        ))
-        .is_empty());
-    node.assert_call("playerbots_fixture_cancel", &[priest, "false"]);
-    let triggered_before = node.query_rows(&format!(
-        "SELECT health FROM game_world_entity WHERE guid = {ally}"
-    ))[0]["health"]
-        .parse::<u32>()
-        .unwrap();
-    node.assert_call(
-        "playerbots_fixture_companion_triggered_cast",
-        &[priest, ally],
-    );
-    let triggered_after = node.query_rows(&format!(
-        "SELECT health FROM game_world_entity WHERE guid = {ally}"
-    ))[0]["health"]
-        .parse::<u32>()
-        .unwrap();
-    assert!(triggered_after > triggered_before);
-    node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
-    node.assert_call("playerbots_fixture_companion_creature_cast", &[ally]);
-    let creature = ((0xF130u64 << 48) | (5_090_301u64 << 24) | 1).to_string();
-    assert!(poll_until(POLL_TIMEOUT, || node
-        .query_rows(&format!(
-            "SELECT * FROM game_pending_cast WHERE caster_guid = {creature}"
-        ))
-        .is_empty()));
-    assert!(node
-        .query_rows(&format!(
-            "SELECT * FROM game_spell_cast_event WHERE caster_guid = {creature} AND spell_id = {HEAL}"
-        ))
-        .iter()
-        .any(|event| event["kind"] == "2"));
-    node.assert_call("playerbots_fixture_cast_mode", &[priest, ally, "true"]);
-    let channel = node.query_rows(&format!(
-        "SELECT outcome FROM pkg_playerbots_action WHERE character_guid = {priest}"
-    ));
-    assert!(
-        channel
-            .iter()
-            .any(|row| row["outcome"].contains("unsupportedChannel")),
-        "{channel:?}"
-    );
-    evidence(&node, "cast-gates");
+    assert!(health(&node, priest) > before);
+    evidence(&node, "self-target-complete");
 }
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn cancellation_and_death_preserve_the_companion_role_and_objective() {
-    let (node, bots) = fixture("playerbots-companion-recovery");
+fn untargeted_actor_cast_keeps_its_supported_lifecycle() {
+    let (node, bots) = fixture("playerbots-companion-untargeted-cast");
+    let priest = &bots[0];
+    node.assert_call("playerbots_fixture_companion_client_cast", &[priest, "0"]);
+    let pending = node.query_rows(&format!(
+        "SELECT target_guid FROM game_pending_cast WHERE caster_guid = {priest}"
+    ));
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["target_guid"], "0");
+    evidence(&node, "untargeted-started");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn triggered_player_cast_bypasses_targeted_los() {
+    let (node, bots) = fixture("playerbots-companion-triggered-cast");
+    let (priest, ally) = (&bots[0], &bots[2]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    node.assert_call("playerbots_fixture_companion_wall", &[priest, ally]);
+    let before = health(&node, ally);
+    node.assert_call(
+        "playerbots_fixture_companion_triggered_cast",
+        &[priest, ally],
+    );
+    assert!(health(&node, ally) > before);
+    evidence(&node, "triggered-los-exemption");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn creature_cast_bypasses_targeted_los_and_completes() {
+    let (node, bots) = fixture("playerbots-companion-creature-cast");
+    let (priest, ally) = (&bots[0], &bots[2]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    node.assert_call("playerbots_fixture_companion_wall", &[priest, ally]);
+    let before = health(&node, ally);
+    node.assert_call("playerbots_fixture_companion_creature_cast", &[ally]);
+    let creature = ((0xF130u64 << 48) | (5_090_301u64 << 24) | 1).to_string();
+    assert!(poll_until(POLL_TIMEOUT, || node
+        .query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {creature}"
+        ))
+        .is_empty()));
+    assert!(health(&node, ally) > before);
+    evidence(&node, "creature-los-exemption");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn actor_channel_request_has_a_typed_unsupported_refusal() {
+    let (node, bots) = fixture("playerbots-companion-channel-refusal");
+    let (priest, ally) = (&bots[0], &bots[2]);
+    node.assert_call("playerbots_fixture_cast_mode", &[priest, ally, "true"]);
+    let action = node.query_rows(&format!(
+        "SELECT outcome FROM pkg_playerbots_action WHERE character_guid = {priest}"
+    ));
+    assert!(
+        action
+            .iter()
+            .any(|row| row["outcome"].contains("unsupportedChannel")),
+        "{action:?}"
+    );
+    evidence(&node, "channel-refusal");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn explicit_cancellation_releases_the_heal_and_resumes_follow() {
+    let (node, bots) = fixture("playerbots-companion-cancel-resume");
     let (priest, ally) = (&bots[0], &bots[2]);
     select(&node, priest, "cohort");
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
@@ -458,8 +566,18 @@ fn cancellation_and_death_preserve_the_companion_role_and_objective() {
     node.assert_call("playerbots_fixture_cancel", &[priest, "false"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
     due(&node, priest);
+    assert_eq!(runner(&node, priest)["objective_sequence"], objective);
     assert!(runner(&node, priest)["chosen"].contains("follow"));
-    evidence(&node, "explicit-cancel-resume");
+    assert!(runner(&node, priest)["companion_heal_target_guid"].contains("none"));
+    evidence(&node, "cancel-resume");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn completion_time_los_refusal_releases_the_heal_and_resumes_follow() {
+    let (node, bots) = fixture("playerbots-companion-los-resume");
+    let (priest, ally) = (&bots[0], &bots[2]);
+    select(&node, priest, "cohort");
     node.assert_call("debug_set_nav_enabled", &["true"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
     due(&node, priest);
@@ -468,6 +586,7 @@ fn cancellation_and_death_preserve_the_companion_role_and_objective() {
             "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
         ))
         .is_empty()));
+    let objective = runner(&node, priest)["objective_sequence"].clone();
     node.assert_call("playerbots_fixture_companion_wall", &[priest, ally]);
     assert!(poll_until(POLL_TIMEOUT, || node
         .query_rows(&format!(
@@ -476,9 +595,22 @@ fn cancellation_and_death_preserve_the_companion_role_and_objective() {
         .iter()
         .any(|row| row["outcome"].contains("noLineOfSight"))));
     assert!(runner(&node, priest)["last_outcome"].contains("refused"));
+    assert!(runner(&node, priest)["companion_heal_target_guid"].contains("none"));
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
     due(&node, priest);
+    assert_eq!(runner(&node, priest)["objective_sequence"], objective);
     assert!(runner(&node, priest)["chosen"].contains("follow"));
+    evidence(&node, "los-refusal-resume");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn death_and_resurrection_preserve_role_then_regroup() {
+    let (node, bots) = fixture("playerbots-companion-death-regroup");
+    let priest = &bots[0];
+    select(&node, priest, "cohort");
+    due(&node, priest);
+    let objective = runner(&node, priest)["objective_sequence"].clone();
     node.assert_call(
         "playerbots_fixture_runner_damage",
         &[priest, "0", "1000000"],
@@ -530,7 +662,7 @@ fn cancellation_and_death_preserve_the_companion_role_and_objective() {
         "SELECT role FROM pkg_playerbots_bot WHERE character_guid = {priest}"
     ));
     assert_eq!(bot[0]["role"], "1");
-    evidence(&node, "cancel-death-regroup");
+    evidence(&node, "death-regroup");
 }
 
 #[test]
@@ -574,17 +706,7 @@ fn populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() 
     assert_eq!(after["objective"], before["objective"]);
     assert_eq!(after["foreground"], before["foreground"]);
     assert!(after["companion_leader_guid"].contains("none"));
-    let effect_target = || {
-        node.query_rows("SELECT target FROM game_spell_effect WHERE id = 8200")[0]["target"].clone()
-    };
-    assert_eq!(effect_target(), "0");
-    node.assert_call("debug_repair_after_publish", &[]);
-    assert_eq!(effect_target(), "2");
-    node.assert_call("debug_repair_after_publish", &[]);
-    assert_eq!(effect_target(), "2");
-    node.assert_call("playerbots_fixture_companion_lesser_heal_target", &["3"]);
-    node.assert_call("debug_repair_after_publish", &[]);
-    assert_eq!(effect_target(), "3");
+    assert!(after["companion_heal_target_guid"].contains("none"));
     let path = support::log_dir().join(format!("{}-migration.json", node.shard_name()));
     std::fs::write(
         path,
@@ -594,10 +716,67 @@ fn populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() 
             "preceding_collection": "155c9e401afb06d5731acedf8fc35a81dbe4aaa6",
             "preceding_wasm_blake3": blake3::hash(&old_wasm).to_hex().to_string(),
             "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
-            "canonical_lesser_heal_target_after_repair": 2,
-            "imported_like_lesser_heal_target_after_repair": effect_target(),
             "before": before,
             "after": after,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+#[ignore = "requires the pinned PB-002 Wasm, SpacetimeDB, and the playerbots Package"]
+fn canonical_lesser_heal_repair_preserves_changed_definitions() {
+    let old_path = std::env::var_os("PLAYERBOTS_COMPANION_PRECEDING_WASM")
+        .expect("PLAYERBOTS_COMPANION_PRECEDING_WASM must name the merged PB-002 Wasm");
+    let old_wasm = std::fs::read(old_path).unwrap();
+    assert_eq!(
+        blake3::hash(&old_wasm).to_hex().to_string(),
+        "e5bfa3e63cd2b03c782af829029030b9a6368b0e6552295958cc128613083fcb"
+    );
+    let mut node = Standalone::start("playerbots-companion-seed-repair");
+    node.publish_module_bytes(&old_wasm);
+    node.assert_call("claim_operator", &[]);
+    node.publish_module();
+    record_inputs(&node);
+    let effect_target = || {
+        node.query_rows("SELECT target FROM game_spell_effect WHERE id = 8200")[0]["target"].clone()
+    };
+    assert_eq!(effect_target(), "0");
+    node.assert_call(
+        "playerbots_fixture_companion_extra_lesser_heal_effect",
+        &["true"],
+    );
+    node.assert_call("debug_repair_after_publish", &[]);
+    let target_with_extra_effect = effect_target();
+    assert_eq!(target_with_extra_effect, "0");
+    node.assert_call(
+        "playerbots_fixture_companion_extra_lesser_heal_effect",
+        &["false"],
+    );
+    node.assert_call("debug_repair_after_publish", &[]);
+    let canonical_target = effect_target();
+    assert_eq!(canonical_target, "2");
+    node.assert_call("debug_repair_after_publish", &[]);
+    let repeated_target = effect_target();
+    assert_eq!(repeated_target, "2");
+    node.assert_call("playerbots_fixture_companion_lesser_heal_target", &["3"]);
+    node.assert_call("debug_repair_after_publish", &[]);
+    let changed_target = effect_target();
+    assert_eq!(changed_target, "3");
+    let path = support::log_dir().join(format!("{}-seed-repair.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "spacetimedb": "2.7.1",
+            "preceding_core": "e6a755db0a150bbf73ad97b972fe829f20f6816c",
+            "preceding_collection": "155c9e401afb06d5731acedf8fc35a81dbe4aaa6",
+            "preceding_wasm_blake3": blake3::hash(&old_wasm).to_hex().to_string(),
+            "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
+            "canonical_lesser_heal_target_after_repair": canonical_target,
+            "repeated_repair_target": repeated_target,
+            "additional_effect_preserved_legacy_target": target_with_extra_effect,
+            "changed_lesser_heal_target_after_repair": changed_target,
         }))
         .unwrap(),
     )

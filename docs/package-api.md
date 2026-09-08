@@ -132,6 +132,8 @@ caller's action deadline to have passed. They return whether they removed the ca
 
 `group::party_facts(ctx, character_guid)` reads the Character's local durable party mirror. It names
 the leader and every member, with nullable live position, health, and death facts for each member.
+An absent membership returns `Ok(None)`. A membership whose Group row is missing returns the typed
+`PartyFactsUnavailable`, so a Package can hold party control instead of starting solo behavior.
 
 ### Package Config
 
