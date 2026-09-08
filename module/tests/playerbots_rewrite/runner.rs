@@ -678,7 +678,7 @@ fn playerbots_runner_finishes_bounded_recovery_lookup_and_revalidates_changes() 
     };
     pass();
     assert!(scan()["stage"].contains("pending"));
-    assert_eq!(scan()["rows_examined"], "24");
+    assert_eq!(scan()["rows_scanned"], "24");
     assert!(runner(&node, bot)["chosen"].contains("recovery"));
     assert!(runner(&node, bot)["chosen"].contains("hold"));
     assert!(node
@@ -686,7 +686,7 @@ fn playerbots_runner_finishes_bounded_recovery_lookup_and_revalidates_changes() 
         .is_empty());
     pass();
     assert!(scan()["stage"].contains("complete"));
-    assert_eq!(scan()["rows_examined"], "2");
+    assert_eq!(scan()["rows_scanned"], "2");
     assert!(runner(&node, bot)["chosen"].contains("5090100"));
     select(&node, bot, "cohort");
     pass();
@@ -724,7 +724,7 @@ fn playerbots_runner_finishes_bounded_recovery_lookup_and_revalidates_changes() 
     pass();
     assert!(!runner(&node, bot)["chosen"].contains("5090100"));
     assert!(scan()["stage"].contains("complete"));
-    assert!(scan()["selected_id"].contains("none"));
+    assert!(scan()["result"].contains("missing"));
     outcomes(&node);
 }
 
@@ -758,5 +758,53 @@ fn playerbots_runner_fixture_targeting_preserves_other_bots_and_handles_grid_edg
         ));
         node.assert_call("playerbots_fixture_runner_clear_navigation", &[&bots[0]]);
     }
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_finished_negative_recovery_scan_keeps_other_actions_eligible() {
+    let (node, bots) = fixture("playerbots-runner-recovery-missing", "1");
+    let bot = &bots[0];
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    node.assert_call("playerbots_fixture_runner_wide_recovery", &[bot]);
+    node.assert_sql(&format!("UPDATE game_player_spell SET spell_id = 5090999 WHERE character_guid = {bot} AND spell_id = 5090100"));
+    select(&node, bot, "recordOnly");
+    let pass = || {
+        node.assert_call("playerbots_fixture_runner_due", &[]);
+        node.assert_call("playerbots_fixture_runner_pass", &[]);
+    };
+    let scan = || {
+        node.query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_recovery_scan WHERE character_guid = {bot}"
+        ))[0]
+            .clone()
+    };
+    pass();
+    assert!(scan()["result"].contains("pending"));
+    assert!(runner(&node, bot)["chosen"].contains("recovery"));
+    pass();
+    assert!(scan()["stage"].contains("complete"));
+    assert!(scan()["result"].contains("missing"));
+    select(&node, bot, "cohort");
+    pass();
+    assert!(scan()["stage"].contains("pending"));
+    assert!(runner(&node, bot)["chosen"].contains("returnHome"));
+    assert!(!node
+        .query_rows(&format!(
+            "SELECT * FROM game_creature_spline WHERE guid = {bot}"
+        ))
+        .is_empty());
+    select(&node, bot, "recordOnly");
+    for _ in 0..4 {
+        pass();
+        assert!(scan()["result"].contains("missing"));
+        assert!(runner(&node, bot)["chosen"].contains("returnHome"));
+    }
+    node.assert_sql(&format!("UPDATE game_player_spell SET spell_id = 5090100 WHERE character_guid = {bot} AND spell_id = 5090999"));
+    for _ in 0..2 {
+        pass();
+    }
+    assert!(runner(&node, bot)["chosen"].contains("5090100"));
     outcomes(&node);
 }
