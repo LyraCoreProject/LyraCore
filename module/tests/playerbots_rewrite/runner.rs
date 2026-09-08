@@ -733,6 +733,7 @@ fn playerbots_runner_recovery_revalidates_retained_rotation_and_spellbook_rows()
     runner_pass(&node);
     assert!(!runner(&node, &bot)["chosen"].contains("5090100"));
     node.assert_call("playerbots_fixture_runner_stage", &[&bot, "true"]);
+    node.assert_call("debug_learn_spell", &[&bot, "5090100"]);
     runner_pass(&node);
     runner_pass(&node);
     assert!(runner(&node, &bot)["chosen"].contains("5090100"));

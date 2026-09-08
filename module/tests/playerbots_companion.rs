@@ -445,7 +445,7 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     let (node, bots) = fixture("playerbots-companion-target-retention");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
     node.assert_call("playerbots_fixture_companion_health", &[leader, "40"]);
-    node.assert_call("playerbots_fixture_companion_move", &[ally, "1600", "1200"]);
+    node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "30"]);
     select(&node, priest, "cohort");
     due(&node, priest);
