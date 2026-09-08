@@ -245,7 +245,7 @@ fn evidence(node: &Standalone, case: &str) {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn priest_follows_a_moving_human_leader_without_pulling() {
+fn playerbots_priest_follows_a_moving_human_leader_without_pulling() {
     let (node, bots) = fixture("playerbots-companion-follow");
     let (priest, leader) = (&bots[0], &bots[1]);
     select(&node, priest, "cohort");
@@ -281,7 +281,7 @@ fn priest_follows_a_moving_human_leader_without_pulling() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn missing_group_parent_holds_the_companion_objective() {
+fn playerbots_missing_group_parent_holds_the_companion_objective() {
     let (node, bots) = fixture("playerbots-companion-party-unavailable");
     let priest = &bots[0];
     select(&node, priest, "cohort");
@@ -301,7 +301,7 @@ fn missing_group_parent_holds_the_companion_objective() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_follow() {
+fn playerbots_priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_follow() {
     let (node, bots) = fixture("playerbots-companion-heal");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
     select(&node, priest, "cohort");
@@ -374,7 +374,7 @@ fn priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_follow() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn low_health_at_the_reached_leader_uses_recovery_instead_of_holding() {
+fn playerbots_low_health_at_the_reached_leader_uses_recovery_instead_of_holding() {
     let (node, bots) = fixture("playerbots-companion-safe-recovery");
     let (priest, leader) = (&bots[0], &bots[1]);
     node.assert_call(
@@ -418,7 +418,7 @@ fn low_health_at_the_reached_leader_uses_recovery_instead_of_holding() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn non_healer_companion_retains_self_recovery() {
+fn playerbots_non_healer_companion_retains_self_recovery() {
     let (node, bots) = fixture_role("playerbots-companion-non-healer-recovery", "2");
     let (companion, leader) = (&bots[0], &bots[1]);
     node.assert_call(
@@ -441,7 +441,7 @@ fn non_healer_companion_retains_self_recovery() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn casting_position_retains_one_injured_ally_across_movement_legs() {
+fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     let (node, bots) = fixture("playerbots-companion-target-retention");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
     node.assert_call("playerbots_fixture_companion_health", &[leader, "40"]);
@@ -479,7 +479,7 @@ fn casting_position_retains_one_injured_ally_across_movement_legs() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn unsupported_channel_does_not_hide_a_supported_learned_heal() {
+fn playerbots_unsupported_channel_does_not_hide_a_supported_learned_heal() {
     let (node, bots) = fixture("playerbots-companion-mixed-heals");
     let (priest, ally) = (&bots[0], &bots[2]);
     node.assert_call("playerbots_fixture_companion_mixed_heals", &[priest]);
@@ -511,7 +511,7 @@ fn unsupported_channel_does_not_hide_a_supported_learned_heal() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn poor_range_selects_the_injured_allys_casting_position() {
+fn playerbots_poor_range_selects_the_injured_allys_casting_position() {
     let (node, bots) = fixture("playerbots-companion-range");
     let (priest, ally) = (&bots[0], &bots[2]);
     node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
@@ -526,7 +526,7 @@ fn poor_range_selects_the_injured_allys_casting_position() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn targeted_los_gate_matches_client_and_bot_casts() {
+fn playerbots_targeted_los_gate_matches_client_and_bot_casts() {
     let (node, bots) = fixture("playerbots-companion-los-parity");
     let (priest, ally) = (&bots[0], &bots[2]);
     node.assert_call("debug_set_nav_enabled", &["true"]);
@@ -554,7 +554,7 @@ fn targeted_los_gate_matches_client_and_bot_casts() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn unlearned_actor_heal_refuses_without_cast_power_or_cooldown_state() {
+fn playerbots_unlearned_actor_heal_refuses_without_cast_power_or_cooldown_state() {
     let (node, bots) = fixture("playerbots-companion-unlearned");
     let (priest, ally) = (&bots[0], &bots[2]);
     let power = node.query_rows(&format!(
@@ -593,7 +593,7 @@ fn unlearned_actor_heal_refuses_without_cast_power_or_cooldown_state() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn explicit_self_target_bypasses_targeted_los_and_completes() {
+fn playerbots_explicit_self_target_bypasses_targeted_los_and_completes() {
     let (node, bots) = fixture("playerbots-companion-self-cast");
     let priest = &bots[0];
     node.assert_call("playerbots_fixture_companion_health", &[priest, "25"]);
@@ -613,7 +613,7 @@ fn explicit_self_target_bypasses_targeted_los_and_completes() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn untargeted_actor_cast_keeps_its_supported_lifecycle() {
+fn playerbots_untargeted_actor_cast_keeps_its_supported_lifecycle() {
     let (node, bots) = fixture("playerbots-companion-untargeted-cast");
     let priest = &bots[0];
     node.assert_call("playerbots_fixture_companion_client_cast", &[priest, "0"]);
@@ -627,7 +627,7 @@ fn untargeted_actor_cast_keeps_its_supported_lifecycle() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn triggered_player_cast_bypasses_targeted_los() {
+fn playerbots_triggered_player_cast_bypasses_targeted_los() {
     let (node, bots) = fixture("playerbots-companion-triggered-cast");
     let (priest, ally) = (&bots[0], &bots[2]);
     node.assert_call("debug_set_nav_enabled", &["true"]);
@@ -643,7 +643,7 @@ fn triggered_player_cast_bypasses_targeted_los() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn creature_cast_bypasses_targeted_los_and_completes() {
+fn playerbots_creature_cast_bypasses_targeted_los_and_completes() {
     let (node, bots) = fixture("playerbots-companion-creature-cast");
     let (priest, ally) = (&bots[0], &bots[2]);
     node.assert_call("debug_set_nav_enabled", &["true"]);
@@ -662,7 +662,7 @@ fn creature_cast_bypasses_targeted_los_and_completes() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn actor_channel_request_has_a_typed_unsupported_refusal() {
+fn playerbots_actor_channel_request_has_a_typed_unsupported_refusal() {
     let (node, bots) = fixture("playerbots-companion-channel-refusal");
     let (priest, ally) = (&bots[0], &bots[2]);
     node.assert_call("playerbots_fixture_cast_mode", &[priest, ally, "true"]);
@@ -680,7 +680,7 @@ fn actor_channel_request_has_a_typed_unsupported_refusal() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn explicit_cancellation_releases_the_heal_and_resumes_follow() {
+fn playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow() {
     let (node, bots) = fixture("playerbots-companion-cancel-resume");
     let (priest, ally) = (&bots[0], &bots[2]);
     select(&node, priest, "cohort");
@@ -703,7 +703,7 @@ fn explicit_cancellation_releases_the_heal_and_resumes_follow() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn completion_time_los_refusal_releases_the_heal_and_resumes_follow() {
+fn playerbots_completion_time_los_refusal_releases_the_heal_and_resumes_follow() {
     let (node, bots) = fixture("playerbots-companion-los-resume");
     let (priest, ally) = (&bots[0], &bots[2]);
     select(&node, priest, "cohort");
@@ -734,7 +734,7 @@ fn completion_time_los_refusal_releases_the_heal_and_resumes_follow() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn death_and_resurrection_preserve_role_then_regroup() {
+fn playerbots_death_and_resurrection_preserve_role_then_regroup() {
     let (node, bots) = fixture("playerbots-companion-death-regroup");
     let priest = &bots[0];
     select(&node, priest, "cohort");
@@ -796,7 +796,7 @@ fn death_and_resurrection_preserve_role_then_regroup() {
 
 #[test]
 #[ignore = "requires the pinned PB-002 Wasm, SpacetimeDB, and the playerbots Package"]
-fn populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() {
+fn playerbots_populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() {
     let preceding = preceding_pb002();
     let old_wasm = preceding.wasm;
     assert_ne!(
@@ -849,7 +849,7 @@ fn populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() 
 
 #[test]
 #[ignore = "requires the pinned PB-002 Wasm, SpacetimeDB, and the playerbots Package"]
-fn canonical_lesser_heal_repair_preserves_changed_definitions() {
+fn playerbots_canonical_lesser_heal_repair_preserves_changed_definitions() {
     let preceding = preceding_pb002();
     let old_wasm = preceding.wasm;
     let mut node = Standalone::start("playerbots-companion-seed-repair");
