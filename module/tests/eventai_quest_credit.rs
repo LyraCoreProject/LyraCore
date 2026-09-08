@@ -12,6 +12,7 @@ fn eventai_quest_credit_keeps_pinned_recipient_and_completion_contracts() {
     standalone.publish_module();
     for (reducer, args) in [
         ("claim_operator", &[][..]),
+        ("install_guid_range", &["0"][..]),
         ("debug_spawn_player_entity", &["1"][..]),
         ("debug_verify_eventai_quest_credit_fixture", &[][..]),
     ] {

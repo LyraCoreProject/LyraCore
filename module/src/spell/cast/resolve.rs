@@ -128,17 +128,18 @@ pub(crate) fn resolve_cast_at(
         break_stealth(ctx, caster_guid);
     }
 
-    // CRAFT reagent gate (282, data-driven) — the profession-loop's reagent cost, co-located with the
-    // money/power gates above and BEFORE the E_CREATE_ITEM product grant. A recipe = a spell with a
-    // CREATE-ITEM effect AND imported reagents; consume EVERY reagent now (multi-reagent). `remove_items`
-    // returns Err (rolling the whole tx back) when a reagent is short, so a craft you can't afford fails
-    // atomically — no product, no skill, no power spent. Scoped to create-item spells so a reagent-
-    // consuming BUFF (Arcane Intellect → Arcane Powder, no CreateItem effect) is untouched (no regression);
-    // a conjure (CreateItem, no reagents) has an empty list → no-op.
-    if effects.iter().any(|e| e.kind == E_CREATE_ITEM) {
-        for (item, count) in recipe_reagents(ctx, spell_id) {
-            crate::items::remove_items(ctx, caster_guid, item, count)?;
-        }
+    // Keep the original identities so a failed product grant can restore reagents even when the
+    // GUID Range is exhausted. Skills are awarded only after every product grant succeeds.
+    let creates_items = effects.iter().any(|effect| effect.kind == E_CREATE_ITEM);
+    let reagents = if creates_items {
+        recipe_reagents(ctx, spell_id)
+    } else {
+        Vec::new()
+    };
+    let inventory_before_craft =
+        creates_items.then(|| crate::items::carried_items(ctx, caster_guid));
+    for (item, count) in reagents {
+        crate::items::remove_items(ctx, caster_guid, item, count)?;
     }
 
     // The effect loop + the ONE cast visual — shared verbatim with the Triggered Cast (`cast_triggered`),
@@ -155,6 +156,7 @@ pub(crate) fn resolve_cast_at(
             client_initiated,
         },
         dest,
+        inventory_before_craft,
     );
 
     // AGGRO-ON-HOSTILE-CAST: a player casting an ENEMY-targeting spell at a creature pulls it into combat at
@@ -322,6 +324,7 @@ fn run_spell_effects(
     level: u8,
     origin: CastOrigin,
     dest: Option<(f32, f32, f32)>,
+    inventory_before_craft: Option<Vec<crate::items::ItemInstance>>,
 ) {
     let mut hit_targets = Vec::new();
     let mut seen_hit_targets = std::collections::HashSet::new();
@@ -331,6 +334,8 @@ fn run_spell_effects(
     let mut total_resisted: u32 = 0;
     let mut total_absorbed: u32 = 0;
     let mut any_crit = false;
+    let mut item_grants = 0;
+    let mut item_refused = false;
     for e in effects {
         let points = effect_amount(
             e.base_points,
@@ -363,6 +368,11 @@ fn run_spell_effects(
                 dest,
                 triggered,
             );
+            match hit.item {
+                ItemGrantOutcome::None => {}
+                ItemGrantOutcome::Granted => item_grants += 1,
+                ItemGrantOutcome::Refused => item_refused = true,
+            }
             remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
             // Only hits on the PRIMARY target feed the single-target damage log (crit/resist/absorb too).
             if t == target_guid {
@@ -372,6 +382,15 @@ fn run_spell_effects(
                 total_healed = total_healed.saturating_add(hit.healed);
                 any_crit |= hit.crit;
             }
+        }
+    }
+    if item_refused {
+        if let Some(items) = inventory_before_craft {
+            crate::items::restore_carried_items(ctx, caster_guid, items);
+        }
+    } else {
+        for _ in 0..item_grants {
+            super::targeting::gain_recipe_skill(ctx, caster_guid, hdr.spell_id);
         }
     }
     if queues_next_swing(effects) {
@@ -490,6 +509,7 @@ fn cast_triggered_with_origin(
         target_guid,
         level,
         origin,
+        None,
         None,
     );
     Ok(())

@@ -805,10 +805,9 @@ fn run_trade_commit(
         Ok(()) => {
             // Reserve both batches while outgoing identities still exist. The item Relay must
             // observe new identities for the incoming items, even when both inventories empty.
-            let partner_guids =
-                crate::items::allocate_item_guids(ctx, partner.guid, acceptor_items.len())?;
-            let acceptor_guids =
-                crate::items::allocate_item_guids(ctx, acceptor.guid, partner_items.len())?;
+            let mut partner_guids =
+                crate::items::allocate_item_guids(ctx, acceptor_items.len() + partner_items.len())?;
+            let acceptor_guids = partner_guids.split_off(acceptor_items.len());
             // ALL outgoing rows leave first — their slots are the room the verdict counted on.
             let instances = ctx.db.game_item_instance();
             for inst in acceptor_items.iter().chain(partner_items.iter()) {

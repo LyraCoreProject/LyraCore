@@ -88,6 +88,7 @@ fn fixture(name: &str) -> Standalone {
     let mut standalone = Standalone::start(name);
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone
 }
 

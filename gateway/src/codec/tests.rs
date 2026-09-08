@@ -4099,10 +4099,10 @@ fn item_push_and_mail_keep_the_instance_property() {
 }
 
 #[test]
-fn item_guid_namespace_bits_survive_item_and_container_wire_updates() {
+fn item_guid_allocation_bits_survive_item_and_container_wire_updates() {
     for guid in [
         0x4000_8000_0000_0800,
-        0x4000_8165_a0bc_0800,
+        0x4000_8000_3b9a_ca01,
         0x4000_ffff_ffff_ffff,
     ] {
         for container_slots in [0, 8] {
@@ -4127,17 +4127,19 @@ fn item_guid_namespace_bits_survive_item_and_container_wire_updates() {
             match &decoded.objects[0] {
                 Object::CreateObject2 {
                     guid3,
+                    object_type: ObjectType::Item,
                     mask2: UpdateMask::Item(fields),
                     ..
-                } => {
+                } if container_slots == 0 => {
                     assert_eq!(guid3.guid(), guid);
                     assert_eq!(fields.object_guid(), Some(Guid::new(guid)));
                 }
                 Object::CreateObject2 {
                     guid3,
+                    object_type: ObjectType::Container,
                     mask2: UpdateMask::Container(fields),
                     ..
-                } => {
+                } if container_slots == 8 => {
                     assert_eq!(guid3.guid(), guid);
                     assert_eq!(fields.object_guid(), Some(Guid::new(guid)));
                 }

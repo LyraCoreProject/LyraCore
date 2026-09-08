@@ -37,6 +37,7 @@ fn forced_weather_is_per_zone_and_a_refusal_leaves_every_row_unchanged() {
     let mut standalone = Standalone::start("weather-forced");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
 
     // The seeded climate covers Elwynn Forest and Westfall, and no zone has weather until something
     // gives it some.
@@ -126,6 +127,7 @@ fn the_weather_roll_and_its_climate_survive_a_republish() {
     let mut standalone = Standalone::start("weather-republish");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("gw_force_zone_weather", &[ELWYNN, RAIN, "0.75"]);
 
     assert_eq!(

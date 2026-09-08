@@ -126,7 +126,8 @@ pub fn set_character_shard(
 /// makes the hand-applied floors (core 0, world-1 1e9, instances 2e9, realm-core 3e9) slots
 /// 0/1/2/3 exactly — so the live databases migrate into this registry by being *recorded*, with no
 /// guid changing. Decimal and small on purpose (`GuidRange`'s doc, `auth.rs`): readable in logs and SQL,
-/// a billion characters per shard, and far below `2^53`, above which `spacetime call` mangles a u64
+/// a billion issued identities per Shard shared by Characters and items. Current assignments are
+/// far below `2^53`, above which `spacetime call` mangles a u64
 /// argument (danger-zones).
 pub const GUID_RANGE_SIZE: u64 = 1_000_000_000;
 

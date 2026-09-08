@@ -14,6 +14,7 @@ fn teleport_motion_rows_follow_the_live_entity_boundary() {
     let mut standalone = Standalone::start("teleport-motion");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_spawn_player_entity", &[&CHARACTER_GUID.to_string()]);
 
     move_to(&standalone, 100.0, 100.0, 1);

@@ -128,6 +128,7 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
         standalone.assert_output_success(&output, &format!("publish {database}"));
     }
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["2000000000"]);
     for database in [INSTANCES, OTHER, REALM] {
         let output = cli.call(standalone.server(), database, "claim_operator", &[]);
         standalone.assert_output_success(&output, &format!("claim {database} operator"));

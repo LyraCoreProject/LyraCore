@@ -13,6 +13,7 @@ fn logon_renews_expired_sessions_and_the_scheduler_reaps_only_expired_rows() {
     let mut standalone = Standalone::start("session-expiry");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     assert!(standalone
         .query_rows("SELECT * FROM game_session_reaper_schedule")
         .is_empty());

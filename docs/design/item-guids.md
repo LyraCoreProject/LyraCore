@@ -1,52 +1,61 @@
 # Item GUID allocation
 
-An item keeps its GUID while it moves between inventory slots and during Character Transfer.
-Trading creates a new item GUID for the recipient. Mail, Auctions and Buyback retain an item
-snapshot and create a new GUID when the recipient takes the item. They do not restore the
-original item GUID.
+Characters and items consume the same durable high-water mark in a Shard's GUID Range.
+Realm-core assigns disjoint billion-value ranges. `install_guid_range` refuses reassignment;
+deleting a Character, deleting an item, Transfer and reinstalling the same range never rewind
+the mark. A batch must fit below the range's exclusive end before the allocator advances.
+The range now budgets Character creation and item creation together.
 
-New item GUIDs retain `HIGHGUID_ITEM = 0x4000` in bits 48 through 63. Bit 47 marks the new
-allocation format. Bits 11 through 46 hold the complete Character GUID; bits 0 through 10
-select one of 2,048 item identities. Character GUIDs above 68,719,476,735 receive
-`ITEM_GUID_OWNER_OUT_OF_RANGE`, with no truncation. The current billion-sized Character ranges
-fit through range 67; range 68 fits only partially. Expanding beyond that requires a reviewed
-allocation change before assigning those ranges.
+New items retain `HIGHGUID_ITEM = 0x4000` in bits 48 through 63. Bit 47 marks this allocation
+format. Bits 0 through 46 hold the issued value, so 140,737,488,355,327 is the largest usable
+item allocation. Requests above that limit return `ITEM_GUID_EXHAUSTED` before advancing the
+mark. Missing ranges return `NO_GUID_RANGE`; a batch crossing a range end returns
+`GUID_RANGE_EXHAUSTED`. Items do not truncate or pack their Character owner's GUID.
 
-Allocation selects free identities in this Character's block and checks each candidate against
-all local item rows. A batch is selected before any existing stacks change or Trading deletes
-outgoing items. A full block returns `ITEM_GUID_EXHAUSTED`, leaving the request unchanged.
-Deleted identities can be reused. The limit bounds simultaneously allocated items, not lifetime
-grants. Normal inventory has fewer than 2,048 slots.
+Grants reserve complete batches before updating partial stacks or deleting Trading items.
+Issued identities are never reused, including items consumed by a quest or craft earlier in
+the same request. If a craft cannot grant all products, it restores the original carried
+inventory with the original item GUIDs. Profession skill gains and automatic learning wait
+until all direct product grants succeed. This restores carried inventory on a refused craft
+without minting refund items from an exhausted range. Other effects retain their authored order.
+This is not whole-cast rollback: a mixed recipe with triggered casts or other side effects needs
+separate acceptance coverage. The committed conjuring fixture has one direct CreateItem effect;
+it does not establish that every imported recipe has that shape.
 
-Reuse relies on existing ownership rules. Transfer preserves the Character and its items together
-under Escrow. Only one Shard may accept inventory changes for that Character. Every operation
-that changes an item's Character owner creates a new recipient GUID. A future ownership-changing
-path that preserves item GUIDs must also replace this allocation policy.
+An item keeps its GUID while moving between inventory slots and during Character Transfer.
+Trading creates new recipient items. Mail, Auctions and Buyback store item snapshots and
+create new items when the recipient takes them. Preserved identities now rely on disjoint
+GUID Ranges and a durable issuer mark, rather than a packed Character namespace.
+
+Transfer does not move or replace a Shard's allocator. An arriving Character raises the local
+mark only when its GUID belongs to the destination's own range. Incoming items need no floor
+update because the issuing Shard retains their high-water mark after they leave.
 
 ## Compatibility and rollout
 
 No table, column, reducer argument or Transfer row format changes. Existing item rows and saved
-Transfer Escrow retain their exact item GUIDs. There is no automatic renumbering or data sweep.
-Legacy items may already overlap another Character's namespace. Destination Transfer import
-checks arriving item ownership, duplicate GUIDs and local collisions before inserting item rows.
-A conflict returns a Refusal; the reducer transaction preserves the destination and the source
-Escrow. It never deletes another Character's item or chooses a replacement identity.
+Transfer Escrow keep their exact GUIDs. There is no automatic renumbering or data sweep.
+Destination import checks arriving item ownership, duplicate GUIDs and local collisions before
+inserting item rows. A conflict returns `ITEM_GUID_CONFLICT`; the reducer transaction preserves
+the destination and source Escrow. It never deletes another Character's item to make room.
 
-The old allocator normally used only the low 32 bits, but its unchecked increment could escape
-that range. Bit 47 alone cannot prove that an existing item was created by the new allocator.
-Before deployment, an authorized Operator must inventory item GUIDs and saved Transfer Escrow
-across every Shard. Record duplicate GUIDs with different owners, malformed item prefixes,
-Character GUIDs above the supported limit and legacy GUIDs with bit 47 set. Resolve those cases
-under separate human approval. The allocator's local collision check is not a realm-wide audit.
+The old allocator normally used only the low 32 bits, but unchecked increments could escape
+that range. No bit below the item prefix is provably unreachable by the old code. Before
+deployment, an authorized Operator must inventory item GUIDs and saved Transfer Escrow across
+every Shard. Record duplicate GUIDs with different owners, malformed item prefixes, legacy IDs
+with bit 47 set, missing or overlapping GUID Ranges, and allocator marks at or beyond their
+range end. Resolve those cases under separate human approval. Local collision checks do not
+replace this realm-wide audit. An already escaped Character GUID also needs explicit review.
 
 Pause World Sessions and all item-granting or ownership-changing activity during the update.
-Drain or retain recorded Transfer Escrow, publish the reviewed Module to every Shard, and verify
-that all Shards run the same build before resuming activity. An old Module would otherwise mint
-from a new item's maximum GUID without respecting the new block boundary. Rolling back has the
-same risk and requires the same pause and a reviewed plan for new-format rows.
+Record outstanding Transfer Escrow. Verify each Shard's permanent range assignment, publish the
+reviewed Module to every Shard, and confirm that all Shards run the same build before resuming
+activity. An old Module would mint from a new item's maximum GUID without respecting the shared
+allocator. Rolling back requires the same pause and a reviewed plan for new-format rows.
+Never reset `game_guid_allocator`, reinstall a different range or delete the range registry.
 
-Before shipping, obtain human review of this layout and rollout plan. On an authorized isolated
-realm, verify existing and new items through grant, split, Trading, Mail, Buyback and round-trip
-Transfer, including a conflicting legacy arrival. Check actual 5875 client item rendering and
-slot moves. Unit tests and private reducer tests do not establish real-client acceptance or
-prove a live realm's existing GUIDs are conflict-free.
+Before deployment, obtain human review of this allocation and rollout plan. On an authorized
+isolated realm, verify existing and new items through grant, split, crafting, Trading, Mail,
+Buyback and round-trip Transfer, including a conflicting legacy arrival. Check actual 5875
+client item rendering and slot moves. Unit tests and private reducer tests do not establish
+real-client acceptance or prove a live realm's existing GUIDs are conflict-free.

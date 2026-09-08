@@ -52,7 +52,7 @@ pub(crate) fn grant_starter_item(
         return Ok(());
     }
     // Grant one owned item at `slot`, only if its template is seeded (a missing template is skipped,
-    // never fatal to login). Allocation still refuses an exhausted Character namespace.
+    // never fatal to login). Allocation still refuses an exhausted GUID Range.
     let grant_one = |entry: u32, slot: u8, stack: u32| -> Result<(), String> {
         let Some(tmpl) = ctx.db.game_item_template().entry().find(entry) else {
             return Ok(());
@@ -61,7 +61,7 @@ pub(crate) fn grant_starter_item(
             return Ok(());
         };
         instances.insert(ItemInstance {
-            guid: next_item_guid(ctx, owner_guid)?,
+            guid: next_item_guid(ctx)?,
             entry: tmpl.entry,
             owner_identity,
             owner_guid,
@@ -241,7 +241,7 @@ pub(crate) fn store_item(
             select_property(ctx, tmpl)?
         });
     }
-    let guids = allocate_item_guids(ctx, player_guid, new_stacks as usize)?;
+    let guids = allocate_item_guids(ctx, new_stacks as usize)?;
     for mut item in partials {
         let add = merge_amount(count, item.stack_count, max_stack);
         if add == 0 {
@@ -336,7 +336,7 @@ pub(crate) fn store_instance_state(
     // instead of CREATE. Mail can safely allocate at insertion time.
     let guid = match preallocated_guid {
         Some(guid) => guid,
-        None => next_item_guid(ctx, player_guid)?,
+        None => next_item_guid(ctx)?,
     };
     ctx.db.game_item_instance().insert(ItemInstance {
         guid,
@@ -405,6 +405,31 @@ pub(crate) fn remove_items(
         return Err(format!("missing {count} of item {item_entry}"));
     }
     Ok(())
+}
+
+pub(crate) fn carried_items(ctx: &ReducerContext, owner_guid: u64) -> Vec<ItemInstance> {
+    ctx.db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&owner_guid)
+        .filter(|item| is_carried_slot(item.slot))
+        .collect()
+}
+
+/// Restore a failed craft before its item changes become visible to the Gateway. This also
+/// removes products from earlier effects in the same craft, without minting refund identities.
+pub(crate) fn restore_carried_items(
+    ctx: &ReducerContext,
+    owner_guid: u64,
+    items: Vec<ItemInstance>,
+) {
+    let instances = ctx.db.game_item_instance();
+    for item in carried_items(ctx, owner_guid) {
+        instances.guid().delete(item.guid);
+    }
+    for item in items {
+        instances.insert(item);
+    }
 }
 
 /// "Recently Bandaged" debuff spell id (vanilla 11196) — already seeded (a 60s `A_FLAG` marker aura, no

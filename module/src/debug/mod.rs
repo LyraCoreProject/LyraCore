@@ -1307,7 +1307,7 @@ fn equip_into(
         inst.soulbound = inst.soulbound || soulbound;
         instances.guid().update(inst);
     } else {
-        let guid = crate::items::next_item_guid(ctx, character_guid)?;
+        let guid = crate::items::next_item_guid(ctx)?;
         instances.insert(ItemInstance {
             guid,
             entry: item_entry,

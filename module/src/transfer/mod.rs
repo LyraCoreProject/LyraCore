@@ -1266,7 +1266,7 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     c.money = decoded.money;
     let account_id = c.account_id;
     // Remove stale rows for this Character even when its Character row is absent. Item import
-    // separately checks foreign GUID collisions; legacy packing did not enforce namespaces.
+    // separately checks foreign GUID collisions because legacy packing could overlap.
     sink.cascade_delete_character(guid);
     sink.insert_character(c);
     // AC#3: ratchet this database's guid allocator past `guid` NOW, in the same

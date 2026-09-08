@@ -203,6 +203,11 @@ _Avoid_: invite intent, group request, party order
 **Home Shard**:
 The shard that currently holds a Character's row.
 
+**GUID Range**:
+A disjoint interval assigned by Realm-core to one Shard. Character creation and item creation
+consume the same durable high-water mark in that interval. Issued identities are never reused,
+even after deletion or Transfer. Items add their wire type and format bits to the issued value.
+
 **Shard Map**:
 The rules that assign a map or instance to a shard.
 

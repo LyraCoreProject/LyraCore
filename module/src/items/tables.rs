@@ -239,8 +239,8 @@ crate::character_owned!(delete, fn sweep_delete_game_item_instance(ctx, characte
         items.guid().delete(r.guid);
     }
 });
-// Transfer preserves the item identity the client already knows. New items use a checked
-// Character namespace; import also checks collisions because legacy GUIDs can overlap.
+// Transfer preserves the item identity the client already knows. New items consume the Shard's
+// GUID Range; import also checks collisions because legacy GUIDs can overlap.
 crate::character_owned!(transfer, fn sweep_transfer_game_item_instance(ctx, character_guid, io) {
     table = game_item_instance,
     by = by_owner_guid,

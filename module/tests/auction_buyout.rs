@@ -10,6 +10,7 @@ fn real_realm_reducer_commits_exact_buyout_mail_before_the_next_transaction() {
     standalone.publish_module();
     for (reducer, args) in [
         ("claim_operator", &[][..]),
+        ("install_guid_range", &["0"][..]),
         ("debug_stage_auction_buyout_fixture", &[][..]),
         (
             "realm_auction_decide_bid",

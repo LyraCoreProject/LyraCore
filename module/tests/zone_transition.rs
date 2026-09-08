@@ -37,6 +37,7 @@ fn accepted_movement_across_a_zone_boundary_updates_the_live_and_durable_zone_on
     let mut standalone = Standalone::start("zone-transition");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     import_areas(&standalone);
     import_terrain(&standalone);
 

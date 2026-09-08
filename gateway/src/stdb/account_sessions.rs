@@ -290,6 +290,7 @@ mod tests {
         let mut fixture = Standalone::start("account-transfer-destination");
         fixture.publish_module();
         fixture.assert_call("claim_operator", &[]);
+        fixture.assert_call("install_guid_range", &["1000000000"]);
         let destination = runtime.block_on(Coordinator::connect(&GatewayConfig {
             stdb_uri: fixture.server().into(),
             module_name: fixture.shard_name().into(),
@@ -415,6 +416,7 @@ mod tests {
         let mut fixture = Standalone::start("account-ownership");
         fixture.publish_module();
         fixture.assert_call("claim_operator", &[]);
+        fixture.assert_call("install_guid_range", &["0"]);
         fixture.assert_call("gw_heartbeat", &[]);
         let cfg = GatewayConfig {
             logon_bind: "127.0.0.1:0".into(),

@@ -197,6 +197,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
     let mut node = Standalone::start("binding-quests");
     node.publish_module();
     node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["0"]);
     node.assert_sql("UPDATE game_character SET level = 20, class = 9, race = 1 WHERE guid = 1");
     node.assert_call("debug_spawn_player_entity", &[PLAYER]);
     node.assert_sql("UPDATE game_world_entity SET level = 20, health = 100000, max_health = 100000 WHERE guid = 1");

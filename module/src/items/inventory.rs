@@ -29,7 +29,7 @@ use crate::{game_player_reputation, game_player_skill};
 /// (`valid_split_dest_slot`) — a split can never legitimately land on the body, and unlike
 /// `apply_item_move` this path runs no equip-validation at all, so admitting 0..=18 here bypassed
 /// `can_equip_into`/proficiency/required-level/BoE entirely. The new partial-stack row reuses the
-/// source's entry / owner / durability and takes a fresh Character-namespaced guid and the
+/// source's entry / owner / durability and takes a fresh GUID and the
 /// current timestamp. Errors if the source slot is empty, the count is invalid, the destination is
 /// an equipment slot, or the destination is occupied. Additive — decrements the source row and
 /// inserts one new item row. [entity]
@@ -70,8 +70,7 @@ pub(crate) fn apply_item_split(
     if slot_occupied(ctx, player_guid, to_slot) {
         return Err(refuse(ItemRefusal::WrongSlot, "destination slot occupied"));
     }
-    let new_guid =
-        next_item_guid(ctx, player_guid).map_err(|detail| refuse(ItemRefusal::Internal, detail))?;
+    let new_guid = next_item_guid(ctx).map_err(|detail| refuse(ItemRefusal::Internal, detail))?;
     inst.stack_count -= count;
     let entry = inst.entry;
     let owner_identity = inst.owner_identity;

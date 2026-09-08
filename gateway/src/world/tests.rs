@@ -10091,6 +10091,7 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
     let mut fixture = Standalone::start("account-world-sessions");
     fixture.publish_module();
     fixture.assert_call("claim_operator", &[]);
+    fixture.assert_call("install_guid_range", &["0"]);
     fixture.assert_call("gw_heartbeat", &[]);
     let cfg = GatewayConfig {
         logon_bind: "127.0.0.1:0".into(),
