@@ -813,6 +813,7 @@ fn playerbots_quest_catalog_upgrades_populated_pb002_runner_state() {
     node.assert_call("playerbots_fixture_prepare", &[]);
     let bot = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]["character_guid"]
         .clone();
+    node.assert_sql("UPDATE game_spell SET cast_time_ms = 60000 WHERE spell_id = 5090100");
     node.assert_call("playerbots_fixture_runner_stage", &[&bot, "true"]);
     node.assert_call("playerbots_select_controller", &[&bot, "{\"cohort\":[]}"]);
     node.assert_call("playerbots_fixture_runner_due", &[]);
@@ -825,20 +826,13 @@ fn playerbots_quest_catalog_upgrades_populated_pb002_runner_state() {
     let preceding = preceding_rows[0].clone();
     assert!(preceding["objective"].contains("returnHome"));
     assert!(preceding["foreground"].contains("cast"));
+    let preceding_cast = node.query_rows("SELECT * FROM game_pending_cast");
+    assert_eq!(preceding_cast.len(), 1);
     node.publish_module();
     let upgraded = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_runner WHERE character_guid = {bot}"
     ));
-    assert_eq!(upgraded.len(), 1);
-    assert_eq!(upgraded[0]["objective"], preceding["objective"]);
-    assert_eq!(upgraded[0]["foreground"], preceding["foreground"]);
-    assert_eq!(
-        upgraded[0]["objective_sequence"],
-        preceding["objective_sequence"]
-    );
-    assert!(node
-        .query_rows("SELECT * FROM pkg_playerbots_quest_objective")
-        .is_empty());
+    let upgraded_cast = node.query_rows("SELECT * FROM game_pending_cast");
     record(&node, "pb002-migration-current");
     let path = support::log_dir().join(format!("{}-pb002-migration.json", node.shard_name()));
     std::fs::write(
@@ -852,8 +846,22 @@ fn playerbots_quest_catalog_upgrades_populated_pb002_runner_state() {
             "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
             "preceding_runner": preceding,
             "upgraded_runner": upgraded,
+            "fixture_cast_time_ms": 60000,
+            "preceding_pending_cast": preceding_cast,
+            "upgraded_pending_cast": upgraded_cast,
         }))
         .unwrap(),
     )
     .unwrap();
+    assert_eq!(upgraded.len(), 1);
+    assert_eq!(upgraded[0]["objective"], preceding["objective"]);
+    assert_eq!(upgraded[0]["foreground"], preceding["foreground"]);
+    assert_eq!(
+        upgraded[0]["objective_sequence"],
+        preceding["objective_sequence"]
+    );
+    assert_eq!(upgraded_cast, preceding_cast);
+    assert!(node
+        .query_rows("SELECT * FROM pkg_playerbots_quest_objective")
+        .is_empty());
 }
