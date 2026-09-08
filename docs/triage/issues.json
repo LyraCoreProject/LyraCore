@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-09-08 07:24 UTC",
-  "base_revision": "408f417cb4b909065bc6c253eba9477c2e402d15",
-  "status_note": "All 66 open issues have current assessments. Item GUID PR #473 and loot retry PR #474 merged after CI and review. Issue #71 is closed as source and design complete. Spell event PR #476 and door collision PR #477 passed every current-head CI job and the combined proof. Human schema approval is pending.",
-  "monitoring_note": "Codex owns this report and the dispatch order. Monitoring is active during this work session. Each implementer follows checks and actual CodeRabbit or human review through fixes; Codex handles final review and merge. No unattended scheduler is installed. The report and its repository source preserve the next actions between sessions.",
+  "updated_at": "2026-09-08 08:59 UTC",
+  "base_revision": "994f86dabbaa861e88791d9ee2caed5451eff792",
+  "status_note": "All 65 open issues have current assessments. Source PRs #473, #474, #476, #477 and #479 merged after CI and review; #71 and #72 are closed. Canonical door performance, imported-data and client acceptance remain open. The next loot-recovery work needs a combined design review of settlement retirement and group-disband recovery.",
+  "monitoring_note": "Codex owns this report and the dispatch order. This source batch is complete; every remaining issue retains an owner and next action. Monitoring runs during active Codex work sessions. No unattended scheduler is installed. The report and its repository source preserve the work between sessions; refresh GitHub state before the next batch.",
   "focus": [
-    "Complete human schema review for Spell event PR #476 and door collision PR #477 after final integration checks. Their implementers own CI and review responses.",
-    "Keep the merged item GUID rollout subject to its authorized legacy-state and range audit. Source issue #71 is complete.",
-    "Revise the next #84 design for receipt cleanup and authority over staged rolls. Codex owns the revision; the GPT-5.6 Sol source study and GPT-6 Astra adversarial review are saved with the local Ticket.",
-    "Keep original loot, imported-door and client acceptance open where the requested evidence is still missing."
+    "Use the existing diagnostics for current capacity, crash and movement verification on approved development targets. Capture evidence for #59, #60 and #424 before choosing another runtime change.",
+    "Review the two dependent #84 designs together before implementation: durable settlement and receipt retirement, then source Group participation and disband recovery. Preserve the stated gameplay rules and keep any deliberate narrowing explicit.",
+    "Run the canonical collision and sight-ray benchmarks for #113 and imported FactoryDoor acceptance for #114 on their approved targets. Their source is complete.",
+    "Coordinate authorized rollout work: audit legacy item GUIDs and permanent ranges, publish the Spell Module before the Gateway, and regenerate imported navigation data plus derived coverage for #479."
   ],
   "issues": [
     {
@@ -532,7 +532,7 @@
       "confidence": "high",
       "disposition": "human",
       "rationale": "PR #258 shipped preparation, finalization, route-planner consumption, and tests. The old issue destination examples no longer match the current World Import Profiles, but docs/vmap-rollout.md settles the target topology. The remaining work changes Realm data and needs route and client evidence.",
-      "next_action": "Refresh the affected nav import, prepare and finalize matching coverage on the approved World Shards, record before and after detours, and enable nav_coverage_enabled only after approval.",
+      "next_action": "Regenerate the affected navigation data with the #479 importer and rebuild derived coverage on approved World Shards. Record before and after detours, then enable nav_coverage_enabled only after the required acceptance and approval.",
       "blockers": [
         "Named-host authorization and imported route and collision acceptance."
       ],
@@ -540,11 +540,14 @@
         "https://github.com/LyraCoreProject/LyraCore/issues/195",
         "https://github.com/LyraCoreProject/LyraCore/pull/258",
         "module/src/vmap.rs stores generation-scoped coverage; module/src/nav.rs consumes it only behind nav_coverage_enabled.",
-        "docs/vmap-rollout.md supplies the current World Import Profile destinations."
+        "docs/vmap-rollout.md supplies the current World Import Profile destinations.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/479",
+        "PR #479 changes the selected WMO standing surface and movement probes. Publishing the Module alone cannot repair old blocked navigation rows; regenerate navigation data and rebuild derived coverage during the authorized import."
       ],
       "related_prs": [
         258,
-        275
+        275,
+        479
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/195",
       "updatedAt": "2026-09-01T08:55:50Z",
@@ -690,63 +693,66 @@
     },
     {
       "number": 114,
-      "summary": "Complete dynamic door collision with instance-aware ray APIs and sibling-instance isolation.",
+      "summary": "Instance-aware door rays and sibling isolation are merged; imported Deadmines FactoryDoor acceptance remains.",
       "importance": 4,
       "gain": 4,
-      "effort": 4,
+      "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "This issue depends only on source work in #113 and should ship in the same source DAG. An instance-0-only registry would create a temporary production interface that the next change immediately replaces. Current callers already hold entity instance identity. Imported Deadmines calibration remains a separate Operator gate after the source and synthetic tests merge.",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417. The implementer will use the next included CodeRabbit review and address any findings. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
+      "disposition": "human",
+      "rationale": "PR #477 ships the source work together with #113. The durable synthetic fixture proves isolated instances, closed/open and despawned state, lifecycle updates, nearest hits and Blink. The issue also requires actual imported FactoryDoor geometry on a development Shard, which synthetic proof does not replace.",
+      "next_action": "On a named approved development Shard, import the Deadmines door models, rebuild colliders, and record FactoryDoor closed/open behavior plus isolation from a sibling instance. Use matching model and Package geometry artifacts.",
       "blockers": [
-        "Human review is required before the additive schema ships.",
         "Final Deadmines acceptance needs approved client data and a named development Shard."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/114",
-        "module/src/vmap.rs ray functions currently lack instance_id.",
+        "Merged PR #477 carries instance_id through movement, sight, collision, floor and Spell callers.",
         "module/src/nav.rs and the listed combat, creature, and spell callers already have the acting entity and its instance_id.",
         "https://github.com/LyraCoreProject/LyraCore/pull/477",
-        "The synthetic durable fixture proves closed/open/despawned state, sibling isolation, Package apply/replay/clear, both debug command signatures, transforms, nearest hits and Blink. It does not prove imported Deadmines geometry or canonical-box performance."
+        "The synthetic durable fixture proves closed/open/despawned state, sibling isolation, Package apply/replay/clear, both debug command signatures, transforms, nearest hits and Blink. It does not prove imported Deadmines geometry or canonical-box performance.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/114#issuecomment-5581599127"
       ],
       "related_prs": [
         477
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/114",
-      "updatedAt": "2026-08-13T05:25:54Z",
+      "updatedAt": "2026-09-08T08:12:45Z",
       "github_state": "open",
-      "owner": "GPT-6 Astra, high effort, door collision implementer"
+      "owner": "Operator and real-client reviewer",
+      "score": 5.3
     },
     {
       "number": 113,
-      "summary": "Imported door meshes have no instance-scoped collider registry or state-gated ray consumer.",
+      "summary": "Instance-scoped door collision is merged; canonical collision and sight-ray performance remain to be measured.",
       "importance": 4,
       "gain": 5,
-      "effort": 4,
+      "effort": 2,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "PR #254 supplied game_go_model. The remaining collider table, lifecycle, transform, state Gate, broad-phase reject, and ray merge are specified and testable with synthetic data. Dynamic collider eligibility can depend on the global Gate and registry data while static geometry keeps its active-generation rule, so map 36 needs no invented static generation or new product decision. Implementing #114 in the same DAG avoids an instance-0-only production path.",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417. The implementer will use the next included CodeRabbit review and address any findings. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
+      "disposition": "verify",
+      "rationale": "PR #477 adds the private collider registry, lifecycle hooks, transforms and state Gate, then merges dynamic and static hits through instance-aware ray calls. Synthetic durable behavior and all CI passed after schema approval and the fixture-data review correction. The issue explicitly requires canonical-box performance evidence before closure.",
+      "next_action": "Run debug_bench_collision_gate and debug_bench_los with exact=true on the canonical box. Record comparable before and after results and investigate any regression before closing #113.",
       "blockers": [
-        "Human review is required before the additive schema ships; imported-door calibration stays open."
+        "Canonical-box collision and sight-ray performance must be measured before closing #113."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/113",
         "https://github.com/LyraCoreProject/LyraCore/pull/254",
-        "module/src/go_model.rs stores local-space DOOR and BUTTON meshes and names game_go_collider as the missing consumer.",
+        "PR #254 supplied local-space DOOR and BUTTON meshes; merged PR #477 adds their instance-scoped collider consumer.",
         "module/src/vmap.rs ties static geometry to an active generation; docs/vmap-rollout.md intentionally leaves the Instance Pool without a bounded-profile generation.",
         "docs/danger-zones.md permits a justified Operator reconciliation scan but forbids spatial-table scans on gameplay paths.",
         "https://github.com/LyraCoreProject/LyraCore/pull/477",
-        "The synthetic durable fixture proves closed/open/despawned state, sibling isolation, Package apply/replay/clear, both debug command signatures, transforms, nearest hits and Blink. It does not prove imported Deadmines geometry or canonical-box performance."
+        "The synthetic durable fixture proves closed/open/despawned state, sibling isolation, Package apply/replay/clear, both debug command signatures, transforms, nearest hits and Blink. It does not prove imported Deadmines geometry or canonical-box performance.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/113#issuecomment-5581598770"
       ],
       "related_prs": [
         254,
         477
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/113",
-      "updatedAt": "2026-08-13T05:25:52Z",
+      "updatedAt": "2026-09-08T08:12:43Z",
       "github_state": "open",
-      "owner": "GPT-6 Astra, high effort, door collision implementer"
+      "owner": "Codex tracks; Operator benchmark needed",
+      "score": 10.0
     },
     {
       "number": 112,
@@ -854,25 +860,28 @@
     },
     {
       "number": 103,
-      "summary": "The dynamic door-collision parent has imported meshes; runtime and instance-aware behavior remain in #113 and #114.",
+      "summary": "Dynamic door collision source is complete; child performance and imported-data acceptance remain.",
       "importance": 4,
       "gain": 5,
       "effort": 1,
       "confidence": "high",
       "disposition": "dependency",
-      "rationale": "The parent delivered its Spec and split, and PR #254 completed the import slice. It is now a tracker. No further design decision blocks source work: #113 and #114 can form one instance-scoped implementation DAG, followed by imported Deadmines acceptance.",
-      "next_action": "Keep this issue as the parent. Merge the combined #113 and #114 source work, complete the imported Deadmines collision probe, then close this parent from that evidence.",
+      "rationale": "PR #254 delivered the model importer and PR #477 delivered the instance-scoped collider and gameplay rays. This parent tracks the remaining evidence in #112, #113 and #114; it has no separate source implementation left.",
+      "next_action": "Collect the approved model import evidence in #112, canonical performance results in #113, and imported FactoryDoor and sibling-instance results in #114. Close this parent only after those checks pass.",
       "blockers": [
-        "Source completion of #113 and #114.",
-        "Operator-assisted imported Deadmines acceptance."
+        "Approved client-data import acceptance in #112.",
+        "Canonical collision and sight-ray performance in #113.",
+        "Imported FactoryDoor and sibling-instance acceptance in #114."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/103",
         "https://github.com/LyraCoreProject/LyraCore/pull/254",
-        "module/src/go_model.rs contains imported meshes; module/src/vmap.rs has no dynamic collider pass."
+        "Merged PR #477 adds the dynamic collider pass, partitioned by map and instance, with the nearest static/dynamic hit selected.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/477"
       ],
       "related_prs": [
-        254
+        254,
+        477
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/103",
       "updatedAt": "2026-08-11T12:43:26Z",
@@ -973,13 +982,13 @@
       "summary": "Loot Roll recovery after result expiry needs durable settlement identity; the original three-Shard and bot-party incident remains unverified.",
       "importance": 4,
       "gain": 4,
-      "effort": 4,
+      "effort": 5,
       "confidence": "medium",
       "disposition": "decision",
-      "rationale": "PR #474 merged the proved completion-marker fix. The remaining work must carry immutable source loot identity beyond the one-second event lifetime and survive Gateway restart. That is a larger design and schema change; retaining only corpse GUID and slot could award a later respawn drop.",
-      "next_action": "Revise the durable settlement design before implementation. Adversarial review found receipt cleanup can lose the original outcome, and source staging rolls need explicit resolution authority after promotion. Keep original incident acceptance separate.",
+      "rationale": "PR #474 merged the completion-marker fix. Recovery after result expiry needs durable receipt retirement plus exclusive roll authority and disband handling across group mirrors. These are several dependent changes. The next design must preserve current loot distribution, including the existing final-member predicate, while preventing stale source work after a group disappears.",
+      "next_action": "Review the T2a and T2b rollout contract together. T2a covers source authority, exact outcomes and receipt retirement. T2b covers Group participation, stale mirror fencing and disband decisions. Preserve original incident acceptance and explicitly review the new Group-id match.",
       "blockers": [
-        "The receipt cleanup and roll authority protocols need a reviewed design.",
+        "Exclusive resolution authority, staging/disband recovery and receipt retirement need one reviewed design.",
         "The original incident rerun needs a disposable three-Shard development Realm and verified Headless Client scenario dispatch."
       ],
       "evidence": [
@@ -990,7 +999,11 @@
         "https://github.com/LyraCoreProject/LyraCore/pull/474",
         "Gateway suite: 1,444 passed, 7 private tests ignored. Formatting and Gateway clippy passed. The regression failed on the unchanged Gateway and passed with the marker fix.",
         "https://github.com/LyraCoreProject/LyraCore/issues/84#issuecomment-5580498204",
-        "The source design study and adversarial review are saved in the local #84 Tickets. An acknowledgment timeout does not bound a suspended Gateway; promotion_source equal to self does not distinguish source staging from single-database resolution authority."
+        "The source design study and adversarial review are saved in the local #84 Tickets. An acknowledgment timeout does not bound a suspended Gateway; promotion_source equal to self does not distinguish source staging from single-database resolution authority.",
+        "A follow-up design proof rejects a contiguous cleanup frontier: one unfinished roll retains unlimited later receipts. Outstanding records plus an issued ceiling prevent that accumulation. Total storage still needs source and Realm admission caps; this is a design proposal, not an implemented guarantee.",
+        "The source admission trace found that withholding later CorpseLoot rows creates a waiting queue and can pin corpse decay. Refusing creation can roll back a death or aura tick; FFA fallback changes group distribution. The next recovery Ticket preserves existing admission and retires completed receipts, with storage proportional to unfinished work. A fixed capacity policy is outside that Ticket.",
+        "The authority review found that a durable disband decision must preserve the exact final-member set and survivor predicate. Retiring that decision also needs a source-mirror fence; a stale mirror can otherwise recreate source group work after Realm disband. This increases remaining effort to several dependent Tickets.",
+        "The final local proposal splits settlement retirement from Group participation and disband recovery. Its Group-id match deliberately narrows the legacy voter-subset-only resolver so a later re-formed Group cannot claim an earlier Group's roll. This remains a design proposal, with thirteen recovery interleavings and no implementation assigned."
       ],
       "related_prs": [
         439,
@@ -1001,7 +1014,7 @@
       "updatedAt": "2026-09-08T06:42:37Z",
       "github_state": "open",
       "owner": "GPT-6, Codex coordinator",
-      "score": 4
+      "score": 3.2
     },
     {
       "number": 82,
@@ -1222,32 +1235,31 @@
     },
     {
       "number": 72,
-      "summary": "SpellCastEvent still multiplexes several wire signals through independent booleans and zero-value conventions.",
+      "summary": "SpellCastEvent has an explicit kind and preserves legacy decoding; the source change is complete.",
       "importance": 3,
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "Legacy decoding can treat the appended zero kind as the current field-derived form, while new constructors stamp explicit kinds. That is a bounded compatibility design. Human schema review belongs after the concrete change.",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417.",
-      "blockers": [
-        "Human schema review before shipping."
-      ],
+      "disposition": "done",
+      "rationale": "PR #476 appends the default-zero kind, stamps typed constructors and dispatches explicitly while keeping legacy payload fields. It merged after human schema approval, independent review and all CI. Module-before-Gateway rollout remains an operational step.",
+      "next_action": "Source complete; #72 closed. Publish the Module before starting the new Gateway during an authorized rollout.",
+      "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/72",
-        "module/src/spell/tables.rs: SpellCastEvent still encodes five signals through independent booleans and zero-value fields.",
-        "gateway/src/stdb/subscriptions.rs: cast_event_outbound decodes those signals through ordered branches, which can remain the kind-zero compatibility path.",
+        "PR #476 appended the explicit SpellCastEvent kind and updated all typed constructors.",
+        "gateway/src/stdb/subscriptions.rs now dispatches known kinds explicitly and retains the old branch order for kind zero.",
         "Typed SpellCastEvent constructors centralize the baseline, so stamping an explicit appended kind stays local.",
         "docs/danger-zones.md permits an end-appended defaulted numeric column and requires human schema review before shipping.",
         "https://github.com/LyraCoreProject/LyraCore/pull/476",
-        "Local proof: Module 1501 passed; Gateway 1446 passed, 7 ignored; importer 360 passed, 8 ignored; shared 156 passed. All 990 bindings match; strict lint, build, formatting and offline preflight pass."
+        "Local proof: Module 1501 passed; Gateway 1446 passed, 7 ignored; importer 360 passed, 8 ignored; shared 156 passed. All 990 bindings match; strict lint, build, formatting and offline preflight pass.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/72#issuecomment-5581049237"
       ],
       "related_prs": [
         476
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/72",
-      "updatedAt": "2026-08-11T08:18:27Z",
-      "github_state": "open",
+      "updatedAt": "2026-09-08T07:28:15Z",
+      "github_state": "closed",
       "owner": "GPT-5.6 Sol, high effort, Spell event implementer",
       "score": 3
     },
@@ -1267,7 +1279,7 @@
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L266-L286. item_guid_for masks the owner to 24 bits and next_item_guid increments the current maximum without a boundary check.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/ops.rs#L213-L228. Routine item storage repeatedly calls next_item_guid, so allocation is not limited to the initial slot set.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L248-L264. Cross-database transfer preserves item GUIDs because the code assumes they are already namespaced per Character.",
-        "items/tables.rs masks the owner to 24 bits and next_item_guid increments without enforcing the 256-value block.",
+        "Before PR #473, items/tables.rs masked the owner to 24 bits and next_item_guid incremented without enforcing the 256-value block.",
         "docs/danger-zones.md requires human review before migration work ships; it does not reserve implementation design for a person.",
         "The issue already supplies saturation, transfer identity, migration, and collision cases for a bounded design Ticket.",
         "The first PR #473 revision reused free IDs. Implementer review found same-transaction identity reuse in crafting and quest rewards. The merged c0ddfd0 revision uses durable GUID Ranges instead.",
@@ -1958,16 +1970,16 @@
     },
     {
       "number": 39,
-      "summary": "Static world collision is shipped, while dynamic GameObject collision, fresh-provision parity, and the final real-client movement checks remain open.",
+      "summary": "Static and dynamic collision source is merged; child acceptance, fresh-provision parity and real-client movement checks remain.",
       "importance": 3,
       "gain": 5,
       "effort": 5,
       "confidence": "high",
       "disposition": "dependency",
-      "rationale": "The epic's main collision slices landed in PR #115. Completion now depends on open issue #103 and its remaining children, issue #104's provisioning Gate, and a human Blink and line-of-sight check, so the umbrella is not a single implementation candidate.",
-      "next_action": "Finish #103 through its remaining dynamic collision Tickets, complete #104 on a fresh provision, then run the real-client Blink and line-of-sight matrix and close the epic.",
+      "rationale": "PR #115 delivered static collision and PR #477 delivered instance-scoped dynamic door collision. Completion still depends on the explicit performance and imported-data checks under #103, issue #104 provisioning parity, and the real-client Blink and line-of-sight matrix.",
+      "next_action": "Complete the performance and imported-data acceptance under #103, verify #104 on a fresh provision, then run the real-client Blink and line-of-sight matrix before closing the epic.",
       "blockers": [
-        "Issue #103 dynamic GameObject collision, including open children #113 and #114",
+        "Issue #103 child performance and imported dynamic collision acceptance.",
         "Issue #104 fresh-provision parity",
         "A real-client Blink and line-of-sight session"
       ],
@@ -1976,11 +1988,13 @@
         "https://github.com/LyraCoreProject/LyraCore/issues/103",
         "https://github.com/LyraCoreProject/LyraCore/issues/104",
         "https://github.com/LyraCoreProject/LyraCore/pull/115",
-        "https://github.com/LyraCoreProject/LyraCore/pull/254"
+        "https://github.com/LyraCoreProject/LyraCore/pull/254",
+        "https://github.com/LyraCoreProject/LyraCore/pull/477"
       ],
       "related_prs": [
         115,
-        254
+        254,
+        477
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/39",
       "updatedAt": "2026-08-11T12:46:47Z",
@@ -4410,8 +4424,8 @@
       "head": "af13d1e94c79601545d5296f88455f91c03207bf",
       "title": "refactor(spells): give cast events an explicit kind",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/476",
-      "checked_at": "2026-09-08 07:24 UTC",
-      "github_state": "OPEN",
+      "checked_at": "2026-09-08 07:30 UTC",
+      "github_state": "MERGED",
       "checks": [
         {
           "name": "durable",
@@ -4443,18 +4457,19 @@
           "source": "Hourly quota prevented actual review."
         }
       ],
-      "status": "All CI and independent review passed; human schema approval pending",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417.",
-      "review_note": "Root reviewed explicit dispatch and kind-zero legacy ordering. Local Module, Gateway, importer and shared suites, all 990 generated bindings, strict lint, build, formatting and offline preflight passed. CodeRabbit posted a rate limit. Root combined all three source changes without conflicts. Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed."
+      "status": "Merged after human schema approval, CI and independent review",
+      "next_action": "Source complete; #72 closed. Publish the Module before starting the new Gateway during an authorized rollout.",
+      "review_note": "Root reviewed explicit dispatch and kind-zero legacy ordering. Local Module, Gateway, importer and shared suites, all 990 generated bindings, strict lint, build, formatting and offline preflight passed. CodeRabbit posted a rate limit. Root combined all three source changes without conflicts. Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed. The user approved the schema change, and root merged af13d1e as 02a0662 after rechecking all CI and zero unresolved threads.",
+      "merge_commit": "02a0662cf22175d1c72de18ae34846377daaabbf"
     },
     {
       "number": 477,
       "owner": "GPT-6 Astra, high effort, door collision implementer",
-      "head": "7d5c8cec6c992a6c0e9338d24d539d3fb84e2957",
+      "head": "37d1a1e2eec8f0a20fcb5126f60719b6da1033a4",
       "title": "fix(vmap): make closed instance doors block rays",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/477",
-      "checked_at": "2026-09-08 07:24 UTC",
-      "github_state": "OPEN",
+      "checked_at": "2026-09-08 08:14 UTC",
+      "github_state": "MERGED",
       "checks": [
         {
           "name": "durable",
@@ -4482,13 +4497,70 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "UNAVAILABLE",
-          "source": "Hourly quota prevented actual review."
+          "result": "REVIEW_AND_FIX_CONFIRMED",
+          "source": "Full review at 7d5c8ce plus explicit confirmation of the rollback fix at 37d1a1e: discussion_r3955595964."
         }
       ],
-      "status": "All CI and independent review passed; human schema approval pending",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417. The implementer will use the next included CodeRabbit review and address any findings. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
-      "review_note": "Root and the item GUID implementer reviewed the runtime. Root reviewed the later pool hooks and their public-Package durable regression. All local proofs passed, including pool rearm, movement, reroll and removal. Final 7d5c8ce rebases main 408f417 with unchanged reviewed patches. CodeRabbit supplied only a quota notice. Root combined all three source changes without conflicts. Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed."
+      "status": "Merged after schema approval, CI and resolved review",
+      "next_action": "Source complete. Keep #113 open for canonical collision and sight-ray benchmarks and #114 open for imported FactoryDoor and sibling-instance acceptance.",
+      "review_note": "Root and the item GUID implementer reviewed runtime behavior, then root reviewed the pool lifecycle follow-up. Combined source proof passed: Module 1508, Gateway 1448, 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy. Full CodeRabbit review at 7d5c8ce found one valid fixture-data issue. Final 37d1a1e rebases onto bfe651f8 and makes the diagnostic fixture abort even after successful assertions. Its fresh durable test requires the success marker and proves seeded unrelated rows survive. Root reviewed this correction without findings; CodeRabbit inspected 37d1a1e and confirmed its original concern no longer applies. The review thread is resolved. All six final CI jobs passed, including the full durable suite. Root verified the exact head and zero unresolved threads, then merged 37d1a1e as ef33da5 after the recorded human schema approval.",
+      "merge_commit": "ef33da57990e71dbace256ff025f4673dd818c5e"
+    },
+    {
+      "number": 478,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/478",
+      "title": "docs(triage): record merged fixes and remaining reviews",
+      "owner": "GPT-6, Codex coordinator",
+      "head": "0320f116f4f2ffde4d9278b6c34a04dfb1b30ce2",
+      "merge_commit": "bfe651f8f101dd7cba1deaaacdb3cc1b59f3e444",
+      "github_state": "MERGED",
+      "status": "Merged",
+      "checked_at": "2026-09-08 07:54 UTC",
+      "next_action": "Complete. Preserve later live report changes in the next source snapshot.",
+      "review_note": "All CI passed. GPT-5.6 Sol independently reviewed the data and deterministic renderer; two stale sentences were corrected and the final revision had no findings. CodeRabbit supplied a quota notice and no content review."
+    },
+    {
+      "number": 479,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/479",
+      "title": "fix(nav): route bots into Northshire Abbey",
+      "owner": "Existing GPT-6 Codex implementer owns merge; triage agents review",
+      "head": "438ad8cdccdc580d003c1e9b00daac9064738dae",
+      "github_state": "MERGED",
+      "status": "Merged after CI and all review findings were resolved",
+      "checked_at": "2026-09-08 08:59 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "REVIEW_AND_FIX_CONFIRMED"
+        }
+      ],
+      "next_action": "Source complete. During an authorized rollout, regenerate imported navigation data and derived coverage, then complete client acceptance.",
+      "review_note": "Independent review reproduced the low-ceiling and stair-boundary regressions, then verified their corrections. CodeRabbit reviewed 72ef1d4 and found the extra height offset in the coarse movement ray. Final 438ad8cd passes foot height to that query and keeps the raised exact ray; a real durable 2.5-yard wall regression failed before the fix and passed after it, according to the implementer. Codex reviewed the final delta without findings, including the exact-step rounding correction. CodeRabbit inspected 438ad8cd and confirmed its finding is addressed at discussion_r3955984303. The sole review thread is resolved. All six final CI jobs passed. The implementer merged 438ad8cd as 994f86d after review was complete. Captured Abbey replay evidence is the implementer's verification; the triage team did not access that geometry.",
+      "merge_commit": "994f86dabbaa861e88791d9ee2caed5451eff792"
     }
   ],
   "history": [
@@ -4843,10 +4915,54 @@
     {
       "at": "2026-09-08 07:24 UTC",
       "text": "Both rebased schema PRs passed every CI job. Human approval remains pending. Independent report review verified all 66 open issue entries and found two stale sentences about the old door head and GUID revision; both are corrected. The door implementer will use the next included CodeRabbit review."
+    },
+    {
+      "at": "2026-09-08 07:30 UTC",
+      "text": "The user approved both concrete schema changes. Merged Spell event PR #476 as 02a0662 and closed #72 with source evidence. Door PR #477 remains in full CodeRabbit review with all CI green. Its trial merge into the new main produces exactly the combined file tree already tested."
+    },
+    {
+      "at": "2026-09-08 07:45 UTC",
+      "text": "CodeRabbit completed its full door review and found that the public assertion fixture could delete existing GameObject and other rows. The implementer is adding rollback-on-success and existing-data preservation proof. The source PR stays held until this finding and fresh CI are complete."
+    },
+    {
+      "at": "2026-09-08 07:54 UTC",
+      "text": "Door PR #477 at 37d1a1e fixes the actual CodeRabbit finding by rolling fixture row writes back after its success marker. The new preservation regression and independent review pass; fresh CI is running. Report snapshot #478 merged."
+    },
+    {
+      "at": "2026-09-08 07:56 UTC",
+      "text": "Detected the concurrent Abbey routing PR #479. Added it to the delivery list and assigned independent navigation and door-compatibility review. #477 remains first in merge order."
+    },
+    {
+      "at": "2026-09-08 08:05 UTC",
+      "text": "Independent Abbey review reproduced a low-ceiling navigation regression: the test fails at 3e740bb and passes on main. Posted the finding and began an isolated candidate correction. The #84 design scope now preserves existing loot admission; it does not claim a fixed storage bound during unlimited unfinished work."
+    },
+    {
+      "at": "2026-09-08 08:14 UTC",
+      "text": "Merged door PR #477 as ef33da5 after all six final CI jobs passed, the user approved the schema, and CodeRabbit confirmed the fixture-data correction. Posted source-completion evidence to #113 and #114 while preserving their explicit benchmark and imported-door acceptance. Updated parent #103 and collision epic #39 accordingly."
+    },
+    {
+      "at": "2026-09-08 08:21 UTC",
+      "text": "The Abbey implementer pushed 72ef1d4 with the ceiling correction, captured-route replay and merged-door integration. Stopped the unpublished parallel candidate. Independent door integration review found no issues; floor/headroom review and final CI remain."
+    },
+    {
+      "at": "2026-09-08 08:26 UTC",
+      "text": "Independent follow-up review reproduced a stair-boundary regression in Abbey head 72ef1d4. A 0.4-yard adjacent tread is classified as a ceiling when its boundary lies on a navigation sample. The test passes on 3e740bb. The active implementer owns correction and final merge; CodeRabbit review is also running."
+    },
+    {
+      "at": "2026-09-08 08:38 UTC",
+      "text": "Independent review cleared the Abbey shared-edge correction at 6bb87b9. CodeRabbit found a separate extra height offset in the coarse movement ray, and Codex verified it against step_hit and los_hit. The implementer owns the fix and a movement regression before final merge."
+    },
+    {
+      "at": "2026-09-08 08:43 UTC",
+      "text": "All Abbey findings are resolved at 438ad8cd. CodeRabbit explicitly verified the foot-height correction and durable wall regression; independent review cleared the final delta. The implementer owns final CI and merge. Raised #84 remaining effort after the authority study exposed a separate group-mirror and disband-retirement dependency."
+    },
+    {
+      "at": "2026-09-08 08:59 UTC",
+      "text": "The Abbey implementer merged PR #479 as 994f86d after all final CI jobs passed, both independent geometry findings were corrected, and CodeRabbit confirmed the coarse-ray fix. Five source PRs are complete. The report keeps 65 issues open with the remaining verification, design and authorized rollout work, and records the two-part #84 proposal."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
   "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "The 2026-09-08 audit covered all 67 then-open issues against their bodies, comments, linked work and source at c6003e5. Two independent audits covered 66 issues; the GUID implementer reproduced #71 on the unchanged Module. Issue #71 has since closed after implementation and review, leaving 66 open issues."
+  "audit_note": "The 2026-09-08 audit covered all 67 then-open issues against their bodies, comments, linked work and source at c6003e5. Two independent audits covered 66 issues; the GUID implementer reproduced #71 on the unchanged Module. Issues #71 and #72 have since closed after implementation and review, leaving 65 open issues."
 }
