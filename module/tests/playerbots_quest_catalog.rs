@@ -12,7 +12,7 @@ const GAMEOBJECT_55: &str = "17370383762768003127";
 const GAMEOBJECT_56: &str = "17370383762768003128";
 const GAMEOBJECT_161557: &str = "17370383762768164629";
 
-fn fixture(name: &str) -> (Standalone, Vec<BTreeMap<String, String>>) {
+fn unstaged_fixture(name: &str) -> (Standalone, Vec<BTreeMap<String, String>>) {
     let mut node = Standalone::start(name);
     node.publish_module();
     node.assert_call("claim_operator", &[]);
@@ -25,6 +25,11 @@ fn fixture(name: &str) -> (Standalone, Vec<BTreeMap<String, String>>) {
     }
     let mut bots = node.query_rows("SELECT character_guid, class FROM pkg_playerbots_bot");
     bots.sort_by_key(|bot| bot["class"].parse::<u8>().unwrap());
+    (node, bots)
+}
+
+fn fixture(name: &str) -> (Standalone, Vec<BTreeMap<String, String>>) {
+    let (node, bots) = unstaged_fixture(name);
     node.assert_call(
         "playerbots_quest_fixture_stage",
         &[&bots[0]["character_guid"]],
@@ -92,6 +97,8 @@ fn record(node: &Standalone, suffix: &str) {
         "character_quests": node.query_rows("SELECT * FROM game_character_quest"),
         "items": node.query_rows("SELECT * FROM game_item_instance"),
         "loot": node.query_rows("SELECT * FROM game_corpse_loot"),
+        "import_catalogue": node.query_rows("SELECT * FROM game_import_meta"),
+        "fixture_ownership": node.query_rows("SELECT * FROM pkg_playerbots_quest_fixture_ownership"),
     });
     let path = support::log_dir().join(format!("{}-{suffix}.json", node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
@@ -125,6 +132,22 @@ fn sorted_rows(node: &Standalone, query: &str, key: &str) -> Vec<BTreeMap<String
     rows
 }
 
+fn catalog_definition_snapshot(node: &Standalone) -> serde_json::Value {
+    serde_json::json!({
+        "item": node.query_rows("SELECT * FROM game_item_template WHERE entry = 750"),
+        "creature": node.query_rows("SELECT * FROM game_creature_template WHERE entry = 823"),
+        "creature_spawn": node.query_rows("SELECT * FROM game_creature_spawn WHERE entry = 823"),
+        "gameobject": node.query_rows("SELECT * FROM game_gameobject_template WHERE entry = 55"),
+        "gameobject_spawn": node.query_rows("SELECT * FROM game_gameobject WHERE template_entry = 161557"),
+        "quest": node.query_rows("SELECT * FROM game_quest_template WHERE entry = 783"),
+        "creature_relations": sorted_rows(node, "SELECT * FROM game_creature_quest WHERE creature_entry = 823", "id"),
+        "gameobject_relations": sorted_rows(node, "SELECT * FROM game_gameobject_quest WHERE go_entry = 55", "id"),
+        "objectives": sorted_rows(node, "SELECT * FROM game_quest_objective WHERE quest_entry = 7", "id"),
+        "creature_loot": sorted_rows(node, "SELECT * FROM game_creature_loot WHERE creature_entry = 299", "id"),
+        "gameobject_loot": sorted_rows(node, "SELECT * FROM game_gameobject_loot WHERE loot_id = 10119", "id"),
+    })
+}
+
 fn select_cohort(node: &Standalone, bot: &str) {
     node.assert_call("playerbots_select_controller", &[bot, "{\"cohort\":[]}"]);
 }
@@ -146,7 +169,17 @@ fn runner(node: &Standalone, bot: &str) -> BTreeMap<String, String> {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_catalog_is_named_versioned_and_shared_by_starter_classes() {
-    let (node, bots) = fixture("playerbots-quest-catalog");
+    let (node, bots) = unstaged_fixture("playerbots-quest-catalog");
+    node.assert_sql(
+        "INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES (1,5099997,5099997,0)",
+    );
+    node.assert_call(
+        "playerbots_quest_fixture_stage",
+        &[&bots[0]["character_guid"]],
+    );
+    record(&node, "inputs");
+    let explicit_relation = node.query_rows("SELECT * FROM game_creature_quest WHERE id = 1");
+    assert_eq!(explicit_relation.len(), 1);
     assert_eq!(
         bots.iter()
             .map(|bot| bot["class"].as_str())
@@ -213,7 +246,117 @@ fn playerbots_catalog_is_named_versioned_and_shared_by_starter_classes() {
         "SELECT destination_evidence_revision FROM pkg_playerbots_catalog_objective WHERE quest_entry = 3904",
     );
     assert_ne!(after[0]["destination_evidence_revision"], before);
+    for query in [
+        "SELECT id FROM game_creature_quest WHERE creature_entry = 823",
+        "SELECT id FROM game_gameobject_quest WHERE go_entry = 55",
+        "SELECT id FROM game_quest_objective WHERE quest_entry = 7",
+        "SELECT id FROM game_creature_loot WHERE creature_entry = 299",
+        "SELECT id FROM game_gameobject_loot WHERE loot_id = 10119",
+    ] {
+        assert!(node.query_rows(query).iter().all(|row| {
+            let id = row["id"].parse::<u64>().unwrap();
+            (5_099_000..=5_099_999).contains(&id)
+        }));
+    }
+    let staged = catalog_definition_snapshot(&node);
+    node.assert_call(
+        "playerbots_quest_fixture_stage",
+        &[&bots[0]["character_guid"]],
+    );
+    assert_eq!(catalog_definition_snapshot(&node), staged);
+    assert_eq!(
+        node.query_rows("SELECT * FROM game_creature_quest WHERE id = 1"),
+        explicit_relation
+    );
+    node.assert_call(
+        "stamp_import_meta",
+        &[
+            "unrelated-fixture-import",
+            "fixture-source",
+            "fixture-hash",
+            "1",
+        ],
+    );
+    let refused = node.call(
+        "playerbots_quest_fixture_stage",
+        &[&bots[0]["character_guid"]],
+    );
+    assert!(
+        !refused.status.success(),
+        "imported stage unexpectedly succeeded"
+    );
+    assert_eq!(catalog_definition_snapshot(&node), staged);
+    assert_eq!(
+        node.query_rows("SELECT * FROM game_creature_quest WHERE id = 1"),
+        explicit_relation
+    );
+    let refused = node.call(
+        "playerbots_quest_fixture_move_gameobject",
+        &["161557", "1220"],
+    );
+    assert!(
+        !refused.status.success(),
+        "fixture operation accepted imported content"
+    );
+    assert_eq!(catalog_definition_snapshot(&node), staged);
     record(&node, "catalog");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_catalog_fixture_refuses_preexisting_semantic_rows_without_mutation() {
+    let (conflict, bots) = unstaged_fixture("playerbots-quest-catalog-conflict");
+    conflict.assert_sql(
+        "INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES (1,823,783,0)",
+    );
+    let before = conflict.query_rows("SELECT * FROM game_creature_quest WHERE id = 1");
+    let character = conflict.query_rows(&format!(
+        "SELECT * FROM game_world_entity WHERE guid = {}",
+        bots[0]["character_guid"]
+    ));
+    let roster = conflict.query_rows("SELECT * FROM pkg_playerbots_bot");
+    let refused = conflict.call(
+        "playerbots_quest_fixture_stage",
+        &[&bots[0]["character_guid"]],
+    );
+    assert!(
+        !refused.status.success(),
+        "pre-existing semantic relation was replaced"
+    );
+    assert_eq!(
+        conflict.query_rows("SELECT * FROM game_creature_quest WHERE id = 1"),
+        before
+    );
+    assert_eq!(
+        conflict.query_rows(&format!(
+            "SELECT * FROM game_world_entity WHERE guid = {}",
+            bots[0]["character_guid"]
+        )),
+        character
+    );
+    assert_eq!(
+        conflict.query_rows("SELECT * FROM pkg_playerbots_bot"),
+        roster
+    );
+    assert!(conflict
+        .query_rows("SELECT * FROM pkg_playerbots_quest_fixture_ownership")
+        .is_empty());
+    assert!(conflict
+        .query_rows("SELECT * FROM game_item_template WHERE entry = 750")
+        .is_empty());
+    assert!(conflict
+        .query_rows("SELECT * FROM game_creature_template WHERE entry = 823")
+        .is_empty());
+    assert!(conflict
+        .query_rows("SELECT * FROM game_gameobject_template WHERE entry = 55")
+        .is_empty());
+    assert!(conflict
+        .query_rows("SELECT * FROM game_quest_template WHERE entry = 783")
+        .is_empty());
+    assert!(conflict
+        .query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100")
+        .is_empty());
+    record(&conflict, "preexisting-refusal");
 }
 
 #[test]
