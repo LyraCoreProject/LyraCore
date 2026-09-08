@@ -20,6 +20,7 @@
 //! reducers (`gw.rs`) are the only surviving callers of these cores.
 
 mod economy;
+mod guids;
 mod inventory;
 mod ops;
 mod properties;
@@ -41,6 +42,7 @@ pub(crate) fn refused(refusal: ItemRefusal) -> String {
 }
 
 pub(crate) use economy::*; // the apply_* cores are pub(crate) (no pub items to re-export)
+pub(crate) use guids::*;
 pub(crate) use inventory::*; // ditto
 pub(crate) use ops::*; // ditto
 pub use properties::*;

@@ -4,8 +4,6 @@
 
 use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
-use lyracore_shared::constants::starter_item;
-
 /// The nine class bits playable by the 1.12 client.  Class ids skip 6 and 10, so Druid (11) is bit
 /// 0x400; the client hides the tooltip "Classes:" line only when every playable bit is set.
 /// Item-template masks retain unknown bits from imported content; this value exists only to make
@@ -241,11 +239,8 @@ crate::character_owned!(delete, fn sweep_delete_game_item_instance(ctx, characte
         items.guid().delete(r.guid);
     }
 });
-// CROSS-DATABASE transport, HOT: worn gear + bags. The item `guid` is PRESERVED, unlike
-// every surrogate-PK table here: it is derived from the OWNER guid (`item_guid_for`), so it is
-// already namespaced per character and cannot collide with the destination's own items — and it is
-// the id the CLIENT knows an item by (equipment slots, loot, trade). Re-minting it would make every
-// item look brand new to the arriving client.
+// Transfer preserves the item identity the client already knows. New items use a checked
+// Character namespace; import also checks collisions because legacy GUIDs can overlap.
 crate::character_owned!(transfer, fn sweep_transfer_game_item_instance(ctx, character_guid, io) {
     table = game_item_instance,
     by = by_owner_guid,
@@ -260,29 +255,6 @@ crate::character_owned!(restamp, fn sweep_restamp_game_item_instance(ctx, charac
         }
     }
 });
-
-/// Compose an item GUID: `HIGHGUID_ITEM` (0x4000) in bits 48..63, the low id in the low bits
-/// (the vanilla item-guid packing the 5875 client expects). The low id is derived from the owning character
-/// so a re-grant after a wipe is deterministic and never collides with a unit/player guid.
-pub(crate) fn item_guid_for(owner_guid: u64, slot: u8) -> u64 {
-    (starter_item::HIGHGUID_ITEM << 48) | ((owner_guid & 0x00FF_FFFF) << 8) | slot as u64
-}
-
-/// Mint a guid STRICTLY above all of this owner's existing item guids — never reuse
-/// `item_guid_for(owner, fallback_slot)`. That slot→guid derivation is only a one-time birth convention
-/// on an empty inventory; `move_item` keeps an item's guid fixed while changing its slot, so a
-/// slot-derived guid can collide with an already-moved item's PK and panic the insert. `max+1` is
-/// unique by construction; fall back to the slot derivation only on an empty inventory.
-pub(crate) fn next_item_guid(ctx: &ReducerContext, owner_guid: u64, fallback_slot: u8) -> u64 {
-    ctx.db
-        .game_item_instance()
-        .by_owner_guid()
-        .filter(&owner_guid)
-        .map(|i| i.guid)
-        .max()
-        .map(|m| m + 1)
-        .unwrap_or_else(|| item_guid_for(owner_guid, fallback_slot))
-}
 
 /// The owner's item instance occupying inventory `slot`, or `None` if that slot is empty. A point scan
 /// over the owner's rows (the inventory model has no per-slot index, so this matches each call site's

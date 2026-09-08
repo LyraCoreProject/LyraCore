@@ -9,7 +9,7 @@ use spacetimedb::{Identity, ReducerContext, Table};
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
 
-use super::{refuse, select_property};
+use super::{allocate_item_guids, next_item_guid, refuse, select_property};
 use crate::game_character; // the durable char holds `class` (the live WorldEntity does not)
 use crate::game_corpse_loot; // the loot.rs accessor trait — re-exported at crate root (`pub use loot::*`)
 use crate::game_gameobject;
@@ -23,8 +23,8 @@ use super::rules::{
     template_stat, EquipStat,
 };
 use super::tables::{
-    game_item_instance, game_item_template, item_guid_for, item_in_slot, item_is_broken,
-    next_item_guid, ItemInstance, ItemTemplate,
+    game_item_instance, game_item_template, item_in_slot, item_is_broken, ItemInstance,
+    ItemTemplate,
 };
 
 /// Grant the starter loadout to a character the first time it logs in, idempotently. Called from
@@ -35,7 +35,11 @@ use super::tables::{
 /// loadout is the EQUIPPED main-hand weapon plus a couple of loose backpack items, proving the
 /// inventory renders multiple distinct items at distinct slots. Additive: it only ever inserts into
 /// the two new item tables. [entity]
-pub(crate) fn grant_starter_item(ctx: &ReducerContext, owner_guid: u64, owner_identity: Identity) {
+pub(crate) fn grant_starter_item(
+    ctx: &ReducerContext,
+    owner_guid: u64,
+    owner_identity: Identity,
+) -> Result<(), String> {
     let instances = ctx.db.game_item_instance();
     // Already has items → nothing to do (idempotent across relogs). This one guard gates every grant
     // below, so the whole loadout is granted at most once per character.
@@ -45,19 +49,19 @@ pub(crate) fn grant_starter_item(ctx: &ReducerContext, owner_guid: u64, owner_id
         .next()
         .is_some()
     {
-        return;
+        return Ok(());
     }
     // Grant one owned item at `slot`, only if its template is seeded (a missing template is skipped,
-    // never fatal to login). `item_guid_for(owner_guid, slot)` derives a distinct guid per slot.
-    let grant_one = |entry: u32, slot: u8, stack: u32| {
+    // never fatal to login). Allocation still refuses an exhausted Character namespace.
+    let grant_one = |entry: u32, slot: u8, stack: u32| -> Result<(), String> {
         let Some(tmpl) = ctx.db.game_item_template().entry().find(entry) else {
-            return;
+            return Ok(());
         };
         let Ok(random_property_id) = select_property(ctx, &tmpl) else {
-            return;
+            return Ok(());
         };
         instances.insert(ItemInstance {
-            guid: item_guid_for(owner_guid, slot),
+            guid: next_item_guid(ctx, owner_guid)?,
             entry: tmpl.entry,
             owner_identity,
             owner_guid,
@@ -71,6 +75,7 @@ pub(crate) fn grant_starter_item(ctx: &ReducerContext, owner_guid: u64, owner_id
             soulbound: binds_on_grant(tmpl.bonding),
             random_property_id,
         });
+        Ok(())
     };
     // Every character starts with a Hearthstone in the backpack (use it to recall to the bound home).
     // Granted BEFORE the outfit/fallback branches so both paths get it; HEARTHSTONE_SLOT (38, last
@@ -79,7 +84,7 @@ pub(crate) fn grant_starter_item(ctx: &ReducerContext, owner_guid: u64, owner_id
         starter_item::HEARTHSTONE_ENTRY,
         starter_item::HEARTHSTONE_SLOT,
         1,
-    );
+    )?;
     // Per-class loadout from CharStartOutfit (game_start_item, importer --dbc): EQUIP each equippable
     // piece into its resolved slot (so weapons/armor render on the model) and stow the rest in the
     // backpack — so a Mage spawns with a staff/robe, not the Warrior's sword. Keyed by the character's
@@ -128,22 +133,23 @@ pub(crate) fn grant_starter_item(ctx: &ReducerContext, owner_guid: u64, owner_id
             match resolve_equip_slot(tmpl.inventory_type, false, |s| occupied.contains(&s)) {
                 Some(eq) => {
                     occupied.insert(eq);
-                    grant_one(entry, eq, count);
+                    grant_one(entry, eq, count)?;
                 }
                 None => {
-                    grant_one(entry, backpack, count);
+                    grant_one(entry, backpack, count)?;
                     backpack += 1;
                 }
             }
         }
-        return;
+        return Ok(());
     }
 
     // FALLBACK (pre-import / unseeded race_class): the hand-authored Warrior loadout — a weapon EQUIPPED in
     // the main hand (slot 15) so the client renders it on the model, plus a couple of backpack items.
-    grant_one(starter_item::ENTRY, starter_item::MAINHAND_SLOT, 1);
-    grant_one(51, starter_item::BACKPACK_SLOT_0, 1);
-    grant_one(52, starter_item::BACKPACK_SLOT_0 + 1, 5);
+    grant_one(starter_item::ENTRY, starter_item::MAINHAND_SLOT, 1)?;
+    grant_one(51, starter_item::BACKPACK_SLOT_0, 1)?;
+    grant_one(52, starter_item::BACKPACK_SLOT_0 + 1, 5)?;
+    Ok(())
 }
 
 /// Grant `count`× `item_entry` to `player_guid` — the canonical "mint an owned item" core, used by
@@ -235,6 +241,7 @@ pub(crate) fn store_item(
             select_property(ctx, tmpl)?
         });
     }
+    let guids = allocate_item_guids(ctx, player_guid, new_stacks as usize)?;
     for mut item in partials {
         let add = merge_amount(count, item.stack_count, max_stack);
         if add == 0 {
@@ -245,12 +252,12 @@ pub(crate) fn store_item(
         count -= add;
         instances.guid().update(item);
     }
-    for random_property_id in properties {
+    for (random_property_id, guid) in properties.into_iter().zip(guids) {
         // The capacity check counted these same slots, and reducers cannot interleave.
         let slot = free_slot(ctx, player_guid).expect("preflight reserved a free item slot");
         let take = count.min(max_stack);
         instances.insert(ItemInstance {
-            guid: next_item_guid(ctx, player_guid, slot),
+            guid,
             entry: tmpl.entry,
             owner_identity,
             owner_guid: player_guid,
@@ -327,7 +334,10 @@ pub(crate) fn store_instance_state(
     // Trade allocates before deleting either side's outgoing rows: otherwise an emptied inventory
     // can re-mint a guid deleted earlier in the same transaction and the item relay sees UPDATE
     // instead of CREATE. Mail can safely allocate at insertion time.
-    let guid = preallocated_guid.unwrap_or_else(|| next_item_guid(ctx, player_guid, slot));
+    let guid = match preallocated_guid {
+        Some(guid) => guid,
+        None => next_item_guid(ctx, player_guid)?,
+    };
     ctx.db.game_item_instance().insert(ItemInstance {
         guid,
         entry: tmpl.entry,

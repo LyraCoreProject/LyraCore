@@ -4097,3 +4097,60 @@ fn item_push_and_mail_keep_the_instance_property() {
         117
     );
 }
+
+#[test]
+fn item_guid_namespace_bits_survive_item_and_container_wire_updates() {
+    for guid in [
+        0x4000_8000_0000_0800,
+        0x4000_8165_a0bc_0800,
+        0x4000_ffff_ffff_ffff,
+    ] {
+        for container_slots in [0, 8] {
+            let item = ItemInstanceView {
+                guid,
+                entry: 25,
+                owner_guid: 3_000_000_001,
+                slot: 23,
+                stack_count: 1,
+                container_slots,
+                ..Default::default()
+            };
+            let mut bytes = Vec::new();
+            build_item_create_object(&item)
+                .write_unencrypted_server(&mut bytes)
+                .unwrap();
+            let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(decoded) =
+                ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap()
+            else {
+                panic!("expected item object update");
+            };
+            match &decoded.objects[0] {
+                Object::CreateObject2 {
+                    guid3,
+                    mask2: UpdateMask::Item(fields),
+                    ..
+                } => {
+                    assert_eq!(guid3.guid(), guid);
+                    assert_eq!(fields.object_guid(), Some(Guid::new(guid)));
+                }
+                Object::CreateObject2 {
+                    guid3,
+                    mask2: UpdateMask::Container(fields),
+                    ..
+                } => {
+                    assert_eq!(guid3.guid(), guid);
+                    assert_eq!(fields.object_guid(), Some(Guid::new(guid)));
+                }
+                other => panic!("expected item or container, got {other:?}"),
+            }
+            let mut slot_bytes = Vec::new();
+            build_inv_slot_values(item.owner_guid, item.slot, guid)
+                .unwrap()
+                .write_unencrypted_server(&mut slot_bytes)
+                .unwrap();
+            assert!(slot_bytes
+                .windows(8)
+                .any(|bytes| bytes == guid.to_le_bytes()));
+        }
+    }
+}

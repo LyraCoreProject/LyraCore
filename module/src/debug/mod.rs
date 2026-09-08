@@ -1275,8 +1275,8 @@ pub fn debug_equip_offhand(
 
 /// Shared core of the `debug_equip_*` reducers: upsert `character_guid`'s owned item instance in `slot`
 /// to `item_entry`, stamping the live entity's owner identity (so the per-owner RLS filter still shows
-/// it) and seeding durability from the template (0 if the template isn't loaded). The slot-derived guid
-/// is unique per slot, so equipping different slots never collides.
+/// it) and seeding durability from the template. Find existing gear by slot, since moving it
+/// preserves its GUID.
 fn equip_into(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -1284,7 +1284,6 @@ fn equip_into(
     slot: u8,
 ) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, character_guid)?;
-    let guid = crate::items::item_guid_for(character_guid, slot);
     let tmpl = ctx.db.game_item_template().entry().find(item_entry);
     let random_property_id = tmpl
         .as_ref()
@@ -1299,7 +1298,7 @@ fn equip_into(
         .map(|t| crate::items::binds_on_grant(t.bonding) || crate::items::binds_on_equip(t.bonding))
         .unwrap_or(false);
     let instances = ctx.db.game_item_instance();
-    if let Some(mut inst) = instances.guid().find(guid) {
+    if let Some(mut inst) = crate::items::item_in_slot(ctx, character_guid, slot) {
         if inst.entry != item_entry {
             inst.random_property_id = random_property_id;
         }
@@ -1308,6 +1307,7 @@ fn equip_into(
         inst.soulbound = inst.soulbound || soulbound;
         instances.guid().update(inst);
     } else {
+        let guid = crate::items::next_item_guid(ctx, character_guid)?;
         instances.insert(ItemInstance {
             guid,
             entry: item_entry,

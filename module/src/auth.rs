@@ -1176,7 +1176,7 @@ pub fn create_character(
     // here: char-select reads ride the gateway's PRIVILEGED coordinator (RLS-bypassed), and any
     // ZERO/stale owner stamp is corrected by player_login's restamp_owned_data sweep BEFORE the
     // first player-scoped (RLS) read of these rows can happen.
-    crate::items::grant_starter_item(ctx, next_guid, owner);
+    crate::items::grant_starter_item(ctx, next_guid, owner)?;
     Ok(())
 }
 
