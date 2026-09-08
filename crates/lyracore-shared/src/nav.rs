@@ -13,8 +13,8 @@
 //!   `base_z + value * OBS_STEP` (`base_z` rides on the row). Height-above-BASE, not
 //!   above-terrain, so a LoS ray tests against it with zero interpolation.
 // Deliberate simplification: one obstruction column per 1 yd cell — can't express "clear under the
-// bridge / two floors". Move to per-cell height LAYERS (or Recast polys, decision #8's fallback)
-// when dungeons or bridges matter; Elwynn/Westfall exteriors don't.
+// bridge / two floors". Ground-floor WMO surfaces can replace nearby terrain; stacked floors
+// still require navigation layers.
 
 use crate::spatial::MAP_COORD_MAX;
 use crate::terrain::{interpolate, CELL_SIZE};
@@ -271,7 +271,7 @@ pub const NAV_RES: f32 = CELL_SIZE / WALK_DIM as f32;
 /// +MAP_COORD_MAX like everything else). u32 range 0..65536.
 fn grid_coord(coord: f32) -> Option<u32> {
     let c = (MAP_COORD_MAX - coord) / NAV_RES;
-    if c < 0.0 || c >= (1024 * WALK_DIM) as f32 {
+    if !(0.0..(1024 * WALK_DIM) as f32).contains(&c) {
         return None;
     }
     Some(c as u32)
@@ -342,14 +342,54 @@ pub fn find_leg_ex(
     to: (f32, f32),
     max_expansions: u32,
 ) -> Option<(Vec<(f32, f32)>, u32, bool)> {
-    let mut cache = Cache::new(fetch);
-    if line_walkable(&mut cache, from, to) {
-        return Some((vec![to], 0, true));
-    }
+    search_leg(fetch, from, to, 0.0, max_expansions)
+}
+
+/// Find a leg to a walkable point within the caller's stopping distance of the target.
+/// The target itself may be inside a conservative obstacle margin.
+pub fn find_leg_in_range(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    from: (f32, f32),
+    to: (f32, f32),
+    stop_dist: f32,
+    max_expansions: u32,
+) -> Option<Vec<(f32, f32)>> {
+    search_leg(fetch, from, to, stop_dist.max(0.0), max_expansions).map(|(path, _, _)| path)
+}
+
+#[allow(clippy::type_complexity)]
+fn search_leg(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    from: (f32, f32),
+    to: (f32, f32),
+    stop_dist: f32,
+    max_expansions: u32,
+) -> Option<(Vec<(f32, f32)>, u32, bool)> {
     let (sx, sy) = (grid_coord(from.0)?, grid_coord(from.1)?);
     let (tx, ty) = (grid_coord(to.0)?, grid_coord(to.1)?);
-    if !grid_walkable(&mut cache, tx, ty) {
-        return None; // goal itself is inside geometry — let the caller fall back
+    if !stop_dist.is_finite() {
+        return None;
+    }
+    let mut cache = Cache::new(fetch);
+    let distance = (to.0 - from.0).hypot(to.1 - from.1);
+    if distance <= stop_dist {
+        return Some((vec![from], 0, true));
+    }
+    let direct = if stop_dist > 0.0 {
+        let scale = (distance - stop_dist) / distance;
+        (
+            from.0 + (to.0 - from.0) * scale,
+            from.1 + (to.1 - from.1) * scale,
+        )
+    } else {
+        to
+    };
+    if line_walkable(&mut cache, from, direct) {
+        return Some((vec![direct], 0, true));
+    }
+    let target_walkable = grid_walkable(&mut cache, tx, ty);
+    if stop_dist == 0.0 && !target_walkable {
+        return None;
     }
     // A* with octile heuristic, integer costs (10 straight / 14 diagonal), corner-cut guard.
     use std::cmp::Reverse;
@@ -361,17 +401,23 @@ pub fn find_leg_ex(
         );
         10 * dx.max(dy) + 4 * dx.min(dy)
     };
+    let remaining = |x, y| h(x, y).saturating_sub((stop_dist / NAV_RES * 14.0).ceil() as u64);
     let mut open: BinaryHeap<Reverse<(u64, u32, u32)>> = BinaryHeap::new();
     let mut g_cost: HashMap<(u32, u32), u64> = HashMap::new();
     let mut came: HashMap<(u32, u32), (u32, u32)> = HashMap::new();
     g_cost.insert((sx, sy), 0);
-    open.push(Reverse((h(sx, sy), sx, sy)));
+    open.push(Reverse((remaining(sx, sy), sx, sy)));
     let mut expanded = 0u32;
     let mut found = false;
     let mut best = ((sx, sy), h(sx, sy)); // nearest-approach node for the partial fallback
     while let Some(Reverse((_, x, y))) = open.pop() {
-        if (x, y) == (tx, ty) {
+        if ((x, y) == (tx, ty) && target_walkable)
+            || (stop_dist > 0.0
+                && (grid_to_world(x) - to.0).hypot(grid_to_world(y) - to.1) <= stop_dist
+                && grid_walkable(&mut cache, x, y))
+        {
             found = true;
+            best.0 = (x, y);
             break;
         }
         expanded += 1;
@@ -413,12 +459,12 @@ pub fn find_leg_ex(
             if g_cost.get(&(nx, ny)).is_none_or(|&old| ng < old) {
                 g_cost.insert((nx, ny), ng);
                 came.insert((nx, ny), (x, y));
-                open.push(Reverse((ng + h(nx, ny), nx, ny)));
+                open.push(Reverse((ng + remaining(nx, ny), nx, ny)));
             }
         }
     }
     let end = if found {
-        (tx, ty)
+        best.0
     } else {
         if best.0 == (sx, sy) {
             return None; // zero progress possible (walled-in start) — caller falls back
@@ -451,9 +497,16 @@ pub fn find_leg_ex(
         anchor = pts[j];
         i = j;
     }
+    if path.is_empty() {
+        anchor = (grid_to_world(end.0), grid_to_world(end.1));
+        path.push(anchor);
+    }
     // Land exactly on the requested destination (the goal cell center is ≤0.4 yd off) — only
     // for a COMPLETE path; a partial one ends at the nearest-approach node by design.
-    if found && line_walkable(&mut cache, anchor, to) {
+    if found
+        && (stop_dist == 0.0 || (anchor.0 - to.0).hypot(anchor.1 - to.1) > stop_dist)
+        && line_walkable(&mut cache, anchor, to)
+    {
         path.pop();
         path.push(to);
     }
@@ -700,6 +753,8 @@ pub const WALK_MARGIN: f32 = RASTER_MARGIN + AGENT_RADIUS;
 /// Gap tolerance when fusing a column's z-intervals (yd): stacked wall bands abut without
 /// overlapping exactly.
 const OBS_GAP: f32 = 0.75;
+/// Coplanar floor triangles can differ slightly after world-coordinate transforms.
+const FLOOR_EPSILON_YD: f32 = 0.01;
 
 /// One world-space collision triangle with its AABB and plane. `z_at` is the exact-rasterization
 /// core: the triangle's z-interval over a 2D point, or None when the point falls outside the
@@ -764,6 +819,15 @@ impl WorldTri {
             if dist < -margin {
                 return None;
             }
+            if margin == 0.0 && side_p == 0.0 {
+                // Assign a shared edge to one triangle. Adjacent stair treads must not overlap
+                // at a sample, while a ceiling mesh diagonal must remain covered.
+                let dx = ex * side_c.signum();
+                let dy = ey * side_c.signum();
+                if !(dy > 0.0 || (dy == 0.0 && dx < 0.0)) {
+                    return None;
+                }
+            }
         }
         // Steep plane (wall or fence side, more than 60° from horizontal): the plane-z is
         // ill-conditioned over the projected sliver and clamps to an arbitrary end of the
@@ -799,12 +863,81 @@ fn clamp_axis(lo_c: f32, hi_c: f32, cell_i: u16, dim: usize) -> Option<(usize, u
     Some((index(lo_local), index(hi_local)))
 }
 
+/// Sample the single standing surface supported by terrain or a nearby WMO floor.
+/// Floors use their exact footprint so their edges cannot create support in empty space.
+fn standing_heights(
+    cell_x: u16,
+    cell_y: u16,
+    dim: usize,
+    terrain: &impl Fn(f32, f32) -> f32,
+    triangles: &[WorldTri],
+) -> Vec<f32> {
+    let side = dim + 2;
+    let resolution = CELL_SIZE / dim as f32;
+    let center = |cell, i: usize| match i {
+        0 => sub_center(cell, 0, dim) + resolution,
+        i if i > dim => sub_center(cell, dim - 1, dim) - resolution,
+        i => sub_center(cell, i - 1, dim),
+    };
+    // The collar checks floor edges across chunk boundaries. Terrain is continued from the
+    // nearest in-cell sample; binned geometry already includes the body-radius margin.
+    let mut ground: Vec<_> = (0..side)
+        .flat_map(|ny| {
+            (0..side).map(move |nx| {
+                terrain(
+                    center(cell_x, nx.clamp(1, dim)),
+                    center(cell_y, ny.clamp(1, dim)),
+                )
+            })
+        })
+        .collect();
+    let mut floor = vec![f32::INFINITY; side * side];
+    for t in triangles {
+        // A floor must be WMO geometry with a slope no greater than 50 degrees.
+        let normal_squared = t.n.iter().map(|v| v * v).sum::<f32>();
+        if !t.is_wmo
+            || normal_squared == 0.0
+            || t.n[2] * t.n[2] < 50.0f32.to_radians().cos().powi(2) * normal_squared
+        {
+            continue;
+        }
+        for ny in 0..side {
+            let y = center(cell_y, ny);
+            if y < t.lo[1] || y > t.hi[1] {
+                continue;
+            }
+            for nx in 0..side {
+                let x = center(cell_x, nx);
+                if x < t.lo[0] || x > t.hi[0] {
+                    continue;
+                }
+                let index = ny * side + nx;
+                let Some((z, _)) = t.z_at(x, y, 0.0) else {
+                    continue;
+                };
+                if (ground[index]..=ground[index] + WALK_HEIGHT).contains(&z) {
+                    floor[index] = floor[index].min(z);
+                }
+            }
+        }
+    }
+    // Keep the lowest model surface above terrain. Choosing a higher surface can promote a
+    // low ceiling to the floor and erase the room's headroom obstruction.
+    for (ground, floor) in ground.iter_mut().zip(floor) {
+        if floor.is_finite() {
+            *ground = floor;
+        }
+    }
+    ground
+}
+
 /// Derive one cell's blobs from the collision triangles binned to it: every triangle whose AABB
 /// touches the cell, inflated by `WALK_MARGIN`. Anything outside the cell is clamped away here.
 ///
 /// `heights` is the cell's 145-value MCNK height grid when a terrain chunk exists. The standing
-/// band references terrain ground only, because a model deck is a blocker and never a floor to
-/// stand on, so without heights the whole cell falls back to `base_z`, the lowest triangle vertex.
+/// band follows terrain or a walkable WMO floor within `WALK_HEIGHT` above it. This single-layer
+/// grid supports ground-floor interiors; stacked floors still need separate navigation layers.
+/// Without terrain, `base_z` is the lowest triangle vertex.
 ///
 /// Returns None when nothing in the cell blocks. A fully-clear cell emits no row, and both readers
 /// treat a missing cell as "no obstacles known".
@@ -831,12 +964,37 @@ pub fn derive_cell(
             .unwrap_or(base_z)
     };
 
+    let triangles: Vec<_> = tris.iter().map(WorldTri::new).collect();
+    let walk_ground = standing_heights(cell_x, cell_y, WALK_DIM, &ground, &triangles);
+    let obs_ground = standing_heights(cell_x, cell_y, OBS_DIM, &ground, &triangles);
+
     let mut walk = vec![0xFFu8; WALK_BYTES];
     let mut obs = vec![OBS_NONE; OBS_BYTES];
     let mut dirty = false;
     let mut col_ivals: Vec<Vec<(f32, f32)>> = vec![Vec::new(); OBS_BYTES];
 
-    for t in tris.iter().map(WorldTri::new) {
+    for ny in 0..WALK_DIM {
+        for nx in 0..WALK_DIM {
+            let index = (ny + 1) * (WALK_DIM + 2) + nx + 1;
+            let g = walk_ground[index];
+            // Subtracting rounded world heights can put an exact step just above the limit.
+            if [
+                index - 1,
+                index + 1,
+                index - WALK_DIM - 2,
+                index + WALK_DIM + 2,
+            ]
+            .iter()
+            .any(|&neighbor| {
+                walk_ground[neighbor] > g + WALK_STEP_UP || g > walk_ground[neighbor] + WALK_STEP_UP
+            }) {
+                walk_set(&mut walk, nx, ny, false);
+                dirty = true;
+            }
+        }
+    }
+
+    for t in &triangles {
         // Walkability (all geometry): block a nav cell only when the triangle passes through the
         // standing band above that cell's ground. Footprint and window are inflated by
         // `WALK_MARGIN`, so cells within a body radius of geometry rasterize blocked and the
@@ -864,8 +1022,14 @@ pub fn derive_cell(
                     let Some((z_lo, z_hi)) = t.z_at(x, y, WALK_MARGIN) else {
                         continue;
                     };
-                    let g = ground(x, y);
-                    if z_lo < g + WALK_HEIGHT && z_hi > g + WALK_STEP_UP {
+                    let g = walk_ground[(ny + 1) * (WALK_DIM + 2) + nx + 1];
+                    // A separate surface above the floor is headroom, even below step height.
+                    // Only its exact footprint counts; an adjacent stair tread is still a step.
+                    let overhead = t.is_wmo
+                        && t.n[2].abs() > 1e-6
+                        && t.z_at(x, y, 0.0)
+                            .is_some_and(|(z, _)| z > g + FLOOR_EPSILON_YD && z < g + WALK_HEIGHT);
+                    if overhead || (z_lo < g + WALK_HEIGHT && z_hi > g + WALK_STEP_UP) {
                         walk_set(&mut walk, nx, ny, false);
                         dirty = true;
                     }
@@ -914,11 +1078,7 @@ pub fn derive_cell(
             if ivals.is_empty() {
                 continue;
             }
-            let (x, y) = (
-                sub_center(cell_x, ox, OBS_DIM),
-                sub_center(cell_y, oy, OBS_DIM),
-            );
-            let g = ground(x, y);
+            let g = obs_ground[(oy + 1) * (OBS_DIM + 2) + ox + 1];
             ivals.sort_by(|a, b| a.0.total_cmp(&b.0));
             let (mut run_lo, mut run_hi) = ivals[0];
             let mut rooted_top: Option<f32> = None;
@@ -1044,6 +1204,207 @@ mod derive_tests {
     }
 
     #[test]
+    fn interaction_range_can_end_before_a_blocked_target() {
+        let (cx, cy) = test_cell();
+        let tris = wall(32, 0, 40, 12.0, wmo());
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris);
+        let (from, to) = (at(10, 20), at(32, 20));
+        assert!(find_leg(&mut cell_fetcher(cell.clone()), from, to, 4096).is_none());
+        let path = find_leg_in_range(&mut cell_fetcher(cell), from, to, 4.0, 4096)
+            .expect("a reachable interaction point");
+        let end = *path.last().unwrap();
+        assert!((end.0 - to.0).hypot(end.1 - to.1) <= 4.01);
+        assert!((end.0 - from.0).hypot(end.1 - from.1) > 1.0);
+    }
+
+    #[test]
+    fn interaction_range_routes_around_an_intervening_wall() {
+        let (cx, cy) = test_cell();
+        let mut tris = wall(32, 0, 40, 12.0, wmo());
+        tris.extend(wall(54, 0, 40, 12.0, wmo()));
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris);
+        let (from, to) = (at(10, 20), at(54, 20));
+        let path = find_leg_in_range(&mut cell_fetcher(cell.clone()), from, to, 4.0, 4096)
+            .expect("a route around the first wall");
+        assert!(path.len() > 1);
+        let end = *path.last().unwrap();
+        assert!((end.0 - to.0).hypot(end.1 - to.1) <= 4.01);
+        let mut fetch = cell_fetcher(cell);
+        let mut cache = Cache::new(&mut fetch);
+        let mut previous = from;
+        for point in path {
+            assert!(line_walkable(&mut cache, previous, point));
+            previous = point;
+        }
+    }
+
+    #[test]
+    fn invalid_coordinates_do_not_produce_a_route() {
+        for invalid in [f32::NAN, f32::INFINITY, -f32::INFINITY] {
+            assert!(
+                find_leg_in_range(&mut |_, _| None, (invalid, 0.0), (0.0, 0.0), 4.0, 4096)
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn a_floor_continues_across_a_chunk_boundary() {
+        let (cx, cy) = test_cell();
+        let tris = [slab(GROUND_Z + 1.6, wmo())];
+        let here = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+        let next = derive_cell(cx + 1, cy, Some(&flat_heights()), &tris).unwrap();
+        assert!(walk_get(&here.walk, 63, 32));
+        assert!(walk_get(&next.walk, 0, 32));
+    }
+
+    #[test]
+    fn adjacent_stair_treads_share_a_walkable_edge() {
+        let (cx, cy) = test_cell();
+        let (seam, y) = at(32, 32);
+        let tread = |x0, x1, z| {
+            [
+                VmapTri {
+                    verts: [[x0, y - 50.0, z], [x1, y - 50.0, z], [x1, y + 50.0, z]],
+                    class: wmo(),
+                },
+                VmapTri {
+                    verts: [[x0, y - 50.0, z], [x1, y + 50.0, z], [x0, y + 50.0, z]],
+                    class: wmo(),
+                },
+            ]
+        };
+        for (low, high) in [(0.5, 0.9), (0.0, WALK_STEP_UP)] {
+            let mut tris = Vec::from(tread(seam, seam + 50.0, GROUND_Z + low));
+            tris.extend(tread(seam - 50.0, seam, GROUND_Z + high));
+            for _ in 0..2 {
+                let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+                assert!(walk_get(&cell.walk, 32, 32), "shared tread edge");
+                for (from, to) in [(at(16, 32), at(48, 32)), (at(48, 32), at(16, 32))] {
+                    assert_eq!(
+                        find_leg(&mut cell_fetcher(Some(cell.clone())), from, to, 4096),
+                        Some(vec![to])
+                    );
+                }
+                tris.reverse();
+                for t in &mut tris {
+                    t.verts.swap(0, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_ceiling_mesh_diagonal_still_blocks_headroom() {
+        let (cx, cy) = test_cell();
+        let (x, y) = at(32, 32);
+        let z = GROUND_Z + 1.5;
+        let mut tris = vec![
+            slab(GROUND_Z + 0.5, wmo()),
+            VmapTri {
+                verts: [
+                    [x - 8.0, y - 8.0, z],
+                    [x + 8.0, y - 8.0, z],
+                    [x + 8.0, y + 8.0, z],
+                ],
+                class: wmo(),
+            },
+            VmapTri {
+                verts: [
+                    [x - 8.0, y - 8.0, z],
+                    [x + 8.0, y + 8.0, z],
+                    [x - 8.0, y + 8.0, z],
+                ],
+                class: wmo(),
+            },
+        ];
+        for _ in 0..2 {
+            let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+            assert!(!walk_get(&cell.walk, 32, 32), "ceiling mesh diagonal");
+            assert!(
+                find_leg(&mut cell_fetcher(Some(cell)), at(24, 32), at(32, 32), 4096).is_none()
+            );
+            tris.reverse();
+            for t in &mut tris {
+                t.verts.swap(0, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn a_low_ceiling_inside_the_floor_selection_band_blocks_routing() {
+        let (cx, cy) = test_cell();
+        for headroom in [0.25, 0.5, 1.0, 1.5] {
+            let tris = [
+                slab(GROUND_Z + 0.5, wmo()),
+                slab(GROUND_Z + 0.5 + headroom, wmo()),
+            ];
+            let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+            assert!(!walk_get(&cell.walk, 32, 20), "headroom={headroom}");
+            assert!(
+                find_leg(&mut cell_fetcher(Some(cell)), at(10, 20), at(54, 20), 4096).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn overlapping_floor_triangles_tolerate_transform_rounding() {
+        let (cx, cy) = test_cell();
+        let tris = [slab(GROUND_Z + 1.6, wmo()), slab(GROUND_Z + 1.601, wmo())];
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris);
+        let (path, _, complete) =
+            find_leg_ex(&mut cell_fetcher(cell), at(10, 20), at(54, 20), 4096)
+                .expect("coplanar floors have room to stand");
+        assert!(complete);
+        assert_eq!(path, vec![at(54, 20)]);
+    }
+
+    #[test]
+    fn a_raised_floor_keeps_low_ceilings_blocked() {
+        let (cx, cy) = test_cell();
+        let tris = [slab(GROUND_Z + 1.6, wmo()), slab(GROUND_Z + 3.0, wmo())];
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+        assert!(!walk_get(&cell.walk, 32, 32));
+    }
+
+    #[test]
+    fn a_raised_floor_cannot_be_entered_across_a_high_edge() {
+        let (cx, cy) = test_cell();
+        let (x0, y0) = at(20, 20);
+        let (x1, y1) = at(50, 50);
+        let z = GROUND_Z + 1.6;
+        let tris = [
+            VmapTri {
+                verts: [[x0, y0, z], [x1, y0, z], [x1, y1, z]],
+                class: wmo(),
+            },
+            VmapTri {
+                verts: [[x0, y0, z], [x1, y1, z], [x0, y1, z]],
+                class: wmo(),
+            },
+        ];
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+        assert!(walk_get(&cell.walk, 35, 35), "the floor itself is walkable");
+        let (_, _, complete) =
+            find_leg_ex(&mut cell_fetcher(Some(cell)), at(10, 35), at(35, 35), 4096)
+                .expect("partial progress toward the edge");
+        assert!(!complete, "a floor needs a step or ramp to reach it");
+    }
+
+    #[test]
+    fn a_raised_wmo_floor_supports_a_route_around_walls() {
+        let (cx, cy) = test_cell();
+        let mut tris = wall(32, 0, 40, 12.0, wmo());
+        tris.push(slab(GROUND_Z + 1.6, wmo()));
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris);
+        let (path, _, complete) =
+            find_leg_ex(&mut cell_fetcher(cell), at(10, 20), at(54, 20), 4096)
+                .expect("the floor supports the route");
+        assert!(complete);
+        assert!(path.len() > 1, "the wall still requires a detour");
+    }
+
+    #[test]
     fn a_wmo_wall_detours_find_leg_only_once_its_coverage_is_merged_in() {
         let tris = wall(32, 0, 40, 12.0, wmo());
         let (cx, cy) = test_cell();
@@ -1147,7 +1508,7 @@ mod derive_tests {
     }
 
     #[test]
-    fn the_standing_band_follows_terrain_ground_not_the_geometry() {
+    fn the_standing_band_under_doodads_follows_terrain_ground() {
         let (cx, cy) = test_cell();
         // Ground rises 1 yd per outer-corner row along x (index i*17+j, i counts along x).
         let mut heights = vec![0.0f32; 145];
@@ -1159,8 +1520,13 @@ mod derive_tests {
         // One flat slab 5 yd above the cell's low end. Ground at walk column nx is
         // GROUND_Z + (nx + 0.5) / 8, so the slab sits inside the band only where the ground has
         // climbed to within [step-up, head height] of it.
-        let cell = derive_cell(cx, cy, Some(&heights), &[slab(GROUND_Z + 5.0, wmo())])
-            .expect("the slab blocks the band it crosses");
+        let cell = derive_cell(
+            cx,
+            cy,
+            Some(&heights),
+            &[slab(GROUND_Z + 5.0, TriClass::M2)],
+        )
+        .expect("the slab blocks the band it crosses");
         let ground_at = |nx: usize| (nx as f32 + 0.5) / 8.0;
         for nx in 0..WALK_DIM {
             let clearance = 5.0 - ground_at(nx);

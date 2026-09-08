@@ -865,8 +865,9 @@ pub fn debug_assert_unreachable_goal_stops_at_wall(
     for ny in 0..WALK_DIM {
         walk_set(&mut walk, 32, ny, false);
     }
+    // A short wall catches an extra height offset in the grid collision query.
     for oy in 0..OBS_DIM {
-        obs_raise(&mut obs, 0.0, 16, oy, 20.0);
+        obs_raise(&mut obs, 0.0, 16, oy, 2.5);
     }
 
     // Stash-and-replace any REAL nav row at the probe cell (dev imports could cover it).

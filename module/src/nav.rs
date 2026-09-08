@@ -278,20 +278,16 @@ pub fn nav_step(
     let stepped = if !nav_enabled(ctx) {
         crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
     } else {
-        match lyracore_shared::nav::find_leg(
+        match lyracore_shared::nav::find_leg_in_range(
             &mut fetcher(ctx, map_id),
             cur,
             dest,
+            stop_dist,
             LEG_MAX_EXPANSIONS,
         ) {
-            // Real detour: head for the first corner, no stop-short (that's for the final approach).
-            Some(path) if path.len() > 1 || path[0] != dest => {
+            Some(path) => {
                 let wp = path[0];
                 crate::creatures::chase_step(cur.0, cur.1, wp.0, wp.1, max_step, 0.0)
-            }
-            // Fast path ([dest]): the direct line is already verified walkable.
-            Some(_) => {
-                crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
             }
             // Keep aiming at an unreachable goal; the commit gate truncates the move at geometry.
             None => crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
@@ -315,23 +311,35 @@ fn step_gate(
     stepped: (f32, f32),
     z: f32,
 ) -> (f32, f32) {
+    gate_step(cur, stepped, z, |from, to| {
+        let exact = crate::vmap::collision_ray(ctx, map_id, instance_id, from, to);
+        let grid = if !crate::vmap::vmap_enabled(ctx, map_id) && nav_enabled(ctx) {
+            // The grid query adds eye height itself, so it starts at foot height.
+            lyracore_shared::nav::step_hit(
+                &mut fetcher(ctx, map_id),
+                (from[0], from[1], z),
+                (to[0], to[1], z),
+            )
+            .map(|p| [p.0, p.1, from[2]])
+        } else {
+            None
+        };
+        crate::vmap::nearest_hit(from, exact, grid).map(|p| (p[0], p[1]))
+    })
+}
+
+fn gate_step(
+    cur: (f32, f32),
+    stepped: (f32, f32),
+    z: f32,
+    mut collision: impl FnMut([f32; 3], [f32; 3]) -> Option<(f32, f32)>,
+) -> (f32, f32) {
     if stepped == cur {
         return stepped;
     }
-    let a = [cur.0, cur.1, z];
-    let b = [stepped.0, stepped.1, z];
-    let exact = crate::vmap::collision_ray(ctx, map_id, instance_id, a, b);
-    let grid = if !crate::vmap::vmap_enabled(ctx, map_id) && nav_enabled(ctx) {
-        lyracore_shared::nav::step_hit(
-            &mut fetcher(ctx, map_id),
-            (a[0], a[1], a[2]),
-            (b[0], b[1], b[2]),
-        )
-        .map(|p| [p.0, p.1, z])
-    } else {
-        None
-    };
-    let hit = crate::vmap::nearest_hit(a, exact, grid).map(|p| (p[0], p[1]));
+    // Probe above walkable steps. A ray at foot height stops on every stair riser.
+    let probe_z = z + lyracore_shared::nav::WALK_STEP_UP;
+    let hit = collision([cur.0, cur.1, probe_z], [stepped.0, stepped.1, probe_z]);
     match hit {
         Some((hx, hy)) => {
             let (dx, dy) = (hx - cur.0, hy - cur.1);
@@ -385,9 +393,53 @@ pub fn debug_find_leg(
 }
 
 #[cfg(test)]
-mod coverage_merge_tests {
+mod tests {
     use super::*;
     use lyracore_shared::nav::{walk_get, walk_set, OBS_BYTES, OBS_NONE, WALK_BYTES};
+
+    #[test]
+    fn movement_steps_over_a_low_riser_but_stops_before_a_wall() {
+        use lyracore_shared::vmap::{cast_ray, RayFlavor, TriClass, VmapTri};
+        let cur = (-8910.0, -180.0);
+        let dest = (-8915.0, -180.0);
+        for (height, expected) in [(0.5, dest), (4.0, (-8911.5, -180.0))] {
+            let x = -8912.5;
+            let tris = vec![
+                VmapTri {
+                    verts: [
+                        [x, -190.0, 80.0],
+                        [x, -170.0, 80.0],
+                        [x, -170.0, 80.0 + height],
+                    ],
+                    class: TriClass::Wmo {
+                        group_id: 0,
+                        mogp_flags: 0,
+                    },
+                },
+                VmapTri {
+                    verts: [
+                        [x, -190.0, 80.0],
+                        [x, -170.0, 80.0 + height],
+                        [x, -190.0, 80.0 + height],
+                    ],
+                    class: TriClass::Wmo {
+                        group_id: 0,
+                        mogp_flags: 0,
+                    },
+                },
+            ];
+            let stepped = gate_step(cur, dest, 80.0, |from, to| {
+                cast_ray(
+                    &mut |_, _| Some(tris.clone()),
+                    from,
+                    to,
+                    RayFlavor::Collision,
+                )
+                .map(|h| (h[0], h[1]))
+            });
+            assert_eq!(stepped, expected, "height={height}");
+        }
+    }
 
     fn open(base_z: f32) -> NavCellData {
         NavCellData {
