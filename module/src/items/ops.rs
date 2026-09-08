@@ -184,14 +184,23 @@ pub(crate) fn request_grant_item(
     count: u32,
     property: Option<u32>,
 ) -> Result<(), ActionRefusal> {
-    let player = crate::helpers::live_entity(ctx, player_guid)
-        .map_err(|_| "player not in world".to_string())?;
+    let player = crate::helpers::live_entity(ctx, player_guid).map_err(|_| {
+        ActionRefusal::new(
+            crate::actor::ActionRefusalKind::MissingActor,
+            "player not in world",
+        )
+    })?;
     let tmpl = ctx
         .db
         .game_item_template()
         .entry()
         .find(item_entry)
-        .ok_or_else(|| format!("no such item {item_entry}"))?;
+        .ok_or_else(|| {
+            ActionRefusal::new(
+                crate::actor::ActionRefusalKind::MissingResource,
+                format!("no such item {item_entry}"),
+            )
+        })?;
     store_item_typed(
         ctx,
         player_guid,
@@ -201,6 +210,38 @@ pub(crate) fn request_grant_item(
         false,
         property,
     )
+}
+
+/// Top a profile-owned carried resource up to a fixed target. The target is capped at the largest
+/// supported ammunition stack so a malformed profile cannot turn periodic repair into an unlimited
+/// grant. Storage still owns capacity, uniqueness, and Random Property Gates.
+pub(crate) fn request_profile_item(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    item_entry: u32,
+    target_count: u32,
+) -> Result<u32, ActionRefusal> {
+    const PROFILE_ITEM_LIMIT: u32 = 200;
+    if target_count == 0 || target_count > PROFILE_ITEM_LIMIT {
+        return Err(ActionRefusal::new(
+            crate::actor::ActionRefusalKind::Other,
+            format!("profile item target {target_count} is outside 1..={PROFILE_ITEM_LIMIT}"),
+        ));
+    }
+    let owned = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&player_guid)
+        .filter(|row| row.entry == item_entry)
+        .map(|row| row.stack_count)
+        .fold(0u32, u32::saturating_add);
+    let missing = target_count.saturating_sub(owned);
+    if missing == 0 {
+        return Ok(0);
+    }
+    request_grant_item(ctx, player_guid, item_entry, missing, None)?;
+    Ok(missing)
 }
 
 /// Add items to matching carried stacks, then free backpack or bag slots.

@@ -13,10 +13,10 @@
 //! `TrainingFailureReason` codes. [entity]
 
 use lyracore_shared::trainer::TrainerRefusal;
-use spacetimedb::{table, ReducerContext};
+use spacetimedb::{table, ReducerContext, Table};
 
 use crate::{
-    game_creature_template, game_player_skill, game_spell_chain, game_spell_effect,
+    game_creature_template, game_player_skill, game_spell, game_spell_chain, game_spell_effect,
     game_world_entity, WorldEntity,
 };
 
@@ -157,6 +157,121 @@ pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
                 .then_some(e.trigger_spell)
         })
         .unwrap_or(spell_id)
+}
+
+fn demo_profile_spell_admitted(class: u8, spell_id: u32) -> bool {
+    match class {
+        1 => matches!(spell_id, 355 | 7386),
+        2 => matches!(spell_id, 635 | 853 | 19740 | 20154 | 20271 | 26573),
+        5 => matches!(spell_id, 139 | 2050),
+        8 => spell_id == 133,
+        _ => false,
+    }
+}
+
+/// Reconcile one free class spell selected by a provisioning profile. Imported Shards require a
+/// real offering from a trainer that serves the Character's class, then apply the offering's level
+/// and the spell rank-chain Gates. A seed-only Shard has no trainer catalogue, so its supported
+/// demo profiles may learn a seeded spell at the spell's own level.
+pub(crate) fn reconcile_profile_spell(
+    ctx: &ReducerContext,
+    guid: u64,
+    spell_id: u32,
+) -> Result<bool, crate::actor::ActionRefusal> {
+    if crate::spell::knows_spell(ctx, guid, spell_id) {
+        return Ok(false);
+    }
+    let actor = crate::helpers::live_entity(ctx, guid).map_err(|_| {
+        crate::actor::ActionRefusal::new(
+            crate::actor::ActionRefusalKind::MissingActor,
+            format!("learner {guid} not in world"),
+        )
+    })?;
+    let spell = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .ok_or_else(|| {
+            crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::MissingResource,
+                format!("no such spell {spell_id}"),
+            )
+        })?;
+    if actor.level < u32::from(spell.spell_level) {
+        return Err(crate::actor::ActionRefusal::new(
+            crate::actor::ActionRefusalKind::Level,
+            format!("spell {spell_id} requires level {}", spell.spell_level),
+        ));
+    }
+
+    if ctx.db.game_trainer_spell().count() == 0 {
+        if !demo_profile_spell_admitted(actor.class(), spell_id) {
+            return Err(crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::Class,
+                format!(
+                    "spell {spell_id} is not available to class {}",
+                    actor.class()
+                ),
+            ));
+        }
+    } else {
+        let offerings: Vec<_> = ctx
+            .db
+            .game_trainer_spell()
+            .iter()
+            .filter(|offering| {
+                offering.learn_skill_line == 0
+                    && resolve_learn_target(ctx, offering.spell_id) == spell_id
+                    && ctx
+                        .db
+                        .game_creature_template()
+                        .entry()
+                        .find(offering.trainer_entry)
+                        .is_some_and(|trainer| {
+                            lyracore_shared::trainer::serves(
+                                actor.class(),
+                                trainer.trainer_type,
+                                trainer.trainer_class,
+                            )
+                        })
+            })
+            .collect();
+        if offerings.is_empty() {
+            return Err(crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::Class,
+                format!(
+                    "spell {spell_id} is not offered for class {}",
+                    actor.class()
+                ),
+            ));
+        }
+        let required_level = offerings
+            .iter()
+            .map(|offering| u32::from(offering.required_level))
+            .min()
+            .unwrap_or(0);
+        if actor.level < required_level {
+            return Err(crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::Level,
+                format!("spell {spell_id} requires level {required_level}"),
+            ));
+        }
+    }
+    if let Some(chain) = ctx.db.game_spell_chain().spell_id().find(spell_id) {
+        if chain.prev_spell != 0 && !crate::spell::knows_spell(ctx, guid, chain.prev_spell) {
+            return Err(crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::Prerequisite,
+                format!(
+                    "spell {spell_id} requires previous rank {}",
+                    chain.prev_spell
+                ),
+            ));
+        }
+    }
+
+    crate::spell::learn_spell_with_dependents(ctx, guid, actor.owner_identity, spell_id);
+    Ok(true)
 }
 
 /// Resolve + validate a trainer interaction: `trainer_guid` must be a real in-range TRAINER on `caster`'s

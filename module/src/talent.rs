@@ -20,18 +20,14 @@
 //! (re-derived correctly at the next learn); gossip surfacing of "unlearn talents" at the trainer
 //! (work-item 198 follow-up — the reducer is wired, the gateway arm is not). [entity]
 //!
-//! DEMO SEED (work-item 207): `seed_talents` inserts a small hand-authored Warrior-flavored tree (ids
-//! 1-8) so a no-DBC sandbox has SOMETHING to learn/test against. KEPT rather than retired even after the
-//! real `TalentTab.dbc`/`Talent.dbc` importer (`importer/src/talent.rs`) landed — a sandbox with no client
-//! MPQ access still needs a talent tree to exercise `learn_talent`/`reset_talents`/the aura pipeline. A
-//! REAL import is a WHOLESALE clear+reload (`DELETE ... WHERE talent_id >= 0` is a tautology on the
-//! unsigned key — every row goes, demo ids 1-8 included): importing REPLACES the demo tree, it does not
-//! coexist with it. A character who learned a demo talent before the import keeps an orphaned
-//! `game_character_talent` row — `apply_learned_talents` logs and skips it at login (respec or
-//! `debug_reset_talents` clears it; fine for the no-prod alpha). The reserved 51xxx demo spell ids
-//! likewise never collide with imported Spell.dbc ids. An operator who imports for real ends up with BOTH
-//! the demo rows (idle, orphaned in tree_id 0-2 alongside real tabs) and the real tree — harmless, since
-//! nothing gates on "is this the only row in tree_id N".
+//! DEMO SEED (work-item 207): `seed_talents` inserts a small hand-authored Warrior tree (ids 1-8) so a
+//! no-DBC sandbox has a talent tree to exercise `learn_talent`/`reset_talents`/the aura pipeline. A real
+//! `TalentTab.dbc`/`Talent.dbc` import normally replaces those rows. If imported tabs coexist with a
+//! tab-less demo row, the owning learn Gate treats the imported catalogue as authoritative and refuses
+//! the demo row. Only a Shard with no `TalentTab` rows may use the Warrior-only demo tree. A character
+//! who learned a demo talent before an import keeps an orphaned `game_character_talent` row;
+//! `apply_learned_talents` logs and skips it at login. The reserved 51xxx demo spell ids do not collide
+//! with imported Spell.dbc ids.
 
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
@@ -48,7 +44,12 @@ use crate::{game_character, game_spell, game_spell_effect, game_world_entity, Sp
 /// CONTRACT: a talent does something via a PASSIVE aura (`spell_id != 0`) and/or by TEACHING an active
 /// (`grant_spell_id != 0`) — at least one should be set (both is allowed; the two are applied
 /// independently). A talent with neither is an inert/malformed seed (logged at login). [static]
-#[table(accessor = game_talent, public, index(accessor = by_tree, btree(columns = [tree_id])))]
+#[table(
+    accessor = game_talent,
+    public,
+    index(accessor = by_tree, btree(columns = [tree_id])),
+    index(accessor = by_tab, btree(columns = [tab_id]))
+)]
 pub struct Talent {
     #[primary_key]
     pub talent_id: u32,
@@ -92,8 +93,8 @@ pub struct Talent {
     /// `required_talent_id` is 0. END-appended `#[default(0)]`.
     #[default(0)]
     pub required_talent_rank: u8,
-    /// A required SPELL the character must already know (Talent.dbc `required_spell`), 0 = none. NOT
-    /// gated by `do_learn_talent` this slice (carried for completeness / a future gate). END-appended
+    /// A required SPELL the character must already know (Talent.dbc `required_spell`), 0 = none.
+    /// `do_learn_talent` checks this before changing talent, spell, or aura state. END-appended with
     /// `#[default(0)]`.
     #[default(0)]
     pub required_spell_id: u32,
@@ -105,7 +106,11 @@ pub struct Talent {
 /// stays 0). `class_mask`/`race_mask` are Talent.dbc's raw bitmasks (one-hot per class in vanilla);
 /// `order_index` is the tab's 0-based position within its class (0/1/2), which `importer/src/talent.rs`
 /// copies onto each of its talents' `tree_id`. [static]
-#[table(accessor = game_talent_tab, public)]
+#[table(
+    accessor = game_talent_tab,
+    public,
+    index(accessor = by_order, btree(columns = [order_index]))
+)]
 pub struct TalentTab {
     #[primary_key]
     pub tab_id: u32,
@@ -236,16 +241,24 @@ fn total_spent(ctx: &ReducerContext, guid: u64) -> u32 {
         .sum()
 }
 
-/// Points `character_guid` has spent in `tree_id` (sum of learned ranks of talents in that tree). Joins
-/// each learned row to its `game_talent` row for the tree id.
-fn points_in_tree(ctx: &ReducerContext, guid: u64, tree_id: u8) -> u32 {
+/// Points `character_guid` has spent in the selected talent's tree. Imported trees use globally
+/// unique `tab_id`; the explicit no-import demo groups its `tab_id == 0` rows by `tree_id`.
+fn same_talent_tree(candidate: &Talent, selected: &Talent) -> bool {
+    if selected.tab_id == 0 {
+        candidate.tab_id == 0 && candidate.tree_id == selected.tree_id
+    } else {
+        candidate.tab_id == selected.tab_id
+    }
+}
+
+fn points_in_tree(ctx: &ReducerContext, guid: u64, selected: &Talent) -> u32 {
     let talents = ctx.db.game_talent();
     ctx.db
         .game_character_talent()
         .by_character()
         .filter(&guid)
         .filter_map(|t| match talents.talent_id().find(t.talent_id) {
-            Some(def) => Some((def.tree_id, t.rank)),
+            Some(def) => Some((def, t.rank)),
             None => {
                 // A learned talent with no metadata row would under-count tree points (loosening the
                 // tier gate). game_talent is static + seeded, so this only fires on a data bug — surface it.
@@ -256,9 +269,17 @@ fn points_in_tree(ctx: &ReducerContext, guid: u64, tree_id: u8) -> u32 {
                 None
             }
         })
-        .filter(|(tree, _)| *tree == tree_id)
+        .filter(|(def, _)| same_talent_tree(def, selected))
         .map(|(_, rank)| rank as u32)
         .sum()
+}
+
+fn mask_admits(mask: u32, id: u8) -> bool {
+    id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0
+}
+
+fn talent_tab_admits(tab: &TalentTab, race: u8, class: u8) -> bool {
+    mask_admits(tab.class_mask, class) && (tab.race_mask == 0 || mask_admits(tab.race_mask, race))
 }
 
 // ===========================================================================================
@@ -284,9 +305,43 @@ pub(crate) fn do_learn_talent(
         .map_err(|_| format!("no live entity for guid {guid} (must be in world to learn)"))?;
     let level = entity.level;
 
+    // The no-import demo is Warrior-only. Once any imported tab exists, a tab-less row cannot use
+    // the demo exception. Imported talents must belong to this Character's class and race before
+    // any rank, spellbook, or aura state changes.
+    if talent.tab_id == 0 {
+        if entity.class() != 1 || ctx.db.game_talent_tab().count() != 0 {
+            return Err(format!(
+                "demo talent {talent_id} is not available to class {} with the current catalogue",
+                entity.class()
+            ));
+        }
+    } else {
+        let tab = ctx
+            .db
+            .game_talent_tab()
+            .tab_id()
+            .find(talent.tab_id)
+            .ok_or_else(|| format!("unknown talent tab {}", talent.tab_id))?;
+        if !talent_tab_admits(&tab, entity.race(), entity.class()) {
+            return Err(format!(
+                "talent {talent_id} is not available to race {} class {}",
+                entity.race(),
+                entity.class()
+            ));
+        }
+    }
+    if talent.required_spell_id != 0
+        && !crate::spell::knows_spell(ctx, guid, talent.required_spell_id)
+    {
+        return Err(format!(
+            "talent {talent_id} requires spell {}",
+            talent.required_spell_id
+        ));
+    }
+
     let available = talent_points_available(level, total_spent(ctx, guid));
     let current = learned_rank(ctx, guid, talent_id);
-    let pit = points_in_tree(ctx, guid, talent.tree_id);
+    let pit = points_in_tree(ctx, guid, &talent);
     let prereq_ok = prereq_satisfied(
         talent.required_talent_id,
         learned_rank(ctx, guid, talent.required_talent_id),
@@ -328,6 +383,28 @@ pub(crate) fn do_learn_talent(
     // it must add Consecration to the spellbook so `cast_spell` accepts it).
     apply_talent_rank(ctx, &talent, guid, owner, next, entity.level as u8);
     Ok(next)
+}
+
+/// Learn one profile-selected talent through the normal talent Gates. The Actor's durable owner is
+/// derived here so a Package cannot stamp learned state for another identity.
+pub(crate) fn reconcile_profile_talent(
+    ctx: &ReducerContext,
+    guid: u64,
+    talent_id: u32,
+) -> Result<bool, crate::actor::ActionRefusal> {
+    let owner = crate::helpers::live_entity(ctx, guid)
+        .map_err(|_| {
+            crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::MissingActor,
+                format!("no live entity for guid {guid} (must be in world to learn)"),
+            )
+        })?
+        .owner_identity;
+    let before = learned_rank(ctx, guid, talent_id);
+    let after = do_learn_talent(ctx, guid, owner, talent_id).map_err(|detail| {
+        crate::actor::ActionRefusal::new(crate::actor::ActionRefusalKind::Other, detail)
+    })?;
+    Ok(after != before)
 }
 
 /// The spell id for `talent` at `rank`. IMPORTED talents (Talent.dbc) carry a DISTINCT spell per rank
