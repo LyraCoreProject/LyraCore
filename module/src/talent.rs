@@ -221,6 +221,7 @@ pub fn prereq_satisfied(
 // ===========================================================================================
 
 /// `character_guid`'s learned rank in `talent_id` (0 if unlearned). Scans the character's small talent set.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 fn learned_rank(ctx: &ReducerContext, guid: u64, talent_id: u32) -> u8 {
     ctx.db
         .game_character_talent()
@@ -412,6 +413,7 @@ pub(crate) fn do_learn_talent(
 
 /// Learn one profile-selected talent through the normal talent Gates. The Actor's durable owner is
 /// derived here so a Package cannot stamp learned state for another identity.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn reconcile_profile_talent(
     ctx: &ReducerContext,
     guid: u64,
@@ -432,7 +434,9 @@ pub(crate) fn reconcile_profile_talent(
     Ok(after != before)
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 const PROFILE_TALENT_LIMIT: usize = 64;
+#[cfg_attr(not(has_packages), allow(dead_code))]
 const PROFILE_TALENT_TAB_LIMIT: usize = 16;
 
 /// Select the next talent in a profile-owned preferred tree through the same admission calculation
@@ -441,6 +445,7 @@ const PROFILE_TALENT_TAB_LIMIT: usize = 16;
 /// per set for overflow detection. The raw tree limit applies before demo-row filtering. One exact
 /// talent-definition read per learned row computes the shared tree-point total. Admission then
 /// performs one exact tab read and at most one exact required-spell read per candidate.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn select_profile_talent(
     ctx: &ReducerContext,
     guid: u64,

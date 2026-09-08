@@ -215,6 +215,7 @@ pub(crate) fn request_grant_item(
 /// Top a profile-owned resource up to a fixed target. The target is capped at the largest
 /// supported ammunition stack so a malformed profile cannot turn periodic repair into an unlimited
 /// grant. Storage still owns capacity, uniqueness, and Random Property Gates.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_profile_item(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -238,8 +239,10 @@ pub(crate) fn request_profile_item(
     Ok(missing)
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 const PROFILE_ITEM_LIMIT: u32 = 200;
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 fn profile_item_target_admitted(target_count: u32) -> Result<(), ActionRefusal> {
     if (1..=PROFILE_ITEM_LIMIT).contains(&target_count) {
         return Ok(());

@@ -359,6 +359,7 @@ pub(crate) fn apply_equip_item(
 /// Equip a profile item only when its destination is empty or holds lower item-level gear. The
 /// existing equip operation still owns every slot, level, proficiency, skill, reputation, and bind
 /// Gate. Full bag slots and missing equipped templates preserve what the Character already wears.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn apply_equip_profile_upgrade(
     ctx: &ReducerContext,
     player_guid: u64,

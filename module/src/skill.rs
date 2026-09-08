@@ -601,6 +601,7 @@ pub(crate) fn raise_combat_caps(ctx: &ReducerContext, guid: u64, new_level: u32)
     }
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 fn profile_mask_admits(mask: u32, id: u8) -> bool {
     mask == 0 || (id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0)
 }
@@ -608,6 +609,7 @@ fn profile_mask_admits(mask: u32, id: u8) -> bool {
 /// Reconcile one combat skill selected by a free provisioning profile. Imported availability owns
 /// the race, class, and level Gates. A seed-only Shard falls back to the established class weapon
 /// table so the no-import demo remains usable.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn reconcile_profile_skill(
     ctx: &ReducerContext,
     guid: u64,

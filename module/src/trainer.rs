@@ -178,14 +178,19 @@ pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
     learn_target_from_effects(spell_id, &effects)
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 const PROFILE_TRAINER_OFFERING_LIMIT: usize = 16;
+#[cfg_attr(not(has_packages), allow(dead_code))]
 const PROFILE_WRAPPER_EFFECT_LIMIT: usize = 16;
+#[cfg_attr(not(has_packages), allow(dead_code))]
 const PROFILE_SPELL_EFFECT_LIMIT: usize = 3;
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 fn profile_limit(detail: impl Into<String>) -> crate::actor::ActionRefusal {
     crate::actor::ActionRefusal::new(crate::actor::ActionRefusalKind::ProfileLimit, detail.into())
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 fn profile_learn_target(
     ctx: &ReducerContext,
     wrapper_spell: u32,
@@ -206,11 +211,13 @@ fn profile_learn_target(
 }
 
 #[derive(Default)]
+#[cfg_attr(not(has_packages), allow(dead_code))]
 struct ProfileOfferingScan {
     examined: usize,
     lowest_required_level: Option<u32>,
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 impl ProfileOfferingScan {
     fn inspect(
         &mut self,
@@ -260,6 +267,7 @@ impl ProfileOfferingScan {
     }
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 fn sorted_offerings(
     ctx: &ReducerContext,
     spell_id: u32,
@@ -285,6 +293,7 @@ fn sorted_offerings(
 /// Target resolution reads at most four effects for the requested spell and each of at most 16
 /// candidate wrappers. Every examined class-spell offering reads one exact trainer template. A usable
 /// offering ends the search; `ProfileLimit` means the bounded prefix was inconclusive.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 fn admit_profile_spell(
     ctx: &ReducerContext,
     spell_id: u32,
@@ -360,6 +369,7 @@ fn admit_profile_spell(
     Err(scan.refusal(spell_id, class))
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 fn demo_profile_spell_admitted(class: u8, spell_id: u32) -> bool {
     match class {
         1 => matches!(spell_id, 355 | 7386),
@@ -374,6 +384,7 @@ fn demo_profile_spell_admitted(class: u8, spell_id: u32) -> bool {
 /// real offering from a trainer that serves the Character's class, then apply the offering's level
 /// and the spell rank-chain Gates. A seed-only Shard has no trainer catalogue, so its supported
 /// demo profiles may learn a seeded spell at the spell's own level.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn reconcile_profile_spell(
     ctx: &ReducerContext,
     guid: u64,
