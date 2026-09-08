@@ -511,7 +511,7 @@ mod session_expiry_tests {
 // ===========================================================================================
 
 /// Shared durable high-water mark for Character and item creation. Deletion and Transfer never
-/// lower it. Transfer advances it for an arriving Character only inside this Shard's own range.
+/// lower it. With a range installed, only local Character GUIDs advance the Transfer floor.
 /// A scan of surviving rows cannot replace it, because issued identities may now live elsewhere.
 #[table(accessor = game_guid_allocator)]
 pub struct GuidAllocator {
@@ -648,8 +648,9 @@ fn guid_batch_end(
     Ok(last)
 }
 
-/// Preserve a local Character's issued GUID before import or deletion. Foreign Characters must
-/// never advance this Shard's mark, including the cleanup that precedes a Transfer import.
+/// Preserve a Character's issued GUID before import or deletion. Once a range is installed,
+/// foreign Characters cannot advance its mark, including cleanup before a Transfer import.
+/// Before installation, retain the legacy floor so a provisioning failure cannot erase it.
 pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
     let range = ctx
         .db
@@ -657,7 +658,7 @@ pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
         .id()
         .find(0)
         .map(|row| (row.base, row.size));
-    if !in_guid_range(range, guid) {
+    if range.is_some() && !in_guid_range(range, guid) {
         return;
     }
     let existing = read_high_water(ctx);
@@ -701,21 +702,8 @@ pub(crate) fn require_guid_range(ctx: &ReducerContext) -> Result<(), String> {
     may_mint(range, mark.unwrap_or(0))
 }
 
-/// Is `guid` inside `range`? Pure, same reason as [`may_mint`] — testable without a
-/// `ReducerContext`. `transfer::apply_import_blob` calls this to decide whether an
-/// ARRIVING character's guid may ratchet THIS database's `game_guid_allocator` — ranges are
-/// disjoint by construction, so a guid outside this
-/// database's own range belongs to another shard and can never collide with anything this shard
-/// mints; ratcheting past it anyway is pure self-harm (it walks this shard's own mark toward, or
-/// past, its own range end for a guid it will never be asked to re-mint — the live
-/// incident).
-///
-/// `None` (no range installed yet) is conservatively `false`, i.e. "not inside" — never a bump.
-/// Same reasoning as `may_mint`'s `NO_GUID_RANGE`: a database with no range cannot mint locally
-/// either, so there is nothing local yet for a foreign arrival to threaten, and treating an
-/// unranged guid as "inside" would let an import inflate the mark before a range even exists to
-/// check it against (poisoning the eventual `install_guid_range` — see its own "already minted
-/// up to N" guard).
+/// True only inside an installed range. Transfer uses this Gate directly; legacy deletion
+/// retains its old high-water floor until a range is installed.
 pub(crate) fn in_guid_range(range: Option<(u64, u64)>, guid: u64) -> bool {
     let Some((base, size)) = range else {
         return false;
@@ -1023,7 +1011,7 @@ mod guid_allocator_tests {
                     .id()
                     .find(0)
                     .map(|row| (row.base, row.size));
-                if !in_guid_range(range, guid) {
+                if range.is_some() && !in_guid_range(range, guid) {
                     return;
                 }
                 let existing = read_high_water(ctx);

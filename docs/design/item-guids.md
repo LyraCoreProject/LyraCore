@@ -28,8 +28,8 @@ Trading creates new recipient items. Mail, Auctions and Buyback store item snaps
 create new items when the recipient takes them. Preserved identities now rely on disjoint
 GUID Ranges and a durable issuer mark, rather than a packed Character namespace.
 
-Transfer does not move or replace a Shard's allocator. An arriving Character raises the local
-mark only when its GUID belongs to the destination's own range. Incoming items need no floor
+Transfer does not move or replace a Shard's allocator. With a range installed, an arriving
+Character raises the local mark only when its GUID belongs to the destination's own range. Incoming items need no floor
 update because the issuing Shard retains their high-water mark after they leave.
 
 ## Compatibility and rollout
@@ -48,9 +48,11 @@ with bit 47 set, missing or overlapping GUID Ranges, and allocator marks at or b
 range end. Resolve those cases under separate human approval. Local collision checks do not
 replace this realm-wide audit. An already escaped Character GUID also needs explicit review.
 
-Without an installed range, Character cleanup no longer raises the allocator mark. Resolve a
-missing range before this rollout; do not delete legacy Characters first and then seed a mark
-from surviving rows. The update never invents a range assignment or resets a mark.
+Without an installed range, Character cleanup retains the legacy allocator floor. Gateway
+startup can continue after a failed range claim, so deleting a Character in that state must not
+allow its GUID to be reused when provisioning recovers. Item creation still returns
+`NO_GUID_RANGE`. Resolve missing ranges before deployment; the update never invents an assignment
+or resets a mark.
 
 Pause World Sessions and all item-granting or ownership-changing activity during the update.
 Record outstanding Transfer Escrow. Verify each Shard's permanent range assignment, publish the

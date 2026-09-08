@@ -447,3 +447,33 @@ fn a_local_legacy_collision_refuses_without_replacing_either_owners_items() {
         mark.to_string()
     );
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn legacy_deletion_preserves_its_floor_before_range_installation() {
+    let mut shard = Standalone::start("item-guid-legacy-floor");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("debug_delete_character", &["1"]);
+    let marks = shard.query_rows("SELECT high_water FROM game_guid_allocator");
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["high_water"], "1");
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call(
+        "create_character",
+        &[
+            "1",
+            "\"AfterDelete\"",
+            "1",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let created = shard.query_rows("SELECT guid FROM game_character WHERE name = 'AfterDelete'");
+    assert_eq!(created[0]["guid"], "2");
+}
