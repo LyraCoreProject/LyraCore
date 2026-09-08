@@ -169,7 +169,9 @@
       ],
       "notes": [
         "The implementer owns the isolated core and Package worktrees and the serialized build slot. The orchestrator owns independent review and merge order.",
-        "One helper owns the two navigation files in an isolated core worktree. The tracer owner integrates that commit with casts, actor operations, Package changes, durable fixtures, and PRs."
+        "The navigation helper supplied route status, clipping, search-work counts, and explicit unknown coverage. The tracer has integrated it.",
+        "Real Package tests exposed partial quest rewards when the caller caught a Refusal. The integrated fix preflights all item consumption and rewards. Its focused checks passed 74 item tests and 21 quest tests; combined durable validation is still in progress.",
+        "The new nullable quest-progress field establishes a baseline without treating pre-existing credit as new progress. An initialization fixture is being checked; this does not yet prove publication over an older Package binary."
       ],
       "acceptance_evidence": []
     },
@@ -204,7 +206,9 @@
       "owner": "Unassigned",
       "prs": [],
       "evidence": [],
-      "notes": [],
+      "notes": [
+        "SpacetimeDB 2.7.1 allows appended enum variants only when old variants stay compatible and storage size and alignment stay unchanged. Prove populated-state migration for the runner schema. Planner source: https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/schema/src/auto_migrate.rs#L826-L895"
+      ],
       "acceptance_evidence": []
     },
     {
@@ -237,7 +241,8 @@
       "prs": [],
       "evidence": [],
       "notes": [
-        "PB-001 found no existing line-of-sight Gate in targeted cast admission. Add the appropriate shared Gate with supported exemptions and client/bot parity coverage so the movement prerequisite responds to a real typed Refusal. Channel actions remain unsupported until their running lifecycle is correlated."
+        "PB-001 found no existing line-of-sight Gate in targeted cast admission. Add the appropriate shared Gate with supported exemptions and client/bot parity coverage so the movement prerequisite responds to a real typed Refusal. Channel actions remain unsupported until their running lifecycle is correlated.",
+        "The historical Actor cast bypasses the player spellbook check. PB-003 owns the appropriate shared Gate for the new runner and must coordinate with provisioning in PB-005. An unlearned heal must refuse without cast, power, or cooldown changes."
       ],
       "acceptance_evidence": []
     },
@@ -556,6 +561,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 11:40 UTC",
-  "summary": "Report and tracker PR #481 merged after independent review and all CI checks. PB-001 passed its cast fixtures and blocked-quest regression; navigation and interaction integration continues. No implementation ticket is complete yet."
+  "updated_at": "2026-09-08 12:16 UTC",
+  "summary": "Report and tracker PR #481 is merged. PB-001 has working cast, route, blocked-quest, and atomic interaction cases. Combined fixture validation and final review are in progress. No implementation ticket is complete yet."
 }
