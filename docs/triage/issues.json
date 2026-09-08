@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-09-08 06:44 UTC",
+  "updated_at": "2026-09-08 06:52 UTC",
   "base_revision": "e41d5f846e55c5b08f67d6477725ebdd8b6158f5",
-  "status_note": "All 67 open issues have current assessments. Report PR #475 and loot retry PR #474 merged. PR #473 has a tested correction for the Character ID reuse regression and is finishing CI. Spell event PR #476 passed all CI; door collision PR #477 is testing a pooled-spawn lifecycle correction. The two additive schema PRs need human review before shipping.",
+  "status_note": "All 67 open issues have current assessments. Report PR #475 and loot retry PR #474 merged. Item GUID PR #473 and door collision PR #477 have tested, independently reviewed corrections and are finishing CI on current main. Spell event PR #476 passed all CI. The two additive schema PRs need human review before shipping.",
   "monitoring_note": "Codex owns this report and the dispatch order. Monitoring is active during this work session. Each implementer follows checks and actual CodeRabbit or human review through fixes; Codex handles final review and merge. No unattended scheduler is installed. The report and its repository source preserve the next actions between sessions.",
   "focus": [
     "Prevent item GUID collisions in #71. GPT-6 Astra, high effort, owns allocation, ownership changes and Transfer proofs.",
@@ -698,7 +698,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "This issue depends only on source work in #113 and should ship in the same source DAG. An instance-0-only registry would create a temporary production interface that the next change immediately replaces. Current callers already hold entity instance identity. Imported Deadmines calibration remains a separate Operator gate after the source and synthetic tests merge.",
-      "next_action": "Register and remove colliders during gathering-pool spawn changes, including templates changed by a Package. Prove the lifecycle, complete CI and rebase after #473 integrates, then obtain human schema review.",
+      "next_action": "Complete CI at af7dd92 and rebase after #473 integrates. Obtain human review of the new private table before shipping. Imported geometry, matching Package model artifacts and canonical performance remain acceptance work.",
       "blockers": [
         "Human review is required before the additive schema ships.",
         "Final Deadmines acceptance needs approved client data and a named development Shard."
@@ -727,7 +727,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "PR #254 supplied game_go_model. The remaining collider table, lifecycle, transform, state Gate, broad-phase reject, and ray merge are specified and testable with synthetic data. Dynamic collider eligibility can depend on the global Gate and registry data while static geometry keeps its active-generation rule, so map 36 needs no invented static generation or new product decision. Implementing #114 in the same DAG avoids an instance-0-only production path.",
-      "next_action": "Register and remove colliders during gathering-pool spawn changes, including templates changed by a Package. Prove the lifecycle, complete CI and rebase after #473 integrates, then obtain human schema review.",
+      "next_action": "Complete CI at af7dd92 and rebase after #473 integrates. Obtain human review of the new private table before shipping. Imported geometry, matching Package model artifacts and canonical performance remain acceptance work.",
       "blockers": [
         "Human review is required before the additive schema ships; imported-door calibration stays open."
       ],
@@ -1259,7 +1259,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "The revised design consumes existing durable GUID Ranges without a table, reducer argument or Transfer-format change. It removes owner truncation and same-transaction reuse. The existing live GUID inventory still needs an authorized audit before a coordinated deployment.",
-      "next_action": "Complete final independent review and CI at 5be1041, then merge source. Twelve item GUID durable cases pass, including the no-range deletion floor and foreign-Character isolation. Deployment still needs the documented legacy-state audit.",
+      "next_action": "Finish CI at c0ddfd0 and merge source. Twelve item GUID durable cases, eleven allocator unit tests and offline preflight pass. Deployment still needs the documented legacy-state audit.",
       "blockers": [
         "Before deployment, an authorized Operator must audit legacy item GUIDs and permanent range assignments across the Realm."
       ],
@@ -4308,10 +4308,10 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/473",
       "title": "fix(items): allocate GUIDs from durable Shard ranges",
       "owner": "GPT-6 Astra, high effort, item GUID implementer",
-      "head": "5be1041560ba855fa79b75732c1cd7d216e24d5d",
-      "status": "Compatibility fix proved locally; full CI and final independent review running",
-      "next_action": "Complete final independent review and CI at 5be1041, then merge source. Twelve item GUID durable cases pass, including the no-range deletion floor and foreign-Character isolation. Deployment still needs the documented legacy-state audit.",
-      "checked_at": "2026-09-08 06:44 UTC",
+      "head": "c0ddfd010db2185cd75a5ebc35f3cfbaee3e0b3e",
+      "status": "Final source reviewed; current-main CI running",
+      "next_action": "Finish CI at c0ddfd0 and merge source. Twelve item GUID durable cases, eleven allocator unit tests and offline preflight pass. Deployment still needs the documented legacy-state audit.",
+      "checked_at": "2026-09-08 06:52 UTC",
       "checks": [
         {
           "name": "durable",
@@ -4343,7 +4343,7 @@
           "source": "Full review of 45 files through fa64b46 completed with no actionable findings. Later fixture and compatibility corrections need independent review."
         }
       ],
-      "review_note": "Root independently reviewed the compatibility correction. Twelve item GUID durable cases and eleven allocator unit tests passed. CodeRabbit completed a full 45-file review through fa64b46 with no actionable findings; the later fixture and compatibility corrections need independent review.",
+      "review_note": "CodeRabbit completed a full 45-file review through fa64b46 with no actionable findings. Root and GPT-5.6 Sol independently reviewed the later compatibility correction. Final c0ddfd0 adds comment corrections and rebases onto main e41d5f8 without further runtime changes.",
       "github_state": "OPEN"
     },
     {
@@ -4409,7 +4409,7 @@
       "head": "97678dd4aaf73c2c1aacb3b3ec7448a79bf238d6",
       "title": "refactor(spells): give cast events an explicit kind",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/476",
-      "checked_at": "2026-09-08 06:44 UTC",
+      "checked_at": "2026-09-08 06:52 UTC",
       "github_state": "OPEN",
       "checks": [
         {
@@ -4449,15 +4449,15 @@
     {
       "number": 477,
       "owner": "GPT-6 Astra, high effort, door collision implementer",
-      "head": "13adbb8234a2d98bcfd40c71588869f67a7649f7",
+      "head": "af7dd923c6f1bc97101b08cc1a1097f7c5ef857d",
       "title": "fix(vmap): make closed instance doors block rays",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/477",
-      "checked_at": "2026-09-08 06:44 UTC",
+      "checked_at": "2026-09-08 06:52 UTC",
       "github_state": "OPEN",
       "checks": [
         {
           "name": "durable",
-          "result": "SUCCESS"
+          "result": "IN_PROGRESS"
         },
         {
           "name": "build",
@@ -4473,7 +4473,7 @@
         },
         {
           "name": "test",
-          "result": "SUCCESS"
+          "result": "IN_PROGRESS"
         },
         {
           "name": "wasm",
@@ -4485,9 +4485,9 @@
           "source": "Hourly quota prevented actual review."
         }
       ],
-      "status": "Pooled-spawn lifecycle correction under way; schema review pending",
-      "next_action": "Register and remove colliders during gathering-pool spawn changes, including templates changed by a Package. Prove the lifecycle, complete CI and rebase after #473 integrates, then obtain human schema review.",
-      "review_note": "Root and the item GUID implementer independently reviewed transforms, nearest-hit selection, instance routing and lifecycle. All local proofs passed: Module 1,508, Gateway 1,443, shared 156, private fixture including Package replay and both debug command signatures, all 995 bindings, strict lint and preflight. CodeRabbit has only a quota notice."
+      "status": "Pooled-spawn correction proved and reviewed; current-main CI running",
+      "next_action": "Complete CI at af7dd92 and rebase after #473 integrates. Obtain human review of the new private table before shipping. Imported geometry, matching Package model artifacts and canonical performance remain acceptance work.",
+      "review_note": "Root and the item GUID implementer reviewed the runtime. Root reviewed the later pool hooks and their public-Package durable regression. All local proofs passed, including pool rearm, movement, reroll and removal. Current af7dd92 rebases main e41d5f8. CodeRabbit supplied only a quota notice."
     }
   ],
   "history": [
@@ -4826,6 +4826,10 @@
     {
       "at": "2026-09-08 06:39 UTC",
       "text": "Durable CI exposed Character ID reuse after deletion before range installation in #473. A nonfatal Gateway provisioning path makes this a runtime compatibility case, now assigned for correction. Review also found missing pooled GameObject collider lifecycle hooks in #477. Re-scored the remaining #84 durable recovery work after its bounded retry fix merged."
+    },
+    {
+      "at": "2026-09-08 06:47 UTC",
+      "text": "The GUID compatibility correction passed all 12 item durable cases and independent review. CodeRabbit completed its full review through fa64b46 without actionable findings. Final source c0ddfd0 rebases current main and is in CI; obsolete runs were canceled. Issue #84 now has a public progress note preserving the original incident acceptance and durable recovery design."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
