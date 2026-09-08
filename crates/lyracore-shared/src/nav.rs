@@ -819,6 +819,15 @@ impl WorldTri {
             if dist < -margin {
                 return None;
             }
+            if margin == 0.0 && side_p == 0.0 {
+                // Assign a shared edge to one triangle. Adjacent stair treads must not overlap
+                // at a sample, while a ceiling mesh diagonal must remain covered.
+                let dx = ex * side_c.signum();
+                let dy = ey * side_c.signum();
+                if !(dy > 0.0 || (dy == 0.0 && dx < 0.0)) {
+                    return None;
+                }
+            }
         }
         // Steep plane (wall or fence side, more than 60° from horizontal): the plane-z is
         // ill-conditioned over the projected sliver and clamps to an arbitrary end of the
@@ -865,7 +874,11 @@ fn standing_heights(
 ) -> Vec<f32> {
     let side = dim + 2;
     let resolution = CELL_SIZE / dim as f32;
-    let center = |cell, i: usize| sub_center(cell, 0, dim) - (i as f32 - 1.0) * resolution;
+    let center = |cell, i: usize| match i {
+        0 => sub_center(cell, 0, dim) + resolution,
+        i if i > dim => sub_center(cell, dim - 1, dim) - resolution,
+        i => sub_center(cell, i - 1, dim),
+    };
     // The collar checks floor edges across chunk boundaries. Terrain is continued from the
     // nearest in-cell sample; binned geometry already includes the body-radius margin.
     let mut ground: Vec<_> = (0..side)
@@ -1241,6 +1254,77 @@ mod derive_tests {
         let next = derive_cell(cx + 1, cy, Some(&flat_heights()), &tris).unwrap();
         assert!(walk_get(&here.walk, 63, 32));
         assert!(walk_get(&next.walk, 0, 32));
+    }
+
+    #[test]
+    fn adjacent_stair_treads_share_a_walkable_edge() {
+        let (cx, cy) = test_cell();
+        let (seam, y) = at(32, 32);
+        let tread = |x0, x1, z| {
+            [
+                VmapTri {
+                    verts: [[x0, y - 50.0, z], [x1, y - 50.0, z], [x1, y + 50.0, z]],
+                    class: wmo(),
+                },
+                VmapTri {
+                    verts: [[x0, y - 50.0, z], [x1, y + 50.0, z], [x0, y + 50.0, z]],
+                    class: wmo(),
+                },
+            ]
+        };
+        let mut tris = Vec::from(tread(seam, seam + 50.0, GROUND_Z + 0.5));
+        tris.extend(tread(seam - 50.0, seam, GROUND_Z + 0.9));
+        for _ in 0..2 {
+            let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+            assert!(walk_get(&cell.walk, 32, 32), "shared tread edge");
+            for (from, to) in [(at(16, 32), at(48, 32)), (at(48, 32), at(16, 32))] {
+                assert_eq!(
+                    find_leg(&mut cell_fetcher(Some(cell.clone())), from, to, 4096),
+                    Some(vec![to])
+                );
+            }
+            tris.reverse();
+            for t in &mut tris {
+                t.verts.swap(0, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn a_ceiling_mesh_diagonal_still_blocks_headroom() {
+        let (cx, cy) = test_cell();
+        let (x, y) = at(32, 32);
+        let z = GROUND_Z + 1.5;
+        let mut tris = vec![
+            slab(GROUND_Z + 0.5, wmo()),
+            VmapTri {
+                verts: [
+                    [x - 8.0, y - 8.0, z],
+                    [x + 8.0, y - 8.0, z],
+                    [x + 8.0, y + 8.0, z],
+                ],
+                class: wmo(),
+            },
+            VmapTri {
+                verts: [
+                    [x - 8.0, y - 8.0, z],
+                    [x + 8.0, y + 8.0, z],
+                    [x - 8.0, y + 8.0, z],
+                ],
+                class: wmo(),
+            },
+        ];
+        for _ in 0..2 {
+            let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+            assert!(!walk_get(&cell.walk, 32, 32), "ceiling mesh diagonal");
+            assert!(
+                find_leg(&mut cell_fetcher(Some(cell)), at(24, 32), at(32, 32), 4096).is_none()
+            );
+            tris.reverse();
+            for t in &mut tris {
+                t.verts.swap(0, 1);
+            }
+        }
     }
 
     #[test]
