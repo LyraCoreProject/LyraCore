@@ -182,20 +182,20 @@ fn health(node: &Standalone, guid: &str) -> u32 {
         .unwrap()
 }
 
-fn movement_leg_finished(node: &Standalone, guid: &str) -> bool {
-    let rows = node.query_rows(&format!(
-        "SELECT start_micros, dur_ms FROM game_creature_spline WHERE guid = {guid}"
-    ));
-    let Some(row) = rows.first() else {
-        return true;
-    };
-    let finish =
-        row["start_micros"].parse::<u64>().unwrap() + row["dur_ms"].parse::<u64>().unwrap() * 1_000;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros() as u64;
-    now >= finish
+fn spline(node: &Standalone, guid: &str) -> Option<BTreeMap<String, String>> {
+    node.query_rows(&format!(
+        "SELECT start_micros, dur_ms, sx, sy, dx, dy, spline_id FROM game_creature_spline WHERE guid = {guid}"
+    ))
+    .into_iter()
+    .next()
+}
+
+fn spline_finished(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>) -> bool {
+    let (x, y) = position(node, guid);
+    let at_destination = (x - leg["dx"].parse::<f32>().unwrap()).abs() < 0.01
+        && (y - leg["dy"].parse::<f32>().unwrap()).abs() < 0.01;
+    at_destination
+        && spline(node, guid).is_none_or(|current| current["spline_id"] != leg["spline_id"])
 }
 
 fn fixture(name: &str) -> (Standalone, Vec<String>) {
@@ -227,6 +227,10 @@ fn due(node: &Standalone, guid: &str) {
     node.assert_call("playerbots_fixture_runner_pass", &[]);
 }
 
+fn pass_once(node: &Standalone, guid: &str) {
+    node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
+}
+
 fn evidence(node: &Standalone, case: &str) {
     let path = support::log_dir().join(format!("{}-{case}.json", node.shard_name()));
     let record = serde_json::json!({
@@ -236,6 +240,7 @@ fn evidence(node: &Standalone, case: &str) {
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "entities": node.query_rows("SELECT guid, map_id, instance_id, x, y, z, health, max_health, dead FROM game_world_entity"),
         "party": node.query_rows("SELECT * FROM game_group_member"),
+        "splines": node.query_rows("SELECT * FROM game_creature_spline"),
         "pending_casts": node.query_rows("SELECT * FROM game_pending_cast"),
         "cast_events": node.query_rows("SELECT * FROM game_spell_cast_event"),
         "melee": node.query_rows("SELECT * FROM game_melee_attack"),
@@ -444,49 +449,75 @@ fn playerbots_non_healer_companion_retains_self_recovery() {
 fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     let (node, bots) = fixture("playerbots-companion-target-retention");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
+    node.assert_call(
+        "playerbots_fixture_companion_move",
+        &[priest, "1340", "1200"],
+    );
     node.assert_call("playerbots_fixture_companion_health", &[leader, "40"]);
     node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "30"]);
     select(&node, priest, "cohort");
-    let mut leg_start = position(&node, priest);
-    due(&node, priest);
-    let first = runner(&node, priest);
-    assert!(first["chosen"].contains("castingPosition"), "{first:?}");
-    assert!(first["chosen"].contains(ally));
-    assert!(first["companion_heal_target_guid"].contains(ally));
-    evidence(&node, "target-retention-first-leg");
-
-    node.assert_call("playerbots_fixture_companion_health", &[leader, "10"]);
     let mut movement_legs = 0;
+    let mut observed_splines = Vec::new();
+    let mut previous_endpoint: Option<(f32, f32)> = None;
+    let mut previous_spline_id: Option<String> = None;
     let pending = loop {
-        assert!(poll_until(POLL_TIMEOUT, || {
-            let observed = position(&node, priest);
-            ((observed.0 - leg_start.0).abs() > 0.1 || (observed.1 - leg_start.1).abs() > 0.1)
-                && movement_leg_finished(&node, priest)
-        }));
-        leg_start = position(&node, priest);
-        movement_legs += 1;
-        due(&node, priest);
+        pass_once(&node, priest);
         let retained = runner(&node, priest);
         assert!(retained["chosen"].contains(ally), "{retained:?}");
         assert!(retained["companion_heal_target_guid"].contains(ally));
-        evidence(
-            &node,
-            &format!("target-retention-transition-{movement_legs}"),
-        );
-        if retained["chosen"].contains("castingPosition") {
-            assert!(movement_legs < 6, "{retained:?}");
-            continue;
-        }
-        assert!(retained["chosen"].contains("heal"), "{retained:?}");
         let pending = node.query_rows(&format!(
             "SELECT scheduled_id, target_guid FROM game_pending_cast WHERE caster_guid = {priest}"
         ));
-        assert_eq!(pending.len(), 1, "{retained:?}");
-        assert_eq!(pending[0]["target_guid"], *ally);
-        break pending[0].clone();
+        if let Some(pending) = pending.first() {
+            assert!(spline(&node, priest).is_none());
+            assert_eq!(pending["target_guid"], *ally);
+            break pending.clone();
+        }
+        assert!(
+            retained["chosen"].contains("castingPosition"),
+            "{retained:?}"
+        );
+        let leg = spline(&node, priest).expect("casting-position pass did not start a spline");
+        assert_ne!(leg["dur_ms"], "0");
+        if let Some(previous) = &previous_spline_id {
+            assert_ne!(&leg["spline_id"], previous);
+        }
+        if let Some((x, y)) = previous_endpoint {
+            assert!((leg["sx"].parse::<f32>().unwrap() - x).abs() < 0.01);
+            assert!((leg["sy"].parse::<f32>().unwrap() - y).abs() < 0.01);
+        }
+        previous_endpoint = Some((
+            leg["dx"].parse::<f32>().unwrap(),
+            leg["dy"].parse::<f32>().unwrap(),
+        ));
+        previous_spline_id = Some(leg["spline_id"].clone());
+        observed_splines.push(leg.clone());
+        evidence(
+            &node,
+            &format!("target-retention-leg-{}", movement_legs + 1),
+        );
+        assert!(movement_legs < 6, "{retained:?}");
+        assert!(poll_until(POLL_TIMEOUT, || spline_finished(
+            &node, priest, &leg
+        )));
+        movement_legs += 1;
+        if movement_legs == 1 {
+            node.assert_call("playerbots_fixture_companion_health", &[leader, "10"]);
+        }
     };
-    assert!(movement_legs >= 2);
+    assert!((2..=6).contains(&movement_legs));
+    let path = support::log_dir().join(format!("{}-target-retention-legs.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "completed_legs": movement_legs,
+            "splines": &observed_splines,
+            "pending_cast": &pending,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 
     assert!(poll_until(POLL_TIMEOUT, || node
         .query_rows(&format!(
@@ -841,6 +872,7 @@ fn playerbots_populated_pb002_runner_state_upgrades_with_objective_and_foregroun
     node.assert_call("install_guid_range", &["1000000"]);
     node.assert_call("playerbots_spawn_role", &["1", "1200", "1200", "50", "1"]);
     node.assert_call("playerbots_fixture_prepare", &[]);
+    node.assert_sql("UPDATE game_spell SET cast_time_ms = 60000 WHERE spell_id = 5090100");
     let bot = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]["character_guid"]
         .clone();
     node.assert_call("playerbots_fixture_runner_stage", &[&bot, "true"]);
@@ -853,14 +885,22 @@ fn playerbots_populated_pb002_runner_state_upgrades_with_objective_and_foregroun
     }
     node.assert_call("playerbots_fixture_freeze", &[&bot]);
     let before = runner(&node, &bot);
+    let pending_before = node.query_rows(&format!(
+        "SELECT * FROM game_pending_cast WHERE caster_guid = {bot}"
+    ));
+    assert_eq!(pending_before.len(), 1);
     assert!(before["objective"].contains("returnHome"));
     assert!(before["foreground"].contains("cast"));
     node.publish_module();
     record_inputs(&node);
     let after = runner(&node, &bot);
+    let pending_after = node.query_rows(&format!(
+        "SELECT * FROM game_pending_cast WHERE caster_guid = {bot}"
+    ));
     assert_eq!(after["objective_sequence"], before["objective_sequence"]);
     assert_eq!(after["objective"], before["objective"]);
     assert_eq!(after["foreground"], before["foreground"]);
+    assert_eq!(pending_after, pending_before);
     assert!(after["companion_leader_guid"].contains("none"));
     assert!(after["companion_heal_target_guid"].contains("none"));
     let path = support::log_dir().join(format!("{}-migration.json", node.shard_name()));
@@ -873,6 +913,8 @@ fn playerbots_populated_pb002_runner_state_upgrades_with_objective_and_foregroun
             "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
             "before": before,
             "after": after,
+            "pending_before": pending_before,
+            "pending_after": pending_after,
         }))
         .unwrap(),
     )
