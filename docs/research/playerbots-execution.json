@@ -293,13 +293,13 @@
       "model": "gpt-6-astra",
       "effort": "high",
       "estimated_tokens": 180000,
-      "status": "review",
+      "status": "complete",
       "repo_scope": [
         "Official Package Collection decision and durable state",
         "LyraCore Module scheduling and diagnostics",
         "Pure decision and durable integration tests"
       ],
-      "owner": "PB-002 runner agent; orchestrator owns final integration",
+      "owner": "PB-002 runner agent; integrated and reviewed by the orchestrator",
       "prs": [
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/484",
@@ -317,13 +317,14 @@
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/26",
-          "status": "open",
+          "status": "merged",
           "label": "Package #26",
-          "head_commit": "dba96bb1a5366d5f779f1b66820931583f426419"
+          "head_commit": "62c459770eb5b2209b7cfbf38e54857454fa69d2",
+          "merge_commit": "155c9e401afb06d5731acedf8fc35a81dbe4aaa6"
         }
       ],
       "evidence": [
-        "All nine criteria have reviewed evidence at corrected core a4b551893897c647b2cc1dfc6d7f1f2e2b375081 and Package dba96bb1a5366d5f779f1b66820931583f426419. Both source trees stayed clean and unchanged through the final local build and run.",
+        "All nine criteria have reviewed source and runtime evidence. Final reviewed heads are core 4f450074d76f8982d1a7d61898a00cf632132737 and Package 62c459770eb5b2209b7cfbf38e54857454fa69d2. The complete local correction run used clean core a4b5518 and Package dba96bb; the later changes strengthen one test and restore CI references.",
         "The full Package union passed 1,631 library tests, 1,632 with debug reducers, all 37 action and runner cases, two personality cases, and five core consent cases. This includes a populated preceding-Wasm migration.",
         "All 37 runtime input records agree on Module BLAKE3 dba4d702a0320e360506f9698fa52e0ef7210ce1e8f9573928599a8e3e032279 and Package Content Identity 33fcb8a217aad84f46f9ad65efdad23be24bad8e29828777de7c7e6469417161. Saved Wasm: 7,590,466 bytes; SHA256 c44a91ee92bb22ebce3de07e39caf9d7028794460a855c3b1d1f9329e473a2ae.",
         "Final Core #486 CI passed after the test-only update, including the full durable suite and all 1,000 default Gateway binding files. The exact spellbook index needs no generated binding change. CI: https://github.com/LyraCoreProject/LyraCore/actions/runs/34248547507/job/102136730760",
@@ -332,7 +333,11 @@
         "Six added regressions cover late eligible heals, retained healing eligibility, health-ratio overflow, isolated fixture timing, navigation grid edges, and a completed missing heal result that permits home movement during rescans. Independent Spec and Standards reviews cleared the final source; the orchestrator reviewed the workflow-only pin update.",
         "The final core change, 4f450074d76f8982d1a7d61898a00cf632132737, strengthens the grid cleanup test. Its focused durable run proves that each grid corner loses all four nearby chunks while a distant chunk survives. Independent Spec and Standards reviews cleared this test-only delta, and CodeRabbit marked its finding addressed. Gameplay source is unchanged from the 37-case run.",
         "The focused grid run records clean core 4f45007 and unchanged Package dba96bb. Its Wasm BLAKE3 is 18a320609eebb7a163154d891953decbbc5bdaa401e81d339acb06dd73eaa9e9 and SHA256 is 713ad9a2401029fd10e184c91da3a4eeee1c7e402ad206bf59b598e4afb55a0e. Package Content Identity matches the complete local suite.",
-        "CodeRabbit completed its Package correction review at dba96bb. Its remaining concern assumed absent consent blocks Legacy bots. Core action admission does not read consent, and group admission suppresses only an existing false row. A durable case proves admission before a consent row exists. The orchestrator independently verified this and the implementer resolved the comment with immutable source and behavior evidence."
+        "CodeRabbit completed its Package correction review at dba96bb. Its remaining concern assumed absent consent blocks Legacy bots. Core action admission does not read consent, and group admission suppresses only an existing false row. A durable case proves admission before a consent row exists. The orchestrator independently verified this and the implementer resolved the comment with immutable source and behavior evidence.",
+        "Final PR CI passed all 37 cases against merged core e6a755db0a150bbf73ad97b972fe829f20f6816c and finalized its artifact upload. Actual tested Package merge d8d6d7c6574948c07d277ae55e1c899e7721ff95 has parents 5724de1660a2628e88320914bdd5abb0c69da517 and 62c459770eb5b2209b7cfbf38e54857454fa69d2. CI: https://github.com/LyraCoreProject/packages/actions/runs/34250561420/job/102143672288",
+        "The orchestrator independently checked all 37 clean final runtime records. Module Wasm BLAKE3 is 80efd76cef0d52ee0342f9bc1fe1ee011bcbace0eac7e67e68c944cd427bf659. Package Content Identity is 33fcb8a217aad84f46f9ad65efdad23be24bad8e29828777de7c7e6469417161. The strengthened grid assertion and populated migration passed.",
+        "Package #26 merged as 155c9e401afb06d5731acedf8fc35a81dbe4aaa6. Its Git tree e2558a9cf421a74f79497ef361dbbfceb911a0d1 exactly matches both the reviewed branch and the successful PR merge build.",
+        "The separate push run also passed all 37 tests, then GitHub returned HTTP 403 while finalizing its artifact upload. The successful PR run supplies the complete required evidence. The orchestrator retains the failure log and owns one retry of that separate upload job. No source change or gameplay retry was needed to establish the passing PR result."
       ],
       "notes": [
         "SpacetimeDB 2.7.1 allows appended enum variants only when old variants stay compatible and storage size and alignment stay unchanged. Prove populated-state migration for the runner schema. Planner source: https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/schema/src/auto_migrate.rs#L826-L895",
@@ -343,7 +348,7 @@
         "The consent check acknowledges current World Shard state before Realm-core group actions. An action admitted before a concurrent freeze may finish; cross-Shard atomicity is not claimed. Controller selection clears unclaimed Group Intents in the same transaction.",
         "The common runner entry checks current Account ownership. Relinquishment releases only the bot's observed cast or movement identity and preserves a later human action.",
         "Package schema changes still require human review before production shipping. Agent review and source merge do not satisfy that production gate.",
-        "Core #484 and Core #486 are merged. Package #26 must pass its final CI run against merged core main before integration. Both completed source reviews have no unresolved finding.",
+        "All three PB-002 implementation PRs are merged. Full source reviews and the final workflow review have no unresolved finding. The completed PR CI supplies the final behavior and artifact evidence; a separate push artifact-service retry remains under orchestration.",
         "Recovery Scan advances through at most 24 indexed rotations per pass and rechecks at most two retained rotations through exact spellbook lookups. Completed Missing remains conclusive while a new scan is Pending, so recovery cannot repeatedly interrupt useful movement.",
         "The missing-result regression observes ReturnHome selection and a real emitted spline while movement scheduling is disabled. Separate arrival and tactical cases prove actual position advancement.",
         "The Recovery Scan is disposable on Transfer and restarts against current content and learned spells. PB-010 still owns transfer of durable objectives and companion intent."
@@ -354,7 +359,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "The pure decision tests permute input order, rank full target-bearing identities, and retain only the highest-priority offer for each identity. All ten decision cases passed in the final library runs.",
-            "https://github.com/LyraCoreProject/packages/blob/dba96bb1a5366d5f779f1b66820931583f426419/playerbots/src/decision.rs"
+            "https://github.com/LyraCoreProject/packages/blob/62c459770eb5b2209b7cfbf38e54857454fa69d2/playerbots/src/decision.rs"
           ]
         },
         {
@@ -362,8 +367,8 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "Typed Strategy tests cover triggers, defaults, and integer priority adjustment. The common runner stamps its durable objective identity into root and nested candidates before selection.",
-            "https://github.com/LyraCoreProject/packages/blob/dba96bb1a5366d5f779f1b66820931583f426419/playerbots/src/decision.rs",
-            "https://github.com/LyraCoreProject/packages/blob/dba96bb1a5366d5f779f1b66820931583f426419/playerbots/src/runner.rs"
+            "https://github.com/LyraCoreProject/packages/blob/62c459770eb5b2209b7cfbf38e54857454fa69d2/playerbots/src/decision.rs",
+            "https://github.com/LyraCoreProject/packages/blob/62c459770eb5b2209b7cfbf38e54857454fa69d2/playerbots/src/runner.rs"
           ]
         },
         {
@@ -371,7 +376,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "The shared limits allow 24 candidates, depth 4, 16 transitions, and one route reservation using the core expansion limit. Separate tests cover each limit, cycles, and repeated cycle refusals inside completed prerequisites.",
-            "https://github.com/LyraCoreProject/packages/blob/dba96bb1a5366d5f779f1b66820931583f426419/playerbots/src/decision.rs",
+            "https://github.com/LyraCoreProject/packages/blob/62c459770eb5b2209b7cfbf38e54857454fa69d2/playerbots/src/decision.rs",
             "Recovery facts use a paged index and exact learned-spell membership. Runtime regressions find a usable heal beyond 25 unlearned rotations and 300 other learned spells without an unbounded eligibility scan."
           ]
         },
@@ -388,7 +393,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "The retained ReturnHome objective records destination, identity, stage, deadline, last verified progress, and catalog revision. Blocked travel defers its destination and caps failures and deferrals at four entries. Real tests cover actual arrival, deferred travel under low health, and deadline expiry.",
-            "https://github.com/LyraCoreProject/packages/blob/dba96bb1a5366d5f779f1b66820931583f426419/playerbots/src/runner.rs",
+            "https://github.com/LyraCoreProject/packages/blob/62c459770eb5b2209b7cfbf38e54857454fa69d2/playerbots/src/runner.rs",
             "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite/runner.rs"
           ]
         },
@@ -414,7 +419,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "The public runner row exposes the objective, target-bearing chosen action and reason, last outcome, progress age, retry count, next eligible time, and revision. Its real lifetime case caps history at eight entries and deletes Character-owned state.",
-            "https://github.com/LyraCoreProject/packages/blob/dba96bb1a5366d5f779f1b66820931583f426419/playerbots/src/runner.rs",
+            "https://github.com/LyraCoreProject/packages/blob/62c459770eb5b2209b7cfbf38e54857454fa69d2/playerbots/src/runner.rs",
             "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite/runner.rs",
             "The separate Recovery Scan row exposes its cursor, bounded rows scanned, retained rotation, current stage, and last completed result. Missing remains valid during a subsequent Pending scan."
           ]
@@ -450,18 +455,19 @@
       "model": "gpt-5.6-sol",
       "effort": "high",
       "estimated_tokens": 150000,
-      "status": "ready",
+      "status": "implementing",
       "repo_scope": [
         "Official Package Collection companion support behavior",
         "LyraCore Module cast and party fact reads",
         "Durable companion scenarios"
       ],
-      "owner": "Unassigned",
+      "owner": "Companion agent; orchestrator reviews and merges",
       "prs": [],
       "evidence": [],
       "notes": [
         "PB-001 found no existing line-of-sight Gate in targeted cast admission. Add the appropriate shared Gate with supported exemptions and client/bot parity coverage so the movement prerequisite responds to a real typed Refusal. Channel actions remain unsupported until their running lifecycle is correlated.",
-        "The historical Actor cast bypasses the player spellbook check. PB-003 owns the appropriate shared Gate for the new runner and must coordinate with provisioning in PB-005. An unlearned heal must refuse without cast, power, or cooldown changes."
+        "The historical Actor cast bypasses the player spellbook check. PB-003 owns the appropriate shared Gate for the new runner and must coordinate with provisioning in PB-005. An unlearned heal must refuse without cast, power, or cooldown changes.",
+        "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot."
       ],
       "acceptance_evidence": []
     },
@@ -519,16 +525,18 @@
       "model": "gpt-5.6-sol",
       "effort": "high",
       "estimated_tokens": 150000,
-      "status": "ready",
+      "status": "implementing",
       "repo_scope": [
         "Official Package Collection provisioning policy",
         "LyraCore Module skill, spell, talent, item, inventory, and equipment operations",
         "Durable idempotency scenarios"
       ],
-      "owner": "Unassigned",
+      "owner": "Provisioning agent; orchestrator reviews and merges",
       "prs": [],
       "evidence": [],
-      "notes": [],
+      "notes": [
+        "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot."
+      ],
       "acceptance_evidence": []
     },
     {
@@ -551,17 +559,18 @@
       "model": "gpt-5.6-sol",
       "effort": "high",
       "estimated_tokens": 150000,
-      "status": "ready",
+      "status": "implementing",
       "repo_scope": [
         "Official Package Collection quest catalog and admission",
         "LyraCore imported quest and world relations",
         "Seeded durable catalog scenarios"
       ],
-      "owner": "Unassigned",
+      "owner": "Quest catalog agent; orchestrator reviews and merges",
       "prs": [],
       "evidence": [],
       "notes": [
-        "Imported source identifies quest 3904 as a collect-item quest backed by chest loot. The existing GameObject use operation needs Package visibility and bounded object discovery. Verify and correct the importer NextQuestInChain column mapping before relying on forward links."
+        "Imported source identifies quest 3904 as a collect-item quest backed by chest loot. The existing GameObject use operation needs Package visibility and bounded object discovery. Verify and correct the importer NextQuestInChain column mapping before relying on forward links.",
+        "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot."
       ],
       "acceptance_evidence": []
     },
@@ -780,6 +789,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 16:21 UTC",
-  "summary": "PB-001 is integrated. Both PB-002 core PRs are merged. All source reviews and the corrected runtime suite passed. Package #26 is restoring its current-core CI refs to main for the final compatibility run. Companions, provisioning, and quest admission start after that run passes and the Package merges."
+  "updated_at": "2026-09-08 16:42 UTC",
+  "summary": "PB-001 and PB-002 are complete and integrated. PB-003, PB-005, and PB-006 are implementing Priest companions, automatic provisioning, and supported-quest admission in parallel. The orchestrator owns shared-contract integration, review, PR merges, and the published record."
 }
