@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use super::account_sessions::SessionEpochs;
+use super::account_sessions::SessionOwnership;
 use super::bindings::*;
 use super::movement_batch::MovementBatch;
 
@@ -34,26 +34,20 @@ pub(crate) struct CharacterPresenceSnapshot {
 /// With a single-entry shard map the set has exactly one entry and `shard_for` always resolves
 /// back to `self` — byte-identical to the pre-sharding gateway.
 #[derive(Clone)]
-pub struct Coordinator(pub(crate) Arc<CoordinatorInner>, pub(crate) Arc<ShardSet>);
+pub struct Coordinator(
+    pub(crate) Arc<CoordinatorInner>,
+    pub(crate) Arc<ShardSet>,
+    pub(crate) Option<Arc<SessionOwnership>>,
+);
 
-/// The gateway's whole multi-database view: the routing table, one coordinator connection per
-/// database it names, and the (gateway-local, shard-INDEPENDENT) session-epoch arbitration.
-///
-/// Session epochs deliberately live here rather than per-shard: they arbitrate two SOCKETS on one
-/// account, which is a gateway concept with no database in it. Keeping them shared means a login
-/// that routes to shard B and a teardown that runs on shard B's handle still compare the same
-/// epochs (a per-shard `SessionEpochs` would silently break the stale-logout gate).
+/// The Gateway's configured Shards and shared Relay view.
 pub(crate) struct ShardSet {
     map: ShardMap,
     /// db name → that database's coordinator connection. Always contains the default database;
     /// an extra shard that failed to connect is ABSENT (routing then degrades to the default).
     conns: HashMap<String, Arc<CoordinatorInner>>,
-    sessions: SessionEpochs,
-    /// The gateway-wide shared area-of-interest view — the cell index plus the viewer
-    /// registry that every shard's coordinator dispatch routes through. Shard-INDEPENDENT for the
-    /// same reason `sessions` is: it answers a question about SESSIONS, and guids are globally
-    /// unique across databases (realm-core hands each shard a disjoint guid range), so one index
-    /// spans the whole realm.
+    /// Realm-wide delivery bookkeeping. Globally allocated guids let one viewer index span
+    /// all configured Shards; durable Account Claims own World Session authority.
     world: Arc<super::world_view::WorldView>,
     /// Coalesce row-delete and reconnect requests behind one off-pump reconciliation worker.
     pub(crate) party_reconciliation_requested: AtomicBool,
@@ -796,6 +790,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_realm",
         "SELECT * FROM game_account",
         "SELECT * FROM game_session",
+        "SELECT * FROM game_account_claim",
+        "SELECT * FROM game_account_fence",
         "SELECT * FROM game_character",
         "SELECT * FROM game_world_entity",
         // Loot Tag rendering is viewer-relative. These rows let the Gateway project the stored
@@ -2440,11 +2436,11 @@ impl Coordinator {
             Arc::new(ShardSet {
                 map,
                 conns,
-                sessions: SessionEpochs::default(),
                 world,
                 party_reconciliation_requested: AtomicBool::new(false),
                 party_reconciliation_running: AtomicBool::new(false),
             }),
+            None,
         );
         // Arm the shared spatial, broadcast, private, and owner dispatch — one callback set per
         // shard instead of one set per player. Must run before any session can log in, and be re-armed
@@ -2587,7 +2583,7 @@ impl Coordinator {
                 self.1.conns.keys().collect::<Vec<_>>()
             );
         }
-        Some(Coordinator(inner?.clone(), self.1.clone()))
+        Some(Coordinator(inner?.clone(), self.1.clone(), self.2.clone()))
     }
 
     /// Every connected shard's handle, DEFAULT FIRST. Two callers: the character-select list
@@ -2652,7 +2648,7 @@ impl Coordinator {
             .conns
             .get(db)
             .ok_or_else(|| anyhow!("auth database {db} missing from the coordinator set"))?;
-        Ok(Coordinator(inner.clone(), self.1.clone()))
+        Ok(Coordinator(inner.clone(), self.1.clone(), self.2.clone()))
     }
 
     /// The connected WORLD SHARDS, default first — the probe order for the character→shard fallback
@@ -2665,7 +2661,7 @@ impl Coordinator {
             .into_iter()
             .filter_map(|db| {
                 let inner = self.1.conns.get(&db)?.clone();
-                Some((db, Coordinator(inner, self.1.clone())))
+                Some((db, Coordinator(inner, self.1.clone(), self.2.clone())))
             })
             .collect()
     }
@@ -2685,7 +2681,7 @@ impl Coordinator {
                         "World Shard {db} has no healthy Coordinator subscription"
                     ));
                 }
-                Ok((db, Coordinator(inner, self.1.clone())))
+                Ok((db, Coordinator(inner, self.1.clone(), self.2.clone())))
             })
             .collect()
     }
@@ -2696,14 +2692,24 @@ impl Coordinator {
         &self.1.map
     }
 
-    /// Claim a fresh in-world session epoch for `account_id` (at player_login). See `SessionEpochs`.
-    pub fn claim_session(&self, account_id: u64) -> u64 {
-        self.1.sessions.claim(account_id)
-    }
-
-    /// Release a session epoch at teardown; true iff still current (caller owns the entity → logout).
-    pub fn release_session(&self, account_id: u64, epoch: u64) -> bool {
-        self.1.sessions.release(account_id, epoch)
+    /// Account admission requires every configured World Shard, including an unavailable one.
+    pub(crate) fn configured_world_shards(&self) -> Result<Vec<Coordinator>> {
+        self.1
+            .map
+            .shards()
+            .into_iter()
+            .map(|name| {
+                let inner = self.1.conns.get(&name).ok_or_else(|| {
+                    anyhow!("Shard {name} is configured but has no Coordinator connection")
+                })?;
+                if !inner.coord().is_healthy() {
+                    return Err(anyhow!(
+                        "Shard {name} has no healthy Coordinator subscription"
+                    ));
+                }
+                Ok(Coordinator(inner.clone(), self.1.clone(), self.2.clone()))
+            })
+            .collect()
     }
 }
 

@@ -806,7 +806,7 @@ pub fn realm_loot_op(
     corpse_guid: u64,
     slot: u8,
     item_entry: u32,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     vote: u8,
     deadline_micros: i64,
     recipients: Vec<u64>,
@@ -815,6 +815,7 @@ pub fn realm_loot_op(
     source_roll_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     use lyracore_shared::loot_roll::loot_op;
     match op {
         loot_op::START => accept_promotion(
@@ -911,8 +912,10 @@ pub fn settle_loot_roll(
     corpse_guid: u64,
     slot: u8,
     winner_guid: u64,
+    request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     settle_roll_grant(ctx, corpse_guid, slot, winner_guid);
     Ok(())
 }
@@ -922,8 +925,13 @@ pub fn settle_loot_roll(
 /// resolved roll already used, called here for an UNRESOLVED one that just changed which database is
 /// authoritative for it.
 #[reducer]
-pub fn clear_promoted_loot_roll(ctx: &ReducerContext, roll_id: u64) -> Result<(), String> {
+pub fn clear_promoted_loot_roll(
+    ctx: &ReducerContext,
+    roll_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     cleanup_roll(ctx, roll_id);
     Ok(())
 }

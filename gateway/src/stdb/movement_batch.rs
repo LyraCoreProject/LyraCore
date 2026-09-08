@@ -104,7 +104,10 @@ mod tests {
 
     fn movement(actor_guid: u64) -> GwMove {
         GwMove {
-            actor_guid,
+            actor: super::super::bindings::SessionActor {
+                guid: actor_guid,
+                ownership: None,
+            },
             opcode: 0x00ee,
             movement_info: vec![actor_guid as u8],
             x: actor_guid as f32,
@@ -150,7 +153,7 @@ mod tests {
 
             assert_eq!(calls.len(), 1);
             assert_eq!(
-                calls[0].iter().map(|m| m.actor_guid).collect::<Vec<_>>(),
+                calls[0].iter().map(|m| m.actor.guid).collect::<Vec<_>>(),
                 (1..=count).collect::<Vec<_>>()
             );
         }
@@ -175,7 +178,7 @@ mod tests {
                 calls
                     .into_iter()
                     .flatten()
-                    .map(|m| m.actor_guid)
+                    .map(|m| m.actor.guid)
                     .collect::<Vec<_>>(),
                 (1..=count).collect::<Vec<_>>()
             );
@@ -198,8 +201,8 @@ mod tests {
             Ok(())
         });
 
-        assert_eq!(first[0][0].actor_guid, 1);
-        assert_eq!(second[0][0].actor_guid, 2);
+        assert_eq!(first[0][0].actor.guid, 1);
+        assert_eq!(second[0][0].actor.guid, 2);
     }
 
     #[test]

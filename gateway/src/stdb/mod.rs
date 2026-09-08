@@ -7,7 +7,8 @@
 //!
 //! This module is split by concern behind a thin facade (pure code-motion):
 //!   - `connection`: the `Coordinator` facade + inner state + live connections + watchdog +
-//!     the `call_reducer!` macro + lifecycle constructors + session-epoch arbitration.
+//!     the `call_reducer!` macro + lifecycle constructors.
+//!   - `account_sessions`: durable Account ownership and socket closure on renewal failure.
 //!   - `reads`: cache-accessor `Coordinator` methods (RLS-bypass reads → codec views).
 //!   - `reducers`: reducer-call wrapper `Coordinator` methods.
 //!   - `subscriptions`: `PlayerSubscriptions`, viewer setup, and shared packet builders.
@@ -18,7 +19,7 @@
 #[allow(clippy::too_many_lines)]
 pub mod bindings;
 
-mod account_sessions; // per-account session-epoch + live-socket registry, split out of `connection`
+mod account_sessions;
 pub(crate) mod aoi; // `world/mod.rs`'s 10s task reads `aoi::AOI_RECENTERS` for the AOISTAT line
 mod armor; // the gateway-side EFFECTIVE-armor fold for the character sheet (Approach B)
 mod connection;

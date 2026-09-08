@@ -260,6 +260,30 @@ Character-side authority projection exists.
 account row, so a transferred character gets an index-entry row with empty salt and verifier. It can
 never satisfy an SRP proof; it exists only to carry the identity binding.
 
+### `game_account_claim` / `game_account_fence` (`module/src/account_ownership.rs`)
+
+Both tables are private and keyed by the Realm-core Account id. The Account Claim stores its
+Character guid, generation, request nonce, expiration and closed state. The Account Fence also
+stores the Account name, since a World Shard's local Account id can differ from Realm-core's id.
+Closed rows remain so an old request cannot lower a generation or reopen a completed claim.
+
+These are new tables. Existing rows and columns have no migration defaults or backfill. The first
+admission fences and removes any prior live Character of that Account on each World Shard before
+entering. Gateway and Module request arguments change together to carry a `SessionActor`; queued
+`GwMove` entries carry the same value. Operator requests for Characters without a World Session
+supply no token, and cannot act as a Character with an active Account Claim or Account Fence.
+
+Stop serving World Sessions on every Gateway before publishing. Install the matching Module on
+Realm-core and every configured World Shard and Instance Pool, then restart only matching Gateways.
+Existing live Characters have no initial fence; first admission intentionally removes those legacy
+live copies. This schema and reducer ABI change requires human review under `danger-zones.md`.
+
+External Headless Client adapters must send the new `SessionActor` shape too. Cleanup for a running
+fixture Character carries the intended World Session's token. Null ownership deliberately refuses
+an active owner. Stop or log out that World Session first, or retain its token for the cleanup; do
+not refresh a stale cleanup token to target a replacement owner. Operator requests for a Character
+whose ownership has closed or expired can use null ownership.
+
 ### `game_map_region` / `game_region_assignment` (`module/src/region.rs:44,:67`)
 
 Both private, and **unused since #471** removed the region tier from the gateway (2026-08-08) —

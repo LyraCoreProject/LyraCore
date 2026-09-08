@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwBuyBankSlotArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub banker_guid: u64,
 }
 
 impl From<GwBuyBankSlotArgs> for super::Reducer {
     fn from(args: GwBuyBankSlotArgs) -> Self {
         Self::GwBuyBankSlot {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             banker_guid: args.banker_guid,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_buy_bank_slot {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_buy_bank_slot:gw_buy_bank_slot_then`] to run a callback after the reducer completes.
-    fn gw_buy_bank_slot(&self, actor_guid: u64, banker_guid: u64) -> __sdk::Result<()> {
-        self.gw_buy_bank_slot_then(actor_guid, banker_guid, |_, _| {})
+    fn gw_buy_bank_slot(&self, request_actor: SessionActor, banker_guid: u64) -> __sdk::Result<()> {
+        self.gw_buy_bank_slot_then(request_actor, banker_guid, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_buy_bank_slot` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_buy_bank_slot {
     ///  and its status can be observed with the `callback`.
     fn gw_buy_bank_slot_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         banker_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +61,7 @@ pub trait gw_buy_bank_slot {
 impl gw_buy_bank_slot for super::RemoteReducers {
     fn gw_buy_bank_slot_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         banker_guid: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +70,7 @@ impl gw_buy_bank_slot for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwBuyBankSlotArgs {
-                actor_guid,
+                request_actor,
                 banker_guid,
             },
             callback,

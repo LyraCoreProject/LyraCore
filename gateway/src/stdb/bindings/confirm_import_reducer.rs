@@ -4,16 +4,20 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct ConfirmImportArgs {
     pub transfer_id: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<ConfirmImportArgs> for super::Reducer {
     fn from(args: ConfirmImportArgs) -> Self {
         Self::ConfirmImport {
             transfer_id: args.transfer_id,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -33,8 +37,8 @@ pub trait confirm_import {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`confirm_import:confirm_import_then`] to run a callback after the reducer completes.
-    fn confirm_import(&self, transfer_id: u64) -> __sdk::Result<()> {
-        self.confirm_import_then(transfer_id, |_, _| {})
+    fn confirm_import(&self, transfer_id: u64, request_actor: SessionActor) -> __sdk::Result<()> {
+        self.confirm_import_then(transfer_id, request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `confirm_import` to run as soon as possible,
@@ -46,6 +50,7 @@ pub trait confirm_import {
     fn confirm_import_then(
         &self,
         transfer_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -57,12 +62,18 @@ impl confirm_import for super::RemoteReducers {
     fn confirm_import_then(
         &self,
         transfer_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(ConfirmImportArgs { transfer_id }, callback)
+        self.imp.invoke_reducer_with_callback(
+            ConfirmImportArgs {
+                transfer_id,
+                request_actor,
+            },
+            callback,
+        )
     }
 }

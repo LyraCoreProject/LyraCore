@@ -245,6 +245,7 @@ include!(concat!(env!("OUT_DIR"), "/package_mods.rs"));
 // HOOK_EVENTS catalog, plus the map-scoped encounter authority registry.
 include!(concat!(env!("OUT_DIR"), "/package_registries.rs"));
 
+mod account_ownership;
 mod action_bar;
 mod actor;
 mod auction;
@@ -365,6 +366,7 @@ mod weather;
 mod world;
 mod xp;
 
+pub use account_ownership::*;
 pub use action_bar::*;
 pub use auction::*;
 pub use auth::*;

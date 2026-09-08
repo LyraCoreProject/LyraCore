@@ -480,12 +480,13 @@ pub(crate) fn apply_send_whisper(
 #[reducer]
 pub fn realm_whisper(
     ctx: &ReducerContext,
-    sender_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
     message: String,
     sender_is_ignored: bool,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
     for (recipient_guid, other_guid, is_inform) in
         whisper_rows(sender_guid, target_guid, sender_is_ignored)

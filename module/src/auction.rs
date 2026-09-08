@@ -1868,7 +1868,7 @@ impl ExpirySink for CtxExpiry<'_> {
 pub fn gw_auction_list_local(
     ctx: &ReducerContext,
     operation_id: u64,
-    seller_guid: u64,
+    request_actor: crate::SessionActor,
     item_guid: u64,
     auctioneer_guid: u64,
     house: u32,
@@ -1877,6 +1877,7 @@ pub fn gw_auction_list_local(
     duration_minutes: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let requested_house = house;
     let existing_house = ctx
         .db
@@ -1926,7 +1927,7 @@ pub fn gw_auction_list_local(
 pub fn gw_auction_hold_listing(
     ctx: &ReducerContext,
     operation_id: u64,
-    seller_guid: u64,
+    request_actor: crate::SessionActor,
     item_guid: u64,
     auctioneer_guid: u64,
     house: u32,
@@ -1935,6 +1936,7 @@ pub fn gw_auction_hold_listing(
     duration_minutes: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let requested_house = house;
     let existing_house = ctx
         .db
@@ -1991,7 +1993,7 @@ pub fn gw_auction_hold_listing(
 pub fn realm_auction_commit_listing(
     ctx: &ReducerContext,
     operation_id: u64,
-    seller_guid: u64,
+    request_actor: crate::SessionActor,
     item_guid: u64,
     item_entry: u32,
     item_stack_count: u32,
@@ -2010,6 +2012,7 @@ pub fn realm_auction_commit_listing(
     expires_micros: i64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let listing = PreparedListing {
         request: ListingRequest {
             operation_id,
@@ -2047,14 +2050,35 @@ pub fn realm_auction_commit_listing(
         .map_err(|refusal| refused(refusal, "listing operation id conflict"))
 }
 
+fn require_listing_actor(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    actor: crate::SessionActor,
+) -> Result<(), String> {
+    crate::account_ownership::require_actor(ctx, actor)?;
+    let seller = CtxSource { ctx }
+        .hold(operation_id)
+        .map(|hold| hold.listing.request.seller_guid)
+        .or_else(|| {
+            <CtxSource<'_> as HoldSink>::receipt(&CtxSource { ctx }, operation_id)
+                .map(|receipt| receipt.listing.request.seller_guid)
+        });
+    if let Some(guid) = seller {
+        crate::account_ownership::require_actor_for(ctx, actor, guid)?;
+    }
+    Ok(())
+}
+
 /// Sharded listing phase 3: copy the matching realm receipt onto the source shard.
 #[reducer]
 pub fn realm_auction_confirm_listing(
     ctx: &ReducerContext,
     operation_id: u64,
     auction_id: u32,
+    request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    require_listing_actor(ctx, operation_id, request_actor)?;
     let listing = CtxSource { ctx }
         .hold(operation_id)
         .map(|hold| hold.listing)
@@ -2075,8 +2099,13 @@ pub fn realm_auction_confirm_listing(
 
 /// Sharded listing phase 4: delete the Hold only after the source has matching receipt evidence.
 #[reducer]
-pub fn realm_auction_settle_listing(ctx: &ReducerContext, operation_id: u64) -> Result<(), String> {
+pub fn realm_auction_settle_listing(
+    ctx: &ReducerContext,
+    operation_id: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    require_listing_actor(ctx, operation_id, request_actor)?;
     settle_listing(&mut CtxSource { ctx }, operation_id)
         .map_err(|refusal| refused(refusal, "listing Hold is not confirmed"))
 }
@@ -2088,7 +2117,7 @@ pub fn realm_auction_settle_listing(ctx: &ReducerContext, operation_id: u64) -> 
 pub fn realm_auction_refund_listing(
     ctx: &ReducerContext,
     operation_id: u64,
-    seller_guid: u64,
+    request_actor: crate::SessionActor,
     item_guid: u64,
     item_entry: u32,
     item_stack_count: u32,
@@ -2107,6 +2136,7 @@ pub fn realm_auction_refund_listing(
     expires_micros: i64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     refund_listing(
         &mut CtxListingRefund { ctx },
         listing_refund(&listing_from_hold(AuctionHold {
@@ -2140,9 +2170,10 @@ pub fn realm_auction_refund_listing(
 pub fn gw_auction_release_listing_hold(
     ctx: &ReducerContext,
     operation_id: u64,
-    seller_guid: u64,
+    request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let seller_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     release_listing(&mut CtxSource { ctx }, operation_id, seller_guid)
         .map_err(|refusal| refused(refusal, "listing Hold is confirmed"))
 }
@@ -2153,13 +2184,14 @@ pub fn gw_auction_release_listing_hold(
 pub fn gw_auction_bid_local(
     ctx: &ReducerContext,
     operation_id: u64,
-    bidder_guid: u64,
+    request_actor: crate::SessionActor,
     auctioneer_guid: u64,
     auction_id: u32,
     house: u32,
     offer: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let replay = ctx
         .db
         .game_auction_bid_hold()
@@ -2200,13 +2232,14 @@ pub fn gw_auction_bid_local(
 pub fn gw_auction_hold_bid(
     ctx: &ReducerContext,
     operation_id: u64,
-    bidder_guid: u64,
+    request_actor: crate::SessionActor,
     auctioneer_guid: u64,
     auction_id: u32,
     house: u32,
     offer: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let replay = ctx
         .db
         .game_auction_bid_hold()
@@ -2234,12 +2267,13 @@ pub fn gw_auction_hold_bid(
 pub fn realm_auction_decide_bid(
     ctx: &ReducerContext,
     operation_id: u64,
-    bidder_guid: u64,
+    request_actor: crate::SessionActor,
     auction_id: u32,
     house: u32,
     offer: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     resolve_bid(
         &mut CtxBidMarket { ctx },
         bid_request(operation_id, bidder_guid, auction_id, house, offer),
@@ -2254,7 +2288,7 @@ pub fn realm_auction_decide_bid(
 pub fn gw_auction_finish_bid(
     ctx: &ReducerContext,
     operation_id: u64,
-    bidder_guid: u64,
+    request_actor: crate::SessionActor,
     auction_id: u32,
     house: u32,
     offer: u32,
@@ -2266,6 +2300,7 @@ pub fn gw_auction_finish_bid(
     accepted_price: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let decision = bid_decision_from_fields(
         BidDecisionFields {
             outcome,
@@ -2292,13 +2327,14 @@ pub fn gw_auction_finish_bid(
 pub fn realm_auction_refund_bid(
     ctx: &ReducerContext,
     operation_id: u64,
-    bidder_guid: u64,
+    request_actor: crate::SessionActor,
     auction_id: u32,
     house: u32,
     offer: u32,
     deferred_refund: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     relay_bid_refund(
         &mut CtxBidMarket { ctx },
         bid_request(operation_id, bidder_guid, auction_id, house, offer),
@@ -2312,13 +2348,14 @@ pub fn realm_auction_refund_bid(
 pub fn gw_auction_confirm_bid_refund(
     ctx: &ReducerContext,
     operation_id: u64,
-    bidder_guid: u64,
+    request_actor: crate::SessionActor,
     auction_id: u32,
     house: u32,
     offer: u32,
     deferred_refund: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let bidder_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     confirm_bid_refund(
         &mut CtxBidSource { ctx },
         bid_request(operation_id, bidder_guid, auction_id, house, offer),

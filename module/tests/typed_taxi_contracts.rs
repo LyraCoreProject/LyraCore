@@ -6,6 +6,8 @@ use support::Standalone;
 
 const ACTOR: &str = "1";
 const MISSING_ACTOR: &str = "999999";
+const SESSION_ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
+const SESSION_MISSING_ACTOR: &str = r#"{"guid":999999,"ownership":null}"#;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
@@ -29,10 +31,10 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     assert_loot_boundary_failure(&standalone, MISSING_ACTOR, "loot:boundary_missing_actor");
 
     for (reducer, args) in [
-        ("gw_trainer_buy", &[MISSING_ACTOR, "0", "0"][..]),
-        ("gw_use_item", &[MISSING_ACTOR, "0"][..]),
-        ("gw_group_leave", &[MISSING_ACTOR][..]),
-        ("gw_add_friend", &[MISSING_ACTOR, "2"][..]),
+        ("gw_trainer_buy", &[SESSION_MISSING_ACTOR, "0", "0"][..]),
+        ("gw_use_item", &[SESSION_MISSING_ACTOR, "0"][..]),
+        ("gw_group_leave", &[SESSION_MISSING_ACTOR][..]),
+        ("gw_add_friend", &[SESSION_MISSING_ACTOR, "2"][..]),
     ] {
         let output = standalone.call(reducer, args);
         let text = failed_text(reducer, output);
@@ -43,11 +45,26 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     }
 
     standalone.assert_sql("DELETE FROM game_active_taxi_flight WHERE character_guid = 1");
-    standalone.assert_call("realm_group_op", &["0", "1", "2", "0", "0"]);
-    standalone.assert_call("realm_group_op", &["1", "2", "0", "0", "0"]);
-    standalone.assert_call("realm_group_op", &["0", "3", "4", "0", "0"]);
-    standalone.assert_call("realm_group_op", &["1", "4", "0", "0", "0"]);
-    standalone.assert_call("realm_group_op", &["0", "3", "5", "0", "0"]);
+    standalone.assert_call(
+        "realm_group_op",
+        &["0", r#"{"guid":1,"ownership":null}"#, "2", "0", "0"],
+    );
+    standalone.assert_call(
+        "realm_group_op",
+        &["1", r#"{"guid":2,"ownership":null}"#, "0", "0", "0"],
+    );
+    standalone.assert_call(
+        "realm_group_op",
+        &["0", r#"{"guid":3,"ownership":null}"#, "4", "0", "0"],
+    );
+    standalone.assert_call(
+        "realm_group_op",
+        &["1", r#"{"guid":4,"ownership":null}"#, "0", "0", "0"],
+    );
+    standalone.assert_call(
+        "realm_group_op",
+        &["0", r#"{"guid":3,"ownership":null}"#, "5", "0", "0"],
+    );
     standalone.assert_sql("DELETE FROM game_group WHERE leader_guid = 3");
 
     let valid_group_before =
@@ -90,72 +107,119 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
 }
 
 fn assert_group_invariant(standalone: &Standalone, args: &[&str]) {
-    let text = failed_text("realm_group_op", standalone.call("realm_group_op", args));
+    let actor = support::actor(args[1]);
+    let mut args = args.to_vec();
+    args[1] = &actor;
+    let text = failed_text("realm_group_op", standalone.call("realm_group_op", &args));
     assert!(text.contains("group invariant failed"), "{args:?}: {text}");
     assert!(!text.contains("group:"), "{args:?}: {text}");
 }
 
 fn taxi_cases() -> Vec<(&'static str, &'static [&'static str], &'static str)> {
     vec![
-        ("gw_trainer_buy", &[ACTOR, "0", "0"], "trainer:unavailable"),
-        ("gw_use_item", &[ACTOR, "0"], "item:not_right_now"),
-        ("gw_equip_item", &[ACTOR, "0"], "item:not_right_now"),
-        ("gw_move_item", &[ACTOR, "0", "1"], "item:not_right_now"),
-        ("gw_unequip_item", &[ACTOR, "0"], "item:not_right_now"),
+        (
+            "gw_trainer_buy",
+            &[SESSION_ACTOR, "0", "0"],
+            "trainer:unavailable",
+        ),
+        ("gw_use_item", &[SESSION_ACTOR, "0"], "item:not_right_now"),
+        ("gw_equip_item", &[SESSION_ACTOR, "0"], "item:not_right_now"),
+        (
+            "gw_move_item",
+            &[SESSION_ACTOR, "0", "1"],
+            "item:not_right_now",
+        ),
+        (
+            "gw_unequip_item",
+            &[SESSION_ACTOR, "0"],
+            "item:not_right_now",
+        ),
         (
             "gw_take_loot",
-            &[ACTOR, "0", "0"],
+            &[SESSION_ACTOR, "0", "0"],
             "loot:looter_unavailable",
         ),
         (
             "gw_open_creature_loot",
-            &[ACTOR, "0"],
+            &[SESSION_ACTOR, "0"],
             "loot:looter_unavailable",
         ),
-        ("gw_loot_money", &[ACTOR, "0"], "loot:looter_unavailable"),
+        (
+            "gw_loot_money",
+            &[SESSION_ACTOR, "0"],
+            "loot:looter_unavailable",
+        ),
         (
             "gw_use_gameobject",
-            &[ACTOR, "0"],
+            &[SESSION_ACTOR, "0"],
             "loot:looter_unavailable",
         ),
-        ("gw_skin", &[ACTOR, "0"], "loot:looter_unavailable"),
+        ("gw_skin", &[SESSION_ACTOR, "0"], "loot:looter_unavailable"),
         (
             "gw_loot_roll",
-            &[ACTOR, "0", "0", "0"],
+            &[SESSION_ACTOR, "0", "0", "0"],
             "loot:looter_unavailable",
         ),
         (
             "gw_loot_master_give",
-            &[ACTOR, "0", "0", "0"],
+            &[SESSION_ACTOR, "0", "0", "0"],
             "loot:looter_unavailable",
         ),
         (
             "gw_accept_group_invite",
-            &[ACTOR],
+            &[SESSION_ACTOR],
             "group:actor_unavailable",
         ),
         (
             "gw_party_chat",
-            &[ACTOR, "\"taxi\""],
+            &[SESSION_ACTOR, "\"taxi\""],
             "group:actor_unavailable",
         ),
-        ("gw_group_invite", &[ACTOR, "2"], "group:actor_unavailable"),
-        ("gw_group_decline", &[ACTOR], "group:actor_unavailable"),
-        ("gw_group_leave", &[ACTOR], "group:actor_unavailable"),
+        (
+            "gw_group_invite",
+            &[SESSION_ACTOR, "2"],
+            "group:actor_unavailable",
+        ),
+        (
+            "gw_group_decline",
+            &[SESSION_ACTOR],
+            "group:actor_unavailable",
+        ),
+        (
+            "gw_group_leave",
+            &[SESSION_ACTOR],
+            "group:actor_unavailable",
+        ),
         (
             "gw_group_uninvite",
-            &[ACTOR, "2"],
+            &[SESSION_ACTOR, "2"],
             "group:actor_unavailable",
         ),
         (
             "gw_group_loot_method",
-            &[ACTOR, "0", "0", "0"],
+            &[SESSION_ACTOR, "0", "0", "0"],
             "group:actor_unavailable",
         ),
-        ("gw_add_friend", &[ACTOR, "2"], "social:actor_unavailable"),
-        ("gw_del_friend", &[ACTOR, "2"], "social:actor_unavailable"),
-        ("gw_add_ignore", &[ACTOR, "2"], "social:actor_unavailable"),
-        ("gw_del_ignore", &[ACTOR, "2"], "social:actor_unavailable"),
+        (
+            "gw_add_friend",
+            &[SESSION_ACTOR, "2"],
+            "social:actor_unavailable",
+        ),
+        (
+            "gw_del_friend",
+            &[SESSION_ACTOR, "2"],
+            "social:actor_unavailable",
+        ),
+        (
+            "gw_add_ignore",
+            &[SESSION_ACTOR, "2"],
+            "social:actor_unavailable",
+        ),
+        (
+            "gw_del_ignore",
+            &[SESSION_ACTOR, "2"],
+            "social:actor_unavailable",
+        ),
     ]
 }
 
@@ -165,7 +229,8 @@ fn assert_loot_boundary_failure(standalone: &Standalone, actor: &str, tag: &str)
             continue;
         }
         let mut args = args.to_vec();
-        args[0] = actor;
+        let actor = support::actor(actor);
+        args[0] = &actor;
         let text = failed_text(reducer, standalone.call(reducer, &args));
         assert!(text.contains(tag), "{reducer} did not return {tag}: {text}");
     }

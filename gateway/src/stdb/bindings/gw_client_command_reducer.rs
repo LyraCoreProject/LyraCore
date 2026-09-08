@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwClientCommandArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub cmd: String,
     pub payload: String,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwClientCommandArgs {
 impl From<GwClientCommandArgs> for super::Reducer {
     fn from(args: GwClientCommandArgs) -> Self {
         Self::GwClientCommand {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             cmd: args.cmd,
             payload: args.payload,
         }
@@ -39,11 +41,11 @@ pub trait gw_client_command {
     /// /// Use [`gw_client_command:gw_client_command_then`] to run a callback after the reducer completes.
     fn gw_client_command(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         cmd: String,
         payload: String,
     ) -> __sdk::Result<()> {
-        self.gw_client_command_then(actor_guid, cmd, payload, |_, _| {})
+        self.gw_client_command_then(request_actor, cmd, payload, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_client_command` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_client_command {
     ///  and its status can be observed with the `callback`.
     fn gw_client_command_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         cmd: String,
         payload: String,
 
@@ -67,7 +69,7 @@ pub trait gw_client_command {
 impl gw_client_command for super::RemoteReducers {
     fn gw_client_command_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         cmd: String,
         payload: String,
 
@@ -77,7 +79,7 @@ impl gw_client_command for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwClientCommandArgs {
-                actor_guid,
+                request_actor,
                 cmd,
                 payload,
             },

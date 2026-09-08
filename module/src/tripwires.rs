@@ -54,6 +54,10 @@ pub(crate) mod character_owned_tripwire {
     /// Each reason states the row's actual owner or lifetime.
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
+            &["game_account_claim", "game_account_fence"],
+            "Account-owned generations retained across Character deletion and Transfer",
+        ),
+        (
             &[
                 "game_auction",
                 "game_auction_bid_decision",
@@ -1124,6 +1128,7 @@ mod character_fence_tripwire {
     /// `(repo-relative path, allowed raw-lookup count, verdict + why)`. One line each; every entry
     /// is an audited exception from the by-guid verdict table in `module/src/transfer/mod.rs`.
     const WHITELIST: &[(&str, usize, &str)] = &[
+        ("module/src/account_ownership.rs", 2, "Account fencing reads ownership even during Transfer. These two reads only check the Account name before fencing or removing a live entity; Character rows and Transfer records remain intact."),
         // THE GATE ITSELF.
         ("module/src/helpers.rs", 2, "`character_by_guid` + `character_by_name` — the fence; these two ARE the raw lookups everything else routes through"),
         // TRANSFER MACHINERY — must read the row the fence hides, or it could not move it.

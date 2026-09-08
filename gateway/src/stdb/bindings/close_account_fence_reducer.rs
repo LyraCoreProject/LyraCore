@@ -4,48 +4,48 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::world_session_token_type::WorldSessionToken;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct GwLeaveWorldArgs {
-    pub actor_guid: u64,
+pub(super) struct CloseAccountFenceArgs {
+    pub token: WorldSessionToken,
 }
 
-impl From<GwLeaveWorldArgs> for super::Reducer {
-    fn from(args: GwLeaveWorldArgs) -> Self {
-        Self::GwLeaveWorld {
-            actor_guid: args.actor_guid,
-        }
+impl From<CloseAccountFenceArgs> for super::Reducer {
+    fn from(args: CloseAccountFenceArgs) -> Self {
+        Self::CloseAccountFence { token: args.token }
     }
 }
 
-impl __sdk::InModule for GwLeaveWorldArgs {
+impl __sdk::InModule for CloseAccountFenceArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `gw_leave_world`.
+/// Extension trait for access to the reducer `close_account_fence`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait gw_leave_world {
-    /// Request that the remote module invoke the reducer `gw_leave_world` to run as soon as possible.
+pub trait close_account_fence {
+    /// Request that the remote module invoke the reducer `close_account_fence` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`gw_leave_world:gw_leave_world_then`] to run a callback after the reducer completes.
-    fn gw_leave_world(&self, actor_guid: u64) -> __sdk::Result<()> {
-        self.gw_leave_world_then(actor_guid, |_, _| {})
+    /// /// Use [`close_account_fence:close_account_fence_then`] to run a callback after the reducer completes.
+    fn close_account_fence(&self, token: WorldSessionToken) -> __sdk::Result<()> {
+        self.close_account_fence_then(token, |_, _| {})
     }
 
-    /// Request that the remote module invoke the reducer `gw_leave_world` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `close_account_fence` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn gw_leave_world_then(
+    fn close_account_fence_then(
         &self,
-        actor_guid: u64,
+        token: WorldSessionToken,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -53,16 +53,16 @@ pub trait gw_leave_world {
     ) -> __sdk::Result<()>;
 }
 
-impl gw_leave_world for super::RemoteReducers {
-    fn gw_leave_world_then(
+impl close_account_fence for super::RemoteReducers {
+    fn close_account_fence_then(
         &self,
-        actor_guid: u64,
+        token: WorldSessionToken,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(GwLeaveWorldArgs { actor_guid }, callback)
+            .invoke_reducer_with_callback(CloseAccountFenceArgs { token }, callback)
     }
 }

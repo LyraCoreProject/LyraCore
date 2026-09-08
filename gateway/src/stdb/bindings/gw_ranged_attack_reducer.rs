@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwRangedAttackArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub target_guid: u64,
     pub spell_id: u32,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwRangedAttackArgs {
 impl From<GwRangedAttackArgs> for super::Reducer {
     fn from(args: GwRangedAttackArgs) -> Self {
         Self::GwRangedAttack {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             target_guid: args.target_guid,
             spell_id: args.spell_id,
         }
@@ -39,11 +41,11 @@ pub trait gw_ranged_attack {
     /// /// Use [`gw_ranged_attack:gw_ranged_attack_then`] to run a callback after the reducer completes.
     fn gw_ranged_attack(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         spell_id: u32,
     ) -> __sdk::Result<()> {
-        self.gw_ranged_attack_then(actor_guid, target_guid, spell_id, |_, _| {})
+        self.gw_ranged_attack_then(request_actor, target_guid, spell_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_ranged_attack` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_ranged_attack {
     ///  and its status can be observed with the `callback`.
     fn gw_ranged_attack_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         spell_id: u32,
 
@@ -67,7 +69,7 @@ pub trait gw_ranged_attack {
 impl gw_ranged_attack for super::RemoteReducers {
     fn gw_ranged_attack_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         spell_id: u32,
 
@@ -77,7 +79,7 @@ impl gw_ranged_attack for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwRangedAttackArgs {
-                actor_guid,
+                request_actor,
                 target_guid,
                 spell_id,
             },

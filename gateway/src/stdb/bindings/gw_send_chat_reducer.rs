@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSendChatArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub chat_type: u8,
     pub language: u8,
     pub message: String,
@@ -16,7 +18,7 @@ pub(super) struct GwSendChatArgs {
 impl From<GwSendChatArgs> for super::Reducer {
     fn from(args: GwSendChatArgs) -> Self {
         Self::GwSendChat {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             chat_type: args.chat_type,
             language: args.language,
             message: args.message,
@@ -41,12 +43,12 @@ pub trait gw_send_chat {
     /// /// Use [`gw_send_chat:gw_send_chat_then`] to run a callback after the reducer completes.
     fn gw_send_chat(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         chat_type: u8,
         language: u8,
         message: String,
     ) -> __sdk::Result<()> {
-        self.gw_send_chat_then(actor_guid, chat_type, language, message, |_, _| {})
+        self.gw_send_chat_then(request_actor, chat_type, language, message, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_send_chat` to run as soon as possible,
@@ -57,7 +59,7 @@ pub trait gw_send_chat {
     ///  and its status can be observed with the `callback`.
     fn gw_send_chat_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         chat_type: u8,
         language: u8,
         message: String,
@@ -71,7 +73,7 @@ pub trait gw_send_chat {
 impl gw_send_chat for super::RemoteReducers {
     fn gw_send_chat_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         chat_type: u8,
         language: u8,
         message: String,
@@ -82,7 +84,7 @@ impl gw_send_chat for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwSendChatArgs {
-                actor_guid,
+                request_actor,
                 chat_type,
                 language,
                 message,

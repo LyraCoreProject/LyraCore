@@ -930,11 +930,12 @@ fn activation_reply(
 #[spacetimedb::reducer]
 pub fn gw_taxi_node_status(
     ctx: &ReducerContext,
-    character_guid: u64,
+    request_actor: crate::SessionActor,
     npc_guid: u64,
     request_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let reply = match resolve_flight_master(ctx, character_guid, npc_guid) {
         Ok((_player, source)) => TaxiServiceReply {
             character_guid,
@@ -967,11 +968,12 @@ pub fn gw_taxi_node_status(
 #[spacetimedb::reducer]
 pub fn gw_open_taxi(
     ctx: &ReducerContext,
-    character_guid: u64,
+    request_actor: crate::SessionActor,
     npc_guid: u64,
     request_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let reply = match resolve_flight_master(ctx, character_guid, npc_guid) {
         Ok((_player, source)) => {
             discover(ctx, character_guid, source.id);
@@ -1008,13 +1010,14 @@ pub fn gw_open_taxi(
 #[spacetimedb::reducer]
 pub fn gw_activate_taxi(
     ctx: &ReducerContext,
-    character_guid: u64,
+    request_actor: crate::SessionActor,
     npc_guid: u64,
     source_client_node_id: u32,
     destination_client_node_id: u32,
     request_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let created_micros = ctx.timestamp.to_micros_since_unix_epoch();
     let attempt = (|| -> Result<(), TaxiGateDenied> {
         let (mut player, source) = resolve_flight_master(ctx, character_guid, npc_guid)?;
@@ -1129,8 +1132,12 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
 }
 
 #[spacetimedb::reducer]
-pub fn gw_arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+pub fn gw_arm_taxi_flight(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     arm_taxi_flight(ctx, character_guid);
     Ok(())
 }
@@ -1220,10 +1227,11 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
 #[spacetimedb::reducer]
 pub fn gw_ack_taxi_reply(
     ctx: &ReducerContext,
-    character_guid: u64,
+    request_actor: crate::SessionActor,
     request_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let replies = ctx.db.game_taxi_service_reply();
     if replies
         .request_id()

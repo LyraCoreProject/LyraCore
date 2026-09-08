@@ -1009,12 +1009,13 @@ pub(crate) enum Plane {
 pub fn realm_group_op(
     ctx: &ReducerContext,
     op: u8,
-    actor_guid: u64,
+    request_actor: crate::SessionActor,
     target_guid: u64,
     arg_a: u8,
     arg_b: u8,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     use lyracore_shared::group::realm_op;
     // An op byte this module does not know is a gateway newer than the module — a deployment fault,
     // not a party outcome, so it stays an untagged error the gateway treats as a failure.
@@ -1053,6 +1054,7 @@ pub fn realm_group_op(
 /// decisions, and decisions belong to the authority. An empty `members` is the disband/last-member
 /// case and deletes the group row.
 #[reducer]
+#[allow(clippy::too_many_arguments)] // The roster and initiating Actor are the reducer wire contract.
 pub fn sync_group_mirror(
     ctx: &ReducerContext,
     group_id: u64,
@@ -1061,8 +1063,10 @@ pub fn sync_group_mirror(
     loot_threshold: u8,
     master_looter_guid: u64,
     members: Vec<u64>,
+    request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    crate::account_ownership::require_actor(ctx, request_actor)?;
     if group_id == 0 {
         return Err("group 0 is not a party".to_string());
     }

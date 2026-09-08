@@ -4,11 +4,13 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmMailCommitArgs {
     pub escrow_id: u64,
-    pub sender_guid: u64,
+    pub request_actor: SessionActor,
     pub recipient_guid: u64,
     pub subject: String,
     pub body: String,
@@ -27,7 +29,7 @@ impl From<RealmMailCommitArgs> for super::Reducer {
     fn from(args: RealmMailCommitArgs) -> Self {
         Self::RealmMailCommit {
             escrow_id: args.escrow_id,
-            sender_guid: args.sender_guid,
+            request_actor: args.request_actor,
             recipient_guid: args.recipient_guid,
             subject: args.subject,
             body: args.body,
@@ -62,7 +64,7 @@ pub trait realm_mail_commit {
     fn realm_mail_commit(
         &self,
         escrow_id: u64,
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -78,7 +80,7 @@ pub trait realm_mail_commit {
     ) -> __sdk::Result<()> {
         self.realm_mail_commit_then(
             escrow_id,
-            sender_guid,
+            request_actor,
             recipient_guid,
             subject,
             body,
@@ -104,7 +106,7 @@ pub trait realm_mail_commit {
     fn realm_mail_commit_then(
         &self,
         escrow_id: u64,
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -128,7 +130,7 @@ impl realm_mail_commit for super::RemoteReducers {
     fn realm_mail_commit_then(
         &self,
         escrow_id: u64,
-        sender_guid: u64,
+        request_actor: SessionActor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -149,7 +151,7 @@ impl realm_mail_commit for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             RealmMailCommitArgs {
                 escrow_id,
-                sender_guid,
+                request_actor,
                 recipient_guid,
                 subject,
                 body,

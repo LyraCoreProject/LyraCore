@@ -4,16 +4,18 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmMailItemRoomArgs {
-    pub payee_guid: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<RealmMailItemRoomArgs> for super::Reducer {
     fn from(args: RealmMailItemRoomArgs) -> Self {
         Self::RealmMailItemRoom {
-            payee_guid: args.payee_guid,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -33,8 +35,8 @@ pub trait realm_mail_item_room {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`realm_mail_item_room:realm_mail_item_room_then`] to run a callback after the reducer completes.
-    fn realm_mail_item_room(&self, payee_guid: u64) -> __sdk::Result<()> {
-        self.realm_mail_item_room_then(payee_guid, |_, _| {})
+    fn realm_mail_item_room(&self, request_actor: SessionActor) -> __sdk::Result<()> {
+        self.realm_mail_item_room_then(request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_mail_item_room` to run as soon as possible,
@@ -45,7 +47,7 @@ pub trait realm_mail_item_room {
     ///  and its status can be observed with the `callback`.
     fn realm_mail_item_room_then(
         &self,
-        payee_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,13 +58,13 @@ pub trait realm_mail_item_room {
 impl realm_mail_item_room for super::RemoteReducers {
     fn realm_mail_item_room_then(
         &self,
-        payee_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(RealmMailItemRoomArgs { payee_guid }, callback)
+            .invoke_reducer_with_callback(RealmMailItemRoomArgs { request_actor }, callback)
     }
 }

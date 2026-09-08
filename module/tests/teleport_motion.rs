@@ -69,7 +69,7 @@ fn teleport_motion_rows_follow_the_live_entity_boundary() {
 
 fn move_to(standalone: &Standalone, x: f32, y: f32, move_time_ms: u32) {
     let args = [
-        CHARACTER_GUID.to_string(),
+        support::actor(&CHARACTER_GUID.to_string()),
         HEARTBEAT.to_string(),
         "[]".to_string(),
         x.to_string(),

@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwBuyItemArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub vendor_guid: u64,
     pub item_entry: u32,
     pub count: u32,
@@ -16,7 +18,7 @@ pub(super) struct GwBuyItemArgs {
 impl From<GwBuyItemArgs> for super::Reducer {
     fn from(args: GwBuyItemArgs) -> Self {
         Self::GwBuyItem {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             vendor_guid: args.vendor_guid,
             item_entry: args.item_entry,
             count: args.count,
@@ -41,12 +43,12 @@ pub trait gw_buy_item {
     /// /// Use [`gw_buy_item:gw_buy_item_then`] to run a callback after the reducer completes.
     fn gw_buy_item(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         vendor_guid: u64,
         item_entry: u32,
         count: u32,
     ) -> __sdk::Result<()> {
-        self.gw_buy_item_then(actor_guid, vendor_guid, item_entry, count, |_, _| {})
+        self.gw_buy_item_then(request_actor, vendor_guid, item_entry, count, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_buy_item` to run as soon as possible,
@@ -57,7 +59,7 @@ pub trait gw_buy_item {
     ///  and its status can be observed with the `callback`.
     fn gw_buy_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         vendor_guid: u64,
         item_entry: u32,
         count: u32,
@@ -71,7 +73,7 @@ pub trait gw_buy_item {
 impl gw_buy_item for super::RemoteReducers {
     fn gw_buy_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         vendor_guid: u64,
         item_entry: u32,
         count: u32,
@@ -82,7 +84,7 @@ impl gw_buy_item for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwBuyItemArgs {
-                actor_guid,
+                request_actor,
                 vendor_guid,
                 item_entry,
                 count,

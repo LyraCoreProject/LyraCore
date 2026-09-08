@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwActivateTaxiArgs {
-    pub character_guid: u64,
+    pub request_actor: SessionActor,
     pub npc_guid: u64,
     pub source_client_node_id: u32,
     pub destination_client_node_id: u32,
@@ -17,7 +19,7 @@ pub(super) struct GwActivateTaxiArgs {
 impl From<GwActivateTaxiArgs> for super::Reducer {
     fn from(args: GwActivateTaxiArgs) -> Self {
         Self::GwActivateTaxi {
-            character_guid: args.character_guid,
+            request_actor: args.request_actor,
             npc_guid: args.npc_guid,
             source_client_node_id: args.source_client_node_id,
             destination_client_node_id: args.destination_client_node_id,
@@ -43,14 +45,14 @@ pub trait gw_activate_taxi {
     /// /// Use [`gw_activate_taxi:gw_activate_taxi_then`] to run a callback after the reducer completes.
     fn gw_activate_taxi(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         source_client_node_id: u32,
         destination_client_node_id: u32,
         request_id: u64,
     ) -> __sdk::Result<()> {
         self.gw_activate_taxi_then(
-            character_guid,
+            request_actor,
             npc_guid,
             source_client_node_id,
             destination_client_node_id,
@@ -67,7 +69,7 @@ pub trait gw_activate_taxi {
     ///  and its status can be observed with the `callback`.
     fn gw_activate_taxi_then(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         source_client_node_id: u32,
         destination_client_node_id: u32,
@@ -82,7 +84,7 @@ pub trait gw_activate_taxi {
 impl gw_activate_taxi for super::RemoteReducers {
     fn gw_activate_taxi_then(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         source_client_node_id: u32,
         destination_client_node_id: u32,
@@ -94,7 +96,7 @@ impl gw_activate_taxi for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwActivateTaxiArgs {
-                character_guid,
+                request_actor,
                 npc_guid,
                 source_client_node_id,
                 destination_client_node_id,

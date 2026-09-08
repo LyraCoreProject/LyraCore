@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwEnchantItemArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub target_slot: u8,
     pub enchant_id: u32,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwEnchantItemArgs {
 impl From<GwEnchantItemArgs> for super::Reducer {
     fn from(args: GwEnchantItemArgs) -> Self {
         Self::GwEnchantItem {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             target_slot: args.target_slot,
             enchant_id: args.enchant_id,
         }
@@ -39,11 +41,11 @@ pub trait gw_enchant_item {
     /// /// Use [`gw_enchant_item:gw_enchant_item_then`] to run a callback after the reducer completes.
     fn gw_enchant_item(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_slot: u8,
         enchant_id: u32,
     ) -> __sdk::Result<()> {
-        self.gw_enchant_item_then(actor_guid, target_slot, enchant_id, |_, _| {})
+        self.gw_enchant_item_then(request_actor, target_slot, enchant_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_enchant_item` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_enchant_item {
     ///  and its status can be observed with the `callback`.
     fn gw_enchant_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_slot: u8,
         enchant_id: u32,
 
@@ -67,7 +69,7 @@ pub trait gw_enchant_item {
 impl gw_enchant_item for super::RemoteReducers {
     fn gw_enchant_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         target_slot: u8,
         enchant_id: u32,
 
@@ -77,7 +79,7 @@ impl gw_enchant_item for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwEnchantItemArgs {
-                actor_guid,
+                request_actor,
                 target_slot,
                 enchant_id,
             },

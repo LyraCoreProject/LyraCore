@@ -4,16 +4,20 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmMailConfirmDeliveryArgs {
     pub escrow_id: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<RealmMailConfirmDeliveryArgs> for super::Reducer {
     fn from(args: RealmMailConfirmDeliveryArgs) -> Self {
         Self::RealmMailConfirmDelivery {
             escrow_id: args.escrow_id,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -33,8 +37,12 @@ pub trait realm_mail_confirm_delivery {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`realm_mail_confirm_delivery:realm_mail_confirm_delivery_then`] to run a callback after the reducer completes.
-    fn realm_mail_confirm_delivery(&self, escrow_id: u64) -> __sdk::Result<()> {
-        self.realm_mail_confirm_delivery_then(escrow_id, |_, _| {})
+    fn realm_mail_confirm_delivery(
+        &self,
+        escrow_id: u64,
+        request_actor: SessionActor,
+    ) -> __sdk::Result<()> {
+        self.realm_mail_confirm_delivery_then(escrow_id, request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `realm_mail_confirm_delivery` to run as soon as possible,
@@ -46,6 +54,7 @@ pub trait realm_mail_confirm_delivery {
     fn realm_mail_confirm_delivery_then(
         &self,
         escrow_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -57,12 +66,18 @@ impl realm_mail_confirm_delivery for super::RemoteReducers {
     fn realm_mail_confirm_delivery_then(
         &self,
         escrow_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(RealmMailConfirmDeliveryArgs { escrow_id }, callback)
+        self.imp.invoke_reducer_with_callback(
+            RealmMailConfirmDeliveryArgs {
+                escrow_id,
+                request_actor,
+            },
+            callback,
+        )
     }
 }

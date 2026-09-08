@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwClearTradeItemArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub trade_slot: u8,
 }
 
 impl From<GwClearTradeItemArgs> for super::Reducer {
     fn from(args: GwClearTradeItemArgs) -> Self {
         Self::GwClearTradeItem {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             trade_slot: args.trade_slot,
         }
     }
@@ -35,8 +37,12 @@ pub trait gw_clear_trade_item {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_clear_trade_item:gw_clear_trade_item_then`] to run a callback after the reducer completes.
-    fn gw_clear_trade_item(&self, actor_guid: u64, trade_slot: u8) -> __sdk::Result<()> {
-        self.gw_clear_trade_item_then(actor_guid, trade_slot, |_, _| {})
+    fn gw_clear_trade_item(
+        &self,
+        request_actor: SessionActor,
+        trade_slot: u8,
+    ) -> __sdk::Result<()> {
+        self.gw_clear_trade_item_then(request_actor, trade_slot, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_clear_trade_item` to run as soon as possible,
@@ -47,7 +53,7 @@ pub trait gw_clear_trade_item {
     ///  and its status can be observed with the `callback`.
     fn gw_clear_trade_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trade_slot: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +65,7 @@ pub trait gw_clear_trade_item {
 impl gw_clear_trade_item for super::RemoteReducers {
     fn gw_clear_trade_item_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         trade_slot: u8,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +74,7 @@ impl gw_clear_trade_item for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwClearTradeItemArgs {
-                actor_guid,
+                request_actor,
                 trade_slot,
             },
             callback,

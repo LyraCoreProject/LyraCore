@@ -72,26 +72,14 @@ fn send_quest_log<St: QuestActionStore + ?Sized>(
     Ok(())
 }
 
-/// Enter (or RE-enter) the world as `character_guid`: rebuild the live entity, subscribe
-/// to its shared view (a FRESH `created` dedup set every call — the full AOI reset a cross-map
-/// re-entry needs), and send the login sequence + self CREATE_OBJECT as one contiguous batch. Shared by
-/// `CMSG_PLAYER_LOGIN` (fresh world entry) and `MSG_MOVE_WORLDPORT_ACK` (cross-map re-entry after
-/// `teleport_player` despawned the old entity) — see their call sites' doc comments for why reusing this
-/// exact path is correct for both. `session_epoch` is the caller's to manage: a fresh login claims a new
-/// one; a world-port reuses the existing one (the session itself hasn't changed). `entry` is the ONE
-/// packet-level difference between the two callers: a world-port re-entry omits
-/// `SMSG_LOGIN_VERIFY_WORLD` (see `codec::WorldEntry`).
-///
-/// Drops any PREVIOUS `InWorld` state FIRST (a world-port re-entry has one, scoped to the old
-/// map/AOI box; a fresh login doesn't). The old `PlayerSubscriptions` guard unregisters its viewer
-/// before this registers the new one. The world-port handler removes it even earlier, before a
-/// cross-shard transfer can cascade-delete source rows.
+/// Rebuild the Character's entity and subscriptions, then send its entry batch.
+/// The bound Store retains Account ownership across a map change. Entry after a map change omits
+/// `SMSG_LOGIN_VERIFY_WORLD`, which would tell the client to load the map again.
 fn enter_world<St: WorldStore + ?Sized>(
     tx: &SessionTx,
     store: &St,
     conn: &mut WorldConn,
     character_guid: u64,
-    session_epoch: u64,
     entry: codec::WorldEntry,
 ) -> Result<()> {
     conn.state = WorldState::CharSelect;
@@ -188,7 +176,6 @@ fn enter_world<St: WorldStore + ?Sized>(
     conn.state = WorldState::InWorld(InWorld {
         self_guid: character_guid,
         subs,
-        session_epoch,
         attacking_target: None,
         open_loot: OpenLootState::default(),
         ranged_repeat: false,
@@ -300,11 +287,14 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
         // CREATE_OBJECT2 as one contiguous batch (so an async peer event can't splice into it).
         ClientOpcodeMessage::CMSG_PLAYER_LOGIN(p) => {
             let character_guid = p.guid.guid();
-            // Claim this account's in-world session: become the current owner of the live entity so a
-            // stale earlier socket's teardown can't delete it out from under us. A world-port
-            // re-entry (below) reuses the EXISTING epoch instead — the session itself hasn't changed,
-            // only the map.
-            let session_epoch = store.claim_session(conn.account_id);
+            if conn.session_claim.is_some() {
+                return Err(anyhow::anyhow!("ACCOUNT_IN_USE"));
+            }
+            let token = store.claim_session(conn.account_id, character_guid)?;
+            conn.session_claim = Some(token);
+            if let Some(bound) = store.bind_session(token)? {
+                conn.home = Some(bound);
+            }
             // Multi-shard routing: pin this session to the shard that owns the character's
             // location BEFORE `player_login` runs, so the login reducer and viewer registration
             // land on the home shard — and so does every message after this one
@@ -317,7 +307,6 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                 st,
                 conn,
                 character_guid,
-                session_epoch,
                 codec::WorldEntry::FreshLogin
             ))?;
         }
@@ -334,14 +323,13 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
         // second load of the map the ack says is already loaded.
         // A spurious/late ack while not mid-transfer (e.g. a double-send) is a no-op — CharSelect has no
         // `self_guid` to re-enter with, so it's silently accepted-and-ignored like every other unsolicited
-        // client ack in this dispatch. The session epoch is REUSED (not re-claimed) — nothing about
-        // session ownership changed, only the entity/map.
+        // client ack in this dispatch. The bound Store retains the same Account ownership.
         ClientOpcodeMessage::MSG_MOVE_WORLDPORT_ACK => {
             let resume = match &conn.state {
-                WorldState::InWorld(iw) => Some((iw.self_guid, iw.session_epoch)),
+                WorldState::InWorld(iw) => Some(iw.self_guid),
                 WorldState::CharSelect => None,
             };
-            if let Some((character_guid, session_epoch)) = resume {
+            if let Some(character_guid) = resume {
                 // Gate on a REAL pending transfer: cross-map teleport
                 // despawns the entity until this ack; a live entity means no transfer is in
                 // flight and the ack is spurious — ignore it instead of re-entering the world.
@@ -357,8 +345,7 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                     // owner lookup instead. Keep `InWorld` intact:
                     // if routing fails, the existing abort path terminates the socket and
                     // `leave_world` retains its logout/error policy. The guard's later Drop is
-                    // idempotent, and the captured guid/epoch above remain valid for destination
-                    // entry.
+                    // idempotent, and destination entry retains the same Character and Account ownership.
                     if let WorldState::InWorld(iw) = &mut conn.state {
                         iw.subs.unregister_viewer();
                     }
@@ -386,7 +373,6 @@ pub(crate) fn handle_char<St: WorldStore + ?Sized>(
                             st,
                             conn,
                             character_guid,
-                            session_epoch,
                             codec::WorldEntry::WorldPort
                         ));
                     }

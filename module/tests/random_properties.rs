@@ -293,7 +293,7 @@ fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
             "realm_mail_commit",
             &[
                 &send,
-                "2",
+                r#"{"guid":2,"ownership":null}"#,
                 "1",
                 "\"Fixture\"",
                 "\"\"",
@@ -314,7 +314,12 @@ fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
         let payout = (escrow_id + 1).to_string();
         shard.assert_call(
             "realm_mail_take_item_fence",
-            &[&payout, "1", &mails[0]["id"], ITEM],
+            &[
+                &payout,
+                r#"{"guid":1,"ownership":null}"#,
+                &mails[0]["id"],
+                ITEM,
+            ],
         );
         let fenced = shard.query_rows(&format!(
             "SELECT random_property_id FROM game_mail_escrow WHERE escrow_id = {payout}"
@@ -322,7 +327,7 @@ fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
         assert_eq!(fenced[0]["random_property_id"], property);
         let args = [
             &payout,
-            "1",
+            r#"{"guid":1,"ownership":null}"#,
             &mails[0]["id"],
             ITEM,
             "1",
@@ -362,7 +367,10 @@ fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
         shard.assert_sql(&format!(
             "UPDATE game_item_template SET random_property = 5090199 WHERE entry = {ITEM}"
         ));
-        shard.assert_call("gw_buyback_item", &["1", &vendor[0]["guid"], "0"]);
+        shard.assert_call(
+            "gw_buyback_item",
+            &[r#"{"guid":1,"ownership":null}"#, &vendor[0]["guid"], "0"],
+        );
         let restored = shard
             .query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1");
         assert_eq!(restored.len(), 1);
@@ -383,7 +391,7 @@ fn auction_refund_replay_compares_the_saved_property() {
     let shard = fixture("property-auction-refund");
     let mut args = [
         "5090140",
-        "1",
+        r#"{"guid":1,"ownership":null}"#,
         "5090141",
         ITEM,
         "1",
@@ -424,22 +432,47 @@ fn cross_shard_transfer_imports_the_saved_item_property() {
     source.assert_call("debug_grant_item", &["1", ITEM, "1"]);
     source.assert_call(
         "begin_transfer",
-        &["5090150", "1", "0", "0", "0", "0", "0", "0", "true"],
+        &[
+            "5090150",
+            r#"{"guid":1,"ownership":null}"#,
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "true",
+        ],
     );
     let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 5090150");
     let mut destination = Standalone::start("property-transfer-destination");
     destination.publish_module();
     destination.assert_call("claim_operator", &[]);
     let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
-    destination.assert_call("import_character_blob", &["5090150", &blob]);
-    destination.assert_call("import_character_blob", &["5090150", &blob]);
+    destination.assert_call(
+        "import_character_blob",
+        &["5090150", &blob, r#"{"guid":0,"ownership":null}"#],
+    );
+    destination.assert_call(
+        "import_character_blob",
+        &["5090150", &blob, r#"{"guid":0,"ownership":null}"#],
+    );
     let items = destination
         .query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["random_property_id"], PROPERTY);
-    source.assert_call("confirm_import", &["5090150"]);
-    source.assert_call("finish_transfer", &["5090150"]);
-    destination.assert_call("release_transfer", &["5090150"]);
+    source.assert_call(
+        "confirm_import",
+        &["5090150", r#"{"guid":0,"ownership":null}"#],
+    );
+    source.assert_call(
+        "finish_transfer",
+        &["5090150", r#"{"guid":0,"ownership":null}"#],
+    );
+    destination.assert_call(
+        "release_transfer",
+        &["5090150", r#"{"guid":0,"ownership":null}"#],
+    );
     assert!(source
         .query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1")
         .is_empty());

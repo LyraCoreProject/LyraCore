@@ -424,17 +424,18 @@ pub(crate) fn apply_return(
 #[reducer]
 pub fn realm_mail_mark_read(
     ctx: &ReducerContext,
-    recipient_guid: u64,
+    request_actor: crate::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_mark_read(ctx, recipient_guid, mail_id)
 }
 #[reducer]
 #[allow(clippy::too_many_arguments)] // a reducer's arguments are the wire
 pub fn realm_mail_send(
     ctx: &ReducerContext,
-    sender_guid: u64,
+    request_actor: crate::SessionActor,
     recipient_guid: u64,
     subject: String,
     body: String,
@@ -443,6 +444,7 @@ pub fn realm_mail_send(
     item_guid: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_send(
         ctx,
         sender_guid,
@@ -457,24 +459,30 @@ pub fn realm_mail_send(
 #[reducer]
 pub fn realm_mail_take_item(
     ctx: &ReducerContext,
-    recipient_guid: u64,
+    request_actor: crate::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_take_item(ctx, recipient_guid, mail_id)
 }
 #[reducer]
 pub fn realm_mail_take_money(
     ctx: &ReducerContext,
-    recipient_guid: u64,
+    request_actor: crate::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_take_money(ctx, recipient_guid, mail_id)
 }
 #[reducer]
-pub fn realm_mail_item_room(ctx: &ReducerContext, payee_guid: u64) -> Result<(), String> {
+pub fn realm_mail_item_room(
+    ctx: &ReducerContext,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     if crate::helpers::acting_entity_by_guid(ctx, payee_guid).is_none() {
         return Err(lyracore_shared::mail::NOT_IN_WORLD.to_string());
     }
@@ -486,19 +494,21 @@ pub fn realm_mail_item_room(ctx: &ReducerContext, payee_guid: u64) -> Result<(),
 #[reducer]
 pub fn realm_mail_delete(
     ctx: &ReducerContext,
-    recipient_guid: u64,
+    request_actor: crate::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_delete(ctx, recipient_guid, mail_id)
 }
 #[reducer]
 pub fn realm_mail_return(
     ctx: &ReducerContext,
-    recipient_guid: u64,
+    request_actor: crate::SessionActor,
     mail_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     apply_return(ctx, recipient_guid, mail_id)
 }
 

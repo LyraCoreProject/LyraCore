@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwMovementUpdateArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub opcode: u16,
     pub movement_info: Vec<u8>,
     pub x: f32,
@@ -20,7 +22,7 @@ pub(super) struct GwMovementUpdateArgs {
 impl From<GwMovementUpdateArgs> for super::Reducer {
     fn from(args: GwMovementUpdateArgs) -> Self {
         Self::GwMovementUpdate {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             opcode: args.opcode,
             movement_info: args.movement_info,
             x: args.x,
@@ -49,7 +51,7 @@ pub trait gw_movement_update {
     /// /// Use [`gw_movement_update:gw_movement_update_then`] to run a callback after the reducer completes.
     fn gw_movement_update(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         opcode: u16,
         movement_info: Vec<u8>,
         x: f32,
@@ -59,7 +61,7 @@ pub trait gw_movement_update {
         move_time_ms: u32,
     ) -> __sdk::Result<()> {
         self.gw_movement_update_then(
-            actor_guid,
+            request_actor,
             opcode,
             movement_info,
             x,
@@ -79,7 +81,7 @@ pub trait gw_movement_update {
     ///  and its status can be observed with the `callback`.
     fn gw_movement_update_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         opcode: u16,
         movement_info: Vec<u8>,
         x: f32,
@@ -97,7 +99,7 @@ pub trait gw_movement_update {
 impl gw_movement_update for super::RemoteReducers {
     fn gw_movement_update_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         opcode: u16,
         movement_info: Vec<u8>,
         x: f32,
@@ -112,7 +114,7 @@ impl gw_movement_update for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwMovementUpdateArgs {
-                actor_guid,
+                request_actor,
                 opcode,
                 movement_info,
                 x,

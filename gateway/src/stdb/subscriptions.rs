@@ -3343,6 +3343,7 @@ impl Coordinator {
         arrival: &codec::EntityView,
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions> {
+        self.watch_session(tx.clone());
         let (login_instance, login_map, login_zone, login_x, login_y) = (
             arrival.instance_id,
             arrival.map_id,

@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwAckTaxiReplyArgs {
-    pub character_guid: u64,
+    pub request_actor: SessionActor,
     pub request_id: u64,
 }
 
 impl From<GwAckTaxiReplyArgs> for super::Reducer {
     fn from(args: GwAckTaxiReplyArgs) -> Self {
         Self::GwAckTaxiReply {
-            character_guid: args.character_guid,
+            request_actor: args.request_actor,
             request_id: args.request_id,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_ack_taxi_reply {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_ack_taxi_reply:gw_ack_taxi_reply_then`] to run a callback after the reducer completes.
-    fn gw_ack_taxi_reply(&self, character_guid: u64, request_id: u64) -> __sdk::Result<()> {
-        self.gw_ack_taxi_reply_then(character_guid, request_id, |_, _| {})
+    fn gw_ack_taxi_reply(&self, request_actor: SessionActor, request_id: u64) -> __sdk::Result<()> {
+        self.gw_ack_taxi_reply_then(request_actor, request_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_ack_taxi_reply` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_ack_taxi_reply {
     ///  and its status can be observed with the `callback`.
     fn gw_ack_taxi_reply_then(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
         request_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,7 +61,7 @@ pub trait gw_ack_taxi_reply {
 impl gw_ack_taxi_reply for super::RemoteReducers {
     fn gw_ack_taxi_reply_then(
         &self,
-        character_guid: u64,
+        request_actor: SessionActor,
         request_id: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -68,7 +70,7 @@ impl gw_ack_taxi_reply for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwAckTaxiReplyArgs {
-                character_guid,
+                request_actor,
                 request_id,
             },
             callback,

@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwPartyChatArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub text: String,
 }
 
 impl From<GwPartyChatArgs> for super::Reducer {
     fn from(args: GwPartyChatArgs) -> Self {
         Self::GwPartyChat {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             text: args.text,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_party_chat {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_party_chat:gw_party_chat_then`] to run a callback after the reducer completes.
-    fn gw_party_chat(&self, actor_guid: u64, text: String) -> __sdk::Result<()> {
-        self.gw_party_chat_then(actor_guid, text, |_, _| {})
+    fn gw_party_chat(&self, request_actor: SessionActor, text: String) -> __sdk::Result<()> {
+        self.gw_party_chat_then(request_actor, text, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_party_chat` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_party_chat {
     ///  and its status can be observed with the `callback`.
     fn gw_party_chat_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         text: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,14 +61,19 @@ pub trait gw_party_chat {
 impl gw_party_chat for super::RemoteReducers {
     fn gw_party_chat_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         text: String,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(GwPartyChatArgs { actor_guid, text }, callback)
+        self.imp.invoke_reducer_with_callback(
+            GwPartyChatArgs {
+                request_actor,
+                text,
+            },
+            callback,
+        )
     }
 }

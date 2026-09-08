@@ -400,7 +400,7 @@ impl WorldStore for Coordinator {
         // individual reducer outcomes are intentionally unavailable.
         let body = codec::movement_info_to_bytes(info)?;
         self.0.motion_batch.push(GwMove {
-            actor_guid: self_guid,
+            actor: self.session_actor(self_guid),
             opcode: opcode as u16,
             movement_info: body,
             x: info.position.x,
@@ -421,10 +421,6 @@ impl WorldStore for Coordinator {
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions> {
         self.subscribe_player_events(account_id, self_guid, arrival, tx)
-    }
-
-    fn logout(&self, account_id: u64, self_guid: u64) -> Result<()> {
-        self.logout(account_id, self_guid)
     }
 
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
@@ -884,12 +880,23 @@ impl WorldStore for Coordinator {
         self.repop(account_id, self_guid)
     }
 
-    fn claim_session(&self, account_id: u64) -> u64 {
-        self.claim_session(account_id)
+    fn claim_session(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+    ) -> Result<crate::world::WorldSessionToken> {
+        self.claim_session(account_id, character_guid)
     }
 
-    fn release_session(&self, account_id: u64, epoch: u64) -> bool {
-        self.release_session(account_id, epoch)
+    fn bind_session(
+        &self,
+        token: crate::world::WorldSessionToken,
+    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        Ok(Some(std::sync::Arc::new(self.bind_session(token)?)))
+    }
+
+    fn release_session(&self, token: crate::world::WorldSessionToken) -> Result<()> {
+        self.release_session(token)
     }
 
     fn reclaim_corpse(&self, account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
@@ -1480,7 +1487,7 @@ mod routing_call_site_tests {
              the world database's stale auth cache\" ) })?; \
              let inner = self .1 .conns .get(db) \
              .ok_or_else(|| anyhow!(\"auth database {db} missing from the coordinator set\"))?; \
-             Ok(Coordinator(inner.clone(), self.1.clone()))"
+             Ok(Coordinator(inner.clone(), self.1.clone(), self.2.clone()))"
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");

@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwLootRollArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub corpse_guid: u64,
     pub loot_slot: u32,
     pub vote: u8,
@@ -16,7 +18,7 @@ pub(super) struct GwLootRollArgs {
 impl From<GwLootRollArgs> for super::Reducer {
     fn from(args: GwLootRollArgs) -> Self {
         Self::GwLootRoll {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             corpse_guid: args.corpse_guid,
             loot_slot: args.loot_slot,
             vote: args.vote,
@@ -41,12 +43,12 @@ pub trait gw_loot_roll {
     /// /// Use [`gw_loot_roll:gw_loot_roll_then`] to run a callback after the reducer completes.
     fn gw_loot_roll(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
     ) -> __sdk::Result<()> {
-        self.gw_loot_roll_then(actor_guid, corpse_guid, loot_slot, vote, |_, _| {})
+        self.gw_loot_roll_then(request_actor, corpse_guid, loot_slot, vote, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_loot_roll` to run as soon as possible,
@@ -57,7 +59,7 @@ pub trait gw_loot_roll {
     ///  and its status can be observed with the `callback`.
     fn gw_loot_roll_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
@@ -71,7 +73,7 @@ pub trait gw_loot_roll {
 impl gw_loot_roll for super::RemoteReducers {
     fn gw_loot_roll_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
@@ -82,7 +84,7 @@ impl gw_loot_roll for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwLootRollArgs {
-                actor_guid,
+                request_actor,
                 corpse_guid,
                 loot_slot,
                 vote,

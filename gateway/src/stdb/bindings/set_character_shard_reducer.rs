@@ -4,12 +4,15 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct SetCharacterShardArgs {
     pub character_guid: u64,
     pub map_id: u32,
     pub instance_id: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<SetCharacterShardArgs> for super::Reducer {
@@ -18,6 +21,7 @@ impl From<SetCharacterShardArgs> for super::Reducer {
             character_guid: args.character_guid,
             map_id: args.map_id,
             instance_id: args.instance_id,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -42,8 +46,15 @@ pub trait set_character_shard {
         character_guid: u64,
         map_id: u32,
         instance_id: u64,
+        request_actor: SessionActor,
     ) -> __sdk::Result<()> {
-        self.set_character_shard_then(character_guid, map_id, instance_id, |_, _| {})
+        self.set_character_shard_then(
+            character_guid,
+            map_id,
+            instance_id,
+            request_actor,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `set_character_shard` to run as soon as possible,
@@ -57,6 +68,7 @@ pub trait set_character_shard {
         character_guid: u64,
         map_id: u32,
         instance_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -70,6 +82,7 @@ impl set_character_shard for super::RemoteReducers {
         character_guid: u64,
         map_id: u32,
         instance_id: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -80,6 +93,7 @@ impl set_character_shard for super::RemoteReducers {
                 character_guid,
                 map_id,
                 instance_id,
+                request_actor,
             },
             callback,
         )

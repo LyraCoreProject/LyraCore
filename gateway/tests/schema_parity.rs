@@ -391,6 +391,12 @@ parity_test!(parity_game_character_explored, "game_character_explored", lyracore
 parity_test!(parity_game_account, "game_account", lyracore_module::Account, bindings::account_type::Account, {
     id, username, salt, verifier, identity, banned, alpha_test_tools,
 });
+parity_test!(parity_game_account_claim, "game_account_claim", lyracore_module::AccountClaim, bindings::account_claim_type::AccountClaim, {
+    account_id, generation, request_nonce, character_guid, expires_micros, closed,
+});
+parity_test!(parity_game_account_fence, "game_account_fence", lyracore_module::AccountFence, bindings::account_fence_type::AccountFence, {
+    account_id, account_name, generation, request_nonce, character_guid, expires_micros, closed,
+});
 parity_test!(parity_game_session, "game_session", lyracore_module::Session, bindings::session_type::Session, {
     account_id, session_key, identity, created_at, expires_at,
 });
@@ -849,6 +855,8 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_addon_message",
     "game_character_explored",
     "game_account",
+    "game_account_claim",
+    "game_account_fence",
     "game_session",
     "game_character",
     "game_character_shard",

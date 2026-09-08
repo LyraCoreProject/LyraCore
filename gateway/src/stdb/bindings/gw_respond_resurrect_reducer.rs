@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwRespondResurrectArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub accept: bool,
 }
 
 impl From<GwRespondResurrectArgs> for super::Reducer {
     fn from(args: GwRespondResurrectArgs) -> Self {
         Self::GwRespondResurrect {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             accept: args.accept,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_respond_resurrect {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_respond_resurrect:gw_respond_resurrect_then`] to run a callback after the reducer completes.
-    fn gw_respond_resurrect(&self, actor_guid: u64, accept: bool) -> __sdk::Result<()> {
-        self.gw_respond_resurrect_then(actor_guid, accept, |_, _| {})
+    fn gw_respond_resurrect(&self, request_actor: SessionActor, accept: bool) -> __sdk::Result<()> {
+        self.gw_respond_resurrect_then(request_actor, accept, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_respond_resurrect` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_respond_resurrect {
     ///  and its status can be observed with the `callback`.
     fn gw_respond_resurrect_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         accept: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,14 +61,19 @@ pub trait gw_respond_resurrect {
 impl gw_respond_resurrect for super::RemoteReducers {
     fn gw_respond_resurrect_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         accept: bool,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(GwRespondResurrectArgs { actor_guid, accept }, callback)
+        self.imp.invoke_reducer_with_callback(
+            GwRespondResurrectArgs {
+                request_actor,
+                accept,
+            },
+            callback,
+        )
     }
 }

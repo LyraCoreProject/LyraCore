@@ -66,7 +66,7 @@ pub(crate) use handlers::{
 use login_queue::{Admission, LoginQueue};
 use social::handle_social;
 pub(crate) use social::ContactOutcome;
-pub use store::WorldStore;
+pub use store::{WorldSessionToken, WorldStore};
 use transfer::{EscrowedTransfer, TransferPlan};
 
 /// One unit of outbound traffic for the single writer thread. A `Batch` is written contiguously so
@@ -145,9 +145,29 @@ pub const EGRESS_SHED_DEPTH: usize = 512;
 pub struct SessionTx {
     tx: Sender<Outbound>,
     depth: Arc<AtomicUsize>,
+    close_socket: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl SessionTx {
+    fn bind_socket<S: DuplexStream>(&mut self, socket: S) {
+        let socket = std::sync::Mutex::new(socket);
+        self.close_socket = Some(Arc::new(move || {
+            let socket = socket
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Err(error) = socket.shutdown_both() {
+                log::warn!("World Session socket shutdown failed: {error}");
+            }
+        }));
+    }
+
+    /// Close both socket directions even when the writer is blocked or its queue is full.
+    pub(crate) fn close(&self) {
+        if let Some(close) = &self.close_socket {
+            close();
+        }
+    }
+
     /// Enqueue one outbound unit. Same signature as `mpsc::Sender::send`, so existing call sites
     /// read identically; the only addition is the depth accounting. Incremented BEFORE the send so
     /// the depth can never read low while an item is on the queue, and rolled back when the send
@@ -188,6 +208,7 @@ pub fn session_channel() -> (SessionTx, Receiver<Outbound>, Arc<AtomicUsize>) {
         SessionTx {
             tx,
             depth: depth.clone(),
+            close_socket: None,
         },
         rx,
         depth,
@@ -259,7 +280,7 @@ pub const MOVE_ACTIVITY_FLOOR: u64 = 100;
 pub static MOVE_SUBMITTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The connection's world-phase sub-state. Encodes the in-world invariant in the TYPE: the relay
-/// subscriptions, the combat/loot targets, and the session epoch exist ONLY while in-world, so the
+/// subscriptions and combat/loot targets exist only while in-world, so the
 /// dispatch arms match on the state instead of guarding scattered `Option`s. `CMSG_PLAYER_LOGIN`
 /// moves `CharSelect → InWorld`; logout / socket teardown moves back, dropping `InWorld` and its
 /// shared-view registration via `PlayerSubscriptions`.
@@ -293,8 +314,6 @@ pub struct InWorld {
     /// Shared-view lifetime guard. Its RAII `Drop` unregisters this viewer on logout or socket
     /// teardown, so a relogin cannot inherit the old routing entry.
     pub subs: PlayerSubscriptions,
-    /// In-world session epoch for the two-connection race arbitration (see `SessionEpochs`).
-    pub session_epoch: u64,
     /// The guid being melee auto-attacked (combat C1), so `CMSG_ATTACKSTOP` can name it. The
     /// authoritative engagement lives in `game_melee_attack`; this is protocol state.
     pub attacking_target: Option<u64>,
@@ -313,6 +332,8 @@ pub struct InWorld {
 /// sole writer of the socket (the header cipher is a stateful stream, so exactly one writer may
 /// advance it). NOT game state: the cipher is re-derivable from K on reconnect.
 pub struct WorldConn {
+    /// Retained before world entry so failed routing or admission is also cleaned up.
+    session_claim: Option<WorldSessionToken>,
     pub account_id: u64,
     /// Proof-validated, realm-wide Account name used for cross-database authority reads.
     pub account_name: String,
@@ -433,50 +454,17 @@ impl WorldConn {
         Ok(())
     }
 
-    /// Leave the world: `InWorld → CharSelect`, dropping the viewer registration (stops shared dispatch;
-    /// observers get `DESTROY` via the entity delete) and deleting the entity ONLY if THIS session
-    /// still owns it. A stale socket whose player already re-logged on a newer session declines the
-    /// `release_session` gate, so we don't vanish the live player (the cached PlayerConn shares one
-    /// identity — only the gateway can tell the sockets apart). Returns the `logout` result so
-    /// each call site keeps its own error policy: the socket-teardown path logs + swallows it (it is
-    /// already ending), while the graceful-logout arm propagates it (session-fatal, as before).
-    /// A no-op (`Ok`) when already in `CharSelect`. Call sites that ack the client (graceful logout)
-    /// send their SMSG batch BEFORE calling this.
+    /// Leave the world and release the matching durable Account claim, including failed entry.
     fn leave_world<St: WorldStore + ?Sized>(&mut self, store: &St) -> Result<()> {
-        if let WorldState::InWorld(InWorld {
-            subs,
-            session_epoch,
-            self_guid,
-            ..
-        }) = std::mem::replace(&mut self.state, WorldState::CharSelect)
-        {
-            drop(subs);
-            let account_id = self.account_id;
-            // The `logout` reducer must delete the entity on the shard it LIVES on, so this
-            // runs on the home shard like every other player-scoped call. Session epochs are
-            // gateway-local and shared across shards, so the same-identity arbitration above is unaffected.
-            let outcome = on_home_shard!(self, store, |st| {
-                if st.release_session(account_id, session_epoch) {
-                    st.logout(account_id, self_guid)
-                } else {
-                    log::debug!(
-                        "world: skipping stale logout for account {account_id} \
-                         (superseded by a newer session)"
-                    );
-                    Ok(())
-                }
-            });
-            // RELEASE the home-shard pin: the socket stays open at character select, and
-            // everything served there — char enum/create/delete — is REALM-scoped (`game_account` /
-            // `game_character` live on the default database). A pin left over from the character we
-            // just logged out of would serve the character list off the instance shard, which is
-            // empty: the player would see no characters at all, and a create/delete would write to
-            // the wrong database. Cleared even when `logout` failed — the state transition above
-            // already happened, so the session is at character select either way.
-            self.home = None;
-            outcome?;
-        }
-        Ok(())
+        let previous = std::mem::replace(&mut self.state, WorldState::CharSelect);
+        drop(previous);
+        let outcome = if let Some(token) = self.session_claim.take() {
+            on_home_shard!(self, store, |st| st.release_session(token))
+        } else {
+            Ok(())
+        };
+        self.home = None;
+        outcome
     }
 }
 
@@ -636,6 +624,7 @@ fn world_handshake_with_queue_and_deadline<
 
     Ok(Some((
         WorldConn {
+            session_claim: None,
             account_id,
             account_name: username,
             decrypt,
@@ -789,7 +778,14 @@ impl WriterTrace {
     /// the wire harness's own crash-dump shape so the two files sit next to each other for a
     /// diff. Best-effort: a dump failing must never be why the writer thread panics.
     fn dump(&self, account_id: u64, reason: &str) {
-        let dir = std::path::Path::new("/tmp/gw-writer-crash");
+        self.dump_to(
+            std::path::Path::new("/tmp/gw-writer-crash"),
+            account_id,
+            reason,
+        );
+    }
+
+    fn dump_to(&self, dir: &std::path::Path, account_id: u64, reason: &str) {
         if let Err(e) = std::fs::create_dir_all(dir) {
             log::warn!("writer trace: could not create {}: {e}", dir.display());
             return;
@@ -1017,7 +1013,12 @@ fn run_world_session_with_queue_and_deadline<
     let wsock = stream
         .try_clone()
         .map_err(|e| anyhow!("clone world socket for writer: {e}"))?;
-    let (tx, rx, depth) = session_channel();
+    let (mut tx, rx, depth) = session_channel();
+    tx.bind_socket(
+        stream
+            .try_clone()
+            .map_err(|error| anyhow!("clone World Session shutdown socket: {error}"))?,
+    );
     let writer = spawn_writer(wsock, encrypt, rx, depth, conn.account_id)?;
 
     let result = (|| -> Result<()> {
@@ -1127,12 +1128,12 @@ fn handle_addon_message<St: WorldStore + ?Sized>(store: &St, conn: &WorldConn, t
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
         return;
     };
-    if let Err(e) = store.client_command(
+    if let Err(e) = on_home_shard!(conn, store, |st| st.client_command(
         conn.account_id,
         social::self_guid(conn).unwrap_or(0),
         cmd.clone(),
         payload,
-    ) {
+    )) {
         log::info!(
             "addon bridge: command {cmd:?} from account {} failed: {e:#}",
             conn.account_id

@@ -4,16 +4,18 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwCancelCastArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<GwCancelCastArgs> for super::Reducer {
     fn from(args: GwCancelCastArgs) -> Self {
         Self::GwCancelCast {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -33,8 +35,8 @@ pub trait gw_cancel_cast {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_cancel_cast:gw_cancel_cast_then`] to run a callback after the reducer completes.
-    fn gw_cancel_cast(&self, actor_guid: u64) -> __sdk::Result<()> {
-        self.gw_cancel_cast_then(actor_guid, |_, _| {})
+    fn gw_cancel_cast(&self, request_actor: SessionActor) -> __sdk::Result<()> {
+        self.gw_cancel_cast_then(request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_cancel_cast` to run as soon as possible,
@@ -45,7 +47,7 @@ pub trait gw_cancel_cast {
     ///  and its status can be observed with the `callback`.
     fn gw_cancel_cast_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,13 +58,13 @@ pub trait gw_cancel_cast {
 impl gw_cancel_cast for super::RemoteReducers {
     fn gw_cancel_cast_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(GwCancelCastArgs { actor_guid }, callback)
+            .invoke_reducer_with_callback(GwCancelCastArgs { request_actor }, callback)
     }
 }

@@ -428,9 +428,6 @@ struct InMemoryStore {
     reset_talents_error: Option<String>,
     /// Recorded `send_chat` lines: (chat_type, language, message).
     chats: std::sync::Mutex<Vec<(u8, u8, String)>>,
-    /// When true, `release_session` reports the epoch superseded (stale socket) — the world-side
-    /// half of the session-epoch arbitration: `leave_world` must then SKIP the `logout` reducer.
-    stale_session: bool,
     /// Imported gossip menu options `gossip_options` returns for ANY npc_guid — empty
     /// by default (the pre-import fallback path).
     gossip_opts: Vec<codec::GossipOptionView>,
@@ -1326,15 +1323,6 @@ impl WorldStore for InMemoryStore {
             None => Ok(PlayerSubscriptions::empty()),
         }
     }
-    fn logout(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
-        self.rec("logout");
-        self.logout_called
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        match &self.logout_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
     fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
         if let Some(error) = &self.character_read_error {
             return Err(anyhow!(error.clone()));
@@ -2201,13 +2189,21 @@ impl WorldStore for InMemoryStore {
         self.repopped.lock().unwrap().push(self_guid);
         Ok(())
     }
-    fn claim_session(&self, _account_id: u64) -> u64 {
-        1
+    fn claim_session(&self, account_id: u64, _character_guid: u64) -> Result<WorldSessionToken> {
+        Ok(WorldSessionToken {
+            account_id,
+            generation: 1,
+            request_nonce: 1,
+        })
     }
-    fn release_session(&self, _account_id: u64, _epoch: u64) -> bool {
-        // Default (false) = this session still owns the entity; `stale_session` simulates a newer
-        // login having superseded it (the session-epoch arbitration), so teardown must skip `logout`.
-        !self.stale_session
+    fn release_session(&self, _token: WorldSessionToken) -> Result<()> {
+        self.rec("logout");
+        self.logout_called
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        match &self.logout_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
     }
     fn reclaim_corpse(&self, _account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
         self.reclaimed_corpses
@@ -6689,7 +6685,7 @@ fn item_reducer_transport_loss_ends_the_world_session() {
 #[test]
 fn logout_while_out_of_combat_succeeds_and_clears_open_loot() {
     // combat_until_ms=0 (default, never in combat) → CMSG_LOGOUT_REQUEST must reply
-    // Success/Instant + LOGOUT_COMPLETE and the logout() store reducer must be called.
+    // Success/Instant + LOGOUT_COMPLETE and the Store must release Account ownership.
     let store = std::sync::Arc::new(InMemoryStore {
         login_entity: Some(warrior_entity()),
         corpse_money: 25,
@@ -6730,12 +6726,12 @@ fn logout_while_out_of_combat_succeeds_and_clears_open_loot() {
     drop(client);
     server.join().unwrap();
 
-    // The logout() reducer must have been called (entity removal path was taken).
+    // Releasing Account ownership removes the live Character.
     assert!(
         store
             .logout_called
             .load(std::sync::atomic::Ordering::SeqCst),
-        "logout() must be called on a successful out-of-combat logout"
+        "Account ownership must be released after successful logout"
     );
     assert!(
         store.money_looted.lock().unwrap().is_empty(),
@@ -7848,7 +7844,7 @@ fn attackswing_desync_error_is_session_fatal() {
     drop(client);
 }
 
-// ── Smaller mappings: WHO, buyback slots, trainer buy, talents, gossip select, chat, epochs ─────
+// ── Smaller mappings: WHO, buyback slots, trainer buy, talents, gossip select, chat ─────
 
 #[test]
 fn who_reply_lists_every_online_player_with_level_and_zone() {
@@ -9473,36 +9469,6 @@ fn messagechat_party_other_rejections_are_silently_dropped() {
     server.join().unwrap();
 }
 
-#[test]
-fn stale_epoch_logout_skips_the_logout_reducer() {
-    // The world-side half of the session-epoch arbitration: when release_session says a newer
-    // login superseded this socket, leave_world must NOT call logout (deleting the entity would
-    // vanish the LIVE player).
-    let mut s = quest_store();
-    s.stale_session = true;
-    let store = std::sync::Arc::new(s);
-    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
-    CMSG_LOGOUT_REQUEST {}
-        .write_encrypted_client(&mut client, &mut c_enc)
-        .unwrap();
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_LOGOUT_RESPONSE(_) => {}
-        other => panic!("expected SMSG_LOGOUT_RESPONSE, got {other}"),
-    }
-    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
-        ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE => {}
-        other => panic!("expected SMSG_LOGOUT_COMPLETE, got {other}"),
-    }
-    drop(client);
-    server.join().unwrap();
-    assert!(
-        !store
-            .logout_called
-            .load(std::sync::atomic::Ordering::SeqCst),
-        "a superseded epoch must NOT delete the newer session's entity"
-    );
-}
-
 // The cross-database transfer TESTS live in `transfer_tests.rs`, but the fixture types
 // below stay here: `InMemoryStore`'s own `Store` impl (the `xdb`/`xstep` glue a few hundred lines up)
 // and two world-port-abort regression tests earlier in this file construct `FakeShardDb`/`FakeChar`
@@ -10073,4 +10039,215 @@ fn cancel_cast_dispatches_for_the_caller() {
     drop(client);
     server.join().unwrap();
     assert_eq!(store.cancelled_casts.lock().unwrap().as_slice(), &[1]);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
+    use crate::accept::BlockingTaskCapacity;
+    use crate::config::GatewayConfig;
+    use crate::durable_test_support::Standalone;
+    use crate::stdb::Coordinator;
+
+    fn start(
+        coord: Coordinator,
+        runtime: tokio::runtime::Handle,
+    ) -> (UnixStream, std::sync::mpsc::Receiver<Result<()>>) {
+        let (client, server) = world_session_socket_pair();
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _entered = runtime.enter();
+            let _ = done.send(run_world_session(server, &coord));
+        });
+        (client, result)
+    }
+
+    fn login(client: &mut UnixStream) -> (EncrypterHalf, DecrypterHalf) {
+        let (mut encrypt, mut decrypt) = client_handshake(client, "TEST", [7; 40]);
+        CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+            .write_encrypted_client(&mut *client, &mut encrypt)
+            .unwrap();
+        for _ in 0..100 {
+            if matches!(
+                ServerOpcodeMessage::read_encrypted(&mut *client, &mut decrypt).unwrap(),
+                ServerOpcodeMessage::SMSG_WEATHER(_)
+            ) {
+                return (encrypt, decrypt);
+            }
+        }
+        panic!("World Session did not complete its entry batch");
+    }
+
+    for name in [
+        "LYRACORE_SHARD_MAP",
+        "LYRACORE_SHARD_MAP_FILE",
+        "LYRACORE_REALM_CORE",
+    ] {
+        assert!(
+            std::env::var_os(name).is_none(),
+            "unset {name} for this private fixture"
+        );
+    }
+    let mut fixture = Standalone::start("account-world-sessions");
+    fixture.publish_module();
+    fixture.assert_call("claim_operator", &[]);
+    fixture.assert_call("gw_heartbeat", &[]);
+    let cfg = GatewayConfig {
+        logon_bind: "127.0.0.1:0".into(),
+        world_bind: "127.0.0.1:0".into(),
+        stdb_uri: fixture.server().into(),
+        module_name: fixture.shard_name().into(),
+        coordinator_token: Some(fixture.owner_token()),
+        gateway_id: "world-owner-a".into(),
+        blocking_task_capacity: BlockingTaskCapacity::new(2),
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let a = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
+    let b = runtime
+        .block_on(Coordinator::connect(&GatewayConfig {
+            gateway_id: "world-owner-b".into(),
+            ..cfg
+        }))
+        .unwrap();
+    let (release_pool, hold_pool) = std::sync::mpsc::channel();
+    let (pool_started, pool_ready) = std::sync::mpsc::channel();
+    runtime.spawn_blocking(move || {
+        pool_started.send(()).unwrap();
+        let _ = hold_pool.recv_timeout(Duration::from_secs(40));
+    });
+    pool_ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    let account = a.account_by_username("TEST").unwrap().unwrap().id;
+    a.establish_session(account, &[7; 40], a.bound_identity(account).unwrap())
+        .unwrap();
+    let (mut first, first_done) = start(a, runtime.handle().clone());
+    let _first_cipher = login(&mut first);
+
+    let (mut refused, refused_done) = start(b.clone(), runtime.handle().clone());
+    let (mut encrypt, _) = client_handshake(&mut refused, "TEST", [7; 40]);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut refused, &mut encrypt)
+        .unwrap();
+    let refusal = refused_done
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        refusal.to_string().contains("ACCOUNT_IN_USE"),
+        "{refusal:#}"
+    );
+    assert!(first_done.try_recv().is_err());
+
+    fixture.assert_sql("UPDATE game_account_claim SET expires_micros = 0");
+    let (mut winner, winner_done) = start(b, runtime.handle().clone());
+    let (mut winner_encrypt, mut winner_decrypt) = login(&mut winner);
+    let first_deadline = fixture.query_rows("SELECT expires_micros FROM game_account_claim")[0]
+        ["expires_micros"]
+        .clone();
+    first_done
+        .recv_timeout(Duration::from_secs(25))
+        .expect("lost Account ownership must close the old World Session")
+        .unwrap();
+    assert_eq!(
+        fixture
+            .query_rows("SELECT * FROM game_world_entity WHERE guid = 1")
+            .len(),
+        1
+    );
+    assert!(winner_done.try_recv().is_err());
+    assert!(
+        crate::durable_test_support::poll_until(Duration::from_secs(5), || fixture
+            .query_rows("SELECT expires_micros FROM game_account_claim")[0]["expires_micros"]
+            != first_deadline),
+        "the winning Account Claim must renew while the Tokio blocking pool is full"
+    );
+    CMSG_LOGOUT_REQUEST {}
+        .write_encrypted_client(&mut winner, &mut winner_encrypt)
+        .unwrap();
+    let mut logged_out = false;
+    for _ in 0..100 {
+        if read_raw_frame(&mut winner, &mut winner_decrypt).0
+            == lyracore_shared::opcodes::world::SMSG_LOGOUT_COMPLETE
+        {
+            logged_out = true;
+            break;
+        }
+    }
+    assert!(
+        logged_out,
+        "winning World Session must still process logout"
+    );
+    winner.shutdown(std::net::Shutdown::Write).unwrap();
+    winner_done
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    drop(winner);
+    release_pool.send(()).unwrap();
+    assert!(fixture
+        .query_rows("SELECT * FROM game_world_entity WHERE guid = 1")
+        .is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn closing_a_world_session_interrupts_a_full_socket_without_draining_its_queue() {
+    use std::os::fd::AsRawFd;
+
+    let (_client, mut socket) = world_session_socket_pair();
+    socket.set_nonblocking(true).unwrap();
+    loop {
+        match socket.write(&[0; 65536]) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("fill owned socket: {error}"),
+        }
+    }
+    socket.set_nonblocking(false).unwrap();
+    let (mut tx, queued, _) = session_channel();
+    tx.bind_socket(socket.try_clone().unwrap());
+    tx.send(Outbound::Raw {
+        opcode: 0,
+        body: vec![],
+    })
+    .unwrap();
+    let socket_fd = socket.as_raw_fd();
+    let (started, ready) = std::sync::mpsc::channel();
+    let (finished, result) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let task = std::fs::read_link("/proc/thread-self")
+            .expect("this Linux socket fixture requires /proc/thread-self");
+        started.send(task).unwrap();
+        finished.send(socket.write_all(&[1; 65536])).unwrap();
+    });
+    let task = ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    let syscall_path = std::path::Path::new("/proc").join(task).join("syscall");
+    assert!(
+        crate::durable_test_support::poll_until(Duration::from_secs(2), || {
+            let syscall = std::fs::read_to_string(&syscall_path)
+                .expect("this Linux socket fixture requires visibility of its writer's syscall");
+            let mut fields = syscall.split_whitespace();
+            let number = fields
+                .next()
+                .and_then(|value| value.parse::<libc::c_long>().ok());
+            let fd = fields
+                .next()
+                .and_then(|value| value.strip_prefix("0x"))
+                .and_then(|value| i32::from_str_radix(value, 16).ok());
+            matches!(number, Some(n) if n == libc::SYS_sendto || n == libc::SYS_write)
+                && fd == Some(socket_fd)
+        }),
+        "writer did not enter its blocked socket write"
+    );
+    tx.close();
+    assert!(result
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    assert!(matches!(queued.try_recv().unwrap(), Outbound::Raw { .. }));
+    writer.join().unwrap();
 }

@@ -2096,6 +2096,10 @@ pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
     let Some(entity) = entity_by_owner(ctx, owner) else {
         return;
     };
+    remove_live_character(ctx, entity);
+}
+
+pub(crate) fn remove_live_character(ctx: &ReducerContext, entity: WorldEntity) {
     // Notify-hook: the player is leaving (explicit logout AND abrupt disconnect both land
     // here). Fired FIRST, while the live entity row still exists for handlers to read.
     crate::hooks::fire_on_logout(

@@ -6,9 +6,11 @@ pub use module_wasm::module_bytes;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -53,8 +55,43 @@ pub fn poll_until(timeout: Duration, mut probe: impl FnMut() -> bool) -> bool {
     }
 }
 
+struct SigningKeys {
+    directory: PathBuf,
+    startup: Mutex<()>,
+}
+
+impl Drop for SigningKeys {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn signing_keys() -> Arc<SigningKeys> {
+    static KEYS: Mutex<Weak<SigningKeys>> = Mutex::new(Weak::new());
+    let mut shared = KEYS.lock().unwrap();
+    if let Some(keys) = shared.upgrade() {
+        return keys;
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "lyracore-fixture-keys-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory).expect("failed to create private fixture signing-key directory");
+    let keys = Arc::new(SigningKeys {
+        directory,
+        startup: Mutex::new(()),
+    });
+    *shared = Arc::downgrade(&keys);
+    keys
+}
+
 pub struct Standalone {
     child: Child,
+    signing_keys: Arc<SigningKeys>,
     cli_config: PathBuf,
     address: String,
     data_dir: PathBuf,
@@ -87,9 +124,24 @@ impl Standalone {
         let spacetime = std::env::var_os("SPACETIME_BIN").unwrap_or_else(|| "spacetime".into());
         let address = format!("127.0.0.1:{port}");
         let server = format!("http://{address}");
-        let child = spawn_node(&spacetime, &cli_config, &address, &data_dir, &log_path);
+        // Nodes in one fixture must accept the same Owner Token. Keep their signing keys private
+        // and wait for the first node to finish creating the pair before another node reads it.
+        let signing_keys = signing_keys();
+        let startup = signing_keys
+            .startup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let child = spawn_node(
+            &spacetime,
+            &cli_config,
+            &address,
+            &data_dir,
+            &log_path,
+            &signing_keys.directory,
+        );
         let mut standalone = Self {
             child,
+            signing_keys: Arc::clone(&signing_keys),
             cli_config,
             address,
             data_dir,
@@ -100,6 +152,7 @@ impl Standalone {
             database: name,
         };
         standalone.wait_for_server();
+        drop(startup);
         standalone
     }
 
@@ -153,6 +206,52 @@ impl Standalone {
         command.args(["call", "-s", &self.server, &self.database, reducer]);
         command.args(args);
         command.output().expect("failed to call reducer")
+    }
+
+    /// Capture committed transactions after the subscription's initial result is visible.
+    #[allow(dead_code)]
+    pub fn capture_updates(
+        &self,
+        query: &str,
+        count: u32,
+        action: impl FnOnce(),
+    ) -> Vec<serde_json::Value> {
+        struct Subscription(Child);
+        impl Drop for Subscription {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = Subscription(
+            self.command()
+                .args([
+                    "subscribe",
+                    "-s",
+                    &self.server,
+                    "--print-initial-update",
+                    "--num-updates",
+                    &count.to_string(),
+                    "--timeout",
+                    "45",
+                    &self.database,
+                    query,
+                ])
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("failed to subscribe to fixture"),
+        );
+        let mut reader = BufReader::new(child.0.stdout.take().unwrap());
+        let mut initial = String::new();
+        assert!(reader.read_line(&mut initial).unwrap() > 0);
+        serde_json::from_str::<serde_json::Value>(&initial).expect("initial subscription result");
+        action();
+        let updates = reader
+            .lines()
+            .map(|line| serde_json::from_str(&line.unwrap()).expect("transaction update"))
+            .collect();
+        assert!(child.0.wait().unwrap().success(), "subscription failed");
+        updates
     }
 
     #[allow(dead_code)] // Only the integration tests that call reducers use this.
@@ -258,6 +357,7 @@ impl Standalone {
             &self.address,
             &self.data_dir,
             &self.log_path,
+            &self.signing_keys.directory,
         );
         self.wait_for_server();
     }
@@ -363,6 +463,7 @@ fn spawn_node(
     address: &str,
     data_dir: &Path,
     log_path: &Path,
+    signing_key_dir: &Path,
 ) -> Child {
     let log = OpenOptions::new()
         .create(true)
@@ -378,6 +479,8 @@ fn spawn_node(
             address,
             "--data-dir",
             data_dir.to_str().unwrap(),
+            "--jwt-key-dir",
+            signing_key_dir.to_str().unwrap(),
             "--in-memory",
             "--non-interactive",
         ])
@@ -434,6 +537,13 @@ fn unquote(value: &str) -> String {
         .and_then(|rest| rest.strip_suffix('"'))
         .unwrap_or(value)
         .to_string()
+}
+
+/// An Operator request for a fixture Character without a World Session.
+#[allow(dead_code)]
+pub fn actor(guid: &str) -> String {
+    let guid: u64 = guid.parse().expect("fixture Character guid");
+    format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
 
 #[cfg(test)]

@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwGossipSelectArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub npc_guid: u64,
     pub option_id: u32,
     pub option_row_id: u32,
@@ -16,7 +18,7 @@ pub(super) struct GwGossipSelectArgs {
 impl From<GwGossipSelectArgs> for super::Reducer {
     fn from(args: GwGossipSelectArgs) -> Self {
         Self::GwGossipSelect {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             npc_guid: args.npc_guid,
             option_id: args.option_id,
             option_row_id: args.option_row_id,
@@ -41,12 +43,12 @@ pub trait gw_gossip_select {
     /// /// Use [`gw_gossip_select:gw_gossip_select_then`] to run a callback after the reducer completes.
     fn gw_gossip_select(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
     ) -> __sdk::Result<()> {
-        self.gw_gossip_select_then(actor_guid, npc_guid, option_id, option_row_id, |_, _| {})
+        self.gw_gossip_select_then(request_actor, npc_guid, option_id, option_row_id, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_gossip_select` to run as soon as possible,
@@ -57,7 +59,7 @@ pub trait gw_gossip_select {
     ///  and its status can be observed with the `callback`.
     fn gw_gossip_select_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
@@ -71,7 +73,7 @@ pub trait gw_gossip_select {
 impl gw_gossip_select for super::RemoteReducers {
     fn gw_gossip_select_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         npc_guid: u64,
         option_id: u32,
         option_row_id: u32,
@@ -82,7 +84,7 @@ impl gw_gossip_select for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwGossipSelectArgs {
-                actor_guid,
+                request_actor,
                 npc_guid,
                 option_id,
                 option_row_id,

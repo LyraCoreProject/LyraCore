@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmWhisperArgs {
-    pub sender_guid: u64,
+    pub request_actor: SessionActor,
     pub target_guid: u64,
     pub message: String,
     pub sender_is_ignored: bool,
@@ -16,7 +18,7 @@ pub(super) struct RealmWhisperArgs {
 impl From<RealmWhisperArgs> for super::Reducer {
     fn from(args: RealmWhisperArgs) -> Self {
         Self::RealmWhisper {
-            sender_guid: args.sender_guid,
+            request_actor: args.request_actor,
             target_guid: args.target_guid,
             message: args.message,
             sender_is_ignored: args.sender_is_ignored,
@@ -41,13 +43,13 @@ pub trait realm_whisper {
     /// /// Use [`realm_whisper:realm_whisper_then`] to run a callback after the reducer completes.
     fn realm_whisper(
         &self,
-        sender_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         message: String,
         sender_is_ignored: bool,
     ) -> __sdk::Result<()> {
         self.realm_whisper_then(
-            sender_guid,
+            request_actor,
             target_guid,
             message,
             sender_is_ignored,
@@ -63,7 +65,7 @@ pub trait realm_whisper {
     ///  and its status can be observed with the `callback`.
     fn realm_whisper_then(
         &self,
-        sender_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         message: String,
         sender_is_ignored: bool,
@@ -77,7 +79,7 @@ pub trait realm_whisper {
 impl realm_whisper for super::RemoteReducers {
     fn realm_whisper_then(
         &self,
-        sender_guid: u64,
+        request_actor: SessionActor,
         target_guid: u64,
         message: String,
         sender_is_ignored: bool,
@@ -88,7 +90,7 @@ impl realm_whisper for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             RealmWhisperArgs {
-                sender_guid,
+                request_actor,
                 target_guid,
                 message,
                 sender_is_ignored,

@@ -4,11 +4,13 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct RealmAuctionRefundListingArgs {
     pub operation_id: u64,
-    pub seller_guid: u64,
+    pub request_actor: SessionActor,
     pub item_guid: u64,
     pub item_entry: u32,
     pub item_stack_count: u32,
@@ -31,7 +33,7 @@ impl From<RealmAuctionRefundListingArgs> for super::Reducer {
     fn from(args: RealmAuctionRefundListingArgs) -> Self {
         Self::RealmAuctionRefundListing {
             operation_id: args.operation_id,
-            seller_guid: args.seller_guid,
+            request_actor: args.request_actor,
             item_guid: args.item_guid,
             item_entry: args.item_entry,
             item_stack_count: args.item_stack_count,
@@ -70,7 +72,7 @@ pub trait realm_auction_refund_listing {
     fn realm_auction_refund_listing(
         &self,
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
         item_guid: u64,
         item_entry: u32,
         item_stack_count: u32,
@@ -90,7 +92,7 @@ pub trait realm_auction_refund_listing {
     ) -> __sdk::Result<()> {
         self.realm_auction_refund_listing_then(
             operation_id,
-            seller_guid,
+            request_actor,
             item_guid,
             item_entry,
             item_stack_count,
@@ -120,7 +122,7 @@ pub trait realm_auction_refund_listing {
     fn realm_auction_refund_listing_then(
         &self,
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
         item_guid: u64,
         item_entry: u32,
         item_stack_count: u32,
@@ -148,7 +150,7 @@ impl realm_auction_refund_listing for super::RemoteReducers {
     fn realm_auction_refund_listing_then(
         &self,
         operation_id: u64,
-        seller_guid: u64,
+        request_actor: SessionActor,
         item_guid: u64,
         item_entry: u32,
         item_stack_count: u32,
@@ -173,7 +175,7 @@ impl realm_auction_refund_listing for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             RealmAuctionRefundListingArgs {
                 operation_id,
-                seller_guid,
+                request_actor,
                 item_guid,
                 item_entry,
                 item_stack_count,

@@ -4,17 +4,19 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSetTradeGoldArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub copper: u32,
 }
 
 impl From<GwSetTradeGoldArgs> for super::Reducer {
     fn from(args: GwSetTradeGoldArgs) -> Self {
         Self::GwSetTradeGold {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             copper: args.copper,
         }
     }
@@ -35,8 +37,8 @@ pub trait gw_set_trade_gold {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_set_trade_gold:gw_set_trade_gold_then`] to run a callback after the reducer completes.
-    fn gw_set_trade_gold(&self, actor_guid: u64, copper: u32) -> __sdk::Result<()> {
-        self.gw_set_trade_gold_then(actor_guid, copper, |_, _| {})
+    fn gw_set_trade_gold(&self, request_actor: SessionActor, copper: u32) -> __sdk::Result<()> {
+        self.gw_set_trade_gold_then(request_actor, copper, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_set_trade_gold` to run as soon as possible,
@@ -47,7 +49,7 @@ pub trait gw_set_trade_gold {
     ///  and its status can be observed with the `callback`.
     fn gw_set_trade_gold_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         copper: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -59,14 +61,19 @@ pub trait gw_set_trade_gold {
 impl gw_set_trade_gold for super::RemoteReducers {
     fn gw_set_trade_gold_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         copper: u32,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
-        self.imp
-            .invoke_reducer_with_callback(GwSetTradeGoldArgs { actor_guid, copper }, callback)
+        self.imp.invoke_reducer_with_callback(
+            GwSetTradeGoldArgs {
+                request_actor,
+                copper,
+            },
+            callback,
+        )
     }
 }

@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwTurnInQuestArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub giver_guid: u64,
     pub quest_entry: u32,
     pub reward_index: u32,
@@ -16,7 +18,7 @@ pub(super) struct GwTurnInQuestArgs {
 impl From<GwTurnInQuestArgs> for super::Reducer {
     fn from(args: GwTurnInQuestArgs) -> Self {
         Self::GwTurnInQuest {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             giver_guid: args.giver_guid,
             quest_entry: args.quest_entry,
             reward_index: args.reward_index,
@@ -41,12 +43,18 @@ pub trait gw_turn_in_quest {
     /// /// Use [`gw_turn_in_quest:gw_turn_in_quest_then`] to run a callback after the reducer completes.
     fn gw_turn_in_quest(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         giver_guid: u64,
         quest_entry: u32,
         reward_index: u32,
     ) -> __sdk::Result<()> {
-        self.gw_turn_in_quest_then(actor_guid, giver_guid, quest_entry, reward_index, |_, _| {})
+        self.gw_turn_in_quest_then(
+            request_actor,
+            giver_guid,
+            quest_entry,
+            reward_index,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `gw_turn_in_quest` to run as soon as possible,
@@ -57,7 +65,7 @@ pub trait gw_turn_in_quest {
     ///  and its status can be observed with the `callback`.
     fn gw_turn_in_quest_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         giver_guid: u64,
         quest_entry: u32,
         reward_index: u32,
@@ -71,7 +79,7 @@ pub trait gw_turn_in_quest {
 impl gw_turn_in_quest for super::RemoteReducers {
     fn gw_turn_in_quest_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         giver_guid: u64,
         quest_entry: u32,
         reward_index: u32,
@@ -82,7 +90,7 @@ impl gw_turn_in_quest for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwTurnInQuestArgs {
-                actor_guid,
+                request_actor,
                 giver_guid,
                 quest_entry,
                 reward_index,

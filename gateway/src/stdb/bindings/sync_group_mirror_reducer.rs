@@ -4,6 +4,8 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct SyncGroupMirrorArgs {
@@ -13,6 +15,7 @@ pub(super) struct SyncGroupMirrorArgs {
     pub loot_threshold: u8,
     pub master_looter_guid: u64,
     pub members: Vec<u64>,
+    pub request_actor: SessionActor,
 }
 
 impl From<SyncGroupMirrorArgs> for super::Reducer {
@@ -24,6 +27,7 @@ impl From<SyncGroupMirrorArgs> for super::Reducer {
             loot_threshold: args.loot_threshold,
             master_looter_guid: args.master_looter_guid,
             members: args.members,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -51,6 +55,7 @@ pub trait sync_group_mirror {
         loot_threshold: u8,
         master_looter_guid: u64,
         members: Vec<u64>,
+        request_actor: SessionActor,
     ) -> __sdk::Result<()> {
         self.sync_group_mirror_then(
             group_id,
@@ -59,6 +64,7 @@ pub trait sync_group_mirror {
             loot_threshold,
             master_looter_guid,
             members,
+            request_actor,
             |_, _| {},
         )
     }
@@ -77,6 +83,7 @@ pub trait sync_group_mirror {
         loot_threshold: u8,
         master_looter_guid: u64,
         members: Vec<u64>,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -93,6 +100,7 @@ impl sync_group_mirror for super::RemoteReducers {
         loot_threshold: u8,
         master_looter_guid: u64,
         members: Vec<u64>,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -106,6 +114,7 @@ impl sync_group_mirror for super::RemoteReducers {
                 loot_threshold,
                 master_looter_guid,
                 members,
+                request_actor,
             },
             callback,
         )

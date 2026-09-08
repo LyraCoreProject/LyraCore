@@ -4,16 +4,18 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwSpiritResArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<GwSpiritResArgs> for super::Reducer {
     fn from(args: GwSpiritResArgs) -> Self {
         Self::GwSpiritRes {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -33,8 +35,8 @@ pub trait gw_spirit_res {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_spirit_res:gw_spirit_res_then`] to run a callback after the reducer completes.
-    fn gw_spirit_res(&self, actor_guid: u64) -> __sdk::Result<()> {
-        self.gw_spirit_res_then(actor_guid, |_, _| {})
+    fn gw_spirit_res(&self, request_actor: SessionActor) -> __sdk::Result<()> {
+        self.gw_spirit_res_then(request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_spirit_res` to run as soon as possible,
@@ -45,7 +47,7 @@ pub trait gw_spirit_res {
     ///  and its status can be observed with the `callback`.
     fn gw_spirit_res_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -56,13 +58,13 @@ pub trait gw_spirit_res {
 impl gw_spirit_res for super::RemoteReducers {
     fn gw_spirit_res_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp
-            .invoke_reducer_with_callback(GwSpiritResArgs { actor_guid }, callback)
+            .invoke_reducer_with_callback(GwSpiritResArgs { request_actor }, callback)
     }
 }

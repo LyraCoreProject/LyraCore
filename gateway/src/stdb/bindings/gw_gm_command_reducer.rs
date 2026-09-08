@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwGmCommandArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub alpha_test_tools: bool,
     pub text: String,
 }
@@ -15,7 +17,7 @@ pub(super) struct GwGmCommandArgs {
 impl From<GwGmCommandArgs> for super::Reducer {
     fn from(args: GwGmCommandArgs) -> Self {
         Self::GwGmCommand {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             alpha_test_tools: args.alpha_test_tools,
             text: args.text,
         }
@@ -39,11 +41,11 @@ pub trait gw_gm_command {
     /// /// Use [`gw_gm_command:gw_gm_command_then`] to run a callback after the reducer completes.
     fn gw_gm_command(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         alpha_test_tools: bool,
         text: String,
     ) -> __sdk::Result<()> {
-        self.gw_gm_command_then(actor_guid, alpha_test_tools, text, |_, _| {})
+        self.gw_gm_command_then(request_actor, alpha_test_tools, text, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_gm_command` to run as soon as possible,
@@ -54,7 +56,7 @@ pub trait gw_gm_command {
     ///  and its status can be observed with the `callback`.
     fn gw_gm_command_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         alpha_test_tools: bool,
         text: String,
 
@@ -67,7 +69,7 @@ pub trait gw_gm_command {
 impl gw_gm_command for super::RemoteReducers {
     fn gw_gm_command_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         alpha_test_tools: bool,
         text: String,
 
@@ -77,7 +79,7 @@ impl gw_gm_command for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwGmCommandArgs {
-                actor_guid,
+                request_actor,
                 alpha_test_tools,
                 text,
             },

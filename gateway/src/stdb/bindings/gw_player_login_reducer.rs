@@ -4,18 +4,20 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwPlayerLoginArgs {
     pub account_id: u64,
-    pub character_guid: u64,
+    pub request_actor: SessionActor,
 }
 
 impl From<GwPlayerLoginArgs> for super::Reducer {
     fn from(args: GwPlayerLoginArgs) -> Self {
         Self::GwPlayerLogin {
             account_id: args.account_id,
-            character_guid: args.character_guid,
+            request_actor: args.request_actor,
         }
     }
 }
@@ -35,8 +37,8 @@ pub trait gw_player_login {
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
     /// /// Use [`gw_player_login:gw_player_login_then`] to run a callback after the reducer completes.
-    fn gw_player_login(&self, account_id: u64, character_guid: u64) -> __sdk::Result<()> {
-        self.gw_player_login_then(account_id, character_guid, |_, _| {})
+    fn gw_player_login(&self, account_id: u64, request_actor: SessionActor) -> __sdk::Result<()> {
+        self.gw_player_login_then(account_id, request_actor, |_, _| {})
     }
 
     /// Request that the remote module invoke the reducer `gw_player_login` to run as soon as possible,
@@ -48,7 +50,7 @@ pub trait gw_player_login {
     fn gw_player_login_then(
         &self,
         account_id: u64,
-        character_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -60,7 +62,7 @@ impl gw_player_login for super::RemoteReducers {
     fn gw_player_login_then(
         &self,
         account_id: u64,
-        character_guid: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -69,7 +71,7 @@ impl gw_player_login for super::RemoteReducers {
         self.imp.invoke_reducer_with_callback(
             GwPlayerLoginArgs {
                 account_id,
-                character_guid,
+                request_actor,
             },
             callback,
         )

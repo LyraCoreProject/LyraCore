@@ -12,6 +12,13 @@ use super::handlers::{
 };
 use super::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorldSessionToken {
+    pub account_id: u64,
+    pub generation: u64,
+    pub request_nonce: u128,
+}
+
 pub trait WorldStore:
     AuctionActionStore
     + CastStore
@@ -419,10 +426,6 @@ pub trait WorldStore:
         arrival: &codec::EntityView,
         tx: SessionTx,
     ) -> Result<PlayerSubscriptions>;
-
-    /// Remove the player from the world (Phase 7): calls the `logout` reducer so the live
-    /// `game_world_entity` row is deleted and observers see the peer vanish. Called on disconnect.
-    fn logout(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
     /// Look up a character by guid (any owner) to answer `CMSG_NAME_QUERY` — the queried guid is
     /// usually a peer, so this is not account-scoped.
@@ -952,13 +955,19 @@ pub trait WorldStore:
     /// once the restored health replicates).
     fn repop(&self, account_id: u64, self_guid: u64) -> Result<()>;
 
-    /// Claim a fresh in-world session epoch (at player_login) so a stale socket's late logout can't
-    /// delete a newer session's entity. The caller presents the returned epoch at teardown.
-    fn claim_session(&self, account_id: u64) -> u64;
+    /// Acquire Realm-core ownership and fence every configured World Shard before returning.
+    fn claim_session(&self, account_id: u64, character_guid: u64) -> Result<WorldSessionToken>;
 
-    /// Release a session epoch at teardown; returns true iff it was still current — i.e. the caller
-    /// still owns the entity and may delete it. False means a newer login superseded this session.
-    fn release_session(&self, account_id: u64, epoch: u64) -> bool;
+    /// Bind subsequent requests to this World Session. A Fake can retain its existing handle.
+    fn bind_session(
+        &self,
+        _token: WorldSessionToken,
+    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        Ok(None)
+    }
+
+    /// Close the matching Shard fences before releasing the Realm-core claim. Stale cleanup is inert.
+    fn release_session(&self, token: WorldSessionToken) -> Result<()>;
 
     /// Reclaim the caller's corpse (`CMSG_RECLAIM_CORPSE`, slice 5): the module validates the caller
     /// is a ghost owning the corpse, in range, past the reclaim delay, then resurrects at 50%.

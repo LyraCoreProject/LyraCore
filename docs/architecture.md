@@ -124,6 +124,28 @@ Request to the Character's Home Shard. The Module combines that value with the C
 and applies the final Gate. World-shard Account rows are not authority, and the Gateway keeps no
 Character authority projection.
 
+Account ownership is durable. `stdb/account_sessions.rs` obtains an Account Claim from Realm-core,
+installs its Account Fence on every configured World Shard, and binds the resulting World Session
+Token to the Store. Claims last 60 seconds and renew every 15 seconds. A live claim refuses a second
+login. Renewal failure closes the old socket; the Module already refuses expired or superseded
+requests, including queued movement, mail, auctions, party operations and Transfer completions.
+Release closes matching Shard fences and removes their Character before closing the Realm-core
+claim. Delayed cleanup cannot close a newer generation. Bound identity remains deterministic.
+
+The Module applies two authority checks. `require_operator(ctx)` authorizes the calling Operator
+through `ctx.sender`. `require_actor(ctx, request_actor)` checks the Character and captured World
+Session Token against the Account Claim or Account Fence. An Operator identity is distinct from a
+Character identity.
+
+Account admission requires every configured World Shard and Instance Pool to be available. The
+Character-to-Shard index is a hint; fencing only its current answer would leave an in-flight Transfer
+able to create a second live copy elsewhere. A partial admission starts no renewal. After its claim
+expires, another generation can finish fencing all Shards. Completed fences retain their generation
+so delayed delivery cannot reopen them. The Module's existing Gateway lease schedule closes up to
+64 expired Account Fences and removes their Characters per 15-second pass. A backlog takes additional
+passes; expired tokens are refused even while their entities await cleanup. Gateway routing
+preserves the bound token across Transfer.
+
 ---
 
 ## 3. The realm is several databases
@@ -184,6 +206,10 @@ gateway's environment. Omit one and you get a **working-looking single-database 
 | `LYRACORE_WRITER_TRACE` | per-session writer black-box ring | off | — |
 | `LYRACORE_TRANSFER_ABORT_AFTER` | crash-injection harness (aborts a named transfer step) | unset | an unknown step name logs an error and nothing fires |
 | `LYRACORE_PROFILE_SECS` | `--features dhat-heap` builds only | `120` | — |
+
+Budget three client socket descriptors per World Session: reader, writer and ownership-loss
+shutdown handle. Add the database sockets for its subscribed Shards and reserve headroom for
+listeners, handshakes and Coordinator connections when setting `LYRACORE_MAX_SESSIONS`.
 
 Two non-`LYRACORE_` variables matter: `RUST_LOG` (consumed by `env_logger` in `gateway/src/main.rs`)
 and `MALLOC_ARENA_MAX` (glibc, not the binary — worth ~4× RSS per connection).

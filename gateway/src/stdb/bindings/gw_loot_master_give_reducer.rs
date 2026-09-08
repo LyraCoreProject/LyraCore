@@ -4,10 +4,12 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
 pub(super) struct GwLootMasterGiveArgs {
-    pub actor_guid: u64,
+    pub request_actor: SessionActor,
     pub corpse_guid: u64,
     pub loot_slot: u8,
     pub target_guid: u64,
@@ -16,7 +18,7 @@ pub(super) struct GwLootMasterGiveArgs {
 impl From<GwLootMasterGiveArgs> for super::Reducer {
     fn from(args: GwLootMasterGiveArgs) -> Self {
         Self::GwLootMasterGive {
-            actor_guid: args.actor_guid,
+            request_actor: args.request_actor,
             corpse_guid: args.corpse_guid,
             loot_slot: args.loot_slot,
             target_guid: args.target_guid,
@@ -41,12 +43,18 @@ pub trait gw_loot_master_give {
     /// /// Use [`gw_loot_master_give:gw_loot_master_give_then`] to run a callback after the reducer completes.
     fn gw_loot_master_give(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
     ) -> __sdk::Result<()> {
-        self.gw_loot_master_give_then(actor_guid, corpse_guid, loot_slot, target_guid, |_, _| {})
+        self.gw_loot_master_give_then(
+            request_actor,
+            corpse_guid,
+            loot_slot,
+            target_guid,
+            |_, _| {},
+        )
     }
 
     /// Request that the remote module invoke the reducer `gw_loot_master_give` to run as soon as possible,
@@ -57,7 +65,7 @@ pub trait gw_loot_master_give {
     ///  and its status can be observed with the `callback`.
     fn gw_loot_master_give_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
@@ -71,7 +79,7 @@ pub trait gw_loot_master_give {
 impl gw_loot_master_give for super::RemoteReducers {
     fn gw_loot_master_give_then(
         &self,
-        actor_guid: u64,
+        request_actor: SessionActor,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
@@ -82,7 +90,7 @@ impl gw_loot_master_give for super::RemoteReducers {
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
             GwLootMasterGiveArgs {
-                actor_guid,
+                request_actor,
                 corpse_guid,
                 loot_slot,
                 target_guid,

@@ -79,6 +79,13 @@ jobs:
       - name: Run the single-shard auction Refusal regression
         run: cargo test -p lyracore-gateway --bin lyracore-gateway stdb::reducers::auction_reducer_tests::a_local_bid_interaction_refusal_stays_a_client_outcome -- --ignored --exact
 
+      - name: Run the Gateway ownership and durable projection regressions
+        run: |
+          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::account_sessions::tests::independent_coordinators_preserve_the_winner_after_delayed_cleanup -- --ignored --exact
+          cargo test -p lyracore-gateway --bin lyracore-gateway world::tests::competing_world_sessions_close_the_old_socket_without_removing_the_winner -- --ignored --exact
+          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::character_gone_durable_tests::another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character -- --ignored --exact
+          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::armor::tests::resistance_projection_adds_property_effects_only_while_the_item_is_worn_and_unbroken -- --ignored --exact
+
       - name: Upload the standalone logs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

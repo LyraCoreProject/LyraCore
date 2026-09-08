@@ -257,7 +257,6 @@ mod tests {
         WorldState::InWorld(InWorld {
             self_guid: 42,
             subs: PlayerSubscriptions::empty(),
-            session_epoch: 1,
             attacking_target,
             open_loot: OpenLootState::default(),
             ranged_repeat,
