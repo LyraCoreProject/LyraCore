@@ -456,7 +456,7 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     node.assert_call("playerbots_fixture_companion_health", &[leader, "40"]);
     node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "30"]);
-    select(&node, priest, "cohort");
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
     let mut movement_legs = 0;
     let mut observed_splines = Vec::new();
     let mut previous_endpoint: Option<(f32, f32)> = None;
