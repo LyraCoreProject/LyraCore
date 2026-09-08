@@ -12,9 +12,27 @@ const GAMEOBJECT_55: &str = "17370383762768003127";
 const GAMEOBJECT_56: &str = "17370383762768003128";
 const GAMEOBJECT_161557: &str = "17370383762768164629";
 
+fn remove_builtin_weather_import_stamp(node: &Standalone) {
+    let imports =
+        node.query_rows("SELECT family, source_sha, file_hash, row_count FROM game_import_meta");
+    assert_eq!(imports.len(), 1, "unexpected init Import Catalogue");
+    assert_eq!(imports[0]["family"], "weather_seed");
+    assert_eq!(imports[0]["source_sha"], "");
+    assert_eq!(imports[0]["file_hash"], "");
+    assert_eq!(imports[0]["row_count"], "2");
+
+    // This disposable Standalone removes only its verified synthetic init stamp. Any later import
+    // remains visible to the Package Gate and must make the quest fixture refuse.
+    node.assert_sql(
+        "DELETE FROM game_import_meta WHERE family = 'weather_seed' AND source_sha = '' AND file_hash = '' AND row_count = 2",
+    );
+    assert!(node.query_rows("SELECT * FROM game_import_meta").is_empty());
+}
+
 fn unstaged_fixture(name: &str) -> (Standalone, Vec<BTreeMap<String, String>>) {
     let mut node = Standalone::start(name);
     node.publish_module();
+    remove_builtin_weather_import_stamp(&node);
     node.assert_call("claim_operator", &[]);
     node.assert_call("install_guid_range", &["1000000"]);
     for (class, role) in [("1", "0"), ("5", "1"), ("8", "2")] {
@@ -25,6 +43,12 @@ fn unstaged_fixture(name: &str) -> (Standalone, Vec<BTreeMap<String, String>>) {
     }
     let mut bots = node.query_rows("SELECT character_guid, class FROM pkg_playerbots_bot");
     bots.sort_by_key(|bot| bot["class"].parse::<u8>().unwrap());
+    for bot in &bots {
+        node.assert_call(
+            "playerbots_select_controller",
+            &[&bot["character_guid"], "{\"frozen\":[]}"],
+        );
+    }
     (node, bots)
 }
 
