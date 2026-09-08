@@ -470,7 +470,7 @@
         "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot.",
         "Shared design keeps one durable objective and one foreground action. A moving leader refreshes the companion destination without replacing the retained heal identity. Each parallel branch must prove behavior against merged prerequisites.",
         "The companion recovery fixture must cover critical health at a reached leader destination. A permanent survival Hold cannot block both useful self-recovery and necessary bounded provisioning.",
-        "The latest companion diagnostic passed five of six cases, including the real ally heal, moving leader, recovery, and populated upgrade. Independent Spec review then found three gaps: heal targets could change between prerequisite movement legs, channel rotations could hide a supported heal, and seed repair accepted an altered effect set. Corrections and new behavior cases are in progress; independent Standards review is pending."
+        "The latest companion diagnostic passed five of six cases, including the real ally heal, moving leader, recovery, and populated upgrade. Independent Spec review then found three gaps: heal targets could change between prerequisite movement legs, channel rotations could hide a supported heal, and seed repair accepted an altered effect set. Standards review also requires an explicit wait for missing group metadata and independent cast Gate tests. These corrections and new behavior cases are in progress; final acceptance remains pending."
       ],
       "acceptance_evidence": []
     },
@@ -542,7 +542,7 @@
         "Agreed integration performs at most one provisioning operation per eligible Cohort tick, with no foreground action. Spawn and level-up arm reconciliation; they do not grant resources outside current control and Account ownership checks.",
         "The real runner hook distinguishes an applied profile operation from a recorded refusal or deferral. Only applied work consumes the tick. Satisfied checks and recorded failures allow the chosen gameplay action to continue; backoff bounds retries.",
         "Useful survival, recovery, and defense outrank routine upkeep. New core operations return typed causes. An older String refusal may remain opaque detail but must not be classified by parsing its text.",
-        "The first runtime diagnostic passed the talent Gate case. Source corrections now distinguish recovery grants from item use, preserve truthful equipment refusal causes, and stop explicitly when bounded profile reads overflow. The corrected implementation is committed and its clean runtime suite is in progress. Final acceptance and review remain pending."
+        "The first runtime diagnostic passed the talent Gate case. Source corrections now distinguish recovery grants from item use, preserve truthful equipment refusal causes, and stop explicitly when bounded profile reads overflow. The corrected implementation is committed and awaits a complete clean runtime pass. Final acceptance and review remain pending."
       ],
       "acceptance_evidence": []
     },
@@ -799,6 +799,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 17:27 UTC",
+  "updated_at": "2026-09-08 18:53 UTC",
   "summary": "PB-001 and PB-002 are complete and integrated. PB-003, PB-005, and PB-006 are implementing Priest companions, automatic provisioning, and supported-quest admission in parallel. The orchestrator owns shared-contract integration, review, PR merges, and the published record."
 }
