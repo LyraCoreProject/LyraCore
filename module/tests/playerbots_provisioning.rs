@@ -189,10 +189,10 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
     node.assert_sql(&format!(
         "DELETE FROM game_item_instance WHERE owner_guid = {guid} AND slot = 15"
     ));
-    let existing_food = one(&node, "SELECT * FROM game_item_template WHERE entry = 117");
+    let existing_food = one(&node, "SELECT * FROM game_item_template WHERE entry = 52");
     node.assert_call("playerbots_fixture_provision_catalog", &[]);
     assert_eq!(
-        one(&node, "SELECT * FROM game_item_template WHERE entry = 117"),
+        one(&node, "SELECT * FROM game_item_template WHERE entry = 52"),
         existing_food,
         "fixture catalogue must preserve an existing low-ID template"
     );
