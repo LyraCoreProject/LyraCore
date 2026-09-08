@@ -1,14 +1,13 @@
 {
-  "updated_at": "2026-09-08 06:52 UTC",
-  "base_revision": "e41d5f846e55c5b08f67d6477725ebdd8b6158f5",
-  "status_note": "All 67 open issues have current assessments. Report PR #475 and loot retry PR #474 merged. Item GUID PR #473 and door collision PR #477 have tested, independently reviewed corrections and are finishing CI on current main. Spell event PR #476 passed all CI. The two additive schema PRs need human review before shipping.",
+  "updated_at": "2026-09-08 07:11 UTC",
+  "base_revision": "408f417cb4b909065bc6c253eba9477c2e402d15",
+  "status_note": "All 66 open issues have current assessments. Item GUID PR #473 and loot retry PR #474 merged after CI and review. Issue #71 is closed as source and design complete. Spell event PR #476 and door collision PR #477 passed the combined proof; human schema review is requested and final rebased-head CI is running.",
   "monitoring_note": "Codex owns this report and the dispatch order. Monitoring is active during this work session. Each implementer follows checks and actual CodeRabbit or human review through fixes; Codex handles final review and merge. No unattended scheduler is installed. The report and its repository source preserve the next actions between sessions.",
   "focus": [
-    "Prevent item GUID collisions in #71. GPT-6 Astra, high effort, owns allocation, ownership changes and Transfer proofs.",
-    "Add explicit Spell event kinds in #72. GPT-5.6 Sol, high effort, owns constructors, legacy decoding and binding checks.",
-    "Implement dynamic door collision #113 and instance isolation #114 in one sequence. GPT-6 Astra, high effort, owns geometry, lifecycle and integration.",
-    "Prove safe retry behavior for #84. The coordinating agent owns the Gateway fix and its recovery limits.",
-    "Keep client acceptance and named-host operations visible after source fixes merge."
+    "Complete human schema review for Spell event PR #476 and door collision PR #477 after final integration checks. Their implementers own CI and review responses.",
+    "Keep the merged item GUID rollout subject to its authorized legacy-state and range audit. Source issue #71 is complete.",
+    "Review the durable Loot Roll settlement design for the next #84 Ticket. GPT-5.6 Sol, high effort, owns the source study; GPT-6 Astra, high effort, challenges replay, acknowledgment and cleanup.",
+    "Keep original loot, imported-door and client acceptance open where the requested evidence is still missing."
   ],
   "issues": [
     {
@@ -698,7 +697,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "This issue depends only on source work in #113 and should ship in the same source DAG. An instance-0-only registry would create a temporary production interface that the next change immediately replaces. Current callers already hold entity instance identity. Imported Deadmines calibration remains a separate Operator gate after the source and synthetic tests merge.",
-      "next_action": "Complete CI at af7dd92 and rebase after #473 integrates. Obtain human review of the new private table before shipping. Imported geometry, matching Package model artifacts and canonical performance remain acceptance work.",
+      "next_action": "Obtain the requested human schema review and finish final CI before merge. The rebase onto 408f417 preserves the reviewed patch. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
       "blockers": [
         "Human review is required before the additive schema ships.",
         "Final Deadmines acceptance needs approved client data and a named development Shard."
@@ -727,7 +726,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "PR #254 supplied game_go_model. The remaining collider table, lifecycle, transform, state Gate, broad-phase reject, and ray merge are specified and testable with synthetic data. Dynamic collider eligibility can depend on the global Gate and registry data while static geometry keeps its active-generation rule, so map 36 needs no invented static generation or new product decision. Implementing #114 in the same DAG avoids an instance-0-only production path.",
-      "next_action": "Complete CI at af7dd92 and rebase after #473 integrates. Obtain human review of the new private table before shipping. Imported geometry, matching Package model artifacts and canonical performance remain acceptance work.",
+      "next_action": "Obtain the requested human schema review and finish final CI before merge. The rebase onto 408f417 preserves the reviewed patch. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
       "blockers": [
         "Human review is required before the additive schema ships; imported-door calibration stays open."
       ],
@@ -978,8 +977,9 @@
       "confidence": "medium",
       "disposition": "decision",
       "rationale": "PR #474 merged the proved completion-marker fix. The remaining work must carry immutable source loot identity beyond the one-second event lifetime and survive Gateway restart. That is a larger design and schema change; retaining only corpse GUID and slot could award a later respawn drop.",
-      "next_action": "PR #474 merged. The next local Ticket defines durable settlement with immutable source loot identity before extending recovery beyond event expiry. Original three-Shard and bot-party incidents still need an approved reproduction.",
+      "next_action": "Revise the durable settlement design before implementation. Adversarial review found receipt cleanup can lose the original outcome, and source staging rolls need explicit resolution authority after promotion. Keep original incident acceptance separate.",
       "blockers": [
+        "The receipt cleanup and roll authority protocols need a reviewed design.",
         "The original incident rerun needs a disposable three-Shard development Realm and verified Headless Client scenario dispatch."
       ],
       "evidence": [
@@ -989,7 +989,8 @@
         "PRs #439 and #461 fixed concurrent and replayed promotions. Neither covers a failed World Shard settlement, and neither proves the original three-Shard incident cause.",
         "https://github.com/LyraCoreProject/LyraCore/pull/474",
         "Gateway suite: 1,444 passed, 7 private tests ignored. Formatting and Gateway clippy passed. The regression failed on the unchanged Gateway and passed with the marker fix.",
-        "https://github.com/LyraCoreProject/LyraCore/issues/84#issuecomment-5580498204"
+        "https://github.com/LyraCoreProject/LyraCore/issues/84#issuecomment-5580498204",
+        "The source design study and adversarial review are saved in the local #84 Tickets. An acknowledgment timeout does not bound a suspended Gateway; promotion_source equal to self does not distinguish source staging from single-database resolution authority."
       ],
       "related_prs": [
         439,
@@ -1228,7 +1229,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "Legacy decoding can treat the appended zero kind as the current field-derived form, while new constructors stamp explicit kinds. That is a bounded compatibility design. Human schema review belongs after the concrete change.",
-      "next_action": "All checks passed for PR #476 at 97678dd. Rebase after #473 integrates, verify the combined source and obtain the required human schema review before shipping.",
+      "next_action": "Obtain the requested human schema review and finish final CI before merge. The rebase onto 408f417 preserves the reviewed patch.",
       "blockers": [
         "Human schema review before shipping."
       ],
@@ -1252,17 +1253,15 @@
     },
     {
       "number": 71,
-      "summary": "Item GUID allocation can leave a Character's 256-value packed block and collide with another Character; transfer relies on the opposite invariant.",
+      "summary": "Durable Shard GUID Ranges prevent new item collisions and preserve Transfer identity; source and migration design are complete.",
       "importance": 5,
       "gain": 3,
       "effort": 5,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "The revised design consumes existing durable GUID Ranges without a table, reducer argument or Transfer-format change. It removes owner truncation and same-transaction reuse. The existing live GUID inventory still needs an authorized audit before a coordinated deployment.",
-      "next_action": "Finish CI at c0ddfd0 and merge source. Twelve item GUID durable cases, eleven allocator unit tests and offline preflight pass. Deployment still needs the documented legacy-state audit.",
-      "blockers": [
-        "Before deployment, an authorized Operator must audit legacy item GUIDs and permanent range assignments across the Realm."
-      ],
+      "disposition": "done",
+      "rationale": "PR #473 merged the durable allocator and committed migration plan after all CI and review findings were resolved. The issue requested source and design work, so it is closed. The authorized legacy-state audit and coordinated deployment remain operational follow-through.",
+      "next_action": "Source and design complete; #71 closed. Before deployment, an authorized Operator must audit legacy GUIDs and permanent ranges, then follow the coordinated rollout plan.",
+      "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/71. The issue identifies both block escape and low-24-bit owner aliasing.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L266-L286. item_guid_for masks the owner to 24 bits and next_item_guid increments the current maximum without a boundary check.",
@@ -1273,14 +1272,15 @@
         "The issue already supplies saturation, transfer identity, migration, and collision cases for a bounded design Ticket.",
         "PR #473 was published at b912dff. Implementer review found that free-ID reuse can recreate an identity deleted earlier in a crafting or quest transaction. The PR is being revised before merge.",
         "Coordinating review found that cascade_delete_character advances the allocator before the Transfer import range Gate. The revised shared allocator must exclude foreign Character GUIDs at this earlier path too.",
-        "The durable high-to-low Transfer regression reproduced allocator inflation from 6 to 1000000006 and passed with the foreign-range Gate. Subsequent Gateway durable CI exposed ID reuse after a no-range deletion, so the Gate must preserve the legacy floor until a range exists."
+        "The durable high-to-low Transfer regression reproduced allocator inflation from 6 to 1000000006 and passed with the foreign-range Gate. Subsequent Gateway durable CI exposed ID reuse after a no-range deletion, so the Gate must preserve the legacy floor until a range exists.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/71#issuecomment-5580753663"
       ],
       "related_prs": [
         473
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/71",
-      "updatedAt": "2026-08-11T08:18:22Z",
-      "github_state": "open",
+      "updatedAt": "2026-09-08T07:04:05Z",
+      "github_state": "closed",
       "owner": "GPT-6 Astra, high effort, item GUID implementer"
     },
     {
@@ -4309,13 +4309,13 @@
       "title": "fix(items): allocate GUIDs from durable Shard ranges",
       "owner": "GPT-6 Astra, high effort, item GUID implementer",
       "head": "c0ddfd010db2185cd75a5ebc35f3cfbaee3e0b3e",
-      "status": "Final source reviewed; current-main CI running",
-      "next_action": "Finish CI at c0ddfd0 and merge source. Twelve item GUID durable cases, eleven allocator unit tests and offline preflight pass. Deployment still needs the documented legacy-state audit.",
-      "checked_at": "2026-09-08 06:52 UTC",
+      "status": "Merged after final CI and review",
+      "next_action": "Source and design complete; #71 closed. Before deployment, an authorized Operator must audit legacy GUIDs and permanent ranges, then follow the coordinated rollout plan.",
+      "checked_at": "2026-09-08 07:05 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -4343,8 +4343,9 @@
           "source": "Full review of 45 files through fa64b46 completed with no actionable findings. Later fixture and compatibility corrections need independent review."
         }
       ],
-      "review_note": "CodeRabbit completed a full 45-file review through fa64b46 with no actionable findings. Root and GPT-5.6 Sol independently reviewed the later compatibility correction. Final c0ddfd0 adds comment corrections and rebases onto main e41d5f8 without further runtime changes.",
-      "github_state": "OPEN"
+      "review_note": "CodeRabbit completed a full 45-file review through fa64b46 with no actionable findings. Root and GPT-5.6 Sol independently reviewed the later compatibility correction. Final c0ddfd0 adds comment corrections and rebases onto main e41d5f8 without further runtime changes. All final-head CI passed, including full Module durable and Gateway ownership/projection suites. The only CodeRabbit thread is resolved.",
+      "github_state": "MERGED",
+      "merge_commit": "408f417cb4b909065bc6c253eba9477c2e402d15"
     },
     {
       "number": 474,
@@ -4406,15 +4407,15 @@
     {
       "number": 476,
       "owner": "GPT-5.6 Sol, high effort, Spell event implementer",
-      "head": "97678dd4aaf73c2c1aacb3b3ec7448a79bf238d6",
+      "head": "af13d1e94c79601545d5296f88455f91c03207bf",
       "title": "refactor(spells): give cast events an explicit kind",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/476",
-      "checked_at": "2026-09-08 06:52 UTC",
+      "checked_at": "2026-09-08 07:11 UTC",
       "github_state": "OPEN",
       "checks": [
         {
           "name": "durable",
-          "result": "SUCCESS"
+          "result": "IN_PROGRESS"
         },
         {
           "name": "build",
@@ -4442,17 +4443,17 @@
           "source": "Hourly quota prevented actual review."
         }
       ],
-      "status": "All CI passed; independent review complete, human schema review required",
-      "next_action": "After #473 merges, rebase on the combined main and verify integration. Obtain human review of the appended default-zero kind before shipping. CodeRabbit is quota-limited.",
-      "review_note": "Root reviewed explicit dispatch and kind-zero legacy ordering. Local Module, Gateway, importer and shared suites, all 990 generated bindings, strict lint, build, formatting and offline preflight passed. CodeRabbit posted a rate limit."
+      "status": "Human schema review requested; combined proof passed, final CI running",
+      "next_action": "Obtain the requested human schema review and finish final CI before merge. The rebase onto 408f417 preserves the reviewed patch.",
+      "review_note": "Root reviewed explicit dispatch and kind-zero legacy ordering. Local Module, Gateway, importer and shared suites, all 990 generated bindings, strict lint, build, formatting and offline preflight passed. CodeRabbit posted a rate limit. Root combined all three source changes without conflicts. Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed."
     },
     {
       "number": 477,
       "owner": "GPT-6 Astra, high effort, door collision implementer",
-      "head": "af7dd923c6f1bc97101b08cc1a1097f7c5ef857d",
+      "head": "7d5c8cec6c992a6c0e9338d24d539d3fb84e2957",
       "title": "fix(vmap): make closed instance doors block rays",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/477",
-      "checked_at": "2026-09-08 06:52 UTC",
+      "checked_at": "2026-09-08 07:11 UTC",
       "github_state": "OPEN",
       "checks": [
         {
@@ -4473,7 +4474,7 @@
         },
         {
           "name": "test",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "wasm",
@@ -4485,9 +4486,9 @@
           "source": "Hourly quota prevented actual review."
         }
       ],
-      "status": "Pooled-spawn correction proved and reviewed; current-main CI running",
-      "next_action": "Complete CI at af7dd92 and rebase after #473 integrates. Obtain human review of the new private table before shipping. Imported geometry, matching Package model artifacts and canonical performance remain acceptance work.",
-      "review_note": "Root and the item GUID implementer reviewed the runtime. Root reviewed the later pool hooks and their public-Package durable regression. All local proofs passed, including pool rearm, movement, reroll and removal. Current af7dd92 rebases main e41d5f8. CodeRabbit supplied only a quota notice."
+      "status": "Human schema review requested; combined proof passed, final CI running",
+      "next_action": "Obtain the requested human schema review and finish final CI before merge. The rebase onto 408f417 preserves the reviewed patch. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
+      "review_note": "Root and the item GUID implementer reviewed the runtime. Root reviewed the later pool hooks and their public-Package durable regression. All local proofs passed, including pool rearm, movement, reroll and removal. Current af7dd92 rebases main e41d5f8. CodeRabbit supplied only a quota notice. Root combined all three source changes without conflicts. Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed."
     }
   ],
   "history": [
@@ -4830,6 +4831,14 @@
     {
       "at": "2026-09-08 06:47 UTC",
       "text": "The GUID compatibility correction passed all 12 item durable cases and independent review. CodeRabbit completed its full review through fa64b46 without actionable findings. Final source c0ddfd0 rebases current main and is in CI; obsolete runs were canceled. Issue #84 now has a public progress note preserving the original incident acceptance and durable recovery design."
+    },
+    {
+      "at": "2026-09-08 07:05 UTC",
+      "text": "Merged item GUID PR #473 as 408f417 after all final-head CI and review passed. Closed #71 because its source/design requirements and migration plan are complete; retained deployment audit and rollout in the report. Spell and door PRs are rebasing onto this main. The combined source already passes Module 1508, Gateway 1448 and all 13 new durable cases."
+    },
+    {
+      "at": "2026-09-08 07:11 UTC",
+      "text": "Completed the combined proof: Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed. Requested human schema review for #476 and #477 after their clean rebases. The next #84 design needs correction after adversarial review found receipt-retention and staging-authority failures."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
