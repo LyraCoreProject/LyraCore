@@ -59,6 +59,7 @@
 use crate::import_meta::game_import_meta;
 use spacetimedb::ReducerContext;
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) struct ImportRevision {
     pub source_sha: String,
     pub file_hash: String,

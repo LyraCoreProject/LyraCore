@@ -294,6 +294,7 @@ pub struct GameObject {
 /// Read stored GameObject destination evidence through an exact template and partition index.
 /// State and distance decide whether a returned object can be used now. They do not erase the
 /// stored destination when every matching object is depleted or far away.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn gameobject_destination_evidence(
     ctx: &ReducerContext,
     template_entry: u32,
@@ -792,13 +793,7 @@ pub(crate) fn apply_pick_lock(
 /// Shared use-a-gameobject core for Character and debug paths. [`usable_go`] requires a live
 /// Character, a loaded GameObject template, the same map and instance, and use range before
 /// type-specific effects run. Supported lock-bearing types also apply [`locked_shut`] first. [entity]
-#[cfg_attr(
-    not(feature = "debug_reducers"),
-    allow(
-        dead_code,
-        reason = "the Package catalog executor is driven by its durable debug_reducers fixture"
-    )
-)]
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,

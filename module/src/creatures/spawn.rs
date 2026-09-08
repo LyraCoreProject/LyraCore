@@ -565,6 +565,7 @@ pub struct CreatureSpawn {
 
 /// Read stored spawn evidence for one creature entry without walking the world spawn table.
 /// Callers still inspect `game_world_entity` when they need a live target they can act on now.
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn creature_spawn_evidence(
     ctx: &ReducerContext,
     entry: u32,
