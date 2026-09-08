@@ -793,12 +793,27 @@ fn playerbots_runner_fixture_due_helpers_preserve_other_bots() {
 fn playerbots_runner_fixture_navigation_handles_both_grid_edges() {
     let (node, bots) = fixture("playerbots-runner-fixture-grid", "1");
     node.assert_sql("DELETE FROM game_creature_move_schedule");
-    for coordinate in ["17066", "-17066"] {
+    for (coordinate, edge_chunks) in [
+        ("17066", "0,0,0,0,,;0,0,1,0,,;0,1,0,0,,;0,1,1,0,,"),
+        (
+            "-17066",
+            "0,1022,1022,0,,;0,1022,1023,0,,;0,1023,1022,0,,;0,1023,1023,0,,",
+        ),
+    ] {
+        node.assert_call(
+            "import_nav_chunks",
+            &[&serde_json::to_string(&format!("{edge_chunks};0,512,512,0,,")).unwrap()],
+        );
+        assert_eq!(node.query_rows("SELECT key FROM game_nav_chunk").len(), 5);
         node.assert_sql(&format!(
             "UPDATE game_world_entity SET x = {coordinate}, y = {coordinate} WHERE guid = {}",
             bots[0]
         ));
         node.assert_call("playerbots_fixture_runner_clear_navigation", &[&bots[0]]);
+        let remaining = node.query_rows("SELECT cell_x, cell_y FROM game_nav_chunk");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0]["cell_x"], "512");
+        assert_eq!(remaining[0]["cell_y"], "512");
     }
     outcomes(&node);
 }
