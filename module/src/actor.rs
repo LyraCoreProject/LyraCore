@@ -90,7 +90,10 @@ pub(crate) fn stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), S
 
 /// Compatibility adapter for callers that only need acceptance. Use `request_cast` to retain
 /// the scheduled identity and observe completion through `on_cast_finished`.
-#[allow(dead_code)] // Retained Package API v1 operation.
+#[allow(
+    dead_code,
+    reason = "Package API v1 retains the result-only cast_at adapter"
+)]
 pub(crate) fn cast_at(
     ctx: &ReducerContext,
     actor_guid: u64,
