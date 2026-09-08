@@ -468,7 +468,8 @@
         "PB-001 found no existing line-of-sight Gate in targeted cast admission. Add the appropriate shared Gate with supported exemptions and client/bot parity coverage so the movement prerequisite responds to a real typed Refusal. Channel actions remain unsupported until their running lifecycle is correlated.",
         "The historical Actor cast bypasses the player spellbook check. PB-003 owns the appropriate shared Gate for the new runner and must coordinate with provisioning in PB-005. An unlearned heal must refuse without cast, power, or cooldown changes.",
         "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot.",
-        "Shared design keeps one durable objective and one foreground action. A moving leader refreshes the companion destination without replacing the retained heal identity. Each parallel branch must prove behavior against merged prerequisites."
+        "Shared design keeps one durable objective and one foreground action. A moving leader refreshes the companion destination without replacing the retained heal identity. Each parallel branch must prove behavior against merged prerequisites.",
+        "The companion recovery fixture must cover critical health at a reached leader destination. A permanent survival Hold cannot block both useful self-recovery and necessary bounded provisioning."
       ],
       "acceptance_evidence": []
     },
@@ -537,7 +538,9 @@
       "evidence": [],
       "notes": [
         "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot.",
-        "Agreed integration performs at most one provisioning operation per eligible Cohort tick, with no foreground action. Spawn and level-up arm reconciliation; they do not grant resources outside current control and Account ownership checks."
+        "Agreed integration performs at most one provisioning operation per eligible Cohort tick, with no foreground action. Spawn and level-up arm reconciliation; they do not grant resources outside current control and Account ownership checks.",
+        "The real runner hook distinguishes an applied profile operation from a recorded refusal or deferral. Only applied work consumes the tick. Satisfied checks and recorded failures allow the chosen gameplay action to continue; backoff bounds retries.",
+        "Useful survival, recovery, and defense outrank routine upkeep. New core operations return typed causes. An older String refusal may remain opaque detail but must not be classified by parsing its text."
       ],
       "acceptance_evidence": []
     },
@@ -573,7 +576,8 @@
       "notes": [
         "Imported source identifies quest 3904 as a collect-item quest backed by chest loot. The existing GameObject use operation needs Package visibility and bounded object discovery. Verify and correct the importer NextQuestInChain column mapping before relying on forward links.",
         "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot.",
-        "Catalog admission must prove a currently callable executor for every required kind. Imported destination evidence is separate from live target discovery. PB-007 owns the later autonomous quest sequence; its planned work cannot establish executor availability today."
+        "Catalog admission must prove a currently callable executor for every required kind. Imported destination evidence is separate from live target discovery. PB-007 owns the later autonomous quest sequence; its planned work cannot establish executor availability today.",
+        "The reference ClassicDB source identity stays separate from observed runtime content and destination revisions. Seeded content or a later import cannot inherit an unverified source hash. A refresh scenario must cover held objectives when the observed content changes."
       ],
       "acceptance_evidence": []
     },
@@ -792,6 +796,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 16:51 UTC",
+  "updated_at": "2026-09-08 17:27 UTC",
   "summary": "PB-001 and PB-002 are complete and integrated. PB-003, PB-005, and PB-006 are implementing Priest companions, automatic provisioning, and supported-quest admission in parallel. The orchestrator owns shared-contract integration, review, PR merges, and the published record."
 }
