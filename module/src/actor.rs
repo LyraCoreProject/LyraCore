@@ -19,6 +19,7 @@
 //! | `accept_quest` | `quest::apply_accept_quest` | alive + giver in range offering the quest + level/race/class/prereq/duplicate gates |
 //! | `stage_quest` | `quest::grant_quest_unchecked` | HARNESS/BOT staging: same row shape, all accept gates SKIPPED (giver-less) |
 //! | `turn_in_quest` | `quest::apply_turn_in_quest` | alive + giver in range ending the quest + objectives complete; rewards atomic |
+//! | `open_creature_loot` | `loot::open_creature_corpse` | legacy result adapter used by the Gateway |
 //! | `request_open_creature_loot` | `loot::request_open_creature_corpse` | typed open acceptance or Refusal; applies the same corpse and Loot Tag Gates |
 //! | `take_loot` | `items::apply_take_loot` | legacy result adapter used by the existing rest-and-loot goal |
 //! | `request_take_loot` | `items::request_take_loot` | typed take completion or Refusal; inventory-full leaves the item and Loot Source unchanged |
@@ -147,6 +148,7 @@ debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest;
 
 // ---- loot / inventory / vendor ----
 
+pub(crate) use crate::loot::open_creature_corpse as open_creature_loot;
 package_only! {
     pub(crate) use crate::items::apply_item_use as use_item;
     pub(crate) use crate::loot::request_open_creature_corpse as request_open_creature_loot;
