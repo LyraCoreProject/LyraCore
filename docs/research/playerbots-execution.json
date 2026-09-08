@@ -72,7 +72,7 @@
       "Movement fixtures measure route or waypoint advancement. After 10 seconds without movement progress the bot changes approach; within 30 seconds it advances, defers the destination, or records a specific wait.",
       "Cast fixtures prove one long cast starts once, survives intervening decisions, and ends once by completion, interruption, cancellation, or expiry.",
       "Companion fixtures cover follow, stay, assist, designated target, controlled enemies, poor range, loss of line of sight, wounded allies and missing buffs between fights, death, regrouping, and one instance entry and exit.",
-      "Autonomous fixtures run ten seeds per starter class through the supported Northshire and Elwynn catalog. At least 95 percent complete each supported scenario without Operator help, and every other seed terminates with an explained outcome.",
+      "Autonomous fixtures run ten seeds per starter class through the supported Northshire and Elwynn catalog. All ten runs per class must finish each supported scenario without Operator help: nine of ten is below the 95 percent requirement. Every failed run must record an explained outcome and fails the release gate.",
       "Autonomous mandatory scenarios include kill, collect, talk-only chains, supported simple GameObject use, turn-in, death, interruption, full bags, absent targets, an unreachable giver, unsupported objectives, and restart with a retained objective.",
       "Restart and Transfer fixtures interrupt active action and escrow stages. They prove no duplicate Character, equipment, supply grant, quest reward, or active controller and prove stale work cannot act on the old location.",
       "Load fixtures run 10, 25, and 100 bots on one named disposable fixture and record decision time, movement time, scheduler lag, route expansions, row reads, row writes, and the slowest due bot before capacity is set.",
@@ -97,13 +97,14 @@
       "Record provenance if any reference code is copied or translated. The architecture proposal does not make a license-compatibility conclusion.",
       "Attended real-client observation is a release gate that may require a human after agent implementation. The implementation tickets must prepare the exact scenario, capture format, and diagnostic reads without claiming that a client session already ran.",
       "Unresolved product choices remain level range beyond the initial catalog, the first full dungeon milestone, equipment strength beyond level-appropriate starter gear, and any explicit catch-up travel policy. They do not block the bounded first release.",
-      "The user authorized autonomous implementation, PR ownership through review, and confident merges. The HTML is the tracker; no issue publication or planning interview is required. Production changes remain outside this authorization."
+      "The user authorized autonomous implementation, PR ownership through review, and confident merges. The HTML is the tracker; no issue publication or planning interview is required. Production changes remain outside this authorization.",
+      "The initial tracer uses real Module and Package operations with named seeded inputs. Client-derived geometry is unavailable in the current workspace. Record this absence instead of treating the seeded route as imported-world proof; PB-011 and PB-012 retain the imported-input release gates."
     ],
     "prs": [
       {
         "url": "https://github.com/LyraCoreProject/LyraCore/pull/481",
         "label": "Execution report #481",
-        "status": "draft"
+        "status": "open"
       }
     ]
   },
@@ -142,7 +143,7 @@
       "blocked_by": [],
       "delivery": "Create the first tracer through a reproducible pinned Module and Package fixture. Drive attack, interaction, movement, and cast-start through real core operations, return typed outcomes to the Package, and capture the blocked-target and out-of-range-heal failures that the rewrite must fix.",
       "acceptance": [
-        "The fixture records the pinned core, Package, imported content, and geometry revisions and can reproduce the same initial state and outcome.",
+        "The fixture records pinned core and Package commits plus the actual content and geometry input revisions, labels seeded and client-derived provenance separately, records unavailable inputs, and reproduces the same initial state and outcome.",
         "The fixture loads and runs the real Module with the real Package; it does not substitute a simulated gameplay engine.",
         "Attack acceptance is distinct from damage and quest progress, and an attempted attack with no hit cannot clear a quest progress clock.",
         "Movement reports complete, safe partial, blocked, or explicit unknown-coverage evidence with route or waypoint advancement where applicable.",
@@ -166,7 +167,8 @@
         "Baseline on core 95e6ad8 and Package c32b2fb: both ignored personality durable tests passed in a private loopback Standalone. This proves the existing Package fixture, not the new outcome contract."
       ],
       "notes": [
-        "The implementer owns the isolated core and Package worktrees and the serialized build slot. The orchestrator owns independent review and merge order."
+        "The implementer owns the isolated core and Package worktrees and the serialized build slot. The orchestrator owns independent review and merge order.",
+        "One helper owns the two navigation files in an isolated core worktree. The tracer owner integrates that commit with casts, actor operations, Package changes, durable fixtures, and PRs."
       ],
       "acceptance_evidence": []
     },
@@ -233,7 +235,9 @@
       "owner": "Unassigned",
       "prs": [],
       "evidence": [],
-      "notes": [],
+      "notes": [
+        "PB-001 found no existing line-of-sight Gate in targeted cast admission. Add the appropriate shared Gate with supported exemptions and client/bot parity coverage so the movement prerequisite responds to a real typed Refusal. Channel actions remain unsupported until their running lifecycle is correlated."
+      ],
       "acceptance_evidence": []
     },
     {
@@ -331,7 +335,9 @@
       "owner": "Unassigned",
       "prs": [],
       "evidence": [],
-      "notes": [],
+      "notes": [
+        "Imported source identifies quest 3904 as a collect-item quest backed by chest loot. The existing GameObject use operation needs Package visibility and bounded object discovery. Verify and correct the importer NextQuestInChain column mapping before relying on forward links."
+      ],
       "acceptance_evidence": []
     },
     {
@@ -483,7 +489,7 @@
       ],
       "delivery": "Run the complete automated release suites on the pinned core, Package, imported content, and geometry. Prove seeded autonomous work, the fixed human-led companion route, restart and Transfer behavior, bounded recovery, scheduler fairness, and measured 10, 25, and 100 bot load.",
       "acceptance": [
-        "Ten seeded runs per starter class execute the supported Northshire and Elwynn catalog; at least 95 percent finish each supported scenario without Operator help and every other run ends with an explained outcome.",
+        "Run ten seeds per starter class through the supported Northshire and Elwynn catalog. All ten runs per class must finish each supported scenario without Operator help: nine of ten is below the 95 percent requirement. Every failed run must record an explained outcome and fails the release gate.",
         "Autonomous acceptance includes kill, collect, talk-only chains, supported simple GameObject use, travel beyond the former home leash, turn-in, death, combat interruption, full bags, absent targets, an unreachable giver, and unsupported objective admission.",
         "One human-controlled Character and four bots complete the fixed repeated-pull route with explicit roles, follow and stay, assist and designated target, wounded allies and missing buffs between fights, loss of line of sight, controlled enemies, death, regrouping, and one instance entry and exit.",
         "The companion fixtures produce no unrequested pull, unexplained role abandonment, repeated cast start, or attack against an obsolete target.",
@@ -549,6 +555,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 11:00 UTC",
-  "summary": "PB-001 is implementing the first tracer. The existing Package-enabled durable baseline passed both personality tests in a private fixture."
+  "updated_at": "2026-09-08 11:19 UTC",
+  "summary": "PB-001 reproduced the immediate-heal defect and passed the first real timed-cast fixture. Cast and navigation work is underway. The report PR passed independent review; imported-world and client acceptance remain pending."
 }

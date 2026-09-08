@@ -27,6 +27,10 @@ def validate(plan):
     if len(by_id) != len(rows):
         raise ValueError("Execution identifiers must be unique")
     tickets = {row["id"]: row for row in plan["tickets"]}
+    for row in rows:
+        for pr in row.get("prs", []):
+            if not re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+/pull/[1-9]\d*", pr["url"]):
+                raise ValueError(f"PR links must name GitHub pull requests for {row['id']}")
     for row in rows[1:]:
         if row["parent"] not in by_id:
             raise ValueError(f"Unknown parent for {row['id']}")
@@ -69,9 +73,6 @@ def validate(plan):
             if not record.get("reviewer", "").strip() or not record.get("evidence") or not all(item.strip() for item in record["evidence"]):
                 raise ValueError(f"Acceptance evidence for {row['id']} needs a reviewer and sources")
             verified[criterion] = record
-        for pr in row.get("prs", []):
-            if not re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+/pull/[1-9]\d*", pr["url"]):
-                raise ValueError("PR links must name GitHub pull requests")
         if row["status"] in FINISHED:
             if set(verified) != set(row["acceptance"]):
                 raise ValueError(f"Completed ticket {row['id']} needs reviewed evidence for every criterion")
