@@ -47,6 +47,7 @@ impl __sdk::__query_builder::HasCols for BotInviteIntent {
 /// Provides typed access to indexed columns for query building.
 pub struct BotInviteIntentIxCols {
     pub id: __sdk::__query_builder::IxCol<BotInviteIntent, u64>,
+    pub inviter_guid: __sdk::__query_builder::IxCol<BotInviteIntent, u64>,
 }
 
 impl __sdk::__query_builder::HasIxCols for BotInviteIntent {
@@ -54,6 +55,7 @@ impl __sdk::__query_builder::HasIxCols for BotInviteIntent {
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         BotInviteIntentIxCols {
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
+            inviter_guid: __sdk::__query_builder::IxCol::new(table_name, "inviter_guid"),
         }
     }
 }

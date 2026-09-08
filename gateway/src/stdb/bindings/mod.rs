@@ -12,6 +12,7 @@ pub mod account_type;
 pub mod activate_vmap_generation_reducer;
 pub mod active_taxi_flight_type;
 pub mod addon_message_type;
+pub mod admit_sessionless_group_action_reducer;
 pub mod advance_taxi_flight_reducer;
 pub mod ai_event_kind_type;
 pub mod alpha_test_tools_enrollment_type;
@@ -146,6 +147,7 @@ pub mod debug_create_fixture_instance_reducer;
 pub mod debug_delete_character_reducer;
 pub mod debug_disarm_instance_tick_reducer;
 pub mod debug_disenchant_reducer;
+pub mod debug_emit_sessionless_group_intent_reducer;
 pub mod debug_enchant_item_reducer;
 pub mod debug_encounter_equip_reducer;
 pub mod debug_encounter_move_reducer;
@@ -224,6 +226,7 @@ pub mod debug_set_money_reducer;
 pub mod debug_set_nav_coverage_enabled_reducer;
 pub mod debug_set_nav_enabled_reducer;
 pub mod debug_set_power_reducer;
+pub mod debug_set_sessionless_action_consent_reducer;
 pub mod debug_set_skill_reducer;
 pub mod debug_set_vmap_enabled_reducer;
 pub mod debug_set_xp_rate_reducer;
@@ -521,6 +524,7 @@ pub mod game_school_lockout_table;
 pub mod game_script_table;
 pub mod game_session_reaper_schedule_table;
 pub mod game_session_table;
+pub mod game_sessionless_action_consent_table;
 pub mod game_shard_load_table;
 pub mod game_shard_load_total_table;
 pub mod game_skill_ability_table;
@@ -907,6 +911,7 @@ pub mod server_config_type;
 pub mod session_actor_type;
 pub mod session_reaper_schedule_type;
 pub mod session_type;
+pub mod sessionless_action_consent_type;
 pub mod set_alpha_test_tools_enrollment_reducer;
 pub mod set_character_shard_reducer;
 pub mod set_gm_level_reducer;
@@ -1007,6 +1012,7 @@ pub use account_type::Account;
 pub use activate_vmap_generation_reducer::activate_vmap_generation;
 pub use active_taxi_flight_type::ActiveTaxiFlight;
 pub use addon_message_type::AddonMessage;
+pub use admit_sessionless_group_action_reducer::admit_sessionless_group_action;
 pub use advance_taxi_flight_reducer::advance_taxi_flight;
 pub use ai_event_kind_type::AiEventKind;
 pub use alpha_test_tools_enrollment_type::AlphaTestToolsEnrollment;
@@ -1141,6 +1147,7 @@ pub use debug_create_fixture_instance_reducer::debug_create_fixture_instance;
 pub use debug_delete_character_reducer::debug_delete_character;
 pub use debug_disarm_instance_tick_reducer::debug_disarm_instance_tick;
 pub use debug_disenchant_reducer::debug_disenchant;
+pub use debug_emit_sessionless_group_intent_reducer::debug_emit_sessionless_group_intent;
 pub use debug_enchant_item_reducer::debug_enchant_item;
 pub use debug_encounter_equip_reducer::debug_encounter_equip;
 pub use debug_encounter_move_reducer::debug_encounter_move;
@@ -1219,6 +1226,7 @@ pub use debug_set_money_reducer::debug_set_money;
 pub use debug_set_nav_coverage_enabled_reducer::debug_set_nav_coverage_enabled;
 pub use debug_set_nav_enabled_reducer::debug_set_nav_enabled;
 pub use debug_set_power_reducer::debug_set_power;
+pub use debug_set_sessionless_action_consent_reducer::debug_set_sessionless_action_consent;
 pub use debug_set_skill_reducer::debug_set_skill;
 pub use debug_set_vmap_enabled_reducer::debug_set_vmap_enabled;
 pub use debug_set_xp_rate_reducer::debug_set_xp_rate;
@@ -1516,6 +1524,7 @@ pub use game_school_lockout_table::*;
 pub use game_script_table::*;
 pub use game_session_reaper_schedule_table::*;
 pub use game_session_table::*;
+pub use game_sessionless_action_consent_table::*;
 pub use game_shard_load_table::*;
 pub use game_shard_load_total_table::*;
 pub use game_skill_ability_table::*;
@@ -1902,6 +1911,7 @@ pub use server_config_type::ServerConfig;
 pub use session_actor_type::SessionActor;
 pub use session_reaper_schedule_type::SessionReaperSchedule;
 pub use session_type::Session;
+pub use sessionless_action_consent_type::SessionlessActionConsent;
 pub use set_alpha_test_tools_enrollment_reducer::set_alpha_test_tools_enrollment;
 pub use set_character_shard_reducer::set_character_shard;
 pub use set_gm_level_reducer::set_gm_level;
@@ -2006,6 +2016,9 @@ pub use zone_weather_type::ZoneWeather;
 pub enum Reducer {
     ActivateVmapGeneration {
         generation_id: u64,
+    },
+    AdmitSessionlessGroupAction {
+        character_guid: u64,
     },
     AdvanceTaxiFlight {
         schedule: TaxiFlightSchedule,
@@ -2216,6 +2229,11 @@ pub enum Reducer {
     DebugDisenchant {
         character_guid: u64,
         slot: u8,
+    },
+    DebugEmitSessionlessGroupIntent {
+        character_guid: u64,
+        target_guid: u64,
+        leave: bool,
     },
     DebugEnchantItem {
         character_guid: u64,
@@ -2548,6 +2566,10 @@ pub enum Reducer {
     DebugSetPower {
         guid: u64,
         power: u32,
+    },
+    DebugSetSessionlessActionConsent {
+        character_guid: u64,
+        allowed: bool,
     },
     DebugSetSkill {
         character_guid: u64,
@@ -3664,6 +3686,7 @@ impl __sdk::Reducer for Reducer {
     fn reducer_name(&self) -> &'static str {
         match self {
             Reducer::ActivateVmapGeneration { .. } => "activate_vmap_generation",
+            Reducer::AdmitSessionlessGroupAction { .. } => "admit_sessionless_group_action",
             Reducer::AdvanceTaxiFlight { .. } => "advance_taxi_flight",
             Reducer::AppendVmapGenerationChunks { .. } => "append_vmap_generation_chunks",
             Reducer::ApplyPackageDeltas { .. } => "apply_package_deltas",
@@ -3717,6 +3740,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugDeleteCharacter { .. } => "debug_delete_character",
             Reducer::DebugDisarmInstanceTick { .. } => "debug_disarm_instance_tick",
             Reducer::DebugDisenchant { .. } => "debug_disenchant",
+            Reducer::DebugEmitSessionlessGroupIntent { .. } => {
+                "debug_emit_sessionless_group_intent"
+            }
             Reducer::DebugEnchantItem { .. } => "debug_enchant_item",
             Reducer::DebugEncounterEquip { .. } => "debug_encounter_equip",
             Reducer::DebugEncounterMove { .. } => "debug_encounter_move",
@@ -3806,6 +3832,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugSetNavCoverageEnabled { .. } => "debug_set_nav_coverage_enabled",
             Reducer::DebugSetNavEnabled { .. } => "debug_set_nav_enabled",
             Reducer::DebugSetPower { .. } => "debug_set_power",
+            Reducer::DebugSetSessionlessActionConsent { .. } => {
+                "debug_set_sessionless_action_consent"
+            }
             Reducer::DebugSetSkill { .. } => "debug_set_skill",
             Reducer::DebugSetVmapEnabled { .. } => "debug_set_vmap_enabled",
             Reducer::DebugSetXpRate { .. } => "debug_set_xp_rate",
@@ -4081,6 +4110,11 @@ impl __sdk::Reducer for Reducer {
                 generation_id,
 }             => __sats::bsatn::to_vec(&activate_vmap_generation_reducer::ActivateVmapGenerationArgs {
                 generation_id: generation_id.clone(),
+}),
+            Reducer::AdmitSessionlessGroupAction{
+                character_guid,
+}             => __sats::bsatn::to_vec(&admit_sessionless_group_action_reducer::AdmitSessionlessGroupActionArgs {
+                character_guid: character_guid.clone(),
 }),
             Reducer::AdvanceTaxiFlight{
                 schedule,
@@ -4460,6 +4494,15 @@ Reducer::DebugCheckRestAt{
 }             => __sats::bsatn::to_vec(&debug_disenchant_reducer::DebugDisenchantArgs {
                 character_guid: character_guid.clone(),
                 slot: slot.clone(),
+}),
+            Reducer::DebugEmitSessionlessGroupIntent{
+                character_guid,
+                target_guid,
+                leave,
+}             => __sats::bsatn::to_vec(&debug_emit_sessionless_group_intent_reducer::DebugEmitSessionlessGroupIntentArgs {
+                character_guid: character_guid.clone(),
+                target_guid: target_guid.clone(),
+                leave: leave.clone(),
 }),
             Reducer::DebugEnchantItem{
                 character_guid,
@@ -5052,6 +5095,13 @@ Reducer::DebugSellItem{
 }             => __sats::bsatn::to_vec(&debug_set_power_reducer::DebugSetPowerArgs {
                 guid: guid.clone(),
                 power: power.clone(),
+}),
+            Reducer::DebugSetSessionlessActionConsent{
+                character_guid,
+                allowed,
+}             => __sats::bsatn::to_vec(&debug_set_sessionless_action_consent_reducer::DebugSetSessionlessActionConsentArgs {
+                character_guid: character_guid.clone(),
+                allowed: allowed.clone(),
 }),
             Reducer::DebugSetSkill{
                 character_guid,
@@ -7236,6 +7286,7 @@ pub struct DbUpdate {
     game_script: __sdk::TableUpdate<Script>,
     game_session: __sdk::TableUpdate<Session>,
     game_session_reaper_schedule: __sdk::TableUpdate<SessionReaperSchedule>,
+    game_sessionless_action_consent: __sdk::TableUpdate<SessionlessActionConsent>,
     game_shard_load: __sdk::TableUpdate<ShardLoad>,
     game_shard_load_total: __sdk::TableUpdate<ShardLoadTotal>,
     game_skill_ability: __sdk::TableUpdate<SkillAbility>,
@@ -7932,6 +7983,11 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_session_reaper_schedule" => db_update.game_session_reaper_schedule.append(
                     game_session_reaper_schedule_table::parse_table_update(table_update)?,
                 ),
+                "game_sessionless_action_consent" => {
+                    db_update.game_sessionless_action_consent.append(
+                        game_sessionless_action_consent_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(game_shard_load_table::parse_table_update(table_update)?),
@@ -9010,6 +9066,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_session_reaper_schedule,
             )
             .with_updates_by_pk(|row| &row.scheduled_id);
+        diff.game_sessionless_action_consent = cache
+            .apply_diff_to_table::<SessionlessActionConsent>(
+                "game_sessionless_action_consent",
+                &self.game_sessionless_action_consent,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
         diff.game_shard_load = cache
             .apply_diff_to_table::<ShardLoad>("game_shard_load", &self.game_shard_load)
             .with_updates_by_pk(|row| &row.id);
@@ -9821,6 +9883,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_session_reaper_schedule" => db_update
                     .game_session_reaper_schedule
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_sessionless_action_consent" => db_update
+                    .game_sessionless_action_consent
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10578,6 +10643,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_session_reaper_schedule" => db_update
                     .game_session_reaper_schedule
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_sessionless_action_consent" => db_update
+                    .game_sessionless_action_consent
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_shard_load" => db_update
                     .game_shard_load
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10956,6 +11024,7 @@ pub struct AppliedDiff<'r> {
     game_script: __sdk::TableAppliedDiff<'r, Script>,
     game_session: __sdk::TableAppliedDiff<'r, Session>,
     game_session_reaper_schedule: __sdk::TableAppliedDiff<'r, SessionReaperSchedule>,
+    game_sessionless_action_consent: __sdk::TableAppliedDiff<'r, SessionlessActionConsent>,
     game_shard_load: __sdk::TableAppliedDiff<'r, ShardLoad>,
     game_shard_load_total: __sdk::TableAppliedDiff<'r, ShardLoadTotal>,
     game_skill_ability: __sdk::TableAppliedDiff<'r, SkillAbility>,
@@ -11931,6 +12000,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<SessionReaperSchedule>(
             "game_session_reaper_schedule",
             &self.game_session_reaper_schedule,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<SessionlessActionConsent>(
+            "game_sessionless_action_consent",
+            &self.game_sessionless_action_consent,
             event,
         );
         callbacks.invoke_table_row_callbacks::<ShardLoad>(
@@ -13057,6 +13131,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_script_table::register_table(client_cache);
         game_session_table::register_table(client_cache);
         game_session_reaper_schedule_table::register_table(client_cache);
+        game_sessionless_action_consent_table::register_table(client_cache);
         game_shard_load_table::register_table(client_cache);
         game_shard_load_total_table::register_table(client_cache);
         game_skill_ability_table::register_table(client_cache);
@@ -13307,6 +13382,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_script",
         "game_session",
         "game_session_reaper_schedule",
+        "game_sessionless_action_consent",
         "game_shard_load",
         "game_shard_load_total",
         "game_skill_ability",

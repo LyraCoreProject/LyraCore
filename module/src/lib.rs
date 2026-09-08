@@ -86,6 +86,12 @@
 ///     keep_key,
 /// });
 ///
+/// // Transports one row whose primary key is the Character guid, preserving that key.
+/// crate::character_owned!(transfer, fn sweep_transfer_game_sessionless_action_consent(ctx, character_guid, io) {
+///     table = game_sessionless_action_consent,
+///     primary_key = character_guid,
+/// });
+///
 /// // Declines. A DECISION written at the table (one-shot relay rows whose durable half lives on the
 /// // character row, or state another database is authoritative for). A CORE table must ALSO be
 /// // listed on `transfer::NOT_TRANSPORTED` with its reason, which build.rs's generated
@@ -146,6 +152,25 @@ macro_rules! character_owned {
                 $ctx,
                 $io,
                 || $ctx.db.$table().$index().filter(&$guid).collect::<Vec<_>>(),
+                |ctx: &spacetimedb::ReducerContext, row| {
+                    ctx.db.$table().insert(row);
+                },
+            );
+        }
+    };
+    (transfer, fn $name:ident($ctx:ident, $guid:ident, $io:ident) {
+        table = $table:ident,
+        primary_key = $key:ident $(,)?
+    }) => {
+        pub(crate) fn $name(
+            $ctx: &spacetimedb::ReducerContext,
+            $guid: u64,
+            $io: &mut $crate::transfer::RowIo<'_>,
+        ) {
+            $crate::transfer::move_rows(
+                $ctx,
+                $io,
+                || $ctx.db.$table().$key().find($guid).into_iter().collect::<Vec<_>>(),
                 |ctx: &spacetimedb::ReducerContext, row| {
                     ctx.db.$table().insert(row);
                 },
@@ -340,6 +365,7 @@ mod runtime_script;
 /// module reads its table.
 mod script_binding;
 mod seed;
+mod sessionless;
 mod skill;
 mod skilldata;
 mod spell;
@@ -406,6 +432,7 @@ pub use realm_core::*;
 pub use region::*;
 pub use reputation::*;
 pub use rest::RestStateEvent; // re-exported for the gateway schema-parity test (4c)
+pub use sessionless::*;
 pub use skill::*;
 pub use skilldata::*;
 pub use spell::stacking::SpellGroupRule; // Keeps this generated table in schema-parity coverage.

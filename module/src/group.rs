@@ -227,7 +227,7 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_group_invite());
 /// (the `game_account`/`game_session` pattern). Short-lived: reaped by
 /// the shared 1s event TTL (`gc.rs`), which is generous — the gateway's subscription callback fires
 /// on the insert, not on a poll. [entity]
-#[table(accessor = game_bot_invite_intent)]
+#[table(accessor = game_bot_invite_intent, index(accessor = by_actor, btree(columns = [inviter_guid])))]
 pub struct BotInviteIntent {
     #[primary_key]
     #[auto_inc]
@@ -284,20 +284,32 @@ fn emit_bot_group_intent(ctx: &ReducerContext, op: u8, actor_guid: u64, target_g
     });
 }
 
-/// Atomically remove one bot invite intent before a Gateway executes it.
-///
-/// Every Gateway subscribes to the same World Shard row. SpacetimeDB serializes reducer
-/// transactions, so the direct primary-key delete admits one caller and refuses every later
-/// callback, including callbacks installed after a watchdog reconnect.
+pub(crate) fn clear_unclaimed_group_intents(ctx: &ReducerContext, character_guid: u64) {
+    let intents = ctx.db.game_bot_invite_intent();
+    for intent in intents
+        .by_actor()
+        .filter(&character_guid)
+        .collect::<Vec<_>>()
+    {
+        intents.id().delete(intent.id);
+    }
+}
+
+/// Admit and consume one Group Intent in a serialized World Shard transaction.
+/// Consent and live Session ownership are checked before deletion. A selection after this claim
+/// cannot recall the action that the winning Gateway will send to Realm-core.
 #[reducer]
 pub fn claim_bot_invite_intent(ctx: &ReducerContext, intent_id: u64) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    if !ctx.db.game_bot_invite_intent().id().delete(intent_id) {
-        return Err(refused(
-            GroupRefusal::IntentAlreadyClaimed,
-            &format!("bot invite intent {intent_id} is gone"),
-        ));
-    }
+    let intent = ctx
+        .db
+        .game_bot_invite_intent()
+        .id()
+        .find(intent_id)
+        .ok_or_else(|| refused(GroupRefusal::IntentAlreadyClaimed, "Group Intent is gone"))?;
+    crate::sessionless::group_action_gate(ctx, intent.inviter_guid)
+        .map_err(|refusal| refused(refusal, "Group Intent admission"))?;
+    ctx.db.game_bot_invite_intent().id().delete(intent_id);
     Ok(())
 }
 
@@ -642,6 +654,12 @@ fn invite_core_on(
 /// The identity-free accept core: shared by `gw::gw_accept_group_invite` and any server-driven
 /// acceptor (a playerbot's auto-accept hook calls this with the bot's guid).
 pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Result<(), String> {
+    if crate::helpers::character_by_guid(ctx, acceptor_guid)
+        .is_some_and(|character| !character.online)
+    {
+        crate::sessionless::group_action_gate(ctx, acceptor_guid)
+            .map_err(|refusal| refused(refusal, "session-less group acceptance"))?;
+    }
     accept_invite_on(ctx, Plane::Shard, acceptor_guid).map_err(|error| {
         group_op_error(
             error,

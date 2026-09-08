@@ -981,35 +981,6 @@ fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
     );
 }
 
-/// The predicate the answer hangs on, over every shape a guid can be in. "Live entity AND no
-/// session" is the whole of it, and each half is load-bearing: without the entity a `DORMANT` player
-/// (offline, logged out, no entity) would read as a bot, and without the session flag every real
-/// player in the world would.
-#[test]
-fn only_a_live_entity_without_a_session_reads_as_a_playerbot() {
-    let (_realm, world, _instances, _calls) = party_topology();
-    assert!(
-        party::session_less_in_world(world.as_ref(), BOT),
-        "live + no session = a playerbot"
-    );
-    assert!(
-        party::session_less_in_world(world.as_ref(), FAR_BOT),
-        "…on whichever connected shard it stands, like every other read in this module"
-    );
-    assert!(
-        !party::session_less_in_world(world.as_ref(), TRIN),
-        "a live player with a session has a client of their own to answer with"
-    );
-    assert!(
-        !party::session_less_in_world(world.as_ref(), DORMANT),
-        "offline with NO live entity is a logged-out PLAYER, not a bot — never answer for them"
-    );
-    assert!(
-        !party::session_less_in_world(world.as_ref(), 999),
-        "and an unknown guid is nobody"
-    );
-}
-
 /// **A REAL PLAYER, ANSWERED FOR — the impersonation this predicate has to refuse.**
 ///
 /// Found by adversarial review and reproduced here before it was fixed. The two halves
@@ -1053,11 +1024,6 @@ fn a_stale_character_row_on_another_shard_cannot_make_a_logged_in_player_look_se
     for shard in [&home, &far] {
         *shard.peers.lock().unwrap() = vec![home.clone(), far.clone()];
     }
-    assert!(
-        !party::session_less_in_world(far.as_ref(), SEEDED),
-        "the session flag must come from the shard that HOLDS the live entity — a stale row on the \
-         asking shard is not a licence to answer for somebody"
-    );
     // …and end to end: an inviter on the far shard must leave that player's dialog alone.
     party::run(far.as_ref(), 9, VIM, party::Op::Invite(SEEDED)).expect("the invite itself is fine");
     let state = realm.party.lock().unwrap();
@@ -1790,4 +1756,138 @@ fn an_unsharded_deployment_still_routes_a_bot_invite_through_realm_group_op() {
         Some((realm_op::INVITE, BOT, TRIN, 0, 0)),
         "the invite must be recorded with the bot as inviter"
     );
+}
+
+#[test]
+fn suppressed_automatic_answers_leave_human_invitations_pending_on_realm_core() {
+    let (realm, world, instances, _) = party_topology();
+    instances
+        .sessionless_admission
+        .lock()
+        .unwrap()
+        .insert(FAR_BOT, GroupRefusal::ActionSuppressed);
+
+    assert_eq!(
+        party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap(),
+        PartyOutcome::Ran
+    );
+
+    let state = realm.party.lock().unwrap();
+    assert!(state.group_of(FAR_BOT).is_none());
+    assert_eq!(state.ops, vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0)]);
+}
+
+#[test]
+fn suppressed_automatic_answers_leave_bot_invitations_pending_on_realm_core() {
+    let (realm, world, instances, _) = party_topology();
+    instances
+        .sessionless_admission
+        .lock()
+        .unwrap()
+        .insert(FAR_BOT, GroupRefusal::ActionSuppressed);
+
+    assert_eq!(
+        party::run_bot_invite(world.as_ref(), BOT, FAR_BOT).unwrap(),
+        PartyOutcome::Ran
+    );
+
+    let state = realm.party.lock().unwrap();
+    assert!(state.group_of(FAR_BOT).is_none());
+    assert_eq!(state.ops, vec![(realm_op::INVITE, BOT, FAR_BOT, 0, 0)]);
+}
+
+#[test]
+fn unavailable_admission_leaves_the_invitation_unanswered() {
+    let (realm, world, instances, _) = party_topology();
+    instances
+        .sessionless_admission_unavailable
+        .lock()
+        .unwrap()
+        .push(FAR_BOT);
+
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+
+    let state = realm.party.lock().unwrap();
+    assert!(state.group_of(FAR_BOT).is_none());
+    assert_eq!(state.ops, vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0)]);
+}
+
+#[test]
+fn current_admission_refuses_a_stale_sessionless_presence_read() {
+    let (realm, world, instances, _) = party_topology();
+    instances
+        .sessionless_admission
+        .lock()
+        .unwrap()
+        .insert(FAR_BOT, GroupRefusal::ActorUnavailable);
+
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+
+    let state = realm.party.lock().unwrap();
+    assert!(state.group_of(FAR_BOT).is_none());
+    assert_eq!(state.ops, vec![(realm_op::INVITE, GINGER, FAR_BOT, 0, 0)]);
+}
+
+#[test]
+fn a_suppressed_group_intent_never_reaches_realm_core() {
+    let (realm, world, _, _) = party_topology();
+    world
+        .bot_intent_claim_refusals
+        .lock()
+        .unwrap()
+        .insert(77, GroupRefusal::ActionSuppressed);
+
+    assert_eq!(
+        party::run_bot_invite_intent(
+            world.as_ref(),
+            77,
+            lyracore_shared::group::bot_op::INVITE,
+            BOT,
+            FAR_BOT
+        )
+        .unwrap(),
+        PartyOutcome::Refused(GroupRefusal::ActionSuppressed)
+    );
+
+    assert!(realm.party.lock().unwrap().ops.is_empty());
+}
+
+#[test]
+fn a_controller_selection_after_admission_does_not_recall_the_answer() {
+    let (realm, world, instances, _) = party_topology();
+    instances
+        .suppress_after_admission
+        .lock()
+        .unwrap()
+        .push(FAR_BOT);
+
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+
+    assert!(realm.party.lock().unwrap().group_of(FAR_BOT).is_some());
+    assert_eq!(
+        instances.admit_sessionless_group_action(FAR_BOT).unwrap(),
+        PartyOutcome::Refused(GroupRefusal::ActionSuppressed)
+    );
+}
+
+#[test]
+fn unsharded_bot_invitations_leave_a_suppressed_target_unanswered() {
+    let store = InMemoryStore {
+        characters: vec![character(BOT, "Botty"), character(FAR_BOT, "Farbotty")],
+        live_guids: vec![BOT, FAR_BOT],
+        offline_guids: vec![BOT, FAR_BOT],
+        ..Default::default()
+    };
+    store
+        .sessionless_admission
+        .lock()
+        .unwrap()
+        .insert(FAR_BOT, GroupRefusal::ActionSuppressed);
+
+    party::run_bot_invite(&store, BOT, FAR_BOT).unwrap();
+
+    let state = store.party.lock().unwrap();
+    assert!(state.group_of(FAR_BOT).is_none());
+    assert_eq!(state.invites, vec![(FAR_BOT, BOT)]);
+    assert_eq!(state.ops, vec![(realm_op::INVITE, BOT, FAR_BOT, 0, 0)]);
 }

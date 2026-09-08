@@ -138,10 +138,12 @@ pub enum GroupRefusal {
     InvalidLootRules,
     /// Another Gateway already claimed this bot invite intent.
     IntentAlreadyClaimed,
+    /// The Package has suppressed session-less actions for this Character.
+    ActionSuppressed,
 }
 
 impl GroupRefusal {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::ActorUnavailable,
         Self::InviteSelf,
         Self::NoSuchPlayer,
@@ -156,6 +158,7 @@ impl GroupRefusal {
         Self::KickSelf,
         Self::InvalidLootRules,
         Self::IntentAlreadyClaimed,
+        Self::ActionSuppressed,
     ];
 
     pub fn as_tag(self) -> &'static str {
@@ -174,6 +177,7 @@ impl GroupRefusal {
             Self::KickSelf => "group:kick_self",
             Self::InvalidLootRules => "group:invalid_loot_rules",
             Self::IntentAlreadyClaimed => "group:intent_already_claimed",
+            Self::ActionSuppressed => "group:action_suppressed",
         }
     }
 

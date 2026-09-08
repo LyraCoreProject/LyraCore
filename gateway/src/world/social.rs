@@ -293,7 +293,8 @@ fn party_result_for(refusal: GroupRefusal) -> PartyResult {
         | GroupRefusal::InviterUnavailable
         | GroupRefusal::KickSelf
         | GroupRefusal::InvalidLootRules
-        | GroupRefusal::IntentAlreadyClaimed => PartyResult::BadPlayerName,
+        | GroupRefusal::IntentAlreadyClaimed
+        | GroupRefusal::ActionSuppressed => PartyResult::BadPlayerName,
     }
 }
 
