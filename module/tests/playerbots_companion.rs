@@ -2,46 +2,137 @@
 
 mod support;
 use std::collections::BTreeMap;
-use support::{poll_until, Standalone, POLL_TIMEOUT};
+use support::{POLL_TIMEOUT, Standalone, poll_until};
 
 const HEAL: &str = "5090100";
 const CHANNEL_HEAL: &str = "5090104";
+const PB002_CORE: &str = "e6a755db0a150bbf73ad97b972fe829f20f6816c";
+const PB002_CORE_TREE: &str = "0769d6b7cd96d7e23a7ad16528399544ece0e2ec";
+const PB002_COLLECTION: &str = "155c9e401afb06d5731acedf8fc35a81dbe4aaa6";
+const PB002_COLLECTION_TREE: &str = "e2558a9cf421a74f79497ef361dbbfceb911a0d1";
+const PB002_PACKAGE_IDENTITY: &str =
+    "33fcb8a217aad84f46f9ad65efdad23be24bad8e29828777de7c7e6469417161";
+
+fn git(path: &std::path::Path, args: &[&str]) -> String {
+    let result = std::process::Command::new("git")
+        .current_dir(path)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    String::from_utf8(result.stdout).unwrap().trim().to_string()
+}
+
+fn digest_files(path: &std::path::Path, digest: &mut blake3::Hasher) {
+    let mut children: Vec<_> = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    children.sort();
+    digest.update(&(children.len() as u64).to_le_bytes());
+    for child in children {
+        let name = child.file_name().unwrap().as_encoded_bytes();
+        digest.update(&(name.len() as u64).to_le_bytes());
+        digest.update(name);
+        digest.update(&[u8::from(child.is_dir())]);
+        if child.is_dir() {
+            digest_files(&child, digest);
+        } else {
+            let contents = std::fs::read(&child).unwrap();
+            digest.update(&(contents.len() as u64).to_le_bytes());
+            digest.update(&contents);
+        }
+    }
+}
+
+struct PrecedingPb002 {
+    wasm: Vec<u8>,
+    manifest: serde_json::Value,
+}
+
+fn preceding_pb002() -> PrecedingPb002 {
+    let wasm_path = std::env::var_os("PLAYERBOTS_COMPANION_PRECEDING_WASM")
+        .expect("PLAYERBOTS_COMPANION_PRECEDING_WASM must name the merged PB-002 Wasm");
+    let manifest_path = std::env::var_os("PLAYERBOTS_COMPANION_PRECEDING_MANIFEST")
+        .expect("PLAYERBOTS_COMPANION_PRECEDING_MANIFEST must describe that Wasm build");
+    let core_path = std::env::var_os("PLAYERBOTS_COMPANION_PRECEDING_CORE")
+        .expect("PLAYERBOTS_COMPANION_PRECEDING_CORE must name the clean PB-002 checkout");
+    let collection_path = std::env::var_os("PLAYERBOTS_COMPANION_PRECEDING_COLLECTION")
+        .expect("PLAYERBOTS_COMPANION_PRECEDING_COLLECTION must name the clean PB-002 checkout");
+    let core_path = std::path::Path::new(&core_path);
+    let collection_path = std::path::Path::new(&collection_path);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+    let wasm = std::fs::read(&wasm_path).unwrap();
+
+    assert_eq!(manifest["core"], PB002_CORE);
+    assert_eq!(manifest["collection"], PB002_COLLECTION);
+    assert_eq!(manifest["core_tree"], PB002_CORE_TREE);
+    assert_eq!(manifest["collection_tree"], PB002_COLLECTION_TREE);
+    assert_eq!(manifest["core_dirty"], false);
+    assert_eq!(manifest["collection_dirty"], false);
+    assert_eq!(manifest["rust"], "1.93.0");
+    assert_eq!(manifest["spacetimedb"], "2.7.1");
+    assert_eq!(manifest["target"], "wasm32-unknown-unknown");
+    assert_eq!(manifest["profile"], "release");
+    assert_eq!(manifest["features"], serde_json::json!(["debug_reducers"]));
+    assert_eq!(
+        manifest["installed_packages"],
+        serde_json::json!(["dungeons", "example", "fire_nova", "playerbots"])
+    );
+    assert_eq!(manifest["package_content_identity"], PB002_PACKAGE_IDENTITY);
+    assert_eq!(manifest["wasm_bytes"].as_u64(), Some(wasm.len() as u64));
+
+    assert_eq!(git(core_path, &["rev-parse", "HEAD"]), PB002_CORE);
+    assert_eq!(
+        git(core_path, &["rev-parse", "HEAD^{tree}"]),
+        PB002_CORE_TREE
+    );
+    assert!(git(core_path, &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        git(collection_path, &["rev-parse", "HEAD"]),
+        PB002_COLLECTION
+    );
+    assert_eq!(
+        git(collection_path, &["rev-parse", "HEAD^{tree}"]),
+        PB002_COLLECTION_TREE
+    );
+    if let Some(playerbots_tree) = manifest["playerbots_tree"].as_str() {
+        assert_eq!(
+            git(collection_path, &["rev-parse", "HEAD:playerbots"]),
+            playerbots_tree
+        );
+    }
+    assert!(git(collection_path, &["status", "--porcelain"]).is_empty());
+    let mut package_digest = blake3::Hasher::new();
+    digest_files(&collection_path.join("playerbots"), &mut package_digest);
+    assert_eq!(
+        package_digest.finalize().to_hex().as_str(),
+        PB002_PACKAGE_IDENTITY
+    );
+
+    let sha256 = std::process::Command::new("sha256sum")
+        .arg(&wasm_path)
+        .output()
+        .unwrap();
+    assert!(sha256.status.success());
+    let sha256 = String::from_utf8(sha256.stdout).unwrap();
+    assert_eq!(
+        sha256.split_whitespace().next().unwrap(),
+        manifest["wasm_sha256"].as_str().unwrap()
+    );
+    if let Some(expected) = manifest["wasm_blake3"].as_str() {
+        assert_eq!(blake3::hash(&wasm).to_hex().as_str(), expected);
+    }
+
+    PrecedingPb002 { wasm, manifest }
+}
 
 fn record_inputs(node: &Standalone) {
     let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
     let package = core.join("packages/playerbots");
-    let git = |path: &std::path::Path, args: &[&str]| {
-        let result = std::process::Command::new("git")
-            .current_dir(path)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(result.status.success());
-        String::from_utf8(result.stdout).unwrap().trim().to_string()
-    };
-    fn digest_files(path: &std::path::Path, digest: &mut blake3::Hasher) {
-        let mut children: Vec<_> = std::fs::read_dir(path)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect();
-        children.sort();
-        digest.update(&(children.len() as u64).to_le_bytes());
-        for child in children {
-            let name = child.file_name().unwrap().as_encoded_bytes();
-            digest.update(&(name.len() as u64).to_le_bytes());
-            digest.update(name);
-            digest.update(&[u8::from(child.is_dir())]);
-            if child.is_dir() {
-                digest_files(&child, digest);
-            } else {
-                let contents = std::fs::read(&child).unwrap();
-                digest.update(&(contents.len() as u64).to_le_bytes());
-                digest.update(&contents);
-            }
-        }
-    }
     let mut digest = blake3::Hasher::new();
     digest_files(&package, &mut digest);
     let mut record: serde_json::Value =
@@ -176,11 +267,12 @@ fn priest_follows_a_moving_human_leader_without_pulling() {
         1,
         "the unrelated hostile fixture must be present"
     );
-    assert!(node
-        .query_rows(&format!(
+    assert!(
+        node.query_rows(&format!(
             "SELECT * FROM game_melee_attack WHERE attacker_guid = {priest}"
         ))
-        .is_empty());
+        .is_empty()
+    );
     evidence(&node, "follow");
 }
 
@@ -443,16 +535,18 @@ fn unlearned_actor_heal_refuses_without_cast_power_or_cooldown_state() {
             .any(|row| row["outcome"].contains("unlearnedSpell")),
         "{action:?}"
     );
-    assert!(node
-        .query_rows(&format!(
+    assert!(
+        node.query_rows(&format!(
             "SELECT * FROM game_pending_cast WHERE caster_guid = {priest}"
         ))
-        .is_empty());
-    assert!(node
-        .query_rows(&format!(
+        .is_empty()
+    );
+    assert!(
+        node.query_rows(&format!(
             "SELECT * FROM game_spell_cd WHERE caster_guid = {priest} AND spell_id = {HEAL}"
         ))
-        .is_empty());
+        .is_empty()
+    );
     assert_eq!(
         node.query_rows(&format!(
             "SELECT power FROM game_world_entity WHERE guid = {priest}"
@@ -668,13 +762,8 @@ fn death_and_resurrection_preserve_role_then_regroup() {
 #[test]
 #[ignore = "requires the pinned PB-002 Wasm, SpacetimeDB, and the playerbots Package"]
 fn populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() {
-    let old_path = std::env::var_os("PLAYERBOTS_COMPANION_PRECEDING_WASM")
-        .expect("PLAYERBOTS_COMPANION_PRECEDING_WASM must name the merged PB-002 Wasm");
-    let old_wasm = std::fs::read(old_path).unwrap();
-    assert_eq!(
-        blake3::hash(&old_wasm).to_hex().to_string(),
-        "e5bfa3e63cd2b03c782af829029030b9a6368b0e6552295958cc128613083fcb"
-    );
+    let preceding = preceding_pb002();
+    let old_wasm = preceding.wasm;
     assert_ne!(
         blake3::hash(&old_wasm),
         blake3::hash(support::module_bytes())
@@ -689,9 +778,9 @@ fn populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() 
         .clone();
     node.assert_call("playerbots_fixture_runner_stage", &[&bot, "true"]);
     select(&node, &bot, "cohort");
-    assert!(poll_until(POLL_TIMEOUT, || runner(&node, &bot)
-        ["foreground"]
-        .contains("cast")));
+    assert!(poll_until(POLL_TIMEOUT, || {
+        runner(&node, &bot)["foreground"].contains("cast")
+    }));
     for _ in 0..4 {
         node.assert_call("playerbots_fixture_runner_damage", &[&bot, "0", "1"]);
     }
@@ -712,8 +801,7 @@ fn populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() 
         path,
         serde_json::to_vec_pretty(&serde_json::json!({
             "spacetimedb": "2.7.1",
-            "preceding_core": "e6a755db0a150bbf73ad97b972fe829f20f6816c",
-            "preceding_collection": "155c9e401afb06d5731acedf8fc35a81dbe4aaa6",
+            "preceding_build": preceding.manifest,
             "preceding_wasm_blake3": blake3::hash(&old_wasm).to_hex().to_string(),
             "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
             "before": before,
@@ -727,13 +815,8 @@ fn populated_pb002_runner_state_upgrades_with_objective_and_foreground_intact() 
 #[test]
 #[ignore = "requires the pinned PB-002 Wasm, SpacetimeDB, and the playerbots Package"]
 fn canonical_lesser_heal_repair_preserves_changed_definitions() {
-    let old_path = std::env::var_os("PLAYERBOTS_COMPANION_PRECEDING_WASM")
-        .expect("PLAYERBOTS_COMPANION_PRECEDING_WASM must name the merged PB-002 Wasm");
-    let old_wasm = std::fs::read(old_path).unwrap();
-    assert_eq!(
-        blake3::hash(&old_wasm).to_hex().to_string(),
-        "e5bfa3e63cd2b03c782af829029030b9a6368b0e6552295958cc128613083fcb"
-    );
+    let preceding = preceding_pb002();
+    let old_wasm = preceding.wasm;
     let mut node = Standalone::start("playerbots-companion-seed-repair");
     node.publish_module_bytes(&old_wasm);
     node.assert_call("claim_operator", &[]);
@@ -769,8 +852,7 @@ fn canonical_lesser_heal_repair_preserves_changed_definitions() {
         path,
         serde_json::to_vec_pretty(&serde_json::json!({
             "spacetimedb": "2.7.1",
-            "preceding_core": "e6a755db0a150bbf73ad97b972fe829f20f6816c",
-            "preceding_collection": "155c9e401afb06d5731acedf8fc35a81dbe4aaa6",
+            "preceding_build": preceding.manifest,
             "preceding_wasm_blake3": blake3::hash(&old_wasm).to_hex().to_string(),
             "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
             "canonical_lesser_heal_target_after_repair": canonical_target,
