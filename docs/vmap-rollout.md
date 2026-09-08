@@ -137,7 +137,7 @@ They use `game_go_collider` rows indexed by map and instance. Map 36 needs no st
 for these rays. Static geometry retains the active-generation requirement; the navigation grid
 still supplies the fallback on maps without one. Area and indoor queries stay static.
 
-GameObject imports, model imports, debug spawns and instance creation register eligible doors.
+GameObject imports, model imports, pool activation, debug spawns and instance creation register eligible doors.
 Gameobjects Package Delta apply and replay reconcile after all spawn and template changes finish.
 Model imports rebuild the registry so either import order works. `rebuild_go_colliders` is an
 Operator reconciliation for existing rows after a publish. Open doors keep their registration;

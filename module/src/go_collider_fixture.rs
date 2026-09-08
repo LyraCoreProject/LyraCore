@@ -159,6 +159,87 @@ fn packed_model(entry: u32, scale: f32) -> String {
     format!("{entry},{scale},0.01,{hex}")
 }
 
+fn pool_lifecycle(ctx: &ReducerContext) -> Result<(), String> {
+    use crate::gameobject::{
+        game_gameobject_pool, game_gameobject_pool_member, GameObjectPool, GameObjectPoolMember,
+    };
+    let pools = ctx.db.game_gameobject_pool();
+    let members = ctx.db.game_gameobject_pool_member();
+    pools.insert(GameObjectPool {
+        pool_id: ENTRY,
+        max_active: 1,
+        in_place: false,
+    });
+    let mut member = members.insert(GameObjectPoolMember {
+        point_id: 0,
+        pool_id: ENTRY,
+        template_entry: ENTRY,
+        map_id: MAP,
+        x: -2.0,
+        y: 0.0,
+        z: 0.0,
+        orientation: 0.0,
+        weight: 1,
+    });
+    let guid = crate::gameobject::pool_point_guid(member.point_id);
+    for (type_id, expected) in [(25, None), (0, Some(-1.0))] {
+        package_claim(
+            ctx,
+            &format!(
+                r#"{{"table":"game_gameobject_template","key":{{"entry":{ENTRY}}},"operation":"update","fields":{{"type_id":{{"type":"u8","value":{type_id}}}}}}}"#
+            ),
+        )?;
+        crate::gameobject::arm_all_pools(ctx)?;
+        rays(ctx, 0, expected)?;
+    }
+
+    member.x = 40.0;
+    member = members.point_id().update(member);
+    crate::gameobject::arm_all_pools(ctx)?;
+    rays(ctx, 0, Some(1.0))?;
+    for hit in [
+        crate::vmap::los_ray(ctx, MAP, 0, [36.0, 0.5, 0.0], [44.0, 0.5, 0.0]),
+        crate::vmap::collision_ray(ctx, MAP, 0, [36.0, 0.5, 0.0], [44.0, 0.5, 0.0]),
+    ] {
+        require(
+            hit.is_some_and(|p| (p[0] - 41.0).abs() < 0.001),
+            "pool rearm left the collider at its old position",
+        )?;
+    }
+    member.x = -2.0;
+    let point_id = member.point_id;
+    member = members.point_id().update(member);
+    crate::gameobject::reroll_pool(ctx, ENTRY, guid);
+    rays(ctx, 0, Some(-1.0))?;
+
+    member.weight = 0;
+    member = members.point_id().update(member);
+    crate::gameobject::reroll_pool(ctx, ENTRY, guid);
+    require(
+        ctx.db.game_go_collider().go_guid().find(guid).is_none(),
+        "empty pool reroll retained a collider",
+    )?;
+    rays(ctx, 0, Some(1.0))?;
+    member.weight = 1;
+    members.point_id().update(member);
+    crate::gameobject::arm_all_pools(ctx)?;
+    rays(ctx, 0, Some(-1.0))?;
+    pools.pool_id().update(GameObjectPool {
+        pool_id: ENTRY,
+        max_active: 0,
+        in_place: false,
+    });
+    crate::gameobject::arm_all_pools(ctx)?;
+    require(
+        ctx.db.game_go_collider().go_guid().find(guid).is_none(),
+        "cleared pool retained a collider",
+    )?;
+    rays(ctx, 0, Some(1.0))?;
+    members.point_id().delete(point_id);
+    pools.pool_id().delete(ENTRY);
+    Ok(())
+}
+
 #[reducer]
 pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -212,6 +293,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     crate::gameobject::despawn_from_relay(ctx, nearer_guid)?;
 
     package_lifecycle(ctx)?;
+    pool_lifecycle(ctx)?;
     let first = crate::instance::create_instance(ctx, MAP, 0)?;
     let sibling = crate::instance::create_instance(ctx, MAP, 0)?;
     rays(ctx, first, Some(1.0))?;

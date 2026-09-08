@@ -410,6 +410,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
     let gos = ctx.db.game_gameobject();
     let members = ctx.db.game_gameobject_pool_member();
     // 1. DEACTIVATE the gathered point (the −1). The just-freed point is itself eligible again below.
+    crate::go_collider::remove(ctx, gathered_guid);
     gos.guid().delete(gathered_guid);
     // 2. Candidate set = pool members with weight > 0 that are currently INACTIVE (no live row at their
     //    derived guid). The just-deleted gathered point is now inactive → eligible to be re-picked (a
@@ -447,7 +448,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
 /// `arm_pool` (initial fill) and `reroll_pool` (rotation). Idempotent-by-guid: the caller guarantees
 /// the point is currently inactive (no row at its guid), so this is a plain insert.
 fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
-    ctx.db.game_gameobject().insert(GameObject {
+    let go = ctx.db.game_gameobject().insert(GameObject {
         guid: pool_point_guid(m.point_id),
         template_entry: m.template_entry,
         map_id: m.map_id,
@@ -469,6 +470,7 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         rotation_2: 0.0,
         rotation_3: 0.0,
     });
+    crate::go_collider::register(ctx, &go);
 }
 
 /// Every map id this database currently holds REAL imported spatial content for, read off
@@ -538,6 +540,7 @@ pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
         .unwrap_or(0);
     // Clear any prior live rows at THIS pool's points (idempotent arming — a re-setup re-fills cleanly).
     for m in members.by_pool().filter(&pool_id) {
+        crate::go_collider::remove(ctx, pool_point_guid(m.point_id));
         gos.guid().delete(pool_point_guid(m.point_id));
     }
     // Activate max_active weighted-distinct points: re-query the inactive eligible set each iteration (a
