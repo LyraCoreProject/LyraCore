@@ -598,11 +598,12 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
             &[bot, banked],
         );
         run_once(&node);
+        record(&node, &format!("provided-item-loss-class-{class}"));
         assert_eq!(quest(&node, bot, 3905), held_before);
         let admission = node.query_rows(&format!(
             "SELECT selected_quest, state, missing_capability, detail, observed_micros, wait_until_micros FROM pkg_playerbots_quest_admission WHERE character_guid = {bot}"
         ));
-        assert_eq!(admission[0]["selected_quest"], "none");
+        assert_eq!(admission[0]["selected_quest"], "(none = ())");
         assert!(admission[0]["state"].contains("waiting"));
         assert!(admission[0]["missing_capability"].contains("missingProvidedItem"));
         assert!(admission[0]["detail"].contains("no longer carried"));
