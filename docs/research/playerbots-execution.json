@@ -103,8 +103,9 @@
     "prs": [
       {
         "url": "https://github.com/LyraCoreProject/LyraCore/pull/481",
-        "label": "Execution report #481",
-        "status": "open"
+        "label": "Execution report #481 merged",
+        "status": "merged",
+        "merge_commit": "f32fad66caefa499757f794310744302914e4dd5"
       }
     ]
   },
@@ -555,6 +556,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 11:19 UTC",
-  "summary": "PB-001 reproduced the immediate-heal defect and passed the first real timed-cast fixture. Cast and navigation work is underway. The report PR passed independent review; imported-world and client acceptance remain pending."
+  "updated_at": "2026-09-08 11:40 UTC",
+  "summary": "Report and tracker PR #481 merged after independent review and all CI checks. PB-001 passed its cast fixtures and blocked-quest regression; navigation and interaction integration continues. No implementation ticket is complete yet."
 }
