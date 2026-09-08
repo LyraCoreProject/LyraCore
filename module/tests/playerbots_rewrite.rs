@@ -445,8 +445,38 @@ fn playerbots_caught_turn_in_refusals_leave_inventory_and_rewards_unchanged() {
     let bot = &bots[0];
     node.assert_call("debug_set_nav_enabled", &["true"]);
     node.assert_call("playerbots_fixture_interaction_stage", &[bot, "false"]);
+    let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
+    node.assert_call("playerbots_fixture_attack", &[bot, &target]);
+    node.assert_call(
+        "debug_encounter_move",
+        &[&target, "1303", "1200", "50", "false"],
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT guid FROM game_creature_spline WHERE guid = {target}"
+        ))
+        .len(),
+        1
+    );
+    node.assert_call("playerbots_fixture_interaction_stage", &[bot, "false"]);
+    assert!(node
+        .query_rows(&format!(
+            "SELECT guid FROM game_creature_spline WHERE guid = {target}"
+        ))
+        .is_empty());
+    assert!(node
+        .query_rows(&format!(
+            "SELECT attacker_guid FROM game_melee_attack WHERE target_guid = {target}"
+        ))
+        .is_empty());
     let before = inventory(&node, bot);
     assert_eq!(before.len(), 16);
+    assert_eq!(
+        node.query_rows("SELECT id FROM game_creature_quest WHERE quest_entry = 50910")
+            .len(),
+        2,
+        "restaging must retain exactly one relation for each quest role"
+    );
     let read_player = || {
         node.query_rows(&format!(
             "SELECT money, xp, level FROM game_world_entity WHERE guid = {bot}"
@@ -461,7 +491,8 @@ fn playerbots_caught_turn_in_refusals_leave_inventory_and_rewards_unchanged() {
     let quest = read_quest();
     for choice in ["99", "0"] {
         node.assert_call("playerbots_fixture_interact", &[bot, "false", choice]);
-        let result = node.query_rows("SELECT outcome FROM pkg_playerbots_action");
+        let result =
+            node.query_rows("SELECT outcome FROM pkg_playerbots_action WHERE quest_entry = 50910");
         assert!(result[0]["outcome"].contains("refused"), "{result:?}");
         if choice == "0" {
             assert!(result[0]["outcome"].contains("inventoryFull"), "{result:?}");
@@ -477,7 +508,8 @@ fn playerbots_caught_turn_in_refusals_leave_inventory_and_rewards_unchanged() {
     node.assert_call("playerbots_fixture_free_slot", &[bot]);
     node.assert_call("playerbots_fixture_interact", &[bot, "false", "0"]);
     assert_eq!(
-        node.query_rows("SELECT outcome FROM pkg_playerbots_action")[0]["outcome"],
+        node.query_rows("SELECT outcome FROM pkg_playerbots_action WHERE quest_entry = 50910")[0]
+            ["outcome"],
         "(completed = ())"
     );
     assert_eq!(read_quest()[0]["rewarded"], "true");
@@ -503,7 +535,9 @@ fn playerbots_acceptance_reports_range_and_capacity_before_granting_a_quest() {
     let (node, bots) = fixture("playerbots-accept-atomic", "1");
     let bot = &bots[0];
     node.assert_call("debug_set_nav_enabled", &["true"]);
-    node.assert_call("playerbots_fixture_interaction_stage", &[bot, "true"]);
+    for _ in 0..2 {
+        node.assert_call("playerbots_fixture_interaction_stage", &[bot, "true"]);
+    }
     let before = inventory(&node, bot);
     node.assert_call("playerbots_fixture_position", &[bot, "1400"]);
     node.assert_call("playerbots_fixture_interact", &[bot, "true", "0"]);
