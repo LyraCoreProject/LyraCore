@@ -1,12 +1,13 @@
 {
-  "updated_at": "2026-09-08 07:24 UTC",
-  "base_revision": "408f417cb4b909065bc6c253eba9477c2e402d15",
-  "status_note": "All 66 open issues have current assessments. Item GUID PR #473 and loot retry PR #474 merged after CI and review. Issue #71 is closed as source and design complete. Spell event PR #476 and door collision PR #477 passed every current-head CI job and the combined proof. Human schema approval is pending.",
+  "updated_at": "2026-09-08 08:05 UTC",
+  "base_revision": "bfe651f8f101dd7cba1deaaacdb3cc1b59f3e444",
+  "status_note": "All 65 open issues have current assessments. Item GUID PR #473, loot retry PR #474 and Spell event PR #476 merged; #71 and #72 are closed as source complete. Door PR #477 has schema approval. Its CodeRabbit fixture finding is fixed and independently reviewed; fresh CI is running before merge.",
   "monitoring_note": "Codex owns this report and the dispatch order. Monitoring is active during this work session. Each implementer follows checks and actual CodeRabbit or human review through fixes; Codex handles final review and merge. No unattended scheduler is installed. The report and its repository source preserve the next actions between sessions.",
   "focus": [
-    "Complete human schema review for Spell event PR #476 and door collision PR #477 after final integration checks. Their implementers own CI and review responses.",
+    "Monitor fresh CI for door PR #477 at 37d1a1e, then merge. The user approved the schema and the fixture-data review finding is resolved. Keep canonical performance and imported Deadmines acceptance open.",
+    "Correct the demonstrated low-ceiling regression, resolve the full navigation seam after #477 merges, and rerun focused geometry, movement, door and CI checks. Codex is preparing a candidate correction in an isolated review checkout.",
     "Keep the merged item GUID rollout subject to its authorized legacy-state and range audit. Source issue #71 is complete.",
-    "Revise the next #84 design for receipt cleanup and authority over staged rolls. Codex owns the revision; the GPT-5.6 Sol source study and GPT-6 Astra adversarial review are saved with the local Ticket.",
+    "Finish the #84 protocol review for exclusive roll authority, staging and disband recovery, and safe retirement of completed receipts. Preserve current gameplay; a fixed capacity policy is separate.",
     "Keep original loot, imported-door and client acceptance open where the requested evidence is still missing."
   ],
   "issues": [
@@ -697,9 +698,8 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "This issue depends only on source work in #113 and should ship in the same source DAG. An instance-0-only registry would create a temporary production interface that the next change immediately replaces. Current callers already hold entity instance identity. Imported Deadmines calibration remains a separate Operator gate after the source and synthetic tests merge.",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417. The implementer will use the next included CodeRabbit review and address any findings. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
+      "next_action": "Monitor fresh CI for door PR #477 at 37d1a1e, then merge. The user approved the schema and the fixture-data review finding is resolved. Keep canonical performance and imported Deadmines acceptance open.",
       "blockers": [
-        "Human review is required before the additive schema ships.",
         "Final Deadmines acceptance needs approved client data and a named development Shard."
       ],
       "evidence": [
@@ -726,9 +726,9 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "PR #254 supplied game_go_model. The remaining collider table, lifecycle, transform, state Gate, broad-phase reject, and ray merge are specified and testable with synthetic data. Dynamic collider eligibility can depend on the global Gate and registry data while static geometry keeps its active-generation rule, so map 36 needs no invented static generation or new product decision. Implementing #114 in the same DAG avoids an instance-0-only production path.",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417. The implementer will use the next included CodeRabbit review and address any findings. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
+      "next_action": "Monitor fresh CI for door PR #477 at 37d1a1e, then merge. The user approved the schema and the fixture-data review finding is resolved. Keep canonical performance and imported Deadmines acceptance open.",
       "blockers": [
-        "Human review is required before the additive schema ships; imported-door calibration stays open."
+        "Canonical-box collision and sight-ray performance must be measured before closing #113."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/113",
@@ -977,9 +977,9 @@
       "confidence": "medium",
       "disposition": "decision",
       "rationale": "PR #474 merged the proved completion-marker fix. The remaining work must carry immutable source loot identity beyond the one-second event lifetime and survive Gateway restart. That is a larger design and schema change; retaining only corpse GUID and slot could award a later respawn drop.",
-      "next_action": "Revise the durable settlement design before implementation. Adversarial review found receipt cleanup can lose the original outcome, and source staging rolls need explicit resolution authority after promotion. Keep original incident acceptance separate.",
+      "next_action": "Finish the #84 protocol review for exclusive roll authority, staging and disband recovery, and safe retirement of completed receipts. Preserve current gameplay; a fixed capacity policy is separate.",
       "blockers": [
-        "The receipt cleanup and roll authority protocols need a reviewed design.",
+        "Exclusive resolution authority, staging/disband recovery and receipt retirement need one reviewed design.",
         "The original incident rerun needs a disposable three-Shard development Realm and verified Headless Client scenario dispatch."
       ],
       "evidence": [
@@ -990,7 +990,9 @@
         "https://github.com/LyraCoreProject/LyraCore/pull/474",
         "Gateway suite: 1,444 passed, 7 private tests ignored. Formatting and Gateway clippy passed. The regression failed on the unchanged Gateway and passed with the marker fix.",
         "https://github.com/LyraCoreProject/LyraCore/issues/84#issuecomment-5580498204",
-        "The source design study and adversarial review are saved in the local #84 Tickets. An acknowledgment timeout does not bound a suspended Gateway; promotion_source equal to self does not distinguish source staging from single-database resolution authority."
+        "The source design study and adversarial review are saved in the local #84 Tickets. An acknowledgment timeout does not bound a suspended Gateway; promotion_source equal to self does not distinguish source staging from single-database resolution authority.",
+        "A follow-up design proof rejects a contiguous cleanup frontier: one unfinished roll retains unlimited later receipts. Outstanding records plus an issued ceiling prevent that accumulation. Total storage still needs source and Realm admission caps; this is a design proposal, not an implemented guarantee.",
+        "The source admission trace found that withholding later CorpseLoot rows creates a waiting queue and can pin corpse decay. Refusing creation can roll back a death or aura tick; FFA fallback changes group distribution. The next recovery Ticket preserves existing admission and retires completed receipts, with storage proportional to unfinished work. A fixed capacity policy is outside that Ticket."
       ],
       "related_prs": [
         439,
@@ -1222,32 +1224,31 @@
     },
     {
       "number": 72,
-      "summary": "SpellCastEvent still multiplexes several wire signals through independent booleans and zero-value conventions.",
+      "summary": "SpellCastEvent has an explicit kind and preserves legacy decoding; the source change is complete.",
       "importance": 3,
       "gain": 3,
       "effort": 3,
       "confidence": "high",
-      "disposition": "review",
-      "rationale": "Legacy decoding can treat the appended zero kind as the current field-derived form, while new constructors stamp explicit kinds. That is a bounded compatibility design. Human schema review belongs after the concrete change.",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417.",
-      "blockers": [
-        "Human schema review before shipping."
-      ],
+      "disposition": "done",
+      "rationale": "PR #476 appends the default-zero kind, stamps typed constructors and dispatches explicitly while keeping legacy payload fields. It merged after human schema approval, independent review and all CI. Module-before-Gateway rollout remains an operational step.",
+      "next_action": "Source complete; #72 closed. Publish the Module before starting the new Gateway during an authorized rollout.",
+      "blockers": [],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/72",
-        "module/src/spell/tables.rs: SpellCastEvent still encodes five signals through independent booleans and zero-value fields.",
-        "gateway/src/stdb/subscriptions.rs: cast_event_outbound decodes those signals through ordered branches, which can remain the kind-zero compatibility path.",
+        "PR #476 appended the explicit SpellCastEvent kind and updated all typed constructors.",
+        "gateway/src/stdb/subscriptions.rs now dispatches known kinds explicitly and retains the old branch order for kind zero.",
         "Typed SpellCastEvent constructors centralize the baseline, so stamping an explicit appended kind stays local.",
         "docs/danger-zones.md permits an end-appended defaulted numeric column and requires human schema review before shipping.",
         "https://github.com/LyraCoreProject/LyraCore/pull/476",
-        "Local proof: Module 1501 passed; Gateway 1446 passed, 7 ignored; importer 360 passed, 8 ignored; shared 156 passed. All 990 bindings match; strict lint, build, formatting and offline preflight pass."
+        "Local proof: Module 1501 passed; Gateway 1446 passed, 7 ignored; importer 360 passed, 8 ignored; shared 156 passed. All 990 bindings match; strict lint, build, formatting and offline preflight pass.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/72#issuecomment-5581049237"
       ],
       "related_prs": [
         476
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/72",
-      "updatedAt": "2026-08-11T08:18:27Z",
-      "github_state": "open",
+      "updatedAt": "2026-09-08T07:28:15Z",
+      "github_state": "closed",
       "owner": "GPT-5.6 Sol, high effort, Spell event implementer",
       "score": 3
     },
@@ -1267,7 +1268,7 @@
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L266-L286. item_guid_for masks the owner to 24 bits and next_item_guid increments the current maximum without a boundary check.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/ops.rs#L213-L228. Routine item storage repeatedly calls next_item_guid, so allocation is not limited to the initial slot set.",
         "https://github.com/LyraCoreProject/LyraCore/blob/a6e7119484e35c8779f0f013af7dadafbc293ce7/module/src/items/tables.rs#L248-L264. Cross-database transfer preserves item GUIDs because the code assumes they are already namespaced per Character.",
-        "items/tables.rs masks the owner to 24 bits and next_item_guid increments without enforcing the 256-value block.",
+        "Before PR #473, items/tables.rs masked the owner to 24 bits and next_item_guid incremented without enforcing the 256-value block.",
         "docs/danger-zones.md requires human review before migration work ships; it does not reserve implementation design for a person.",
         "The issue already supplies saturation, transfer identity, migration, and collision cases for a bounded design Ticket.",
         "The first PR #473 revision reused free IDs. Implementer review found same-transaction identity reuse in crafting and quest rewards. The merged c0ddfd0 revision uses durable GUID Ranges instead.",
@@ -4410,8 +4411,8 @@
       "head": "af13d1e94c79601545d5296f88455f91c03207bf",
       "title": "refactor(spells): give cast events an explicit kind",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/476",
-      "checked_at": "2026-09-08 07:24 UTC",
-      "github_state": "OPEN",
+      "checked_at": "2026-09-08 07:30 UTC",
+      "github_state": "MERGED",
       "checks": [
         {
           "name": "durable",
@@ -4443,22 +4444,23 @@
           "source": "Hourly quota prevented actual review."
         }
       ],
-      "status": "All CI and independent review passed; human schema approval pending",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417.",
-      "review_note": "Root reviewed explicit dispatch and kind-zero legacy ordering. Local Module, Gateway, importer and shared suites, all 990 generated bindings, strict lint, build, formatting and offline preflight passed. CodeRabbit posted a rate limit. Root combined all three source changes without conflicts. Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed."
+      "status": "Merged after human schema approval, CI and independent review",
+      "next_action": "Source complete; #72 closed. Publish the Module before starting the new Gateway during an authorized rollout.",
+      "review_note": "Root reviewed explicit dispatch and kind-zero legacy ordering. Local Module, Gateway, importer and shared suites, all 990 generated bindings, strict lint, build, formatting and offline preflight passed. CodeRabbit posted a rate limit. Root combined all three source changes without conflicts. Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed. The user approved the schema change, and root merged af13d1e as 02a0662 after rechecking all CI and zero unresolved threads.",
+      "merge_commit": "02a0662cf22175d1c72de18ae34846377daaabbf"
     },
     {
       "number": 477,
       "owner": "GPT-6 Astra, high effort, door collision implementer",
-      "head": "7d5c8cec6c992a6c0e9338d24d539d3fb84e2957",
+      "head": "37d1a1e2eec8f0a20fcb5126f60719b6da1033a4",
       "title": "fix(vmap): make closed instance doors block rays",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/477",
-      "checked_at": "2026-09-08 07:24 UTC",
+      "checked_at": "2026-09-08 08:05 UTC",
       "github_state": "OPEN",
       "checks": [
         {
           "name": "durable",
-          "result": "SUCCESS"
+          "result": "IN_PROGRESS"
         },
         {
           "name": "build",
@@ -4482,13 +4484,68 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "UNAVAILABLE",
-          "source": "Hourly quota prevented actual review."
+          "result": "REVIEW_AND_FIX_CONFIRMED",
+          "source": "Full review at 7d5c8ce plus explicit confirmation of the rollback fix at 37d1a1e: discussion_r3955595964."
         }
       ],
-      "status": "All CI and independent review passed; human schema approval pending",
-      "next_action": "Obtain the requested human schema approval before merge. The reviewed patch is unchanged after rebasing onto main 408f417. The implementer will use the next included CodeRabbit review and address any findings. Imported geometry, matching Package artifacts and canonical performance remain acceptance work.",
-      "review_note": "Root and the item GUID implementer reviewed the runtime. Root reviewed the later pool hooks and their public-Package durable regression. All local proofs passed, including pool rearm, movement, reroll and removal. Final 7d5c8ce rebases main 408f417 with unchanged reviewed patches. CodeRabbit supplied only a quota notice. Root combined all three source changes without conflicts. Module 1508, Gateway 1448, all 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy passed."
+      "status": "Fixture finding resolved; fresh CI running; schema approved",
+      "next_action": "Monitor fresh CI for door PR #477 at 37d1a1e, then merge. The user approved the schema and the fixture-data review finding is resolved. Keep canonical performance and imported Deadmines acceptance open.",
+      "review_note": "Root and the item GUID implementer reviewed runtime behavior, then root reviewed the pool lifecycle follow-up. Combined source proof passed: Module 1508, Gateway 1448, 13 new durable cases, all 995 bindings, formatting and strict workspace Clippy. Full CodeRabbit review at 7d5c8ce found one valid fixture-data issue. Final 37d1a1e rebases onto bfe651f8 and makes the diagnostic fixture abort even after successful assertions. Its fresh durable test requires the success marker and proves seeded unrelated rows survive. Root reviewed this correction without findings; CodeRabbit inspected 37d1a1e and confirmed its original concern no longer applies. The review thread is resolved. Fresh CI is running. Human schema approval is recorded."
+    },
+    {
+      "number": 478,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/478",
+      "title": "docs(triage): record merged fixes and remaining reviews",
+      "owner": "GPT-6, Codex coordinator",
+      "head": "0320f116f4f2ffde4d9278b6c34a04dfb1b30ce2",
+      "merge_commit": "bfe651f8f101dd7cba1deaaacdb3cc1b59f3e444",
+      "github_state": "MERGED",
+      "status": "Merged",
+      "checked_at": "2026-09-08 07:54 UTC",
+      "next_action": "Complete. Preserve later live report changes in the next source snapshot.",
+      "review_note": "All CI passed. GPT-5.6 Sol independently reviewed the data and deterministic renderer; two stale sentences were corrected and the final revision had no findings. CodeRabbit supplied a quota notice and no content review."
+    },
+    {
+      "number": 479,
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/479",
+      "title": "fix(nav): route bots into Northshire Abbey",
+      "owner": "Existing GPT-6 Codex implementer; Codex triage coordinates review",
+      "head": "3e740bb16057d5bf57544531cea3a01cb49f4f6f",
+      "github_state": "OPEN",
+      "status": "Confirmed low-ceiling regression; door merge conflict",
+      "checked_at": "2026-09-08 08:05 UTC",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "IN_PROGRESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "QUOTA_NOTICE"
+        }
+      ],
+      "next_action": "Correct the demonstrated low-ceiling regression, resolve the full navigation seam after #477 merges, and rerun focused geometry, movement, door and CI checks. Codex is preparing a candidate correction in an isolated review checkout.",
+      "review_note": "GPT-6 Astra demonstrated a regression at 3e740bb: terrain 80, WMO floor 80.5 and ceiling 81.5 permit a direct route with only one yard of headroom. The same regression passes on base. Finding: https://github.com/LyraCoreProject/LyraCore/pull/479#issuecomment-5581485117. The trial merge with #477 conflicts in module/src/nav.rs and also needs its instance-aware collision call preserved. CodeRabbit supplied a quota notice. Source correction and combined proof are pending."
     }
   ],
   "history": [
@@ -4843,10 +4900,30 @@
     {
       "at": "2026-09-08 07:24 UTC",
       "text": "Both rebased schema PRs passed every CI job. Human approval remains pending. Independent report review verified all 66 open issue entries and found two stale sentences about the old door head and GUID revision; both are corrected. The door implementer will use the next included CodeRabbit review."
+    },
+    {
+      "at": "2026-09-08 07:30 UTC",
+      "text": "The user approved both concrete schema changes. Merged Spell event PR #476 as 02a0662 and closed #72 with source evidence. Door PR #477 remains in full CodeRabbit review with all CI green. Its trial merge into the new main produces exactly the combined file tree already tested."
+    },
+    {
+      "at": "2026-09-08 07:45 UTC",
+      "text": "CodeRabbit completed its full door review and found that the public assertion fixture could delete existing GameObject and other rows. The implementer is adding rollback-on-success and existing-data preservation proof. The source PR stays held until this finding and fresh CI are complete."
+    },
+    {
+      "at": "2026-09-08 07:54 UTC",
+      "text": "Door PR #477 at 37d1a1e fixes the actual CodeRabbit finding by rolling fixture row writes back after its success marker. The new preservation regression and independent review pass; fresh CI is running. Report snapshot #478 merged."
+    },
+    {
+      "at": "2026-09-08 07:56 UTC",
+      "text": "Detected the concurrent Abbey routing PR #479. Added it to the delivery list and assigned independent navigation and door-compatibility review. #477 remains first in merge order."
+    },
+    {
+      "at": "2026-09-08 08:05 UTC",
+      "text": "Independent Abbey review reproduced a low-ceiling navigation regression: the test fails at 3e740bb and passes on main. Posted the finding and began an isolated candidate correction. The #84 design scope now preserves existing loot admission; it does not claim a fixed storage bound during unlimited unfinished work."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
   "report_url": "https://1u1gh8ximdga.postplan.dev",
   "merge_policy": "Codex takes the final merge after current-head checks pass and review findings are resolved. Explicit human review requirements and real-client acceptance remain separate.",
-  "audit_note": "The 2026-09-08 audit covered all 67 then-open issues against their bodies, comments, linked work and source at c6003e5. Two independent audits covered 66 issues; the GUID implementer reproduced #71 on the unchanged Module. Issue #71 has since closed after implementation and review, leaving 66 open issues."
+  "audit_note": "The 2026-09-08 audit covered all 67 then-open issues against their bodies, comments, linked work and source at c6003e5. Two independent audits covered 66 issues; the GUID implementer reproduced #71 on the unchanged Module. Issues #71 and #72 have since closed after implementation and review, leaving 65 open issues."
 }
