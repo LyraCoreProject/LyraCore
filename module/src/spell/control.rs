@@ -363,7 +363,7 @@ pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
         // All other cols default/zero (this is neither a START, a GO, nor an interrupt).
         ctx.db.game_spell_cast_event().insert(SpellCastEvent {
             delay_ms: CAST_PUSHBACK_MS as u32,
-            ..SpellCastEvent::signal(ctx, caster_guid, spell_id)
+            ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Pushback)
         });
         log::info!(
             "cast pushed back: caster {caster_guid}'s spell {spell_id} delayed {CAST_PUSHBACK_MS}ms \
@@ -395,7 +395,7 @@ pub(crate) fn interrupt_cast(ctx: &ReducerContext, caster_guid: u64) -> bool {
         // take the START branch; damage 0 so no damage log. All other cols default.
         ctx.db.game_spell_cast_event().insert(SpellCastEvent {
             is_interrupted: true,
-            ..SpellCastEvent::signal(ctx, caster_guid, spell_id)
+            ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Interrupt)
         });
     }
     if interrupted {

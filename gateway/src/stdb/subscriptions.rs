@@ -1227,17 +1227,56 @@ pub(crate) fn melee_disengage_outbound(self_guid: u64, row: &MeleeAttack) -> Vec
     ))]
 }
 
-/// Spell cast visuals: the ONE body both legs run — the full cast-lock
-/// contract (START/GO sequencing, interrupt teardown, pushback, proc log, damage/heal logs,
-/// cooldown), pure over the row + the viewer's own guid. Every caster-private branch keys on
-/// `self_guid` exactly as the per-player closure did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpellCastEventKind {
+    Start,
+    Go,
+    Interrupt,
+    Pushback,
+    ProcLog,
+}
+
+impl SpellCastEventKind {
+    /// Decode the append-only Module code. Kind zero is a row from the old schema and keeps the
+    /// former field-based order. An unknown nonzero kind is newer or damaged data, so guessing a
+    /// client packet would be unsafe.
+    fn decode(row: &SpellCastEvent) -> Option<Self> {
+        match row.kind {
+            0 if row.is_interrupted => Some(Self::Interrupt),
+            0 if row.delay_ms > 0 => Some(Self::Pushback),
+            0 if row.is_proc_log => Some(Self::ProcLog),
+            0 if row.cast_time_ms > 0 => Some(Self::Start),
+            0 => Some(Self::Go),
+            1 => Some(Self::Start),
+            2 => Some(Self::Go),
+            3 => Some(Self::Interrupt),
+            4 => Some(Self::Pushback),
+            5 => Some(Self::ProcLog),
+            unknown => {
+                log::warn!(
+                    "spell cast relay: unknown kind {unknown} (event {}, caster {}, spell {})",
+                    row.id,
+                    row.caster_guid,
+                    row.spell_id
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Spell cast visuals: the one body both paths run. It handles START and GO sequencing, interrupt
+/// teardown, pushback, Proc logs, damage and heal logs, and cooldown. Every caster-private branch
+/// keys on `self_guid`.
 pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<Outbound> {
     let mut out = Vec::new();
-    // INTERRUPT signal (cast-interrupt-on-damage): the victim's mid-cast timed spell was cancelled.
+    let Some(kind) = SpellCastEventKind::decode(row) else {
+        return out;
+    };
+    // INTERRUPT signal: the victim's mid-cast timed spell was cancelled.
     // Relay SMSG_SPELL_FAILURE{spell, Interrupted} to the caster so the client tears down its cast
-    // bar (no SMSG_SPELL_GO follows — the cast never resolved). This row carries ONLY caster/spell,
-    // so it must be handled before the START/GO/COOLDOWN sequence below (it has cast_time_ms 0).
-    if row.is_interrupted {
+    // bar. No SMSG_SPELL_GO follows because the cast never resolved.
+    if kind == SpellCastEventKind::Interrupt {
         // SELF-ONLY for a PLAYER caster: game_spell_cast_event is a global public subscription,
         // so this closure fires for EVERY player. SMSG_SPELL_FAILURE is a caster-private cast-bar
         // teardown (unlike the START/GO broadcast visuals), so relay it ONLY to the caster — else
@@ -1269,15 +1308,9 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         }
         return out;
     }
-    // PUSHBACK signal: a direct hit slid the caster's in-progress timed cast's
-    // fire time. Broadcast (NOT self-only) — SMSG_SPELL_DELAYED is a caster-visible cast-bar
-    // shift, like SMSG_SPELL_START/GO below, so anyone watching the caster's cast bar sees it
-    // slide (unlike SMSG_SPELL_FAILURE above, which is a private cast-bar-teardown message). This
-    // row carries ONLY caster/spell/delay_ms, so it must be handled before the START/GO/COOLDOWN
-    // sequence below (it has cast_time_ms 0 and is_completion false, so it does NOT take either
-    // of those branches, but returning explicitly keeps this a single-purpose row like the
-    // is_interrupted branch above it).
-    if row.delay_ms > 0 {
+    // PUSHBACK signal: a direct hit moved the fire time of an in-progress timed cast. Broadcast
+    // SMSG_SPELL_DELAYED so anyone watching the caster's cast bar sees the same shift.
+    if kind == SpellCastEventKind::Pushback {
         let m = codec::build_spell_delayed(row.caster_guid, row.delay_ms);
         out.push(Outbound::One(ServerOpcodeMessage::SMSG_SPELL_DELAYED(
             Box::new(m),
@@ -1285,7 +1318,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         return out;
     }
     // Proc and ranged-impact rows report damage without another cast animation or cooldown.
-    if row.is_proc_log {
+    if kind == SpellCastEventKind::ProcLog {
         if row.damage > 0 {
             let log = codec::build_spell_non_melee_damage_log(
                 row.target_guid,
@@ -1303,7 +1336,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         }
         return out;
     }
-    if row.cast_time_ms > 0 {
+    if kind == SpellCastEventKind::Start {
         // Cast-START (a timed spell): SMSG_SPELL_START with the cast-bar duration so observers
         // see the bar FILL. The GO/COOLDOWN follow on the cast-GO COMPLETION event.
         let start =
@@ -1313,7 +1346,7 @@ pub(crate) fn cast_event_outbound(self_guid: u64, row: &SpellCastEvent) -> Vec<O
         )));
         return out;
     }
-    // Cast-GO (cast_time_ms == 0). Mangos-faithful sequence:
+    // Cast-GO. Legacy rows reach this branch when cast_time_ms is zero. Sequence:
     //   - GENUINE INSTANT (is_completion=false): START(0)+GO — SendSpellStart fires for EVERY
     //     non-triggered cast (timer 0 for an instant) to register the pending cast, then cast() →
     //     SendSpellGo finalizes it. START flags = 0x02, GO flags = 0x0100 (set in the builders).
@@ -3872,6 +3905,7 @@ mod tests {
             grid_x: 0,
             grid_y: 0,
             failure_reason: 0,
+            kind: 5,
         };
         let out = cast_event_outbound(7, &row);
         let [Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(log))] = out.as_slice()
@@ -4419,16 +4453,13 @@ mod tests {
     /// The module's `CAST_FAIL_NO_POWER`.
     const NO_POWER_CODE: u8 = 1;
 
-    /// An interruption signal row for `spell_id` cast by `HEROIC_STRIKE_CASTER`, carrying
-    /// `failure_reason`. Every other field stays at the module baseline's zero, which is what such a
-    /// row really looks like on the wire.
-    fn interrupted_cast(spell_id: u32, failure_reason: u8) -> SpellCastEvent {
+    fn spell_cast_event(kind: u8) -> SpellCastEvent {
         SpellCastEvent {
             id: 1,
             caster_guid: HEROIC_STRIKE_CASTER,
-            spell_id,
+            spell_id: 133,
             created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
-            target_guid: 0,
+            target_guid: 11,
             cast_time_ms: 0,
             is_completion: false,
             damage: 0,
@@ -4436,7 +4467,7 @@ mod tests {
             is_crit: false,
             resisted: 0,
             absorbed: 0,
-            is_interrupted: true,
+            is_interrupted: false,
             cooldown_ms: 0,
             delay_ms: 0,
             healed: 0,
@@ -4447,8 +4478,154 @@ mod tests {
             instance_id: 0,
             grid_x: 0,
             grid_y: 0,
-            failure_reason,
+            failure_reason: 0,
+            kind,
         }
+    }
+
+    /// An interruption signal row for `spell_id` cast by `HEROIC_STRIKE_CASTER`, carrying
+    /// `failure_reason`. Every other field stays at the module baseline's zero, which is what such a
+    /// row really looks like on the wire.
+    fn interrupted_cast(spell_id: u32, failure_reason: u8) -> SpellCastEvent {
+        SpellCastEvent {
+            spell_id,
+            target_guid: 0,
+            is_interrupted: true,
+            failure_reason,
+            ..spell_cast_event(3)
+        }
+    }
+
+    #[test]
+    fn explicit_spell_cast_event_kinds_override_legacy_discriminators() {
+        let contradictory = |kind| SpellCastEvent {
+            cast_time_ms: 1_500,
+            is_completion: true,
+            damage: 23,
+            is_interrupted: true,
+            delay_ms: 500,
+            is_proc_log: true,
+            kind,
+            ..spell_cast_event(kind)
+        };
+
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &contradictory(1)).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(_))]
+        ));
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER + 1, &contradictory(2)).as_slice(),
+            [
+                Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(_)),
+                Outbound::One(ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(_))
+            ]
+        ));
+
+        let interrupt = SpellCastEvent {
+            kind: 3,
+            ..spell_cast_event(3)
+        };
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &interrupt).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_FAILURE(_))]
+        ));
+
+        let pushback = SpellCastEvent {
+            delay_ms: 500,
+            kind: 4,
+            ..spell_cast_event(4)
+        };
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &pushback).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_DELAYED(_))]
+        ));
+
+        let proc_log = SpellCastEvent {
+            damage: 23,
+            kind: 5,
+            ..spell_cast_event(5)
+        };
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &proc_log).as_slice(),
+            [Outbound::One(
+                ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(_)
+            )]
+        ));
+    }
+
+    #[test]
+    fn legacy_spell_cast_event_rows_keep_the_field_based_decoder() {
+        let start = SpellCastEvent {
+            cast_time_ms: 1_500,
+            ..spell_cast_event(0)
+        };
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &start).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(_))]
+        ));
+
+        let go = spell_cast_event(0);
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER + 1, &go).as_slice(),
+            [
+                Outbound::One(ServerOpcodeMessage::SMSG_SPELL_START(_)),
+                Outbound::One(ServerOpcodeMessage::SMSG_SPELL_GO(_))
+            ]
+        ));
+
+        let interrupt = SpellCastEvent {
+            is_interrupted: true,
+            ..spell_cast_event(0)
+        };
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &interrupt).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_FAILURE(_))]
+        ));
+
+        let pushback = SpellCastEvent {
+            delay_ms: 500,
+            ..spell_cast_event(0)
+        };
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &pushback).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_DELAYED(_))]
+        ));
+
+        let proc_log = SpellCastEvent {
+            damage: 23,
+            is_proc_log: true,
+            ..spell_cast_event(0)
+        };
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &proc_log).as_slice(),
+            [Outbound::One(
+                ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(_)
+            )]
+        ));
+
+        let old_precedence = SpellCastEvent {
+            cast_time_ms: 1_500,
+            is_interrupted: true,
+            delay_ms: 500,
+            is_proc_log: true,
+            ..spell_cast_event(0)
+        };
+        assert!(matches!(
+            cast_event_outbound(HEROIC_STRIKE_CASTER, &old_precedence).as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_SPELL_FAILURE(_))]
+        ));
+    }
+
+    #[test]
+    fn unknown_spell_cast_event_kind_emits_no_packet() {
+        let row = SpellCastEvent {
+            is_interrupted: true,
+            delay_ms: 500,
+            is_proc_log: true,
+            kind: u8::MAX,
+            ..spell_cast_event(u8::MAX)
+        };
+        assert!(cast_event_outbound(HEROIC_STRIKE_CASTER, &row).is_empty());
     }
 
     /// A queued strike that could not pay its cost at the swing: the caster gets the cast-bar

@@ -430,7 +430,7 @@ fn run_spell_effects(
         // The cooldown starts at the GO (the spell fired). Only spells with a real cooldown send the packet.
         cooldown_ms: hdr.cooldown_ms,
         client_initiated,
-        ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id)
+        ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
     });
 }
 
@@ -1338,7 +1338,7 @@ fn begin_cast_with_admission(
         cast_time_ms: completion_ms,
         // A cast-START is never a completion and carries no damage/cooldown (the GO event at resolve
         // does both); the baseline's is_interrupted:false/delay_ms:0 already hold.
-        ..SpellCastEvent::signal(ctx, caster_guid, spell_id)
+        ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Start)
     });
     Ok(())
 }

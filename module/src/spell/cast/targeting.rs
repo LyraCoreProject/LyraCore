@@ -595,7 +595,12 @@ pub(crate) fn aura_apply(
             ctx.db.game_spell_cast_event().insert(SpellCastEvent {
                 // aura-slot overflow is an interrupt signal, not a pushback (delay_ms stays 0).
                 is_interrupted: true,
-                ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id)
+                ..SpellCastEvent::signal(
+                    ctx,
+                    caster_guid,
+                    hdr.spell_id,
+                    SpellCastEventKind::Interrupt,
+                )
             });
             return;
         };

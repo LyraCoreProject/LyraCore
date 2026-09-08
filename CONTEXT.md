@@ -292,6 +292,12 @@ _Avoid_: other unit, opponent
 The cast a fired Proc starts. It runs the cast core's effect loop and nothing else: no Gate, no cost, no cooldown, no stealth break. Its own hits fire no further Procs.
 _Avoid_: proc cast, internal cast, free cast
 
+**Spell Cast Event Kind**:
+The append-only code naming the wire signal in one `game_spell_cast_event` row. Zero means a row
+from the old schema. New rows use 1 START, 2 GO, 3 INTERRUPT, 4 PUSHBACK, or 5 PROC_LOG. A Gateway
+does not guess how to decode an unknown nonzero code.
+_Avoid_: cast flags, event flags, signal flags
+
 ### Creature AI
 
 **Creature-AI Family**:

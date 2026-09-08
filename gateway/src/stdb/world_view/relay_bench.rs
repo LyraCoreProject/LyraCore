@@ -229,6 +229,7 @@ impl SyntheticRealm {
             grid_x: gx,
             grid_y: gy,
             failure_reason: 0,
+            kind: 2,
         }
     }
 

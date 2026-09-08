@@ -227,6 +227,7 @@ fn cast(realm: &Realm, caster: u64, target: u64) -> SpellCastEvent {
         grid_x,
         grid_y,
         failure_reason: 0,
+        kind: 2,
     }
 }
 
