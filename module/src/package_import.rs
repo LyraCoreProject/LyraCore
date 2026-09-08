@@ -388,6 +388,10 @@ fn apply_claims(
     for row in &plan.rows {
         family.write_row(ctx, row)?;
     }
+    if family == ClaimFamily::Gameobjects {
+        // Operator apply and replay finish every spawn and template edit before reconciling.
+        crate::go_collider::rebuild_go_colliders(ctx)?;
+    }
     Ok(plan.packages)
 }
 

@@ -410,6 +410,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
     let gos = ctx.db.game_gameobject();
     let members = ctx.db.game_gameobject_pool_member();
     // 1. DEACTIVATE the gathered point (the −1). The just-freed point is itself eligible again below.
+    crate::go_collider::remove(ctx, gathered_guid);
     gos.guid().delete(gathered_guid);
     // 2. Candidate set = pool members with weight > 0 that are currently INACTIVE (no live row at their
     //    derived guid). The just-deleted gathered point is now inactive → eligible to be re-picked (a
@@ -447,7 +448,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
 /// `arm_pool` (initial fill) and `reroll_pool` (rotation). Idempotent-by-guid: the caller guarantees
 /// the point is currently inactive (no row at its guid), so this is a plain insert.
 fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
-    ctx.db.game_gameobject().insert(GameObject {
+    let go = ctx.db.game_gameobject().insert(GameObject {
         guid: pool_point_guid(m.point_id),
         template_entry: m.template_entry,
         map_id: m.map_id,
@@ -469,6 +470,7 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         rotation_2: 0.0,
         rotation_3: 0.0,
     });
+    crate::go_collider::register(ctx, &go);
 }
 
 /// Every map id this database currently holds REAL imported spatial content for, read off
@@ -538,6 +540,7 @@ pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
         .unwrap_or(0);
     // Clear any prior live rows at THIS pool's points (idempotent arming — a re-setup re-fills cleanly).
     for m in members.by_pool().filter(&pool_id) {
+        crate::go_collider::remove(ctx, pool_point_guid(m.point_id));
         gos.guid().delete(pool_point_guid(m.point_id));
     }
     // Activate max_active weighted-distinct points: re-query the inactive eligible set each iteration (a
@@ -946,6 +949,7 @@ pub(crate) fn despawn_from_relay(ctx: &ReducerContext, go_guid: u64) -> Result<(
         .game_gameobject_trap_cooldown()
         .go_guid()
         .delete(go_guid);
+    crate::go_collider::remove(ctx, go_guid);
     ctx.db.game_gameobject().guid().delete(go_guid);
     Ok(())
 }
@@ -1098,6 +1102,7 @@ pub fn import_gameobjects(ctx: &ReducerContext, packed: String) -> Result<(), St
     let gos = ctx.db.game_gameobject();
     let guids: Vec<u64> = gos.iter().map(|g| g.guid).collect();
     for g in guids {
+        crate::go_collider::remove(ctx, g);
         gos.guid().delete(g);
     }
     if load_go_batch(ctx, &packed)? == 0 {
@@ -1145,29 +1150,31 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         // also makes it structurally impossible for `grid_x`, `grid_y` and `cell` below to be
         // derived from different coordinates.
         let (gx_src, gy_src) = (pf32(f[3])?, pf32(f[4])?);
-        gos.try_insert(GameObject {
-            guid: pu64(f[0])?,
-            template_entry: pu32(f[1])?,
-            map_id: pu32(f[2])?,
-            x: pf32(f[3])?,
-            y: pf32(f[4])?,
-            z: pf32(f[5])?,
-            orientation: pf32(f[6])?,
-            state: pu8(f[7])?,
-            created_at: now,
-            respawn_at_micros: 0, // a freshly-imported node is ready (no pending respawn)
-            instance_id: 0, // imported static rows are open-world (dungeon copies are runtime, 190 slice 2)
-            // note: the new respawn_secs/gather_gray cols live on the TEMPLATE (GameObjectTemplate), not on
-            // this SPAWN row — so this GameObject literal is otherwise unchanged this slice.,
-            grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
-            grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,
-            cell: lyracore_shared::spatial::cell_id_at(gx_src, gy_src),
-            rotation_0: pf32(f[8])?,
-            rotation_1: pf32(f[9])?,
-            rotation_2: pf32(f[10])?,
-            rotation_3: pf32(f[11])?,
-        })
-        .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
+        let go = gos
+            .try_insert(GameObject {
+                guid: pu64(f[0])?,
+                template_entry: pu32(f[1])?,
+                map_id: pu32(f[2])?,
+                x: pf32(f[3])?,
+                y: pf32(f[4])?,
+                z: pf32(f[5])?,
+                orientation: pf32(f[6])?,
+                state: pu8(f[7])?,
+                created_at: now,
+                respawn_at_micros: 0, // a freshly-imported node is ready (no pending respawn)
+                instance_id: 0, // imported static rows are open-world (dungeon copies are runtime, 190 slice 2)
+                // note: the new respawn_secs/gather_gray cols live on the TEMPLATE (GameObjectTemplate), not on
+                // this SPAWN row — so this GameObject literal is otherwise unchanged this slice.,
+                grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
+                grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,
+                cell: lyracore_shared::spatial::cell_id_at(gx_src, gy_src),
+                rotation_0: pf32(f[8])?,
+                rotation_1: pf32(f[9])?,
+                rotation_2: pf32(f[10])?,
+                rotation_3: pf32(f[11])?,
+            })
+            .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
+        crate::go_collider::register(ctx, &go);
         loaded += 1;
     }
     Ok(loaded)

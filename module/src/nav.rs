@@ -233,23 +233,18 @@ fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<
     }
 }
 
-/// Line of sight for gameplay checks (aggro sensing, hostile casts, engage, swing gate, caster
-/// hold-range) (decision §10, benchmark PASS): when exact vmap data is
-/// consuming (`vmap::vmap_enabled`), this defers to the exact WMO-only ray
-/// (`vmap::los_ray`) instead of the coarse grid raymarch — a hostile behind a real wall is
-/// "unseen" at the true wall plane rather than the nearest whole nav cell. Falls back to the grid
-/// (243's `nav_enabled` gate) when vmap is off, which itself falls back to `true` ("walls don't
-/// exist") when nav is off too — the same three-tier degrade `blink_forward` uses. NOTE: this
-/// degrade is per-FLAG, not per-cell — `vmap_enabled` on with zero `game_vmap_chunk` rows for a
-/// map (the standard `import-world.sh` pipeline never populates it) reads as "every ray on that
-/// map is clear", not "fall back to the grid". `vmap_enabled` therefore defaults OFF
-/// (`config.rs`) and is a per-map operator opt-in once `importer --vmap` has actually populated
-/// the map's chunks — never flip the default without a wired import step.
-pub fn has_los(ctx: &ReducerContext, map_id: u32, a: (f32, f32, f32), b: (f32, f32, f32)) -> bool {
-    if crate::vmap::vmap_enabled(ctx, map_id) {
-        return crate::vmap::los_ray(ctx, map_id, [a.0, a.1, a.2], [b.0, b.1, b.2]).is_none();
+/// Closed doors apply even where static geometry falls back to the coarse navigation grid.
+pub fn has_los(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    a: (f32, f32, f32),
+    b: (f32, f32, f32),
+) -> bool {
+    if crate::vmap::los_ray(ctx, map_id, instance_id, [a.0, a.1, a.2], [b.0, b.1, b.2]).is_some() {
+        return false;
     }
-    if !nav_enabled(ctx) {
+    if crate::vmap::vmap_enabled(ctx, map_id) || !nav_enabled(ctx) {
         return true;
     }
     lyracore_shared::nav::has_los(&mut fetcher(ctx, map_id), a, b)
@@ -269,9 +264,11 @@ const LEG_MAX_EXPANSIONS: u32 = 4096;
 /// (`debug/instance.rs`) is the companion harness for THIS path — run it against the same box
 /// before flipping `vmap_enabled` on a populated map, and compare its wall time to
 /// `debug_bench_los(exact=true)`'s on that box.
+#[allow(clippy::too_many_arguments)] // A movement step carries its partition, endpoints and distances.
 pub fn nav_step(
     ctx: &ReducerContext,
     map_id: u32,
+    instance_id: u64,
     cur: (f32, f32),
     dest: (f32, f32),
     max_step: f32,
@@ -300,7 +297,7 @@ pub fn nav_step(
             None => crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
         }
     };
-    step_gate(ctx, map_id, cur, stepped, z)
+    step_gate(ctx, map_id, instance_id, cur, stepped, z)
 }
 
 /// The margin `nav_step`'s step gate stops short of a ray hit by — same value
@@ -313,6 +310,7 @@ const GATE_CLEARANCE_YD: f32 = 1.0;
 fn step_gate(
     ctx: &ReducerContext,
     map_id: u32,
+    instance_id: u64,
     cur: (f32, f32),
     stepped: (f32, f32),
     z: f32,
@@ -320,18 +318,20 @@ fn step_gate(
     if stepped == cur {
         return stepped;
     }
-    let hit = if crate::vmap::vmap_enabled(ctx, map_id) {
-        crate::vmap::collision_ray(ctx, map_id, [cur.0, cur.1, z], [stepped.0, stepped.1, z])
-            .map(|h| (h[0], h[1]))
-    } else if nav_enabled(ctx) {
+    let a = [cur.0, cur.1, z];
+    let b = [stepped.0, stepped.1, z];
+    let exact = crate::vmap::collision_ray(ctx, map_id, instance_id, a, b);
+    let grid = if !crate::vmap::vmap_enabled(ctx, map_id) && nav_enabled(ctx) {
         lyracore_shared::nav::step_hit(
             &mut fetcher(ctx, map_id),
-            (cur.0, cur.1, z),
-            (stepped.0, stepped.1, z),
+            (a[0], a[1], a[2]),
+            (b[0], b[1], b[2]),
         )
+        .map(|p| [p.0, p.1, z])
     } else {
         None
     };
+    let hit = crate::vmap::nearest_hit(a, exact, grid).map(|p| (p[0], p[1]));
     match hit {
         Some((hx, hy)) => {
             let (dx, dy) = (hx - cur.0, hy - cur.1);

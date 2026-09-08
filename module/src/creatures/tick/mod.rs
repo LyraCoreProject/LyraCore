@@ -644,7 +644,7 @@ pub(crate) fn emit_creature_leg(
     set_leg_ends: bool,
 ) {
     // Ground-snap THIS leg's landing point (work-item 174) — one snap now covers every pass.
-    let nz = crate::terrain::snap_z(ctx, e.map_id, to.0, to.1, z_fallback);
+    let nz = crate::terrain::snap_z(ctx, e.map_id, e.instance_id, to.0, to.1, z_fallback);
     // REFUSE a non-finite leg (see `ai::finite_point`). Writing one makes the creature invisible to
     // this very tick — its grid cell casts to `i32::MIN`, so no active cell ever contains it again —
     // while `tick_melee` keeps swinging off the melee row. It becomes an unshakeable attacker. Loud,

@@ -1,13 +1,5 @@
-//! Module-private store for DOOR/BUTTON collision meshes. `importer --go-models` resolves each
-//! DOOR/BUTTON `gameobject_template.display_id` to an M2 bounding mesh, pre-applies the MDDF axis
-//! shuffle (`importer/src/go_model.rs::shuffle`), and packs the result into local-space triangles
-//! via `lyracore_shared::vmap`'s per-triangle codec. This table only STORES that local-space
-//! geometry — the state-gated ray merge that CONSUMES it (per-spawn world transform,
-//! liveness/open-state gating against `game_gameobject`) is the `game_go_collider` registry.
-//!
-//! PRIVATE — no gateway binding needed (`docs/danger-zones.md` §1: "a table binding is only
-//! needed if the gateway subscribes to or reads that table" — nothing outside this module does
-//! yet; an operator inspects it with `spacetime sql`).
+//! Imported DOOR and BUTTON meshes in model-local coordinates.
+//! Registration derives conservative world bounds; rays read current spawn state and transform.
 
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
@@ -17,8 +9,7 @@ pub struct GoModel {
     pub entry: u32,
     /// `gameobject_template.size` (render/collision scale), carried verbatim from the dump.
     pub scale: f32,
-    /// Local-space bounding-sphere radius of the shuffled mesh — the cheap segment-reject the
-    /// ray merge needs before decoding and transforming the full triangle blob.
+    /// Importer's AABB-centered radius. Registration derives an origin bound from the vertices.
     pub radius: f32,
     /// `lyracore_shared::vmap`-codec local-space triangles. The class tag the codec carries is
     /// unused here — a door's dynamic-ray participation is decided per `game_gameobject` row
@@ -35,9 +26,16 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     if !s.len().is_multiple_of(2) {
         return Err("odd-length hex blob".to_string());
     }
-    (0..s.len() / 2)
-        .map(|i| {
-            u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| format!("bad hex at {i}"))
+    s.as_bytes()
+        .chunks_exact(2)
+        .enumerate()
+        .map(|(i, pair)| {
+            let digit = |byte: u8| {
+                (byte as char)
+                    .to_digit(16)
+                    .ok_or_else(|| format!("bad hex at {i}"))
+            };
+            Ok((digit(pair[0])? * 16 + digit(pair[1])?) as u8)
         })
         .collect()
 }
@@ -58,8 +56,22 @@ fn parse_row(row: &str) -> Result<(u32, f32, f32, Vec<u8>), String> {
         .parse::<f32>()
         .map_err(|_| format!("bad radius: {}", f[2]))?;
     let blob = hex_decode(f[3])?;
-    lyracore_shared::vmap::decode(&blob)
+    let tris = lyracore_shared::vmap::decode(&blob)
         .map_err(|err| format!("invalid go_model blob: {err:?}"))?;
+    if !scale.is_finite()
+        || scale <= 0.0
+        || !radius.is_finite()
+        || radius < 0.0
+        || tris
+            .iter()
+            .flat_map(|t| t.verts)
+            .flatten()
+            .any(|v| !v.is_finite())
+    {
+        return Err(
+            "go_model needs finite geometry, a positive scale and a nonnegative radius".to_string(),
+        );
+    }
     Ok((entry, scale, radius, blob))
 }
 
@@ -94,7 +106,7 @@ pub fn import_go_models(ctx: &ReducerContext, packed: String) -> Result<(), Stri
     if load_go_model_batch(ctx, &packed)? == 0 {
         return Err("go_model import payload was empty".to_string());
     }
-    Ok(())
+    crate::go_collider::rebuild_go_colliders(ctx)
 }
 
 /// Append a go-model batch WITHOUT the reset — a full catalogue can span many `spacetime call`
@@ -103,7 +115,7 @@ pub fn import_go_models(ctx: &ReducerContext, packed: String) -> Result<(), Stri
 pub fn import_go_models_append(ctx: &ReducerContext, packed: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     load_go_model_batch(ctx, &packed)?;
-    Ok(())
+    crate::go_collider::rebuild_go_colliders(ctx)
 }
 
 #[cfg(test)]
@@ -132,6 +144,22 @@ mod tests {
     fn parse_row_rejects_an_invalid_blob() {
         let row = "1,1.0,1.0,zz";
         assert!(parse_row(row).is_err());
+    }
+
+    #[test]
+    fn malformed_transform_and_non_ascii_hex_are_refused() {
+        let blob = lyracore_shared::vmap::encode(&[]);
+        let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
+        for (scale, radius) in [
+            ("0", "1"),
+            ("-1", "1"),
+            ("NaN", "1"),
+            ("1", "NaN"),
+            ("1", "-1"),
+        ] {
+            assert!(parse_row(&format!("1,{scale},{radius},{hex}")).is_err());
+        }
+        assert!(parse_row("1,1,1,€a").is_err());
     }
 
     // -------------------------------------------------------------------------------------

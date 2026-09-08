@@ -118,6 +118,7 @@ pub mod debug_arm_instance_tick_reducer;
 pub mod debug_assert_blink_clamp_reducer;
 pub mod debug_assert_chase_stops_at_column_reducer;
 pub mod debug_assert_floor_snap_reducer;
+pub mod debug_assert_go_collision_reducer;
 pub mod debug_assert_unreachable_goal_stops_at_wall_reducer;
 pub mod debug_audit_class_kits_reducer;
 pub mod debug_audit_quest_chains_reducer;
@@ -266,6 +267,7 @@ pub mod debug_verify_lethal_damage_floor_fixture_reducer;
 pub mod debug_verify_loot_tag_fixture_reducer;
 pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_vmap_area_info_reducer;
+pub mod debug_vmap_ray_instance_reducer;
 pub mod debug_vmap_ray_reducer;
 pub mod delete_character_reducer;
 pub mod discard_vmap_generation_reducer;
@@ -426,6 +428,7 @@ pub mod game_gameobject_unlocked_table;
 pub mod game_gateway_lease_reaper_schedule_table;
 pub mod game_gateway_lease_table;
 pub mod game_gateway_session_table;
+pub mod game_go_collider_table;
 pub mod game_go_model_table;
 pub mod game_gossip_menu_profile_option_table;
 pub mod game_gossip_menu_profile_table;
@@ -582,6 +585,7 @@ pub mod gateway_lease_reaper_schedule_type;
 pub mod gateway_lease_type;
 pub mod gateway_session_type;
 pub mod gm_world_config_type;
+pub mod go_collider_type;
 pub mod go_model_type;
 pub mod gossip_menu_profile_option_type;
 pub mod gossip_menu_profile_type;
@@ -833,6 +837,7 @@ pub mod reap_mail_escrows_reducer;
 pub mod reap_movement_events_reducer;
 pub mod reap_sessions_reducer;
 pub mod reap_transfers_reducer;
+pub mod rebuild_go_colliders_reducer;
 pub mod receive_ai_event_condition_type;
 pub mod receive_emote_condition_type;
 pub mod record_region_load_reducer;
@@ -1108,6 +1113,7 @@ pub use debug_arm_instance_tick_reducer::debug_arm_instance_tick;
 pub use debug_assert_blink_clamp_reducer::debug_assert_blink_clamp;
 pub use debug_assert_chase_stops_at_column_reducer::debug_assert_chase_stops_at_column;
 pub use debug_assert_floor_snap_reducer::debug_assert_floor_snap;
+pub use debug_assert_go_collision_reducer::debug_assert_go_collision;
 pub use debug_assert_unreachable_goal_stops_at_wall_reducer::debug_assert_unreachable_goal_stops_at_wall;
 pub use debug_audit_class_kits_reducer::debug_audit_class_kits;
 pub use debug_audit_quest_chains_reducer::debug_audit_quest_chains;
@@ -1256,6 +1262,7 @@ pub use debug_verify_lethal_damage_floor_fixture_reducer::debug_verify_lethal_da
 pub use debug_verify_loot_tag_fixture_reducer::debug_verify_loot_tag_fixture;
 pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ranged_lethal_damage_floor_fixture;
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
+pub use debug_vmap_ray_instance_reducer::debug_vmap_ray_instance;
 pub use debug_vmap_ray_reducer::debug_vmap_ray;
 pub use delete_character_reducer::delete_character;
 pub use discard_vmap_generation_reducer::discard_vmap_generation;
@@ -1416,6 +1423,7 @@ pub use game_gameobject_unlocked_table::*;
 pub use game_gateway_lease_reaper_schedule_table::*;
 pub use game_gateway_lease_table::*;
 pub use game_gateway_session_table::*;
+pub use game_go_collider_table::*;
 pub use game_go_model_table::*;
 pub use game_gossip_menu_profile_option_table::*;
 pub use game_gossip_menu_profile_table::*;
@@ -1572,6 +1580,7 @@ pub use gateway_lease_reaper_schedule_type::GatewayLeaseReaperSchedule;
 pub use gateway_lease_type::GatewayLease;
 pub use gateway_session_type::GatewaySession;
 pub use gm_world_config_type::GmWorldConfig;
+pub use go_collider_type::GoCollider;
 pub use go_model_type::GoModel;
 pub use gossip_menu_profile_option_type::GossipMenuProfileOption;
 pub use gossip_menu_profile_type::GossipMenuProfile;
@@ -1823,6 +1832,7 @@ pub use reap_mail_escrows_reducer::reap_mail_escrows;
 pub use reap_movement_events_reducer::reap_movement_events;
 pub use reap_sessions_reducer::reap_sessions;
 pub use reap_transfers_reducer::reap_transfers;
+pub use rebuild_go_colliders_reducer::rebuild_go_colliders;
 pub use receive_ai_event_condition_type::ReceiveAiEventCondition;
 pub use receive_emote_condition_type::ReceiveEmoteCondition;
 pub use record_region_load_reducer::record_region_load;
@@ -2090,6 +2100,7 @@ pub enum Reducer {
         map_id: u32,
         creature_entry: u32,
     },
+    DebugAssertGoCollision,
     DebugAssertUnreachableGoalStopsAtWall {
         character_guid: u64,
     },
@@ -2712,6 +2723,16 @@ pub enum Reducer {
         x_1: f32,
         y_1: f32,
         z_1: f32,
+    },
+    DebugVmapRayInstance {
+        map: u32,
+        x_0: f32,
+        y_0: f32,
+        z_0: f32,
+        x_1: f32,
+        y_1: f32,
+        z_1: f32,
+        instance_id: u64,
     },
     DeleteCharacter {
         account_id: u64,
@@ -3509,6 +3530,7 @@ pub enum Reducer {
     ReapTransfers {
         schedule: TransferReaperSchedule,
     },
+    RebuildGoColliders,
     RecordRegionLoad {
         map_id: u32,
         region_id: u32,
@@ -3665,6 +3687,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugAssertBlinkClamp { .. } => "debug_assert_blink_clamp",
             Reducer::DebugAssertChaseStopsAtColumn { .. } => "debug_assert_chase_stops_at_column",
             Reducer::DebugAssertFloorSnap { .. } => "debug_assert_floor_snap",
+            Reducer::DebugAssertGoCollision => "debug_assert_go_collision",
             Reducer::DebugAssertUnreachableGoalStopsAtWall { .. } => {
                 "debug_assert_unreachable_goal_stops_at_wall"
             }
@@ -3845,6 +3868,7 @@ impl __sdk::Reducer for Reducer {
             }
             Reducer::DebugVmapAreaInfo { .. } => "debug_vmap_area_info",
             Reducer::DebugVmapRay { .. } => "debug_vmap_ray",
+            Reducer::DebugVmapRayInstance { .. } => "debug_vmap_ray_instance",
             Reducer::DeleteCharacter { .. } => "delete_character",
             Reducer::DiscardVmapGeneration { .. } => "discard_vmap_generation",
             Reducer::EnsureInstance { .. } => "ensure_instance",
@@ -4016,6 +4040,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ReapMovementEvents { .. } => "reap_movement_events",
             Reducer::ReapSessions { .. } => "reap_sessions",
             Reducer::ReapTransfers { .. } => "reap_transfers",
+            Reducer::RebuildGoColliders => "rebuild_go_colliders",
             Reducer::RecordRegionLoad { .. } => "record_region_load",
             Reducer::RecordShardLoad { .. } => "record_shard_load",
             Reducer::ReleaseAccountClaim { .. } => "release_account_claim",
@@ -4224,7 +4249,9 @@ Reducer::ClearPromotedLootRoll{
                 map_id: map_id.clone(),
                 creature_entry: creature_entry.clone(),
 }),
-            Reducer::DebugAssertUnreachableGoalStopsAtWall{
+            Reducer::DebugAssertGoCollision => __sats::bsatn::to_vec(&debug_assert_go_collision_reducer::DebugAssertGoCollisionArgs {
+                }),
+Reducer::DebugAssertUnreachableGoalStopsAtWall{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_assert_unreachable_goal_stops_at_wall_reducer::DebugAssertUnreachableGoalStopsAtWallArgs {
                 character_guid: character_guid.clone(),
@@ -5341,6 +5368,25 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 x_1: x_1.clone(),
                 y_1: y_1.clone(),
                 z_1: z_1.clone(),
+}),
+            Reducer::DebugVmapRayInstance{
+                map,
+                x_0,
+                y_0,
+                z_0,
+                x_1,
+                y_1,
+                z_1,
+                instance_id,
+}             => __sats::bsatn::to_vec(&debug_vmap_ray_instance_reducer::DebugVmapRayInstanceArgs {
+                map: map.clone(),
+                x_0: x_0.clone(),
+                y_0: y_0.clone(),
+                z_0: z_0.clone(),
+                x_1: x_1.clone(),
+                y_1: y_1.clone(),
+                z_1: z_1.clone(),
+                instance_id: instance_id.clone(),
 }),
             Reducer::DeleteCharacter{
                 account_id,
@@ -6769,7 +6815,9 @@ Reducer::PrepareVmapNavCoverage{
 }             => __sats::bsatn::to_vec(&reap_transfers_reducer::ReapTransfersArgs {
                 schedule: schedule.clone(),
 }),
-            Reducer::RecordRegionLoad{
+            Reducer::RebuildGoColliders => __sats::bsatn::to_vec(&rebuild_go_colliders_reducer::RebuildGoCollidersArgs {
+                }),
+Reducer::RecordRegionLoad{
                 map_id,
                 region_id,
                 players,
@@ -7108,6 +7156,7 @@ pub struct DbUpdate {
     game_gateway_lease: __sdk::TableUpdate<GatewayLease>,
     game_gateway_lease_reaper_schedule: __sdk::TableUpdate<GatewayLeaseReaperSchedule>,
     game_gateway_session: __sdk::TableUpdate<GatewaySession>,
+    game_go_collider: __sdk::TableUpdate<GoCollider>,
     game_go_model: __sdk::TableUpdate<GoModel>,
     game_gossip_menu: __sdk::TableUpdate<GossipMenu>,
     game_gossip_menu_profile: __sdk::TableUpdate<GossipMenuProfile>,
@@ -7637,6 +7686,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_gateway_session" => db_update.game_gateway_session.append(
                     game_gateway_session_table::parse_table_update(table_update)?,
                 ),
+                "game_go_collider" => db_update
+                    .game_go_collider
+                    .append(game_go_collider_table::parse_table_update(table_update)?),
                 "game_go_model" => db_update
                     .game_go_model
                     .append(game_go_model_table::parse_table_update(table_update)?),
@@ -8631,6 +8683,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 &self.game_gateway_session,
             )
             .with_updates_by_pk(|row| &row.entity_guid);
+        diff.game_go_collider = cache
+            .apply_diff_to_table::<GoCollider>("game_go_collider", &self.game_go_collider)
+            .with_updates_by_pk(|row| &row.go_guid);
         diff.game_go_model = cache
             .apply_diff_to_table::<GoModel>("game_go_model", &self.game_go_model)
             .with_updates_by_pk(|row| &row.entry);
@@ -9526,6 +9581,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_gateway_session" => db_update
                     .game_gateway_session
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_go_collider" => db_update
+                    .game_go_collider
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_go_model" => db_update
                     .game_go_model
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10280,6 +10338,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_gateway_session" => db_update
                     .game_gateway_session
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_go_collider" => db_update
+                    .game_go_collider
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_go_model" => db_update
                     .game_go_model
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10815,6 +10876,7 @@ pub struct AppliedDiff<'r> {
     game_gateway_lease: __sdk::TableAppliedDiff<'r, GatewayLease>,
     game_gateway_lease_reaper_schedule: __sdk::TableAppliedDiff<'r, GatewayLeaseReaperSchedule>,
     game_gateway_session: __sdk::TableAppliedDiff<'r, GatewaySession>,
+    game_go_collider: __sdk::TableAppliedDiff<'r, GoCollider>,
     game_go_model: __sdk::TableAppliedDiff<'r, GoModel>,
     game_gossip_menu: __sdk::TableAppliedDiff<'r, GossipMenu>,
     game_gossip_menu_profile: __sdk::TableAppliedDiff<'r, GossipMenuProfile>,
@@ -11493,6 +11555,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<GatewaySession>(
             "game_gateway_session",
             &self.game_gateway_session,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GoCollider>(
+            "game_go_collider",
+            &self.game_go_collider,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GoModel>(
@@ -12910,6 +12977,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_gateway_lease_table::register_table(client_cache);
         game_gateway_lease_reaper_schedule_table::register_table(client_cache);
         game_gateway_session_table::register_table(client_cache);
+        game_go_collider_table::register_table(client_cache);
         game_go_model_table::register_table(client_cache);
         game_gossip_menu_table::register_table(client_cache);
         game_gossip_menu_profile_table::register_table(client_cache);
@@ -13159,6 +13227,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_gateway_lease",
         "game_gateway_lease_reaper_schedule",
         "game_gateway_session",
+        "game_go_collider",
         "game_go_model",
         "game_gossip_menu",
         "game_gossip_menu_profile",

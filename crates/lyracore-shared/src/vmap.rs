@@ -360,7 +360,7 @@ fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 /// Möller–Trumbore, no backface culling (both winding orders block), segment-clamped (`t` in
 /// `0..=1`, not an infinite ray). Returns the hit parameter along `a -> b`, or `None`.
-fn segment_tri_hit(a: [f32; 3], b: [f32; 3], tri: [[f32; 3]; 3]) -> Option<f32> {
+pub fn segment_tri_hit(a: [f32; 3], b: [f32; 3], tri: [[f32; 3]; 3]) -> Option<f32> {
     let dir = sub3(b, a);
     let e1 = sub3(tri[1], tri[0]);
     let e2 = sub3(tri[2], tri[0]);

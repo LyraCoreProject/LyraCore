@@ -564,6 +564,7 @@ fn swing_blocked(
     if !crate::nav::has_los(
         ctx,
         attacker.map_id,
+        attacker.instance_id,
         (attacker.x, attacker.y, attacker.z),
         (target.x, target.y, target.z),
     ) {
