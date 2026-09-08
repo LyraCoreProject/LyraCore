@@ -90,6 +90,8 @@ fn record(node: &Standalone, suffix: &str) {
         "retained": node.query_rows("SELECT * FROM pkg_playerbots_quest_objective"),
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "character_quests": node.query_rows("SELECT * FROM game_character_quest"),
+        "items": node.query_rows("SELECT * FROM game_item_instance"),
+        "loot": node.query_rows("SELECT * FROM game_corpse_loot"),
     });
     let path = support::log_dir().join(format!("{}-{suffix}.json", node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
@@ -115,6 +117,12 @@ fn item_count(node: &Standalone, bot: &str, entry: u32) -> u32 {
     .iter()
     .map(|row| row["stack_count"].parse::<u32>().unwrap())
     .sum()
+}
+
+fn sorted_rows(node: &Standalone, query: &str, key: &str) -> Vec<BTreeMap<String, String>> {
+    let mut rows = node.query_rows(query);
+    rows.sort_by_key(|row| row[key].parse::<u64>().unwrap());
+    rows
 }
 
 fn select_cohort(node: &Standalone, bot: &str) {
@@ -266,6 +274,15 @@ fn playerbots_talk_kill_creature_drop_and_provided_item_paths_change_core_state(
         &[priest, "299"],
     );
     assert_eq!(item_count(&node, priest, 750), 8);
+    let loot_actions = node.query_rows(&format!(
+        "SELECT kind, outcome FROM pkg_playerbots_action WHERE character_guid = {priest}"
+    ));
+    assert!(loot_actions
+        .iter()
+        .any(|row| row["kind"].contains("openLoot") && row["outcome"].contains("completed")));
+    assert!(loot_actions
+        .iter()
+        .any(|row| row["kind"].contains("takeLoot") && row["outcome"].contains("completed")));
     node.assert_call("playerbots_quest_fixture_turn_in", &[priest, "33"]);
     assert_eq!(quest(&node, priest, 33)["rewarded"], "true");
     assert_eq!(item_count(&node, priest, 750), 0);
@@ -317,7 +334,31 @@ fn playerbots_gameobject_loot_and_simple_use_paths_change_core_state() {
     );
     node.assert_call(
         "playerbots_quest_fixture_use_gameobject",
-        &[mage, "161557", "true"],
+        &[mage, "161557", "false"],
+    );
+    node.assert_call("playerbots_quest_fixture_fill_inventory", &[mage]);
+    let inventory_query = format!("SELECT * FROM game_item_instance WHERE owner_guid = {mage}");
+    let loot_query =
+        format!("SELECT * FROM game_corpse_loot WHERE corpse_guid = {GAMEOBJECT_161557}");
+    let inventory_before = sorted_rows(&node, &inventory_query, "guid");
+    let loot_before = sorted_rows(&node, &loot_query, "id");
+    assert!(!loot_before.is_empty());
+    node.assert_call("playerbots_quest_fixture_try_take_gameobject_loot", &[mage]);
+    assert_eq!(
+        sorted_rows(&node, &inventory_query, "guid"),
+        inventory_before
+    );
+    assert_eq!(sorted_rows(&node, &loot_query, "id"), loot_before);
+    let take_refusal = node.query_rows(&format!(
+        "SELECT outcome FROM pkg_playerbots_action WHERE character_guid = {mage}"
+    ));
+    assert!(take_refusal
+        .iter()
+        .any(|row| row["outcome"].contains("inventoryFull")));
+    record(&node, "gameobject-inventory-refusal");
+    node.assert_call(
+        "playerbots_quest_fixture_clear_filler_and_take_gameobject_loot",
+        &[mage],
     );
     assert_eq!(item_count(&node, mage, 11119), 8);
     assert_eq!(
@@ -537,6 +578,57 @@ fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting(
     assert_eq!(persistent[0]["selected_quest"], "(some = 5261)");
     assert!(persistent[0]["missing_capability"].contains("escort"));
     record(&node, "reconcile");
+
+    let (node, bots) = fixture("playerbots-quest-provided-item-loss");
+    for (class, banked) in [("1", "false"), ("5", "true")] {
+        let bot = bot_for_class(&bots, class);
+        node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "3905"]);
+        node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+        select_cohort(&node, bot);
+        run_once(&node);
+        assert_eq!(
+            node.query_rows(&format!(
+                "SELECT quest_entry FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
+            ))[0]["quest_entry"],
+            "3905"
+        );
+        let held_before = quest(&node, bot, 3905);
+        node.assert_call(
+            "playerbots_quest_fixture_lose_provided_item",
+            &[bot, banked],
+        );
+        run_once(&node);
+        assert_eq!(quest(&node, bot, 3905), held_before);
+        let admission = node.query_rows(&format!(
+            "SELECT selected_quest, state, missing_capability, detail, observed_micros, wait_until_micros FROM pkg_playerbots_quest_admission WHERE character_guid = {bot}"
+        ));
+        assert_eq!(admission[0]["selected_quest"], "none");
+        assert!(admission[0]["state"].contains("waiting"));
+        assert!(admission[0]["missing_capability"].contains("missingProvidedItem"));
+        assert!(admission[0]["detail"].contains("no longer carried"));
+        assert!(
+            admission[0]["wait_until_micros"].parse::<i64>().unwrap()
+                > admission[0]["observed_micros"].parse::<i64>().unwrap()
+        );
+        assert!(node
+            .query_rows(&format!(
+                "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
+            ))
+            .is_empty());
+        let held = runner(&node, bot);
+        assert!(held["chosen"].contains("hold"));
+        assert!(held["chosen"].contains("quest"));
+        let provided = node.query_rows(&format!(
+            "SELECT slot FROM game_item_instance WHERE owner_guid = {bot} AND entry = 11125"
+        ));
+        if banked == "true" {
+            assert_eq!(provided.len(), 1);
+            assert_eq!(provided[0]["slot"], "39");
+        } else {
+            assert!(provided.is_empty());
+        }
+    }
+    record(&node, "provided-item-loss");
 }
 
 #[test]

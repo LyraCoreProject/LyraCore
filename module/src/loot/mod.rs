@@ -45,6 +45,7 @@
 
 use spacetimedb::{table, ReducerContext, Table};
 
+use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::character::game_character; // credit_purse's offline-recipient fallback (work-item 221)
 use crate::game_group_member; // clone_quest_loot_for_group's GameObject roster read
 use crate::game_world_entity;
@@ -784,21 +785,29 @@ pub(crate) fn refused(refusal: LootRefusal, detail: &str) -> String {
 
 /// Open a creature corpse for the read that follows. This reducer core only authorizes the read;
 /// it does not create durable loot-window state.
-pub(crate) fn open_creature_corpse(
+pub(crate) fn request_open_creature_corpse(
     ctx: &ReducerContext,
     actor_guid: u64,
     corpse_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), ActionRefusal> {
     let actor = ctx
         .db
         .game_world_entity()
         .guid()
         .find(actor_guid)
-        .ok_or_else(|| refused(LootRefusal::LooterUnavailable, "looter not in world"))?;
+        .ok_or_else(|| {
+            ActionRefusal::new(
+                ActionRefusalKind::MissingActor,
+                refused(LootRefusal::LooterUnavailable, "looter not in world"),
+            )
+        })?;
     if actor.dead {
-        return Err(refused(
-            LootRefusal::LooterUnavailable,
-            "dead Characters cannot loot",
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::DeadActor,
+            refused(
+                LootRefusal::LooterUnavailable,
+                "dead Characters cannot loot",
+            ),
         ));
     }
     let corpse = ctx
@@ -806,24 +815,54 @@ pub(crate) fn open_creature_corpse(
         .game_world_entity()
         .guid()
         .find(corpse_guid)
-        .ok_or_else(|| refused(LootRefusal::NoLootSource, "no such corpse"))?;
+        .ok_or_else(|| {
+            ActionRefusal::new(
+                ActionRefusalKind::MissingTarget,
+                refused(LootRefusal::NoLootSource, "no such corpse"),
+            )
+        })?;
     if corpse.is_player() || !corpse.dead {
-        return Err(refused(
-            LootRefusal::NoLootSource,
-            "Loot Source is not a creature corpse",
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::MissingTarget,
+            refused(
+                LootRefusal::NoLootSource,
+                "Loot Source is not a creature corpse",
+            ),
         ));
     }
     if corpse.map_id != actor.map_id || corpse.instance_id != actor.instance_id {
-        return Err(refused(
-            LootRefusal::OutOfRange,
-            "Loot Source is on another map or instance",
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            refused(
+                LootRefusal::OutOfRange,
+                "Loot Source is on another map or instance",
+            ),
         ));
     }
     let (dx, dy, dz) = (corpse.x - actor.x, corpse.y - actor.y, corpse.z - actor.z);
     if dx * dx + dy * dy + dz * dz > LOOT_RANGE_SQ {
-        return Err(refused(LootRefusal::OutOfRange, "corpse is out of reach"));
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OutOfRange,
+            refused(LootRefusal::OutOfRange, "corpse is out of reach"),
+        ));
     }
-    corpse_access_gate(ctx, actor_guid, corpse_guid)
+    corpse_access(ctx, actor_guid, corpse_guid).map_err(|refusal| {
+        ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            refused(
+                refusal,
+                &format!("actor_guid={actor_guid} corpse_guid={corpse_guid}"),
+            ),
+        )
+    })
+}
+
+pub(crate) fn open_creature_corpse(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    corpse_guid: u64,
+) -> Result<(), String> {
+    request_open_creature_corpse(ctx, actor_guid, corpse_guid).map_err(Into::into)
 }
 
 /// Shared core: take corpse money by explicit looter guid, behind the `loot_money` reducer and
