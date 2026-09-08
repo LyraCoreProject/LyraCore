@@ -138,7 +138,7 @@ fn write_evidence(node: &Standalone, name: &str, mut evidence: serde_json::Value
     );
     fields.insert(
         "seeded_content_identity".to_string(),
-        "playerbots-provisioning-v1".into(),
+        "playerbots-provisioning-v2".into(),
     );
     fields.insert(
         "seeded_geometry_identity".to_string(),
@@ -147,7 +147,7 @@ fn write_evidence(node: &Standalone, name: &str, mut evidence: serde_json::Value
     fields.insert(
         "content".to_string(),
         serde_json::json!({
-            "revision": "playerbots-provisioning-v1",
+            "revision": "playerbots-provisioning-v2",
             "profile_catalogue": "seeded class/role kit plus private profile-item fixture rows",
             "imported_content": null,
         }),
@@ -307,19 +307,22 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
     for kit in
         node.query_rows("SELECT spell_id FROM pkg_playerbots_kit WHERE class = 1 AND role = 0")
     {
+        let expected = if kit["spell_id"] == "6673" { 0 } else { 1 };
         assert_eq!(
             node.query_rows(&format!(
                 "SELECT * FROM game_player_spell WHERE character_guid = {guid} AND spell_id = {}",
                 kit["spell_id"]
             ))
             .len(),
-            1,
+            expected,
             "profile spell {}",
             kit["spell_id"]
         );
     }
+    assert!(history.contains("spell = 6673"));
+    assert!(history.contains("class"));
     assert!(history.contains("warrior-tank-free"));
-    assert_eq!(completed["revision"], "1");
+    assert_eq!(completed["revision"], "2");
     assert!(history.contains("applied"));
     for action in ["skill", "spell", "talent", "item", "equip"] {
         assert!(

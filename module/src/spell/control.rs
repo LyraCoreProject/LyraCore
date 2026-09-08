@@ -34,6 +34,106 @@ pub fn has_aura(ctx: &ReducerContext, unit_guid: u64, spell_id: u32) -> bool {
     auras_on(ctx, unit_guid).any(|a| a.spell_id == spell_id)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuffStatus {
+    Missing,
+    Satisfied,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitControl {
+    Incapacitated,
+    Feared,
+    Rooted,
+}
+
+/// Read all control auras for one unit within a declared limit. Oversized state is unavailable, so
+/// an arbitrary prefix cannot decide whether the party may damage the unit.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub fn control_status(
+    ctx: &ReducerContext,
+    unit_guid: u64,
+    limit: usize,
+) -> Result<Option<UnitControl>, ()> {
+    let auras: Vec<_> = auras_on(ctx, unit_guid)
+        .take(limit.saturating_add(1))
+        .collect();
+    if auras.len() > limit {
+        return Err(());
+    }
+    let has = |mechanic| {
+        auras
+            .iter()
+            .any(|aura| aura.eff_kind == A_CONTROL && aura.eff_p0 == mechanic)
+    };
+    Ok(if has(M_STUN) || has(M_POLY) {
+        Some(UnitControl::Incapacitated)
+    } else if has(M_FEAR) {
+        Some(UnitControl::Feared)
+    } else if has(M_ROOT) {
+        Some(UnitControl::Rooted)
+    } else {
+        None
+    })
+}
+
+/// Classify a spell from its complete effect set. A spell has at most three effects.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub fn spell_control(ctx: &ReducerContext, spell_id: u32) -> Result<Option<UnitControl>, ()> {
+    let effects: Vec<_> = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .take(4)
+        .collect();
+    if effects.len() > 3 {
+        return Err(());
+    }
+    let has = |mechanic| {
+        effects.iter().any(|effect| {
+            effect.kind == A_CONTROL && effect.p0_kind == P_MECHANIC && effect.p0 == mechanic
+        })
+    };
+    Ok(if has(M_STUN) || has(M_POLY) {
+        Some(UnitControl::Incapacitated)
+    } else if has(M_FEAR) {
+        Some(UnitControl::Feared)
+    } else if has(M_ROOT) {
+        Some(UnitControl::Rooted)
+    } else {
+        None
+    })
+}
+
+/// Whether a target needs the requested buff. Oversized or ambiguous catalogue data is unavailable,
+/// so callers hold instead of choosing from an arbitrary prefix.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub fn buff_status(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    spell_id: u32,
+    caster_level: u8,
+) -> BuffStatus {
+    const AURA_LIMIT: usize = 64;
+    const FAMILY_LIMIT: usize = 64;
+    let auras: Vec<_> = auras_on(ctx, target_guid).take(AURA_LIMIT + 1).collect();
+    if auras.len() > AURA_LIMIT {
+        return BuffStatus::Unavailable;
+    }
+    if auras.iter().any(|aura| aura.spell_id == spell_id) {
+        return BuffStatus::Satisfied;
+    }
+    match super::stacking::buff_group_status(ctx, spell_id, caster_level, &auras, FAMILY_LIMIT) {
+        super::stacking::BuffGroupStatus::NoGroup | super::stacking::BuffGroupStatus::Missing => {
+            BuffStatus::Missing
+        }
+        super::stacking::BuffGroupStatus::Satisfied => BuffStatus::Satisfied,
+        super::stacking::BuffGroupStatus::Unavailable => BuffStatus::Unavailable,
+    }
+}
+
 fn is_channel_aura(ctx: &ReducerContext, aura: &Aura) -> bool {
     aura.eff_kind == A_PERIODIC_TRIGGER
         || (aura.eff_kind == A_PERIODIC_ENERGIZE

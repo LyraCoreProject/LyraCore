@@ -205,6 +205,117 @@ pub(crate) fn resolve_group_conflict(
     }
 }
 
+/// Whether an existing member already has at least the incoming strength. Maintenance selection
+/// treats equality as satisfied because refreshing an equal family member would be redundant.
+pub(crate) fn group_strength_satisfied(strength: i32, existing: &[AuraSummary]) -> bool {
+    existing.iter().any(|aura| aura.strength >= strength)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuffGroupStatus {
+    NoGroup,
+    Missing,
+    Satisfied,
+    Unavailable,
+}
+
+/// Compare a requested buff with active members of its stacking family. The limits belong beside
+/// the stacking reads so casting and maintenance cannot grow different family rules.
+pub(crate) fn buff_group_status(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    caster_level: u8,
+    auras: &[Aura],
+    family_limit: usize,
+) -> BuffGroupStatus {
+    let groups = ctx.db.game_spell_group();
+    let memberships: Vec<_> = groups.by_spell().filter(&spell_id).take(2).collect();
+    let [membership] = memberships.as_slice() else {
+        return if memberships.is_empty() {
+            BuffGroupStatus::NoGroup
+        } else {
+            BuffGroupStatus::Unavailable
+        };
+    };
+    let group_id = membership.group_id;
+    let Some(rule) = ctx.db.game_spell_group_rule().group_id().find(group_id) else {
+        return BuffGroupStatus::Unavailable;
+    };
+    if group_rule_from_u8(rule.rule) != GroupRule::ExclusiveStronger {
+        return BuffGroupStatus::Missing;
+    }
+    let Some(header) = ctx.db.game_spell().spell_id().find(spell_id) else {
+        return BuffGroupStatus::Unavailable;
+    };
+    let effects: Vec<_> = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .take(4)
+        .collect();
+    if effects.len() > 3 {
+        return BuffGroupStatus::Unavailable;
+    }
+    let aura_effects: Vec<_> = effects
+        .into_iter()
+        .filter(|effect| effect.kind & KIND_AURA_BIT != 0)
+        .collect();
+    if aura_effects.is_empty() {
+        return BuffGroupStatus::Unavailable;
+    }
+    let incoming = aura_effects
+        .into_iter()
+        .map(|effect| {
+            compute_group_strength(
+                rule.rank_is_comparable,
+                rank_of(ctx, spell_id),
+                effect_amount(
+                    effect.base_points,
+                    effect.die_sides,
+                    effect.per_level,
+                    u32::from(caster_level),
+                    header.spell_level,
+                    header.max_level,
+                    0,
+                )
+                .saturating_abs(),
+            )
+        })
+        .max()
+        .unwrap_or(0);
+    let family_rows: Vec<_> = groups
+        .by_group()
+        .filter(&group_id)
+        .take(family_limit.saturating_add(1))
+        .collect();
+    if family_rows.len() > family_limit {
+        return BuffGroupStatus::Unavailable;
+    }
+    let family: std::collections::HashSet<_> =
+        family_rows.into_iter().map(|row| row.spell_id).collect();
+    let existing: Vec<_> = auras
+        .iter()
+        .filter(|aura| family.contains(&aura.spell_id))
+        .map(|aura| AuraSummary {
+            aura_id: aura.id,
+            caster_guid: aura.caster_guid,
+            strength: compute_group_strength(
+                rule.rank_is_comparable,
+                rank_of(ctx, aura.spell_id),
+                aura.amount
+                    .saturating_abs()
+                    .saturating_mul(i32::from(aura.stacks.max(1))),
+            ),
+        })
+        .collect();
+    if group_strength_satisfied(incoming, &existing) {
+        BuffGroupStatus::Satisfied
+    } else {
+        BuffGroupStatus::Missing
+    }
+}
+
 /// THE CC-diminishing-returns chokepoint (work-item 192). Called by `resolve_dr_for_target` for every
 /// `A_CONTROL(mechanic)` effect on a player target. `prior` is the DR window state read for this
 /// `(target, category)` BEFORE this application (`None` if the target has never taken this category of
