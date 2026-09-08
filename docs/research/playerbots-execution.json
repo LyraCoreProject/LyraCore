@@ -106,6 +106,12 @@
         "label": "Execution report #481 merged",
         "status": "merged",
         "merge_commit": "f32fad66caefa499757f794310744302914e4dd5"
+      },
+      {
+        "url": "https://github.com/LyraCoreProject/LyraCore/pull/483",
+        "label": "Progress #483",
+        "status": "merged",
+        "merge_commit": "ca33b76bc631a8ba31ebb95a0ca50f6216bfc007"
       }
     ]
   },
@@ -287,21 +293,130 @@
       "model": "gpt-6-astra",
       "effort": "high",
       "estimated_tokens": 180000,
-      "status": "implementing",
+      "status": "review",
       "repo_scope": [
         "Official Package Collection decision and durable state",
         "LyraCore Module scheduling and diagnostics",
         "Pure decision and durable integration tests"
       ],
-      "owner": "PB-002 implementer",
-      "prs": [],
-      "evidence": [],
+      "owner": "PB-002 runner agent and consent helper",
+      "prs": [
+        {
+          "url": "https://github.com/LyraCoreProject/LyraCore/pull/484",
+          "status": "merged",
+          "label": "Core #484",
+          "head_commit": "41488bfe8fecae21498371e172969c01948e7bc2",
+          "merge_commit": "76142010cda8b497f07b1824d34472051c4fa4b2"
+        },
+        {
+          "url": "https://github.com/LyraCoreProject/packages/pull/26",
+          "status": "open",
+          "label": "Package #26",
+          "head_commit": "1a6577308e7327a3c33f1d7074748d0a93771367"
+        }
+      ],
+      "evidence": [
+        "All nine criteria have reviewed evidence at the revisions below. The final correction remains under review and must pass its own behavior checks before integration.",
+        "The recorded frozen local sources are core 41488bfe8fecae21498371e172969c01948e7bc2 and Package 584d01b00b2b241b6d5667bb810b49af0430d634. The full Package union passed 1,631 normal library tests, 1,632 debug library tests, all 31 action and runner cases, two personality cases, and five core consent cases.",
+        "All 31 saved runtime input records agree on clean source revisions, Module BLAKE3 70b3d7ea1d39a79b947f3cf69078ed45c0775e2bec7218d3d611e412579e6a0c, and Package Content Identity 010384cd6726756a0e92af053f571b2a29adf957acd92a24ab52329149ccaa5a. The saved Wasm SHA256 is 0f26f21aa34da55fcc84928c61881f6d0b5bb9ece1156c16c2dbf6373bbec885.",
+        "Current core CI is green, including the complete durable job and parity for all 1,000 default Gateway binding files. CI: https://github.com/LyraCoreProject/LyraCore/actions/runs/34239158710/job/102104571384",
+        "Core Rust CI passed 360 importer tests, 1,524 default Module tests, 1,454 Gateway tests with seven ignored, and 172 shared tests. Formatting, Clippy, Runtime Scripts, and Wasm compilation also passed.",
+        "Corrected Package CI is green for both push and paired PR runs at 334ea463845903e60d3823ee2af707cbaa49723d. This revision changes only the preceding build directory; its playerbots tree matches the final local source. Paired durable CI: https://github.com/LyraCoreProject/packages/actions/runs/34241057172/job/102111355643",
+        "The populated local migration records preceding Wasm BLAKE3 1662b0963dc0e03c29ddde985f08c0ec5a6f392e899a80eac9d7789a85b1b5a9 and the final Module identity above. Preceding inventory contains example, fire_nova, and playerbots. Final inventory also contains dungeons. CI independently builds the full preceding Package collection.",
+        "The later run against merged core main also passed all 31 cases. Its inputs record core 76142010cda8b497f07b1824d34472051c4fa4b2 and tested Package merge 624bde06814cdf64add8310a54457c6547e843cb for branch head 1a6577308e7327a3c33f1d7074748d0a93771367. This precedes the new review corrections. CI: https://github.com/LyraCoreProject/packages/actions/runs/34242661194/job/102116572438"
+      ],
       "notes": [
         "SpacetimeDB 2.7.1 allows appended enum variants only when old variants stay compatible and storage size and alignment stay unchanged. Prove populated-state migration for the runner schema. Planner source: https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/schema/src/auto_migrate.rs#L826-L895",
         "Direct damage can delay a pending cast while retaining its scheduled identity. Observe its current due time before deciding that completion is late; the objective deadline is a separate policy limit.",
-        "Record-only means no gameplay actions from either runner for the selected bot. Freeze must stop retained foreground work. Verify both through the normal Package tick entry."
+        "Record-only means no gameplay actions from either runner for the selected bot. Freeze must stop retained foreground work. Verify both through the normal Package tick entry.",
+        "The first runner behavior retains a home destination through defense and self-heal interruptions. Companion policy and quest admission remain in their dependent tickets.",
+        "Control must cover damage and invitation hooks as well as the tick. The Gateway also auto-accepts invitations for session-less Characters. The core-owned consent check covers that path for record-only and frozen bots.",
+        "The consent check acknowledges current World Shard state before Realm-core group actions. An action admitted before a concurrent freeze may finish; cross-Shard atomicity is not claimed. Controller selection clears unclaimed Group Intents in the same transaction.",
+        "The common runner entry checks current Account ownership. Relinquishment releases only the bot's observed cast or movement identity and preserves a later human action.",
+        "Package schema changes still require human review before production shipping. Agent review and source merge do not satisfy that production gate.",
+        "Core #484 merged after all checks and its completed CodeRabbit review passed. Package #26 restored all three current-core checkouts to main. That compatibility run passed before the new correction work.",
+        "Package CodeRabbit review found silent truncation of eligible facts, a health-percentage overflow, and narrow fixture and workflow issues. The implementer is resolving them before merge. Moving the read bound after filters would permit unbounded work and is not the chosen fix. Final corrected-source checks and review remain required.",
+        "The correction adds exact learned-spell lookup and a healing-profile scan that advances through bounded turns. An independent review found that completed negative results must survive rescans, or Recovery Hold can interrupt useful movement. The implementer is fixing that case before final verification."
       ],
-      "acceptance_evidence": []
+      "acceptance_evidence": [
+        {
+          "criterion": "Fixed facts and explicit time produce the same target-bearing candidate order and chosen action.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "The pure decision tests permute input order, rank full target-bearing identities, and retain only the highest-priority offer for each identity. All ten decision cases passed in the final library runs.",
+            "https://github.com/LyraCoreProject/packages/blob/584d01b00b2b241b6d5667bb810b49af0430d634/playerbots/src/decision.rs"
+          ]
+        },
+        {
+          "criterion": "Strategies compose supported triggers, defaults, and priority rules without a global string registry or a second authoritative state machine.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "Typed Strategy tests cover triggers, defaults, and integer priority adjustment. The common runner stamps its durable objective identity into root and nested candidates before selection.",
+            "https://github.com/LyraCoreProject/packages/blob/584d01b00b2b241b6d5667bb810b49af0430d634/playerbots/src/decision.rs",
+            "https://github.com/LyraCoreProject/packages/blob/584d01b00b2b241b6d5667bb810b49af0430d634/playerbots/src/runner.rs"
+          ]
+        },
+        {
+          "criterion": "Prerequisites, alternatives, and continuers have explicit depth, transition, candidate, and route-work limits with cycle refusal.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "The shared limits allow 24 candidates, depth 4, 16 transitions, and one route reservation using the core expansion limit. Separate tests cover each limit, cycles, and repeated cycle refusals inside completed prerequisites.",
+            "https://github.com/LyraCoreProject/packages/blob/584d01b00b2b241b6d5667bb810b49af0430d634/playerbots/src/decision.rs"
+          ]
+        },
+        {
+          "criterion": "Only one foreground movement or cast action owns the bot, and a higher-priority action explicitly cancels incompatible work.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "The final real runner suite proves cast retention through pushback, explicit survival preemption, changed-destination cancellation, and freeze. The Account ownership case preserves a later human cast while the bot relinquishes control. All 15 runner cases passed.",
+            "https://github.com/LyraCoreProject/LyraCore/blob/41488bfe8fecae21498371e172969c01948e7bc2/module/tests/playerbots_rewrite/runner.rs"
+          ]
+        },
+        {
+          "criterion": "The durable objective records identity, destination, stage, deadline, last verified progress, bounded failures, deferred destinations, and catalog revision.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "The retained ReturnHome objective records destination, identity, stage, deadline, last verified progress, and catalog revision. Blocked travel defers its destination and caps failures and deferrals at four entries. Real tests cover actual arrival, deferred travel under low health, and deadline expiry.",
+            "https://github.com/LyraCoreProject/packages/blob/584d01b00b2b241b6d5667bb810b49af0430d634/playerbots/src/runner.rs",
+            "https://github.com/LyraCoreProject/LyraCore/blob/41488bfe8fecae21498371e172969c01948e7bc2/module/tests/playerbots_rewrite/runner.rs"
+          ]
+        },
+        {
+          "criterion": "Separate movement, combat, cast, and quest progress evidence prevents an accepted action from masquerading as completion.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "The final tactical movement case moves away from home for more than ten seconds, records movement progress, and leaves the home progress clock unchanged. Defense acceptance does not count as damage. Cast completion uses the exact core scheduled identity. PB-001 quest-credit and no-hit cases still pass.",
+            "https://github.com/LyraCoreProject/LyraCore/blob/41488bfe8fecae21498371e172969c01948e7bc2/module/tests/playerbots_rewrite/runner.rs",
+            "https://github.com/LyraCoreProject/LyraCore/blob/41488bfe8fecae21498371e172969c01948e7bc2/module/tests/playerbots_rewrite.rs"
+          ]
+        },
+        {
+          "criterion": "Due bots run in stable indexed order under a per-pass limit; excess work remains due, gets a fair next turn, and records scheduler lag.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "The real 25-bot case proves stable indexed processing in batches of 16 then 9. Excess work remains due and records lag. The populated migration also verifies bounded lazy backfill.",
+            "https://github.com/LyraCoreProject/LyraCore/blob/41488bfe8fecae21498371e172969c01948e7bc2/module/tests/playerbots_rewrite/runner.rs"
+          ]
+        },
+        {
+          "criterion": "The explanation read reports the current objective and target, chosen action and reason, last outcome, progress age, retry count, next eligible time, and relevant revision with bounded history.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "The public runner row exposes the objective, target-bearing chosen action and reason, last outcome, progress age, retry count, next eligible time, and revision. Its real lifetime case caps history at eight entries and deletes Character-owned state.",
+            "https://github.com/LyraCoreProject/packages/blob/584d01b00b2b241b6d5667bb810b49af0430d634/playerbots/src/runner.rs",
+            "https://github.com/LyraCoreProject/LyraCore/blob/41488bfe8fecae21498371e172969c01948e7bc2/module/tests/playerbots_rewrite/runner.rs"
+          ]
+        },
+        {
+          "criterion": "The additive state migration defines defaults and backfill and adds a durable controller selector before any bot can use the new runner. Record-only mode emits no gameplay actions; cohort mode has one eligible controller and supports freeze.",
+          "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
+          "evidence": [
+            "The final populated upgrade publishes a preceding Wasm, creates bot roster, goals, observations, and quest rows, then upgrades the same private database. Legacy and scheduler-lag defaults survive. Normal tick and hook cases prove RecordOnly and Frozen suppression and one Cohort controller. Five real core consent cases cover current ownership, invitation admission, deletion, and Transfer.",
+            "https://github.com/LyraCoreProject/LyraCore/blob/41488bfe8fecae21498371e172969c01948e7bc2/module/tests/playerbots_rewrite/runner.rs",
+            "https://github.com/LyraCoreProject/LyraCore/blob/41488bfe8fecae21498371e172969c01948e7bc2/module/tests/sessionless_consent.rs"
+          ]
+        }
+      ]
     },
     {
       "id": "PB-003",
@@ -653,6 +768,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 13:20 UTC",
-  "summary": "PB-001 is complete. Core #482 and Package #25 are merged with reviewed evidence for all eight criteria and passing final CI. PB-002 is implementing the durable decision runner. One of 12 implementation tickets is complete; imported-world and attended-client release evidence remains pending."
+  "updated_at": "2026-09-08 15:29 UTC",
+  "summary": "PB-001 is integrated. PB-002 core is merged; the Package remains in review while the implementer resolves new findings. Earlier clean local and paired CI evidence is retained with its exact revisions. The next frontier remains gated by the Package merge."
 }
