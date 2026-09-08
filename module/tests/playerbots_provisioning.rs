@@ -612,6 +612,7 @@ fn playerbots_provisioning_migrates_populated_pb002_runner_state() {
             .to_ascii_lowercase()
             .contains("movement")
     }));
+    node.assert_call("playerbots_fixture_freeze", &[&guid]);
     let preceding = one(
         &node,
         &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
