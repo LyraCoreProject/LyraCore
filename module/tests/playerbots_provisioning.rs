@@ -452,8 +452,7 @@ fn playerbots_provisioning_yields_to_recovery_then_supplies_missing_recovery() {
     node.assert_call("playerbots_fixture_prepare", &[]);
     node.assert_call("playerbots_fixture_runner_stage", &[&guid, "true"]);
     node.assert_call("playerbots_fixture_position", &[&guid, "1240"]);
-    node.assert_call("playerbots_fixture_runner_due", &[]);
-    node.assert_call("playerbots_fixture_runner_pass", &[]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let urgent = one(
         &node,
         &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
@@ -470,9 +469,20 @@ fn playerbots_provisioning_yields_to_recovery_then_supplies_missing_recovery() {
 
     node.assert_call("playerbots_fixture_cancel", &[&guid, "false"]);
     node.assert_call("playerbots_fixture_provision_remove_recovery", &[&guid]);
-    assert_eq!(item_count(&node, &guid, 117), 9);
+    let staged_food = item_count(&node, &guid, 117);
     let wounded_health = health(&node, &guid);
-    node.assert_call("playerbots_fixture_runner_pass", &[]);
+    write_evidence(
+        &node,
+        "priority-staged",
+        serde_json::json!({
+            "food": staged_food,
+            "health": wounded_health,
+            "bot": one(&node, &format!("SELECT next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {guid}")),
+            "provisioning": one(&node, &format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}")),
+        }),
+    );
+    assert_eq!(staged_food, 9);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     assert_eq!(item_count(&node, &guid, 117), 10);
     let supplied = one(
         &node,
@@ -482,7 +492,7 @@ fn playerbots_provisioning_yields_to_recovery_then_supplies_missing_recovery() {
         .to_ascii_lowercase()
         .contains("provisioning"));
     node.assert_call("playerbots_fixture_provision_due", &[&guid]);
-    node.assert_call("playerbots_fixture_runner_pass", &[]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     assert_eq!(item_count(&node, &guid, 117), 9);
     assert!(!node
         .query_rows(&format!(
