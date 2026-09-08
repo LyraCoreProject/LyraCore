@@ -428,6 +428,27 @@ pub fn debug_force_cast(
     crate::spell::resolve_cast(ctx, character_guid, spell_id, e.level as u8)
 }
 
+fn resolve_debug_cast_at(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    target_guid: u64,
+) -> Result<(), String> {
+    let caster = crate::helpers::live_entity(ctx, caster_guid)?;
+    // Fixture spells can be staged without being learned. Keep that debug-only bypass while using
+    // the owning synchronous resolver for costs, targets, effects, and other cast Gates.
+    crate::spell::resolve_cast_at(
+        ctx,
+        caster_guid,
+        spell_id,
+        caster.level as u8,
+        target_guid,
+        false,
+        false,
+        None,
+    )
+}
+
 /// Like `debug_force_cast` but directs the cast at an explicit `target_guid` instead of self —
 /// used to test targeted interrupts (e.g. Kick: caster A casts Kick on target B who is mid-cast).
 /// For interrupt testing the `lockout_ms` value is read from `game_spell.duration_ms` for the
@@ -439,8 +460,7 @@ pub fn debug_force_cast_at(
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
-    // Actor verb: sources the caster level from the live entity and resolves synchronously.
-    crate::actor::cast_at(ctx, caster_guid, spell_id, target_guid)
+    resolve_debug_cast_at(ctx, caster_guid, spell_id, target_guid)
 }
 
 /// Set `character_guid`'s level and recompute `max_health`/`max_power` from the real stat curve
@@ -1039,17 +1059,7 @@ pub fn debug_cast_at(
 ) -> Result<(), String> {
     // Debug direct cast resolves synchronously — not a timed-cast completion (instant packet
     // sequence). It bypasses player spellbook admission so fixtures can cast rows they just staged.
-    let caster = crate::helpers::live_entity(ctx, caster_guid)?;
-    crate::spell::resolve_cast_at(
-        ctx,
-        caster_guid,
-        spell_id,
-        caster.level as u8,
-        target_guid,
-        false,
-        false,
-        None,
-    )
+    resolve_debug_cast_at(ctx, caster_guid, spell_id, target_guid)
 }
 
 /// Begin a (possibly cast-timed) cast from `caster_guid` AT `target_guid` — drives `begin_cast` so a
