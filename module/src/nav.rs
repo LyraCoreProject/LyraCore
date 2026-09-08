@@ -314,10 +314,11 @@ fn step_gate(
     gate_step(cur, stepped, z, |from, to| {
         let exact = crate::vmap::collision_ray(ctx, map_id, instance_id, from, to);
         let grid = if !crate::vmap::vmap_enabled(ctx, map_id) && nav_enabled(ctx) {
+            // The grid query adds eye height itself, so it starts at foot height.
             lyracore_shared::nav::step_hit(
                 &mut fetcher(ctx, map_id),
-                (from[0], from[1], from[2]),
-                (to[0], to[1], to[2]),
+                (from[0], from[1], z),
+                (to[0], to[1], z),
             )
             .map(|p| [p.0, p.1, from[2]])
         } else {

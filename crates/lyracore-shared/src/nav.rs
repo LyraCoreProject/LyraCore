@@ -977,6 +977,7 @@ pub fn derive_cell(
         for nx in 0..WALK_DIM {
             let index = (ny + 1) * (WALK_DIM + 2) + nx + 1;
             let g = walk_ground[index];
+            // Subtracting rounded world heights can put an exact step just above the limit.
             if [
                 index - 1,
                 index + 1,
@@ -984,8 +985,9 @@ pub fn derive_cell(
                 index + WALK_DIM + 2,
             ]
             .iter()
-            .any(|&neighbor| (walk_ground[neighbor] - g).abs() > WALK_STEP_UP)
-            {
+            .any(|&neighbor| {
+                walk_ground[neighbor] > g + WALK_STEP_UP || g > walk_ground[neighbor] + WALK_STEP_UP
+            }) {
                 walk_set(&mut walk, nx, ny, false);
                 dirty = true;
             }
@@ -1272,20 +1274,22 @@ mod derive_tests {
                 },
             ]
         };
-        let mut tris = Vec::from(tread(seam, seam + 50.0, GROUND_Z + 0.5));
-        tris.extend(tread(seam - 50.0, seam, GROUND_Z + 0.9));
-        for _ in 0..2 {
-            let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
-            assert!(walk_get(&cell.walk, 32, 32), "shared tread edge");
-            for (from, to) in [(at(16, 32), at(48, 32)), (at(48, 32), at(16, 32))] {
-                assert_eq!(
-                    find_leg(&mut cell_fetcher(Some(cell.clone())), from, to, 4096),
-                    Some(vec![to])
-                );
-            }
-            tris.reverse();
-            for t in &mut tris {
-                t.verts.swap(0, 1);
+        for (low, high) in [(0.5, 0.9), (0.0, WALK_STEP_UP)] {
+            let mut tris = Vec::from(tread(seam, seam + 50.0, GROUND_Z + low));
+            tris.extend(tread(seam - 50.0, seam, GROUND_Z + high));
+            for _ in 0..2 {
+                let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+                assert!(walk_get(&cell.walk, 32, 32), "shared tread edge");
+                for (from, to) in [(at(16, 32), at(48, 32)), (at(48, 32), at(16, 32))] {
+                    assert_eq!(
+                        find_leg(&mut cell_fetcher(Some(cell.clone())), from, to, 4096),
+                        Some(vec![to])
+                    );
+                }
+                tris.reverse();
+                for t in &mut tris {
+                    t.verts.swap(0, 1);
+                }
             }
         }
     }
