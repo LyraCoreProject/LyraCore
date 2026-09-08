@@ -57,6 +57,8 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::seed::seed_createinfo_spells(ctx);
     let createinfo = ctx.db.game_createinfo_spell().count();
 
+    let lesser_heal_target = crate::seed::repair_lesser_heal_target(ctx);
+
     crate::seed::seed_spell_groups(ctx);
     crate::items::seed_compatibility_enchantments(ctx);
     let spell_groups = ctx.db.game_spell_group().count();
@@ -350,6 +352,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     // already present" signal worth stamping separately.
     let total = talents
         + createinfo
+        + lesser_heal_target
         + spell_groups
         + pw_shield
         + fixture_catalogue

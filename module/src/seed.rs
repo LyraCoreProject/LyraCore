@@ -905,7 +905,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     spell(772, "Rend", 1, 10, 0, 5, 21000, 1, 0, true, 0);
     effect(772, 0, 0x90, 7, 3000, 1, 0, 0); // bleed 7 dmg / 3s on the target enemy (T_TARGET_ENEMY)
     spell(2050, "Lesser Heal", 0, 30, 1500, 40, 0, 2, 0, false, 0);
-    effect(2050, 0, 0x02, 50, 0, 0, 0, 0); // heal self 50
+    effect(2050, 0, 0x02, 50, 0, 2, 0, 0); // heal the named ally for 50
     spell(133, "Fireball", 0, 0, 0, 30, 0, 4, 0, false, 0);
     effect(133, 0, 0x01, 20, 0, 1, 0, 0); // 20 fire dmg to an enemy (lethal -> kill_creature)
     spell(
@@ -1326,6 +1326,78 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     // dump lands wholesale. Idempotent + shared with `debug_repair_after_publish`, which is how an
     // already-migrated development database picks up reconciled rows (init does NOT re-run).
     seed_spell_groups(ctx);
+}
+
+#[cfg(feature = "debug_reducers")]
+fn legacy_lesser_heal_header(spell: &Spell) -> bool {
+    spell.spell_id == 2050
+        && spell.name == "Lesser Heal"
+        && spell.power_type == 0
+        && spell.cost == 30
+        && spell.cast_time_ms == 1500
+        && spell.gcd_ms == 1500
+        && spell.cooldown_ms == 0
+        && spell.range_yd == 40
+        && spell.duration_ms == 0
+        && spell.school_mask == 2
+        && spell.dispel_type == 0
+        && spell.mechanic == 0
+        && spell.max_stacks == 0
+        && spell.aura_interrupt == 0
+        && spell.attributes == 0
+        && spell.spell_level == 0
+        && spell.max_level == 0
+        && !spell.is_negative
+        && spell.cast_flags == 0
+        && spell.stances == 0
+        && spell.family_name == 0
+        && spell.family_flags == 0
+        && spell.proc_flags == 0
+        && spell.proc_chance == 0
+        && spell.proc_charges == 0
+}
+
+#[cfg(feature = "debug_reducers")]
+fn legacy_lesser_heal_effect(effect: &SpellEffect) -> bool {
+    effect.id == (2050u64 << 2)
+        && effect.spell_id == 2050
+        && effect.effect_index == 0
+        && effect.kind == 0x02
+        && effect.base_points == 50
+        && effect.die_sides == 0
+        && effect.per_level == 0.0
+        && effect.period_ms == 0
+        && effect.target == crate::spell::T_SELF
+        && effect.radius_yd == 0.0
+        && effect.chain_targets == 0
+        && effect.trigger_spell == 0
+        && effect.effect_mechanic == 0
+        && effect.p0 == 0
+        && effect.p0_kind == 0
+        && effect.p1 == 0
+        && effect.script_id == 0
+        && !effect.enters_combat
+}
+
+/// Repair only the exact former hand-authored Lesser Heal row. Imported or tuned spell data does
+/// not match the complete header and effect shapes and remains authoritative.
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn repair_lesser_heal_target(ctx: &ReducerContext) -> u64 {
+    let Some(spell) = ctx.db.game_spell().spell_id().find(2050) else {
+        return 0;
+    };
+    let effects = ctx.db.game_spell_effect();
+    let mut spell_effects: Vec<_> = effects.by_spell().filter(&2050u32).take(2).collect();
+    if spell_effects.len() != 1 {
+        return 0;
+    }
+    let mut effect = spell_effects.pop().unwrap();
+    if !legacy_lesser_heal_header(&spell) || !legacy_lesser_heal_effect(&effect) {
+        return 0;
+    }
+    effect.target = crate::spell::T_TARGET_ALLY;
+    effects.id().update(effect);
+    1
 }
 
 /// Stratum 4 — scheduler arming: the event reaper, instance reaper, creature movement tick, melee

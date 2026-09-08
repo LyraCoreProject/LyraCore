@@ -472,6 +472,85 @@ pub(crate) fn group_of(ctx: &ReducerContext, character_guid: u64) -> Option<Grou
         .next()
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartyUnitFacts {
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub health: u32,
+    pub max_health: u32,
+    pub dead: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartyMemberFacts {
+    pub character_guid: u64,
+    pub unit: Option<PartyUnitFacts>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartyFacts {
+    pub group_id: u64,
+    pub leader_guid: u64,
+    pub members: Vec<PartyMemberFacts>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartyFactsUnavailable {
+    pub group_id: u64,
+}
+
+/// Read one Character's local durable party mirror and current member facts. Membership remains
+/// useful when a member has no live entity on this Shard, so those facts are nullable.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub fn party_facts(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<Option<PartyFacts>, PartyFactsUnavailable> {
+    let Some(member) = group_of(ctx, character_guid) else {
+        return Ok(None);
+    };
+    let group =
+        ctx.db
+            .game_group()
+            .group_id()
+            .find(member.group_id)
+            .ok_or(PartyFactsUnavailable {
+                group_id: member.group_id,
+            })?;
+    let members = members_of(ctx, member.group_id)
+        .into_iter()
+        .map(|member| {
+            let unit = ctx
+                .db
+                .game_world_entity()
+                .guid()
+                .find(member.character_guid)
+                .map(|entity| PartyUnitFacts {
+                    map_id: entity.map_id,
+                    instance_id: entity.instance_id,
+                    x: entity.x,
+                    y: entity.y,
+                    z: entity.z,
+                    health: entity.health,
+                    max_health: entity.max_health,
+                    dead: entity.dead,
+                });
+            PartyMemberFacts {
+                character_guid: member.character_guid,
+                unit,
+            }
+        })
+        .collect();
+    Ok(Some(PartyFacts {
+        group_id: member.group_id,
+        leader_guid: group.leader_guid,
+        members,
+    }))
+}
+
 /// Resolve a membership and its required parent for mutation cores. `Ok(None)` means the
 /// Character has no membership; a membership without its Group is a durable invariant failure.
 fn checked_group_membership(

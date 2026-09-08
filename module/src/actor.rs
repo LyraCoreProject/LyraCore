@@ -14,6 +14,7 @@
 //! | `ranged_attack` | `combat::apply_start_ranged_attack` | `attack` gates + ranged weapon equipped (slot 17) |
 //! | `stop_attack` | `combat::stop_attack_for` | unconditional disarm of the actor's outgoing melee row |
 //! | `cast_at` | `spell::request_cast` | normal cast lifecycle; an existing timed cast waits; level comes from the live entity |
+//! | `cast_readiness` | `spell::cast_readiness` | read-only spellbook, supported-lifecycle, and cast Gate check |
 //! | `request_cast` | `spell::request_cast` | typed start, waiting, and Refusal; completion uses `on_cast_finished` |
 //! | `accept_quest` | `quest::apply_accept_quest` | alive + giver in range offering the quest + level/race/class/prereq/duplicate gates |
 //! | `stage_quest` | `quest::grant_quest_unchecked` | HARNESS/BOT staging: same row shape, all accept gates SKIPPED (giver-less) |
@@ -79,6 +80,7 @@ macro_rules! package_only {
 package_only! { pub(crate) use crate::combat::apply_start_attack as attack; }
 package_only! { pub(crate) use crate::combat::request_attack as request_attack; }
 package_only! { pub(crate) use crate::spell::request_cast as request_cast; }
+package_only! { pub(crate) use crate::spell::cast_readiness as cast_readiness; }
 debug_only! { pub(crate) use crate::combat::apply_start_ranged_attack as ranged_attack; }
 
 /// Disarm the actor's outgoing auto-attack (melee or ranged). Shape adapter ONLY: the core returns
