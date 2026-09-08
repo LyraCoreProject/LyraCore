@@ -753,6 +753,8 @@ pub const WALK_MARGIN: f32 = RASTER_MARGIN + AGENT_RADIUS;
 /// Gap tolerance when fusing a column's z-intervals (yd): stacked wall bands abut without
 /// overlapping exactly.
 const OBS_GAP: f32 = 0.75;
+/// Coplanar floor triangles can differ slightly after world-coordinate transforms.
+const FLOOR_EPSILON_YD: f32 = 0.01;
 
 /// One world-space collision triangle with its AABB and plane. `z_at` is the exact-rasterization
 /// core: the triangle's z-interval over a 2D point, or None when the point falls outside the
@@ -876,7 +878,7 @@ fn standing_heights(
             })
         })
         .collect();
-    let terrain_ground = ground.clone();
+    let mut floor = vec![f32::INFINITY; side * side];
     for t in triangles {
         // A floor must be WMO geometry with a slope no greater than 50 degrees.
         let normal_squared = t.n.iter().map(|v| v * v).sum::<f32>();
@@ -900,10 +902,17 @@ fn standing_heights(
                 let Some((z, _)) = t.z_at(x, y, 0.0) else {
                     continue;
                 };
-                if z <= terrain_ground[index] + WALK_HEIGHT {
-                    ground[index] = ground[index].max(z);
+                if (ground[index]..=ground[index] + WALK_HEIGHT).contains(&z) {
+                    floor[index] = floor[index].min(z);
                 }
             }
+        }
+    }
+    // Keep the lowest model surface above terrain. Choosing a higher surface can promote a
+    // low ceiling to the floor and erase the room's headroom obstruction.
+    for (ground, floor) in ground.iter_mut().zip(floor) {
+        if floor.is_finite() {
+            *ground = floor;
         }
     }
     ground
@@ -999,7 +1008,13 @@ pub fn derive_cell(
                         continue;
                     };
                     let g = walk_ground[(ny + 1) * (WALK_DIM + 2) + nx + 1];
-                    if z_lo < g + WALK_HEIGHT && z_hi > g + WALK_STEP_UP {
+                    // A separate surface above the floor is headroom, even below step height.
+                    // Only its exact footprint counts; an adjacent stair tread is still a step.
+                    let overhead = t.is_wmo
+                        && t.n[2].abs() > 1e-6
+                        && t.z_at(x, y, 0.0)
+                            .is_some_and(|(z, _)| z > g + FLOOR_EPSILON_YD && z < g + WALK_HEIGHT);
+                    if overhead || (z_lo < g + WALK_HEIGHT && z_hi > g + WALK_STEP_UP) {
                         walk_set(&mut walk, nx, ny, false);
                         dirty = true;
                     }
@@ -1226,6 +1241,34 @@ mod derive_tests {
         let next = derive_cell(cx + 1, cy, Some(&flat_heights()), &tris).unwrap();
         assert!(walk_get(&here.walk, 63, 32));
         assert!(walk_get(&next.walk, 0, 32));
+    }
+
+    #[test]
+    fn a_low_ceiling_inside_the_floor_selection_band_blocks_routing() {
+        let (cx, cy) = test_cell();
+        for headroom in [0.25, 0.5, 1.0, 1.5] {
+            let tris = [
+                slab(GROUND_Z + 0.5, wmo()),
+                slab(GROUND_Z + 0.5 + headroom, wmo()),
+            ];
+            let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris).unwrap();
+            assert!(!walk_get(&cell.walk, 32, 20), "headroom={headroom}");
+            assert!(
+                find_leg(&mut cell_fetcher(Some(cell)), at(10, 20), at(54, 20), 4096).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn overlapping_floor_triangles_tolerate_transform_rounding() {
+        let (cx, cy) = test_cell();
+        let tris = [slab(GROUND_Z + 1.6, wmo()), slab(GROUND_Z + 1.601, wmo())];
+        let cell = derive_cell(cx, cy, Some(&flat_heights()), &tris);
+        let (path, _, complete) =
+            find_leg_ex(&mut cell_fetcher(cell), at(10, 20), at(54, 20), 4096)
+                .expect("coplanar floors have room to stand");
+        assert!(complete);
+        assert_eq!(path, vec![at(54, 20)]);
     }
 
     #[test]
