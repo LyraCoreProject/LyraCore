@@ -10,10 +10,13 @@ use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::{game_aura, game_spell}; // racial-passive attribute lookup (game_spell); aura strip (game_aura)
 
-/// A spell a character has LEARNED (beyond the class baseline). Per-player, owner-scoped (RLS like
-/// `game_character`/`game_player_skill`). Logical key `(character_guid, spell_id)` via an `#[auto_inc]` PK
-/// + `by_character` btree. Durable (a learned ability persists across logout — no re-grant at login). [entity]
-#[table(accessor = game_player_spell, public, index(accessor = by_character, btree(columns = [character_guid])))]
+/// A Character's learned spell. The pair index answers membership without scanning the spellbook.
+#[table(
+    accessor = game_player_spell,
+    public,
+    index(accessor = by_character, btree(columns = [character_guid])),
+    index(accessor = by_character_spell, btree(columns = [character_guid, spell_id]))
+)]
 pub struct PlayerSpell {
     #[primary_key]
     #[auto_inc]
@@ -91,15 +94,14 @@ pub(crate) fn createinfo_row_matches(row_race: u8, row_class: u8, race: u8, clas
     (row_race == 0 || row_race == race) && (row_class == 0 || row_class == class)
 }
 
-/// Whether `guid` may cast `spell_id`: exactly the `game_player_spell` rows. The single spellbook gate
-/// `cast_spell` enforces — creation grants the createinfo kit as rows, so there is no separate
-/// "baseline" arm to drift from the stored book. [entity]
+/// Whether the Character has learned this spell, including its creation kit.
 pub(crate) fn knows_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) -> bool {
     ctx.db
         .game_player_spell()
-        .by_character()
-        .filter(&guid)
-        .any(|s| s.spell_id == spell_id)
+        .by_character_spell()
+        .filter((guid, spell_id))
+        .next()
+        .is_some()
 }
 
 /// Apply the PASSIVE racial spells' auras for `race` at login (parallel to `apply_learned_talents`). Only
@@ -127,19 +129,12 @@ pub(crate) fn apply_racial_passives(ctx: &ReducerContext, guid: u64, race: u8, l
     }
 }
 
-/// Teach `guid` the spell `spell_id` — insert the row if absent (idempotent; never duplicates).
-/// The single grant path: character creation (createinfo kit), ability talents, trainers, quest
-/// rewards all come through here. [entity]
+/// Learn a missing spell once. Creation, talents, trainers, and quest rewards use this operation.
 pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spell_id: u32) {
-    let spells = ctx.db.game_player_spell();
-    if spells
-        .by_character()
-        .filter(&guid)
-        .any(|s| s.spell_id == spell_id)
-    {
-        return; // already learned
+    if knows_spell(ctx, guid, spell_id) {
+        return;
     }
-    spells.insert(PlayerSpell {
+    ctx.db.game_player_spell().insert(PlayerSpell {
         id: 0,
         character_guid: guid,
         owner_identity: owner,
@@ -150,18 +145,13 @@ pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spel
     crate::skill::grant_lockpicking_on_learn(ctx, guid, owner, spell_id);
 }
 
-/// Forget `guid`'s `spell_id` — delete every `game_player_spell` row for it (collect-then-delete; never
-/// duplicates, so at most one row exists, but the pattern matches every other book sweep in this crate).
-/// The unlearn twin of [`learn_spell`]: talent supersede/respec are the current callers, and any future
-/// unlearn source (GM strip, a gossip respec option) should route through here rather than re-deriving
-/// the collect-then-delete dance. Does not touch auras — pair with [`strip_spell_auras`] when the spell
-/// also applied a passive. [entity]
+/// Forget every matching row without changing auras. Talent supersession and respec remove those
+/// separately through `strip_spell_auras`.
 pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
     let spells = ctx.db.game_player_spell();
     for row in spells
-        .by_character()
-        .filter(&guid)
-        .filter(|s| s.spell_id == spell_id)
+        .by_character_spell()
+        .filter((guid, spell_id))
         .collect::<Vec<_>>()
     {
         spells.id().delete(row.id);

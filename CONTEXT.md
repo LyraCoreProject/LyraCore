@@ -217,6 +217,11 @@ A proposed action identified by its action, target, spell, reason, and Bot Objec
 **Strategy**:
 A composition of typed triggers, defaults, and integer priorities used to select Candidates.
 
+**Recovery Scan**:
+A bounded scan of healing rotations that retains its last completed result while reading the next
+batch. The scan can be pending or complete; its result distinguishes unread, missing, and a selected
+rotation. It rechecks selections before use and restarts after Transfer using destination state.
+
 **Sessionless Action Consent**:
 A Character-owned core projection of a Package's controller selection. An absent row permits legacy
 behavior. Each selection updates consent and clears unclaimed Group Intents in one transaction,
