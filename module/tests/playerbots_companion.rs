@@ -287,6 +287,7 @@ fn evidence(node: &Standalone, case: &str) {
         "case": case,
         "spacetimedb": "2.7.1",
         "runner": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
+        "provisioning": node.query_rows("SELECT * FROM pkg_playerbots_provisioning"),
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "entities": node.query_rows("SELECT guid, map_id, instance_id, x, y, z, health, max_health, dead FROM game_world_entity"),
         "party": node.query_rows("SELECT * FROM game_group_member"),
@@ -796,9 +797,9 @@ fn playerbots_actor_channel_request_has_a_typed_unsupported_refusal() {
 fn playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow() {
     let (node, bots) = fixture("playerbots-companion-cancel-resume");
     let (priest, ally) = (&bots[0], &bots[2]);
-    select(&node, priest, "cohort");
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
-    due(&node, priest);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
+    pass_once(&node, priest);
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows(&format!(
             "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
@@ -822,10 +823,10 @@ fn playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow() {
 fn playerbots_completion_time_los_refusal_releases_the_heal_and_resumes_follow() {
     let (node, bots) = fixture("playerbots-companion-los-resume");
     let (priest, ally) = (&bots[0], &bots[2]);
-    select(&node, priest, "cohort");
     node.assert_call("debug_set_nav_enabled", &["true"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
-    due(&node, priest);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
+    pass_once(&node, priest);
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows(&format!(
             "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
