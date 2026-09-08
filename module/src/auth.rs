@@ -837,8 +837,7 @@ mod guid_allocator_tests {
     #[test]
     fn in_guid_range_only_admits_guids_inside_the_installed_range() {
         use super::in_guid_range;
-        // No range installed: nothing is "inside" it — a database that cannot mint locally
-        // either has nothing local yet for a foreign arrival to threaten.
+        // No installed range proves membership. Legacy deletion preserves its floor separately.
         assert!(!in_guid_range(None, 0));
         assert!(!in_guid_range(None, 4242));
         // Inside a real range, base included, end excluded — same boundary shape as `may_mint`.
@@ -1028,10 +1027,8 @@ mod guid_allocator_tests {
         );
         assert_eq!(
             got, want,
-            "bump_guid_high_water's body no longer matches the pinned shape — it must seed from \
-             the durable mark first, floor it at `guid` via the tested `ratchet_high_water`, and \
-             persist the result for local GUIDs (skipping the write on the already-seeded, already-ahead \
-             no-op). Got:\n{got}"
+            "bump_guid_high_water must preserve the legacy floor before range installation, \
+             then floor only local GUIDs. It must persist the new mark unless already ahead. Got:\n{got}"
         );
     }
 }
