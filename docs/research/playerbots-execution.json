@@ -293,18 +293,30 @@
       "model": "gpt-6-astra",
       "effort": "high",
       "estimated_tokens": 180000,
-      "status": "implementing",
+      "status": "review",
       "repo_scope": [
         "Official Package Collection decision and durable state",
         "LyraCore Module scheduling and diagnostics",
         "Pure decision and durable integration tests"
       ],
       "owner": "PB-002 runner agent and consent helper",
-      "prs": [],
+      "prs": [
+        {
+          "url": "https://github.com/LyraCoreProject/LyraCore/pull/484",
+          "status": "draft"
+        },
+        {
+          "url": "https://github.com/LyraCoreProject/packages/pull/26",
+          "status": "draft"
+        }
+      ],
       "evidence": [
-        "The first combined durable run passed 10 of 11 cases, including the populated preceding-Wasm upgrade, preserved bot and quest state, bounded 16-plus-9 backfill, normal invitations, controller modes, defense and arrival, destination deferral, and bounded history. Final evidence must come from the reviewed source after the remaining fixes.",
-        "The pushback case retained the same scheduled cast, observed its delayed due time, healed, and resumed travel. Its final cast-event count ran after event expiry. The fixture now retains those events and checks the exact delay before the final rerun.",
-        "The consent implementation passed 1,523 default Module tests, 1,454 Gateway tests, five real durable cases, formatting, and exact parity for all 1,000 default Gateway binding files. These results precede the current ownership Gate refinement.",
+        "The populated preceding-Wasm upgrade passed again, preserving bot, goal, action, and quest rows before bounded runner backfill. Final migration evidence must be repeated after the action payload changes now in review.",
+        "The real ownership case passed with an active Account Claim while online remained false. Bot position held, a later human cast retained its identity through controller changes, and bot travel resumed after ownership ended.",
+        "Independent specification review found and then confirmed source fixes for Survival bypassing a deferred destination, false stalls during tactical movement, and a second cycle refusal being mistaken for completion. Final execution evidence is pending.",
+        "Independent standards review prompted action payload types, consistent Reason terminology, a separate cycle test, corrected consent ownership prose, and reuse of the core route limit. These corrections are in progress. Strategy defaults and priority adjustments remain because this ticket explicitly requires them.",
+        "The full Package-enabled Module library passed 1,630 tests after the behavior corrections and Character-read fix. Further debug, durable, default-inventory, binding, and CI checks must cover the final action types.",
+        "The prior consent implementation passed 1,523 default Module tests, 1,454 Gateway tests, five real durable cases, and exact parity for all 1,000 default Gateway binding files. These results precede the final combined source.",
         "The preceding-build record identifies exact core and Package revisions, installed Package inventory, toolchain, per-file Package identities, and Wasm identity. The populated upgrade records both old and new Wasm identities."
       ],
       "notes": [
@@ -314,7 +326,8 @@
         "The first runner behavior retains a home destination through defense and self-heal interruptions. Companion policy and quest admission remain in their dependent tickets.",
         "Control must cover damage and invitation hooks as well as the tick. The Gateway also auto-accepts invitations for session-less Characters. The core-owned consent check covers that path for record-only and frozen bots.",
         "The consent check acknowledges current World Shard state before Realm-core group actions. An action admitted before a concurrent freeze may finish; cross-Shard atomicity is not claimed. Controller selection clears unclaimed Group Intents in the same transaction.",
-        "Root review found that movement could run after an Account Claim took control of the Character. The common runner entry is being gated on current ownership. Relinquishment must release only the bot's own retained cast or movement and leave later human actions intact."
+        "The common runner entry checks current Account ownership. Relinquishment releases only the bot's observed cast or movement identity and preserves a later human action.",
+        "The first Package migration CI build missed the preceding checkout's Cargo configuration. Its working directory is corrected; final CI is still required before integration."
       ],
       "acceptance_evidence": []
     },
@@ -668,6 +681,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 14:12 UTC",
-  "summary": "PB-001 is complete. PB-002 has passed its first populated upgrade and main runner scenarios. Review found an account-ownership gap in movement, which is being fixed before final checks and PR review. One of 12 implementation tickets is complete."
+  "updated_at": "2026-09-08 14:32 UTC",
+  "summary": "PB-001 is complete. PB-002 has draft core and Package PRs, passing upgrade and human-ownership cases, and completed initial independent reviews. Review corrections and full checks are in progress. One of 12 implementation tickets is complete."
 }
