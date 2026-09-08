@@ -483,6 +483,17 @@ fn unsupported_channel_does_not_hide_a_supported_learned_heal() {
     let (node, bots) = fixture("playerbots-companion-mixed-heals");
     let (priest, ally) = (&bots[0], &bots[2]);
     node.assert_call("playerbots_fixture_companion_mixed_heals", &[priest]);
+    let bot = &node.query_rows(&format!(
+        "SELECT class, role FROM pkg_playerbots_bot WHERE character_guid = {priest}"
+    ))[0];
+    for spell in [HEAL, CHANNEL_HEAL] {
+        let rotations = node.query_rows(&format!(
+            "SELECT class, role FROM pkg_playerbots_rotation WHERE spell_id = {spell}"
+        ));
+        assert_eq!(rotations.len(), 1, "{spell}: {rotations:?}");
+        assert_eq!(rotations[0]["class"], bot["class"]);
+        assert_eq!(rotations[0]["role"], bot["role"]);
+    }
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
     select(&node, priest, "cohort");
     due(&node, priest);
