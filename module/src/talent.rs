@@ -437,8 +437,9 @@ const PROFILE_TALENT_TAB_LIMIT: usize = 16;
 
 /// Select the next talent in a profile-owned preferred tree through the same admission calculation
 /// as `do_learn_talent`. The indexed reads accept at most 64 learned rows, 16 tabs at the requested
-/// tree position, and 64 talent candidates, with one extra row per set for overflow detection. One
-/// exact talent-definition read per learned row computes the shared tree-point total. Admission then
+/// tree position, and 64 rows from either the selected tab or the raw no-tab tree, with one extra row
+/// per set for overflow detection. The raw tree limit applies before demo-row filtering. One exact
+/// talent-definition read per learned row computes the shared tree-point total. Admission then
 /// performs one exact tab read and at most one exact required-spell read per candidate.
 pub(crate) fn select_profile_talent(
     ctx: &ReducerContext,
@@ -494,12 +495,24 @@ pub(crate) fn select_profile_talent(
             .take(PROFILE_TALENT_LIMIT + 1)
             .collect()
     } else if entity.class() == 1 {
-        ctx.db
+        let raw_tree: Vec<_> = ctx
+            .db
             .game_talent()
             .by_tree()
             .filter(&preferred_tree)
-            .filter(|talent| talent.tab_id == 0)
             .take(PROFILE_TALENT_LIMIT + 1)
+            .collect();
+        if raw_tree.len() > PROFILE_TALENT_LIMIT {
+            return Err(crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::ProfileLimit,
+                format!(
+                    "talent tree {preferred_tree} has more than {PROFILE_TALENT_LIMIT} raw rows"
+                ),
+            ));
+        }
+        raw_tree
+            .into_iter()
+            .filter(|talent| talent.tab_id == 0)
             .collect()
     } else {
         vec![]

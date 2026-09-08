@@ -189,11 +189,11 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
     node.assert_sql(&format!(
         "DELETE FROM game_item_instance WHERE owner_guid = {guid} AND slot = 15"
     ));
-    let existing_food = one(&node, "SELECT * FROM game_item_template WHERE entry = 52");
+    let existing_template = one(&node, "SELECT * FROM game_item_template WHERE entry = 52");
     node.assert_call("playerbots_fixture_provision_catalog", &[]);
     assert_eq!(
         one(&node, "SELECT * FROM game_item_template WHERE entry = 52"),
-        existing_food,
+        existing_template,
         "fixture catalogue must preserve an existing low-ID template"
     );
     node.assert_call("playerbots_fixture_provision_complete_profile", &[&guid]);
@@ -732,6 +732,42 @@ fn playerbots_talent_gates_are_atomic_and_use_global_tab_identity() {
         &node,
         "talent-gates",
         serde_json::json!({"mage": talent_state(&node, &mage), "warrior": talent_state(&node, &warrior)}),
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_provisioning_stops_on_partial_talent_catalog_without_character_changes() {
+    let (node, guid) = fixture("playerbots-provisioning-partial-talents", "1", "0");
+    node.assert_call("debug_set_level", &[&guid, "20"]);
+    assert!(node.query_rows("SELECT * FROM game_talent_tab").is_empty());
+    node.assert_call("playerbots_fixture_provision_partial_talent_catalog", &[]);
+    let raw_tree_rows = node
+        .query_rows("SELECT talent_id FROM game_talent WHERE tree_id = 2")
+        .len();
+    assert!(raw_tree_rows > 64);
+    select(&node, &guid, "cohort");
+    let before = talent_state(&node, &guid);
+
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+    let provisioning = one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"),
+    );
+    let history = provisioning["history"].to_ascii_lowercase();
+    assert!(history.contains("stopped"), "{history}");
+    assert!(history.contains("profilelimit"), "{history}");
+    assert!(history.contains("raw rows"), "{history}");
+    assert_eq!(talent_state(&node, &guid), before);
+    write_evidence(
+        &node,
+        "partial-talent-catalog",
+        serde_json::json!({
+            "fixture_kind": "source-derived partial Talent import",
+            "raw_tree_rows": raw_tree_rows,
+            "provisioning": provisioning,
+            "character_talent_state": before,
+        }),
     );
 }
 
