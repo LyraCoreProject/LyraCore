@@ -196,6 +196,7 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
         existing_template,
         "fixture catalogue must preserve an existing low-ID template"
     );
+    node.assert_sql("DELETE FROM game_skill_availability WHERE id = 5096999");
     node.assert_sql("INSERT INTO game_skill_availability (id,skill_line,race_mask,class_mask,flags,min_level) VALUES (5096999,44,0,1,0,1)");
     let existing_availability = one(
         &node,
@@ -210,6 +211,7 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
         existing_availability,
         "fixture skill staging must preserve unrelated availability rows"
     );
+    node.assert_sql("DELETE FROM game_skill_availability WHERE id = 5096998");
     node.assert_sql("INSERT INTO game_skill_availability (id,skill_line,race_mask,class_mask,flags,min_level) VALUES (5096998,43,0,128,0,1)");
     let skill_rows_before_refusal =
         node.query_rows("SELECT * FROM game_skill_availability WHERE skill_line = 43");
@@ -656,7 +658,7 @@ fn playerbots_provisioning_stops_cleanly_and_preserves_owned_items_and_gear() {
         "skill-overflow",
         serde_json::json!({"history": skill_overflow, "skills": overflow_skills}),
     );
-    assert!(skill_overflow.contains("refused"));
+    assert!(skill_overflow.contains("stopped"));
     assert!(skill_overflow.contains("profilelimit"));
     assert!(overflow_skills.is_empty());
     node.assert_call("playerbots_fixture_provision_profile_overflow", &[&guid]);
