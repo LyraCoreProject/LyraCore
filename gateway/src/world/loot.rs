@@ -208,15 +208,15 @@ pub(crate) fn flush_pending_promotions<St: WorldStore + ?Sized>(
 /// One promotion + settlement pass. No-op on an unsharded store (`realm_store()` answers
 /// `None`), which is what makes running this on a timer free for a single-database gateway.
 ///
-/// `won_watermark` is the caller's own `game_group_event.id` high-water mark, threaded through
-/// call to call so the relay never re-settles an old win after a restart within one process
-/// lifetime forgets nothing it already saw — advanced only up to what [`WorldStore::loot_won_since`]
-/// actually returns, never optimistically.
+/// `won_watermark` advances only after every settlement in the batch succeeds on every Shard.
+/// A failure leaves the result available to retry while its Realm-core event still exists.
+/// A successful grant removes the original loot row, and the Module ignores rows that are not
+/// withheld. These guards cannot distinguish a later loot row with the same corpse GUID and slot.
 ///
 /// Both directions are BEST-EFFORT, deliberately, the same posture `party::sync_mirrors` documents:
 /// realm-core has already committed (a promoted roll exists there, or a roll has already resolved)
 /// by the time either loop runs, so a failed relay step must not undo or re-litigate that — it just
-/// leaves the affected shard's local state stale until the next tick.
+/// leaves the affected Shard's local state stale. Settlement retries still need the outcome event.
 ///
 /// Ordinary promotion latency (a roll NOT caught by [`flush_pending_promotions`]) is bounded by this
 /// function's own caller's poll interval, not by anything in here — see this module's doc for why
@@ -232,18 +232,22 @@ pub(crate) fn relay_tick<St: WorldStore + ?Sized>(store: &St, won_watermark: &mu
     // harmless no-ops, so this does not need to know in advance which one holds the corpse.
     match realm.loot_won_since(*won_watermark) {
         Ok((new_watermark, wins)) => {
+            let mut settled = true;
             for (corpse_guid, slot, winner_guid) in wins {
                 for shard in store.world_stores() {
                     if let Err(e) = shard.settle_loot_roll(corpse_guid, slot, winner_guid) {
+                        settled = false;
                         log::warn!(
-                            "loot-roll relay: could not settle ({corpse_guid}, {slot}) on {} ({e:#}) \
-                             — the winner's item stays on the corpse until the next successful settle",
+                            "loot-roll relay: could not settle ({corpse_guid}, {slot}) on {} ({e:#}); \
+                             retrying while the result event remains",
                             shard.shard_name()
                         );
                     }
                 }
             }
-            *won_watermark = new_watermark;
+            if settled {
+                *won_watermark = new_watermark;
+            }
         }
         Err(e) => {
             log::warn!("loot-roll relay: could not read realm-core's ROLL_WON events ({e:#})")

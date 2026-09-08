@@ -231,6 +231,34 @@ fn relay_tick_settles_every_connected_shard_for_a_resolved_roll() {
     );
 }
 
+#[test]
+fn a_failed_settlement_retries_after_the_shard_recovers() {
+    let (realm, world, instances, _) = party_topology();
+    let unavailable = std::sync::Arc::new(InMemoryStore {
+        shard: instances.shard.clone(),
+        settle_loot_roll_error: Some("Shard connection unavailable".into()),
+        ..Default::default()
+    });
+    *world.peers.lock().unwrap() = vec![unavailable.clone(), world.clone()];
+    let win = (500, 2, GINGER);
+    *realm.won_events.lock().unwrap() = vec![win];
+    let mut watermark = 0;
+
+    loot::relay_tick(world.as_ref(), &mut watermark);
+
+    assert!(unavailable.settled_rolls.lock().unwrap().is_empty());
+    assert_eq!(*world.settled_rolls.lock().unwrap(), vec![win]);
+    assert_eq!(watermark, 0, "the failed Shard still needs this result");
+
+    *world.peers.lock().unwrap() = vec![instances.clone(), world.clone()];
+    loot::relay_tick(world.as_ref(), &mut watermark);
+
+    assert_eq!(*instances.settled_rolls.lock().unwrap(), vec![win]);
+    assert_eq!(watermark, 1);
+    loot::relay_tick(world.as_ref(), &mut watermark);
+    assert_eq!(*instances.settled_rolls.lock().unwrap(), vec![win]);
+}
+
 // ---- `flush_pending_promotions` (the disband race, found in adversarial review) ----
 
 /// **AC: a disband-capable op promotes every connected shard's pending rolls BEFORE it reaches
