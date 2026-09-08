@@ -168,24 +168,25 @@
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/482",
           "label": "Core #482",
           "status": "open",
-          "head_commit": "ab1983192a455fa10e23d64e49ae4abac97d99aa"
+          "head_commit": "fe9caef6eb0d132c45a5d151827ab6fe64925f79"
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/25",
           "label": "Package #25",
           "status": "open",
-          "head_commit": "43cdbd42a70fc9056414c629373541f6450d2e20"
+          "head_commit": "c97464f6be211525a3b36a2ee3824cf259edbdd1"
         }
       ],
       "evidence": [
         "Baseline on core 95e6ad8 and Package c32b2fb: both ignored personality durable tests passed in a private loopback Standalone. This proves the existing Package fixture, not the new outcome contract.",
         "Private real-Module and Package fixture passed all 16 cases in 167.69 seconds, including cast completion and cancellation, atomic quest refusal, migrated progress initialization, dead-attacker refusal, and bounded action-row deletion. This run preceded the final owning-operation cast-result refinement; final source checks remain pending.",
-        "Final local union passed 1,621 Module unit tests normally, 1,622 with debug reducers, and 32 durable cases. Default-core SpacetimeDB 2.7.1 generation matched all 995 committed Gateway binding files. Independent standards findings are resolved or explicitly accepted; Spec review found no confirmed defects."
+        "Final local union passed 1,621 Module unit tests normally, 1,622 with debug reducers, and 32 durable cases. Default-core SpacetimeDB 2.7.1 generation matched all 995 committed Gateway binding files. Independent standards findings are resolved or explicitly accepted; Spec review found no confirmed defects.",
+        "The final Package CI run passed all 16 strengthened fixtures against core fe9caef6. Repeated interaction setup now clears only its reserved target and quest rows, including stale movement and engagement. Evidence: https://github.com/LyraCoreProject/packages/actions/runs/34229152446/job/102070649535"
       ],
       "notes": [
         "All eight source acceptance criteria now have reviewed evidence. The ticket remains in review until both PRs merge.",
         "Core merges first. Package CI must then return from its temporary paired-core pin to main and pass again before Package merge.",
-        "Core final durable CI and actual CodeRabbit reviews are pending. No production deployment or imported-world/client release acceptance is claimed.",
+        "Both full CodeRabbit reviews completed. The repeated-setup finding is fixed; the core CI coverage question is resolved by the paired Package durable job. Final incremental automated review was rate limited. Independent review covered the final fixture changes. Core durable CI is still pending.",
         "The flat observation row remains intentional for SQL diagnosis. Action-specific request functions and a private recorder own production writes; PB-002 owns typed runner candidates and foreground control.",
         "The nullable quest-credit initialization fixture preserves an existing stall. A full older-Wasm upgrade was not claimed. The new Package schema remains subject to the repository human review requirement before shipping."
       ],
@@ -194,9 +195,10 @@
           "criterion": "The fixture records pinned core and Package commits plus the actual content and geometry input revisions, labels seeded and client-derived provenance separately, records unavailable inputs, and reproduces the same initial state and outcome.",
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
-            "All 16 local input records identify clean core ab1983192a455fa10e23d64e49ae4abac97d99aa and Package 43cdbd42a70fc9056414c629373541f6450d2e20. Content is playerbots-seeded-actions-v1; geometry is playerbots-synthetic-nav-v1. Imported content and client geometry are explicitly unavailable.",
-            "Module BLAKE3: 9e991951b0ba2e5fcc652bfa28d6dd74f4ef2886aedcebc647414beff665576d. Package BLAKE3: e2d65f66a02e2e2aca10222240f185fc4cc351dfee54427700f82d250922af9f.",
-            "Input manifest: https://github.com/LyraCoreProject/packages/blob/43cdbd42a70fc9056414c629373541f6450d2e20/playerbots/fixtures/actions.json"
+            "All 16 final CI input records name clean core fe9caef6eb0d132c45a5d151827ab6fe64925f79 and GitHub tested Package merge 744732b50cc8135d3a06e598e07e26aa8633a434, whose parents are main c32b2fb and reviewed Package c97464f6be211525a3b36a2ee3824cf259edbdd1. Content is playerbots-seeded-actions-v1; geometry is playerbots-synthetic-nav-v1. Imported content and client geometry are explicitly unavailable.",
+            "CI Module BLAKE3: a4e921d874c49ada97f9893b4c9b41847ffdb994c670dcd3ea5673f0fab466fd. Package BLAKE3: 1b4de3cdafc56407264c216a3accda917117277914b2deffb4fbd0c3efaf29f6. The local focused Module has a different installed inventory; byte equality across those builds is not claimed.",
+            "Input manifest: https://github.com/LyraCoreProject/packages/blob/c97464f6be211525a3b36a2ee3824cf259edbdd1/playerbots/fixtures/actions.json",
+            "CI input and outcome artifacts: https://github.com/LyraCoreProject/packages/actions/runs/34229152446"
           ]
         },
         {
@@ -204,7 +206,8 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
             "Final local fixture passed all 16 cases through compiled Module Wasm, the real Package, and private SpacetimeDB 2.7.1 Standalone nodes. No simulated gameplay engine was substituted.",
-            "The same behavior passed in Package CI: https://github.com/LyraCoreProject/packages/actions/runs/34226546164/job/102061988209"
+            "The same behavior passed in Package CI: https://github.com/LyraCoreProject/packages/actions/runs/34226546164/job/102061988209",
+            "Final fixture changes also passed all 16 cases in 166.26 seconds: https://github.com/LyraCoreProject/packages/actions/runs/34229152446/job/102070649535"
           ]
         },
         {
@@ -212,7 +215,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
             "playerbots_an_accepted_attack_without_a_hit_does_not_clear_quest_stall observes accepted engagement, full target health, zero quest credit, and an unchanged stall clock behind a synthetic wall. Its positive phase uses the real lethal-hit pipeline to award credit; it does not claim that the bot hit through the wall.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/ab1983192a455fa10e23d64e49ae4abac97d99aa/module/tests/playerbots_rewrite.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/fe9caef6eb0d132c45a5d151827ab6fe64925f79/module/tests/playerbots_rewrite.rs"
           ]
         },
         {
@@ -220,7 +223,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
             "The complete-route and partial-route cases distinguish a proposed leg from observed arrival, retain a waypoint and search-work count, and record Unknown coverage. The blocked-target case holds position. Shared navigation tests passed 34 cases; VerifiedCells only attests consulted derived rows.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/ab1983192a455fa10e23d64e49ae4abac97d99aa/module/tests/playerbots_rewrite.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/fe9caef6eb0d132c45a5d151827ab6fe64925f79/module/tests/playerbots_rewrite.rs"
           ]
         },
         {
@@ -228,7 +231,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
             "The fixture covers typed cast start/wait/resolve/refusal/cancel/expire outcomes, synchronous quest completion/refusal, full-inventory and invalid-choice atomicity, source-item refusal, and dead-attacker refusal. All 16 final cases passed.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/ab1983192a455fa10e23d64e49ae4abac97d99aa/module/tests/playerbots_rewrite.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/fe9caef6eb0d132c45a5d151827ab6fe64925f79/module/tests/playerbots_rewrite.rs"
           ]
         },
         {
@@ -236,7 +239,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
             "playerbots_a_long_bot_cast_waits_for_core_completion retains one five-second cast through repeated requests and normal decision ticks, observes one START and one GO, and verifies the heal. The owning begin operation returns its exact result directly.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/ab1983192a455fa10e23d64e49ae4abac97d99aa/module/tests/playerbots_rewrite.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/fe9caef6eb0d132c45a5d151827ab6fe64925f79/module/tests/playerbots_rewrite.rs"
           ]
         },
         {
@@ -244,14 +247,14 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
             "The blocked-target scenario and playerbots_an_out_of_range_heal_reports_the_owning_cast_gate record reproducible inputs and typed observations. The poor-range target starts at x=1400 while the bot starts at x=1200. Actions retain target, route, clipping, coverage, cast identity, and Refusal.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/ab1983192a455fa10e23d64e49ae4abac97d99aa/module/tests/playerbots_rewrite.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/fe9caef6eb0d132c45a5d151827ab6fe64925f79/module/tests/playerbots_rewrite.rs"
           ]
         },
         {
           "criterion": "A written extraction comparison chooses the smaller total implementation and records why the full AzerothCore runtime is not used.",
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
-            "The extraction comparison in the Package README chooses typed Rust decisions and existing Module operations. It compares the 2,967-line selection-kernel inventory with the 243,560-line C++ runtime and records host-pointer, packet, and WotLK dependencies. https://github.com/LyraCoreProject/packages/blob/43cdbd42a70fc9056414c629373541f6450d2e20/playerbots/README.md",
+            "The extraction comparison in the Package README chooses typed Rust decisions and existing Module operations. It compares the 2,967-line selection-kernel inventory with the 243,560-line C++ runtime and records host-pointer, packet, and WotLK dependencies. https://github.com/LyraCoreProject/packages/blob/c97464f6be211525a3b36a2ee3824cf259edbdd1/playerbots/README.md",
             "https://github.com/LyraCoreProject/LyraCore/pull/482#issuecomment-5585257477"
           ]
         }
@@ -643,6 +646,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 12:45 UTC",
-  "summary": "PB-001 has reviewed evidence for all eight criteria. Both PRs remain open while final core CI and review finish. Package tests and default Gateway binding verification pass. No implementation ticket is merged yet."
+  "updated_at": "2026-09-08 13:08 UTC",
+  "summary": "The execution-plan PR is merged. PB-001 has reviewed evidence for all eight source criteria and passing final Package CI. Its core durable check remains pending before the core and Package PRs can merge in order. PB-002 starts after that integration."
 }
