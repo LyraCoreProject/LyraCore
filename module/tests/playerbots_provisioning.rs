@@ -190,6 +190,7 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
         "DELETE FROM game_item_instance WHERE owner_guid = {guid} AND slot = 15"
     ));
     node.assert_call("playerbots_fixture_provision_catalog", &[]);
+    node.assert_call("playerbots_fixture_provision_complete_profile", &[&guid]);
     select(&node, &guid, "cohort");
     node.assert_call("playerbots_fixture_runner_due", &[]);
     node.assert_call("playerbots_fixture_runner_pass", &[]);
@@ -209,7 +210,24 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
         &format!("SELECT level, xp, money FROM game_character WHERE guid = {guid}"),
     );
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "64"]);
+    let completed = one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"),
+    );
+    let history = completed["history"].to_ascii_lowercase();
     let provisioned = gameplay(&node, &guid);
+    write_evidence(
+        &node,
+        "profile",
+        serde_json::json!({
+            "status": "captured before completion assertions",
+            "armed": armed,
+            "runner": runner,
+            "provisioning": completed,
+            "gameplay": provisioned,
+            "fixture_profile_spells": node.query_rows("SELECT spell_id FROM pkg_playerbots_kit WHERE class = 1 AND role = 0"),
+        }),
+    );
     assert_eq!(item_count(&node, &guid, 4496), 4);
     assert_eq!(item_count(&node, &guid, 117), 10);
     assert_eq!(item_count(&node, &guid, 118), 5);
@@ -251,11 +269,6 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
             kit["spell_id"]
         );
     }
-    let completed = one(
-        &node,
-        &format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"),
-    );
-    let history = completed["history"].to_ascii_lowercase();
     assert!(history.contains("warrior-tank-free"));
     assert_eq!(completed["revision"], "1");
     assert!(history.contains("applied"));
@@ -298,6 +311,7 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
             "runner": runner,
             "provisioning": one(&node, &format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}")),
             "gameplay": gameplay(&node, &guid),
+            "fixture_profile_spells": node.query_rows("SELECT spell_id FROM pkg_playerbots_kit WHERE class = 1 AND role = 0"),
         }),
     );
 }
@@ -422,6 +436,22 @@ fn playerbots_provisioning_stops_cleanly_and_preserves_owned_items_and_gear() {
         .to_ascii_lowercase();
     assert!(missing.contains("refused"));
     assert!(missing.contains("missingresource"));
+    node.assert_call("playerbots_fixture_provision_missing_spell", &[&guid]);
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+    let missing_spell = one(
+        &node,
+        &format!("SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"),
+    )["history"]
+        .to_ascii_lowercase();
+    assert!(missing_spell.contains("spell"));
+    assert!(missing_spell.contains("7386"));
+    assert!(missing_spell.contains("refused"));
+    assert!(missing_spell.contains("missingresource"));
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 7386"
+        ))
+        .is_empty());
     node.assert_call("playerbots_fixture_provision_wrong_class_spell", &[&guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
     let wrong_class = one(
@@ -472,7 +502,7 @@ fn playerbots_provisioning_stops_cleanly_and_preserves_owned_items_and_gear() {
     write_evidence(
         &node,
         "stops",
-        serde_json::json!({"stopped": stopped, "missing": missing, "wrong_class": wrong_class, "overflow": overflow, "dead": dead, "gameplay": gameplay(&node, &guid)}),
+        serde_json::json!({"stopped": stopped, "missing_item": missing, "missing_spell": missing_spell, "wrong_class": wrong_class, "overflow": overflow, "dead": dead, "gameplay": gameplay(&node, &guid)}),
     );
     write_evidence(
         &gear_node,
