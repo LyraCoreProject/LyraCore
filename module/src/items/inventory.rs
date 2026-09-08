@@ -365,7 +365,7 @@ pub(crate) fn apply_equip_profile_upgrade(
     player_guid: u64,
     from_slot: u8,
 ) -> Result<bool, ItemRefusal> {
-    if from_slot <= BAG_SLOT_END_INCL {
+    if from_slot <= BAG_SLOT_END_INCL || !is_carried_slot(from_slot) {
         return Err(refuse(
             ItemRefusal::WrongSlot,
             "profile equipment must come from carried storage",

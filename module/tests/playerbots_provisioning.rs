@@ -222,6 +222,9 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
     );
     let history = completed["history"].to_ascii_lowercase();
     let provisioned = gameplay(&node, &guid);
+    let skill_availability = node.query_rows(
+        "SELECT id, race_mask, class_mask, min_level FROM game_skill_availability WHERE skill_line = 43",
+    );
     write_evidence(
         &node,
         "profile",
@@ -232,8 +235,10 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
             "provisioning": completed,
             "gameplay": provisioned,
             "fixture_profile_spells": node.query_rows("SELECT spell_id FROM pkg_playerbots_kit WHERE class = 1 AND role = 0"),
+            "skill_availability": skill_availability,
         }),
     );
+    assert!(skill_availability.len() > 16);
     assert_eq!(item_count(&node, &guid, 4496), 4);
     assert_eq!(item_count(&node, &guid, 117), 10);
     assert_eq!(item_count(&node, &guid, 118), 5);
@@ -249,13 +254,14 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
         )["entry"],
         "25"
     );
-    assert_eq!(
-        node.query_rows(&format!(
-            "SELECT * FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 43"
-        ))
-        .len(),
-        1
+    let profile_skill = one(
+        &node,
+        &format!(
+            "SELECT current, max_rank FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 43"
+        ),
     );
+    assert_eq!(profile_skill["current"], "100");
+    assert_eq!(profile_skill["max_rank"], "100");
     assert!(!node
         .query_rows(&format!(
             "SELECT * FROM game_character_talent WHERE character_guid = {guid}"
@@ -599,6 +605,24 @@ fn playerbots_provisioning_stops_cleanly_and_preserves_owned_items_and_gear() {
             "SELECT * FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 133"
         ))
         .is_empty());
+    node.assert_call("playerbots_fixture_provision_skill_overflow", &[&guid]);
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+    let skill_overflow = one(
+        &node,
+        &format!("SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"),
+    )["history"]
+        .to_ascii_lowercase();
+    let overflow_skills = node.query_rows(&format!(
+        "SELECT * FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 43"
+    ));
+    write_evidence(
+        &node,
+        "skill-overflow",
+        serde_json::json!({"history": skill_overflow, "skills": overflow_skills}),
+    );
+    assert!(skill_overflow.contains("refused"));
+    assert!(skill_overflow.contains("profilelimit"));
+    assert!(overflow_skills.is_empty());
     node.assert_call("playerbots_fixture_provision_profile_overflow", &[&guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
     let overflow = one(
@@ -632,15 +656,36 @@ fn playerbots_provisioning_stops_cleanly_and_preserves_owned_items_and_gear() {
         ),
     );
     assert_eq!(mainhand["entry"], "50");
-    write_evidence(
-        &node,
-        "stops",
-        serde_json::json!({"stopped": stopped, "missing_item": missing, "missing_spell": missing_spell, "wrong_class": wrong_class, "overflow": overflow, "dead": dead, "gameplay": gameplay(&node, &guid)}),
+    gear_node.assert_call("playerbots_fixture_provision_bank_weapon", &[&gear_guid]);
+    let bank_before = gear_node.query_rows(&format!(
+        "SELECT guid, entry, slot FROM game_item_instance WHERE owner_guid = {gear_guid} AND slot = 39"
+    ));
+    let refused_bank_equip = gear_node.call(
+        "playerbots_fixture_provision_equip_bank_weapon",
+        &[&gear_guid],
     );
+    let bank_call_succeeded = refused_bank_equip.status.success();
+    let bank_refusal = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused_bank_equip.stdout),
+        String::from_utf8_lossy(&refused_bank_equip.stderr)
+    )
+    .to_ascii_lowercase();
+    let bank_after = gear_node.query_rows(&format!(
+        "SELECT guid, entry, slot FROM game_item_instance WHERE owner_guid = {gear_guid} AND slot = 39"
+    ));
     write_evidence(
         &gear_node,
         "gear",
-        serde_json::json!({"mainhand": mainhand, "gameplay": gameplay(&gear_node, &gear_guid)}),
+        serde_json::json!({"mainhand": mainhand, "bank_item": bank_after, "bank_call_succeeded": bank_call_succeeded, "bank_refusal": bank_refusal, "gameplay": gameplay(&gear_node, &gear_guid)}),
+    );
+    assert!(!bank_call_succeeded);
+    assert!(bank_refusal.contains("wrongslot"), "{bank_refusal}");
+    assert_eq!(bank_after, bank_before);
+    write_evidence(
+        &node,
+        "stops",
+        serde_json::json!({"stopped": stopped, "missing_item": missing, "missing_spell": missing_spell, "wrong_class": wrong_class, "skill_overflow": skill_overflow, "overflow": overflow, "dead": dead, "gameplay": gameplay(&node, &guid)}),
     );
 }
 

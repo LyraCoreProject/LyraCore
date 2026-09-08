@@ -606,9 +606,14 @@ fn profile_mask_admits(mask: u32, id: u8) -> bool {
     mask == 0 || (id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0)
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
+const PROFILE_SKILL_AVAILABILITY_LIMIT: usize = 16;
+
 /// Reconcile one combat skill selected by a free provisioning profile. Imported availability owns
 /// the race, class, and level Gates. A seed-only Shard falls back to the established class weapon
-/// table so the no-import demo remains usable.
+/// table so the no-import demo remains usable. The indexed admission reads at most 16 matching
+/// availability rows plus one overflow row. An eligible row ends the read early; an inconclusive
+/// bounded prefix returns `ProfileLimit`.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn reconcile_profile_skill(
     ctx: &ReducerContext,
@@ -627,29 +632,51 @@ pub(crate) fn reconcile_profile_skill(
             format!("learner {guid} not in world"),
         )
     })?;
-    let availability: Vec<_> = ctx
-        .db
-        .game_skill_availability()
-        .by_skill_line()
-        .filter(&line)
-        .collect();
     let imported = ctx.db.game_skill_availability().count() > 0;
-    let identity_admitted = availability.iter().any(|row| {
-        profile_mask_admits(row.race_mask, actor.race())
-            && profile_mask_admits(row.class_mask, actor.class())
-    });
-    let admitted = if imported {
-        availability.iter().any(|row| {
-            profile_mask_admits(row.race_mask, actor.race())
-                && profile_mask_admits(row.class_mask, actor.class())
-                && i64::from(row.min_level) <= i64::from(actor.level)
-        })
+    let (admitted, identity_admitted, overflow) = if imported {
+        let mut admitted = false;
+        let mut identity_admitted = false;
+        let mut examined = 0usize;
+        let mut overflow = false;
+        for row in ctx
+            .db
+            .game_skill_availability()
+            .by_skill_line()
+            .filter(&line)
+            .take(PROFILE_SKILL_AVAILABILITY_LIMIT + 1)
+        {
+            if examined == PROFILE_SKILL_AVAILABILITY_LIMIT {
+                overflow = true;
+                break;
+            }
+            examined += 1;
+            let identity_matches = profile_mask_admits(row.race_mask, actor.race())
+                && profile_mask_admits(row.class_mask, actor.class());
+            identity_admitted |= identity_matches;
+            if identity_matches && i64::from(row.min_level) <= i64::from(actor.level) {
+                admitted = true;
+                break;
+            }
+        }
+        (admitted, identity_admitted, overflow)
     } else {
-        line == skill_line::DEFENSE
-            || line == skill_line::UNARMED
-            || class_weapon_skill_lines(actor.class()).contains(&line)
+        (
+            line == skill_line::DEFENSE
+                || line == skill_line::UNARMED
+                || class_weapon_skill_lines(actor.class()).contains(&line),
+            false,
+            false,
+        )
     };
     if !admitted {
+        if overflow {
+            return Err(crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::ProfileLimit,
+                format!(
+                    "skill line {line} admission exceeded {PROFILE_SKILL_AVAILABILITY_LIMIT} availability rows"
+                ),
+            ));
+        }
         let kind = if imported && identity_admitted {
             crate::actor::ActionRefusalKind::Level
         } else {
@@ -684,7 +711,7 @@ pub(crate) fn reconcile_profile_skill(
             character_guid: guid,
             owner_identity: actor.owner_identity,
             skill_line: line,
-            current: 1,
+            current: cap,
             max_rank: cap,
         });
     }
