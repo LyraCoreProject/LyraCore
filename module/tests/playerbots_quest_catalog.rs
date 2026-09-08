@@ -117,6 +117,7 @@ fn record(node: &Standalone, suffix: &str) {
         "objectives": node.query_rows("SELECT * FROM pkg_playerbots_catalog_objective"),
         "admission": node.query_rows("SELECT * FROM pkg_playerbots_quest_admission"),
         "retained": node.query_rows("SELECT * FROM pkg_playerbots_quest_objective"),
+        "provisioning": node.query_rows("SELECT * FROM pkg_playerbots_provisioning"),
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "character_quests": node.query_rows("SELECT * FROM game_character_quest"),
         "items": node.query_rows("SELECT * FROM game_item_instance"),
@@ -708,8 +709,26 @@ fn playerbots_companion_control_precedes_held_quest_work() {
     let held_quest = quest(&node, bot, 7);
 
     node.assert_call("playerbots_fixture_companion_stage", &[bot, leader, ally]);
-    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
-    let following = runner(&node, bot);
+    let mut following = None;
+    let mut companion_sequence = None;
+    for pass in 0..32 {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        let state = runner(&node, bot);
+        record(&node, &format!("companion-pass-{pass}"));
+        assert!(state["objective"].contains("companion"), "{state:?}");
+        let sequence =
+            companion_sequence.get_or_insert_with(|| state["objective_sequence"].clone());
+        assert_eq!(&state["objective_sequence"], sequence);
+        assert_eq!(quest(&node, bot, 7), held_quest);
+        if state["chosen"].contains("follow") {
+            following = Some(state);
+            break;
+        }
+        assert!(state["chosen"].contains("provisioning"), "{state:?}");
+        assert!(state["last_outcome"].contains("provisioning"), "{state:?}");
+        assert!(state["foreground"].contains("none"), "{state:?}");
+    }
+    let following = following.expect("companion did not follow after bounded upkeep");
     record(&node, "companion-follow");
     assert!(
         following["objective"].contains("companion"),
@@ -720,6 +739,13 @@ fn playerbots_companion_control_precedes_held_quest_work() {
         following["foreground"].contains("movement"),
         "{following:?}"
     );
+    assert!(support::poll_until(support::POLL_TIMEOUT, || {
+        let position = node.query_rows(&format!(
+            "SELECT x, y FROM game_world_entity WHERE guid = {bot}"
+        ));
+        (position[0]["x"].parse::<f32>().unwrap() - 1200.0).abs() > 0.01
+            || (position[0]["y"].parse::<f32>().unwrap() - 1200.0).abs() > 0.01
+    }));
     assert_ne!(following["objective_sequence"], solo["objective_sequence"]);
     assert_eq!(quest(&node, bot, 7), held_quest);
     assert!(node
