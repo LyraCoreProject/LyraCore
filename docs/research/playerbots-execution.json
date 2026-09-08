@@ -303,15 +303,16 @@
       "prs": [
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/484",
-          "status": "open",
+          "status": "merged",
           "label": "Core #484",
-          "head_commit": "41488bfe8fecae21498371e172969c01948e7bc2"
+          "head_commit": "41488bfe8fecae21498371e172969c01948e7bc2",
+          "merge_commit": "76142010cda8b497f07b1824d34472051c4fa4b2"
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/26",
           "status": "open",
           "label": "Package #26",
-          "head_commit": "334ea463845903e60d3823ee2af707cbaa49723d"
+          "head_commit": "1a6577308e7327a3c33f1d7074748d0a93771367"
         }
       ],
       "evidence": [
@@ -331,8 +332,9 @@
         "Control must cover damage and invitation hooks as well as the tick. The Gateway also auto-accepts invitations for session-less Characters. The core-owned consent check covers that path for record-only and frozen bots.",
         "The consent check acknowledges current World Shard state before Realm-core group actions. An action admitted before a concurrent freeze may finish; cross-Shard atomicity is not claimed. Controller selection clears unclaimed Group Intents in the same transaction.",
         "The common runner entry checks current Account ownership. Relinquishment releases only the bot's observed cast or movement identity and preserves a later human action.",
-        "Both PRs are ready for review. CodeRabbit reviews remain pending. Merge core first, restore the Package checks to core main, and require final Package checks before integration.",
-        "Package schema changes still require human review before production shipping. Agent review and source merge do not satisfy that production gate."
+        "Package schema changes still require human review before production shipping. Agent review and source merge do not satisfy that production gate.",
+        "Core #484 merged after all checks and its completed CodeRabbit review passed. Package #26 restored all three current-core checkouts to main. Its final compatibility run is in progress.",
+        "Package CodeRabbit review found silent truncation of eligible facts, a health-percentage overflow, and narrow fixture and workflow issues. The implementer is resolving them before merge. Moving the read bound after filters would permit unbounded work and is not the chosen fix. Final corrected-source checks and review remain required."
       ],
       "acceptance_evidence": [
         {
@@ -764,6 +766,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 15:04 UTC",
-  "summary": "PB-001 is integrated. PB-002 passes its final local and CI checks and has reviewed evidence for all nine criteria. Both PRs await the remaining automated reviews and ordered integration. The next implementation frontier remains gated by those merges."
+  "updated_at": "2026-09-08 15:14 UTC",
+  "summary": "PB-001 is integrated. PB-002 core is merged; the Package remains in review while the implementer resolves new findings. Earlier clean local and paired CI evidence is retained with its exact revisions. The next frontier remains gated by the Package merge."
 }
