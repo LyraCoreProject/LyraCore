@@ -30,6 +30,7 @@
 //! | `trainer_buy` | `trainer::apply_trainer_buy` | trainer resolved by guid + offering gates (class/level/money) |
 //! | `reconcile_profile_spell` | `trainer::reconcile_profile_spell` | free profile grant + trainer/class/level/rank gates; explicit no-import demo fallback |
 //! | `reconcile_profile_skill` | `skill::reconcile_profile_skill` | free profile grant + race/class/level availability gates |
+//! | `select_profile_talent` | `talent::select_profile_talent` | bounded preferred-tree selection through the owning talent Gates |
 //! | `learn_profile_talent` | `talent::do_learn_talent` | class/race/level/point/tier/prerequisite gates |
 //! | `reconcile_profile_item` | `items::request_profile_item` | bounded top-up + capacity/uniqueness gates |
 //! | `equip_profile_upgrade` | `items::apply_equip_profile_upgrade` | normal equip gates + preserves equal or stronger gear |
@@ -144,6 +145,7 @@ package_only! {
     pub(crate) use crate::trainer::reconcile_profile_spell as reconcile_profile_spell;
     pub(crate) use crate::skill::reconcile_profile_skill as reconcile_profile_skill;
     pub(crate) use crate::talent::reconcile_profile_talent as learn_profile_talent;
+    pub(crate) use crate::talent::select_profile_talent as select_profile_talent;
 }
 
 // ---- NPC services / world ----
@@ -189,6 +191,7 @@ pub enum ActionRefusalKind {
     Class,
     Level,
     Prerequisite,
+    ProfileLimit,
 }
 
 impl ActionRefusal {

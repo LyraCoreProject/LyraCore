@@ -36,7 +36,12 @@ pub(crate) fn refused(refusal: TrainerRefusal, detail: &str) -> String {
 /// One spell a trainer teaches. Static, public, SQL-loadable (no Timestamp), keyed by the trainer's
 /// CREATURE TEMPLATE entry (every spawned trainer of that entry offers the same list — like vendors).
 /// Logical key `(trainer_entry, spell_id)` via the `#[auto_inc]` PK + `by_trainer` btree. [static]
-#[table(accessor = game_trainer_spell, public, index(accessor = by_trainer, btree(columns = [trainer_entry])))]
+#[table(
+    accessor = game_trainer_spell,
+    public,
+    index(accessor = by_trainer, btree(columns = [trainer_entry])),
+    index(accessor = by_spell, btree(columns = [spell_id]))
+)]
 pub struct TrainerSpell {
     #[primary_key]
     #[auto_inc]
@@ -142,21 +147,217 @@ pub(crate) fn trainer_buy_check(
 /// the same rule on the two sides of the wire. Generic over the kind. Shared by `apply_trainer_buy`
 /// (the player buy) and the playerbots trainer-kit pass (work-item 156) — ONE wrapper-resolution
 /// chokepoint, so a bot's spellbook and a trained player's can never drift. [entity]
+fn learn_target_trigger(effect: &crate::SpellEffect) -> Option<u32> {
+    (effect.trigger_spell != 0
+        && effect.kind != crate::spell::A_PERIODIC_TRIGGER
+        && effect.kind != crate::spell::A_FLAG
+        && effect.kind != crate::spell::A_PROC_TRIGGER
+        && effect.kind != crate::spell::A_PROC_DAMAGE
+        && effect.kind != crate::spell::E_TRIGGER)
+        .then_some(effect.trigger_spell)
+}
+
+fn learn_target_from_effects(spell_id: u32, effects: &[crate::SpellEffect]) -> u32 {
+    effects
+        .iter()
+        .filter_map(|effect| {
+            learn_target_trigger(effect).map(|target| (effect.effect_index, effect.id, target))
+        })
+        .min_by_key(|(effect_index, id, _)| (*effect_index, *id))
+        .map(|(_, _, target)| target)
+        .unwrap_or(spell_id)
+}
+
 pub(crate) fn resolve_learn_target(ctx: &ReducerContext, spell_id: u32) -> u32 {
-    ctx.db
+    let effects: Vec<_> = ctx
+        .db
         .game_spell_effect()
         .by_spell()
         .filter(&spell_id)
-        .find_map(|e| {
-            (e.trigger_spell != 0
-                && e.kind != crate::spell::A_PERIODIC_TRIGGER
-                && e.kind != crate::spell::A_FLAG
-                && e.kind != crate::spell::A_PROC_TRIGGER
-                && e.kind != crate::spell::A_PROC_DAMAGE
-                && e.kind != crate::spell::E_TRIGGER)
-                .then_some(e.trigger_spell)
-        })
-        .unwrap_or(spell_id)
+        .collect();
+    learn_target_from_effects(spell_id, &effects)
+}
+
+const PROFILE_TRAINER_OFFERING_LIMIT: usize = 16;
+const PROFILE_WRAPPER_EFFECT_LIMIT: usize = 16;
+const PROFILE_SPELL_EFFECT_LIMIT: usize = 3;
+
+fn profile_limit(detail: impl Into<String>) -> crate::actor::ActionRefusal {
+    crate::actor::ActionRefusal::new(crate::actor::ActionRefusalKind::ProfileLimit, detail.into())
+}
+
+fn profile_learn_target(
+    ctx: &ReducerContext,
+    wrapper_spell: u32,
+) -> Result<u32, crate::actor::ActionRefusal> {
+    let effects: Vec<_> = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&wrapper_spell)
+        .take(PROFILE_SPELL_EFFECT_LIMIT + 1)
+        .collect();
+    if effects.len() > PROFILE_SPELL_EFFECT_LIMIT {
+        return Err(profile_limit(format!(
+            "spell {wrapper_spell} has more than {PROFILE_SPELL_EFFECT_LIMIT} effects"
+        )));
+    }
+    Ok(learn_target_from_effects(wrapper_spell, &effects))
+}
+
+#[derive(Default)]
+struct ProfileOfferingScan {
+    examined: usize,
+    lowest_required_level: Option<u32>,
+}
+
+impl ProfileOfferingScan {
+    fn inspect(
+        &mut self,
+        ctx: &ReducerContext,
+        class: u8,
+        level: u32,
+        offering: &TrainerSpell,
+    ) -> bool {
+        self.examined += 1;
+        if offering.learn_skill_line != 0 {
+            return false;
+        }
+        let Some(trainer) = ctx
+            .db
+            .game_creature_template()
+            .entry()
+            .find(offering.trainer_entry)
+        else {
+            return false;
+        };
+        if !lyracore_shared::trainer::serves(class, trainer.trainer_type, trainer.trainer_class) {
+            return false;
+        }
+        let required_level = u32::from(offering.required_level);
+        if level >= required_level {
+            return true;
+        }
+        self.lowest_required_level = Some(
+            self.lowest_required_level
+                .map_or(required_level, |seen| seen.min(required_level)),
+        );
+        false
+    }
+
+    fn refusal(&self, requested_spell: u32, class: u8) -> crate::actor::ActionRefusal {
+        if let Some(required_level) = self.lowest_required_level {
+            crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::Level,
+                format!("spell {requested_spell} requires level {required_level}"),
+            )
+        } else {
+            crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::Class,
+                format!("spell {requested_spell} is not offered for class {class}"),
+            )
+        }
+    }
+}
+
+fn sorted_offerings(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    remaining: usize,
+) -> (Vec<TrainerSpell>, bool) {
+    let mut offerings: Vec<_> = ctx
+        .db
+        .game_trainer_spell()
+        .by_spell()
+        .filter(&spell_id)
+        .take(remaining + 1)
+        .collect();
+    offerings.sort_by_key(|offering| offering.id);
+    let overflow = offerings.len() > remaining;
+    offerings.truncate(remaining);
+    (offerings, overflow)
+}
+
+/// Admit one imported trainer spell without scanning the catalogue. One request examines at most 16
+/// class-spell offerings across the requested spell and its wrappers and reads one overflow row when
+/// needed. If the requested id resolves to another target, its rejected direct lookup reads at most
+/// 17 rows before the wrapper search reads at most 17 more. Reverse lookup reads at most 17 effects.
+/// Target resolution reads at most four effects for the requested spell and each of at most 16
+/// candidate wrappers. Every examined class-spell offering reads one exact trainer template. A usable
+/// offering ends the search; `ProfileLimit` means the bounded prefix was inconclusive.
+fn admit_profile_spell(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    class: u8,
+    level: u32,
+) -> Result<(), crate::actor::ActionRefusal> {
+    let mut scan = ProfileOfferingScan::default();
+    let (direct, direct_overflow) = sorted_offerings(ctx, spell_id, PROFILE_TRAINER_OFFERING_LIMIT);
+    let direct_matches = if direct.is_empty() {
+        false
+    } else {
+        profile_learn_target(ctx, spell_id)? == spell_id
+    };
+    if direct_matches {
+        for offering in &direct {
+            if scan.inspect(ctx, class, level, offering) {
+                return Ok(());
+            }
+        }
+        if direct_overflow {
+            return Err(profile_limit(format!(
+                "spell {spell_id} trainer admission exceeded {PROFILE_TRAINER_OFFERING_LIMIT} offerings"
+            )));
+        }
+    }
+
+    let mut trigger_effects: Vec<_> = ctx
+        .db
+        .game_spell_effect()
+        .by_trigger_spell()
+        .filter(&spell_id)
+        .take(PROFILE_WRAPPER_EFFECT_LIMIT + 1)
+        .collect();
+    trigger_effects.sort_by_key(|effect| (effect.spell_id, effect.effect_index, effect.id));
+    let trigger_overflow = trigger_effects.len() > PROFILE_WRAPPER_EFFECT_LIMIT;
+    trigger_effects.truncate(PROFILE_WRAPPER_EFFECT_LIMIT);
+    let mut wrappers: Vec<_> = trigger_effects
+        .iter()
+        .filter(|effect| learn_target_trigger(effect) == Some(spell_id))
+        .map(|effect| effect.spell_id)
+        .filter(|wrapper| *wrapper != spell_id)
+        .collect();
+    wrappers.sort_unstable();
+    wrappers.dedup();
+
+    for wrapper in wrappers {
+        if profile_learn_target(ctx, wrapper)? != spell_id {
+            continue;
+        }
+        let remaining = PROFILE_TRAINER_OFFERING_LIMIT.saturating_sub(scan.examined);
+        if remaining == 0 {
+            return Err(profile_limit(format!(
+                "spell {spell_id} trainer admission exceeded {PROFILE_TRAINER_OFFERING_LIMIT} offerings"
+            )));
+        }
+        let (wrapper_offerings, offering_overflow) = sorted_offerings(ctx, wrapper, remaining);
+        for offering in &wrapper_offerings {
+            if scan.inspect(ctx, class, level, offering) {
+                return Ok(());
+            }
+        }
+        if offering_overflow {
+            return Err(profile_limit(format!(
+                "spell {spell_id} trainer admission exceeded {PROFILE_TRAINER_OFFERING_LIMIT} offerings"
+            )));
+        }
+    }
+    if trigger_overflow {
+        return Err(profile_limit(format!(
+            "spell {spell_id} trainer admission exceeded {PROFILE_WRAPPER_EFFECT_LIMIT} reverse trigger effects"
+        )));
+    }
+    Err(scan.refusal(spell_id, class))
 }
 
 fn demo_profile_spell_admitted(class: u8, spell_id: u32) -> bool {
@@ -216,47 +417,7 @@ pub(crate) fn reconcile_profile_spell(
             ));
         }
     } else {
-        let offerings: Vec<_> = ctx
-            .db
-            .game_trainer_spell()
-            .iter()
-            .filter(|offering| {
-                offering.learn_skill_line == 0
-                    && resolve_learn_target(ctx, offering.spell_id) == spell_id
-                    && ctx
-                        .db
-                        .game_creature_template()
-                        .entry()
-                        .find(offering.trainer_entry)
-                        .is_some_and(|trainer| {
-                            lyracore_shared::trainer::serves(
-                                actor.class(),
-                                trainer.trainer_type,
-                                trainer.trainer_class,
-                            )
-                        })
-            })
-            .collect();
-        if offerings.is_empty() {
-            return Err(crate::actor::ActionRefusal::new(
-                crate::actor::ActionRefusalKind::Class,
-                format!(
-                    "spell {spell_id} is not offered for class {}",
-                    actor.class()
-                ),
-            ));
-        }
-        let required_level = offerings
-            .iter()
-            .map(|offering| u32::from(offering.required_level))
-            .min()
-            .unwrap_or(0);
-        if actor.level < required_level {
-            return Err(crate::actor::ActionRefusal::new(
-                crate::actor::ActionRefusalKind::Level,
-                format!("spell {spell_id} requires level {required_level}"),
-            ));
-        }
+        admit_profile_spell(ctx, spell_id, actor.class(), actor.level)?;
     }
     if let Some(chain) = ctx.db.game_spell_chain().spell_id().find(spell_id) {
         if chain.prev_spell != 0 && !crate::spell::knows_spell(ctx, guid, chain.prev_spell) {

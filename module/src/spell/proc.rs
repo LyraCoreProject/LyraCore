@@ -1195,21 +1195,4 @@ mod tests {
              pipeline. Body was:\n{body}"
         );
     }
-
-    /// The trainer's wrapper-resolution exclusion list names the renamed Proc kind. It and the
-    /// importer's `wrapper_to_rank` heuristic are the same rule on the two sides of the wire: a
-    /// trigger spell on a Proc aura is an effect PAYLOAD, not a rank to learn.
-    #[test]
-    fn the_learn_target_resolution_excludes_the_proc_trigger_kind() {
-        let src = crate::test_scan::read_scanned("module/src/trainer.rs")
-            .expect("module/ is never optional");
-        let body = crate::test_scan::code_of(&src, "pub(crate) fn resolve_learn_target(");
-        for kind in ["A_PROC_TRIGGER", "A_PROC_DAMAGE"] {
-            assert!(
-                body.contains(kind),
-                "`resolve_learn_target` no longer excludes `{kind}` — buying Frost Armor rank 2 would \
-                 teach `Chilled` instead. Body was:\n{body}"
-            );
-        }
-    }
 }

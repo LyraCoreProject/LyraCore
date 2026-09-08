@@ -189,7 +189,13 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
     node.assert_sql(&format!(
         "DELETE FROM game_item_instance WHERE owner_guid = {guid} AND slot = 15"
     ));
+    let existing_food = one(&node, "SELECT * FROM game_item_template WHERE entry = 117");
     node.assert_call("playerbots_fixture_provision_catalog", &[]);
+    assert_eq!(
+        one(&node, "SELECT * FROM game_item_template WHERE entry = 117"),
+        existing_food,
+        "fixture catalogue must preserve an existing low-ID template"
+    );
     node.assert_call("playerbots_fixture_provision_complete_profile", &[&guid]);
     select(&node, &guid, "cohort");
     node.assert_call("playerbots_fixture_runner_due", &[]);
@@ -312,6 +318,123 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
             "provisioning": one(&node, &format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}")),
             "gameplay": gameplay(&node, &guid),
             "fixture_profile_spells": node.query_rows("SELECT spell_id FROM pkg_playerbots_kit WHERE class = 1 AND role = 0"),
+        }),
+    );
+}
+
+fn provision_spell_outcome(node: &Standalone, guid: &str, spell: &str) -> String {
+    node.assert_call("playerbots_fixture_provision_reset", &[guid]);
+    node.assert_call("playerbots_fixture_provision_spell_action", &[guid, spell]);
+    node.assert_call("playerbots_fixture_provision_steps", &[guid, "1"]);
+    one(
+        node,
+        &format!("SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"),
+    )["history"]
+        .to_ascii_lowercase()
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_provisioning_bounds_imported_style_trainer_facts() {
+    let (node, guid) = fixture("playerbots-provisioning-trainers", "1", "0");
+    node.assert_call("debug_set_level", &[&guid, "20"]);
+    node.assert_call("playerbots_fixture_provision_trainer_catalog", &[&guid]);
+    select(&node, &guid, "cohort");
+    let unrelated_offerings = node
+        .query_rows("SELECT spell_id FROM game_trainer_spell")
+        .into_iter()
+        .filter(|row| {
+            let spell_id = row["spell_id"].parse::<u32>().unwrap();
+            (5_099_000..5_099_040).contains(&spell_id)
+        })
+        .count();
+    assert_eq!(unrelated_offerings, 40);
+    let duplicate_offerings = node
+        .query_rows("SELECT id FROM game_trainer_spell WHERE spell_id = 5090210")
+        .len();
+    let overflow_offerings = node
+        .query_rows("SELECT id FROM game_trainer_spell WHERE spell_id = 5090208")
+        .len();
+    assert_eq!(duplicate_offerings, 17);
+    assert_eq!(overflow_offerings, 17);
+
+    let direct = provision_spell_outcome(&node, &guid, "355");
+    assert!(direct.contains("applied"), "{direct}");
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 355"
+        ))
+        .len(),
+        1
+    );
+
+    let wrapper = provision_spell_outcome(&node, &guid, "2050");
+    assert!(wrapper.contains("applied"), "{wrapper}");
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 2050"
+        ))
+        .len(),
+        1
+    );
+
+    let duplicate_success = provision_spell_outcome(&node, &guid, "5090210");
+    assert!(duplicate_success.contains("applied"), "{duplicate_success}");
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 5090210"
+        ))
+        .len(),
+        1
+    );
+
+    let wrong_wrapper = provision_spell_outcome(&node, &guid, "5090211");
+    assert!(wrong_wrapper.contains("class"), "{wrong_wrapper}");
+
+    let channel_payload = provision_spell_outcome(&node, &guid, "139");
+    assert!(channel_payload.contains("class"), "{channel_payload}");
+    let proc_payload = provision_spell_outcome(&node, &guid, "133");
+    assert!(proc_payload.contains("class"), "{proc_payload}");
+    let wrong_class = provision_spell_outcome(&node, &guid, "5090205");
+    assert!(wrong_class.contains("class"), "{wrong_class}");
+    let low_level = provision_spell_outcome(&node, &guid, "5090206");
+    assert!(low_level.contains("level"), "{low_level}");
+    let previous_rank = provision_spell_outcome(&node, &guid, "5090207");
+    assert!(previous_rank.contains("prerequisite"), "{previous_rank}");
+    let overflow = provision_spell_outcome(&node, &guid, "5090208");
+    assert!(overflow.contains("profilelimit"), "{overflow}");
+    assert!(overflow.contains("stopped"), "{overflow}");
+
+    for spell in [
+        139, 133, 5_090_205, 5_090_206, 5_090_207, 5_090_208, 5_090_211, 5_090_212,
+    ] {
+        assert!(
+            node.query_rows(&format!(
+                "SELECT * FROM game_player_spell WHERE character_guid = {guid} AND spell_id = {spell}"
+            ))
+            .is_empty(),
+            "refused spell {spell} changed the spellbook"
+        );
+    }
+    write_evidence(
+        &node,
+        "trainer-bounds",
+        serde_json::json!({
+            "fixture_kind": "source-derived imported-style rows; not imported-world proof",
+            "unrelated_offerings": unrelated_offerings,
+            "duplicate_offerings": duplicate_offerings,
+            "overflow_offerings": overflow_offerings,
+            "direct": direct,
+            "wrapper": wrapper,
+            "duplicate_success": duplicate_success,
+            "wrong_wrapper": wrong_wrapper,
+            "channel_payload": channel_payload,
+            "proc_payload": proc_payload,
+            "wrong_class": wrong_class,
+            "low_level": low_level,
+            "previous_rank": previous_rank,
+            "overflow": overflow,
+            "spellbook": node.query_rows(&format!("SELECT spell_id FROM game_player_spell WHERE character_guid = {guid}")),
         }),
     );
 }

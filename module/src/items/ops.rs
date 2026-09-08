@@ -212,7 +212,7 @@ pub(crate) fn request_grant_item(
     )
 }
 
-/// Top a profile-owned carried resource up to a fixed target. The target is capped at the largest
+/// Top a profile-owned resource up to a fixed target. The target is capped at the largest
 /// supported ammunition stack so a malformed profile cannot turn periodic repair into an unlimited
 /// grant. Storage still owns capacity, uniqueness, and Random Property Gates.
 pub(crate) fn request_profile_item(
@@ -221,13 +221,7 @@ pub(crate) fn request_profile_item(
     item_entry: u32,
     target_count: u32,
 ) -> Result<u32, ActionRefusal> {
-    const PROFILE_ITEM_LIMIT: u32 = 200;
-    if target_count == 0 || target_count > PROFILE_ITEM_LIMIT {
-        return Err(ActionRefusal::new(
-            crate::actor::ActionRefusalKind::Other,
-            format!("profile item target {target_count} is outside 1..={PROFILE_ITEM_LIMIT}"),
-        ));
-    }
+    profile_item_target_admitted(target_count)?;
     let owned = ctx
         .db
         .game_item_instance()
@@ -242,6 +236,18 @@ pub(crate) fn request_profile_item(
     }
     request_grant_item(ctx, player_guid, item_entry, missing, None)?;
     Ok(missing)
+}
+
+const PROFILE_ITEM_LIMIT: u32 = 200;
+
+fn profile_item_target_admitted(target_count: u32) -> Result<(), ActionRefusal> {
+    if (1..=PROFILE_ITEM_LIMIT).contains(&target_count) {
+        return Ok(());
+    }
+    Err(ActionRefusal::new(
+        crate::actor::ActionRefusalKind::ProfileLimit,
+        format!("profile item target {target_count} is outside 1..={PROFILE_ITEM_LIMIT}"),
+    ))
 }
 
 /// Add items to matching carried stacks, then free backpack or bag slots.
@@ -917,8 +923,21 @@ pub(crate) fn apply_take_loot(
 #[cfg(test)]
 mod tests {
     use super::{
-        bandage_cooldown_blocks, death_durability_loss, use_spell_for, RECENTLY_BANDAGED_SPELL,
+        bandage_cooldown_blocks, death_durability_loss, profile_item_target_admitted,
+        use_spell_for, RECENTLY_BANDAGED_SPELL,
     };
+
+    #[test]
+    fn profile_item_target_refuses_zero_and_over_limit_counts() {
+        for target in [0, 201] {
+            assert_eq!(
+                profile_item_target_admitted(target).unwrap_err().kind,
+                crate::actor::ActionRefusalKind::ProfileLimit
+            );
+        }
+        assert!(profile_item_target_admitted(1).is_ok());
+        assert!(profile_item_target_admitted(200).is_ok());
+    }
 
     /// `use_spell_for`: `spellid_1` is the on-use spell IFF it's nonzero AND `spelltrigger_1` names
     /// the on-use trigger slot (0 — `ItemSpellTriggerType::OnUse`). A trigger-1 (on-equip) spell is NOT
