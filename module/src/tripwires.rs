@@ -1155,7 +1155,6 @@ mod character_fence_tripwire {
         // Split the former single `debug.rs` into a directory; this lookup lives in the one
         // reducer the collapse put it in.
         ("module/src/debug/repair.rs", 1, "`debug_repair_after_publish`'s gm-tester backfill (guid 1, formerly the standalone `debug_seed_gm_tester`); every debug WRITER that touches character state is fenced"),
-        ("packages/playerbots/src/goals.rs", 1, "a bot reads a nearby player's NAME for goal selection — no write"),
         ("packages/playerbots/src/mod.rs", 4, "bot roster bookkeeping over rows this same reducer just created — free-name probe, post-create fetch, post-update re-read; +1 for `ensure_bot_account`'s per-account character COUNT, which reaches no character (it decides which bot account still has room under the 10-character cap) — an in-transit bot counting or not counting toward that cap is harmless either way"),
     ];
 
