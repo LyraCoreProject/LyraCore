@@ -695,6 +695,67 @@ fn playerbots_quest_objective_survives_combat_and_refreshes_changed_evidence() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_companion_control_precedes_held_quest_work() {
+    let (node, bots) = fixture("playerbots-quest-companion-control");
+    let bot = bot_for_class(&bots, "1");
+    let leader = bot_for_class(&bots, "5");
+    let ally = bot_for_class(&bots, "8");
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let solo = runner(&node, bot);
+    assert!(solo["objective"].contains("quest"), "{solo:?}");
+    let held_quest = quest(&node, bot, 7);
+
+    node.assert_call("playerbots_fixture_companion_stage", &[bot, leader, ally]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let following = runner(&node, bot);
+    record(&node, "companion-follow");
+    assert!(
+        following["objective"].contains("companion"),
+        "{following:?}"
+    );
+    assert!(following["chosen"].contains("follow"), "{following:?}");
+    assert!(
+        following["foreground"].contains("movement"),
+        "{following:?}"
+    );
+    assert_ne!(following["objective_sequence"], solo["objective_sequence"]);
+    assert_eq!(quest(&node, bot, 7), held_quest);
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM game_melee_attack WHERE attacker_guid = {bot}"
+        ))
+        .is_empty());
+
+    node.assert_call("playerbots_fixture_companion_remove_group", &[]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+    let unavailable = runner(&node, bot);
+    record(&node, "companion-unavailable");
+    let path = support::log_dir().join(format!("{}-runner.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "solo": solo, "following": following, "unavailable": unavailable
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(unavailable["objective"], following["objective"]);
+    assert_eq!(
+        unavailable["objective_sequence"],
+        following["objective_sequence"]
+    );
+    assert!(
+        unavailable["chosen"].contains("partyUnavailable"),
+        "{unavailable:?}"
+    );
+    assert!(unavailable["foreground"].contains("none"));
+    assert_eq!(quest(&node, bot, 7), held_quest);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     let (node, bots) = fixture("playerbots-quest-deferred-retry");
     let bot = bot_for_class(&bots, "1");
