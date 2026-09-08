@@ -40,6 +40,7 @@ fn claim_replay_recovers_a_lost_reply_without_reopening_closed_ownership() {
     let mut shard = Standalone::start("account-claim-replay");
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
     let first = token(1, 101);
     let deadline = claim(&shard, "101");
     let receipt = shard.query_rows("SELECT * FROM game_account_claim");
@@ -115,9 +116,11 @@ fn a_new_generation_completes_partial_admission_and_fences_transfer_completion()
     let mut source = Standalone::start("account-transfer-source");
     source.publish_module();
     source.assert_call("claim_operator", &[]);
+    source.assert_call("install_guid_range", &["0"]);
     let mut destination = Standalone::start("account-transfer-destination");
     destination.publish_module();
     destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
     let first = token(1, 201);
     let deadline = claim(&source, "201");
     fence(&source, &first, &deadline);
@@ -235,6 +238,7 @@ fn expired_account_ownership_is_reaped_while_another_gateway_keeps_its_lease_ali
     let mut shard = Standalone::start("account-owner-crash");
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("gw_heartbeat", &[]);
     let first = token(1, 301);
     let deadline = claim(&shard, "301");
@@ -283,6 +287,7 @@ fn realm_core_party_requests_use_the_account_claim_without_a_world_shard_fence()
     let mut realm = Standalone::start("account-realm-party");
     realm.publish_module();
     realm.assert_call("claim_operator", &[]);
+    realm.assert_call("install_guid_range", &["0"]);
     claim(&realm, "401");
     let first = actor(&token(1, 401));
     realm.assert_call("realm_group_op", &["0", &first, "2", "0", "0"]);
@@ -359,6 +364,7 @@ fn expired_fences_make_progress_in_bounded_batches() {
     let mut shard = Standalone::start("account-fence-batches");
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     let mut rows: Vec<_> = (1..=65)
         .map(|id| format!("({id},'TEST',1,1,{id},0,false)"))

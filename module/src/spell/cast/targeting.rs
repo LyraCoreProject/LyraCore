@@ -25,10 +25,19 @@ use crate::skilldata::game_skill_ability;
 // module doc — so the E_SCRIPTED arm reaches it by explicit path.
 use crate::script_binding::game_script;
 
-/// What one damaging effect dealt + how the hit broke down — surfaced so the cast-GO row can carry the
-/// crit flag + resisted/absorbed for the floating damage log. Non-damaging arms return `EffectHit::none()`.
+#[derive(Clone, Copy, Default)]
+pub(crate) enum ItemGrantOutcome {
+    #[default]
+    None,
+    Granted,
+    Refused,
+}
+
+/// The effect's hit details and item grant outcome. The cast settles crafting before publishing
+/// hit callbacks or awarding profession skill.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct EffectHit {
+    pub item: ItemGrantOutcome,
     pub dealt: u32,    // post-mitigation damage (what `apply_target_damage` returned)
     pub resisted: u32, // magic resisted off the crit-scaled hit (0 for physical / unresisted)
     pub absorbed: u32, // soaked by A_ABSORB shields before the health write
@@ -91,6 +100,12 @@ fn recipe_skill(ctx: &ReducerContext, spell_id: u32) -> Option<(u32, u32, u32)> 
         .filter(|a| a.spell_id == spell_id && crate::skill::is_profession_line(a.skill_line))
         .map(|a| (a.skill_line, a.green.max(0) as u32, a.gray.max(0) as u32))
         .next()
+}
+
+pub(crate) fn gain_recipe_skill(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) {
+    if let Some((line, green, gray)) = recipe_skill(ctx, spell_id) {
+        crate::skill::gain_profession_skill(ctx, caster_guid, line, green, gray);
+    }
 }
 
 // ===========================================================================================
@@ -1018,6 +1033,7 @@ fn apply_damage_effect(
                 absorbed,
                 crit: is_crit,
                 healed: 0,
+                ..EffectHit::default()
             }
         }
         E_WEAPON_STRIKE => {
@@ -1322,27 +1338,24 @@ fn apply_inventory_effect(
                     "spell {} E_CREATE_ITEM with no item entry (p0=0) — skipped",
                     e.spell_id
                 );
+                return EffectHit {
+                    item: ItemGrantOutcome::Refused,
+                    ..EffectHit::default()
+                };
             } else if let Err(err) = crate::items::grant_item(ctx, caster_guid, entry, count) {
                 log::info!(
                     "spell {} E_CREATE_ITEM: could not grant {count}x item {entry} to {caster_guid}: {err}",
                     e.spell_id
                 );
-                // CRAFT (282): the reagents were already consumed (the gate in resolve_cast_at), so a
-                // failed product grant (full bag) must NOT eat them — refund EVERY reagent (vanilla refunds
-                // an unstorable craft). A conjure/quest CreateItem has no reagents → this loop is empty.
-                for (item, cnt) in recipe_reagents(ctx, e.spell_id) {
-                    let _ = crate::items::grant_item(ctx, caster_guid, item, cnt);
-                }
-            } else if let Some((line, green, gray)) = recipe_skill(ctx, e.spell_id) {
-                // CRAFT skill-up (282) — the profession-loop's third leg, co-located with the product grant.
-                // Reaching here means the craft fully succeeded → climb the recipe's OWN profession line one
-                // step toward its cap, with the REAL difficulty band (green floor .. gray ceiling) from
-                // game_skill_ability. A no-op if the line isn't learned or is at cap; a degenerate/zero band
-                // ⇒ always +1 (skillup_chance_bp). Non-craft E_CREATE_ITEM (conjure) has no profession
-                // ability → None → skipped.
-                crate::skill::gain_profession_skill(ctx, caster_guid, line, green, gray);
+                return EffectHit {
+                    item: ItemGrantOutcome::Refused,
+                    ..EffectHit::default()
+                };
             }
-            EffectHit::none()
+            EffectHit {
+                item: ItemGrantOutcome::Granted,
+                ..EffectHit::default()
+            }
         }
         E_PICKPOCKET => {
             // Grant the rogue copper from the CREATURE target WITHOUT engaging (no combat, no aggro, no

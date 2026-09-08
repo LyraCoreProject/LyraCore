@@ -11,6 +11,7 @@ fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
     let mut standalone = Standalone::start("xp-cap");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
     standalone.assert_call("debug_spawn_player_entity", &["1"]);
     standalone.assert_call("debug_set_level", &["1", "59"]);

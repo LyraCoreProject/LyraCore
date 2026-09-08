@@ -1265,21 +1265,8 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     c.relocate(decoded.destination());
     c.money = decoded.money;
     let account_id = c.account_id;
-    // A stale copy from an earlier, half-finished hop in the OTHER direction gets its owned rows
-    // wiped before the re-insert, so the arriving payload never lands on top of rows that would
-    // PK-collide (or worse, survive as a second, older loadout).
-    //
-    // UNCONDITIONAL: this used to run only `if sink.has_character(guid)`, which wipes
-    // every owned table when `game_character` itself survived — but says nothing about a table
-    // that has this guid's rows WITHOUT a `game_character` row to key off. That combination is
-    // exactly the one no transfer-id witness can see (the witness is a fact about
-    // `game_transfer_in`, not about `game_item_instance`), and item rows are guid-namespaced to
-    // the OWNER (`item_guid_for`), so a collision there can only ever be this SAME character's own
-    // leftover. Sweeping every time makes the destination table set an idempotent function of
-    // "what belongs to this guid right now" rather than depending on `game_character` also having
-    // survived intact — cheap when there is nothing to sweep (every delete-by-key on an absent row
-    // is a no-op) and the only thing standing between a genuinely orphaned row and a hard panic on
-    // replay. See `orphaned_owned_rows_with_no_character_row_are_wiped_before_a_fresh_import_lands`.
+    // Remove stale rows for this Character even when its Character row is absent. Item import
+    // separately checks foreign GUID collisions because legacy packing could overlap.
     sink.cascade_delete_character(guid);
     sink.insert_character(c);
     // AC#3: ratchet this database's guid allocator past `guid` NOW, in the same

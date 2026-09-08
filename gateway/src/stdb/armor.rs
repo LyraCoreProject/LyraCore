@@ -228,6 +228,7 @@ mod tests {
         let mut shard = Standalone::start("property-armor");
         shard.publish_module();
         shard.assert_call("claim_operator", &[]);
+        shard.assert_call("install_guid_range", &["0"]);
         shard.assert_call("debug_seed_scenario_fixtures", &[]);
         shard.assert_call("debug_spawn_player_entity", &["1"]);
         shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");

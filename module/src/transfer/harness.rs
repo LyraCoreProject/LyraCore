@@ -1180,7 +1180,7 @@ fn a_stale_copy_from_an_earlier_hop_is_wiped_before_the_arrival_lands() {
 /// owned row (this guid's OWN item/quest/etc. left behind with no accompanying `game_character`
 /// row and no `game_transfer_in` witness — the residual state a table-level witness cannot see,
 /// since it is a fact about a DIFFERENT table) survived untouched and a fresh import landed
-/// its rows on top. Item rows are guid-namespaced to the OWNER (`item_guid_for`), so this can
+/// its rows on top. The stale rows in this fixture belong to the arriving Character, so this can
 /// only ever collide with the SAME character's own leftover, never a stranger's — real
 /// SpacetimeDB would PANIC on the duplicate primary key exactly as `import_character_blob`'s
 /// crash trace showed on `game_item_instance`. The fake never panics on a duplicate push, so

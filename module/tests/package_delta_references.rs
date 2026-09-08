@@ -174,6 +174,7 @@ fn quest_and_loot_claims_refuse_missing_cross_table_references() {
     let mut standalone = Standalone::start("package-delta-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
 
     let refused_quest = apply(&standalone, "quests", &quest_source_item(MISSING_ITEM));
@@ -215,6 +216,7 @@ fn cast_claims_refuse_missing_cross_table_references() {
     let mut standalone = Standalone::start("package-delta-cast-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
 
     let refused_spell = apply(
@@ -259,6 +261,7 @@ fn creature_spell_updates_cannot_hide_their_fixture_creature_target() {
     let mut standalone = Standalone::start("cast-fixture-target");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
     assert_eq!(
         standalone
@@ -319,6 +322,7 @@ fn a_profession_offerings_marker_spell_is_exempt_but_a_class_offerings_is_not() 
     let mut standalone = Standalone::start("package-delta-trainer-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
 
     // A class offering (`learn_skill_line` 0) names a real spell.
@@ -376,6 +380,7 @@ fn gossip_claims_refuse_missing_cross_table_references() {
     let mut standalone = Standalone::start("package-delta-gossip-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
 
     let refused_slot = apply(
@@ -428,6 +433,7 @@ fn globals_claims_refuse_missing_references_and_every_insert_on_a_fixed_key_tabl
     let mut standalone = Standalone::start("package-delta-globals-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
 
     let refused_zone = apply(
@@ -487,6 +493,7 @@ fn spell_metadata_claims_refuse_a_missing_spell_in_the_key_and_in_a_column() {
     let mut standalone = Standalone::start("package-delta-spellmeta-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
 
     let refused_chain = apply(&standalone, "spellmeta", &spell_chain_insert(PACKAGE_SPELL));
@@ -587,6 +594,7 @@ fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_ma
     let mut standalone = Standalone::start("package-delta-creature-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
 
     let refused = apply(
@@ -661,6 +669,7 @@ fn gameobject_claims_refuse_a_missing_template_and_place_an_invented_one() {
     let mut standalone = Standalone::start("package-delta-gameobject-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
 
     let refused = apply(
         &standalone,
@@ -790,6 +799,7 @@ fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
     let mut standalone = Standalone::start("package-delta-creature-ai-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
     seed_broadcast_texts(&standalone);
 

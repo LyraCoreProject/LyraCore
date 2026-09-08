@@ -128,9 +128,14 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
         standalone.assert_output_success(&output, &format!("publish {database}"));
     }
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["2000000000"]);
     for database in [INSTANCES, OTHER, REALM] {
         let output = cli.call(standalone.server(), database, "claim_operator", &[]);
         standalone.assert_output_success(&output, &format!("claim {database} operator"));
+    }
+    for (database, base) in [(INSTANCES, "0"), (OTHER, "1000000000")] {
+        let output = cli.call(standalone.server(), database, "install_guid_range", &[base]);
+        standalone.assert_output_success(&output, &format!("install range on {database}"));
     }
     for database in [INSTANCES, OTHER] {
         let output = cli.call(
@@ -140,10 +145,6 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
             &["1"],
         );
         standalone.assert_output_success(&output, &format!("clear Character 1 on {database}"));
-    }
-    for (database, base) in [(INSTANCES, "0"), (OTHER, "1000000000")] {
-        let output = cli.call(standalone.server(), database, "install_guid_range", &[base]);
-        standalone.assert_output_success(&output, &format!("install range on {database}"));
     }
     for (database, name) in [(INSTANCES, "PartyTwo"), (OTHER, "PartyOther")] {
         let output = cli.call(

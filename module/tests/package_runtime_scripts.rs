@@ -95,6 +95,7 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
     let mut standalone = Standalone::start("package-runtime-scripts");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
 
     // --- One Package's whole set lands, disabled script included.
     apply(
@@ -231,6 +232,7 @@ fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
     let mut standalone = Standalone::start("package-runtime-scripts-conflict");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
 
     apply(
         &standalone,
@@ -304,6 +306,7 @@ fn a_package_binds_its_own_event_and_never_another_packages() {
     let mut standalone = Standalone::start("package-runtime-scripts-package-event");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
 
     apply(
         &standalone,
@@ -369,6 +372,7 @@ fn a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_n
     let mut standalone = Standalone::start("package-runtime-scripts-fire");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
 

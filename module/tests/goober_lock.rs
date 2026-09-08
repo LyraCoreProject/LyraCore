@@ -123,6 +123,7 @@ fn locked_goober_use_is_atomic_until_an_opener_unlocks_it() {
     let mut standalone = Standalone::start("goober-lock");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
     standalone.assert_call("debug_spawn_player_entity", &[&CHARACTER_GUID.to_string()]);
     standalone.assert_sql(&format!(

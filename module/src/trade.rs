@@ -803,20 +803,17 @@ fn run_trade_commit(
             Ok(())
         }
         Ok(()) => {
-            // Mint incoming guids from the PRE-delete high-water mark: after the deletes a seat
-            // can hold zero rows, and `next_item_guid`'s birth-formula fallback could then
-            // re-mint a guid this very swap just deleted — an insert on a deleted PK is an
-            // UPDATE to the item relay, which renders the OLD item (the #8 ghost-item gotcha in
-            // its other form). Pre-delete, max+1 can collide with nothing.
-            let base_slot = lyracore_shared::constants::starter_item::BACKPACK_SLOT_0;
-            let mut partner_next = crate::items::next_item_guid(ctx, partner.guid, base_slot);
-            let mut acceptor_next = crate::items::next_item_guid(ctx, acceptor.guid, base_slot);
+            // Reserve both batches while outgoing identities still exist. The item Relay must
+            // observe new identities for the incoming items, even when both inventories empty.
+            let mut partner_guids =
+                crate::items::allocate_item_guids(ctx, acceptor_items.len() + partner_items.len())?;
+            let acceptor_guids = partner_guids.split_off(acceptor_items.len());
             // ALL outgoing rows leave first — their slots are the room the verdict counted on.
             let instances = ctx.db.game_item_instance();
             for inst in acceptor_items.iter().chain(partner_items.iter()) {
                 instances.guid().delete(inst.guid);
             }
-            for inst in &acceptor_items {
+            for (inst, guid) in acceptor_items.iter().zip(partner_guids) {
                 let tmpl = ctx
                     .db
                     .game_item_template()
@@ -828,12 +825,11 @@ fn run_trade_commit(
                     partner.guid,
                     partner.owner_identity,
                     &tmpl,
-                    Some(partner_next),
+                    Some(guid),
                     &crate::items::ItemSnapshot::from(inst),
                 )?;
-                partner_next += 1;
             }
-            for inst in &partner_items {
+            for (inst, guid) in partner_items.iter().zip(acceptor_guids) {
                 let tmpl = ctx
                     .db
                     .game_item_template()
@@ -845,10 +841,9 @@ fn run_trade_commit(
                     acceptor.guid,
                     acceptor.owner_identity,
                     &tmpl,
-                    Some(acceptor_next),
+                    Some(guid),
                     &crate::items::ItemSnapshot::from(inst),
                 )?;
-                acceptor_next += 1;
             }
             // Gold, both legs through the ONE arithmetic the verdict already approved, applied
             // to the freshly-read rows (in-transaction they equal the verdict's snapshot; using

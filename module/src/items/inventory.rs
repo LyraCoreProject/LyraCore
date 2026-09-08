@@ -8,7 +8,7 @@ use spacetimedb::{ReducerContext, Table};
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
 
-use super::{refuse, refused};
+use super::{next_item_guid, refuse, refused};
 
 use super::rules::{
     binds_on_equip, can_equip_into, eligibility_mask_allows, equip_slot, invtype,
@@ -16,8 +16,7 @@ use super::rules::{
     resolve_equip_slot, Proficiency,
 };
 use super::tables::{
-    game_item_instance, game_item_template, item_in_slot, next_item_guid, slot_occupied,
-    ItemInstance,
+    game_item_instance, game_item_template, item_in_slot, slot_occupied, ItemInstance,
 };
 use crate::{game_player_reputation, game_player_skill};
 
@@ -30,7 +29,7 @@ use crate::{game_player_reputation, game_player_skill};
 /// (`valid_split_dest_slot`) — a split can never legitimately land on the body, and unlike
 /// `apply_item_move` this path runs no equip-validation at all, so admitting 0..=18 here bypassed
 /// `can_equip_into`/proficiency/required-level/BoE entirely. The new partial-stack row reuses the
-/// source's entry / owner / durability and takes a fresh per-slot guid (`item_guid_for`) + the
+/// source's entry / owner / durability and takes a fresh GUID and the
 /// current timestamp. Errors if the source slot is empty, the count is invalid, the destination is
 /// an equipment slot, or the destination is occupied. Additive — decrements the source row and
 /// inserts one new item row. [entity]
@@ -71,6 +70,7 @@ pub(crate) fn apply_item_split(
     if slot_occupied(ctx, player_guid, to_slot) {
         return Err(refuse(ItemRefusal::WrongSlot, "destination slot occupied"));
     }
+    let new_guid = next_item_guid(ctx).map_err(|detail| refuse(ItemRefusal::Internal, detail))?;
     inst.stack_count -= count;
     let entry = inst.entry;
     let owner_identity = inst.owner_identity;
@@ -78,7 +78,6 @@ pub(crate) fn apply_item_split(
     let random_property_id = inst.random_property_id;
     let soulbound = inst.soulbound; // the split half carries the SAME binding state as its source stack
     instances.guid().update(inst);
-    let new_guid = next_item_guid(ctx, player_guid, to_slot);
     instances.insert(ItemInstance {
         guid: new_guid,
         entry,
@@ -97,8 +96,7 @@ pub(crate) fn apply_item_split(
 
 /// Shared move/swap logic for the player + debug paths: move the item in `from_slot` to `to_slot`.
 /// If `to_slot` holds an item too, the two SWAP slots; if it's empty, the item just moves. The item
-/// GUID is its stable identity (only `slot` changes) — `item_guid_for`'s guid↔slot derivation is a
-/// grant-time convenience, not an invariant the client relies on after that (it tracks items by guid).
+/// GUID remains stable when its inventory slot changes.
 /// One EXCEPTION to the swap (FEATURE B): if the destination holds the SAME stackable item
 /// (`dst.entry == src.entry` and the template's `max_stack > 1`), the stacks MERGE instead of swapping
 /// — `merge_amount` units flow from src into dst (capped by dst's headroom); src is deleted if drained,

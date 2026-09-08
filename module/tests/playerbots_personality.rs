@@ -214,6 +214,7 @@ fn the_packages_own_personality_artifact_reconciles_onto_a_shard() {
     let mut standalone = Standalone::start("playerbots-personality-shipped");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
 
     reconcile(&standalone, &[shipped_artifact()]);
 

@@ -1079,7 +1079,7 @@ pub(crate) fn apply_player_login(
     // this idempotent call (no-op if the character owns ANY item) covers characters created
     // before that change. It also re-scopes nothing — owner_identity here is the live connection,
     // matching what the restamp sweep would set anyway.
-    crate::items::grant_starter_item(ctx, character.guid, owner);
+    crate::items::grant_starter_item(ctx, character.guid, owner)?;
 
     // Weapon skill (rank 14): lazily seed this character's skill lines (Defense + Unarmed + the now-equipped
     // weapon's line) at the level cap, owner-scoped for the RLS. AFTER grant_starter_item so the starter

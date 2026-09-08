@@ -17,6 +17,7 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     standalone.publish_module_bytes(wasm);
     assert_loot_boundary_failure(&standalone, ACTOR, "loot:boundary_operator_rejected");
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_spawn_player_entity", &[ACTOR]);
     standalone.assert_sql(
         "INSERT INTO game_active_taxi_flight \

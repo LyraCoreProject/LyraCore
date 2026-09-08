@@ -13,6 +13,7 @@ fn fixture(name: &str, class: u8) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
     shard.assert_sql(&format!(

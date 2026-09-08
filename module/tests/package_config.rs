@@ -40,6 +40,7 @@ fn debug_seed_package_config_seeds_once_and_never_clobbers_a_live_value_on_resee
     let mut standalone = Standalone::start("package-config-seed");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
 
     standalone.assert_call(
         "debug_seed_package_config",
@@ -84,6 +85,7 @@ fn set_package_config_updates_an_existing_keys_value() {
     let mut standalone = Standalone::start("package-config-update");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call(
         "debug_seed_package_config",
         &[&arg(PACKAGE), &arg("max_bots"), &arg("10")],
@@ -107,6 +109,7 @@ fn set_package_config_refuses_an_unknown_key_and_names_the_packages_known_keys()
     let mut standalone = Standalone::start("package-config-refusal");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call(
         "debug_seed_package_config",
         &[&arg(PACKAGE), &arg("max_bots"), &arg("10")],
@@ -147,6 +150,7 @@ fn set_package_config_with_allow_new_creates_an_unknown_key() {
     let mut standalone = Standalone::start("package-config-allow-new");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call(
         "debug_seed_package_config",
         &[&arg(PACKAGE), &arg("max_bots"), &arg("10")],

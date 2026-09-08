@@ -11,6 +11,7 @@
 use spacetimedb::{log, ReducerContext, SpacetimeType};
 
 use super::TransferOut;
+use crate::items::{game_item_instance, ItemInstance};
 
 #[path = "legacy_item_rows.rs"]
 mod legacy_item_rows;
@@ -379,6 +380,31 @@ pub(crate) fn import_rows(
     payload: &[TableRows],
 ) -> Result<(), String> {
     let payload = legacy_item_rows::prepare(payload)?;
+    if let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_item_instance")
+    {
+        let mut outcome = Ok(());
+        let rows = decode_rows::<ItemInstance>(&entry.rows, &mut outcome);
+        outcome?;
+        let mut guids = std::collections::BTreeSet::new();
+        for row in rows {
+            if row.owner_guid != character_guid {
+                return Err(format!(
+                    "ITEM_GUID_OWNER_MISMATCH: item {} belongs to Character {}",
+                    row.guid, row.owner_guid
+                ));
+            }
+            if !guids.insert(row.guid)
+                || ctx.db.game_item_instance().guid().find(row.guid).is_some()
+            {
+                return Err(format!(
+                    "ITEM_GUID_CONFLICT: item {} for Character {character_guid}",
+                    row.guid
+                ));
+            }
+        }
+    }
     import_rows_via(
         ctx,
         character_guid,

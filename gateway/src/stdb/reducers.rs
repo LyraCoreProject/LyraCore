@@ -3652,6 +3652,7 @@ mod auction_reducer_tests {
         let mut standalone = Standalone::start("auction-refusal");
         standalone.publish_module();
         standalone.assert_call("claim_operator", &[]);
+        standalone.assert_call("install_guid_range", &["0"]);
         let cfg = GatewayConfig {
             logon_bind: "127.0.0.1:0".into(),
             world_bind: "127.0.0.1:0".into(),

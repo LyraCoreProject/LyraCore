@@ -10,6 +10,7 @@ fn fixture(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
@@ -448,6 +449,7 @@ fn cross_shard_transfer_imports_the_saved_item_property() {
     let mut destination = Standalone::start("property-transfer-destination");
     destination.publish_module();
     destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
     let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
     destination.assert_call(
         "import_character_blob",

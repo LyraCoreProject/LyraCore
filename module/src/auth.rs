@@ -510,26 +510,9 @@ mod session_expiry_tests {
 //  Realm-safe guid allocation
 // ===========================================================================================
 
-/// Durable high-water mark for `game_character.guid`. Singleton row (`id` is always 0). Private —
-/// nothing outside this crate reads it.
-///
-/// Why this exists: the old allocator was a per-transaction scan of THIS database's own
-/// `game_character`/`game_item_instance` rows, which only ever sees what's still HERE. The
-/// escrowed transfer's `finish_transfer` deletes the departed character's row on the source
-/// database (and, via the `character_owned!` sweep, its item rows too) — so the instant a
-/// character transfers away, its guid looked free again on the database it left, and the next
-/// `create_character` there could re-issue it while the transferred character is still alive on
-/// the destination. Two characters, one guid, two databases.
-///
-/// This mark is monotonic: `next_character_guid` bumps it by one on every local create, and
-/// `crate::transfer::apply_import_blob` bumps it (via `bump_guid_high_water`) to at least the
-/// guid of every character this database RECEIVES from another one. Neither path ever lowers it,
-/// so a guid this database has ever handed out — locally or by import — can never be handed out
-/// here again, even after the character that held it is long deleted.
-///
-/// `create_character` is unrouted (§ premise check): the gateway always calls it
-/// against the account's home/default database, never a routed shard, so a per-database mark is
-/// sufficient — no cross-database plumbing on the creation path itself.
+/// Shared durable high-water mark for Character and item creation. Deletion and Transfer never
+/// lower it. With a range installed, only local Character GUIDs advance the Transfer floor.
+/// A scan of surviving rows cannot replace it, because issued identities may now live elsewhere.
 #[table(accessor = game_guid_allocator)]
 pub struct GuidAllocator {
     #[primary_key]
@@ -620,14 +603,64 @@ pub(crate) fn next_character_guid(ctx: &ReducerContext) -> u64 {
     next
 }
 
-/// Ratchet the mark up to at least `guid`. Two call sites: `transfer::apply_import_blob`
-/// right after it materialises an imported character (AC#3 — so THIS database can never later
-/// re-issue a guid it just received from another one), and `world::cascade_delete_character` right
-/// before it removes a `game_character` row on ANY delete path (defect 1 — so a database that has
-/// never yet seeded its allocator can't have a guid freed out from under a scan that would otherwise
-/// miss it). A no-op once the mark is already seeded and ahead. Pinned by
-/// [`guid_allocator_tests::bump_guid_high_water_routes_through_ratchet_high_water`].
+/// Reserve a batch from this Shard's GUID Range. Items and Characters consume the same durable
+/// high-water mark; deletion and Transfer never return issued identities to the range.
+pub(crate) fn reserve_guids(
+    ctx: &ReducerContext,
+    count: u64,
+    max_guid: u64,
+) -> Result<std::ops::RangeInclusive<u64>, String> {
+    let existing = read_high_water(ctx);
+    let mark = existing
+        .as_ref()
+        .map(|row| row.high_water)
+        .unwrap_or_else(|| legacy_guid_seed_now(ctx));
+    let range = ctx
+        .db
+        .game_guid_range()
+        .id()
+        .find(0)
+        .map(|row| (row.base, row.size));
+    let last = guid_batch_end(range, mark, count, max_guid)?;
+    write_high_water(ctx, existing, last);
+    Ok(mark + 1..=last)
+}
+
+fn guid_batch_end(
+    range: Option<(u64, u64)>,
+    mark: u64,
+    count: u64,
+    max_guid: u64,
+) -> Result<u64, String> {
+    let (base, size) = range.ok_or_else(|| "NO_GUID_RANGE".to_owned())?;
+    let end = base
+        .checked_add(size)
+        .ok_or_else(|| "GUID_RANGE_EXHAUSTED".to_owned())?;
+    let last = mark
+        .checked_add(count)
+        .ok_or_else(|| "GUID_RANGE_EXHAUSTED".to_owned())?;
+    if count == 0 || mark < base || last >= end {
+        return Err("GUID_RANGE_EXHAUSTED".to_owned());
+    }
+    if last > max_guid {
+        return Err("ITEM_GUID_EXHAUSTED".to_owned());
+    }
+    Ok(last)
+}
+
+/// Preserve a Character's issued GUID before import or deletion. Once a range is installed,
+/// foreign Characters cannot advance its mark, including cleanup before a Transfer import.
+/// Before installation, retain the legacy floor so a provisioning failure cannot erase it.
 pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
+    let range = ctx
+        .db
+        .game_guid_range()
+        .id()
+        .find(0)
+        .map(|row| (row.base, row.size));
+    if range.is_some() && !in_guid_range(range, guid) {
+        return;
+    }
     let existing = read_high_water(ctx);
     let seed = existing
         .as_ref()
@@ -640,37 +673,8 @@ pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
     write_high_water(ctx, existing, mark);
 }
 
-/// **The guid range THIS database was assigned, and its licence to mint.**
-///
-/// `game_character.guid` is a per-database `#[auto_inc]`-style mark, so two databases that both
-/// MINT characters mint colliding guids — and `transfer_id` **is** the character guid, so a
-/// collision means two characters sharing an escrow ledger row. It was demonstrated live: guid 59
-/// was one character on `lyracore` and a different one on `lyracore-world-1`, and routing
-/// sent the second player to the first's shard. The receiving half already exists
-/// (`apply_import_blob` and `cascade_delete_character` ratchet the mark), so a shard can never
-/// re-issue a guid it was *given*; this table is the other half: a shard that mints its own starts
-/// from a floor nobody else will reach.
-///
-/// Convention (`docs/design/`): shard *n* gets floor `n * 1_000_000_000`. Decimal and small on
-/// purpose — it stays readable in logs and SQL, leaves a billion characters per shard, and stays far
-/// below both `2^53` (above which `spacetime call` mangles u64 arguments — danger-zones) and the
-/// high-bit type markers real entity guids carry.
-///
-/// the first cut (since deleted) gave each database its floor by hand through a
-/// standalone reducer that only ratcheted `game_guid_allocator.high_water` — a collision became
-/// *impossible*, but the guarantee rested on an operator remembering to run it on every new shard;
-/// a shard provisioned without it minted from zero into `lyracore`'s range, silently at creation,
-/// and surfaced later as a mis-routed login or two characters sharing an escrow row (`transfer_id`
-/// IS the character guid).
-///
-/// So the floor is no longer something a database can lack: the presence of this row is what
-/// permits [`next_character_guid`] to run at all, and only [`install_guid_range`] writes it, from a
-/// range realm-core assigned. A shard that never claimed one refuses to create characters — loudly,
-/// at the point of creation — rather than minting guids that belong to someone else.
-///
-/// A range is never *reassigned*: guids already minted from it are referenced by rows that outlive
-/// the character (escrow ledgers, party rosters, the shard index, mail), so moving a shard's range
-/// would strand them.
+/// The permanent GUID Range assigned by Realm-core. Character and item creation both require it.
+/// Reassignment would let the Shard reuse identities still held in other Shards or Escrow.
 #[table(accessor = game_guid_range)]
 pub struct GuidRange {
     #[primary_key]
@@ -679,16 +683,10 @@ pub struct GuidRange {
     pub size: u64,
 }
 
-/// May this database mint a character guid? Pure — the whole rule, so it is testable without a
-/// `ReducerContext` and so the refusal message has one source.
+/// May this Shard mint one more GUID? The next value must remain below the exclusive range end.
+/// Pure, so both allocation paths use the same range boundary.
 pub(crate) fn may_mint(range: Option<(u64, u64)>, mark: u64) -> Result<(), String> {
-    let Some((base, size)) = range else {
-        return Err("NO_GUID_RANGE".to_string());
-    };
-    if mark >= base.saturating_add(size) {
-        return Err("GUID_RANGE_EXHAUSTED".to_string());
-    }
-    Ok(())
+    guid_batch_end(range, mark, 1, u64::MAX).map(|_| ())
 }
 
 /// [`may_mint`]'s ctx glue: read this database's range + mark and apply the rule. Called by
@@ -704,21 +702,8 @@ pub(crate) fn require_guid_range(ctx: &ReducerContext) -> Result<(), String> {
     may_mint(range, mark.unwrap_or(0))
 }
 
-/// Is `guid` inside `range`? Pure, same reason as [`may_mint`] — testable without a
-/// `ReducerContext`. `transfer::apply_import_blob` calls this to decide whether an
-/// ARRIVING character's guid may ratchet THIS database's `game_guid_allocator` — ranges are
-/// disjoint by construction, so a guid outside this
-/// database's own range belongs to another shard and can never collide with anything this shard
-/// mints; ratcheting past it anyway is pure self-harm (it walks this shard's own mark toward, or
-/// past, its own range end for a guid it will never be asked to re-mint — the live
-/// incident).
-///
-/// `None` (no range installed yet) is conservatively `false`, i.e. "not inside" — never a bump.
-/// Same reasoning as `may_mint`'s `NO_GUID_RANGE`: a database with no range cannot mint locally
-/// either, so there is nothing local yet for a foreign arrival to threaten, and treating an
-/// unranged guid as "inside" would let an import inflate the mark before a range even exists to
-/// check it against (poisoning the eventual `install_guid_range` — see its own "already minted
-/// up to N" guard).
+/// True only inside an installed range. Transfer uses this Gate directly; legacy deletion
+/// retains its old high-water floor until a range is installed.
 pub(crate) fn in_guid_range(range: Option<(u64, u64)>, guid: u64) -> bool {
     let Some((base, size)) = range else {
         return false;
@@ -800,6 +785,27 @@ mod guid_allocator_tests {
         );
     }
 
+    #[test]
+    fn guid_batches_share_the_character_boundary_and_refuse_overflow() {
+        use super::guid_batch_end;
+        assert_eq!(guid_batch_end(Some((100, 10)), 106, 3, u64::MAX), Ok(109));
+        assert_eq!(
+            guid_batch_end(Some((100, 10)), 109, 1, u64::MAX).unwrap_err(),
+            "GUID_RANGE_EXHAUSTED"
+        );
+        assert!(guid_batch_end(Some((100, 10)), 106, 4, u64::MAX).is_err());
+        assert!(guid_batch_end(Some((u64::MAX - 1, 2)), u64::MAX - 1, 1, u64::MAX).is_err());
+        assert!(guid_batch_end(Some((100, 10)), 99, 1, u64::MAX).is_err());
+        assert_eq!(
+            guid_batch_end(Some((100, 10)), 106, 3, 108).unwrap_err(),
+            "ITEM_GUID_EXHAUSTED"
+        );
+        assert_eq!(
+            guid_batch_end(None, 0, 1, u64::MAX).unwrap_err(),
+            "NO_GUID_RANGE"
+        );
+    }
+
     /// The floor above is monotonic but *optional* — a shard nobody ran it on mints
     /// from zero. This is the rule that makes it non-optional, and the two refusals are the whole
     /// point: no range at all, and a mark that has escaped the range it was assigned.
@@ -816,7 +822,8 @@ mod guid_allocator_tests {
         // A licensed shard mints anywhere inside its range, including at the very base.
         assert!(may_mint(Some((1_000_000_000, 1_000_000_000)), 1_000_000_000).is_ok());
         assert!(may_mint(Some((1_000_000_000, 1_000_000_000)), 1_999_999_998).is_ok());
-        // …and stops at the boundary rather than walking into the next shard's guids.
+        assert!(may_mint(Some((1_000_000_000, 1_000_000_000)), 1_999_999_999).is_err());
+        // The next GUID must stay below the exclusive end.
         assert_eq!(
             may_mint(Some((1_000_000_000, 1_000_000_000)), 2_000_000_000).unwrap_err(),
             "GUID_RANGE_EXHAUSTED"
@@ -830,8 +837,7 @@ mod guid_allocator_tests {
     #[test]
     fn in_guid_range_only_admits_guids_inside_the_installed_range() {
         use super::in_guid_range;
-        // No range installed: nothing is "inside" it — a database that cannot mint locally
-        // either has nothing local yet for a foreign arrival to threaten.
+        // No installed range proves membership. Legacy deletion preserves its floor separately.
         assert!(!in_guid_range(None, 0));
         assert!(!in_guid_range(None, 4242));
         // Inside a real range, base included, end excluded — same boundary shape as `may_mint`.
@@ -998,6 +1004,15 @@ mod guid_allocator_tests {
         );
         let want = norm(
             "{
+                let range = ctx
+                    .db
+                    .game_guid_range()
+                    .id()
+                    .find(0)
+                    .map(|row| (row.base, row.size));
+                if range.is_some() && !in_guid_range(range, guid) {
+                    return;
+                }
                 let existing = read_high_water(ctx);
                 let seed = existing
                     .as_ref()
@@ -1012,10 +1027,8 @@ mod guid_allocator_tests {
         );
         assert_eq!(
             got, want,
-            "bump_guid_high_water's body no longer matches the pinned shape — it must seed from \
-             the durable mark first, floor it at `guid` via the tested `ratchet_high_water`, and \
-             persist the result (skipping the write ONLY on the already-seeded, already-ahead \
-             no-op). Got:\n{got}"
+            "bump_guid_high_water must preserve the legacy floor before range installation, \
+             then floor only local GUIDs. It must persist the new mark unless already ahead. Got:\n{got}"
         );
     }
 }
@@ -1176,7 +1189,7 @@ pub fn create_character(
     // here: char-select reads ride the gateway's PRIVILEGED coordinator (RLS-bypassed), and any
     // ZERO/stale owner stamp is corrected by player_login's restamp_owned_data sweep BEFORE the
     // first player-scoped (RLS) read of these rows can happen.
-    crate::items::grant_starter_item(ctx, next_guid, owner);
+    crate::items::grant_starter_item(ctx, next_guid, owner)?;
     Ok(())
 }
 

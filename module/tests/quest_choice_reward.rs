@@ -20,6 +20,7 @@ fn durable_choice_turn_in_grants_the_selected_item_with_all_other_rewards() {
     standalone.publish_module();
     for (reducer, args) in [
         ("claim_operator", &[][..]),
+        ("install_guid_range", &["0"][..]),
         ("debug_spawn_player_entity", &["1"][..]),
         ("debug_stage_choice_reward_fixture", &["false"][..]),
         ("debug_turn_in_choice_reward_fixture", &["0"][..]),
