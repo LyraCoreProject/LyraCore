@@ -1,0 +1,547 @@
+{
+  "spec": {
+    "id": "PB",
+    "title": "Rewrite playerbots around durable objectives and typed action outcomes",
+    "problem": "The current playerbots Package can accept an action without proving that the action completed, loses route results, treats attempted combat as quest progress, bypasses the normal cast lifecycle, and retains too little purpose across interruption, restart, and Transfer. Bots can therefore stall, repeat work, choose an obsolete target, or abandon useful intent without explaining why. The current tests also do not prove the Package and core together against real actor operations, imported content, navigation, protocol transitions, and sustained load.",
+    "solution": "Replace the behavior control flow with one typed Rust decision runner shared by autonomous bots and human-led companions. The runner observes bounded facts, composes supported Strategies, ranks target-bearing candidates deterministically, executes actions through core operations, records typed outcomes, and retains one durable objective with bounded failure memory. Build the rewrite through a pinned real Module and Package fixture, then prove companion behavior, provisioning, seeded quest loops, recovery, commands, restart, Transfer, load, cutover, and attended client behavior before deleting the displaced implementation.",
+    "user_stories": [
+      "As an Operator, I want every bot controlled by one eligible runner, so that two behavior systems cannot issue conflicting actions.",
+      "As an Operator, I want a stopped bot to report its objective, target, chosen action, outcome, retry count, next eligible time, and content revision, so that I can diagnose it without reading source.",
+      "As an Operator, I want decision work scheduled in bounded fair batches, so that a large roster cannot monopolize a Module tick.",
+      "As an Operator, I want excess due bots deferred with recorded lag, so that overload does not silently discard durable work.",
+      "As an Operator, I want repeatable provisioning profiles, so that I can explain why a bot received a spell, item, or supply.",
+      "As an Operator, I want deployment capacity based on measured runs of 10, 25, and 100 bots, so that release limits reflect this implementation.",
+      "As a developer, I want fixed facts and time to produce the same decision, so that policy changes have reproducible tests.",
+      "As a developer, I want candidates identified by action, target, and relevant event, so that a higher score cannot retain the wrong target.",
+      "As a developer, I want each supported action to return a typed outcome, so that success, waiting, Refusal, cancellation, expiry, and infrastructure failure remain distinct.",
+      "As a developer, I want action prerequisites, alternatives, and continuers to be bounded, so that retries and cycles cannot run forever.",
+      "As a developer, I want a reproducible Module and Package fixture at pinned revisions, so that failures and fixes can be compared against the same content and geometry.",
+      "As a developer, I want casts to use the normal core cast-start lifecycle, so that cast time, interruption, cancellation, cost, and completion use the same Gates as client casts.",
+      "As a developer, I want movement outcomes to preserve route completion and coverage evidence, so that policy can distinguish progress, a partial route, blockage, and unknown coverage.",
+      "As an autonomous bot, I want one objective retained across tactical interruptions, so that defending myself does not erase my quest purpose.",
+      "As an autonomous bot, I want quest admission to require an executor for every required objective, so that unsupported quests do not trap me.",
+      "As an autonomous bot, I want to accept, travel for, complete, and turn in a supported kill quest, so that I can earn normal quest credit and XP.",
+      "As an autonomous bot, I want to find the actual drop source, loot it, and turn in a supported collect quest, so that collection progress comes from gameplay outcomes.",
+      "As an autonomous bot, I want supported talk-only chains and simple GameObject objectives executed through normal core interactions, so that a quest route does not stop at a non-combat step.",
+      "As an autonomous bot, I want the actual quest ender retained from the catalog, so that I travel to the correct turn-in Character or GameObject.",
+      "As an autonomous bot, I want death, combat, full bags, absent targets, and temporary route failure to have finite recovery rules, so that I can resume or stop with a specific reason.",
+      "As an autonomous bot, I want a failed destination deferred by map, instance, and geometry revision, so that a restart cannot immediately choose the same failed target again.",
+      "As an autonomous bot, I want skill and spell training, vanilla talents, equipment, and supplies reconciled on spawn and level-up through core Gates, so that I remain playable without receiving invalid progress.",
+      "As a human party leader, I want a companion to follow or stay on command, so that I control its position.",
+      "As a human party leader, I want a companion to assist my chosen fight or a designated target, so that it does not pull an unrelated enemy.",
+      "As a human party leader, I want companions to respect controlled enemies, so that crowd control is not broken by autonomous target choice.",
+      "As a human party leader, I want each companion to retain an explicit tank, healer, or damage role, so that party behavior remains predictable through death and Transfer.",
+      "As an injured party member, I want a Priest companion to repair range or line of sight and complete one real heal cast, so that repeated decisions do not restart the cast bar.",
+      "As a party member, I want a Warrior tank to hold the chosen fight and a Mage damage companion to act at class-appropriate range, so that role does not erase class capabilities.",
+      "As a companion, I want joining a human-led party to suspend autonomous travel and leaving it to resume a still-valid solo objective, so that control changes preserve useful intent.",
+      "As a companion, I want my role, party intent, and retained objective reconciled after restart and Transfer, so that delayed work from the old location cannot act.",
+      "As a maintainer, I want the old behavior source and obsolete state retired after both release suites pass, so that one implementation remains authoritative.",
+      "As a party member, I want companions to heal and apply useful missing buffs between fights, so that the party starts the next fight ready without repeated redundant casts."
+    ],
+    "implementation_decisions": [
+      "Use a targeted Rust rewrite of the useful AzerothCore decision grammar. Do not port its C++ runtime, synthetic World Sessions, packet queues, host object graph, or WotLK rules.",
+      "Keep durable gameplay authority in the Module. Keep party authority in Realm-core. Use existing Transfer and Group Intent routing only for their realm-wide responsibilities.",
+      "Give the Package one small decision interface, one action execution interface, and one explanation read. Keep internal behavior behind those interfaces.",
+      "Represent Strategies, triggers, facts, candidates, actions, targets, outcomes, tactical modes, objective stages, and failure reasons with typed values instead of strings and dynamic lookup.",
+      "Rank candidates with integer scores and stable tie-breaking. Candidate identity includes the action, target, and relevant event. Saved random state may break equal valid choices only.",
+      "Support bounded prerequisites, alternatives, and continuers. Limit candidate count, graph depth, transitions, and route expansion independently during each decision pass.",
+      "Allow one foreground action to own movement or a cast. A higher-priority action must explicitly cancel incompatible work before it starts.",
+      "Retain the quest or party objective across tactical interruption. Store its identity, destination, stage, deadline, last verified progress, deferred destinations, bounded failure memory, and catalog revision.",
+      "Keep route segments and live target observations transient. Correlate pending work with controller generation and location so stale completions cannot advance current state.",
+      "Treat action acceptance and actual progress as different facts. Track movement, combat, cast, and quest progress with separate evidence and clocks.",
+      "Expose typed outcomes from the owning core operations for the actions the selected behaviors require. Preserve existing Gates and atomic Refusal behavior.",
+      "Route bot spells through the normal cast-start and timed completion lifecycle. A running cast stays retained until completion, interruption, cancellation, or expiry.",
+      "Preserve complete, partial, blocked, and explicit unknown-coverage movement evidence. Do not infer missing coverage only from absent sparse navigation rows.",
+      "Derive tactical mode and active Strategies from durable Character, party, combat, aura, health, threat, target, position, and capability facts. Do not create a second authoritative state machine.",
+      "Use the bounded priority order from the report: lifecycle and Transfer restrictions, immediate survival, urgent party support, the current fight, human orders, maintenance, autonomous quest work, then idle activity.",
+      "Store an indexed next-decision time per bot, process due bots in stable order with a fixed batch limit, coalesce urgent reconsideration reasons, and record lag for deferred work.",
+      "Build a versioned supported quest catalog from imported quest relations, objectives, spawns, loot sources, and actual enders. Admit only quests whose required objectives have executors.",
+      "Start autonomous release coverage with a seeded Northshire and Elwynn catalog and ordinary quest credit and earned XP. Treat this as a bounded proof rather than level 1 to 60 coverage.",
+      "Start companion release coverage with Warrior tank, Priest healer, and Mage damage capabilities. Store the explicit role and derive a deterministic vanilla default when none is chosen.",
+      "Support durable follow, stay, assist, and designated-target orders through the existing command transport. Joining a human-led party suspends solo work; leaving rechecks and resumes it when valid.",
+      "Reconcile skill and spell training, vanilla talent choices, equipment, bags, food, potions, ammo, reagents, and bounded supplies as separate idempotent actions through core Gates. Provisioning never changes level, grants quest completion, deletes quest items, or duplicates owned resources.",
+      "Add new state through an additive migration and one durable controller selector. Use record-only comparison before a small active cohort, then retire the old controller and its obsolete state after release acceptance.",
+      "Keep a bounded history of transitions and failures. Do not retain one row for each successful idle decision."
+    ],
+    "testing_decisions": [
+      "Use the highest real seam available. Pure tests cover deterministic policy, durable Module and Package fixtures cover gameplay operations and navigation, Headless Client scenarios cover protocol and world transitions, and attended client observation covers visible behavior.",
+      "The baseline fixture pins core commit 95e6ad8c61540f74471e3087897e8c3ef7e065d1 and Package Collection commit c32b2fb7aa405190728034b63ce6eb9a3c0dd6be together with named imported content and geometry revisions.",
+      "Every supported action has behavioral cases for success, waiting, Refusal, cancellation, and expiry. Infrastructure failures remain separate where the seam can produce them.",
+      "Durable fixtures call real actor, cast, movement, quest, loot, item, and lifecycle operations. They do not replace gameplay with a simulated combat model.",
+      "Decision fixtures cover stable candidate order, target-bearing identity, bounded transition graphs, survival against role work, healing against following, and combat interruption against retained quest work.",
+      "Movement fixtures measure route or waypoint advancement. After 10 seconds without movement progress the bot changes approach; within 30 seconds it advances, defers the destination, or records a specific wait.",
+      "Cast fixtures prove one long cast starts once, survives intervening decisions, and ends once by completion, interruption, cancellation, or expiry.",
+      "Companion fixtures cover follow, stay, assist, designated target, controlled enemies, poor range, loss of line of sight, wounded allies and missing buffs between fights, death, regrouping, and one instance entry and exit.",
+      "Autonomous fixtures run ten seeds per starter class through the supported Northshire and Elwynn catalog. At least 95 percent complete each supported scenario without Operator help, and every other seed terminates with an explained outcome.",
+      "Autonomous mandatory scenarios include kill, collect, talk-only chains, supported simple GameObject use, turn-in, death, interruption, full bags, absent targets, an unreachable giver, unsupported objectives, and restart with a retained objective.",
+      "Restart and Transfer fixtures interrupt active action and escrow stages. They prove no duplicate Character, equipment, supply grant, quest reward, or active controller and prove stale work cannot act on the old location.",
+      "Load fixtures run 10, 25, and 100 bots on one named disposable fixture and record decision time, movement time, scheduler lag, route expansions, row reads, row writes, and the slowest due bot before capacity is set.",
+      "Final observation requires one hour with 25 bots on imported content plus an attended companion session in a real unmodified 1.12.1 client. A human must collect and sign off this evidence if the implementation environment cannot run that client.",
+      "Review final behavior against this specification and repository standards after the focused and full relevant checks pass."
+    ],
+    "out_of_scope": [
+      "A direct or mechanical port of the complete AzerothCore playerbots runtime.",
+      "Synthetic World Sessions or packet observation inside the Package.",
+      "A user-defined action language, global string factory, client addon, or new product UI.",
+      "Claims of general level 1 to 60 quest coverage, all classes, all regions, all dungeons, or thousands of bots.",
+      "Exploration, escort, scripted-event, transport, and other quest objective types until they receive explicit executors and catalog support.",
+      "Routine catch-up teleportation through blocked geometry.",
+      "A full economy simulation or provisioning that changes level, fabricates quest credit, clears inventory, or completes prerequisite quests.",
+      "A full Deadmines run unless the team later selects it as the first dungeon milestone.",
+      "Production realm changes, live database inspection, publication, or deployment as part of implementation and local acceptance."
+    ],
+    "notes": [
+      "The source report proposes acceptance thresholds. Implementation must measure them before treating them as release facts.",
+      "Bad or stale imported geometry can imitate a policy defect. Every route fixture and observation record names its content and geometry revisions.",
+      "The source comparison found no behavioral assertion suite in the pinned AzerothCore tree. Its architecture is evidence for design choices, not proof of LyraCore behavior.",
+      "Record provenance if any reference code is copied or translated. The architecture proposal does not make a license-compatibility conclusion.",
+      "Attended real-client observation is a release gate that may require a human after agent implementation. The implementation tickets must prepare the exact scenario, capture format, and diagnostic reads without claiming that a client session already ran.",
+      "Unresolved product choices remain level range beyond the initial catalog, the first full dungeon milestone, equipment strength beyond level-appropriate starter gear, and any explicit catch-up travel policy. They do not block the bounded first release.",
+      "The user authorized autonomous implementation, PR ownership through review, and confident merges. The HTML is the tracker; no issue publication or planning interview is required. Production changes remain outside this authorization."
+    ]
+  },
+  "groups": [
+    {
+      "id": "S1",
+      "title": "Typed action foundation and durable runner",
+      "parent": "PB"
+    },
+    {
+      "id": "S2",
+      "title": "Companions and provisioning",
+      "parent": "PB"
+    },
+    {
+      "id": "S3",
+      "title": "Autonomous questing and recovery",
+      "parent": "PB"
+    },
+    {
+      "id": "S4",
+      "title": "Commands, Transfer, and restart",
+      "parent": "PB"
+    },
+    {
+      "id": "S5",
+      "title": "Release evidence and retirement",
+      "parent": "PB"
+    }
+  ],
+  "tickets": [
+    {
+      "id": "PB-001",
+      "title": "Prove typed outcomes in a real pinned fixture",
+      "parent": "S1",
+      "blocked_by": [],
+      "delivery": "Create the first tracer through a reproducible pinned Module and Package fixture. Drive attack, interaction, movement, and cast-start through real core operations, return typed outcomes to the Package, and capture the blocked-target and out-of-range-heal failures that the rewrite must fix.",
+      "acceptance": [
+        "The fixture records the pinned core, Package, imported content, and geometry revisions and can reproduce the same initial state and outcome.",
+        "The fixture loads and runs the real Module with the real Package; it does not substitute a simulated gameplay engine.",
+        "Attack acceptance is distinct from damage and quest progress, and an attempted attack with no hit cannot clear a quest progress clock.",
+        "Movement reports complete, safe partial, blocked, or explicit unknown-coverage evidence with route or waypoint advancement where applicable.",
+        "Interaction and cast-start return typed success, waiting, Refusal, cancellation, and expiry outcomes supported by their owning operations.",
+        "A long bot cast uses the normal core cast lifecycle and completes once without restart on later decision ticks.",
+        "The blocked target and poor-range heal cases have reproducible inputs, observed outcomes, and enough evidence to compare later runner behavior.",
+        "A written extraction comparison chooses the smaller total implementation and records why the full AzerothCore runtime is not used."
+      ],
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "estimated_tokens": 180000,
+      "status": "implementing",
+      "repo_scope": [
+        "LyraCore Module action and navigation contracts",
+        "Official Package Collection playerbots fixture",
+        "Local durable integration tests"
+      ],
+      "owner": "PB-001 implementer",
+      "prs": [],
+      "evidence": [
+        "Baseline on core 95e6ad8 and Package c32b2fb: both ignored personality durable tests passed in a private loopback Standalone. This proves the existing Package fixture, not the new outcome contract."
+      ],
+      "notes": [
+        "The implementer owns the isolated core and Package worktrees and the serialized build slot. The orchestrator owns independent review and merge order."
+      ],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-002",
+      "title": "Run one durable objective through bounded decisions",
+      "parent": "S1",
+      "blocked_by": [
+        "PB-001"
+      ],
+      "delivery": "Build the shared decision runner around typed facts and outcomes. Retain one objective, arbitrate one foreground action, schedule bots in stable bounded batches, and explain each meaningful choice through the Package's normal entry point.",
+      "acceptance": [
+        "Fixed facts and explicit time produce the same target-bearing candidate order and chosen action.",
+        "Strategies compose supported triggers, defaults, and priority rules without a global string registry or a second authoritative state machine.",
+        "Prerequisites, alternatives, and continuers have explicit depth, transition, candidate, and route-work limits with cycle refusal.",
+        "Only one foreground movement or cast action owns the bot, and a higher-priority action explicitly cancels incompatible work.",
+        "The durable objective records identity, destination, stage, deadline, last verified progress, bounded failures, deferred destinations, and catalog revision.",
+        "Separate movement, combat, cast, and quest progress evidence prevents an accepted action from masquerading as completion.",
+        "Due bots run in stable indexed order under a per-pass limit; excess work remains due, gets a fair next turn, and records scheduler lag.",
+        "The explanation read reports the current objective and target, chosen action and reason, last outcome, progress age, retry count, next eligible time, and relevant revision with bounded history.",
+        "The additive state migration defines defaults and backfill and adds a durable controller selector before any bot can use the new runner. Record-only mode emits no gameplay actions; cohort mode has one eligible controller and supports freeze."
+      ],
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "estimated_tokens": 180000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection decision and durable state",
+        "LyraCore Module scheduling and diagnostics",
+        "Pure decision and durable integration tests"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-003",
+      "title": "Make a Priest follow, heal, and resume",
+      "parent": "S2",
+      "blocked_by": [
+        "PB-002"
+      ],
+      "delivery": "Complete the first human-led companion loop. A Priest follows its party leader, retains an injured ally as the heal target, repairs range or line of sight, casts through the real lifecycle, handles interruption, and resumes following.",
+      "acceptance": [
+        "Joining a human-led party suspends autonomous travel and selects companion Strategies from durable party facts.",
+        "The Priest follows a moving leader without starting a fight against an unrelated nearby enemy.",
+        "An injured ally outranks ordinary following when the Priest has a usable heal and the survival policy permits it.",
+        "Poor range or line of sight produces a movement prerequisite that retains the injured ally and finds a reachable casting position or records a specific wait.",
+        "The heal starts one real timed cast, does not restart on repeated decisions, and observes completion or interruption through typed outcomes.",
+        "After healing, cancellation, or a recoverable interruption, the Priest resumes following without losing party control state.",
+        "Death and resurrection preserve the companion role and lead to regrouping rather than a permanent solo objective change."
+      ],
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "estimated_tokens": 150000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection companion support behavior",
+        "LyraCore Module cast and party fact reads",
+        "Durable companion scenarios"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-004",
+      "title": "Complete starter roles, target choice, and crowd control",
+      "parent": "S2",
+      "blocked_by": [
+        "PB-003"
+      ],
+      "delivery": "Add Warrior tank and Mage damage behavior beside the Priest healer on the shared runner. Make explicit durable roles, vanilla class capabilities, chosen-target assistance, controlled-enemy avoidance, death, rest, and regrouping work through repeated party pulls.",
+      "acceptance": [
+        "Warrior, Priest, and Mage have validated ability sets at every level supported by the companion fixture.",
+        "Each companion retains an explicit tank, healer, or damage role, with a deterministic vanilla-derived default when no role was selected.",
+        "The Warrior tank chooses and holds the party's selected fight according to survival and threat facts rather than inheriting damage-only retreat behavior.",
+        "The Mage acts at class-appropriate range and role does not force a ranged class into melee.",
+        "All companions honor the party's chosen fight and designated target and do not initiate an unrequested pull.",
+        "Controlled enemies remain ineligible unless the control is intentionally broken by a higher-priority survival rule with a recorded reason.",
+        "Repeated-pull fixtures cover wounded allies between fights, target death or disappearance, loss of line of sight, companion death, rest, and regrouping without role abandonment.",
+        "Between fights, companions select useful missing class buffs, repair casting position when needed, apply them through real core casts, observe the resulting auras, and avoid redundant recasting while the buff remains valid."
+      ],
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "estimated_tokens": 150000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection starter class and role behavior",
+        "LyraCore Module combat and capability facts",
+        "Durable repeated-pull party scenarios"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-005",
+      "title": "Provision playable bots without duplicating progress",
+      "parent": "S2",
+      "blocked_by": [
+        "PB-002"
+      ],
+      "delivery": "Reconcile the supported bot's skills, spells, vanilla talents, equipment, bags, food, potions, ammo, reagents, and bounded supplies on spawn and level-up through real core operations. Make each action idempotent and explain it by provisioning profile and revision.",
+      "acceptance": [
+        "Provisioning runs on spawn and level-up and periodically repairs only resources owned by the selected profile.",
+        "Spell learning, equipment, inventory, uniqueness, proficiency, class, and level rules pass through core operations. Free provisioning is an explicit profile choice; its grants remain bounded and attributable.",
+        "Skill training and vanilla talent choices follow the selected class profile through the owning core Gates. Prerequisites, earned talent points, rank limits, and level restrictions hold, and reconciliation cannot spend a point or train a rank twice.",
+        "Repeated reconciliation does not create duplicate equipment, unlimited supplies, repeated spell grants, or repeated costs.",
+        "The policy respects an equipped upgrade, does not delete quest items, and never raises a bot's level to match a leader.",
+        "Quest credit, earned XP, loot entitlement, and quest completion remain consequences of normal gameplay operations.",
+        "Full bags, missing consumables, resource recovery, rest, and death produce bounded next actions or an explained stop.",
+        "Decision history records the provisioning profile, revision, chosen action, and typed outcome."
+      ],
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "estimated_tokens": 150000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection provisioning policy",
+        "LyraCore Module skill, spell, talent, item, inventory, and equipment operations",
+        "Durable idempotency scenarios"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-006",
+      "title": "Admit supported quests from a seeded catalog",
+      "parent": "S3",
+      "blocked_by": [
+        "PB-002"
+      ],
+      "delivery": "Build a versioned quest catalog for the initial Northshire and Elwynn proof from imported relations, objectives, spawns, loot sources, and actual enders. Admit a quest only when every required objective has a supported executor, and retain the chosen objective and destination.",
+      "acceptance": [
+        "The catalog records quest eligibility, each objective kind, target or drop source, actual ender, work area, destination evidence, and content revision.",
+        "The initial fixture contains a named supported Northshire and Elwynn catalog with deterministic seeds for each starter class.",
+        "Admission checks ordinary core eligibility and confirms an executor for every required objective before acceptance.",
+        "Unsupported exploration, escort, scripted event, transport, and complex GameObject requirements remain explicit and cannot enter a futile loop. Mixed quests are admitted only when every required kind has an executor, including supported talk-only and simple GameObject steps.",
+        "A live creature search chooses what can be acted on now but does not decide whether a quest destination exists in imported content.",
+        "The retained objective stores the actual ender and catalog revision and survives a tactical combat interruption.",
+        "If a held quest becomes unsupported, the bot records the missing capability and proceeds to another supported objective or a specific wait without repeated abandonment and reacceptance."
+      ],
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "estimated_tokens": 150000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection quest catalog and admission",
+        "LyraCore imported quest and world relations",
+        "Seeded durable catalog scenarios"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-007",
+      "title": "Finish supported autonomous quest loops",
+      "parent": "S3",
+      "blocked_by": [
+        "PB-005",
+        "PB-006"
+      ],
+      "delivery": "Complete supported kill, collect, talk-only, and simple GameObject quest loops. The bot accepts the quest, retains its objective, travels through real navigation, executes the required gameplay, earns ordinary credit and XP, turns in to the actual ender, and selects the next supported work.",
+      "acceptance": [
+        "A supported kill quest completes through accepted combat, actual damage and death, kill credit, travel, and turn-in rather than a changed internal label.",
+        "A supported collect quest hunts an explicit eligible drop source, receives the item through real loot and inventory operations, and turns in to the catalog's actual ender.",
+        "A supported talk-only chain advances through actual quest eligibility, giver and ender interactions, and ordinary rewards without manufacturing prerequisite completion.",
+        "At least one cataloged simple GameObject objective completes through the owning core use or loot operation, respects range and object state, and earns credit once. Unsupported scripted object behavior is refused at admission.",
+        "Quest objective progress changes only when the authoritative core gameplay outcome changes it.",
+        "The retained quest objective survives combat interruption, death, rest, and provisioning, then resumes after rechecking eligibility.",
+        "Target death, disappearance, or ineligibility cancels only the current action and selects a new eligible target or an explicit respawn wait.",
+        "A completed turn-in grants ordinary rewards once and advances to another supported catalog entry without Operator help.",
+        "Seeded scenarios cover Warrior, Priest, and Mage and produce reproducible decision and outcome histories.",
+        "A supported quest destination outside the former home leash remains reachable under the current work area and retained destination. Tactical retreat returns to an appropriate safe position in the current partition and cannot reset travel to the spawn home."
+      ],
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "estimated_tokens": 150000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection autonomous quest behavior",
+        "LyraCore Module quest, combat, loot, inventory, and navigation operations",
+        "Seeded durable quest scenarios"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-008",
+      "title": "Recover from blocked travel and stalled quest work",
+      "parent": "S3",
+      "blocked_by": [
+        "PB-004",
+        "PB-007"
+      ],
+      "delivery": "Turn typed failure and progress evidence into finite recovery for both autonomous bots and companions. Change approach, defer destinations, invalidate stale targets, and explain waits without erasing the retained objective.",
+      "acceptance": [
+        "The blocked-target fixture cannot clear its stall clock through attack acceptance when route, damage, and quest progress remain unchanged.",
+        "After 10 seconds without movement progress the bot changes approach; within 30 seconds it advances, defers the destination, or records a specific wait.",
+        "A safe partial route remains eligible while it advances a route or waypoint within a bounded route budget.",
+        "Repeated no-progress defers a destination by map, instance, and geometry revision for a bounded period and allows another useful action.",
+        "Unknown coverage stays distinct from a verified blocked route and reports the missing imported coverage evidence.",
+        "Death, full bags, absent targets, an unreachable giver, a controlled enemy, and a broken prerequisite each end in recovery or an explained finite stop.",
+        "Recovery remains active for companions and uses follow distance, leader movement, and casting position as its progress evidence.",
+        "Restarting the fixture preserves the bounded failure memory that prevents immediate reselection of the same failed target."
+      ],
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "estimated_tokens": 180000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection travel and recovery behavior",
+        "LyraCore Module navigation evidence",
+        "Durable blocked-route and stalled-work scenarios"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-009",
+      "title": "Honor durable follow, stay, assist, and target orders",
+      "parent": "S4",
+      "blocked_by": [
+        "PB-004"
+      ],
+      "delivery": "Complete the companion command contract through the existing command transport. Persist follow, stay, assist, and designated-target orders, apply them with party authority, and resume valid solo work when human-led control ends.",
+      "acceptance": [
+        "A human party leader can issue follow, stay, assist, and designated-target orders through the existing command transport.",
+        "Each accepted order persists as typed control state and produces an explanation entry with Actor, target where relevant, and outcome.",
+        "Follow tracks the leader, stay holds the commanded location within movement tolerances, and assist limits initiation to the chosen fight.",
+        "A designated target participates in candidate identity and cannot be replaced by another proposal's target when scores change.",
+        "Controlled enemies remain ineligible while assist or target orders are active unless an explicit higher-priority survival decision records why control was broken.",
+        "Joining a human-led party suspends autonomous travel and opportunistic grouping without deleting the solo objective.",
+        "Leaving the party invalidates companion actions, rechecks the retained solo objective, and resumes it only when it is still eligible.",
+        "Role and command state survive companion death and remain consistent after regrouping."
+      ],
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "estimated_tokens": 150000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection commands and control state",
+        "LyraCore Gateway command transport and Module party reads",
+        "Durable join and leave scenarios"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-010",
+      "title": "Preserve one controller through restart and Transfer",
+      "parent": "S4",
+      "blocked_by": [
+        "PB-008",
+        "PB-009"
+      ],
+      "delivery": "Define and prove the lifecycle of every new bot row across Character deletion, Module restart, Gateway restart, party changes, and Transfer. Suspend local actions while Transfer is pending, rebuild transient observations on arrival, and prevent stale work from acting.",
+      "acceptance": [
+        "Each durable Package row has an explicit keep, move, rebuild, or delete rule for Character deletion and Transfer.",
+        "A pending Transfer suspends local actions and relies on authoritative Transfer state rather than timeout to create another executor.",
+        "The retained quest or party objective, control mode, role, deadlines, deferred destinations, and bounded failure memory survive their defined restart and Transfer cases.",
+        "Transient targets and route segments do not Transfer; arrival rebuilds them against the destination's content and geometry revisions.",
+        "Pending work carries controller generation and location, and an old completion cannot advance a new action after restart or arrival.",
+        "Restart fixtures interrupt active movement, cast, provisioning, quest reward, and Transfer stages without duplicating a Character, item, supply grant, reward, or active controller.",
+        "A transferred companion retains the correct party and role on arrival, and a transferred autonomous bot resumes or invalidates its objective for a recorded reason.",
+        "One instance entry and exit through the real routing path preserves companion orders and produces arrival evidence."
+      ],
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "estimated_tokens": 180000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection bot row lifecycle",
+        "LyraCore Module, Gateway, Realm-core, Transfer, and Group Intent integration",
+        "Durable restart and Transfer scenarios"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-011",
+      "title": "Pass autonomous, companion, and load acceptance",
+      "parent": "S5",
+      "blocked_by": [
+        "PB-005",
+        "PB-007",
+        "PB-008",
+        "PB-010"
+      ],
+      "delivery": "Run the complete automated release suites on the pinned core, Package, imported content, and geometry. Prove seeded autonomous work, the fixed human-led companion route, restart and Transfer behavior, bounded recovery, scheduler fairness, and measured 10, 25, and 100 bot load.",
+      "acceptance": [
+        "Ten seeded runs per starter class execute the supported Northshire and Elwynn catalog; at least 95 percent finish each supported scenario without Operator help and every other run ends with an explained outcome.",
+        "Autonomous acceptance includes kill, collect, talk-only chains, supported simple GameObject use, travel beyond the former home leash, turn-in, death, combat interruption, full bags, absent targets, an unreachable giver, and unsupported objective admission.",
+        "One human-controlled Character and four bots complete the fixed repeated-pull route with explicit roles, follow and stay, assist and designated target, wounded allies and missing buffs between fights, loss of line of sight, controlled enemies, death, regrouping, and one instance entry and exit.",
+        "The companion fixtures produce no unrequested pull, unexplained role abandonment, repeated cast start, or attack against an obsolete target.",
+        "Every supported action covers success, waiting, Refusal, cancellation, and expiry through the highest suitable behavior seam.",
+        "Restart and Transfer acceptance shows no duplicate Character, equipment, supply grant, quest reward, or controller and no stale action at the old location.",
+        "Named disposable load runs execute 10, 25, and 100 bots and record decision time, movement time, scheduler lag, route expansions, row reads, row writes, and slowest due bot.",
+        "The load report sets a measured deployment capacity, records fixture resources and revisions, and accounts for every deferred due bot without silent loss.",
+        "All relevant repository checks and both specification and standards reviews pass at the pinned revisions."
+      ],
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "estimated_tokens": 180000,
+      "status": "ready",
+      "repo_scope": [
+        "LyraCore and Official Package Collection acceptance suites",
+        "Headless Client protocol and world-transition scenarios",
+        "Disposable imported-world load fixture and measurement report"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": []
+    },
+    {
+      "id": "PB-012",
+      "title": "Cut over, observe, and retire the old behavior",
+      "parent": "S5",
+      "blocked_by": [
+        "PB-011"
+      ],
+      "delivery": "Complete the additive state cutover with one durable controller selector, compare record-only decisions, activate a small cohort, gather imported-world and attended client evidence, then delete the displaced behavior source, obsolete tests, and active old state path. Leave old table retirement as its separately reviewed migration when required by repository rules.",
+      "acceptance": [
+        "The additive state migration defines defaults and backfill, and exactly one durable selector makes one runner eligible to control each bot.",
+        "Record-only comparison on fixed facts issues no gameplay actions and reports deterministic policy disagreements before cohort activation.",
+        "A small active cohort can freeze without a second controller and can resume after the failure reason is recorded.",
+        "Both automated release suites from PB-011 pass again with the new runner selected and no old runner actions.",
+        "A one-hour imported-world observation runs 25 bots and records no unexplained stall, repeated Refusal spam, visible clipping, or idle injured healer.",
+        "An attended session in a real unmodified 1.12.1 client exercises the companion route and signs off follow, stay, assist, target choice, crowd-control respect, real casts, death, regrouping, and instance entry and exit.",
+        "If the implementation environment cannot run the real client, the exact observation script, fixture revisions, capture format, and diagnostic reads are ready, and this acceptance item remains explicitly pending human evidence.",
+        "The displaced behavior source, obsolete helper-shape tests, broad internal exports, active old controller path, and unused old state access are deleted after acceptance.",
+        "Repository checks prove the deleted behavior source cannot regain control and no production code reads or writes obsolete active state.",
+        "Any physical old-table removal has its own reviewed migration plan and does not weaken the completed single-controller cutover."
+      ],
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "estimated_tokens": 180000,
+      "status": "ready",
+      "repo_scope": [
+        "Official Package Collection controller cutover and source retirement",
+        "LyraCore additive state migration and architecture checks",
+        "Imported-world observation and attended client evidence"
+      ],
+      "owner": "Unassigned",
+      "prs": [],
+      "evidence": [],
+      "notes": [],
+      "acceptance_evidence": [],
+      "required_observations": [
+        "imported_world",
+        "attended_client"
+      ],
+      "observations": {}
+    }
+  ],
+  "updated_at": "2026-09-08 11:00 UTC",
+  "summary": "PB-001 is implementing the first tracer. The existing Package-enabled durable baseline passed both personality tests in a private fixture."
+}
