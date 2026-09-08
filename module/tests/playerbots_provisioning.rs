@@ -233,9 +233,8 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
         skill_rows_before_refusal
     );
     node.assert_sql("DELETE FROM game_skill_availability WHERE id = 5096998");
-    select(&node, &guid, "cohort");
-    node.assert_call("playerbots_fixture_runner_due", &[]);
-    node.assert_call("playerbots_fixture_runner_pass", &[]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let runner = one(
         &node,
         &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
