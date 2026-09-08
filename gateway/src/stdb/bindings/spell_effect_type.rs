@@ -87,6 +87,7 @@ impl __sdk::__query_builder::HasCols for SpellEffect {
 pub struct SpellEffectIxCols {
     pub id: __sdk::__query_builder::IxCol<SpellEffect, u64>,
     pub spell_id: __sdk::__query_builder::IxCol<SpellEffect, u32>,
+    pub trigger_spell: __sdk::__query_builder::IxCol<SpellEffect, u32>,
 }
 
 impl __sdk::__query_builder::HasIxCols for SpellEffect {
@@ -95,6 +96,7 @@ impl __sdk::__query_builder::HasIxCols for SpellEffect {
         SpellEffectIxCols {
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
             spell_id: __sdk::__query_builder::IxCol::new(table_name, "spell_id"),
+            trigger_spell: __sdk::__query_builder::IxCol::new(table_name, "trigger_spell"),
         }
     }
 }

@@ -356,6 +356,74 @@ pub(crate) fn apply_equip_item(
     apply_item_move(ctx, player_guid, from_slot, to_slot)
 }
 
+/// Equip a profile item only when its destination is empty or holds lower item-level gear. The
+/// existing equip operation still owns every slot, level, proficiency, skill, reputation, and bind
+/// Gate. Full bag slots and missing equipped templates preserve what the Character already wears.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn apply_equip_profile_upgrade(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    from_slot: u8,
+) -> Result<bool, ItemRefusal> {
+    if from_slot <= BAG_SLOT_END_INCL || !is_carried_slot(from_slot) {
+        return Err(refuse(
+            ItemRefusal::WrongSlot,
+            "profile equipment must come from carried storage",
+        ));
+    }
+    let candidate = item_in_slot(ctx, player_guid, from_slot).ok_or_else(|| {
+        refuse(
+            ItemRefusal::ItemNotFound,
+            format!("no item in slot {from_slot}"),
+        )
+    })?;
+    let candidate_template = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(candidate.entry)
+        .ok_or_else(|| {
+            refuse(
+                ItemRefusal::ItemNotFound,
+                format!("no template for item entry {}", candidate.entry),
+            )
+        })?;
+
+    let destination = if candidate_template.inventory_type == invtype::BAG {
+        let Some(slot) = first_free_bag_equip_slot(ctx, player_guid) else {
+            return Ok(false);
+        };
+        slot
+    } else {
+        let can_dual_wield = crate::spell::knows_spell(
+            ctx,
+            player_guid,
+            lyracore_shared::constants::dual_wield::SPELL_ID,
+        );
+        resolve_equip_slot(candidate_template.inventory_type, can_dual_wield, |slot| {
+            slot_occupied(ctx, player_guid, slot)
+        })
+        .ok_or_else(|| {
+            refuse(
+                ItemRefusal::CannotEquip,
+                format!("item {} is not equippable", candidate.entry),
+            )
+        })?
+    };
+
+    if let Some(equipped) = item_in_slot(ctx, player_guid, destination) {
+        let Some(equipped_template) = ctx.db.game_item_template().entry().find(equipped.entry)
+        else {
+            return Ok(false);
+        };
+        if equipped_template.item_level >= candidate_template.item_level {
+            return Ok(false);
+        }
+    }
+    apply_equip_item(ctx, player_guid, from_slot)?;
+    Ok(true)
+}
+
 /// Shared UNEQUIP logic for the player + debug paths: take the item in equipment `from_slot` (0..=18)
 /// and move it to the first free backpack slot. Rejects a non-equipment source slot (it's not equipped)
 /// or a full backpack. Delegates to `apply_item_move` so the placement is the exact same move primitive;

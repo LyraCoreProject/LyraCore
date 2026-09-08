@@ -184,14 +184,23 @@ pub(crate) fn request_grant_item(
     count: u32,
     property: Option<u32>,
 ) -> Result<(), ActionRefusal> {
-    let player = crate::helpers::live_entity(ctx, player_guid)
-        .map_err(|_| "player not in world".to_string())?;
+    let player = crate::helpers::live_entity(ctx, player_guid).map_err(|_| {
+        ActionRefusal::new(
+            crate::actor::ActionRefusalKind::MissingActor,
+            "player not in world",
+        )
+    })?;
     let tmpl = ctx
         .db
         .game_item_template()
         .entry()
         .find(item_entry)
-        .ok_or_else(|| format!("no such item {item_entry}"))?;
+        .ok_or_else(|| {
+            ActionRefusal::new(
+                crate::actor::ActionRefusalKind::MissingResource,
+                format!("no such item {item_entry}"),
+            )
+        })?;
     store_item_typed(
         ctx,
         player_guid,
@@ -201,6 +210,47 @@ pub(crate) fn request_grant_item(
         false,
         property,
     )
+}
+
+/// Top a profile-owned resource up to a fixed target. The target is capped at the largest
+/// supported ammunition stack so a malformed profile cannot turn periodic repair into an unlimited
+/// grant. Storage still owns capacity, uniqueness, and Random Property Gates.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn request_profile_item(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    item_entry: u32,
+    target_count: u32,
+) -> Result<u32, ActionRefusal> {
+    profile_item_target_admitted(target_count)?;
+    let owned = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(&player_guid)
+        .filter(|row| row.entry == item_entry)
+        .map(|row| row.stack_count)
+        .fold(0u32, u32::saturating_add);
+    let missing = target_count.saturating_sub(owned);
+    if missing == 0 {
+        return Ok(0);
+    }
+    request_grant_item(ctx, player_guid, item_entry, missing, None)?;
+    Ok(missing)
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+const PROFILE_ITEM_LIMIT: u32 = 200;
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+fn profile_item_target_admitted(target_count: u32) -> Result<(), ActionRefusal> {
+    if (1..=PROFILE_ITEM_LIMIT).contains(&target_count) {
+        return Ok(());
+    }
+    Err(ActionRefusal::new(
+        crate::actor::ActionRefusalKind::ProfileLimit,
+        format!("profile item target {target_count} is outside 1..={PROFILE_ITEM_LIMIT}"),
+    ))
 }
 
 /// Add items to matching carried stacks, then free backpack or bag slots.
@@ -876,8 +926,21 @@ pub(crate) fn apply_take_loot(
 #[cfg(test)]
 mod tests {
     use super::{
-        bandage_cooldown_blocks, death_durability_loss, use_spell_for, RECENTLY_BANDAGED_SPELL,
+        bandage_cooldown_blocks, death_durability_loss, profile_item_target_admitted,
+        use_spell_for, RECENTLY_BANDAGED_SPELL,
     };
+
+    #[test]
+    fn profile_item_target_refuses_zero_and_over_limit_counts() {
+        for target in [0, 201] {
+            assert_eq!(
+                profile_item_target_admitted(target).unwrap_err().kind,
+                crate::actor::ActionRefusalKind::ProfileLimit
+            );
+        }
+        assert!(profile_item_target_admitted(1).is_ok());
+        assert!(profile_item_target_admitted(200).is_ok());
+    }
 
     /// `use_spell_for`: `spellid_1` is the on-use spell IFF it's nonzero AND `spelltrigger_1` names
     /// the on-use trigger slot (0 — `ItemSpellTriggerType::OnUse`). A trigger-1 (on-equip) spell is NOT

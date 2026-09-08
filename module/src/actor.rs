@@ -28,6 +28,12 @@
 //! | `cast_item_target` | `creatures::apply_item_target_spell` | spell kind + owned carried item + effect-specific gates |
 //! | `equip_item` | `items::apply_equip_item` | slot type/level gates |
 //! | `trainer_buy` | `trainer::apply_trainer_buy` | trainer resolved by guid + offering gates (class/level/money) |
+//! | `reconcile_profile_spell` | `trainer::reconcile_profile_spell` | free profile grant + trainer/class/level/rank gates; explicit no-import demo fallback |
+//! | `reconcile_profile_skill` | `skill::reconcile_profile_skill` | free profile grant + race/class/level availability gates |
+//! | `select_profile_talent` | `talent::select_profile_talent` | bounded preferred-tree selection through the owning talent Gates |
+//! | `learn_profile_talent` | `talent::reconcile_profile_talent` | class/race/level/point/tier/prerequisite gates |
+//! | `reconcile_profile_item` | `items::request_profile_item` | bounded top-up + capacity/uniqueness gates |
+//! | `equip_profile_upgrade` | `items::apply_equip_profile_upgrade` | normal equip gates + preserves equal or stronger gear |
 //! | `use_gameobject` | `gameobject::apply_use_gameobject` | GO resolved by guid + range/use gates |
 //! | `repop` | `world::do_repop` | dead actor releases to the graveyard ghost |
 //! | `respond_resurrect` | `spell::do_resurrect_response` | consume the actor's pending rez offer; accept revives IN PLACE at the offer's % |
@@ -124,6 +130,8 @@ package_only! {
     pub(crate) use crate::items::apply_item_use as use_item;
     pub(crate) use crate::loot::open_creature_corpse as open_creature_loot;
     pub(crate) use crate::items::apply_take_loot as take_loot;
+    pub(crate) use crate::items::request_profile_item as reconcile_profile_item;
+    pub(crate) use crate::items::apply_equip_profile_upgrade as equip_profile_upgrade;
     // `loot_money` also feeds playerbots' drink-at-rest behavior (work-item 154).
     pub(crate) use crate::loot::apply_loot_money as loot_money;
 }
@@ -132,6 +140,12 @@ debug_only! {
     pub(crate) use crate::items::apply_buy_item as buy_item;
     pub(crate) use crate::items::apply_equip_item as equip_item;
     pub(crate) use crate::items::apply_item_sell as sell_item;
+}
+package_only! {
+    pub(crate) use crate::trainer::reconcile_profile_spell as reconcile_profile_spell;
+    pub(crate) use crate::skill::reconcile_profile_skill as reconcile_profile_skill;
+    pub(crate) use crate::talent::reconcile_profile_talent as learn_profile_talent;
+    pub(crate) use crate::talent::select_profile_talent as select_profile_talent;
 }
 
 // ---- NPC services / world ----
@@ -173,6 +187,11 @@ pub enum ActionRefusalKind {
     OutOfRange,
     InventoryFull,
     Other,
+    MissingResource,
+    Class,
+    Level,
+    Prerequisite,
+    ProfileLimit,
 }
 
 impl ActionRefusal {

@@ -87,7 +87,12 @@ pub struct Spell {
 /// `p0_kind` (the importer resolves `EffectMiscValue` into these ONCE, so the runtime never asks "what
 /// does this int mean"). `id` is DETERMINISTIC `(spell_id<<2)|effect_index` (the seeder computes it, NOT
 /// auto_inc) so seed/SQL rows are stable and `game_aura.effect_id` is reproducible. [static]
-#[table(accessor = game_spell_effect, public, index(accessor = by_spell, btree(columns = [spell_id])))]
+#[table(
+    accessor = game_spell_effect,
+    public,
+    index(accessor = by_spell, btree(columns = [spell_id])),
+    index(accessor = by_trigger_spell, btree(columns = [trigger_spell]))
+)]
 pub struct SpellEffect {
     #[primary_key]
     pub id: u64, // = (spell_id<<2)|effect_index, computed by the author/importer

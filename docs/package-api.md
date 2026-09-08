@@ -102,6 +102,17 @@ supported-lifecycle, range, line-of-sight, and ordinary cast Gates used at cast 
 turn an `OutOfRange` or `NoLineOfSight` Refusal into a movement prerequisite without spending power,
 starting a cooldown, or creating a cast.
 
+Provisioning uses six Actor operations. `select_profile_talent` performs a bounded preferred-tree
+read through the owning talent admission calculation. `reconcile_profile_spell`,
+`reconcile_profile_skill`, and `learn_profile_talent` return `Result<bool, ActionRefusal>`; `true`
+means they changed normal Character state and `false` means the selected profile entry was already
+satisfied.
+`reconcile_profile_item` returns the granted count and caps its target at 200.
+`equip_profile_upgrade` returns whether it equipped the carried item and preserves equal or stronger
+gear. These verbs do not authorize an Actor. A Package must first pass the same controller and
+Sessionless Action Gate as any other gameplay request. Their grants have no money cost because the
+selected profile is the source of the entitlement.
+
 `actor::request_cast(ctx, actor_guid, spell_id, target_guid)` returns
 `Result<spell::CastStart, spell::CastRefusal>`. `Started` carries a Cast Handle. `Waiting` carries
 an existing cast's original identity, spell, target, and current due time, even when the new request

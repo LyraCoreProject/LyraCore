@@ -19,7 +19,7 @@ use lyracore_shared::constants::starter_item;
 // `game_player_skill` is defined in THIS module (the `#[table]` accessor is generated here, like
 // `threat::game_threat`), so it's in scope without a `use`. `game_item_template` (items/) is read to
 // resolve the equipped weapon's subclass; `game_world_entity` (world.rs) only by the debug reducer.
-use crate::skilldata::game_skill_ability;
+use crate::skilldata::{game_skill_ability, game_skill_availability};
 use crate::{game_item_template, game_world_entity, WorldEntity}; // accessor trait for the autolearn read (282)
 
 // ===========================================================================================
@@ -599,6 +599,122 @@ pub(crate) fn raise_combat_caps(ctx: &ReducerContext, guid: u64, new_level: u32)
             skills.id().update(row);
         }
     }
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+fn profile_mask_admits(mask: u32, id: u8) -> bool {
+    mask == 0 || (id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0)
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+const PROFILE_SKILL_AVAILABILITY_LIMIT: usize = 16;
+
+/// Reconcile one combat skill selected by a free provisioning profile. Imported availability owns
+/// the race, class, and level Gates. A seed-only Shard falls back to the established class weapon
+/// table so the no-import demo remains usable. The indexed admission reads at most 16 matching
+/// availability rows plus one overflow row. An eligible row ends the read early; an inconclusive
+/// bounded prefix returns `ProfileLimit`.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn reconcile_profile_skill(
+    ctx: &ReducerContext,
+    guid: u64,
+    line: u32,
+) -> Result<bool, crate::actor::ActionRefusal> {
+    if !is_combat_skill_line(line) {
+        return Err(crate::actor::ActionRefusal::new(
+            crate::actor::ActionRefusalKind::Class,
+            format!("skill line {line} is not a combat skill"),
+        ));
+    }
+    let actor = crate::helpers::live_entity(ctx, guid).map_err(|_| {
+        crate::actor::ActionRefusal::new(
+            crate::actor::ActionRefusalKind::MissingActor,
+            format!("learner {guid} not in world"),
+        )
+    })?;
+    let imported = ctx.db.game_skill_availability().count() > 0;
+    let (admitted, identity_admitted, overflow) = if imported {
+        let mut admitted = false;
+        let mut identity_admitted = false;
+        let mut overflow = false;
+        for (examined, row) in ctx
+            .db
+            .game_skill_availability()
+            .by_skill_line()
+            .filter(&line)
+            .take(PROFILE_SKILL_AVAILABILITY_LIMIT + 1)
+            .enumerate()
+        {
+            if examined == PROFILE_SKILL_AVAILABILITY_LIMIT {
+                overflow = true;
+                break;
+            }
+            let identity_matches = profile_mask_admits(row.race_mask, actor.race())
+                && profile_mask_admits(row.class_mask, actor.class());
+            identity_admitted |= identity_matches;
+            if identity_matches && i64::from(row.min_level) <= i64::from(actor.level) {
+                admitted = true;
+                break;
+            }
+        }
+        (admitted, identity_admitted, overflow)
+    } else {
+        (
+            line == skill_line::DEFENSE
+                || line == skill_line::UNARMED
+                || class_weapon_skill_lines(actor.class()).contains(&line),
+            false,
+            false,
+        )
+    };
+    if !admitted {
+        if overflow {
+            return Err(crate::actor::ActionRefusal::new(
+                crate::actor::ActionRefusalKind::ProfileLimit,
+                format!(
+                    "skill line {line} admission exceeded {PROFILE_SKILL_AVAILABILITY_LIMIT} availability rows"
+                ),
+            ));
+        }
+        let kind = if imported && identity_admitted {
+            crate::actor::ActionRefusalKind::Level
+        } else {
+            crate::actor::ActionRefusalKind::Class
+        };
+        return Err(crate::actor::ActionRefusal::new(
+            kind,
+            format!(
+                "skill line {line} is not available to race {} class {} at level {}",
+                actor.race(),
+                actor.class(),
+                actor.level
+            ),
+        ));
+    }
+
+    let cap = skill_cap_for_level(actor.level) as u16;
+    let skills = ctx.db.game_player_skill();
+    if let Some(mut row) = skills
+        .by_character()
+        .filter(&guid)
+        .find(|row| row.skill_line == line)
+    {
+        if row.max_rank >= cap {
+            return Ok(false);
+        }
+        row.max_rank = cap;
+        skills.id().update(row);
+    } else {
+        skills.insert(PlayerSkill {
+            id: 0,
+            character_guid: guid,
+            owner_identity: actor.owner_identity,
+            skill_line: line,
+            current: cap,
+            max_rank: cap,
+        });
+    }
+    Ok(true)
 }
 
 /// Skill-up a PROFESSION line (e.g. Cooking) after a successful craft/gather: ROLL the orange/gray

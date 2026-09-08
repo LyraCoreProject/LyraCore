@@ -204,6 +204,11 @@ _Avoid_: invite intent, group request, party order
 The durable selector for Legacy, RecordOnly, Cohort, or Frozen behavior. RecordOnly records decisions
 and authorizes no bot gameplay. Frozen cancels Foreground Actions and authorizes no new bot gameplay.
 
+**Provisioning Profile**:
+A revisioned, bounded upkeep policy for a supported bot class and role. It selects free training and
+owned supplies; Module Gates decide every operation. It is distinct from a World Import Profile,
+which scopes imported world content.
+
 **Bot Objective**:
 A retained purpose with its destination, stage, deadline, catalog revision, and verified progress.
 Tactical interruption does not replace the objective. A companion in a human-led party retains the
