@@ -445,7 +445,7 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     let (node, bots) = fixture("playerbots-companion-target-retention");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
     node.assert_call("playerbots_fixture_companion_health", &[leader, "40"]);
-    node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
+    node.assert_call("playerbots_fixture_companion_move", &[ally, "1600", "1200"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "30"]);
     select(&node, priest, "cohort");
     due(&node, priest);
@@ -453,25 +453,53 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     assert!(first["chosen"].contains("castingPosition"), "{first:?}");
     assert!(first["chosen"].contains(ally));
     assert!(first["companion_heal_target_guid"].contains(ally));
+    evidence(&node, "target-retention-first-leg");
 
     node.assert_call("playerbots_fixture_companion_health", &[leader, "10"]);
-    for _ in 0..3 {
+    let mut movement_legs = 1;
+    let pending = loop {
         assert!(poll_until(POLL_TIMEOUT, || movement_leg_finished(
             &node, priest
         )));
         due(&node, priest);
         let retained = runner(&node, priest);
-        assert!(
-            retained["chosen"].contains("castingPosition"),
-            "{retained:?}"
-        );
         assert!(retained["chosen"].contains(ally), "{retained:?}");
         assert!(retained["companion_heal_target_guid"].contains(ally));
-    }
+        evidence(
+            &node,
+            &format!("target-retention-transition-{movement_legs}"),
+        );
+        if retained["chosen"].contains("castingPosition") {
+            movement_legs += 1;
+            assert!(movement_legs <= 6, "{retained:?}");
+            continue;
+        }
+        assert!(retained["chosen"].contains("heal"), "{retained:?}");
+        let pending = node.query_rows(&format!(
+            "SELECT scheduled_id, target_guid FROM game_pending_cast WHERE caster_guid = {priest}"
+        ));
+        assert_eq!(pending.len(), 1, "{retained:?}");
+        assert_eq!(pending[0]["target_guid"], *ally);
+        break pending[0].clone();
+    };
+    assert!(movement_legs >= 2);
+
+    assert!(poll_until(POLL_TIMEOUT, || node
+        .query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
+        ))
+        .is_empty()));
+    evidence(&node, "target-retention-cast-complete");
 
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
     due(&node, priest);
     let replaced = runner(&node, priest);
+    assert!(node
+        .query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest} AND scheduled_id = {}",
+            pending["scheduled_id"]
+        ))
+        .is_empty());
     assert!(replaced["companion_heal_target_guid"].contains(leader));
     assert!(replaced["chosen"].contains(leader), "{replaced:?}");
     evidence(&node, "target-retention");
