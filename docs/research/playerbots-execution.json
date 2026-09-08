@@ -302,17 +302,19 @@
       "owner": "PB-002 runner agent and consent helper",
       "prs": [],
       "evidence": [
-        "Five pure selector behaviors passed. The first real home-arrival fixture published Module Wasm but stopped on enum argument encoding before gameplay. The fixture is being corrected; no arrival pass is claimed.",
-        "The preceding-build record now identifies exact core and Package revisions, installed Package inventory, toolchain, per-file Package identities, and Wasm identity for the populated-state migration test.",
-        "The consent work passed pinned default schema generation and exact parity for all 1,000 Gateway binding files. Gateway and real durable checks are still running."
+        "The first combined durable run passed 10 of 11 cases, including the populated preceding-Wasm upgrade, preserved bot and quest state, bounded 16-plus-9 backfill, normal invitations, controller modes, defense and arrival, destination deferral, and bounded history. Final evidence must come from the reviewed source after the remaining fixes.",
+        "The pushback case retained the same scheduled cast, observed its delayed due time, healed, and resumed travel. Its final cast-event count ran after event expiry. The fixture now retains those events and checks the exact delay before the final rerun.",
+        "The consent implementation passed 1,523 default Module tests, 1,454 Gateway tests, five real durable cases, formatting, and exact parity for all 1,000 default Gateway binding files. These results precede the current ownership Gate refinement.",
+        "The preceding-build record identifies exact core and Package revisions, installed Package inventory, toolchain, per-file Package identities, and Wasm identity. The populated upgrade records both old and new Wasm identities."
       ],
       "notes": [
         "SpacetimeDB 2.7.1 allows appended enum variants only when old variants stay compatible and storage size and alignment stay unchanged. Prove populated-state migration for the runner schema. Planner source: https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/schema/src/auto_migrate.rs#L826-L895",
         "Direct damage can delay a pending cast while retaining its scheduled identity. Observe its current due time before deciding that completion is late; the objective deadline is a separate policy limit.",
         "Record-only means no gameplay actions from either runner for the selected bot. Freeze must stop retained foreground work. Verify both through the normal Package tick entry.",
         "The first runner behavior retains a home destination through defense and self-heal interruptions. Companion policy and quest admission remain in their dependent tickets.",
-        "Control must cover damage and invitation hooks as well as the tick. The Gateway also auto-accepts invitations for session-less Characters. A core-owned consent check is being added so record-only and frozen bots cannot act through that path.",
-        "The consent check acknowledges current World Shard state before Realm-core group actions. An action admitted before a concurrent freeze may finish; cross-Shard atomicity is not claimed. Controller selection clears unclaimed Group Intents in the same transaction."
+        "Control must cover damage and invitation hooks as well as the tick. The Gateway also auto-accepts invitations for session-less Characters. The core-owned consent check covers that path for record-only and frozen bots.",
+        "The consent check acknowledges current World Shard state before Realm-core group actions. An action admitted before a concurrent freeze may finish; cross-Shard atomicity is not claimed. Controller selection clears unclaimed Group Intents in the same transaction.",
+        "Root review found that movement could run after an Account Claim took control of the Character. The common runner entry is being gated on current ownership. Relinquishment must release only the bot's own retained cast or movement and leave later human actions intact."
       ],
       "acceptance_evidence": []
     },
@@ -666,6 +668,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 13:49 UTC",
-  "summary": "PB-001 is complete and its progress report is merged. PB-002 is implementing retained objectives, bounded decisions, and one controller for tick and invitation actions. Pure selector checks and default binding generation pass; real runner and migration evidence remains pending. One of 12 implementation tickets is complete."
+  "updated_at": "2026-09-08 14:12 UTC",
+  "summary": "PB-001 is complete. PB-002 has passed its first populated upgrade and main runner scenarios. Review found an account-ownership gap in movement, which is being fixed before final checks and PR review. One of 12 implementation tickets is complete."
 }
