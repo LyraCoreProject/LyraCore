@@ -12,6 +12,7 @@ START = "<!-- PLAYERBOTS_EXECUTION_START -->"
 END = "<!-- PLAYERBOTS_EXECUTION_END -->"
 FINISHED = {"complete", "merged"}
 STATUSES = {"ready", "planned", "implementing", "review", "approved", "merged", "complete", "blocked", "waiting-for-client"}
+RELEASE_OBSERVATIONS = {"imported_world", "attended_client"}
 
 
 def escape(value):
@@ -58,6 +59,8 @@ def validate(plan):
             raise ValueError(f"Unknown status for {row['id']}")
         if not row["acceptance"]:
             raise ValueError(f"No acceptance criteria for {row['id']}")
+        if row["id"] == "PB-012" and set(row.get("required_observations", [])) != RELEASE_OBSERVATIONS:
+            raise ValueError("PB-012 must retain both release observation requirements")
         verified = {}
         for record in row.get("acceptance_evidence", []):
             criterion = record["criterion"]
@@ -76,9 +79,12 @@ def validate(plan):
                 raise ValueError(f"Completed ticket {row['id']} needs merged PRs with commit identities")
             for kind in row.get("required_observations", []):
                 observation = row.get("observations", {}).get(kind, {})
-                required = ["observer", "observed_at", "core_revision", "package_revision", "content_revision", "geometry_revision", "evidence"]
-                if not all(str(observation.get(key, "")).strip() for key in required):
+                required = ["observer", "observed_at", "core_revision", "package_revision", "content_revision", "geometry_revision"]
+                if not all(isinstance(observation.get(key), str) and observation[key].strip() for key in required):
                     raise ValueError(f"Completed ticket {row['id']} needs {kind} observation evidence")
+                sources = observation.get("evidence")
+                if not isinstance(sources, list) or not sources or not all(isinstance(source, str) and source.strip() for source in sources):
+                    raise ValueError(f"Observation {kind} needs nonempty evidence sources")
                 if kind == "attended_client" and observation.get("client_build") != "1.12.1.5875":
                     raise ValueError("Attended observation must name the real 1.12.1.5875 client")
                 if kind == "imported_world" and (observation.get("minutes", 0) < 60 or observation.get("bots", 0) < 25):

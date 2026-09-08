@@ -98,6 +98,13 @@
       "Attended real-client observation is a release gate that may require a human after agent implementation. The implementation tickets must prepare the exact scenario, capture format, and diagnostic reads without claiming that a client session already ran.",
       "Unresolved product choices remain level range beyond the initial catalog, the first full dungeon milestone, equipment strength beyond level-appropriate starter gear, and any explicit catch-up travel policy. They do not block the bounded first release.",
       "The user authorized autonomous implementation, PR ownership through review, and confident merges. The HTML is the tracker; no issue publication or planning interview is required. Production changes remain outside this authorization."
+    ],
+    "prs": [
+      {
+        "url": "https://github.com/LyraCoreProject/LyraCore/pull/481",
+        "label": "Execution report #481",
+        "status": "draft"
+      }
     ]
   },
   "groups": [
