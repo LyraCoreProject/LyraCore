@@ -53,6 +53,7 @@ impl __sdk::__query_builder::HasCols for TrainerSpell {
 /// Provides typed access to indexed columns for query building.
 pub struct TrainerSpellIxCols {
     pub id: __sdk::__query_builder::IxCol<TrainerSpell, u64>,
+    pub spell_id: __sdk::__query_builder::IxCol<TrainerSpell, u32>,
     pub trainer_entry: __sdk::__query_builder::IxCol<TrainerSpell, u32>,
 }
 
@@ -61,6 +62,7 @@ impl __sdk::__query_builder::HasIxCols for TrainerSpell {
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         TrainerSpellIxCols {
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
+            spell_id: __sdk::__query_builder::IxCol::new(table_name, "spell_id"),
             trainer_entry: __sdk::__query_builder::IxCol::new(table_name, "trainer_entry"),
         }
     }

@@ -46,6 +46,7 @@ impl __sdk::__query_builder::HasCols for TalentTab {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct TalentTabIxCols {
+    pub order_index: __sdk::__query_builder::IxCol<TalentTab, u8>,
     pub tab_id: __sdk::__query_builder::IxCol<TalentTab, u32>,
 }
 
@@ -53,6 +54,7 @@ impl __sdk::__query_builder::HasIxCols for TalentTab {
     type IxCols = TalentTabIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         TalentTabIxCols {
+            order_index: __sdk::__query_builder::IxCol::new(table_name, "order_index"),
             tab_id: __sdk::__query_builder::IxCol::new(table_name, "tab_id"),
         }
     }
