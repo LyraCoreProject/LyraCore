@@ -196,7 +196,41 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
         existing_template,
         "fixture catalogue must preserve an existing low-ID template"
     );
+    node.assert_sql("INSERT INTO game_skill_availability (id,skill_line,race_mask,class_mask,flags,min_level) VALUES (5096999,44,0,1,0,1)");
+    let existing_availability = one(
+        &node,
+        "SELECT * FROM game_skill_availability WHERE id = 5096999",
+    );
     node.assert_call("playerbots_fixture_provision_complete_profile", &[&guid]);
+    assert_eq!(
+        one(
+            &node,
+            "SELECT * FROM game_skill_availability WHERE id = 5096999"
+        ),
+        existing_availability,
+        "fixture skill staging must preserve unrelated availability rows"
+    );
+    node.assert_sql("INSERT INTO game_skill_availability (id,skill_line,race_mask,class_mask,flags,min_level) VALUES (5096998,43,0,128,0,1)");
+    let skill_rows_before_refusal =
+        node.query_rows("SELECT * FROM game_skill_availability WHERE skill_line = 43");
+    let refused_skill_staging =
+        node.call("playerbots_fixture_provision_complete_profile", &[&guid]);
+    let skill_staging_refusal = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused_skill_staging.stdout),
+        String::from_utf8_lossy(&refused_skill_staging.stderr)
+    )
+    .to_ascii_lowercase();
+    assert!(!refused_skill_staging.status.success());
+    assert!(
+        skill_staging_refusal.contains("non-fixture availability"),
+        "{skill_staging_refusal}"
+    );
+    assert_eq!(
+        node.query_rows("SELECT * FROM game_skill_availability WHERE skill_line = 43"),
+        skill_rows_before_refusal
+    );
+    node.assert_sql("DELETE FROM game_skill_availability WHERE id = 5096998");
     select(&node, &guid, "cohort");
     node.assert_call("playerbots_fixture_runner_due", &[]);
     node.assert_call("playerbots_fixture_runner_pass", &[]);
@@ -236,6 +270,8 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
             "gameplay": provisioned,
             "fixture_profile_spells": node.query_rows("SELECT spell_id FROM pkg_playerbots_kit WHERE class = 1 AND role = 0"),
             "skill_availability": skill_availability,
+            "preserved_skill_availability": existing_availability,
+            "skill_staging_refusal": skill_staging_refusal,
         }),
     );
     assert!(skill_availability.len() > 16);
