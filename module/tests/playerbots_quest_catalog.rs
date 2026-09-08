@@ -3,7 +3,7 @@
 mod support;
 
 use std::collections::BTreeMap;
-use support::{poll_until, Standalone, POLL_TIMEOUT};
+use support::Standalone;
 
 const CREATURE_197: &str = "17379390965327855617";
 const CREATURE_6: &str = "17379390962123407361";
@@ -557,18 +557,14 @@ fn playerbots_quest_catalog_upgrades_populated_pb002_runner_state() {
     node.assert_call("playerbots_select_controller", &[&bot, "{\"cohort\":[]}"]);
     node.assert_call("playerbots_fixture_runner_due", &[]);
     node.assert_call("playerbots_fixture_runner_pass", &[]);
-    assert!(poll_until(POLL_TIMEOUT, || {
-        let rows = node.query_rows(&format!(
-            "SELECT objective, foreground FROM pkg_playerbots_runner WHERE character_guid = {bot}"
-        ));
-        rows.len() == 1
-            && !rows[0]["objective"].contains("none")
-            && !rows[0]["foreground"].contains("none")
-    }));
-    let preceding = node.query_rows(&format!(
+    node.assert_call("playerbots_fixture_freeze", &[&bot]);
+    let preceding_rows = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_runner WHERE character_guid = {bot}"
-    ))[0]
-        .clone();
+    ));
+    assert_eq!(preceding_rows.len(), 1);
+    let preceding = preceding_rows[0].clone();
+    assert!(preceding["objective"].contains("returnHome"));
+    assert!(preceding["foreground"].contains("cast"));
     node.publish_module();
     let upgraded = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_runner WHERE character_guid = {bot}"
