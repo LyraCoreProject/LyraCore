@@ -1038,8 +1038,18 @@ pub fn debug_cast_at(
     target_guid: u64,
 ) -> Result<(), String> {
     // Debug direct cast resolves synchronously — not a timed-cast completion (instant packet
-    // sequence); the actor verb sources the caster level from the live entity.
-    crate::actor::cast_at(ctx, caster_guid, spell_id, target_guid)
+    // sequence). It bypasses player spellbook admission so fixtures can cast rows they just staged.
+    let caster = crate::helpers::live_entity(ctx, caster_guid)?;
+    crate::spell::resolve_cast_at(
+        ctx,
+        caster_guid,
+        spell_id,
+        caster.level as u8,
+        target_guid,
+        false,
+        false,
+        None,
+    )
 }
 
 /// Begin a (possibly cast-timed) cast from `caster_guid` AT `target_guid` — drives `begin_cast` so a
