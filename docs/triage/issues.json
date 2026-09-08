@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-09-08 08:14 UTC",
-  "base_revision": "ef33da57990e71dbace256ff025f4673dd818c5e",
-  "status_note": "All 65 open issues have current assessments. PRs #473, #474, #476 and #477 merged after CI and review; #71 and #72 are closed as source complete. Door performance and imported Deadmines acceptance remain open. Abbey navigation PR #479 has a demonstrated low-ceiling finding and needs integration with the merged door change.",
-  "monitoring_note": "Codex owns this report and the dispatch order. Monitoring is active during this work session. Each implementer follows checks and actual CodeRabbit or human review through fixes; Codex handles final review and merge. No unattended scheduler is installed. The report and its repository source preserve the next actions between sessions.",
+  "updated_at": "2026-09-08 08:59 UTC",
+  "base_revision": "994f86dabbaa861e88791d9ee2caed5451eff792",
+  "status_note": "All 65 open issues have current assessments. Source PRs #473, #474, #476, #477 and #479 merged after CI and review; #71 and #72 are closed. Canonical door performance, imported-data and client acceptance remain open. The next loot-recovery work needs a combined design review of settlement retirement and group-disband recovery.",
+  "monitoring_note": "Codex owns this report and the dispatch order. This source batch is complete; every remaining issue retains an owner and next action. Monitoring runs during active Codex work sessions. No unattended scheduler is installed. The report and its repository source preserve the work between sessions; refresh GitHub state before the next batch.",
   "focus": [
-    "Correct the demonstrated low-ceiling regression in PR #479, integrate the merged door movement behavior, and complete combined checks before merge. Codex is preparing a bounded candidate in an isolated review checkout.",
-    "Run the canonical collision and sight-ray benchmarks for #113 and imported FactoryDoor acceptance for #114 on their approved development targets. Their source is complete.",
-    "Keep the merged item GUID rollout subject to its authorized legacy-state and range audit. Publish the new Spell Module before updating the Gateway during an authorized rollout.",
-    "Finish the #84 protocol review for exclusive roll authority, staging and disband recovery, and safe retirement of completed receipts. Preserve current gameplay; a fixed capacity policy is separate."
+    "Use the existing diagnostics for current capacity, crash and movement verification on approved development targets. Capture evidence for #59, #60 and #424 before choosing another runtime change.",
+    "Review the two dependent #84 designs together before implementation: durable settlement and receipt retirement, then source Group participation and disband recovery. Preserve the stated gameplay rules and keep any deliberate narrowing explicit.",
+    "Run the canonical collision and sight-ray benchmarks for #113 and imported FactoryDoor acceptance for #114 on their approved targets. Their source is complete.",
+    "Coordinate authorized rollout work: audit legacy item GUIDs and permanent ranges, publish the Spell Module before the Gateway, and regenerate imported navigation data plus derived coverage for #479."
   ],
   "issues": [
     {
@@ -532,7 +532,7 @@
       "confidence": "high",
       "disposition": "human",
       "rationale": "PR #258 shipped preparation, finalization, route-planner consumption, and tests. The old issue destination examples no longer match the current World Import Profiles, but docs/vmap-rollout.md settles the target topology. The remaining work changes Realm data and needs route and client evidence.",
-      "next_action": "Refresh the affected nav import, prepare and finalize matching coverage on the approved World Shards, record before and after detours, and enable nav_coverage_enabled only after approval.",
+      "next_action": "Regenerate the affected navigation data with the #479 importer and rebuild derived coverage on approved World Shards. Record before and after detours, then enable nav_coverage_enabled only after the required acceptance and approval.",
       "blockers": [
         "Named-host authorization and imported route and collision acceptance."
       ],
@@ -540,11 +540,14 @@
         "https://github.com/LyraCoreProject/LyraCore/issues/195",
         "https://github.com/LyraCoreProject/LyraCore/pull/258",
         "module/src/vmap.rs stores generation-scoped coverage; module/src/nav.rs consumes it only behind nav_coverage_enabled.",
-        "docs/vmap-rollout.md supplies the current World Import Profile destinations."
+        "docs/vmap-rollout.md supplies the current World Import Profile destinations.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/479",
+        "PR #479 changes the selected WMO standing surface and movement probes. Publishing the Module alone cannot repair old blocked navigation rows; regenerate navigation data and rebuild derived coverage during the authorized import."
       ],
       "related_prs": [
         258,
-        275
+        275,
+        479
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/195",
       "updatedAt": "2026-09-01T08:55:50Z",
@@ -979,11 +982,11 @@
       "summary": "Loot Roll recovery after result expiry needs durable settlement identity; the original three-Shard and bot-party incident remains unverified.",
       "importance": 4,
       "gain": 4,
-      "effort": 4,
+      "effort": 5,
       "confidence": "medium",
       "disposition": "decision",
-      "rationale": "PR #474 merged the proved completion-marker fix. The remaining work must carry immutable source loot identity beyond the one-second event lifetime and survive Gateway restart. That is a larger design and schema change; retaining only corpse GUID and slot could award a later respawn drop.",
-      "next_action": "Finish the #84 protocol review for exclusive roll authority, staging and disband recovery, and safe retirement of completed receipts. Preserve current gameplay; a fixed capacity policy is separate.",
+      "rationale": "PR #474 merged the completion-marker fix. Recovery after result expiry needs durable receipt retirement plus exclusive roll authority and disband handling across group mirrors. These are several dependent changes. The next design must preserve current loot distribution, including the existing final-member predicate, while preventing stale source work after a group disappears.",
+      "next_action": "Review the T2a and T2b rollout contract together. T2a covers source authority, exact outcomes and receipt retirement. T2b covers Group participation, stale mirror fencing and disband decisions. Preserve original incident acceptance and explicitly review the new Group-id match.",
       "blockers": [
         "Exclusive resolution authority, staging/disband recovery and receipt retirement need one reviewed design.",
         "The original incident rerun needs a disposable three-Shard development Realm and verified Headless Client scenario dispatch."
@@ -998,7 +1001,9 @@
         "https://github.com/LyraCoreProject/LyraCore/issues/84#issuecomment-5580498204",
         "The source design study and adversarial review are saved in the local #84 Tickets. An acknowledgment timeout does not bound a suspended Gateway; promotion_source equal to self does not distinguish source staging from single-database resolution authority.",
         "A follow-up design proof rejects a contiguous cleanup frontier: one unfinished roll retains unlimited later receipts. Outstanding records plus an issued ceiling prevent that accumulation. Total storage still needs source and Realm admission caps; this is a design proposal, not an implemented guarantee.",
-        "The source admission trace found that withholding later CorpseLoot rows creates a waiting queue and can pin corpse decay. Refusing creation can roll back a death or aura tick; FFA fallback changes group distribution. The next recovery Ticket preserves existing admission and retires completed receipts, with storage proportional to unfinished work. A fixed capacity policy is outside that Ticket."
+        "The source admission trace found that withholding later CorpseLoot rows creates a waiting queue and can pin corpse decay. Refusing creation can roll back a death or aura tick; FFA fallback changes group distribution. The next recovery Ticket preserves existing admission and retires completed receipts, with storage proportional to unfinished work. A fixed capacity policy is outside that Ticket.",
+        "The authority review found that a durable disband decision must preserve the exact final-member set and survivor predicate. Retiring that decision also needs a source-mirror fence; a stale mirror can otherwise recreate source group work after Realm disband. This increases remaining effort to several dependent Tickets.",
+        "The final local proposal splits settlement retirement from Group participation and disband recovery. Its Group-id match deliberately narrows the legacy voter-subset-only resolver so a later re-formed Group cannot claim an earlier Group's roll. This remains a design proposal, with thirteen recovery interleavings and no implementation assigned."
       ],
       "related_prs": [
         439,
@@ -1009,7 +1014,7 @@
       "updatedAt": "2026-09-08T06:42:37Z",
       "github_state": "open",
       "owner": "GPT-6, Codex coordinator",
-      "score": 4
+      "score": 3.2
     },
     {
       "number": 82,
@@ -4518,15 +4523,15 @@
       "number": 479,
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/479",
       "title": "fix(nav): route bots into Northshire Abbey",
-      "owner": "Existing GPT-6 Codex implementer; Codex triage coordinates review",
-      "head": "3e740bb16057d5bf57544531cea3a01cb49f4f6f",
-      "github_state": "OPEN",
-      "status": "Low-ceiling correction and door integration pending",
-      "checked_at": "2026-09-08 08:05 UTC",
+      "owner": "Existing GPT-6 Codex implementer owns merge; triage agents review",
+      "head": "438ad8cdccdc580d003c1e9b00daac9064738dae",
+      "github_state": "MERGED",
+      "status": "Merged after CI and all review findings were resolved",
+      "checked_at": "2026-09-08 08:59 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -4550,11 +4555,12 @@
         },
         {
           "name": "CodeRabbit",
-          "result": "QUOTA_NOTICE"
+          "result": "REVIEW_AND_FIX_CONFIRMED"
         }
       ],
-      "next_action": "Correct the demonstrated low-ceiling regression in PR #479, integrate the merged door movement behavior, and complete combined checks before merge. Codex is preparing a bounded candidate in an isolated review checkout.",
-      "review_note": "GPT-6 Astra demonstrated a regression at 3e740bb: terrain 80, WMO floor 80.5 and ceiling 81.5 permit a direct route with only one yard of headroom. The same regression passes on base. Finding: https://github.com/LyraCoreProject/LyraCore/pull/479#issuecomment-5581485117. The trial merge with #477 conflicts in module/src/nav.rs and also needs its instance-aware collision call preserved. CodeRabbit supplied a quota notice. Source correction and combined proof are pending."
+      "next_action": "Source complete. During an authorized rollout, regenerate imported navigation data and derived coverage, then complete client acceptance.",
+      "review_note": "Independent review reproduced the low-ceiling and stair-boundary regressions, then verified their corrections. CodeRabbit reviewed 72ef1d4 and found the extra height offset in the coarse movement ray. Final 438ad8cd passes foot height to that query and keeps the raised exact ray; a real durable 2.5-yard wall regression failed before the fix and passed after it, according to the implementer. Codex reviewed the final delta without findings, including the exact-step rounding correction. CodeRabbit inspected 438ad8cd and confirmed its finding is addressed at discussion_r3955984303. The sole review thread is resolved. All six final CI jobs passed. The implementer merged 438ad8cd as 994f86d after review was complete. Captured Abbey replay evidence is the implementer's verification; the triage team did not access that geometry.",
+      "merge_commit": "994f86dabbaa861e88791d9ee2caed5451eff792"
     }
   ],
   "history": [
@@ -4933,6 +4939,26 @@
     {
       "at": "2026-09-08 08:14 UTC",
       "text": "Merged door PR #477 as ef33da5 after all six final CI jobs passed, the user approved the schema, and CodeRabbit confirmed the fixture-data correction. Posted source-completion evidence to #113 and #114 while preserving their explicit benchmark and imported-door acceptance. Updated parent #103 and collision epic #39 accordingly."
+    },
+    {
+      "at": "2026-09-08 08:21 UTC",
+      "text": "The Abbey implementer pushed 72ef1d4 with the ceiling correction, captured-route replay and merged-door integration. Stopped the unpublished parallel candidate. Independent door integration review found no issues; floor/headroom review and final CI remain."
+    },
+    {
+      "at": "2026-09-08 08:26 UTC",
+      "text": "Independent follow-up review reproduced a stair-boundary regression in Abbey head 72ef1d4. A 0.4-yard adjacent tread is classified as a ceiling when its boundary lies on a navigation sample. The test passes on 3e740bb. The active implementer owns correction and final merge; CodeRabbit review is also running."
+    },
+    {
+      "at": "2026-09-08 08:38 UTC",
+      "text": "Independent review cleared the Abbey shared-edge correction at 6bb87b9. CodeRabbit found a separate extra height offset in the coarse movement ray, and Codex verified it against step_hit and los_hit. The implementer owns the fix and a movement regression before final merge."
+    },
+    {
+      "at": "2026-09-08 08:43 UTC",
+      "text": "All Abbey findings are resolved at 438ad8cd. CodeRabbit explicitly verified the foot-height correction and durable wall regression; independent review cleared the final delta. The implementer owns final CI and merge. Raised #84 remaining effort after the authority study exposed a separate group-mirror and disband-retirement dependency."
+    },
+    {
+      "at": "2026-09-08 08:59 UTC",
+      "text": "The Abbey implementer merged PR #479 as 994f86d after all final CI jobs passed, both independent geometry findings were corrected, and CodeRabbit confirmed the coarse-ray fix. Five source PRs are complete. The report keeps 65 issues open with the remaining verification, design and authorized rollout work, and records the two-part #84 proposal."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
