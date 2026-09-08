@@ -718,7 +718,7 @@ fn playerbots_provisioning_stops_cleanly_and_preserves_owned_items_and_gear() {
         serde_json::json!({"mainhand": mainhand, "bank_item": bank_after, "bank_call_succeeded": bank_call_succeeded, "bank_refusal": bank_refusal, "gameplay": gameplay(&gear_node, &gear_guid)}),
     );
     assert!(!bank_call_succeeded);
-    assert!(bank_refusal.contains("wrongslot"), "{bank_refusal}");
+    assert!(bank_refusal.contains("item:wrong_slot"), "{bank_refusal}");
     assert_eq!(bank_after, bank_before);
     write_evidence(
         &node,
