@@ -4,7 +4,8 @@ Characters and items consume the same durable high-water mark in a Shard's GUID 
 Realm-core assigns disjoint billion-value ranges. `install_guid_range` refuses reassignment;
 deleting a Character, deleting an item, Transfer and reinstalling the same range never rewind
 the mark. A batch must fit below the range's exclusive end before the allocator advances.
-The range now budgets Character creation and item creation together.
+The range now budgets Character creation and item creation together. Its base is the allocator
+floor, leaving 999,999,999 issued identities per range.
 
 New items retain `HIGHGUID_ITEM = 0x4000` in bits 48 through 63. Bit 47 marks this allocation
 format. Bits 0 through 46 hold the issued value, so 140,737,488,355,327 is the largest usable
@@ -46,6 +47,10 @@ every Shard. Record duplicate GUIDs with different owners, malformed item prefix
 with bit 47 set, missing or overlapping GUID Ranges, and allocator marks at or beyond their
 range end. Resolve those cases under separate human approval. Local collision checks do not
 replace this realm-wide audit. An already escaped Character GUID also needs explicit review.
+
+Without an installed range, Character cleanup no longer raises the allocator mark. Resolve a
+missing range before this rollout; do not delete legacy Characters first and then seed a mark
+from surviving rows. The update never invents a range assignment or resets a mark.
 
 Pause World Sessions and all item-granting or ownership-changing activity during the update.
 Record outstanding Transfer Escrow. Verify each Shard's permanent range assignment, publish the
