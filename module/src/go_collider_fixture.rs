@@ -1,4 +1,4 @@
-//! Synthetic durable verification. Run only on an isolated fixture Shard.
+//! Synthetic durable verification. Even success aborts the transaction to preserve existing rows.
 
 use crate::game_world_entity;
 use crate::gameobject::game_gameobject;
@@ -453,5 +453,5 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     rays(ctx, 0, Some(2.0))?;
     crate::gameobject::despawn_from_relay(ctx, imported_guid)?;
     ctx.db.game_go_model().entry().delete(ENTRY);
-    Ok(())
+    Err("GO_COLLISION_FIXTURE_PASSED_ROLLED_BACK".to_string())
 }
