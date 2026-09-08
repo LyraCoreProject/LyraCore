@@ -1,4 +1,4 @@
-//! Package-owned consent for core actions performed without a Session.
+//! Character-owned core consent for actions performed without a World Session.
 
 use lyracore_shared::group::GroupRefusal;
 use spacetimedb::{reducer, table, ReducerContext, Table};

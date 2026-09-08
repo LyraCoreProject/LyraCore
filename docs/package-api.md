@@ -243,3 +243,5 @@ geometry. A Package must measure actual position on later observations to establ
 or arrival; the proposed endpoint cannot establish either.
 
 `actor::sessionless_action_gate(ctx, character_guid)` checks current Account Claim and Fence ownership, Character availability, and World Session status before Package gameplay. It permits a missing live entity so Legacy can restore a body. Group admission also requires a live entity and current controller consent.
+
+`nav::LEG_MAX_EXPANSIONS` is the expansion cap used by `nav::route_step`. A Package can reserve that work before selecting movement.

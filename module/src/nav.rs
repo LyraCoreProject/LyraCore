@@ -265,10 +265,8 @@ pub fn has_los(
     lyracore_shared::nav::has_los(&mut fetcher(ctx, map_id), a, b)
 }
 
-/// Expansion cap for one chase leg's A*. An UNREACHABLE goal burns the whole budget before
-/// falling back (242 note), so this stays small — a 500 ms leg only needs to round a corner,
-/// not solve the zone. 244 owns the measured tuning.
-const LEG_MAX_EXPANSIONS: u32 = 4096;
+/// Maximum expansions consumed by one route step. Packages reserve this budget before movement.
+pub(crate) const LEG_MAX_EXPANSIONS: u32 = 4096;
 
 /// Complete and Partial describe the planned route, including when collision stops this step.
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
