@@ -695,6 +695,63 @@ fn playerbots_quest_objective_survives_combat_and_refreshes_changed_evidence() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
+    let (node, bots) = fixture("playerbots-quest-deferred-retry");
+    let bot = bot_for_class(&bots, "1");
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select_cohort(&node, bot);
+    run_once(&node);
+    let initial = runner(&node, bot);
+    let retained = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
+    ));
+    assert!(initial["objective"].contains("quest"));
+
+    node.assert_call("playerbots_fixture_runner_expire_objective", &[bot]);
+    run_once(&node);
+    let deferred = runner(&node, bot);
+    assert!(deferred["objective"].contains("deferred"));
+    assert!(!deferred["deferred_destinations"].is_empty());
+    run_once(&node);
+    let waiting = runner(&node, bot);
+    assert_eq!(waiting["objective"], deferred["objective"]);
+    assert_eq!(
+        waiting["deferred_destinations"],
+        deferred["deferred_destinations"]
+    );
+
+    let retried = support::poll_until(std::time::Duration::from_secs(45), || {
+        runner(&node, bot)["objective"].contains("travelling")
+    });
+    let resumed = runner(&node, bot);
+    record(&node, "deferred-retry");
+    let path = support::log_dir().join(format!("{}-runner.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "initial": initial, "deferred": deferred, "waiting": waiting, "resumed": resumed
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        retried,
+        "quest did not retry after its deferral expired: {resumed:?}"
+    );
+    assert_eq!(resumed["objective_sequence"], initial["objective_sequence"]);
+    assert!(resumed["deferred_destinations"].is_empty());
+    assert_eq!(resumed["retry_count"], "0");
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
+        )),
+        retained
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_held_unsupported_quest_selects_supported_work_without_reaccepting() {
     let (node, bots) = fixture("playerbots-quest-reconcile");
     let bot = bot_for_class(&bots, "1");
