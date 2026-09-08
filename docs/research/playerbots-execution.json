@@ -310,9 +310,10 @@
         },
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/486",
-          "status": "open",
+          "status": "merged",
           "label": "Core #486",
-          "head_commit": "a4b551893897c647b2cc1dfc6d7f1f2e2b375081"
+          "head_commit": "4f450074d76f8982d1a7d61898a00cf632132737",
+          "merge_commit": "e6a755db0a150bbf73ad97b972fe829f20f6816c"
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/26",
@@ -325,10 +326,13 @@
         "All nine criteria have reviewed evidence at corrected core a4b551893897c647b2cc1dfc6d7f1f2e2b375081 and Package dba96bb1a5366d5f779f1b66820931583f426419. Both source trees stayed clean and unchanged through the final local build and run.",
         "The full Package union passed 1,631 library tests, 1,632 with debug reducers, all 37 action and runner cases, two personality cases, and five core consent cases. This includes a populated preceding-Wasm migration.",
         "All 37 runtime input records agree on Module BLAKE3 dba4d702a0320e360506f9698fa52e0ef7210ce1e8f9573928599a8e3e032279 and Package Content Identity 33fcb8a217aad84f46f9ad65efdad23be24bad8e29828777de7c7e6469417161. Saved Wasm: 7,590,466 bytes; SHA256 c44a91ee92bb22ebce3de07e39caf9d7028794460a855c3b1d1f9329e473a2ae.",
-        "Core #486 CI is green, including full durable verification and all 1,000 default Gateway binding files. The exact spellbook index needs no generated binding change. CI: https://github.com/LyraCoreProject/LyraCore/actions/runs/34245817645/job/102127383032",
+        "Final Core #486 CI passed after the test-only update, including the full durable suite and all 1,000 default Gateway binding files. The exact spellbook index needs no generated binding change. CI: https://github.com/LyraCoreProject/LyraCore/actions/runs/34248547507/job/102136730760",
         "Corrected paired Package CI passed all 37 cases against core a4b5518. Package branch dba96bb ran as synthetic merge e786ee50bb06fc1902b9f5a8e9514669f2d0689e. All inputs are clean and the Package content identity matches local. CI Wasm BLAKE3 is 80efd76cef0d52ee0342f9bc1fe1ee011bcbace0eac7e67e68c944cd427bf659. CI: https://github.com/LyraCoreProject/packages/actions/runs/34245772629/job/102127317130",
         "The populated local upgrade uses preceding core be3fa67d0f0c24749230560544a3e8e8b577f61d and Package 5724de1660a2628e88320914bdd5abb0c69da517. Its Wasm BLAKE3 is 1662b0963dc0e03c29ddde985f08c0ec5a6f392e899a80eac9d7789a85b1b5a9. Preceding local inventory has example, fire_nova, and playerbots; current inventory also has dungeons. CI independently builds the full preceding collection and records its own Wasm identity.",
-        "Six added regressions cover late eligible heals, retained healing eligibility, health-ratio overflow, isolated fixture timing, navigation grid edges, and a completed missing heal result that permits home movement during rescans. Independent Spec and Standards reviews cleared the final source; the orchestrator reviewed the workflow-only pin update."
+        "Six added regressions cover late eligible heals, retained healing eligibility, health-ratio overflow, isolated fixture timing, navigation grid edges, and a completed missing heal result that permits home movement during rescans. Independent Spec and Standards reviews cleared the final source; the orchestrator reviewed the workflow-only pin update.",
+        "The final core change, 4f450074d76f8982d1a7d61898a00cf632132737, strengthens the grid cleanup test. Its focused durable run proves that each grid corner loses all four nearby chunks while a distant chunk survives. Independent Spec and Standards reviews cleared this test-only delta, and CodeRabbit marked its finding addressed. Gameplay source is unchanged from the 37-case run.",
+        "The focused grid run records clean core 4f45007 and unchanged Package dba96bb. Its Wasm BLAKE3 is 18a320609eebb7a163154d891953decbbc5bdaa401e81d339acb06dd73eaa9e9 and SHA256 is 713ad9a2401029fd10e184c91da3a4eeee1c7e402ad206bf59b598e4afb55a0e. Package Content Identity matches the complete local suite.",
+        "CodeRabbit completed its Package correction review at dba96bb. Its remaining concern assumed absent consent blocks Legacy bots. Core action admission does not read consent, and group admission suppresses only an existing false row. A durable case proves admission before a consent row exists. The orchestrator independently verified this and the implementer resolved the comment with immutable source and behavior evidence."
       ],
       "notes": [
         "SpacetimeDB 2.7.1 allows appended enum variants only when old variants stay compatible and storage size and alignment stay unchanged. Prove populated-state migration for the runner schema. Planner source: https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/schema/src/auto_migrate.rs#L826-L895",
@@ -339,7 +343,7 @@
         "The consent check acknowledges current World Shard state before Realm-core group actions. An action admitted before a concurrent freeze may finish; cross-Shard atomicity is not claimed. Controller selection clears unclaimed Group Intents in the same transaction.",
         "The common runner entry checks current Account ownership. Relinquishment releases only the bot's observed cast or movement identity and preserves a later human action.",
         "Package schema changes still require human review before production shipping. Agent review and source merge do not satisfy that production gate.",
-        "Core #484 is merged. Core #486 adds exact learned-spell lookup and the six correction regressions. Package #26 must restore its three current-core CI refs to main after that merge and pass the final compatibility run.",
+        "Core #484 and Core #486 are merged. Package #26 must pass its final CI run against merged core main before integration. Both completed source reviews have no unresolved finding.",
         "Recovery Scan advances through at most 24 indexed rotations per pass and rechecks at most two retained rotations through exact spellbook lookups. Completed Missing remains conclusive while a new scan is Pending, so recovery cannot repeatedly interrupt useful movement.",
         "The missing-result regression observes ReturnHome selection and a real emitted spline while movement scheduling is disabled. Separate arrival and tactical cases prove actual position advancement.",
         "The Recovery Scan is disposable on Transfer and restarts against current content and learned spells. PB-010 still owns transfer of durable objectives and companion intent."
@@ -376,7 +380,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "The final real runner suite proves cast retention through pushback, explicit survival preemption, changed-destination cancellation, and freeze. The Account ownership case preserves a later human cast while the bot relinquishes control. All 21 runner cases passed.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/a4b551893897c647b2cc1dfc6d7f1f2e2b375081/module/tests/playerbots_rewrite/runner.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite/runner.rs"
           ]
         },
         {
@@ -385,7 +389,7 @@
           "evidence": [
             "The retained ReturnHome objective records destination, identity, stage, deadline, last verified progress, and catalog revision. Blocked travel defers its destination and caps failures and deferrals at four entries. Real tests cover actual arrival, deferred travel under low health, and deadline expiry.",
             "https://github.com/LyraCoreProject/packages/blob/dba96bb1a5366d5f779f1b66820931583f426419/playerbots/src/runner.rs",
-            "https://github.com/LyraCoreProject/LyraCore/blob/a4b551893897c647b2cc1dfc6d7f1f2e2b375081/module/tests/playerbots_rewrite/runner.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite/runner.rs"
           ]
         },
         {
@@ -393,8 +397,8 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "The final tactical movement case moves away from home for more than ten seconds, records movement progress, and leaves the home progress clock unchanged. Defense acceptance does not count as damage. Cast completion uses the exact core scheduled identity. PB-001 quest-credit and no-hit cases still pass.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/a4b551893897c647b2cc1dfc6d7f1f2e2b375081/module/tests/playerbots_rewrite/runner.rs",
-            "https://github.com/LyraCoreProject/LyraCore/blob/a4b551893897c647b2cc1dfc6d7f1f2e2b375081/module/tests/playerbots_rewrite.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite/runner.rs",
+            "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite.rs"
           ]
         },
         {
@@ -402,7 +406,7 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "The real 25-bot case proves stable indexed processing in batches of 16 then 9. Excess work remains due and records lag. The populated migration also verifies bounded lazy backfill.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/a4b551893897c647b2cc1dfc6d7f1f2e2b375081/module/tests/playerbots_rewrite/runner.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite/runner.rs"
           ]
         },
         {
@@ -411,7 +415,7 @@
           "evidence": [
             "The public runner row exposes the objective, target-bearing chosen action and reason, last outcome, progress age, retry count, next eligible time, and revision. Its real lifetime case caps history at eight entries and deletes Character-owned state.",
             "https://github.com/LyraCoreProject/packages/blob/dba96bb1a5366d5f779f1b66820931583f426419/playerbots/src/runner.rs",
-            "https://github.com/LyraCoreProject/LyraCore/blob/a4b551893897c647b2cc1dfc6d7f1f2e2b375081/module/tests/playerbots_rewrite/runner.rs",
+            "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite/runner.rs",
             "The separate Recovery Scan row exposes its cursor, bounded rows scanned, retained rotation, current stage, and last completed result. Missing remains valid during a subsequent Pending scan."
           ]
         },
@@ -420,8 +424,8 @@
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec and GPT-5.6 Sol Standards reviews",
           "evidence": [
             "The final populated upgrade publishes a preceding Wasm, creates bot roster, goals, observations, and quest rows, then upgrades the same private database. Legacy and scheduler-lag defaults survive. Normal tick and hook cases prove RecordOnly and Frozen suppression and one Cohort controller. Five real core consent cases cover current ownership, invitation admission, deletion, and Transfer.",
-            "https://github.com/LyraCoreProject/LyraCore/blob/a4b551893897c647b2cc1dfc6d7f1f2e2b375081/module/tests/playerbots_rewrite/runner.rs",
-            "https://github.com/LyraCoreProject/LyraCore/blob/a4b551893897c647b2cc1dfc6d7f1f2e2b375081/module/tests/sessionless_consent.rs"
+            "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/playerbots_rewrite/runner.rs",
+            "https://github.com/LyraCoreProject/LyraCore/blob/4f450074d76f8982d1a7d61898a00cf632132737/module/tests/sessionless_consent.rs"
           ]
         }
       ]
@@ -776,6 +780,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 15:54 UTC",
-  "summary": "PB-001 is integrated. PB-002 passed its corrected 37-case runtime suite and current core and Package CI. Core #484 is merged; Core #486 and Package #26 remain in final review. The next frontier starts after those two merges and the final Package run against merged core."
+  "updated_at": "2026-09-08 16:21 UTC",
+  "summary": "PB-001 is integrated. Both PB-002 core PRs are merged. All source reviews and the corrected runtime suite passed. Package #26 is restoring its current-core CI refs to main for the final compatibility run. Companions, provisioning, and quest admission start after that run passes and the Package merges."
 }
