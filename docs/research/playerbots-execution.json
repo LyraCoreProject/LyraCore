@@ -156,7 +156,7 @@
       "model": "gpt-6-astra",
       "effort": "high",
       "estimated_tokens": 180000,
-      "status": "review",
+      "status": "complete",
       "repo_scope": [
         "LyraCore Module action and navigation contracts",
         "Official Package Collection playerbots fixture",
@@ -167,26 +167,29 @@
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/482",
           "label": "Core #482",
-          "status": "open",
-          "head_commit": "fe9caef6eb0d132c45a5d151827ab6fe64925f79"
+          "status": "merged",
+          "head_commit": "fe9caef6eb0d132c45a5d151827ab6fe64925f79",
+          "merge_commit": "be3fa67d0f0c24749230560544a3e8e8b577f61d"
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/25",
           "label": "Package #25",
-          "status": "open",
-          "head_commit": "c97464f6be211525a3b36a2ee3824cf259edbdd1"
+          "status": "merged",
+          "head_commit": "0781d7e5c8831fd3cec9235bfbdb84dc2cd0537c",
+          "merge_commit": "5724de1660a2628e88320914bdd5abb0c69da517"
         }
       ],
       "evidence": [
         "Baseline on core 95e6ad8 and Package c32b2fb: both ignored personality durable tests passed in a private loopback Standalone. This proves the existing Package fixture, not the new outcome contract.",
-        "Private real-Module and Package fixture passed all 16 cases in 167.69 seconds, including cast completion and cancellation, atomic quest refusal, migrated progress initialization, dead-attacker refusal, and bounded action-row deletion. This run preceded the final owning-operation cast-result refinement; final source checks remain pending.",
         "Final local union passed 1,621 Module unit tests normally, 1,622 with debug reducers, and 32 durable cases. Default-core SpacetimeDB 2.7.1 generation matched all 995 committed Gateway binding files. Independent standards findings are resolved or explicitly accepted; Spec review found no confirmed defects.",
-        "The final Package CI run passed all 16 strengthened fixtures against core fe9caef6. Repeated interaction setup now clears only its reserved target and quest rows, including stale movement and engagement. Evidence: https://github.com/LyraCoreProject/packages/actions/runs/34229152446/job/102070649535"
+        "The final Package CI run passed all 16 strengthened fixtures against core fe9caef6. Repeated interaction setup now clears only its reserved target and quest rows, including stale movement and engagement. Evidence: https://github.com/LyraCoreProject/packages/actions/runs/34229152446/job/102070649535",
+        "Core #482 merged as be3fa67d0f0c24749230560544a3e8e8b577f61d after all checks passed, including the full durable job: https://github.com/LyraCoreProject/LyraCore/actions/runs/34229150494/job/102070610422",
+        "Final Package checks against merged core main passed, including all 16 durable fixtures in 167.90 seconds. Package #25 merged as 5724de1660a2628e88320914bdd5abb0c69da517. CI: https://github.com/LyraCoreProject/packages/actions/runs/34230810246/job/102076215519"
       ],
       "notes": [
-        "All eight source acceptance criteria now have reviewed evidence. The ticket remains in review until both PRs merge.",
-        "Core merges first. Package CI must then return from its temporary paired-core pin to main and pass again before Package merge.",
-        "Both full CodeRabbit reviews completed. The repeated-setup finding is fixed; the core CI coverage question is resolved by the paired Package durable job. Final incremental automated review was rate limited. Independent review covered the final fixture changes. Core durable CI is still pending.",
+        "All eight source acceptance criteria have reviewed evidence. Core #482 and Package #25 are merged.",
+        "Package CI was restored to core main after the core merge. All final checks passed before the Package merge.",
+        "Both full CodeRabbit reviews completed. The repeated-setup finding is fixed; the core CI coverage question is resolved by the paired Package durable job. Final incremental automated review was rate limited. Independent review covered the final fixture changes. All core checks passed.",
         "The flat observation row remains intentional for SQL diagnosis. Action-specific request functions and a private recorder own production writes; PB-002 owns typed runner candidates and foreground control.",
         "The nullable quest-credit initialization fixture preserves an existing stall. A full older-Wasm upgrade was not claimed. The new Package schema remains subject to the repository human review requirement before shipping."
       ],
@@ -198,16 +201,18 @@
             "All 16 final CI input records name clean core fe9caef6eb0d132c45a5d151827ab6fe64925f79 and GitHub tested Package merge 744732b50cc8135d3a06e598e07e26aa8633a434, whose parents are main c32b2fb and reviewed Package c97464f6be211525a3b36a2ee3824cf259edbdd1. Content is playerbots-seeded-actions-v1; geometry is playerbots-synthetic-nav-v1. Imported content and client geometry are explicitly unavailable.",
             "CI Module BLAKE3: a4e921d874c49ada97f9893b4c9b41847ffdb994c670dcd3ea5673f0fab466fd. Package BLAKE3: 1b4de3cdafc56407264c216a3accda917117277914b2deffb4fbd0c3efaf29f6. The local focused Module has a different installed inventory; byte equality across those builds is not claimed.",
             "Input manifest: https://github.com/LyraCoreProject/packages/blob/c97464f6be211525a3b36a2ee3824cf259edbdd1/playerbots/fixtures/actions.json",
-            "CI input and outcome artifacts: https://github.com/LyraCoreProject/packages/actions/runs/34229152446"
+            "CI input and outcome artifacts: https://github.com/LyraCoreProject/packages/actions/runs/34229152446",
+            "The final run against merged core be3fa67d also records 16 clean input and outcome pairs. Tested Package merge b451105562bbb5deab45ceff9919b9e002aa240d has parents c32b2fb and reviewed head 0781d7e5. Module and Package identities match the preceding CI run. Artifacts: https://github.com/LyraCoreProject/packages/actions/runs/34230810246"
           ]
         },
         {
           "criterion": "The fixture loads and runs the real Module with the real Package; it does not substitute a simulated gameplay engine.",
           "reviewer": "Codex orchestrator with independent GPT-6 Astra Spec review",
           "evidence": [
-            "Final local fixture passed all 16 cases through compiled Module Wasm, the real Package, and private SpacetimeDB 2.7.1 Standalone nodes. No simulated gameplay engine was substituted.",
+            "The local fixture passed all 16 cases through compiled Module Wasm, the real Package, and private SpacetimeDB 2.7.1 Standalone nodes. The final CI run below also includes the later repeated-setup checks.",
             "The same behavior passed in Package CI: https://github.com/LyraCoreProject/packages/actions/runs/34226546164/job/102061988209",
-            "Final fixture changes also passed all 16 cases in 166.26 seconds: https://github.com/LyraCoreProject/packages/actions/runs/34229152446/job/102070649535"
+            "Final fixture changes also passed all 16 cases in 166.26 seconds: https://github.com/LyraCoreProject/packages/actions/runs/34229152446/job/102070649535",
+            "The same 16 fixtures passed against merged core main before the Package merge: https://github.com/LyraCoreProject/packages/actions/runs/34230810246/job/102076215519"
           ]
         },
         {
@@ -282,17 +287,19 @@
       "model": "gpt-6-astra",
       "effort": "high",
       "estimated_tokens": 180000,
-      "status": "ready",
+      "status": "implementing",
       "repo_scope": [
         "Official Package Collection decision and durable state",
         "LyraCore Module scheduling and diagnostics",
         "Pure decision and durable integration tests"
       ],
-      "owner": "Unassigned",
+      "owner": "PB-002 implementer",
       "prs": [],
       "evidence": [],
       "notes": [
-        "SpacetimeDB 2.7.1 allows appended enum variants only when old variants stay compatible and storage size and alignment stay unchanged. Prove populated-state migration for the runner schema. Planner source: https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/schema/src/auto_migrate.rs#L826-L895"
+        "SpacetimeDB 2.7.1 allows appended enum variants only when old variants stay compatible and storage size and alignment stay unchanged. Prove populated-state migration for the runner schema. Planner source: https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/schema/src/auto_migrate.rs#L826-L895",
+        "Direct damage can delay a pending cast while retaining its scheduled identity. Observe its current due time before deciding that completion is late; the objective deadline is a separate policy limit.",
+        "Record-only means no gameplay actions from either runner for the selected bot. Freeze must stop retained foreground work. Verify both through the normal Package tick entry."
       ],
       "acceptance_evidence": []
     },
@@ -646,6 +653,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 13:08 UTC",
-  "summary": "The execution-plan PR is merged. PB-001 has reviewed evidence for all eight source criteria and passing final Package CI. Its core durable check remains pending before the core and Package PRs can merge in order. PB-002 starts after that integration."
+  "updated_at": "2026-09-08 13:20 UTC",
+  "summary": "PB-001 is complete. Core #482 and Package #25 are merged with reviewed evidence for all eight criteria and passing final CI. PB-002 is implementing the durable decision runner. One of 12 implementation tickets is complete; imported-world and attended-client release evidence remains pending."
 }
