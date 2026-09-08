@@ -636,9 +636,9 @@ fn playerbots_runner_observes_tactical_movement_without_advancing_the_home_clock
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     node.assert_call("playerbots_fixture_runner_clear_navigation", &[bot]);
     let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
-    node.assert_call("playerbots_fixture_position", &[&target, "1400"]);
+    node.assert_call("playerbots_fixture_position", &[&target, "1000"]);
     node.assert_sql(&format!(
-        "UPDATE game_creature_spawn SET x = 1400 WHERE guid = {target}"
+        "UPDATE game_creature_spawn SET x = 1000 WHERE guid = {target}"
     ));
     node.assert_sql("DELETE FROM game_melee_schedule");
     select(&node, bot, "cohort");
@@ -648,7 +648,7 @@ fn playerbots_runner_observes_tactical_movement_without_advancing_the_home_clock
     let start = position(&node, bot);
     std::thread::sleep(Duration::from_secs(12));
     let observed = runner(&node, bot);
-    assert!(position(&node, bot) > start + 30.0);
+    assert!(position(&node, bot) < start - 30.0);
     assert!(observed["chosen"].contains("defense"));
     assert!(!observed["failures"].contains("noMovement"));
     assert_eq!(observed["retry_count"], "0");
