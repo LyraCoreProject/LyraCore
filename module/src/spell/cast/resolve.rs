@@ -45,7 +45,7 @@ pub(crate) fn resolve_cast_at(
     // true ONLY when called from `fire_pending_cast` (a TIMED cast finishing its cast bar): written onto
     // the cast-GO event so the gateway emits GO+COOLDOWN WITHOUT a second SMSG_SPELL_START(0) (the START
     // was already sent at begin_cast). false for an instant cast, a channel, a creature cast, and a
-    // triggered cast — all of which still want the START(0)+GO+COOLDOWN instant packet sequence.
+    // triggered cast, which still use the START(0)+GO+COOLDOWN instant packet sequence.
     is_completion: bool,
     // true ONLY on the player CMSG_CAST_SPELL path (088; threaded via begin_cast from the cast_spell
     // reducer): the gateway sent that caster's START/RESULT/GO synchronously, so the relay suppresses
