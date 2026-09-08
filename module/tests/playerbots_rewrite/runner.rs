@@ -562,9 +562,7 @@ fn playerbots_runner_relinquishes_current_account_ownership_without_cancelling_h
     let (node, bots) = fixture("playerbots-runner-ownership", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
-    node.assert_sql(&format!(
-        "UPDATE game_world_entity SET health = max_health WHERE guid = {bot}"
-    ));
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
         ["foreground"]
