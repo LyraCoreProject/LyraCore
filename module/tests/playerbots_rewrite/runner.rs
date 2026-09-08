@@ -658,43 +658,59 @@ fn playerbots_runner_observes_tactical_movement_without_advancing_the_home_clock
     outcomes(&node);
 }
 
+fn recovery_fixture(label: &str) -> (Standalone, String) {
+    let (node, bots) = fixture(label, "1");
+    let bot = bots[0].clone();
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    node.assert_call("playerbots_fixture_runner_wide_recovery", &[&bot]);
+    select(&node, &bot, "recordOnly");
+    (node, bot)
+}
+
+fn runner_pass(node: &Standalone) {
+    node.assert_call("playerbots_fixture_runner_due", &[]);
+    node.assert_call("playerbots_fixture_runner_pass", &[]);
+}
+
+fn recovery_scan(node: &Standalone, bot: &str) -> BTreeMap<String, String> {
+    node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_recovery_scan WHERE character_guid = {bot}"
+    ))[0]
+        .clone()
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_runner_finishes_bounded_recovery_lookup_and_revalidates_changes() {
-    let (node, bots) = fixture("playerbots-runner-recovery-scan", "1");
-    let bot = &bots[0];
-    node.assert_sql("DELETE FROM game_creature_move_schedule");
-    node.assert_call("playerbots_fixture_runner_wide_recovery", &[bot]);
-    select(&node, bot, "recordOnly");
-    let pass = || {
-        node.assert_call("playerbots_fixture_runner_due", &[]);
-        node.assert_call("playerbots_fixture_runner_pass", &[]);
-    };
-    let scan = || {
-        node.query_rows(&format!(
-            "SELECT * FROM pkg_playerbots_recovery_scan WHERE character_guid = {bot}"
-        ))[0]
-            .clone()
-    };
-    pass();
-    assert!(scan()["stage"].contains("pending"));
-    assert_eq!(scan()["rows_scanned"], "24");
-    assert!(runner(&node, bot)["chosen"].contains("recovery"));
-    assert!(runner(&node, bot)["chosen"].contains("hold"));
+fn playerbots_runner_recovery_pages_reach_a_late_known_spell() {
+    let (node, bot) = recovery_fixture("playerbots-runner-recovery-scan");
+    runner_pass(&node);
+    assert!(recovery_scan(&node, &bot)["stage"].contains("pending"));
+    assert_eq!(recovery_scan(&node, &bot)["rows_scanned"], "24");
+    assert!(runner(&node, &bot)["chosen"].contains("recovery"));
+    assert!(runner(&node, &bot)["chosen"].contains("hold"));
     assert!(node
         .query_rows("SELECT * FROM game_pending_cast")
         .is_empty());
-    pass();
-    assert!(scan()["stage"].contains("complete"));
-    assert_eq!(scan()["rows_scanned"], "2");
-    assert!(runner(&node, bot)["chosen"].contains("5090100"));
-    select(&node, bot, "cohort");
-    pass();
+    runner_pass(&node);
+    assert!(recovery_scan(&node, &bot)["stage"].contains("complete"));
+    assert_eq!(recovery_scan(&node, &bot)["rows_scanned"], "2");
+    assert!(runner(&node, &bot)["chosen"].contains("5090100"));
+    select(&node, &bot, "cohort");
+    runner_pass(&node);
     assert_eq!(
         node.query_rows("SELECT spell_id FROM game_pending_cast")[0]["spell_id"],
         "5090100"
     );
-    select(&node, bot, "recordOnly");
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_recovery_revalidates_retained_rotation_and_spellbook_rows() {
+    let (node, bot) = recovery_fixture("playerbots-runner-recovery-validity");
+    runner_pass(&node);
+    runner_pass(&node);
+    assert!(runner(&node, &bot)["chosen"].contains("5090100"));
     let rotation = node
         .query_rows("SELECT * FROM pkg_playerbots_rotation WHERE spell_id = 5090100")[0]
         .clone();
@@ -702,43 +718,61 @@ fn playerbots_runner_finishes_bounded_recovery_lookup_and_revalidates_changes() 
         "UPDATE pkg_playerbots_rotation SET condition = 0 WHERE id = {}",
         rotation["id"]
     ));
-    pass();
-    assert!(!runner(&node, bot)["chosen"].contains("5090100"));
+    runner_pass(&node);
+    assert!(!runner(&node, &bot)["chosen"].contains("5090100"));
     node.assert_sql(&format!(
         "UPDATE pkg_playerbots_rotation SET condition = {} WHERE id = {}",
         rotation["condition"], rotation["id"]
     ));
-    pass();
-    pass();
-    assert!(runner(&node, bot)["chosen"].contains("5090100"));
+    runner_pass(&node);
+    runner_pass(&node);
+    assert!(runner(&node, &bot)["chosen"].contains("5090100"));
     node.assert_sql(&format!(
         "DELETE FROM game_player_spell WHERE character_guid = {bot} AND spell_id = 5090100"
     ));
-    pass();
-    assert!(!runner(&node, bot)["chosen"].contains("5090100"));
-    node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
-    pass();
-    pass();
-    assert!(runner(&node, bot)["chosen"].contains("5090100"));
+    runner_pass(&node);
+    assert!(!runner(&node, &bot)["chosen"].contains("5090100"));
+    node.assert_call("playerbots_fixture_runner_stage", &[&bot, "true"]);
+    runner_pass(&node);
+    runner_pass(&node);
+    assert!(runner(&node, &bot)["chosen"].contains("5090100"));
     node.assert_sql("DELETE FROM pkg_playerbots_rotation WHERE spell_id = 5090100");
-    pass();
-    assert!(!runner(&node, bot)["chosen"].contains("5090100"));
-    assert!(scan()["stage"].contains("complete"));
-    assert!(scan()["result"].contains("missing"));
+    runner_pass(&node);
+    assert!(!runner(&node, &bot)["chosen"].contains("5090100"));
+    assert!(recovery_scan(&node, &bot)["stage"].contains("complete"));
+    assert!(recovery_scan(&node, &bot)["result"].contains("missing"));
     outcomes(&node);
 }
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_runner_fixture_targeting_preserves_other_bots_and_handles_grid_edges() {
+fn playerbots_runner_wounded_comparison_preserves_large_health_ratios() {
+    let (node, bots) = fixture("playerbots-runner-large-health", "1");
+    let bot = &bots[0];
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
+    select(&node, bot, "recordOnly");
+    node.assert_sql(&format!("UPDATE game_world_entity SET health = 1000000000, max_health = 4000000000 WHERE guid = {bot}"));
+    runner_pass(&node);
+    assert!(runner(&node, bot)["chosen"].contains("recovery"));
+    node.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 2000000000 WHERE guid = {bot}"
+    ));
+    runner_pass(&node);
+    assert!(!runner(&node, bot)["chosen"].contains("recovery"));
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_fixture_due_helpers_preserve_other_bots() {
     let (node, bots) = fixture("playerbots-runner-fixture-scope", "2");
     node.assert_sql("DELETE FROM game_creature_move_schedule");
     for bot in &bots {
         node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
         select(&node, bot, "recordOnly");
     }
-    node.assert_call("playerbots_fixture_runner_due", &[]);
-    node.assert_call("playerbots_fixture_runner_pass", &[]);
+    runner_pass(&node);
     node.assert_sql("UPDATE pkg_playerbots_bot SET next_think_micros = 9223372036854775807");
     node.assert_call("playerbots_fixture_runner_survival", &[&bots[0]]);
     let other_due = || {
@@ -751,6 +785,14 @@ fn playerbots_runner_fixture_targeting_preserves_other_bots_and_handles_grid_edg
     assert_eq!(other_due(), "9223372036854775807");
     node.assert_call("playerbots_fixture_runner_expire_objective", &[&bots[0]]);
     assert_eq!(other_due(), "9223372036854775807");
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_fixture_navigation_handles_both_grid_edges() {
+    let (node, bots) = fixture("playerbots-runner-fixture-grid", "1");
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
     for coordinate in ["17066", "-17066"] {
         node.assert_sql(&format!(
             "UPDATE game_world_entity SET x = {coordinate}, y = {coordinate} WHERE guid = {}",
@@ -763,48 +805,35 @@ fn playerbots_runner_fixture_targeting_preserves_other_bots_and_handles_grid_edg
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_runner_finished_negative_recovery_scan_keeps_other_actions_eligible() {
-    let (node, bots) = fixture("playerbots-runner-recovery-missing", "1");
-    let bot = &bots[0];
-    node.assert_sql("DELETE FROM game_creature_move_schedule");
-    node.assert_call("playerbots_fixture_runner_wide_recovery", &[bot]);
+fn playerbots_runner_recovery_missing_result_keeps_other_actions_eligible() {
+    let (node, bot) = recovery_fixture("playerbots-runner-recovery-missing");
     node.assert_sql(&format!("UPDATE game_player_spell SET spell_id = 5090999 WHERE character_guid = {bot} AND spell_id = 5090100"));
-    select(&node, bot, "recordOnly");
-    let pass = || {
-        node.assert_call("playerbots_fixture_runner_due", &[]);
-        node.assert_call("playerbots_fixture_runner_pass", &[]);
-    };
-    let scan = || {
-        node.query_rows(&format!(
-            "SELECT * FROM pkg_playerbots_recovery_scan WHERE character_guid = {bot}"
-        ))[0]
-            .clone()
-    };
-    pass();
-    assert!(scan()["result"].contains("pending"));
-    assert!(runner(&node, bot)["chosen"].contains("recovery"));
-    pass();
-    assert!(scan()["stage"].contains("complete"));
-    assert!(scan()["result"].contains("missing"));
-    select(&node, bot, "cohort");
-    pass();
-    assert!(scan()["stage"].contains("pending"));
-    assert!(runner(&node, bot)["chosen"].contains("returnHome"));
+    runner_pass(&node);
+    assert!(recovery_scan(&node, &bot)["result"].contains("pending"));
+    assert!(runner(&node, &bot)["chosen"].contains("recovery"));
+    runner_pass(&node);
+    assert!(recovery_scan(&node, &bot)["stage"].contains("complete"));
+    assert!(recovery_scan(&node, &bot)["result"].contains("missing"));
+    select(&node, &bot, "cohort");
+    std::thread::sleep(Duration::from_millis(1100));
+    runner_pass(&node);
+    assert!(recovery_scan(&node, &bot)["stage"].contains("pending"));
+    assert!(runner(&node, &bot)["chosen"].contains("returnHome"));
     assert!(!node
         .query_rows(&format!(
             "SELECT * FROM game_creature_spline WHERE guid = {bot}"
         ))
         .is_empty());
-    select(&node, bot, "recordOnly");
+    select(&node, &bot, "recordOnly");
     for _ in 0..4 {
-        pass();
-        assert!(scan()["result"].contains("missing"));
-        assert!(runner(&node, bot)["chosen"].contains("returnHome"));
+        runner_pass(&node);
+        assert!(recovery_scan(&node, &bot)["result"].contains("missing"));
+        assert!(runner(&node, &bot)["chosen"].contains("returnHome"));
     }
     node.assert_sql(&format!("UPDATE game_player_spell SET spell_id = 5090100 WHERE character_guid = {bot} AND spell_id = 5090999"));
     for _ in 0..2 {
-        pass();
+        runner_pass(&node);
     }
-    assert!(runner(&node, bot)["chosen"].contains("5090100"));
+    assert!(runner(&node, &bot)["chosen"].contains("5090100"));
     outcomes(&node);
 }
