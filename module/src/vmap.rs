@@ -1,13 +1,6 @@
-//! Exact per-cell collision-triangle store + ray queries (part of the full-vmap
-//! epic; design record `docs/decisions.md` §10). Builds on the codec/binning
-//! (`lyracore_shared::vmap`): this slice adds the module-PRIVATE table the packed per-cell blobs
-//! land in, the import reducers that fill it (mirroring `nav::import_nav_chunks`/`_append`), and
-//! the module-side wrappers over `lyracore_shared::vmap::cast_ray` — LoS (WMO-class triangles
-//! only) and collision (WMO + M2 doodads).
-//!
-//! Gated on `game_config.vmap_enabled` (default OFF, mirroring `nav_enabled`'s pre-244 posture):
-//! off, or a world with no vmap data imported, both ray queries return `None` (clear) — the same
-//! missing-chunk-means-unobstructed contract `nav` uses, so nothing regresses on an unimported map.
+//! Static collision generations and instance-aware geometry queries.
+//! The global Gate controls gameplay rays. Static hits require an active generation;
+//! closed DOOR/BUTTON hits use their own instance-scoped registration.
 
 use crate::terrain::game_terrain_chunk;
 use lyracore_shared::terrain::cell_key;
@@ -767,17 +760,19 @@ fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
         .map(|generation| generation.id)
 }
 
-/// Exact geometry can consume only when the global kill-switch is on AND this map has a complete
-/// active generation. Staging or legacy chunks never make an uncovered map read as clear.
+/// Static geometry consumes only with the global Gate and a complete active generation.
+/// This decides whether navigation still needs its coarse grid fallback.
 pub fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
-    let configured = ctx
-        .db
+    rays_enabled(ctx) && active_generation_id(ctx, map_id).is_some()
+}
+
+/// Global collision Gate. Dynamic doors do not require a static generation.
+pub(crate) fn rays_enabled(ctx: &ReducerContext) -> bool {
+    ctx.db
         .game_config()
         .id()
         .find(0)
-        .map(|c| c.vmap_enabled)
-        .unwrap_or(false);
-    configured && active_generation_id(ctx, map_id).is_some()
+        .is_some_and(|c| c.vmap_enabled)
 }
 
 /// Chunk fetch closure for `cast_ray`: one indexed scan + decode per crossed cell, gathering
@@ -807,43 +802,72 @@ fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<
     }
 }
 
-/// Exact line-of-sight ray: WMO-class triangles only (doodads/forests never block sight). `None`
-/// when vmap is off, unimported, or the segment is clear; `Some(point)` = first-hit world point.
-pub fn los_ray(ctx: &ReducerContext, map_id: u32, a: [f32; 3], b: [f32; 3]) -> Option<[f32; 3]> {
-    if !vmap_enabled(ctx, map_id) {
-        return None;
-    }
-    lyracore_shared::vmap::cast_ray(&mut fetcher(ctx, map_id), a, b, RayFlavor::Los)
-}
-
-/// Exact collision ray (WMO + M2 doodads) — the first-hit point for movement/reach clamps.
-pub fn collision_ray(
+/// Exact sight includes WMO geometry and closed doors in the requested instance.
+pub fn los_ray(
     ctx: &ReducerContext,
     map_id: u32,
+    instance_id: u64,
     a: [f32; 3],
     b: [f32; 3],
 ) -> Option<[f32; 3]> {
-    if !vmap_enabled(ctx, map_id) {
-        return None;
-    }
-    lyracore_shared::vmap::cast_ray(&mut fetcher(ctx, map_id), a, b, RayFlavor::Collision)
+    rays_enabled(ctx)
+        .then(|| ray(ctx, map_id, instance_id, a, b, RayFlavor::Los))
+        .flatten()
 }
 
-/// Operator-only geometry read: consults a verified active generation but deliberately ignores
-/// the gameplay kill-switch. Debug probes use this to establish collision evidence before an
-/// operator chooses to enable live consumption.
+/// Exact collision includes WMO, static doodads and closed doors.
+pub fn collision_ray(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    a: [f32; 3],
+    b: [f32; 3],
+) -> Option<[f32; 3]> {
+    rays_enabled(ctx)
+        .then(|| ray(ctx, map_id, instance_id, a, b, RayFlavor::Collision))
+        .flatten()
+}
+
+pub(crate) fn nearest_hit(
+    a: [f32; 3],
+    first: Option<[f32; 3]>,
+    second: Option<[f32; 3]>,
+) -> Option<[f32; 3]> {
+    let distance = |p: [f32; 3]| p.iter().zip(a).map(|(x, y)| (x - y) * (x - y)).sum::<f32>();
+    match (first, second) {
+        (Some(x), Some(y)) => Some(if distance(x) <= distance(y) { x } else { y }),
+        (x, None) | (None, x) => x,
+    }
+}
+
+fn ray(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    a: [f32; 3],
+    b: [f32; 3],
+    flavor: RayFlavor,
+) -> Option<[f32; 3]> {
+    let static_hit = lyracore_shared::vmap::cast_ray(&mut fetcher(ctx, map_id), a, b, flavor);
+    nearest_hit(
+        a,
+        static_hit,
+        crate::go_collider::ray(ctx, map_id, instance_id, a, b),
+    )
+}
+
+/// Operator geometry probe, independent of the gameplay Gate.
 pub fn probe_rays(
     ctx: &ReducerContext,
     map_id: u32,
+    instance_id: u64,
     a: [f32; 3],
     b: [f32; 3],
 ) -> (Option<[f32; 3]>, Option<[f32; 3]>) {
-    let mut los_fetcher = fetcher(ctx, map_id);
-    let los = lyracore_shared::vmap::cast_ray(&mut los_fetcher, a, b, RayFlavor::Los);
-    let mut collision_fetcher = fetcher(ctx, map_id);
-    let collision =
-        lyracore_shared::vmap::cast_ray(&mut collision_fetcher, a, b, RayFlavor::Collision);
-    (los, collision)
+    (
+        ray(ctx, map_id, instance_id, a, b, RayFlavor::Los),
+        ray(ctx, map_id, instance_id, a, b, RayFlavor::Collision),
+    )
 }
 
 // ===========================================================================================
@@ -860,33 +884,34 @@ const FLOOR_PROBE_UP_YD: f32 = 2.0;
 /// a multi-deck WMO interior (Deadmines) from a probe standing on an upper deck.
 const FLOOR_PROBE_DOWN_YD: f32 = 200.0;
 
-/// Topmost model-floor (WMO + M2 collision-class) triangle at or below `probe_z`, at (x, y) on
-/// `map_id`. A single downward `collision_ray` cast from `probe_z + FLOOR_PROBE_UP_YD` to
-/// `probe_z - FLOOR_PROBE_DOWN_YD`: `cast_ray` returns the NEAREST hit along the segment, which
-/// for a downward segment is exactly the highest surface at or below the start — the "topmost
-/// floor" this function promises. `None` when vmap is off, unimported, or no floor triangle lies
-/// in the search range (mirrors every other vmap query's missing-chunk-means-nothing-found
-/// contract — callers keep their current Z).
-pub fn floor_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32, probe_z: f32) -> Option<f32> {
-    let top = [x, y, probe_z + FLOOR_PROBE_UP_YD];
-    let bottom = [x, y, probe_z - FLOOR_PROBE_DOWN_YD];
-    collision_ray(ctx, map_id, top, bottom).map(|hit| hit[2])
-}
-
-/// Read-only model-floor probe for a verified active generation, independent of the gameplay
-/// gate. See [`probe_rays`] for why diagnostics must not flip that gate.
-pub fn probe_floor_z(
+/// Highest static or closed-door surface in the vertical probe segment in this partition.
+/// The segment starts slightly above `probe_z` so a point already on the surface can find it.
+/// Returns `None` when the gameplay Gate is off or no collision triangle lies in that segment.
+pub fn floor_z(
     ctx: &ReducerContext,
     map_id: u32,
+    instance_id: u64,
     x: f32,
     y: f32,
     probe_z: f32,
 ) -> Option<f32> {
     let top = [x, y, probe_z + FLOOR_PROBE_UP_YD];
     let bottom = [x, y, probe_z - FLOOR_PROBE_DOWN_YD];
-    let mut fetcher = fetcher(ctx, map_id);
-    lyracore_shared::vmap::cast_ray(&mut fetcher, top, bottom, RayFlavor::Collision)
-        .map(|hit| hit[2])
+    collision_ray(ctx, map_id, instance_id, top, bottom).map(|hit| hit[2])
+}
+
+/// Static and closed-door floor probe, independent of the gameplay Gate.
+pub fn probe_floor_z(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    x: f32,
+    y: f32,
+    probe_z: f32,
+) -> Option<f32> {
+    let top = [x, y, probe_z + FLOOR_PROBE_UP_YD];
+    let bottom = [x, y, probe_z - FLOOR_PROBE_DOWN_YD];
+    ray(ctx, map_id, instance_id, top, bottom, RayFlavor::Collision).map(|hit| hit[2])
 }
 
 // ===========================================================================================

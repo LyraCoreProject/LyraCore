@@ -58,9 +58,16 @@ pub fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32
 /// the vmap floor never both apply to the same surface (a bridge deck isn't in the ADT MCVT
 /// grid), so `max` picks whichever one actually has an answer here rather than averaging or
 /// preferring one system outright.
-pub fn snap_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32, fallback: f32) -> f32 {
+pub fn snap_z(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    x: f32,
+    y: f32,
+    fallback: f32,
+) -> f32 {
     let base = ground_z(ctx, map_id, x, y).unwrap_or(fallback);
-    match crate::vmap::floor_z(ctx, map_id, x, y, fallback) {
+    match crate::vmap::floor_z(ctx, map_id, instance_id, x, y, fallback) {
         Some(floor) => base.max(floor),
         None => base,
     }

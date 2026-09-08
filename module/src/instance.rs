@@ -725,7 +725,7 @@ pub(crate) fn create_instance_with_id(
         .collect();
     let mut copied = 0u32;
     for src in &sources {
-        gos.insert(crate::gameobject::GameObject {
+        let copy = gos.insert(crate::gameobject::GameObject {
             guid: (0xF110u64 << 48) | GO_COPY_BAND | next_go_seq,
             template_entry: src.template_entry,
             map_id: src.map_id,
@@ -747,6 +747,7 @@ pub(crate) fn create_instance_with_id(
             rotation_2: src.rotation_2,
             rotation_3: src.rotation_3,
         });
+        crate::go_collider::register(ctx, &copy);
         next_go_seq += 1;
         copied += 1;
     }
@@ -1000,6 +1001,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         .collect();
     for guid in &copies {
         crate::loot::reap_corpse_loot_family(ctx, *guid); // a GO is not a creature — the loot family only
+        crate::go_collider::remove(ctx, *guid);
         gos.guid().delete(guid);
     }
 

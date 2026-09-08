@@ -52,8 +52,8 @@ checking generations. A successful import is data-plane evidence, not permission
 ## Geometry-probe readiness
 
 Issue #184 requires ray and floor evidence before exact-vmap consumption is enabled. The current
-`debug_vmap_ray` and `debug_floor_probe` reducers read the active generation directly and do not
-require `vmap_enabled`; use them while the gameplay gate remains off. Do not use a temporary
+`debug_vmap_ray` and `debug_floor_probe` reducers read active static geometry and registered doors.
+They do not require `vmap_enabled`; use them while the gameplay Gate remains off. Do not use a temporary
 `debug_set_vmap_enabled true` change as a substitute: it already enables the behavior this checklist
 is meant to accept.
 
@@ -129,3 +129,31 @@ Nearby movement and line-of-sight observation:
 Verdict: PASS / FAIL / INCONCLUSIVE
 Links to raw importer output and server/client evidence:
 ```
+
+## Instance doors
+
+DOOR and BUTTON models also participate in sight and collision rays when `vmap_enabled` is on.
+They use `game_go_collider` rows indexed by map and instance. Map 36 needs no static generation
+for these rays. Static geometry retains the active-generation requirement; the navigation grid
+still supplies the fallback on maps without one. Area and indoor queries stay static.
+
+GameObject imports, model imports, debug spawns and instance creation register eligible doors.
+Gameobjects Package Delta apply and replay reconcile after all spawn and template changes finish.
+Model imports rebuild the registry so either import order works. `rebuild_go_colliders` is an
+Operator reconciliation for existing rows after a publish. Open doors keep their registration;
+rays check their current state. Despawn and instance reap remove registration.
+
+Collision scale and triangles come from `game_go_model`. A Package that changes a template's
+size or display requires an explicitly matching model artifact. This path does not regenerate
+meshes from Package Claims; a routine model import does not establish that those Claims match.
+
+Before imported Deadmines acceptance, import approved DOOR/BUTTON models on the named development
+Shard and run `rebuild_go_colliders`. Use `debug_vmap_ray_instance` with the instance id as its
+final argument. The original `debug_vmap_ray` command still probes instance 0. Record the Factory
+Door hit while closed, the clear ray after `debug_encounter_open_door`, and a closed sibling instance.
+These probes also calibrate the
+imported model axes and spawn quaternion. Synthetic tests do not establish imported-client parity.
+
+Retain `debug_bench_collision_gate` and `debug_bench_los` evidence on the imported canonical box
+before enabling gameplay consumption. Those performance and real-client checks remain Operator
+acceptance; the private durable fixture proves geometry and lifecycle behavior.

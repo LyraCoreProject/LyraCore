@@ -1064,6 +1064,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             && crate::nav::has_los(
                 self.ctx,
                 first.map_id,
+                first.instance_id,
                 (first.x, first.y, first.z),
                 (second.x, second.y, second.z),
             )

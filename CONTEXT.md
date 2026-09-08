@@ -866,3 +866,10 @@ reference even when the Stat Kind is unknown.
 Enchantment IDs 7745 and 7748 are authored compatibility entries, with +3 Strength and +3 Stamina.
 They preserve existing stored item meanings. They are not rows from the build 5875 client
 catalogue. The importer refuses a client catalogue that collides with either ID.
+
+### GameObject collision
+
+**GameObject Collider**:
+Derived registration of a DOOR or BUTTON mesh for one GameObject in one map and instance.
+A closed, live GameObject blocks sight and collision rays. Its registration remains while open.
+Static geometry retains its separate active-generation rule.

@@ -358,7 +358,16 @@ impl IdleSink for CtxWorld<'_> {
             .guid()
             .find(guid)
             .map_or(to, |c| {
-                crate::nav::nav_step(self.ctx, c.map_id, (c.x, c.y), to, max_step, 0.0, c.z)
+                crate::nav::nav_step(
+                    self.ctx,
+                    c.map_id,
+                    c.instance_id,
+                    (c.x, c.y),
+                    to,
+                    max_step,
+                    0.0,
+                    c.z,
+                )
             })
     }
     fn roll(&self) -> u32 {
@@ -460,7 +469,13 @@ impl EngageSink for CtxWorld<'_> {
             .guid()
             .find(looker)
             .is_none_or(|c| {
-                crate::nav::has_los(self.ctx, c.map_id, (c.x, c.y, c.z), (at.x, at.y, at.z))
+                crate::nav::has_los(
+                    self.ctx,
+                    c.map_id,
+                    c.instance_id,
+                    (c.x, c.y, c.z),
+                    (at.x, at.y, at.z),
+                )
             })
     }
     fn engage(&mut self, creature: u64, victim: u64, pull: Pull) {

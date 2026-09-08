@@ -185,8 +185,8 @@ pub fn debug_nav_leg(ctx: &ReducerContext, map: u32, x0: f32, y0: f32, x1: f32, 
     // LoS/collision endpoints stand on the ground like real units (falls back to z=0 off-slice).
     let z0 = crate::terrain::ground_z(ctx, map, x0, y0).unwrap_or(0.0);
     let z1 = crate::terrain::ground_z(ctx, map, x1, y1).unwrap_or(0.0);
-    let step = crate::nav::nav_step(ctx, map, (x0, y0), (x1, y1), 4.0, 0.0, z0);
-    let los = crate::nav::has_los(ctx, map, (x0, y0, z0), (x1, y1, z1));
+    let step = crate::nav::nav_step(ctx, map, 0, (x0, y0), (x1, y1), 4.0, 0.0, z0);
+    let los = crate::nav::has_los(ctx, map, 0, (x0, y0, z0), (x1, y1, z1));
     let raw = crate::nav::debug_find_leg(ctx, map, (x0, y0), (x1, y1));
     log::info!(
         "nav leg ({x0:.1},{y0:.1})->({x1:.1},{y1:.1}) map {map}: nav_enabled={enabled} first_step=({:.2},{:.2}) has_los={los} raw={raw}",
@@ -245,11 +245,7 @@ pub fn debug_set_nav_coverage_enabled(ctx: &ReducerContext, enabled: bool) -> Re
     Ok(())
 }
 
-/// 521 spot-probe: cast an exact vmap ray from (x0,y0,z0) to (x1,y1,z1) on `map`, BOTH flavors —
-/// LoS (WMO-only) and collision (WMO + M2 doodads). Analogue of `debug_nav_leg`; vmap has no
-/// client-visible readback, so this is the server-side verification hook (decision). Logs
-/// hit/miss + the first-hit point for each flavor so a doodad-vs-wall distinction is directly
-/// observable: a doodad blocks `collision` but leaves `los` clear.
+/// Probe both ray flavors in instance 0. Preserve the original Operator command signature.
 #[reducer]
 #[allow(clippy::too_many_arguments)] // A reducer's arguments are its call signature.
 pub fn debug_vmap_ray(
@@ -262,12 +258,30 @@ pub fn debug_vmap_ray(
     y1: f32,
     z1: f32,
 ) {
-    let enabled = crate::vmap::vmap_enabled(ctx, map);
+    debug_vmap_ray_instance(ctx, map, x0, y0, z0, x1, y1, z1, 0);
+}
+
+/// Probe both ray flavors in one instance, independent of the gameplay Gate.
+/// Static doodads affect collision only; closed DOOR/BUTTON geometry affects both flavors.
+#[reducer]
+#[allow(clippy::too_many_arguments)] // A reducer's arguments are its call signature.
+pub fn debug_vmap_ray_instance(
+    ctx: &ReducerContext,
+    map: u32,
+    x0: f32,
+    y0: f32,
+    z0: f32,
+    x1: f32,
+    y1: f32,
+    z1: f32,
+    instance_id: u64,
+) {
+    let enabled = crate::vmap::rays_enabled(ctx);
     let a = [x0, y0, z0];
     let b = [x1, y1, z1];
-    let (los, collision) = crate::vmap::probe_rays(ctx, map, a, b);
+    let (los, collision) = crate::vmap::probe_rays(ctx, map, instance_id, a, b);
     log::info!(
-        "vmap ray ({x0:.1},{y0:.1},{z0:.1})->({x1:.1},{y1:.1},{z1:.1}) map {map}: vmap_enabled={enabled} los={los:?} collision={collision:?}"
+        "vmap ray ({x0:.1},{y0:.1},{z0:.1})->({x1:.1},{y1:.1},{z1:.1}) map {map} instance {instance_id}: vmap_enabled={enabled} los={los:?} collision={collision:?}"
     );
 }
 
@@ -279,8 +293,8 @@ pub fn debug_vmap_ray(
 pub fn debug_floor_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32, probe_z: f32) {
     let enabled = crate::vmap::vmap_enabled(ctx, map);
     let ground = crate::terrain::ground_z(ctx, map, x, y);
-    let floor = crate::vmap::probe_floor_z(ctx, map, x, y, probe_z);
-    let snapped = crate::terrain::snap_z(ctx, map, x, y, probe_z);
+    let floor = crate::vmap::probe_floor_z(ctx, map, 0, x, y, probe_z);
+    let snapped = crate::terrain::snap_z(ctx, map, 0, x, y, probe_z);
     log::info!(
         "floor probe ({x:.1},{y:.1}) map {map} probe_z={probe_z:.2}: vmap_enabled={enabled} ground_z={ground:?} floor_z={floor:?} snap_z={snapped:.2}"
     );
@@ -409,9 +423,9 @@ pub fn debug_assert_floor_snap(
     }
 
     // (1) the raw floor probe, from above the deck looking down.
-    let floor = crate::vmap::floor_z(ctx, map_id, ORIGIN.0, ORIGIN.1, FLOOR_Z + 5.0);
+    let floor = crate::vmap::floor_z(ctx, map_id, 0, ORIGIN.0, ORIGIN.1, FLOOR_Z + 5.0);
     // (2) the combined snap a movement/targeting call site actually uses.
-    let snapped = crate::terrain::snap_z(ctx, map_id, ORIGIN.0, ORIGIN.1, TERRAIN_FALLBACK);
+    let snapped = crate::terrain::snap_z(ctx, map_id, 0, ORIGIN.0, ORIGIN.1, TERRAIN_FALLBACK);
     let ground = crate::terrain::ground_z(ctx, map_id, ORIGIN.0, ORIGIN.1);
 
     // (3) spawn a creature AT the terrain-less fallback z (i.e. what an imported spawn row with
@@ -776,6 +790,7 @@ pub fn debug_assert_chase_stops_at_column(
     let stepped = crate::nav::nav_step(
         ctx,
         map_id,
+        start.instance_id,
         (ORIGIN.0, ORIGIN.1),
         (DEST_X, ORIGIN.1),
         STEP_YD,
@@ -895,7 +910,7 @@ pub fn debug_assert_unreachable_goal_stops_at_wall(
         }
     }
 
-    let stepped = crate::nav::nav_step(ctx, map_id, cur, dest, 100.0, 0.0, 0.0);
+    let stepped = crate::nav::nav_step(ctx, map_id, start.instance_id, cur, dest, 100.0, 0.0, 0.0);
 
     // Cleanup FIRST — never leave synthetic nav data or flipped flags behind, even on assert failure.
     nav_chunks.key().delete(key);
@@ -991,9 +1006,9 @@ pub fn debug_bench_los(
             let angle = TAU * (d as f32) / (directions.max(1) as f32);
             let (bx, by, bz) = (cx + radius * angle.cos(), cy + radius * angle.sin(), *cz);
             let blocked = if exact {
-                crate::vmap::los_ray(ctx, map, [*cx, *cy, *cz], [bx, by, bz]).is_some()
+                crate::vmap::los_ray(ctx, map, 0, [*cx, *cy, *cz], [bx, by, bz]).is_some()
             } else {
-                !crate::nav::has_los(ctx, map, (*cx, *cy, *cz), (bx, by, bz))
+                !crate::nav::has_los(ctx, map, 0, (*cx, *cy, *cz), (bx, by, bz))
             };
             queries += 1;
             if blocked {
@@ -1054,7 +1069,7 @@ pub fn debug_bench_collision_gate(
         for d in 0..directions {
             let angle = TAU * (d as f32) / (directions.max(1) as f32);
             let dest = (cx + radius * angle.cos(), cy + radius * angle.sin());
-            let stepped = crate::nav::nav_step(ctx, map, (*cx, *cy), dest, radius, 0.0, *cz);
+            let stepped = crate::nav::nav_step(ctx, map, 0, (*cx, *cy), dest, radius, 0.0, *cz);
             queries += 1;
             if (stepped.0 - dest.0).abs() > 0.01 || (stepped.1 - dest.1).abs() > 0.01 {
                 gated += 1;

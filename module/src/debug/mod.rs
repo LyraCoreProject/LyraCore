@@ -758,7 +758,8 @@ pub fn debug_spawn_gameobject(
     // Clear any prior Pick-Lock unlock (work-item 119) for this DERIVED guid so a re-spawn of a locked
     // template is deterministically LOCKED again (the verify's negative case relies on this).
     ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
-    ctx.db
+    let go = ctx
+        .db
         .game_gameobject()
         .insert(crate::gameobject::GameObject {
             guid,
@@ -784,6 +785,7 @@ pub fn debug_spawn_gameobject(
             rotation_2: 0.0,
             rotation_3: 0.0,
         });
+    crate::go_collider::register(ctx, &go);
     Ok(())
 }
 

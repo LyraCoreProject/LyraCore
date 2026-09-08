@@ -1685,69 +1685,40 @@ fn blink_dest(x: f32, y: f32, orientation: f32, yd: f32) -> (f32, f32) {
 /// grid-clamp's coarser guarantee).
 const BLINK_CLEARANCE_YD: f32 = 1.0;
 
-/// Blink: teleport the caster `dist_yd` FORWARD along its facing (Mage Blink). Self-cast — no target.
-/// Reuses the teleport core exactly like Charge, but toward a fixed forward point rather than a unit.
-/// `dist_yd` is the effect's DBC radius (data-driven, 20yd for Blink) — `resolve_cast_at` already
-/// rejected the cast if it was 0, so no fallback here (a silent default would hide mis-seeded data).
-///
-/// Collision: when exact vmap data is consuming
-/// (`vmap::vmap_enabled`), clamp on the COLLISION ray's first-hit point (WMO + M2 doodads —
-/// `vmap::collision_ray`, not the WMO-only LoS ray `has_los` uses) minus `BLINK_CLEARANCE_YD`, so
-/// Blink lands right at the obstacle's true plane instead of the nearest whole nav cell before it
-/// — carts and abbey columns stop Blink exactly at the collision surface. A wall inside the
-/// clearance margin (point-blank) → stay put rather than teleport into geometry. Falls back to the
-/// pre-523 grid step-back loop (`nav::has_los`, 2yd steps) when vmap is off — the same rollback
-/// posture `nav::has_los` itself keeps.
+/// Blink forward, stopping one yard before static or instance door geometry.
+/// Maps without an active static generation also retain the coarse grid step-back check.
+/// The effect radius is positive by the cast Gate; the teleport keeps the caster's instance.
 pub(crate) fn blink_forward(ctx: &ReducerContext, caster_guid: u64, dist_yd: f32) {
-    let entities = ctx.db.game_world_entity();
-    let Some(caster) = entities.guid().find(caster_guid) else {
+    let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) else {
         return;
     };
-    if crate::vmap::vmap_enabled(ctx, caster.map_id) {
-        let (fx, fy) = blink_dest(caster.x, caster.y, caster.orientation, dist_yd);
-        let a = [caster.x, caster.y, caster.z];
-        let b = [fx, fy, caster.z];
-        let (nx, ny) = match crate::vmap::collision_ray(ctx, caster.map_id, a, b) {
-            Some(hit) => {
-                let (dx, dy) = (hit[0] - caster.x, hit[1] - caster.y);
-                let hit_dist = (dx * dx + dy * dy).sqrt();
-                let land_dist = hit_dist - BLINK_CLEARANCE_YD;
-                if land_dist <= 0.0 {
-                    return; // wall inside the clearance margin — stay put
-                }
-                (
-                    caster.x + dx / hit_dist * land_dist,
-                    caster.y + dy / hit_dist * land_dist,
-                )
-            }
-            None => (fx, fy), // clear ray (or no vmap data this cell) — the full distance
-        };
-        crate::world::teleport_player(
-            ctx,
-            caster_guid,
-            caster.map_id,
-            0,
-            nx,
-            ny,
-            caster.z,
-            caster.orientation,
-        );
-        return;
-    }
-    let mut yd = dist_yd;
+    let (fx, fy) = blink_dest(caster.x, caster.y, caster.orientation, dist_yd);
+    let a = [caster.x, caster.y, caster.z];
+    let b = [fx, fy, caster.z];
+    let mut yd = match crate::vmap::collision_ray(ctx, caster.map_id, caster.instance_id, a, b) {
+        Some(hit) => {
+            let dx = hit[0] - caster.x;
+            let dy = hit[1] - caster.y;
+            (dx * dx + dy * dy).sqrt() - BLINK_CLEARANCE_YD
+        }
+        None => dist_yd,
+    };
     while yd > 0.0 {
         let (nx, ny) = blink_dest(caster.x, caster.y, caster.orientation, yd);
-        if crate::nav::has_los(
-            ctx,
-            caster.map_id,
-            (caster.x, caster.y, caster.z),
-            (nx, ny, caster.z),
-        ) {
+        if crate::vmap::vmap_enabled(ctx, caster.map_id)
+            || crate::nav::has_los(
+                ctx,
+                caster.map_id,
+                caster.instance_id,
+                (caster.x, caster.y, caster.z),
+                (nx, ny, caster.z),
+            )
+        {
             crate::world::teleport_player(
                 ctx,
                 caster_guid,
                 caster.map_id,
-                0,
+                caster.instance_id,
                 nx,
                 ny,
                 caster.z,
@@ -1884,7 +1855,7 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
         }
         return;
     }
-    let nz = crate::terrain::snap_z(ctx, caster.map_id, nx, ny, target.z);
+    let nz = crate::terrain::snap_z(ctx, caster.map_id, caster.instance_id, nx, ny, target.z);
     let duration_ms = ((dist / lyracore_shared::constants::speeds::CHARGE) * 1000.0) as u32;
     let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
     // Emit the rush leg for the PLAYER guid — the gateway relay (build_monster_move) is type-agnostic,

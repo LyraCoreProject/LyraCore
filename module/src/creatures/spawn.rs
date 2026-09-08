@@ -662,7 +662,14 @@ pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut enti
     // Stand on a model floor (bridge, WMO interior deck) instead of the imported spawn.z
     // when one's imported at/below this spawn point — `floor_z` is `None` off vmap-slice/gate, so
     // an unimported map spawns byte-identical to before this line existed.
-    if let Some(floor) = crate::vmap::floor_z(ctx, entity.map_id, entity.x, entity.y, entity.z) {
+    if let Some(floor) = crate::vmap::floor_z(
+        ctx,
+        entity.map_id,
+        entity.instance_id,
+        entity.x,
+        entity.y,
+        entity.z,
+    ) {
         entity.z = entity.z.max(floor);
     }
     let payload = crate::hooks::CreatureSpawnPayload {
