@@ -231,6 +231,56 @@ fn pass_once(node: &Standalone, guid: &str) {
     node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
 }
 
+/// The largest supported Provisioning Profile has at most 30 actions. Two extra passes cover the
+/// cycle boundary and the Follow selection. A later Follow would exceed the profile's bound.
+fn resume_follow_after_provisioning(
+    node: &Standalone,
+    guid: &str,
+    objective_sequence: &str,
+    case: &str,
+) -> BTreeMap<String, String> {
+    const PASS_LIMIT: usize = 32;
+
+    let starting_position = position(node, guid);
+    let role = node.query_rows(&format!(
+        "SELECT role FROM pkg_playerbots_bot WHERE character_guid = {guid}"
+    ))[0]["role"]
+        .clone();
+    node.assert_call("playerbots_fixture_provision_due", &[guid]);
+    let mut saw_provisioning = false;
+    for pass in 1..=PASS_LIMIT {
+        pass_once(node, guid);
+        let state = runner(node, guid);
+        evidence(node, &format!("{case}-pass-{pass}"));
+        assert_eq!(state["objective_sequence"], objective_sequence);
+        assert!(state["objective"].contains("companion"), "{state:?}");
+        assert_eq!(
+            node.query_rows(&format!(
+                "SELECT role FROM pkg_playerbots_bot WHERE character_guid = {guid}"
+            ))[0]["role"],
+            role
+        );
+        if state["chosen"].contains("follow") {
+            assert!(
+                saw_provisioning,
+                "forced Provisioning never consumed a pass"
+            );
+            assert!(state["foreground"].contains("movement"), "{state:?}");
+            assert!(poll_until(POLL_TIMEOUT, || {
+                let current = position(node, guid);
+                (current.0 - starting_position.0).abs() > 0.01
+                    || (current.1 - starting_position.1).abs() > 0.01
+            }));
+            return state;
+        }
+        assert!(state["chosen"].contains("provisioning"), "{state:?}");
+        assert!(state["last_outcome"].contains("provisioning"), "{state:?}");
+        assert!(state["foreground"].contains("none"), "{state:?}");
+        saw_provisioning = true;
+    }
+    panic!("Follow did not resume within {PASS_LIMIT} Provisioning Profile passes")
+}
+
 fn evidence(node: &Standalone, case: &str) {
     let path = support::log_dir().join(format!("{}-{case}.json", node.shard_name()));
     let record = serde_json::json!({
@@ -756,11 +806,14 @@ fn playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow() {
         .is_empty()));
     let objective = runner(&node, priest)["objective_sequence"].clone();
     node.assert_call("playerbots_fixture_cancel", &[priest, "false"]);
+    assert!(node
+        .query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
+        ))
+        .is_empty());
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
-    due(&node, priest);
-    assert_eq!(runner(&node, priest)["objective_sequence"], objective);
-    assert!(runner(&node, priest)["chosen"].contains("follow"));
-    assert!(runner(&node, priest)["companion_heal_target_guid"].contains("none"));
+    let resumed = resume_follow_after_provisioning(&node, priest, &objective, "cancel-resume");
+    assert!(resumed["companion_heal_target_guid"].contains("none"));
     evidence(&node, "cancel-resume");
 }
 
@@ -789,9 +842,7 @@ fn playerbots_completion_time_los_refusal_releases_the_heal_and_resumes_follow()
     assert!(runner(&node, priest)["last_outcome"].contains("refused"));
     assert!(runner(&node, priest)["companion_heal_target_guid"].contains("none"));
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
-    due(&node, priest);
-    assert_eq!(runner(&node, priest)["objective_sequence"], objective);
-    assert!(runner(&node, priest)["chosen"].contains("follow"));
+    resume_follow_after_provisioning(&node, priest, &objective, "los-refusal-resume");
     evidence(&node, "los-refusal-resume");
 }
 
