@@ -2,7 +2,7 @@
 
 mod support;
 use std::collections::BTreeMap;
-use support::{POLL_TIMEOUT, Standalone, poll_until};
+use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const HEAL: &str = "5090100";
 const CHANNEL_HEAL: &str = "5090104";
@@ -199,12 +199,16 @@ fn movement_leg_finished(node: &Standalone, guid: &str) -> bool {
 }
 
 fn fixture(name: &str) -> (Standalone, Vec<String>) {
+    fixture_role(name, "1")
+}
+
+fn fixture_role(name: &str, role: &str) -> (Standalone, Vec<String>) {
     let mut node = Standalone::start(name);
     node.publish_module();
     record_inputs(&node);
     node.assert_call("claim_operator", &[]);
     node.assert_call("install_guid_range", &["1000000"]);
-    node.assert_call("playerbots_spawn_role", &["3", "1200", "1200", "50", "1"]);
+    node.assert_call("playerbots_spawn_role", &["3", "1200", "1200", "50", role]);
     node.assert_call("playerbots_fixture_prepare", &[]);
     let bots: Vec<_> = node
         .query_rows("SELECT character_guid FROM pkg_playerbots_bot")
@@ -267,12 +271,11 @@ fn priest_follows_a_moving_human_leader_without_pulling() {
         1,
         "the unrelated hostile fixture must be present"
     );
-    assert!(
-        node.query_rows(&format!(
+    assert!(node
+        .query_rows(&format!(
             "SELECT * FROM game_melee_attack WHERE attacker_guid = {priest}"
         ))
-        .is_empty()
-    );
+        .is_empty());
     evidence(&node, "follow");
 }
 
@@ -415,6 +418,29 @@ fn low_health_at_the_reached_leader_uses_recovery_instead_of_holding() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn non_healer_companion_retains_self_recovery() {
+    let (node, bots) = fixture_role("playerbots-companion-non-healer-recovery", "2");
+    let (companion, leader) = (&bots[0], &bots[1]);
+    node.assert_call(
+        "playerbots_fixture_companion_move",
+        &[leader, "1202", "1200"],
+    );
+    node.assert_call("playerbots_fixture_companion_health", &[companion, "25"]);
+    select(&node, companion, "cohort");
+    due(&node, companion);
+    let state = runner(&node, companion);
+    assert!(state["chosen"].contains("recovery"), "{state:?}");
+    let pending = node.query_rows(&format!(
+        "SELECT spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {companion}"
+    ));
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["spell_id"], HEAL);
+    assert_eq!(pending[0]["target_guid"], *companion);
+    evidence(&node, "non-healer-recovery");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn casting_position_retains_one_injured_ally_across_movement_legs() {
     let (node, bots) = fixture("playerbots-companion-target-retention");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
@@ -535,18 +561,16 @@ fn unlearned_actor_heal_refuses_without_cast_power_or_cooldown_state() {
             .any(|row| row["outcome"].contains("unlearnedSpell")),
         "{action:?}"
     );
-    assert!(
-        node.query_rows(&format!(
+    assert!(node
+        .query_rows(&format!(
             "SELECT * FROM game_pending_cast WHERE caster_guid = {priest}"
         ))
-        .is_empty()
-    );
-    assert!(
-        node.query_rows(&format!(
+        .is_empty());
+    assert!(node
+        .query_rows(&format!(
             "SELECT * FROM game_spell_cd WHERE caster_guid = {priest} AND spell_id = {HEAL}"
         ))
-        .is_empty()
-    );
+        .is_empty());
     assert_eq!(
         node.query_rows(&format!(
             "SELECT power FROM game_world_entity WHERE guid = {priest}"
