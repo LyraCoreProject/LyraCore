@@ -152,7 +152,7 @@ pub fn import_nav_chunks_append(ctx: &ReducerContext, packed: String) -> Result<
 //  Runtime consumption (work-item 243) — the module-side wrappers over `lyracore_shared::nav`'s
 //  pure queries, gated on `game_config.nav_enabled` (default OFF; the 244 benchmark + live
 //  verify flips it). Every wrapper degrades to the pre-243 straight-line behavior when the
-//  flag is off, the chunk is missing, or no path exists.
+//  flag is off or a chunk is missing. `route_step` holds position when no path exists.
 // ===========================================================================================
 
 use crate::game_config;
@@ -205,32 +205,47 @@ fn merged_cell(terrain: Option<NavCellData>, coverage: Option<NavCellData>) -> O
 /// (the same hoist `vmap::fetcher` does with its active-generation lookup), never per cell.
 fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<NavCellData> + '_ {
     let generation = coverage_generation(ctx, map_id);
-    move |cx, cy| {
-        let key = cell_key(map_id, cx, cy);
-        let terrain = ctx
-            .db
-            .game_nav_chunk()
-            .key()
-            .find(key)
-            .map(|c| NavCellData {
-                base_z: c.base_z,
-                walk: c.walk,
-                obs: c.obs,
-            });
-        let coverage = generation.and_then(|generation_id| {
-            ctx.db
-                .game_vmap_nav_coverage()
-                .by_generation_cell()
-                .filter((generation_id, key))
-                .next()
-                .map(|c| NavCellData {
-                    base_z: c.base_z,
-                    walk: c.walk,
-                    obs: c.obs,
-                })
+    move |cx, cy| fetch_cell(ctx, map_id, generation, cx, cy).0
+}
+
+fn fetch_cell(
+    ctx: &ReducerContext,
+    map_id: u32,
+    generation: Option<u64>,
+    cx: u16,
+    cy: u16,
+) -> (Option<NavCellData>, bool) {
+    let key = cell_key(map_id, cx, cy);
+    let terrain = ctx
+        .db
+        .game_nav_chunk()
+        .key()
+        .find(key)
+        .map(|c| NavCellData {
+            base_z: c.base_z,
+            walk: c.walk,
+            obs: c.obs,
         });
-        merged_cell(terrain, coverage)
-    }
+    let coverage = generation.and_then(|generation_id| {
+        ctx.db
+            .game_vmap_nav_coverage()
+            .by_generation_cell()
+            .filter((generation_id, key))
+            .next()
+    });
+    let matching = coverage.as_ref().is_some_and(|c| {
+        c.map_id == map_id
+            && c.cell_x == cx
+            && c.cell_y == cy
+            && c.walk.len() == WALK_BYTES
+            && (c.obs.is_empty() || c.obs.len() == OBS_BYTES)
+    });
+    let coverage = coverage.map(|c| NavCellData {
+        base_z: c.base_z,
+        walk: c.walk,
+        obs: c.obs,
+    });
+    (merged_cell(terrain, coverage), matching)
 }
 
 /// Closed doors apply even where static geometry falls back to the coarse navigation grid.
@@ -254,6 +269,145 @@ pub fn has_los(
 /// falling back (242 note), so this stays small — a 500 ms leg only needs to round a corner,
 /// not solve the zone. 244 owns the measured tuning.
 const LEG_MAX_EXPANSIONS: u32 = 4096;
+
+/// Complete and Partial describe the planned route, including when collision stops this step.
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub enum RouteStatus {
+    Complete,
+    Partial,
+    Blocked,
+    /// Navigation is disabled. The collision Gate still applies.
+    Direct,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub enum CoverageEvidence {
+    Unknown,
+    /// Every consulted navigation cell has a matching derived row from the active generation's
+    /// finalized manifest. This does not certify terrain coverage or the world import scope.
+    VerifiedCells(VerifiedRouteCells),
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedRouteCells {
+    pub generation_id: u64,
+    pub checked_cells: u32,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
+pub struct RoutePoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl From<(f32, f32)> for RoutePoint {
+    fn from((x, y): (f32, f32)) -> Self {
+        Self { x, y }
+    }
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
+pub struct RouteClip {
+    pub attempted: RoutePoint,
+    pub hit: RoutePoint,
+}
+
+/// `endpoint == from` means no movement. Complete means a route was planned, not arrival.
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
+pub struct RouteStep {
+    pub from: RoutePoint,
+    pub endpoint: RoutePoint,
+    pub first_waypoint: Option<RoutePoint>,
+    pub status: RouteStatus,
+    pub expansions: u32,
+    pub clipping: Option<RouteClip>,
+    pub coverage: CoverageEvidence,
+}
+
+/// Plan one bot movement step. A failed search holds position; sparse missing rows retain
+/// unknown coverage. Collision can shorten complete, partial, and direct steps independently.
+#[allow(clippy::too_many_arguments)] // A movement step carries its partition, endpoints and distances.
+pub fn route_step(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    cur: (f32, f32),
+    dest: (f32, f32),
+    max_step: f32,
+    stop_dist: f32,
+    z: f32,
+) -> RouteStep {
+    let mut result = RouteStep {
+        from: cur.into(),
+        endpoint: cur.into(),
+        first_waypoint: None,
+        status: RouteStatus::Blocked,
+        expansions: 0,
+        clipping: None,
+        coverage: CoverageEvidence::Unknown,
+    };
+    if ![cur.0, cur.1, dest.0, dest.1, max_step, stop_dist, z]
+        .iter()
+        .all(|value| value.is_finite())
+        || max_step < 0.0
+        || stop_dist < 0.0
+        || [cur.0, cur.1, dest.0, dest.1]
+            .iter()
+            .any(|&value| cell_index(value).is_none())
+    {
+        return result;
+    }
+    let enabled = nav_enabled(ctx);
+    let generation = enabled.then(|| coverage_generation(ctx, map_id)).flatten();
+    let mut checked = std::collections::BTreeSet::new();
+    let mut all_covered = generation.is_some();
+    let mut fetch = |cx, cy| {
+        let (cell, covered) = fetch_cell(ctx, map_id, generation, cx, cy);
+        checked.insert((cx, cy));
+        all_covered &= covered;
+        cell
+    };
+    let attempted = if enabled {
+        // The search exempts its starting sub-cell and may finish without fetching it.
+        if let (Some(cx), Some(cy)) = (cell_index(cur.0), cell_index(cur.1)) {
+            fetch(cx, cy);
+        }
+        let search =
+            nav::find_leg_in_range_ex(&mut fetch, cur, dest, stop_dist, LEG_MAX_EXPANSIONS);
+        result.expansions = search.expansions;
+        let path = match search.outcome {
+            nav::LegOutcome::Complete(path) => {
+                result.status = RouteStatus::Complete;
+                path
+            }
+            nav::LegOutcome::Partial(path) => {
+                result.status = RouteStatus::Partial;
+                path
+            }
+            nav::LegOutcome::Blocked => Vec::new(),
+        };
+        result.first_waypoint = path.first().copied().map(RoutePoint::from);
+        result.first_waypoint.map_or(cur, |wp| {
+            crate::creatures::chase_step(cur.0, cur.1, wp.x, wp.y, max_step, 0.0)
+        })
+    } else {
+        result.status = RouteStatus::Direct;
+        crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+    };
+    let (endpoint, clipping) =
+        step_gate_with_fetch(ctx, map_id, instance_id, cur, attempted, z, &mut fetch);
+    result.endpoint = endpoint.into();
+    result.clipping = clipping;
+    if all_covered && !checked.is_empty() {
+        if let Some(generation_id) = generation {
+            result.coverage = CoverageEvidence::VerifiedCells(VerifiedRouteCells {
+                generation_id,
+                checked_cells: checked.len() as u32,
+            });
+        }
+    }
+    result
+}
 
 /// Steps toward a walkable path's first waypoint, then gates every result against geometry.
 /// A missing path may aim straight at the goal, but the commit gate stops it at obstructions.
@@ -311,16 +465,28 @@ fn step_gate(
     stepped: (f32, f32),
     z: f32,
 ) -> (f32, f32) {
+    let mut fetch = None;
+    step_gate_with_fetch(ctx, map_id, instance_id, cur, stepped, z, &mut |cx, cy| {
+        fetch.get_or_insert_with(|| fetcher(ctx, map_id))(cx, cy)
+    })
+    .0
+}
+
+fn step_gate_with_fetch(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    cur: (f32, f32),
+    stepped: (f32, f32),
+    z: f32,
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+) -> ((f32, f32), Option<RouteClip>) {
     gate_step(cur, stepped, z, |from, to| {
         let exact = crate::vmap::collision_ray(ctx, map_id, instance_id, from, to);
         let grid = if !crate::vmap::vmap_enabled(ctx, map_id) && nav_enabled(ctx) {
             // The grid query adds eye height itself, so it starts at foot height.
-            lyracore_shared::nav::step_hit(
-                &mut fetcher(ctx, map_id),
-                (from[0], from[1], z),
-                (to[0], to[1], z),
-            )
-            .map(|p| [p.0, p.1, from[2]])
+            lyracore_shared::nav::step_hit(fetch, (from[0], from[1], z), (to[0], to[1], z))
+                .map(|p| [p.0, p.1, from[2]])
         } else {
             None
         };
@@ -333,9 +499,9 @@ fn gate_step(
     stepped: (f32, f32),
     z: f32,
     mut collision: impl FnMut([f32; 3], [f32; 3]) -> Option<(f32, f32)>,
-) -> (f32, f32) {
+) -> ((f32, f32), Option<RouteClip>) {
     if stepped == cur {
-        return stepped;
+        return (stepped, None);
     }
     // Probe above walkable steps. A ray at foot height stops on every stair riser.
     let probe_z = z + lyracore_shared::nav::WALK_STEP_UP;
@@ -345,16 +511,23 @@ fn gate_step(
             let (dx, dy) = (hx - cur.0, hy - cur.1);
             let hit_dist = (dx * dx + dy * dy).sqrt();
             let land_dist = hit_dist - GATE_CLEARANCE_YD;
-            if land_dist <= 0.0 {
+            let endpoint = if land_dist <= 0.0 {
                 cur // hit inside the clearance margin — hold in place
             } else {
                 (
                     cur.0 + dx / hit_dist * land_dist,
                     cur.1 + dy / hit_dist * land_dist,
                 )
-            }
+            };
+            (
+                endpoint,
+                Some(RouteClip {
+                    attempted: stepped.into(),
+                    hit: (hx, hy).into(),
+                }),
+            )
         }
-        None => stepped, // clear (or no data under this segment) — the plain step stands
+        None => (stepped, None),
     }
 }
 
@@ -398,6 +571,46 @@ mod tests {
     use lyracore_shared::nav::{walk_get, walk_set, OBS_BYTES, OBS_NONE, WALK_BYTES};
 
     #[test]
+    fn collision_evidence_retains_the_attempt_when_the_step_cannot_advance() {
+        let from = (0.0, 0.0);
+        let attempted = (5.0, 0.0);
+        let hit = (0.5, 0.0);
+        let (endpoint, clipping) = gate_step(from, attempted, 80.0, |_, _| Some(hit));
+        assert_eq!(endpoint, from);
+        assert_eq!(
+            clipping,
+            Some(RouteClip {
+                attempted: attempted.into(),
+                hit: hit.into()
+            })
+        );
+    }
+
+    #[test]
+    fn collision_evidence_retains_progress_before_the_hit() {
+        let from = (0.0, 0.0);
+        let attempted = (5.0, 0.0);
+        let hit = (3.0, 0.0);
+        let (endpoint, clipping) = gate_step(from, attempted, 80.0, |_, _| Some(hit));
+        assert_eq!(endpoint, (2.0, 0.0));
+        assert_eq!(
+            clipping,
+            Some(RouteClip {
+                attempted: attempted.into(),
+                hit: hit.into()
+            })
+        );
+    }
+
+    #[test]
+    fn an_unclipped_step_has_no_collision_evidence() {
+        let attempted = (5.0, 0.0);
+        let (endpoint, clipping) = gate_step((0.0, 0.0), attempted, 80.0, |_, _| None);
+        assert_eq!(endpoint, attempted);
+        assert_eq!(clipping, None);
+    }
+
+    #[test]
     fn movement_steps_over_a_low_riser_but_stops_before_a_wall() {
         use lyracore_shared::vmap::{cast_ray, RayFlavor, TriClass, VmapTri};
         let cur = (-8910.0, -180.0);
@@ -428,7 +641,7 @@ mod tests {
                     },
                 },
             ];
-            let stepped = gate_step(cur, dest, 80.0, |from, to| {
+            let (stepped, _) = gate_step(cur, dest, 80.0, |from, to| {
                 cast_ray(
                     &mut |_, _| Some(tris.clone()),
                     from,
