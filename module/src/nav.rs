@@ -182,7 +182,7 @@ pub fn nav_coverage_enabled(ctx: &ReducerContext) -> bool {
 /// The generation whose derived coverage may join planning on this map, or `None` for the
 /// terrain-only grid. Needs the gate on, an ACTIVE generation, and a COMPLETE manifest — partial
 /// coverage never routes, and a non-active generation's rows are invisible here.
-fn coverage_generation(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
+pub(crate) fn coverage_generation(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
     if !nav_coverage_enabled(ctx) {
         return None;
     }

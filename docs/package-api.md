@@ -72,6 +72,17 @@ authoritative; this list is the set of event names and their payload types.
 | `on_hp_threshold` | `crate::hooks::HpThresholdPayload` |
 | `on_go_used` | `crate::hooks::GoUsedPayload` |
 
+### Session-less action consent
+
+`actor::set_sessionless_action_consent(ctx, character_guid, allowed)` records a core-owned consent
+projection during bot setup or controller selection. Call it for repeated selection too: every call
+removes that Character's unclaimed Group Intents. Do not call it on decision ticks. Absent consent
+preserves Legacy behavior. Core Gates check consent when accepting an invite or claiming an Intent.
+
+The Gateway obtains acknowledged admission from the owning World Shard before it accepts at
+Realm-core. Admission committed before a concurrent controller change can finish afterwards; this
+ordering does not promise an atomic operation across Shards.
+
 ### Encounter kernel
 
 `crate::encounter` holds the encounter state machine and the choreography verbs a Package drives it
@@ -221,8 +232,14 @@ Gate evidence. `endpoint == from` means no movement was approved, even if a comp
 planned. A blocked search holds position. Creature callers retain `nav_step` and its existing
 collision-gated fallback.
 
+`nav::coverage_generation(ctx, map_id)` returns the active complete coverage generation when its
+Gate is enabled, or `None`. Include it with map and instance in deferred destination keys. A changed
+generation invalidates a retained route decision; `None` preserves unknown coverage.
+
 `coverage` is `Unknown` unless every consulted navigation cell matches the active complete
 manifest. `VerifiedCells` names that generation and the number of checked cells. It proves only
 those cells' derivation, not world coverage or the presence of imported terrain and client
 geometry. A Package must measure actual position on later observations to establish advancement
 or arrival; the proposed endpoint cannot establish either.
+
+`actor::sessionless_action_gate(ctx, character_guid)` checks current Account Claim and Fence ownership, Character availability, and World Session status before Package gameplay. It permits a missing live entity so Legacy can restore a body. Group admission also requires a live entity and current controller consent.

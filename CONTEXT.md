@@ -212,7 +212,7 @@ Tactical interruption does not replace the objective.
 The single movement or cast retained by one Bot Controller generation.
 
 **Candidate**:
-A proposed action identified by its action, target, spell, and trigger.
+A proposed action identified by its action, target, spell, trigger, and Bot Objective identity.
 
 **Strategy**:
 A composition of typed triggers, defaults, and integer priorities used to select Candidates.

@@ -150,6 +150,7 @@ package_only! {
     pub(crate) use crate::chat::emit_system_message as system_message;
     pub(crate) use crate::group::accept_invite_for as accept_group_invite;
     pub(crate) use crate::sessionless::set_sessionless_action_consent as set_sessionless_action_consent;
+    pub(crate) use crate::sessionless::action_gate as sessionless_action_gate;
 }
 
 /// A Refusal classified at the operation's Gate. Detail preserves existing client messages.

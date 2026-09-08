@@ -44,10 +44,13 @@ pub(crate) fn set_sessionless_action_consent(
     crate::group::clear_unclaimed_group_intents(ctx, character_guid);
 }
 
-pub(crate) fn group_action_gate(
+/// Check current ownership before Package gameplay. A missing body is allowed so Legacy can
+/// restore it; group admission additionally requires a live entity and controller consent.
+pub(crate) fn action_gate(
     ctx: &ReducerContext,
     character_guid: u64,
-) -> Result<(), GroupRefusal> {
+) -> Result<(), crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
     crate::account_ownership::require_actor(
         ctx,
         crate::SessionActor {
@@ -55,16 +58,30 @@ pub(crate) fn group_action_gate(
             ownership: None,
         },
     )
-    .map_err(|_| GroupRefusal::ActorUnavailable)?;
-    let character = crate::helpers::character_by_guid(ctx, character_guid)
-        .ok_or(GroupRefusal::ActorUnavailable)?;
-    if character.online
-        || ctx
-            .db
-            .game_world_entity()
-            .guid()
-            .find(character_guid)
-            .is_none()
+    .map_err(|detail| ActionRefusal::new(ActionRefusalKind::CannotAct, detail))?;
+    let character = crate::helpers::character_by_guid(ctx, character_guid).ok_or_else(|| {
+        ActionRefusal::new(ActionRefusalKind::MissingActor, "Character unavailable")
+    })?;
+    if character.online {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "Character has a World Session",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn group_action_gate(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), GroupRefusal> {
+    action_gate(ctx, character_guid).map_err(|_| GroupRefusal::ActorUnavailable)?;
+    if ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .is_none()
     {
         return Err(GroupRefusal::ActorUnavailable);
     }

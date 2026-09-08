@@ -1,5 +1,7 @@
 //! Real Package action requests against a private, seeded Module.
 
+#[path = "playerbots_rewrite/runner.rs"]
+mod runner;
 mod support;
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
