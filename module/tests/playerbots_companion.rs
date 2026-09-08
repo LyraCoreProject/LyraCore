@@ -797,21 +797,30 @@ fn playerbots_actor_channel_request_has_a_typed_unsupported_refusal() {
 fn playerbots_explicit_cancellation_releases_the_heal_and_resumes_follow() {
     let (node, bots) = fixture("playerbots-companion-cancel-resume");
     let (priest, ally) = (&bots[0], &bots[2]);
+    node.assert_sql("UPDATE game_spell SET cast_time_ms = 60000 WHERE spell_id = 5090100");
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
     node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
     pass_once(&node, priest);
-    assert!(poll_until(POLL_TIMEOUT, || !node
-        .query_rows(&format!(
-            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
-        ))
-        .is_empty()));
+    let pending = node.query_rows(&format!(
+        "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
+    ));
+    assert_eq!(pending.len(), 1);
+    let scheduled_id = pending[0]["scheduled_id"].clone();
     let objective = runner(&node, priest)["objective_sequence"].clone();
     node.assert_call("playerbots_fixture_cancel", &[priest, "false"]);
+    evidence(&node, "cancelled-before-provisioning");
     assert!(node
         .query_rows(&format!(
             "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
         ))
         .is_empty());
+    let cancelled = node.query_rows(&format!(
+        "SELECT cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {priest}"
+    ));
+    assert_eq!(cancelled.len(), 1);
+    assert_eq!(cancelled[0]["cast_id"], scheduled_id);
+    assert_eq!(cancelled[0]["outcome"], "(cancelled = ())");
+    assert!(runner(&node, priest)["last_outcome"].contains("cancelled"));
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
     let resumed = resume_follow_after_provisioning(&node, priest, &objective, "cancel-resume");
     assert!(resumed["companion_heal_target_guid"].contains("none"));
