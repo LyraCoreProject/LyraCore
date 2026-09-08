@@ -448,6 +448,7 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "30"]);
     select(&node, priest, "cohort");
+    let mut leg_start = position(&node, priest);
     due(&node, priest);
     let first = runner(&node, priest);
     assert!(first["chosen"].contains("castingPosition"), "{first:?}");
@@ -456,11 +457,15 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     evidence(&node, "target-retention-first-leg");
 
     node.assert_call("playerbots_fixture_companion_health", &[leader, "10"]);
-    let mut movement_legs = 1;
+    let mut movement_legs = 0;
     let pending = loop {
-        assert!(poll_until(POLL_TIMEOUT, || movement_leg_finished(
-            &node, priest
-        )));
+        assert!(poll_until(POLL_TIMEOUT, || {
+            let observed = position(&node, priest);
+            ((observed.0 - leg_start.0).abs() > 0.1 || (observed.1 - leg_start.1).abs() > 0.1)
+                && movement_leg_finished(&node, priest)
+        }));
+        leg_start = position(&node, priest);
+        movement_legs += 1;
         due(&node, priest);
         let retained = runner(&node, priest);
         assert!(retained["chosen"].contains(ally), "{retained:?}");
@@ -470,8 +475,7 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
             &format!("target-retention-transition-{movement_legs}"),
         );
         if retained["chosen"].contains("castingPosition") {
-            movement_legs += 1;
-            assert!(movement_legs <= 6, "{retained:?}");
+            assert!(movement_legs < 6, "{retained:?}");
             continue;
         }
         assert!(retained["chosen"].contains("heal"), "{retained:?}");
