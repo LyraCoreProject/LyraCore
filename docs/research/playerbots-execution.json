@@ -470,7 +470,7 @@
         "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot.",
         "Shared design keeps one durable objective and one foreground action. A moving leader refreshes the companion destination without replacing the retained heal identity. Each parallel branch must prove behavior against merged prerequisites.",
         "The companion recovery fixture must cover critical health at a reached leader destination. A permanent survival Hold cannot block both useful self-recovery and necessary bounded provisioning.",
-        "The latest diagnostic passed three of six companion cases: safe low-health recovery, moving-leader follow without pulling, and populated PB-002 upgrade. The remaining fixture corrections address one-second cast event expiry, cooldown query fields, and bounded regrouping after resurrection. Final clean acceptance and independent review remain pending."
+        "The latest companion diagnostic passed five of six cases, including the real ally heal, moving leader, recovery, and populated upgrade. Independent Spec review then found three gaps: heal targets could change between prerequisite movement legs, channel rotations could hide a supported heal, and seed repair accepted an altered effect set. Corrections and new behavior cases are in progress; independent Standards review is pending."
       ],
       "acceptance_evidence": []
     },
@@ -542,7 +542,7 @@
         "Agreed integration performs at most one provisioning operation per eligible Cohort tick, with no foreground action. Spawn and level-up arm reconciliation; they do not grant resources outside current control and Account ownership checks.",
         "The real runner hook distinguishes an applied profile operation from a recorded refusal or deferral. Only applied work consumes the tick. Satisfied checks and recorded failures allow the chosen gameplay action to continue; backoff bounds retries.",
         "Useful survival, recovery, and defense outrank routine upkeep. New core operations return typed causes. An older String refusal may remain opaque detail but must not be classified by parsing its text.",
-        "The first completed runtime diagnostic passed the talent Gate case. Five other cases need corrected empty-row queries, a movement setup wait, or narrower protected-state assertions. Review also found ambiguous equipment refusal categories, a one-item recovery top-up mistaken for consumption, and row scans that need bounds before collection. No completion claim is made from this diagnostic."
+        "The first runtime diagnostic passed the talent Gate case. Source corrections now distinguish recovery grants from item use, preserve truthful equipment refusal causes, and stop explicitly when bounded profile reads overflow. The corrected implementation is committed and its clean runtime suite is in progress. Final acceptance and review remain pending."
       ],
       "acceptance_evidence": []
     },
@@ -580,7 +580,7 @@
         "Started in isolated core and Package worktrees from merged PB-002. Shared runner composition belongs to PB-003; builds use one coordinated slot.",
         "Catalog admission must prove a currently callable executor for every required kind. Imported destination evidence is separate from live target discovery. PB-007 owns the later autonomous quest sequence; its planned work cannot establish executor availability today.",
         "The reference ClassicDB source identity stays separate from observed runtime content and destination revisions. Seeded content or a later import cannot inherit an unverified source hash. A refresh scenario must cover held objectives when the observed content changes.",
-        "The importer column regression and native/Wasm checks passed. The first eight-case runtime suite is next. Current work includes the real Quest/Hold contribution, observed-content refresh with a shared deadline, and correct objective selection from carried collect items. Final runtime acceptance and review remain pending."
+        "The clean catalog run passed all seven admission and behavior cases with no compile warnings. Root verified 17 saved records against the exact core, Package, and Wasm identities. The eighth case, populated PB-002 upgrade, used an incorrect nested-option check; its corrected fixture awaits rerun. Independent review and final acceptance remain pending."
       ],
       "acceptance_evidence": []
     },
