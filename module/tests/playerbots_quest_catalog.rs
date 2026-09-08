@@ -718,7 +718,7 @@ fn playerbots_companion_control_precedes_held_quest_work() {
         assert!(state["objective"].contains("companion"), "{state:?}");
         let sequence =
             companion_sequence.get_or_insert_with(|| state["objective_sequence"].clone());
-        assert_eq!(&state["objective_sequence"], sequence);
+        assert_eq!(state["objective_sequence"].as_str(), sequence.as_str());
         assert_eq!(quest(&node, bot, 7), held_quest);
         if state["chosen"].contains("follow") {
             following = Some(state);
