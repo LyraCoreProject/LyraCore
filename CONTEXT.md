@@ -298,6 +298,24 @@ from the old schema. New rows use 1 START, 2 GO, 3 INTERRUPT, 4 PUSHBACK, or 5 P
 does not guess how to decode an unknown nonzero code.
 _Avoid_: cast flags, event flags, signal flags
 
+**Item Exchange**:
+A complete plan of carried-item consumption and item grants. Capacity, uniqueness, Random Property,
+and identity allocation Gates pass before any inventory row changes. Quest rewards commit as one
+exchange even when the caller retains a Refusal and continues.
+
+**Action Outcome**:
+An observation returned by the operation that owns an action. Acceptance records that work was
+admitted; completion and progress require evidence from that work. A synchronous interaction ends
+with success or Refusal. A timed cast also retains waiting and terminal outcomes.
+
+**Route Step**:
+A planned movement leg with its route status, first waypoint, collision clipping, and coverage
+evidence. Its endpoint is proposed movement, not proof of advancement or arrival.
+
+**Cast Handle**:
+The scheduled identity, spell, target, and current due time of one timed cast. Repeated bot requests
+retain this identity until the cast finishes or an explicit cancellation removes it.
+
 ### Creature AI
 
 **Creature-AI Family**:

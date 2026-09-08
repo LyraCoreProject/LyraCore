@@ -162,13 +162,9 @@ pub struct ItemTemplate {
     pub required_reputation_faction: u32,
     #[default(0)]
     pub required_reputation_rank: u32,
-    /// Unique-count cap (cmangos `maxcount`, 0 = no cap in-game convention but our importer/tooltip
-    /// treats 0 as "no limit" same as vanilla), the raw `item_template.Flags` bitmask (unique/
-    /// conjured/etc — `ItemFlag` on the wire), the readable-item page-text id (`PageText` — needs a
-    /// page_text dump table + reader packet, deferred as its own follow-up), the quest-starter link
-    /// (`startquest` — 194 consumes), and the bag-type restriction bitmask (`BagFamily`). Work-item
-    /// 213: data plumbing only, no consumer reads these yet (all 0 = unrestricted/no-cap/no-quest,
-    /// baseline-safe). END-appended + `#[default(0)]` → additive auto-migration. [reference]
+    /// Unique-count cap (`maxcount`), item flags, readable-item page, quest starter, and bag family.
+    /// Storage enforces `max_count` across carried and banked copies. Zero means no limit.
+    /// END-appended defaults keep existing items unrestricted. [reference]
     #[default(0)]
     pub max_count: u32,
     #[default(0)]

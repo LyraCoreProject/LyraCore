@@ -61,6 +61,7 @@ authoritative; this list is the set of event names and their payload types.
 | `on_kill` | `crate::hooks::KillPayload` |
 | `on_aggro` | `crate::hooks::AggroPayload` |
 | `on_cast_resolved` | `crate::hooks::CastResolvedPayload` |
+| `on_cast_finished` | `crate::hooks::CastFinishedPayload` |
 | `on_loot` | `crate::hooks::LootPayload` |
 | `on_quest_accept` | `crate::hooks::QuestAcceptPayload` |
 | `on_quest_turnin` | `crate::hooks::QuestTurninPayload` |
@@ -81,9 +82,32 @@ encounter content; the kernel exists for Packages.
 
 ### Actor verbs and helpers
 
-`crate::actor` is the documented verb set over every explicit-guid action: one uniform shape,
-`fn verb(ctx, actor_guid, ..) -> Result<(), String>`, with the gates of the core operation it names.
-The table at the top of `module/src/actor.rs` lists every verb and its gate semantics.
+`crate::actor` holds explicit-guid operations with the Gates of the core operation each names.
+Existing verbs keep `fn verb(ctx, actor_guid, ..) -> Result<(), String>`. The table in
+`module/src/actor.rs` lists their contracts.
+
+`actor::request_cast(ctx, actor_guid, spell_id, target_guid)` returns
+`Result<spell::CastStart, spell::CastRefusal>`. `Started` carries a Cast Handle. `Waiting` carries
+an existing cast's original identity, spell, target, and current due time, even when the new request
+names a different spell or target. It never restarts that cast. `Resolved` means effects dispatched
+synchronously, which does not imply a projectile hit. Channeled spells return `UnsupportedChannel`
+until bot requests can retain their lifecycle. Client casts keep their existing channel behavior.
+`actor::cast_at` is the compatibility adapter that discards this distinction. These explicit-guid
+requests preserve the Actor API's spellbook bypass. They do not prove the Character knows the spell;
+capability selection must enforce known, supported spells before proposing them.
+
+A scheduled cast ends through `on_cast_finished`. Its payload carries the caster, target, scheduled
+identity, and `spell::CastFinish`. Packages must match the scheduled identity before updating retained
+work. The hook runs after the pending row is removed. An instant cast returns its result directly and
+does not fire this hook. `on_cast_resolved` keeps its existing effect-dispatch contract.
+
+`spell::pending_cast` reads the current Cast Handle by caster. Refusal kinds are supplied by the
+owning Gate. `Other` preserves a Gate's message when no current caller needs a separate policy.
+
+`spell::cancel_cast_attempt(ctx, caster_guid, scheduled_id)` cancels only that scheduled cast.
+`spell::expire_cast_attempt(ctx, caster_guid, scheduled_id, deadline_micros)` also requires the
+caller's action deadline to have passed. They return whether they removed the cast and report
+`Cancelled` or `Expired` through `on_cast_finished`. A stale identity cannot cancel a replacement.
 
 `crate::helpers` holds the reads a Package needs before it acts: `live_entity`, `require_character`,
 `character_by_guid`, `character_by_name`, `entity_by_owner`, `acting_entity_by_guid`, `entities_near`,
@@ -177,3 +201,28 @@ so the surface can grow or the Package can move off it.
 
 An exemption cannot enable a whole-crate alias or `#[path]`. Either spelling can hide dependencies
 on other lines or in files the lint cannot locate, so the build always refuses it.
+
+## Action observations
+
+`actor::request_attack` returns `AttackStart::Armed` or `AlreadyArmed`. The latter keeps the current
+melee swing timer. Both mean an engagement was accepted; neither proves a hit. The existing
+`actor::attack` and client operations retain their re-arm behavior.
+
+`actor::request_accept_quest` and `request_turn_in_quest` complete synchronously. They return
+`Result<(), ActionRefusal>`, with the same core Gates and effects as the client operations. They
+have no waiting, cancellation, or expiry phase. Attack requests also return `ActionRefusal`.
+Its `kind` identifies actionable Gates and `detail` preserves the client message. `Other` is an
+opaque refusal; Package policy must not classify its text.
+
+`nav::route_step` accepts the same arguments as `nav_step` and returns a `RouteStep`. Its `status`
+is `Complete`, `Partial`, `Blocked`, or `Direct` when navigation is disabled. Complete and Partial
+describe the planned route. `first_waypoint`, `expansions`, and `clipping` retain search and commit
+Gate evidence. `endpoint == from` means no movement was approved, even if a complete path was
+planned. A blocked search holds position. Creature callers retain `nav_step` and its existing
+collision-gated fallback.
+
+`coverage` is `Unknown` unless every consulted navigation cell matches the active complete
+manifest. `VerifiedCells` names that generation and the number of checked cells. It proves only
+those cells' derivation, not world coverage or the presence of imported terrain and client
+geometry. A Package must measure actual position on later observations to establish advancement
+or arrival; the proposed endpoint cannot establish either.

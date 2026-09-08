@@ -342,7 +342,27 @@ pub fn find_leg_ex(
     to: (f32, f32),
     max_expansions: u32,
 ) -> Option<(Vec<(f32, f32)>, u32, bool)> {
-    search_leg(fetch, from, to, 0.0, max_expansions)
+    let search = search_leg(fetch, from, to, 0.0, max_expansions);
+    match search.outcome {
+        LegOutcome::Complete(path) => Some((path, search.expansions, true)),
+        LegOutcome::Partial(path) => Some((path, search.expansions, false)),
+        LegOutcome::Blocked => None,
+    }
+}
+
+/// Planning success is distinct from arrival. Partial legs retain safe progress toward the goal.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LegOutcome {
+    Complete(Vec<(f32, f32)>),
+    Partial(Vec<(f32, f32)>),
+    Blocked,
+}
+
+/// Search work is retained even when no progress is possible.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegSearch {
+    pub outcome: LegOutcome,
+    pub expansions: u32,
 }
 
 /// Find a leg to a walkable point within the caller's stopping distance of the target.
@@ -354,26 +374,58 @@ pub fn find_leg_in_range(
     stop_dist: f32,
     max_expansions: u32,
 ) -> Option<Vec<(f32, f32)>> {
-    search_leg(fetch, from, to, stop_dist.max(0.0), max_expansions).map(|(path, _, _)| path)
+    match find_leg_in_range_ex(fetch, from, to, stop_dist, max_expansions).outcome {
+        LegOutcome::Complete(path) | LegOutcome::Partial(path) => Some(path),
+        LegOutcome::Blocked => None,
+    }
 }
 
-#[allow(clippy::type_complexity)]
+/// Find a range-limited leg without discarding completeness or failed-search work.
+pub fn find_leg_in_range_ex(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    from: (f32, f32),
+    to: (f32, f32),
+    stop_dist: f32,
+    max_expansions: u32,
+) -> LegSearch {
+    if !stop_dist.is_finite() {
+        return LegSearch {
+            outcome: LegOutcome::Blocked,
+            expansions: 0,
+        };
+    }
+    search_leg(fetch, from, to, stop_dist.max(0.0), max_expansions)
+}
+
 fn search_leg(
     fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
     from: (f32, f32),
     to: (f32, f32),
     stop_dist: f32,
     max_expansions: u32,
-) -> Option<(Vec<(f32, f32)>, u32, bool)> {
-    let (sx, sy) = (grid_coord(from.0)?, grid_coord(from.1)?);
-    let (tx, ty) = (grid_coord(to.0)?, grid_coord(to.1)?);
+) -> LegSearch {
+    let blocked = |expansions| LegSearch {
+        outcome: LegOutcome::Blocked,
+        expansions,
+    };
+    let (Some(sx), Some(sy), Some(tx), Some(ty)) = (
+        grid_coord(from.0),
+        grid_coord(from.1),
+        grid_coord(to.0),
+        grid_coord(to.1),
+    ) else {
+        return blocked(0);
+    };
     if !stop_dist.is_finite() {
-        return None;
+        return blocked(0);
     }
     let mut cache = Cache::new(fetch);
     let distance = (to.0 - from.0).hypot(to.1 - from.1);
     if distance <= stop_dist {
-        return Some((vec![from], 0, true));
+        return LegSearch {
+            outcome: LegOutcome::Complete(vec![from]),
+            expansions: 0,
+        };
     }
     let direct = if stop_dist > 0.0 {
         let scale = (distance - stop_dist) / distance;
@@ -385,11 +437,14 @@ fn search_leg(
         to
     };
     if line_walkable(&mut cache, from, direct) {
-        return Some((vec![direct], 0, true));
+        return LegSearch {
+            outcome: LegOutcome::Complete(vec![direct]),
+            expansions: 0,
+        };
     }
     let target_walkable = grid_walkable(&mut cache, tx, ty);
     if stop_dist == 0.0 && !target_walkable {
-        return None;
+        return blocked(0);
     }
     // A* with octile heuristic, integer costs (10 straight / 14 diagonal), corner-cut guard.
     use std::cmp::Reverse;
@@ -420,10 +475,10 @@ fn search_leg(
             best.0 = (x, y);
             break;
         }
-        expanded += 1;
-        if expanded > max_expansions {
+        if expanded == max_expansions {
             break; // budget exhausted — fall through to the best-effort partial path
         }
+        expanded += 1;
         let hxy = h(x, y);
         if hxy < best.1 {
             best = ((x, y), hxy);
@@ -467,7 +522,7 @@ fn search_leg(
         best.0
     } else {
         if best.0 == (sx, sy) {
-            return None; // zero progress possible (walled-in start) — caller falls back
+            return blocked(expanded);
         }
         best.0
     };
@@ -510,7 +565,14 @@ fn search_leg(
         path.pop();
         path.push(to);
     }
-    Some((path, expanded, found))
+    LegSearch {
+        outcome: if found {
+            LegOutcome::Complete(path)
+        } else {
+            LegOutcome::Partial(path)
+        },
+        expansions: expanded,
+    }
 }
 
 #[cfg(test)]
@@ -638,6 +700,68 @@ mod runtime_tests {
         assert_eq!(expanded, 0);
         assert_eq!(path.len(), 1);
         assert!(complete);
+    }
+
+    #[test]
+    fn range_search_completes_before_a_blocked_target() {
+        let from = at(10, 50);
+        let to = at(32, 50);
+        let search = find_leg_in_range_ex(&mut fetcher(), from, to, 4.0, 4096);
+        let LegOutcome::Complete(path) = search.outcome else {
+            panic!("the stopping distance ends before the wall");
+        };
+        assert_eq!(search.expansions, 0);
+        let endpoint = *path.last().unwrap();
+        assert!(((endpoint.0 - to.0).hypot(endpoint.1 - to.1) - 4.0).abs() < 0.01);
+        assert_ne!(endpoint, from);
+    }
+
+    #[test]
+    fn range_search_retains_safe_partial_progress_at_the_expansion_cap() {
+        let from = at(50, 8);
+        let to = at(8, 8);
+        let search = find_leg_in_range_ex(&mut fetcher(), from, to, 0.0, 32);
+        let LegOutcome::Partial(path) = search.outcome else {
+            panic!("the sealed pocket permits only partial progress");
+        };
+        assert_eq!(search.expansions, 32);
+        assert_ne!(path.last().copied(), Some(from));
+        let mut fetch = fetcher();
+        let mut cache = Cache::new(&mut fetch);
+        let mut previous = from;
+        for point in path {
+            assert!(line_walkable(&mut cache, previous, point));
+            previous = point;
+        }
+    }
+
+    #[test]
+    fn blocked_search_retains_expansions_without_a_straight_fallback() {
+        let ((cx, cy), mut cell) = walled_cell();
+        cell.walk.fill(0);
+        walk_set(&mut cell.walk, 10, 10, true);
+        walk_set(&mut cell.walk, 50, 50, true);
+        let mut fetch = |x, y| (x == cx && y == cy).then(|| cell.clone());
+        let search = find_leg_in_range_ex(&mut fetch, at(10, 10), at(50, 50), 0.0, 4096);
+        assert_eq!(search.outcome, LegOutcome::Blocked);
+        assert_eq!(search.expansions, 1);
+    }
+
+    #[test]
+    fn zero_search_budget_never_expands_a_node() {
+        let search = find_leg_in_range_ex(&mut fetcher(), at(10, 50), at(54, 50), 0.0, 0);
+        assert_eq!(search.outcome, LegOutcome::Blocked);
+        assert_eq!(search.expansions, 0);
+    }
+
+    #[test]
+    fn nonfinite_stopping_distance_does_not_produce_a_route() {
+        for distance in [f32::NAN, f32::INFINITY, -f32::INFINITY] {
+            let search =
+                find_leg_in_range_ex(&mut fetcher(), at(10, 50), at(20, 50), distance, 4096);
+            assert_eq!(search.outcome, LegOutcome::Blocked);
+            assert_eq!(search.expansions, 0);
+        }
     }
 
     #[test]

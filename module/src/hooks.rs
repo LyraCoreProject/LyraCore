@@ -125,6 +125,15 @@ pub struct CastResolvedPayload {
     pub target_guid: u64,
 }
 
+/// One scheduled cast ended. The scheduled identity distinguishes successive casts of one spell.
+/// The pending row has been removed before handlers run.
+pub struct CastFinishedPayload {
+    pub caster_guid: u64,
+    pub target_guid: u64,
+    pub scheduled_id: u64,
+    pub outcome: crate::spell::CastFinish,
+}
+
 /// A unit LOOTED one item stack from a corpse/gameobject loot window (`items::apply_take_loot`
 /// success — the player reducer and `debug_take_loot` both route here). Money pickup is a separate
 /// path and does not fire this.

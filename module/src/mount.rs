@@ -678,7 +678,7 @@ mod tests {
         let src = include_str!("combat/engage.rs");
         for (signature, gate) in [
             (
-                "pub(crate) fn apply_start_attack(",
+                "fn start_attack(",
                 "validate_attack_target(ctx, &attacker, target_guid)?;",
             ),
             (
@@ -715,7 +715,7 @@ mod tests {
     fn an_accepted_cast_dismounts_and_the_mount_cast_is_exempt() {
         let body = crate::test_scan::code_of(
             include_str!("spell/cast/resolve.rs"),
-            "pub(crate) fn resolve_cast_at(",
+            "pub(crate) fn resolve_cast_at_typed(",
         );
         let gates = body
             .find("check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;")

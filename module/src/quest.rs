@@ -21,6 +21,7 @@
 //! [`crate::xp::grant_xp`] + [`crate::items::grant_item`]), and marks the row rewarded (kept, to block
 //! a repeat). Purely additive: brand-new tables + one hook call in `kill_creature`.
 
+use crate::actor::{ActionRefusal, ActionRefusalKind};
 use std::collections::BTreeSet;
 
 use spacetimedb::{table, Identity, ReducerContext, Table};
@@ -590,7 +591,7 @@ fn validate_giver(
     ctx: &ReducerContext,
     player: &crate::WorldEntity,
     giver_guid: u64,
-) -> Result<GiverKind, String> {
+) -> Result<GiverKind, ActionRefusal> {
     if let Some(giver) = ctx.db.game_world_entity().guid().find(giver_guid) {
         if giver.is_player() {
             // Work-item 194 (sharing): the ONLY case a live PLAYER entity is a valid giver — a
@@ -598,11 +599,17 @@ fn validate_giver(
             return validate_party_giver(ctx, player, giver_guid, &giver);
         }
         if giver.map_id != player.map_id || giver.instance_id != player.instance_id {
-            return Err("quest giver on another map".to_string());
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::OtherPartition,
+                "quest giver on another map",
+            ));
         }
         let (dx, dy, dz) = (giver.x - player.x, giver.y - player.y, giver.z - player.z);
         if dx * dx + dy * dy + dz * dz > QUEST_GIVER_RANGE_SQ {
-            return Err("quest giver out of range".to_string());
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::OutOfRange,
+                "quest giver out of range",
+            ));
         }
         return Ok(GiverKind::Creature(giver.entry));
     }
@@ -614,11 +621,17 @@ fn validate_giver(
         // dungeon GOs are per-instance copies, so a giver in another party's Deadmines can never
         // serve this player).
         if go.map_id != player.map_id || go.instance_id != player.instance_id {
-            return Err("quest giver on another map".to_string());
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::OtherPartition,
+                "quest giver on another map",
+            ));
         }
         let (dx, dy, dz) = (go.x - player.x, go.y - player.y, go.z - player.z);
         if dx * dx + dy * dy + dz * dz > QUEST_GIVER_RANGE_SQ {
-            return Err("quest giver out of range".to_string());
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::OutOfRange,
+                "quest giver out of range",
+            ));
         }
         return Ok(GiverKind::GameObject(go.template_entry));
     }
@@ -632,7 +645,7 @@ fn validate_giver(
         .find(giver_guid)
         .filter(|i| i.owner_guid == player.guid)
         .map(|i| GiverKind::Item(i.entry))
-        .ok_or_else(|| "no such quest giver".to_string())
+        .ok_or_else(|| ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such quest giver"))
 }
 
 /// Work-item 194 (sharing): validates a live PLAYER `giver_guid` as a party-share giver for `player`
@@ -646,7 +659,7 @@ fn validate_party_giver(
     player: &crate::WorldEntity,
     giver_guid: u64,
     giver: &crate::WorldEntity,
-) -> Result<GiverKind, String> {
+) -> Result<GiverKind, ActionRefusal> {
     let same_group = match (
         crate::group::group_of(ctx, player.guid),
         crate::group::group_of(ctx, giver_guid),
@@ -655,14 +668,20 @@ fn validate_party_giver(
         _ => false,
     };
     if !same_group {
-        return Err("target is not a quest giver".to_string());
+        return Err("target is not a quest giver".to_string().into());
     }
     if giver.map_id != player.map_id || giver.instance_id != player.instance_id {
-        return Err("quest giver on another map".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "quest giver on another map",
+        ));
     }
     let (dx, dy, dz) = (giver.x - player.x, giver.y - player.y, giver.z - player.z);
     if dx * dx + dy * dy + dz * dz > PARTY_SHARE_RANGE_SQ {
-        return Err("quest giver out of range".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OutOfRange,
+            "quest giver out of range",
+        ));
     }
     Ok(GiverKind::Party(giver_guid))
 }
@@ -777,14 +796,28 @@ pub(crate) fn apply_accept_quest(
     giver_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
+    request_accept_quest(ctx, player_guid, giver_guid, quest_entry).map_err(Into::into)
+}
+
+pub(crate) fn request_accept_quest(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    giver_guid: u64,
+    quest_entry: u32,
+) -> Result<(), ActionRefusal> {
     let player = crate::helpers::live_entity(ctx, player_guid)
-        .map_err(|_| "player not in world".to_string())?;
+        .map_err(|_| ActionRefusal::new(ActionRefusalKind::MissingActor, "player not in world"))?;
     if player.dead {
-        return Err("dead players cannot accept quests".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::DeadActor,
+            "dead players cannot accept quests",
+        ));
     }
     let giver = validate_giver(ctx, &player, giver_guid)?;
     if !giver_has_quest_role(ctx, &giver, quest_entry, quest_role::START) {
-        return Err("that quest giver does not offer this quest".to_string());
+        return Err("that quest giver does not offer this quest"
+            .to_string()
+            .into());
     }
     let tmpl = ctx
         .db
@@ -818,7 +851,7 @@ pub(crate) fn apply_accept_quest(
 /// once every accept GATE has been checked (by the real accept) or deliberately skipped (by the harness
 /// grant), both paths do the identical work: grant the quest's provided "source" item (cmangos
 /// SrcItemId — the item HANDED to the player on accept, satisfying a COLLECT objective whose ReqItemId
-/// == SrcItemId; `?` rolls the whole accept back on a full backpack), size a zeroed progress vector to
+/// == SrcItemId; an item Refusal leaves the quest unchanged), size a zeroed progress vector to
 /// the quest's objective count (capped at [`MAX_OBJECTIVES`]), write the [`CharacterQuest`] row —
 /// UPDATED in place if `existing` names one (the repeatable/failed reset path, id kept — see
 /// `apply_accept_quest`'s duplicate guard), else a fresh insert — and fire the accept hook. The debug
@@ -831,9 +864,15 @@ fn apply_accept_effects(
     tmpl: &QuestTemplate,
     existing: Option<CharacterQuest>,
     deadline_micros: i64,
-) -> Result<(), String> {
+) -> Result<(), ActionRefusal> {
     if tmpl.src_item != 0 {
-        crate::items::grant_item(ctx, character_guid, tmpl.src_item, tmpl.src_item_count)?;
+        crate::items::request_grant_item(
+            ctx,
+            character_guid,
+            tmpl.src_item,
+            tmpl.src_item_count,
+            None,
+        )?;
     }
     let num_objectives = ctx
         .db
@@ -931,6 +970,7 @@ pub(crate) fn grant_quest_unchecked(
         None,
         0,
     )
+    .map_err(Into::into)
 }
 
 /// Pure choice-reward pick (testable without a live `ReducerContext`): given a quest's choice rows as
@@ -954,13 +994,9 @@ fn pick_choice_reward(
         .ok_or_else(|| format!("invalid reward choice {reward_index} for quest {quest_entry}"))
 }
 
-/// Turn quest `quest_entry` in to giver `giver_guid` for `player_guid` — the shared core behind the
-/// player `turn_in_quest` reducer and its debug twin. Validates: the player is in world + alive; the
-/// giver is a real creature in range that ENDS the quest; the player has it ACTIVE (a row, not yet
-/// rewarded); and every objective is complete. Then grants the rewards atomically — reward ITEMS first
-/// (the only step that can fail, on a full backpack, rolling the whole tx back so nothing is granted
-/// without the items landing), then money + XP — and marks the row `rewarded` (kept, to block a
-/// repeat). Reuses [`crate::items::grant_item`] + [`crate::xp::grant_xp`]. [entity]
+/// Turn in a completed quest through the giver and objective Gates. Resolve the reward choice,
+/// spell, and complete item exchange before changing items, money, XP, or the quest row.
+/// A caller may retain a Refusal without relying on reducer rollback.
 pub(crate) fn apply_turn_in_quest(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -968,30 +1004,45 @@ pub(crate) fn apply_turn_in_quest(
     quest_entry: u32,
     reward_index: u32,
 ) -> Result<(), String> {
+    request_turn_in_quest(ctx, player_guid, giver_guid, quest_entry, reward_index)
+        .map_err(Into::into)
+}
+
+pub(crate) fn request_turn_in_quest(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    giver_guid: u64,
+    quest_entry: u32,
+    reward_index: u32,
+) -> Result<(), ActionRefusal> {
     let entities = ctx.db.game_world_entity();
-    let mut player = entities
-        .guid()
-        .find(player_guid)
-        .ok_or_else(|| "player not in world".to_string())?;
+    let mut player = entities.guid().find(player_guid).ok_or_else(|| {
+        ActionRefusal::new(ActionRefusalKind::MissingActor, "player not in world")
+    })?;
     if player.dead {
-        return Err("dead players cannot turn in quests".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::DeadActor,
+            "dead players cannot turn in quests",
+        ));
     }
     let giver = validate_giver(ctx, &player, giver_guid)?;
     if !giver_has_quest_role(ctx, &giver, quest_entry, quest_role::END) {
-        return Err("that quest giver does not complete this quest".to_string());
+        return Err("that quest giver does not complete this quest"
+            .to_string()
+            .into());
     }
     let mut cq = character_quest_row(ctx, player_guid, quest_entry)
         .ok_or_else(|| "you are not on that quest".to_string())?;
     if cq.rewarded {
-        return Err("quest already turned in".to_string());
+        return Err("quest already turned in".to_string().into());
     }
     // Work-item 194 (timed quests): a FAILED (expired) quest can't be turned in — it must be
     // re-accepted first (the duplicate guard in `apply_accept_quest` lets that through).
     if cq.failed {
-        return Err("quest has expired".to_string());
+        return Err("quest has expired".to_string().into());
     }
     if !quest_is_complete(ctx, &cq) {
-        return Err("quest objectives not complete".to_string());
+        return Err("quest objectives not complete".to_string().into());
     }
     let tmpl = ctx
         .db
@@ -1014,41 +1065,26 @@ pub(crate) fn apply_turn_in_quest(
             .find(reward.spell_id)
             .is_none()
         {
-            return Err(format!("quest reward spell {} is missing", reward.spell_id));
+            return Err(format!("quest reward spell {} is missing", reward.spell_id).into());
         }
     }
     let owner_identity = player.owner_identity;
 
-    // Consume the COLLECT objectives' required items BEFORE granting rewards — frees the bag
-    // space the reward may need, and is atomic with the grant (any later Err rolls the whole tx back, so a
-    // failed turn-in neither eats the items nor hands out the reward). `quest_is_complete` already verified
-    // the player holds enough, so `remove_items` won't normally Err (it still does defensively).
-    let collect: Vec<_> = ctx
+    let collect: Vec<(u32, u32)> = ctx
         .db
         .game_quest_objective()
         .by_quest()
         .filter(&quest_entry)
         .filter(|o| o.kind == objective_kind::COLLECT_ITEM)
+        .map(|o| (o.target_entry, o.required_count))
         .collect();
-    for obj in collect {
-        crate::items::remove_items(ctx, player_guid, obj.target_entry, obj.required_count)?;
-    }
-
-    // Rewards. Items FIRST (the fallible step — a full backpack must fail the whole turn-in before any
-    // money/XP/state change; SpacetimeDB rolls the tx back on Err). Then money (saturating) + XP via the
-    // shared ding loop. The player entity is updated once after grant_xp folds in any level-ups.
-    for r in ctx
+    let mut rewards: Vec<(u32, u32)> = ctx
         .db
         .game_quest_reward_item()
         .by_quest()
         .filter(&quest_entry)
-    {
-        crate::items::grant_item(ctx, player_guid, r.item_entry, r.count)?;
-    }
-    // Choice reward (pick-1-of-N): grant the single row whose choice_index == reward_index, IN ADDITION to
-    // the guaranteed items above and atomic with them (any Err rolls the whole tx back, before money/XP).
-    // A quest with NO choice rows ignores reward_index; a choice-quest whose index matches no slot is
-    // REJECTED (the client must pick a valid slot) — never silently grant nothing / the wrong item.
+        .map(|reward| (reward.item_entry, reward.count))
+        .collect();
     let choices: Vec<(u8, u32, u32)> = ctx
         .db
         .game_quest_reward_choice()
@@ -1056,8 +1092,8 @@ pub(crate) fn apply_turn_in_quest(
         .filter(&quest_entry)
         .map(|c| (c.choice_index, c.item_entry, c.count))
         .collect();
-    if let Some((item_entry, count)) = pick_choice_reward(&choices, reward_index, quest_entry)? {
-        crate::items::grant_item(ctx, player_guid, item_entry, count)?;
+    if let Some(reward) = pick_choice_reward(&choices, reward_index, quest_entry)? {
+        rewards.push(reward);
     }
     player.money = player.money.saturating_add(tmpl.reward_money);
     // Quest XP is scaled by the realm xp_rate at the source (like kill XP), so a custom-rate realm
@@ -1084,7 +1120,11 @@ pub(crate) fn apply_turn_in_quest(
         player.money = player
             .money
             .saturating_add(lyracore_shared::quest::max_level_money_reward(xp));
-    } else {
+    }
+    // Packages may retain a Refusal and continue their reducer. The exchange resolves all item
+    // Gates before committing; every quest effect below this point is infallible.
+    crate::items::exchange_items(ctx, player_guid, &collect, &rewards)?;
+    if player.level < QUEST_MAX_LEVEL_PAYOUT {
         // "+N experience" feedback: a non-kill game_xp_event → SMSG_LOG_XPGAIN, mirroring the kill
         // (award_xp) and exploration paths. grant_xp itself deliberately never emits one, so quest XP
         // showed no floating text without this. killed_guid 0 = no source unit (the NonKill form).

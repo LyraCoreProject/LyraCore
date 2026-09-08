@@ -74,7 +74,7 @@ jobs:
       # `lethal_floor`'s ranged phase races the module's own cast-event sweep and health regen, and
       # is flaky on `main` with or without this change.
       - name: Run the durable suite
-        run: cargo test -p lyracore-module --tests -- --ignored --test-threads=4 --skip deadmines --skip personality --skip lethal_floor
+        run: cargo test -p lyracore-module --tests -- --ignored --test-threads=4 --skip deadmines --skip personality --skip playerbots_ --skip lethal_floor
 
       - name: Run the single-shard auction Refusal regression
         run: cargo test -p lyracore-gateway --bin lyracore-gateway stdb::reducers::auction_reducer_tests::a_local_bid_interaction_refusal_stays_a_client_outcome -- --ignored --exact

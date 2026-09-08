@@ -3,23 +3,18 @@
 //! playerbots brains, and the future Tier-2 Lua host API — consumes the SAME verbs the
 //! player reducers do, with identical gates.
 //!
-//! Design rules (all enforced by construction — every verb IS its core, re-exported):
-//! - **No behavior**: each verb is a `pub(crate) use` rename of the existing core; the gates
-//!   (range, money, validation, CC, faction) live in the cores and CANNOT drift here. The two
-//!   exceptions below (`cast_at`, `stop_attack`) are shape adapters only and say so.
-//! - **Uniform shape**: `fn verb(ctx, actor_guid, ...) -> Result<(), String>` — the actor is
-//!   always the first arg after ctx, by guid (never identity; sender resolution stays in the
-//!   player reducers). Cores resolve every OTHER participant by guid too, so no caller ever
-//!   passes a row.
-//! - **NOT authorization**: these are reducer-internal fns. Callers are already inside a reducer
-//!   transaction that authorized the action (a debug reducer, a bot tick pass, a hook handler).
+//! Existing verbs retain their `Result<(), String>` contract. Typed requests expose accepted
+//! work and pending cast identity without changing the client operations. All Gates remain
+//! in the operation that owns them. Callers authorize the Actor before entering these functions.
 //!
 //! | verb | core | gate semantics (unchanged, documented here for consumers) |
 //! |------|------|------------------------------------------------------------|
 //! | `attack` | `combat::apply_start_attack` | CC-blocked rejected; no self/corpse/cross-map; friendly (green) target rejected when faction data exists; re-arm retargets |
+//! | `request_attack` | `combat::request_attack` | typed acceptance or Refusal; keeps a matching swing timer; acceptance does not imply damage |
 //! | `ranged_attack` | `combat::apply_start_ranged_attack` | `attack` gates + ranged weapon equipped (slot 17) |
 //! | `stop_attack` | `combat::stop_attack_for` | unconditional disarm of the actor's outgoing melee row |
-//! | `cast_at` | `spell::resolve_cast_at` | the full cast core: CC/dead/range/cost/GCD/cooldown gates; level sourced from the live entity |
+//! | `cast_at` | `spell::request_cast` | normal cast lifecycle; an existing timed cast waits; level comes from the live entity |
+//! | `request_cast` | `spell::request_cast` | typed start, waiting, and Refusal; completion uses `on_cast_finished` |
 //! | `accept_quest` | `quest::apply_accept_quest` | alive + giver in range offering the quest + level/race/class/prereq/duplicate gates |
 //! | `stage_quest` | `quest::grant_quest_unchecked` | HARNESS/BOT staging: same row shape, all accept gates SKIPPED (giver-less) |
 //! | `turn_in_quest` | `quest::apply_turn_in_quest` | alive + giver in range ending the quest + objectives complete; rewards atomic |
@@ -81,6 +76,8 @@ macro_rules! package_only {
 }
 
 package_only! { pub(crate) use crate::combat::apply_start_attack as attack; }
+package_only! { pub(crate) use crate::combat::request_attack as request_attack; }
+package_only! { pub(crate) use crate::spell::request_cast as request_cast; }
 debug_only! { pub(crate) use crate::combat::apply_start_ranged_attack as ranged_attack; }
 
 /// Disarm the actor's outgoing auto-attack (melee or ranged). Shape adapter ONLY: the core returns
@@ -91,34 +88,30 @@ pub(crate) fn stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), S
     Ok(())
 }
 
-/// Resolve a cast from the actor AT `target_guid` through the single cast core (instant packet
-/// shape — `is_completion = false`, matching `debug_cast_at`). Shape adapter ONLY: sources the
-/// caster level from the live entity, exactly like the player path, then delegates.
-#[cfg_attr(not(has_packages), allow(dead_code))] // package-only consumer — see `package_only!`
+/// Compatibility adapter for callers that only need acceptance. Use `request_cast` to retain
+/// the scheduled identity and observe completion through `on_cast_finished`.
+#[allow(
+    dead_code,
+    reason = "Package API v1 retains the result-only cast_at adapter"
+)]
 pub(crate) fn cast_at(
     ctx: &ReducerContext,
     actor_guid: u64,
     spell_id: u32,
     target_guid: u64,
 ) -> Result<(), String> {
-    let e = crate::helpers::live_entity(ctx, actor_guid)?;
-    crate::spell::resolve_cast_at(
-        ctx,
-        actor_guid,
-        spell_id,
-        e.level as u8,
-        target_guid,
-        false,
-        false,
-        None,
-    )
+    crate::spell::request_cast(ctx, actor_guid, spell_id, target_guid)
+        .map(|_| ())
+        .map_err(Into::into)
 }
 
 // ---- quests ----
 
 package_only! {
     pub(crate) use crate::quest::apply_accept_quest as accept_quest;
+    pub(crate) use crate::quest::request_accept_quest as request_accept_quest;
     pub(crate) use crate::quest::apply_turn_in_quest as turn_in_quest;
+    pub(crate) use crate::quest::request_turn_in_quest as request_turn_in_quest;
 }
 debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest; }
 
@@ -155,4 +148,48 @@ package_only! {
 package_only! {
     pub(crate) use crate::chat::emit_system_message as system_message;
     pub(crate) use crate::group::accept_invite_for as accept_group_invite;
+}
+
+/// A Refusal classified at the operation's Gate. Detail preserves existing client messages.
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct ActionRefusal {
+    pub kind: ActionRefusalKind,
+    pub detail: String,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionRefusalKind {
+    MissingActor,
+    MissingTarget,
+    DeadActor,
+    DeadTarget,
+    CannotAct,
+    OtherPartition,
+    OutOfRange,
+    InventoryFull,
+    Other,
+}
+
+impl ActionRefusal {
+    pub(crate) fn new(kind: ActionRefusalKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+        }
+    }
+}
+impl From<String> for ActionRefusal {
+    fn from(detail: String) -> Self {
+        Self::new(ActionRefusalKind::Other, detail)
+    }
+}
+impl From<ActionRefusal> for String {
+    fn from(reason: ActionRefusal) -> Self {
+        reason.detail
+    }
+}
+impl std::fmt::Display for ActionRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.detail.fmt(f)
+    }
 }

@@ -18,6 +18,7 @@ use crate::{game_faction_template, game_world_entity, WorldEntity};
 // `RangedImpactSchedule` tables' `scheduled(..)` macros below to resolve, since those two reducers are
 // defined in `swing.rs` (mirrors `spell::tables`'s identical cross-file `scheduled(..)` pattern).
 use super::*;
+use crate::actor::{ActionRefusal, ActionRefusalKind};
 
 // --- Engagement queries over `game_melee_attack` (the single source of truth for who fights whom).
 // `attacker_guid` is the PK; an engagement "touches" a unit when it is on EITHER side. These three
@@ -508,23 +509,29 @@ fn validate_attack_target(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target_guid: u64,
-) -> Result<WorldEntity, String> {
-    let target =
-        crate::helpers::live_entity(ctx, target_guid).map_err(|_| "no such target".to_string())?;
+) -> Result<WorldEntity, ActionRefusal> {
+    let target = crate::helpers::live_entity(ctx, target_guid)
+        .map_err(|_| ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such target"))?;
     if target.map_id != attacker.map_id || target.instance_id != attacker.instance_id {
-        return Err("target on another map".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "target on another map",
+        ));
     }
     if target.dead {
         // Can't attack a corpse during decay. The gateway maps this exact error to
         // SMSG_ATTACKSWING_DEADTARGET so the client leaves combat stance (shared constant).
-        return Err(lyracore_shared::ERR_ATTACK_TARGET_DEAD.to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::DeadTarget,
+            lyracore_shared::ERR_ATTACK_TARGET_DEAD,
+        ));
     }
     // Faction gate: reject a swing only at a FRIENDLY target. Hostile (red) AND neutral (yellow —
     // e.g. Elwynn wolves, which are huntable) stay attackable, matching vanilla; only friendly (green)
     // units are protected. The gateway maps this to SMSG_ATTACKSWING_CANT_ATTACK so the client leaves
     // stance. SKIPPED when faction data isn't loaded (table empty) so missing data never blocks combat.
     if ctx.db.game_faction_template().count() > 0 && !may_harm(ctx, attacker, &target) {
-        return Err(lyracore_shared::ERR_ATTACK_FRIENDLY.to_string());
+        return Err(lyracore_shared::ERR_ATTACK_FRIENDLY.to_string().into());
     }
     Ok(target)
 }
@@ -536,8 +543,42 @@ pub(crate) fn apply_start_attack(
     attacker_guid: u64,
     target_guid: u64,
 ) -> Result<(), String> {
-    let attacker = crate::helpers::live_entity(ctx, attacker_guid)
-        .map_err(|_| "attacker not in world".to_string())?;
+    start_attack(ctx, attacker_guid, target_guid, false)
+        .map(|_| ())
+        .map_err(Into::into)
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackStart {
+    Armed,
+    AlreadyArmed,
+}
+
+/// Arm melee without resetting a current swing timer. Acceptance does not imply a hit.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn request_attack(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+) -> Result<AttackStart, ActionRefusal> {
+    start_attack(ctx, attacker_guid, target_guid, true)
+}
+
+fn start_attack(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+    retain_current: bool,
+) -> Result<AttackStart, ActionRefusal> {
+    let attacker = crate::helpers::live_entity(ctx, attacker_guid).map_err(|_| {
+        ActionRefusal::new(ActionRefusalKind::MissingActor, "attacker not in world")
+    })?;
+    if attacker.dead {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::DeadActor,
+            "dead attackers cannot attack",
+        ));
+    }
     // Crowd control: an ACTION-blocked attacker (stunned/polymorphed/feared) cannot ENTER combat —
     // arming an engagement is itself an action. This is the player-command twin of the per-swing gate in
     // `tick_melee` (without it a CC'd player could insert a `game_melee_attack` row whose swings are then
@@ -547,13 +588,13 @@ pub(crate) fn apply_start_attack(
     // match the gateway's desync classifier, so it just rejects the command rather than dropping the
     // session.)
     if crate::spell::is_action_blocked(ctx, attacker.guid) {
-        return Err(format!(
-            "attacker {} cannot act (stun/poly/fear)",
-            attacker.guid
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            format!("attacker {} cannot act (stun/poly/fear)", attacker.guid),
         ));
     }
     if target_guid == attacker.guid {
-        return Err("cannot attack self".to_string());
+        return Err("cannot attack self".to_string().into());
     }
     validate_attack_target(ctx, &attacker, target_guid)?;
 
@@ -561,10 +602,20 @@ pub(crate) fn apply_start_attack(
     // engagement is armed. Every rejection above returned already, so an invalid attack packet leaves
     // the mount up. No-op for an unmounted attacker, and idempotent on a re-target.
     crate::mount::dismount(ctx, attacker.guid);
+    if retain_current
+        && ctx
+            .db
+            .game_melee_attack()
+            .attacker_guid()
+            .find(attacker_guid)
+            .is_some_and(|attack| attack.target_guid == target_guid && attack.ranged_spell_id == 0)
+    {
+        return Ok(AttackStart::AlreadyArmed);
+    }
 
     if !attacker.is_player() {
         if arm_creature_engagement(ctx, attacker.guid, target_guid, false) {
-            return Ok(());
+            return Ok(AttackStart::Armed);
         }
         if let Some(mut creature) = ctx.db.game_world_entity().guid().find(attacker.guid) {
             if creature.target_guid != target_guid {
@@ -592,7 +643,7 @@ pub(crate) fn apply_start_attack(
     } else {
         melee.insert(row);
     }
-    Ok(())
+    Ok(AttackStart::Armed)
 }
 
 /// Shared core: arm `attacker_guid`'s RANGED auto-attack on `target_guid` with `spell_id`. Same gates as
@@ -607,6 +658,9 @@ pub(crate) fn apply_start_ranged_attack(
 ) -> Result<(), String> {
     let attacker = crate::helpers::live_entity(ctx, attacker_guid)
         .map_err(|_| "attacker not in world".to_string())?;
+    if attacker.dead {
+        return Err("dead attackers cannot attack".to_string());
+    }
     if crate::spell::is_action_blocked(ctx, attacker.guid) {
         return Err(format!(
             "attacker {} cannot act (stun/poly/fear)",
