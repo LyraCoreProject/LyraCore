@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-09-08 06:13 UTC",
-  "base_revision": "5a4dedcb3818dbb3413affe2e592901c950f4ac3",
-  "status_note": "All 67 open issues have current assessments. Report source PR #475 merged. Spell event PR #476 is published; loot retry PR #474 passed independent review. Revised item GUID PR #473 is completing a repaired fixture and CI. Door collision #113/#114 is finishing validation.",
+  "updated_at": "2026-09-08 06:44 UTC",
+  "base_revision": "e41d5f846e55c5b08f67d6477725ebdd8b6158f5",
+  "status_note": "All 67 open issues have current assessments. Report PR #475 and loot retry PR #474 merged. PR #473 has a tested correction for the Character ID reuse regression and is finishing CI. Spell event PR #476 passed all CI; door collision PR #477 is testing a pooled-spawn lifecycle correction. The two additive schema PRs need human review before shipping.",
   "monitoring_note": "Codex owns this report and the dispatch order. Monitoring is active during this work session. Each implementer follows checks and actual CodeRabbit or human review through fixes; Codex handles final review and merge. No unattended scheduler is installed. The report and its repository source preserve the next actions between sessions.",
   "focus": [
     "Prevent item GUID collisions in #71. GPT-6 Astra, high effort, owns allocation, ownership changes and Transfer proofs.",
@@ -696,9 +696,9 @@
       "gain": 4,
       "effort": 4,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "This issue depends only on source work in #113 and should ship in the same source DAG. An instance-0-only registry would create a temporary production interface that the next change immediately replaces. Current callers already hold entity instance identity. Imported Deadmines calibration remains a separate Operator gate after the source and synthetic tests merge.",
-      "next_action": "Build the collider registry and lifecycle, merge instance-scoped ray hits, prove closed/open/despawned and sibling-instance behavior, then publish one integrated PR for human schema review. Imported Deadmines acceptance stays separate.",
+      "next_action": "Register and remove colliders during gathering-pool spawn changes, including templates changed by a Package. Prove the lifecycle, complete CI and rebase after #473 integrates, then obtain human schema review.",
       "blockers": [
         "Human review is required before the additive schema ships.",
         "Final Deadmines acceptance needs approved client data and a named development Shard."
@@ -706,9 +706,13 @@
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/114",
         "module/src/vmap.rs ray functions currently lack instance_id.",
-        "module/src/nav.rs and the listed combat, creature, and spell callers already have the acting entity and its instance_id."
+        "module/src/nav.rs and the listed combat, creature, and spell callers already have the acting entity and its instance_id.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/477",
+        "The synthetic durable fixture proves closed/open/despawned state, sibling isolation, Package apply/replay/clear, both debug command signatures, transforms, nearest hits and Blink. It does not prove imported Deadmines geometry or canonical-box performance."
       ],
-      "related_prs": [],
+      "related_prs": [
+        477
+      ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/114",
       "updatedAt": "2026-08-13T05:25:54Z",
       "github_state": "open",
@@ -721,9 +725,9 @@
       "gain": 5,
       "effort": 4,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "PR #254 supplied game_go_model. The remaining collider table, lifecycle, transform, state Gate, broad-phase reject, and ray merge are specified and testable with synthetic data. Dynamic collider eligibility can depend on the global Gate and registry data while static geometry keeps its active-generation rule, so map 36 needs no invented static generation or new product decision. Implementing #114 in the same DAG avoids an instance-0-only production path.",
-      "next_action": "Build the collider registry and lifecycle, merge instance-scoped ray hits, prove closed/open/despawned and sibling-instance behavior, then publish one integrated PR for human schema review. Imported Deadmines acceptance stays separate.",
+      "next_action": "Register and remove colliders during gathering-pool spawn changes, including templates changed by a Package. Prove the lifecycle, complete CI and rebase after #473 integrates, then obtain human schema review.",
       "blockers": [
         "Human review is required before the additive schema ships; imported-door calibration stays open."
       ],
@@ -732,10 +736,13 @@
         "https://github.com/LyraCoreProject/LyraCore/pull/254",
         "module/src/go_model.rs stores local-space DOOR and BUTTON meshes and names game_go_collider as the missing consumer.",
         "module/src/vmap.rs ties static geometry to an active generation; docs/vmap-rollout.md intentionally leaves the Instance Pool without a bounded-profile generation.",
-        "docs/danger-zones.md permits a justified Operator reconciliation scan but forbids spatial-table scans on gameplay paths."
+        "docs/danger-zones.md permits a justified Operator reconciliation scan but forbids spatial-table scans on gameplay paths.",
+        "https://github.com/LyraCoreProject/LyraCore/pull/477",
+        "The synthetic durable fixture proves closed/open/despawned state, sibling isolation, Package apply/replay/clear, both debug command signatures, transforms, nearest hits and Blink. It does not prove imported Deadmines geometry or canonical-box performance."
       ],
       "related_prs": [
-        254
+        254,
+        477
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/113",
       "updatedAt": "2026-08-13T05:25:52Z",
@@ -964,24 +971,25 @@
     },
     {
       "number": 84,
-      "summary": "A failed Loot Roll settlement advances the completion marker and prevents an available result from retrying.",
+      "summary": "Loot Roll recovery after result expiry needs durable settlement identity; the original three-Shard and bot-party incident remains unverified.",
       "importance": 4,
       "gain": 4,
-      "effort": 1,
-      "confidence": "high",
-      "disposition": "review",
-      "rationale": "The focused fix holds the marker on failure and continues healthy Shards. Recovery after one-second event expiry needs an immutable settlement identity; retaining only corpse GUID and slot could award a later respawn drop.",
-      "next_action": "Finish PR #474 current-head CI after the comment-only review correction. Independent review passed. Follow CodeRabbit when available. The next local Ticket requires immutable source loot identity and durable settlement before recovery can exceed event expiry.",
+      "effort": 4,
+      "confidence": "medium",
+      "disposition": "decision",
+      "rationale": "PR #474 merged the proved completion-marker fix. The remaining work must carry immutable source loot identity beyond the one-second event lifetime and survive Gateway restart. That is a larger design and schema change; retaining only corpse GUID and slot could award a later respawn drop.",
+      "next_action": "PR #474 merged. The next local Ticket defines durable settlement with immutable source loot identity before extending recovery beyond event expiry. Original three-Shard and bot-party incidents still need an approved reproduction.",
       "blockers": [
         "The original incident rerun needs a disposable three-Shard development Realm and verified Headless Client scenario dispatch."
       ],
       "evidence": [
         "https://github.com/LyraCoreProject/LyraCore/issues/84",
-        "gateway/src/world/loot.rs: relay_tick logs a failed settle_loot_roll request but advances won_watermark after the loop.",
-        "gateway/src/world/tests.rs already lets the Fake fail settle_loot_roll, but gateway/src/world/loot_tests.rs has no failed-settlement watermark regression.",
+        "PR #474 changed gateway/src/world/loot.rs to retain the completion marker after settlement failure while continuing healthy Shards.",
+        "gateway/src/world/loot_tests.rs now proves a failed settlement retries while the result event remains, successful work continues, and completed results stop repeating.",
         "PRs #439 and #461 fixed concurrent and replayed promotions. Neither covers a failed World Shard settlement, and neither proves the original three-Shard incident cause.",
         "https://github.com/LyraCoreProject/LyraCore/pull/474",
-        "Gateway suite: 1,444 passed, 7 private tests ignored. Formatting and Gateway clippy passed. The regression failed on the unchanged Gateway and passed with the marker fix."
+        "Gateway suite: 1,444 passed, 7 private tests ignored. Formatting and Gateway clippy passed. The regression failed on the unchanged Gateway and passed with the marker fix.",
+        "https://github.com/LyraCoreProject/LyraCore/issues/84#issuecomment-5580498204"
       ],
       "related_prs": [
         439,
@@ -989,10 +997,10 @@
         474
       ],
       "url": "https://github.com/LyraCoreProject/LyraCore/issues/84",
-      "updatedAt": "2026-08-11T08:23:01Z",
+      "updatedAt": "2026-09-08T06:42:37Z",
       "github_state": "open",
       "owner": "GPT-6, Codex coordinator",
-      "score": 16
+      "score": 4
     },
     {
       "number": 82,
@@ -1220,7 +1228,7 @@
       "confidence": "high",
       "disposition": "review",
       "rationale": "Legacy decoding can treat the appended zero kind as the current field-derived form, while new constructors stamp explicit kinds. That is a bounded compatibility design. Human schema review belongs after the concrete change.",
-      "next_action": "Finish PR #476 checks and review at 97678dd, then obtain the required human schema review before shipping.",
+      "next_action": "All checks passed for PR #476 at 97678dd. Rebase after #473 integrates, verify the combined source and obtain the required human schema review before shipping.",
       "blockers": [
         "Human schema review before shipping."
       ],
@@ -1249,9 +1257,9 @@
       "gain": 3,
       "effort": 5,
       "confidence": "high",
-      "disposition": "implementing",
+      "disposition": "review",
       "rationale": "The revised design consumes existing durable GUID Ranges without a table, reducer argument or Transfer-format change. It removes owner truncation and same-transaction reuse. The existing live GUID inventory still needs an authorized audit before a coordinated deployment.",
-      "next_action": "Complete repaired Loot Tag fixture verification and current-head CI on PR #473 at e6ac132. All 11 new allocator durable cases and 11 existing item-property durable cases pass. Independent source review found no blockers; fresh CodeRabbit review remains pending.",
+      "next_action": "Complete final independent review and CI at 5be1041, then merge source. Twelve item GUID durable cases pass, including the no-range deletion floor and foreign-Character isolation. Deployment still needs the documented legacy-state audit.",
       "blockers": [
         "Before deployment, an authorized Operator must audit legacy item GUIDs and permanent range assignments across the Realm."
       ],
@@ -1265,7 +1273,7 @@
         "The issue already supplies saturation, transfer identity, migration, and collision cases for a bounded design Ticket.",
         "PR #473 was published at b912dff. Implementer review found that free-ID reuse can recreate an identity deleted earlier in a crafting or quest transaction. The PR is being revised before merge.",
         "Coordinating review found that cascade_delete_character advances the allocator before the Transfer import range Gate. The revised shared allocator must exclude foreign Character GUIDs at this earlier path too.",
-        "The durable high-to-low Transfer regression reproduced destination allocator inflation from 6 to 1000000006. Revision 8e6742e Gates the shared cleanup path by the local GUID Range; the revised green run is pending."
+        "The durable high-to-low Transfer regression reproduced allocator inflation from 6 to 1000000006 and passed with the foreign-range Gate. Subsequent Gateway durable CI exposed ID reuse after a no-range deletion, so the Gate must preserve the legacy floor until a range exists."
       ],
       "related_prs": [
         473
@@ -4300,10 +4308,10 @@
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/473",
       "title": "fix(items): allocate GUIDs from durable Shard ranges",
       "owner": "GPT-6 Astra, high effort, item GUID implementer",
-      "head": "fa64b4662c7c7894b48f6753bb1bdbd019e06367",
-      "status": "Draft; allocator proofs passed, repaired legacy fixture under verification",
-      "next_action": "Finish the repaired Loot Tag fixture and current-head durable CI, then mark ready for fresh review. Independent source review found no blockers. Deployment requires the documented legacy-state audit.",
-      "checked_at": "2026-09-08 06:13 UTC",
+      "head": "5be1041560ba855fa79b75732c1cd7d216e24d5d",
+      "status": "Compatibility fix proved locally; full CI and final independent review running",
+      "next_action": "Complete final independent review and CI at 5be1041, then merge source. Twelve item GUID durable cases pass, including the no-range deletion floor and foreign-Character isolation. Deployment still needs the documented legacy-state audit.",
+      "checked_at": "2026-09-08 06:44 UTC",
       "checks": [
         {
           "name": "durable",
@@ -4311,32 +4319,31 @@
         },
         {
           "name": "build",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "fmt",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "clippy",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "test",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "wasm",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "CodeRabbit",
-          "result": "UNAVAILABLE",
-          "platform_result": "SUCCESS",
-          "source": "No actual review on the current head. Draft skips or rate-limit notices do not count as reviews."
+          "result": "PASS_ON_PRIOR_HEAD",
+          "source": "Full review of 45 files through fa64b46 completed with no actionable findings. Later fixture and compatibility corrections need independent review."
         }
       ],
-      "review_note": "Independent review by the door collision implementer found no Standards or Spec blockers in 4ada232. Head e6ac132 only installs the required range in an older Loot Tag fixture. The old CodeRabbit wire-test finding was fixed and its thread resolved; CodeRabbit has not reviewed the revised allocator.",
+      "review_note": "Root independently reviewed the compatibility correction. Twelve item GUID durable cases and eleven allocator unit tests passed. CodeRabbit completed a full 45-file review through fa64b46 with no actionable findings; the later fixture and compatibility corrections need independent review.",
       "github_state": "OPEN"
     },
     {
@@ -4345,13 +4352,13 @@
       "title": "fix(loot): retry failed settlements while results remain",
       "owner": "GPT-6, Codex coordinator",
       "head": "2a11e7c24ba58594a8089bce64343cecf251dbd3",
-      "status": "Independent review passed; comment correction CI running",
-      "next_action": "Finish current-head CI and follow CodeRabbit when review is available. Independent review is complete after narrowing the retry safety comment. Keep issue #84 open for durable outcome retention and original incident acceptance.",
-      "checked_at": "2026-09-08 06:13 UTC",
+      "status": "Merged after CI and independent review",
+      "next_action": "Bounded retry is complete. Issue #84 keeps immutable durable settlement and original three-Shard/bot-party acceptance open.",
+      "checked_at": "2026-09-08 06:32 UTC",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -4367,7 +4374,7 @@
         },
         {
           "name": "test",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "wasm",
@@ -4376,12 +4383,12 @@
         {
           "name": "CodeRabbit",
           "result": "UNAVAILABLE",
-          "platform_result": "SUCCESS",
-          "source": "No actual review on the current head. Draft skips or rate-limit notices do not count as reviews."
+          "source": "Hourly quota prevented actual review. Independent review is recorded separately."
         }
       ],
-      "github_state": "OPEN",
-      "review_note": "GPT-5.6 Sol independently reviewed 2a11e7c with no remaining findings. The only requested change corrected the stated safety limit; production logic is unchanged from fully checked a39fd62."
+      "github_state": "MERGED",
+      "review_note": "Merged at 2a11e7c after every CI job and GPT-5.6 Sol independent review passed, with no unresolved threads. CodeRabbit was unavailable under its hourly quota and supplied no review of this PR.",
+      "merge_commit": "e41d5f846e55c5b08f67d6477725ebdd8b6158f5"
     },
     {
       "number": 475,
@@ -4402,12 +4409,12 @@
       "head": "97678dd4aaf73c2c1aacb3b3ec7448a79bf238d6",
       "title": "refactor(spells): give cast events an explicit kind",
       "url": "https://github.com/LyraCoreProject/LyraCore/pull/476",
-      "checked_at": "2026-09-08 06:13 UTC",
+      "checked_at": "2026-09-08 06:44 UTC",
       "github_state": "OPEN",
       "checks": [
         {
           "name": "durable",
-          "result": "IN_PROGRESS"
+          "result": "SUCCESS"
         },
         {
           "name": "build",
@@ -4432,13 +4439,55 @@
         {
           "name": "CodeRabbit",
           "result": "UNAVAILABLE",
-          "platform_result": "SUCCESS",
-          "source": "No actual review on the current head. Draft skips or rate-limit notices do not count as reviews."
+          "source": "Hourly quota prevented actual review."
         }
       ],
-      "status": "Published; CI and CodeRabbit pending, human schema review required",
-      "next_action": "Complete current-head CI and review, then obtain human review of the appended default-zero kind before shipping. Module publication must precede the Gateway update as documented in the PR.",
+      "status": "All CI passed; independent review complete, human schema review required",
+      "next_action": "After #473 merges, rebase on the combined main and verify integration. Obtain human review of the appended default-zero kind before shipping. CodeRabbit is quota-limited.",
       "review_note": "Root reviewed explicit dispatch and kind-zero legacy ordering. Local Module, Gateway, importer and shared suites, all 990 generated bindings, strict lint, build, formatting and offline preflight passed. CodeRabbit posted a rate limit."
+    },
+    {
+      "number": 477,
+      "owner": "GPT-6 Astra, high effort, door collision implementer",
+      "head": "13adbb8234a2d98bcfd40c71588869f67a7649f7",
+      "title": "fix(vmap): make closed instance doors block rays",
+      "url": "https://github.com/LyraCoreProject/LyraCore/pull/477",
+      "checked_at": "2026-09-08 06:44 UTC",
+      "github_state": "OPEN",
+      "checks": [
+        {
+          "name": "durable",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "build",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "fmt",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "clippy",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "test",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "wasm",
+          "result": "SUCCESS"
+        },
+        {
+          "name": "CodeRabbit",
+          "result": "UNAVAILABLE",
+          "source": "Hourly quota prevented actual review."
+        }
+      ],
+      "status": "Pooled-spawn lifecycle correction under way; schema review pending",
+      "next_action": "Register and remove colliders during gathering-pool spawn changes, including templates changed by a Package. Prove the lifecycle, complete CI and rebase after #473 integrates, then obtain human schema review.",
+      "review_note": "Root and the item GUID implementer independently reviewed transforms, nearest-hit selection, instance routing and lifecycle. All local proofs passed: Module 1,508, Gateway 1,443, shared 156, private fixture including Package replay and both debug command signatures, all 995 bindings, strict lint and preflight. CodeRabbit has only a quota notice."
     }
   ],
   "history": [
@@ -4769,6 +4818,14 @@
     {
       "at": "2026-09-08 06:13 UTC",
       "text": "Merged report PR #475 after all CI checks and independent content review. Published Spell event PR #476 at 97678dd. Independent review of the revised item allocator found no blockers; its 11 new and 11 existing item durable cases passed. Corrected the loot retry comment in 2a11e7c after review, with no production logic change. CodeRabbit has not reviewed these current source heads."
+    },
+    {
+      "at": "2026-09-08 06:32 UTC",
+      "text": "Merged loot retry PR #474 after all CI and independent review passed; CodeRabbit was quota-limited and did not review it. Door PR #477 is published at 13adbb8 after all local proofs and two runtime reviews. Spell PR #476 passed every CI job. Item PR #473 at fa64b46 is in fresh full CodeRabbit review. Schema PRs will be checked against the combined main before human approval."
+    },
+    {
+      "at": "2026-09-08 06:39 UTC",
+      "text": "Durable CI exposed Character ID reuse after deletion before range installation in #473. A nonfatal Gateway provisioning path makes this a runtime compatibility case, now assigned for correction. Review also found missing pooled GameObject collider lifecycle hooks in #477. Re-scored the remaining #84 durable recovery work after its bounded retry fix merged."
     }
   ],
   "postplan_draft": "1u1gh8ximdga",
