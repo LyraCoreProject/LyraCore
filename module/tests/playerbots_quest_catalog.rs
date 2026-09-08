@@ -699,6 +699,11 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     let (node, bots) = fixture("playerbots-quest-deferred-retry");
     let bot = bot_for_class(&bots, "1");
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
+    node.assert_call(
+        "playerbots_quest_fixture_move_creature_spawn",
+        &["6", "1230"],
+    );
+    node.assert_call("playerbots_quest_fixture_refresh", &[]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     select_cohort(&node, bot);
     run_once(&node);
@@ -707,11 +712,13 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
     ));
     assert!(initial["objective"].contains("quest"));
+    assert!(initial["objective"].contains("travelling"), "{initial:?}");
 
     node.assert_call("playerbots_fixture_runner_expire_objective", &[bot]);
     run_once(&node);
     let deferred = runner(&node, bot);
-    assert!(deferred["objective"].contains("deferred"));
+    record(&node, "deferral-start");
+    assert!(deferred["objective"].contains("deferred"), "{deferred:?}");
     assert!(!deferred["deferred_destinations"].is_empty());
     run_once(&node);
     let waiting = runner(&node, bot);
