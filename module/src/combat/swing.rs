@@ -11,7 +11,7 @@ use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{
     game_item_instance, game_item_template, game_spell, game_spell_cast_event, game_world_entity,
-    SpellCastEvent, WorldEntity,
+    SpellCastEvent, SpellCastEventKind, WorldEntity,
 };
 
 // Tables' pure formulas/consts and the sibling submodules' re-exports (`roll_swing`, `apply_hit`,
@@ -670,7 +670,12 @@ fn fire_melee_swing(
                 ctx.db.game_spell_cast_event().insert(SpellCastEvent {
                     is_interrupted: true, // SMSG_SPELL_FAILURE → the caster's cast bar tears down
                     failure_reason: crate::spell::CAST_FAIL_NO_POWER, // → "Not enough rage"
-                    ..SpellCastEvent::signal_at(ctx, attacker, queued_spell)
+                    ..SpellCastEvent::signal_at(
+                        ctx,
+                        attacker,
+                        queued_spell,
+                        SpellCastEventKind::Interrupt,
+                    )
                 });
             }
         }
@@ -741,7 +746,7 @@ fn fire_melee_swing(
             // The swing outcome — on a 0-damage fire the relay shapes the GO miss list from it
             // (yellow "Heroic Strike missed/was dodged/was parried", not a white MISS line).
             swing_hit_info: hit_info,
-            ..SpellCastEvent::signal_at(ctx, attacker, queued_spell)
+            ..SpellCastEvent::signal_at(ctx, attacker, queued_spell, SpellCastEventKind::Go)
         });
     }
     // 114 FIX (b): the seal's holy portion — a log-only row (is_proc_log): the gateway sends ONLY
@@ -753,7 +758,7 @@ fn fire_melee_swing(
             damage: projected_seal,
             school: 1, // holy (school_mask 2 → index 1, the mask→index rule in resolve_cast_at)
             is_proc_log: true,
-            ..SpellCastEvent::signal_at(ctx, attacker, seal_spell)
+            ..SpellCastEvent::signal_at(ctx, attacker, seal_spell, SpellCastEventKind::ProcLog)
         });
     }
 
@@ -986,7 +991,12 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
             damage: damage.amount,
             is_crit: shot.is_crit,
             is_proc_log: true,
-            ..SpellCastEvent::signal_at(ctx, &attacker, shot.ranged_spell_id)
+            ..SpellCastEvent::signal_at(
+                ctx,
+                &attacker,
+                shot.ranged_spell_id,
+                SpellCastEventKind::ProcLog,
+            )
         });
     }
     if outcome.duel_completed {

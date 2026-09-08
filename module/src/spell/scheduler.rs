@@ -54,7 +54,12 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
         // is_interrupted signal → the gateway relays SMSG_SPELL_FAILURE to the caster, tearing the bar down.
         ctx.db.game_spell_cast_event().insert(SpellCastEvent {
             is_interrupted: true,
-            ..SpellCastEvent::signal(ctx, sched.caster_guid, sched.spell_id)
+            ..SpellCastEvent::signal(
+                ctx,
+                sched.caster_guid,
+                sched.spell_id,
+                SpellCastEventKind::Interrupt,
+            )
         });
     }
 }
@@ -831,7 +836,12 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                         resisted: (a.amount.max(0) as u32).saturating_sub(resisted.max(0) as u32),
                         absorbed,
                         is_proc_log: true,
-                        ..crate::spell::SpellCastEvent::signal(ctx, a.caster_guid, a.spell_id)
+                        ..crate::spell::SpellCastEvent::signal(
+                            ctx,
+                            a.caster_guid,
+                            a.spell_id,
+                            SpellCastEventKind::ProcLog,
+                        )
                     });
             }
         }

@@ -31,6 +31,7 @@ pub struct SpellCastEvent {
     pub grid_x: i32,
     pub grid_y: i32,
     pub failure_reason: u8,
+    pub kind: u8,
 }
 
 impl __sdk::InModule for SpellCastEvent {
@@ -65,6 +66,7 @@ pub struct SpellCastEventCols {
     pub grid_x: __sdk::__query_builder::Col<SpellCastEvent, i32>,
     pub grid_y: __sdk::__query_builder::Col<SpellCastEvent, i32>,
     pub failure_reason: __sdk::__query_builder::Col<SpellCastEvent, u8>,
+    pub kind: __sdk::__query_builder::Col<SpellCastEvent, u8>,
 }
 
 impl __sdk::__query_builder::HasCols for SpellCastEvent {
@@ -95,6 +97,7 @@ impl __sdk::__query_builder::HasCols for SpellCastEvent {
             grid_x: __sdk::__query_builder::Col::new(table_name, "grid_x"),
             grid_y: __sdk::__query_builder::Col::new(table_name, "grid_y"),
             failure_reason: __sdk::__query_builder::Col::new(table_name, "failure_reason"),
+            kind: __sdk::__query_builder::Col::new(table_name, "kind"),
         }
     }
 }

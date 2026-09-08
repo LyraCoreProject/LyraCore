@@ -572,7 +572,12 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
             resisted: (row.amount as u32).saturating_sub(after_resist.max(0) as u32),
             absorbed,
             is_proc_log: true,
-            ..SpellCastEvent::signal(ctx, row.target_guid, row.spell_id)
+            ..SpellCastEvent::signal(
+                ctx,
+                row.target_guid,
+                row.spell_id,
+                SpellCastEventKind::ProcLog,
+            )
         });
     }
     true

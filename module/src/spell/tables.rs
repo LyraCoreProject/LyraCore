@@ -316,6 +316,18 @@ pub const CAST_FAIL_NONE: u8 = 0;
 /// ("Not enough rage"), which is what releases the client's lit on-next-swing button.
 pub const CAST_FAIL_NO_POWER: u8 = 1;
 
+/// The signal carried by one [`SpellCastEvent`]. Codes are append-only because the Gateway reads
+/// them from durable rows during a rolling Module and Gateway update.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(crate) enum SpellCastEventKind {
+    Start = 1,
+    Go = 2,
+    Interrupt = 3,
+    Pushback = 4,
+    ProcLog = 5,
+}
+
 /// A spell cast (the visual). Separate from the aura row so a re-cast always replays the cast
 /// animation/SFX (`SMSG_SPELL_GO`) even when the aura only refreshes its timer. Reaped by the event GC.
 #[table(
@@ -339,12 +351,9 @@ pub struct SpellCastEvent {
     // cast-bar duration; 0 on the cast-GO event (instant or completion). END-appended + defaulted.
     #[default(0u32)]
     pub cast_time_ms: u32,
-    // true on a TIMED-cast COMPLETION (the GO event from resolve_cast_at via fire_pending_cast); false on a
-    // begin-START, a genuine instant cast, a channel/creature cast. CURRENTLY UNUSED on the relay path: the
-    // gateway emits the SAME START(0)+GO+COOLDOWN close sequence for a completion and a genuine instant (the
-    // 5875 client closes its cast state on a START→GO pair, like the instant-cast + channel-tick relays).
-    // Kept (additive, harmless) for a future relay that wants to distinguish them. END-appended +
-    // #[default(false)] → auto-migrates.
+    // true on a timed completion or queued strike GO. The Gateway uses it to avoid a second START
+    // and to send the caster's successful cast result. It is payload within the GO kind, not the
+    // event discriminator. Kept for schema compatibility. END-appended + #[default(false)].
     #[default(false)]
     pub is_completion: bool,
     // Total post-mitigation spell damage dealt by this cast (summed across E_DAMAGE/E_WEAPON_STRIKE
@@ -371,8 +380,8 @@ pub struct SpellCastEvent {
     // primary target). Drives the damage log's `absorbed_damage` field ("(N absorbed)"). END-appended + defaulted.
     #[default(0u32)]
     pub absorbed: u32,
-    // True on an INTERRUPT signal row (the victim's mid-cast timed spell was cancelled by direct damage,
-    // or an on-next-swing strike could not pay its cost at the swing). The gateway relays
+    // Legacy compatibility field on an INTERRUPT row (the victim's mid-cast timed spell was cancelled
+    // by direct damage, or an on-next-swing strike could not pay its cost at the swing). The gateway relays
     // SMSG_SPELL_FAILURE{spell, result=Interrupted} to the caster, plus the failed cast result when
     // `failure_reason` names one. Such a row carries no cast-START/GO/COOLDOWN sequence. END-appended
     // + #[default(false)] → additive auto-migration (the publish-migration rule).
@@ -386,13 +395,9 @@ pub struct SpellCastEvent {
     // cast each spell once). END-appended + #[default(0u32)] → additive auto-migration.
     #[default(0u32)]
     pub cooldown_ms: u32,
-    // PUSHBACK signal (work-item 039): >0 on a pushback row (direct damage slid the caster's in-progress
-    // TIMED cast's fire time by this many ms) — the gateway relays SMSG_SPELL_DELAYED{guid, delay_time} so
-    // the client's cast bar visibly shifts. This is the ONLY field set on such a row besides
-    // caster_guid/spell_id (cast_time_ms/is_completion stay 0/false — it is neither a START nor a GO).
-    // `game_spell_cast_event` is gateway-subscribed (per-player, `stdb/subscriptions.rs`), so this
-    // END-appended column needs the binding hand-synced (`gateway/src/stdb/bindings/spell_cast_event_type.rs`)
-    // — a hand-maintained binding not mirrored on a schema change breaks live row decode silently.
+    // PUSHBACK payload (work-item 039): the number of milliseconds added to the in-progress timed
+    // cast. The Gateway relays SMSG_SPELL_DELAYED{guid, delay_time}. Kind names the signal; this
+    // value remains zero on every other kind and preserves decoding for old rows.
     // END-appended + #[default(0u32)] → additive auto-migration (the publish-migration rule).
     #[default(0u32)]
     pub delay_ms: u32,
@@ -402,11 +407,9 @@ pub struct SpellCastEvent {
     // delay_ms note above). END-appended + #[default(0u32)] → additive auto-migration.
     #[default(0u32)]
     pub healed: u32,
-    // PROC-LOG signal (114): true on a swing-proc damage line (Seal of Righteousness holy riding a
-    // landed melee swing). The gateway sends ONLY SMSG_SPELLNONMELEEDAMAGELOG — no START/GO/cooldown
-    // (nothing "casts"; the seal aura is already up). Distinct from an on-next-swing FIRE (Heroic
-    // Strike), which rides the normal is_completion=true relay (CAST_RESULT(OK)+GO alone) because the
-    // client holds a pending cast for it. Binding hand-synced (see the delay_ms note above).
+    // Legacy compatibility field on a PROC_LOG row (114), such as Seal of Righteousness damage on a
+    // landed melee swing. The Gateway sends only SMSG_SPELLNONMELEEDAMAGELOG. An on-next-swing fire
+    // uses GO with is_completion=true because the client holds a pending cast for it.
     // END-appended + #[default(false)] -> additive auto-migration.
     #[default(false)]
     pub is_proc_log: bool,
@@ -437,14 +440,19 @@ pub struct SpellCastEvent {
     pub grid_x: i32,
     #[default(0i32)]
     pub grid_y: i32,
-    // Why this cast failed (`CAST_FAIL_*`), on an `is_interrupted` row. A deferred on-next-swing
+    // Why this cast failed (`CAST_FAIL_*`), on an INTERRUPT row. A deferred on-next-swing
     // strike that cannot pay its cost at the swing carries `CAST_FAIL_NO_POWER`, so the gateway
     // follows the teardown with a failed SMSG_CAST_RESULT naming the queued spell — without it the
     // 1.12 client keeps the ability latched as its current melee spell. `CAST_FAIL_NONE` on every
-    // other row keeps the plain teardown. Binding hand-synced (see the delay_ms note above).
+    // other row keeps the plain teardown.
     // END-appended + #[default(0u8)] -> additive auto-migration.
     #[default(0u8)]
     pub failure_reason: u8,
+    // The explicit Spell Cast Event Kind. Zero identifies a row written before this column existed,
+    // so the Gateway decodes that row from the legacy fields. New Module rows always use a nonzero
+    // append-only code. END-appended with a typed default for additive auto-migration.
+    #[default(0u8)]
+    pub kind: u8,
 }
 
 impl SpellCastEvent {
@@ -454,36 +462,41 @@ impl SpellCastEvent {
     /// ~20-field literal + 4× `grid_of` copy-paste this used to require at every call site (perf catalog
     /// audit, 2026-08-06): a call site now overrides only the 2-4 fields that carry real signal, via
     /// struct-update syntax, e.g.
-    /// `SpellCastEvent { is_interrupted: true, ..SpellCastEvent::signal(ctx, caster_guid, spell_id) }`.
+    /// `SpellCastEvent { is_interrupted: true, ..SpellCastEvent::signal(ctx, caster_guid, spell_id,
+    /// SpellCastEventKind::Interrupt) }`.
     ///
     /// Use [`Self::signal_at`] instead when the caster's live [`WorldEntity`] is already in hand — it
     /// skips this lookup entirely (a landed swing carrying a seal proc + a queued strike used to pay the
     /// `game_world_entity` PK lookup up to twelve times over for what is, in every case, the SAME row).
-    pub(crate) fn signal(ctx: &ReducerContext, caster_guid: u64, spell_id: u32) -> Self {
-        let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, caster_guid);
+    pub(crate) fn signal(
+        ctx: &ReducerContext,
+        caster_guid: u64,
+        spell_id: u32,
+        kind: SpellCastEventKind,
+    ) -> Self {
         Self::signal_addr(
             ctx,
             caster_guid,
             spell_id,
-            map_id,
-            instance_id,
-            grid_x,
-            grid_y,
+            crate::helpers::grid_of(ctx, caster_guid),
+            kind,
         )
     }
 
     /// Same baseline as [`Self::signal`], stamped from an already-fetched `caster` entity — zero
     /// `game_world_entity` lookups.
-    pub(crate) fn signal_at(ctx: &ReducerContext, caster: &WorldEntity, spell_id: u32) -> Self {
-        let (map_id, instance_id, grid_x, grid_y) = crate::helpers::entity_addr(caster);
+    pub(crate) fn signal_at(
+        ctx: &ReducerContext,
+        caster: &WorldEntity,
+        spell_id: u32,
+        kind: SpellCastEventKind,
+    ) -> Self {
         Self::signal_addr(
             ctx,
             caster.guid,
             spell_id,
-            map_id,
-            instance_id,
-            grid_x,
-            grid_y,
+            crate::helpers::entity_addr(caster),
+            kind,
         )
     }
 
@@ -491,11 +504,10 @@ impl SpellCastEvent {
         ctx: &ReducerContext,
         caster_guid: u64,
         spell_id: u32,
-        map_id: u32,
-        instance_id: u64,
-        grid_x: i32,
-        grid_y: i32,
+        address: (u32, u64, i32, i32),
+        kind: SpellCastEventKind,
     ) -> Self {
+        let (map_id, instance_id, grid_x, grid_y) = address;
         Self {
             id: 0,
             caster_guid,
@@ -521,6 +533,7 @@ impl SpellCastEvent {
             grid_x,
             grid_y,
             failure_reason: CAST_FAIL_NONE,
+            kind: kind as u8,
         }
     }
 }
