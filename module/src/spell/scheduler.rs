@@ -20,6 +20,11 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    // Release this identity before effect hooks can begin another cast.
+    ctx.db
+        .game_pending_cast()
+        .scheduled_id()
+        .delete(sched.scheduled_id);
     let result = resolve_cast_at_typed(
         ctx,
         sched.caster_guid,
@@ -62,10 +67,6 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             )
         });
     }
-    ctx.db
-        .game_pending_cast()
-        .scheduled_id()
-        .delete(sched.scheduled_id);
     crate::hooks::fire_on_cast_finished(
         ctx,
         &crate::hooks::CastFinishedPayload {
@@ -133,8 +134,8 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
 
 /// The spellbook-gated cast core, actor-explicit: everything [`cast_spell`] does after
 /// resolving WHO is casting — the sender reducer above and `gw::gw_cast_spell` both delegate here.
-/// Distinct from [`crate::actor::cast_at`], which drives `resolve_cast_at` and skips the spellbook
-/// gate; this is the player-shaped entry (cast-time aware, self-cast on `target_guid == 0`).
+/// This entry checks the spellbook and maps `target_guid == 0` to self. Actor requests use the same
+/// cast lifecycle but retain the explicit-guid API's existing spellbook bypass.
 pub(crate) fn do_cast_spell(
     ctx: &ReducerContext,
     caster: crate::WorldEntity,

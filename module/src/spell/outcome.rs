@@ -71,7 +71,7 @@ impl From<PendingCast> for CastHandle {
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
 pub enum CastStart {
-    /// Effects dispatched. A projectile may still be in flight.
+    /// Effects dispatched. A projectile or channel may remain active.
     Resolved,
     Started(CastHandle),
     Waiting(CastHandle),
@@ -118,11 +118,7 @@ pub(crate) fn request_cast(
         false,
         None,
         CreatureSpellCasterAdmission::Living,
-    )?;
-    Ok(match pending_cast(ctx, caster_guid) {
-        Some(cast) => CastStart::Started(cast),
-        None => CastStart::Resolved,
-    })
+    )
 }
 
 pub(crate) fn pending_cast(ctx: &ReducerContext, caster_guid: u64) -> Option<CastHandle> {

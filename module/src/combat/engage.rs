@@ -573,6 +573,12 @@ fn start_attack(
     let attacker = crate::helpers::live_entity(ctx, attacker_guid).map_err(|_| {
         ActionRefusal::new(ActionRefusalKind::MissingActor, "attacker not in world")
     })?;
+    if attacker.dead {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::DeadActor,
+            "dead attackers cannot attack",
+        ));
+    }
     // Crowd control: an ACTION-blocked attacker (stunned/polymorphed/feared) cannot ENTER combat —
     // arming an engagement is itself an action. This is the player-command twin of the per-swing gate in
     // `tick_melee` (without it a CC'd player could insert a `game_melee_attack` row whose swings are then
@@ -652,6 +658,9 @@ pub(crate) fn apply_start_ranged_attack(
 ) -> Result<(), String> {
     let attacker = crate::helpers::live_entity(ctx, attacker_guid)
         .map_err(|_| "attacker not in world".to_string())?;
+    if attacker.dead {
+        return Err("dead attackers cannot attack".to_string());
+    }
     if crate::spell::is_action_blocked(ctx, attacker.guid) {
         return Err(format!(
             "attacker {} cannot act (stun/poly/fear)",

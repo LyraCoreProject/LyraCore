@@ -720,6 +720,7 @@ pub(crate) fn start_creature_spell(
             None,
             route.admission,
         )
+        .map(|_| ())
         .map_err(Into::into),
         CreatureSpellStartMode::Triggered => {
             let origin = match route.admission {
@@ -1257,6 +1258,7 @@ pub(crate) fn begin_cast(
         dest,
         CreatureSpellCasterAdmission::Living,
     )
+    .map(|_| ())
     .map_err(Into::into)
 }
 
@@ -1270,7 +1272,7 @@ pub(crate) fn begin_cast_with_admission(
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
     admission: CreatureSpellCasterAdmission,
-) -> Result<(), CastRefusal> {
+) -> Result<CastStart, CastRefusal> {
     let hdr = ctx
         .db
         .game_spell()
@@ -1343,7 +1345,7 @@ pub(crate) fn begin_cast_with_admission(
             dest,
         );
         clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
-        return result;
+        return result.map(|_| CastStart::Resolved);
     }
 
     let completion_ms = if completed_channel {
@@ -1373,7 +1375,7 @@ pub(crate) fn begin_cast_with_admission(
         Some(p) => (true, p),
         None => (false, (0.0, 0.0, 0.0)),
     };
-    pending.insert(PendingCast {
+    let cast = pending.insert(PendingCast {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Time(fire_at),
         caster_guid,
@@ -1396,7 +1398,7 @@ pub(crate) fn begin_cast_with_admission(
         // does both); the baseline's is_interrupted:false/delay_ms:0 already hold.
         ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Start)
     });
-    Ok(())
+    Ok(CastStart::Started(cast.into()))
 }
 
 /// True when a spell effect's `kind` should reach the passive-apply path (`apply_spell_auras`'s
