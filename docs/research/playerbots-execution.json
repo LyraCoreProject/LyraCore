@@ -316,13 +316,14 @@
         }
       ],
       "evidence": [
-        "All nine source criteria have reviewed evidence. Independent reviews cleared the runner and consent changes. The orchestrator reviewed the final payload encoding correction and the one-line CI build-directory correction against both axes.",
-        "Final frozen local sources are core 41488bfe8fecae21498371e172969c01948e7bc2 and Package 584d01b00b2b241b6d5667bb810b49af0430d634. The full Package union passed 1,631 normal library tests, 1,632 debug library tests, all 31 action and runner cases, two personality cases, and five core consent cases.",
+        "All nine criteria have reviewed evidence at the revisions below. The final correction remains under review and must pass its own behavior checks before integration.",
+        "The recorded frozen local sources are core 41488bfe8fecae21498371e172969c01948e7bc2 and Package 584d01b00b2b241b6d5667bb810b49af0430d634. The full Package union passed 1,631 normal library tests, 1,632 debug library tests, all 31 action and runner cases, two personality cases, and five core consent cases.",
         "All 31 saved runtime input records agree on clean source revisions, Module BLAKE3 70b3d7ea1d39a79b947f3cf69078ed45c0775e2bec7218d3d611e412579e6a0c, and Package Content Identity 010384cd6726756a0e92af053f571b2a29adf957acd92a24ab52329149ccaa5a. The saved Wasm SHA256 is 0f26f21aa34da55fcc84928c61881f6d0b5bb9ece1156c16c2dbf6373bbec885.",
         "Current core CI is green, including the complete durable job and parity for all 1,000 default Gateway binding files. CI: https://github.com/LyraCoreProject/LyraCore/actions/runs/34239158710/job/102104571384",
         "Core Rust CI passed 360 importer tests, 1,524 default Module tests, 1,454 Gateway tests with seven ignored, and 172 shared tests. Formatting, Clippy, Runtime Scripts, and Wasm compilation also passed.",
         "Corrected Package CI is green for both push and paired PR runs at 334ea463845903e60d3823ee2af707cbaa49723d. This revision changes only the preceding build directory; its playerbots tree matches the final local source. Paired durable CI: https://github.com/LyraCoreProject/packages/actions/runs/34241057172/job/102111355643",
-        "The populated local migration records preceding Wasm BLAKE3 1662b0963dc0e03c29ddde985f08c0ec5a6f392e899a80eac9d7789a85b1b5a9 and the final Module identity above. Preceding inventory contains example, fire_nova, and playerbots. Final inventory also contains dungeons. CI independently builds the full preceding Package collection."
+        "The populated local migration records preceding Wasm BLAKE3 1662b0963dc0e03c29ddde985f08c0ec5a6f392e899a80eac9d7789a85b1b5a9 and the final Module identity above. Preceding inventory contains example, fire_nova, and playerbots. Final inventory also contains dungeons. CI independently builds the full preceding Package collection.",
+        "The later run against merged core main also passed all 31 cases. Its inputs record core 76142010cda8b497f07b1824d34472051c4fa4b2 and tested Package merge 624bde06814cdf64add8310a54457c6547e843cb for branch head 1a6577308e7327a3c33f1d7074748d0a93771367. This precedes the new review corrections. CI: https://github.com/LyraCoreProject/packages/actions/runs/34242661194/job/102116572438"
       ],
       "notes": [
         "SpacetimeDB 2.7.1 allows appended enum variants only when old variants stay compatible and storage size and alignment stay unchanged. Prove populated-state migration for the runner schema. Planner source: https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/schema/src/auto_migrate.rs#L826-L895",
@@ -333,8 +334,9 @@
         "The consent check acknowledges current World Shard state before Realm-core group actions. An action admitted before a concurrent freeze may finish; cross-Shard atomicity is not claimed. Controller selection clears unclaimed Group Intents in the same transaction.",
         "The common runner entry checks current Account ownership. Relinquishment releases only the bot's observed cast or movement identity and preserves a later human action.",
         "Package schema changes still require human review before production shipping. Agent review and source merge do not satisfy that production gate.",
-        "Core #484 merged after all checks and its completed CodeRabbit review passed. Package #26 restored all three current-core checkouts to main. Its final compatibility run is in progress.",
-        "Package CodeRabbit review found silent truncation of eligible facts, a health-percentage overflow, and narrow fixture and workflow issues. The implementer is resolving them before merge. Moving the read bound after filters would permit unbounded work and is not the chosen fix. Final corrected-source checks and review remain required."
+        "Core #484 merged after all checks and its completed CodeRabbit review passed. Package #26 restored all three current-core checkouts to main. That compatibility run passed before the new correction work.",
+        "Package CodeRabbit review found silent truncation of eligible facts, a health-percentage overflow, and narrow fixture and workflow issues. The implementer is resolving them before merge. Moving the read bound after filters would permit unbounded work and is not the chosen fix. Final corrected-source checks and review remain required.",
+        "The correction adds exact learned-spell lookup and a healing-profile scan that advances through bounded turns. An independent review found that completed negative results must survive rescans, or Recovery Hold can interrupt useful movement. The implementer is fixing that case before final verification."
       ],
       "acceptance_evidence": [
         {
@@ -766,6 +768,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 15:14 UTC",
+  "updated_at": "2026-09-08 15:29 UTC",
   "summary": "PB-001 is integrated. PB-002 core is merged; the Package remains in review while the implementer resolves new findings. Earlier clean local and paired CI evidence is retained with its exact revisions. The next frontier remains gated by the Package merge."
 }
