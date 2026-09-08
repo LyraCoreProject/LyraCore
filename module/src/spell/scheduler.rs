@@ -20,7 +20,7 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
-    let result = resolve_cast_at(
+    let result = resolve_cast_at_typed(
         ctx,
         sched.caster_guid,
         sched.spell_id,
@@ -41,7 +41,7 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             .then_some((sched.dest_x, sched.dest_y, sched.dest_z)),
     );
     clear_dead_callback_cast_admission(ctx, sched.caster_guid, sched.spell_id);
-    if let Err(e) = result {
+    if let Err(e) = &result {
         log::info!(
             "pending cast {} (spell {}, caster {}) did not resolve: {}",
             sched.scheduled_id,
@@ -62,6 +62,22 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             )
         });
     }
+    ctx.db
+        .game_pending_cast()
+        .scheduled_id()
+        .delete(sched.scheduled_id);
+    crate::hooks::fire_on_cast_finished(
+        ctx,
+        &crate::hooks::CastFinishedPayload {
+            caster_guid: sched.caster_guid,
+            target_guid: sched.target_guid,
+            scheduled_id: sched.scheduled_id,
+            outcome: match result {
+                Ok(()) => CastFinish::Resolved,
+                Err(refusal) => CastFinish::Refused(refusal),
+            },
+        },
+    );
 }
 
 /// One-shot scheduler callback: a projectile's missile travel time elapsed — apply the

@@ -32,6 +32,8 @@
 //! submodule actually defines it.
 
 mod cast;
+mod outcome;
+pub(crate) use outcome::*;
 mod control;
 mod effects;
 mod math;

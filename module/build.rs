@@ -179,6 +179,12 @@ const HOOK_EVENTS: &[HookEvent] = &[
         "payload.caster_guid",
         "payload.target_guid",
     ),
+    hook(
+        "on_cast_finished",
+        "crate::hooks::CastFinishedPayload",
+        "payload.caster_guid",
+        "payload.target_guid",
+    ),
     // The corpse is a loot container, not a live entity, so `event.target` is normally absent here.
     hook(
         "on_loot",

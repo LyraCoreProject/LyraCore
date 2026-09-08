@@ -97,6 +97,7 @@ pub const HOOK_EVENT_NAMES: &[&str] = &[
     "on_kill",
     "on_aggro",
     "on_cast_resolved",
+    "on_cast_finished",
     "on_loot",
     "on_quest_accept",
     "on_quest_turnin",

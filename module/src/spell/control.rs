@@ -379,15 +379,23 @@ pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
 /// client-facing cast-bar cancel (an `SMSG_SPELL_FAILED`/interrupted wire push) is a gateway follow-up —
 /// the server-authoritative effect (the cast simply never lands) is complete here. [entity]
 pub(crate) fn interrupt_cast(ctx: &ReducerContext, caster_guid: u64) -> bool {
+    interrupt_cast_with_outcome(ctx, caster_guid, CastFinish::Cancelled)
+}
+
+fn interrupt_cast_with_outcome(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    outcome: CastFinish,
+) -> bool {
     let pending = ctx.db.game_pending_cast();
     // Capture (scheduled_id, spell_id) BEFORE deletion — the spell_id rides the interrupt signal row.
-    let hits: Vec<(u64, u32)> = pending
+    let hits: Vec<(u64, u32, u64)> = pending
         .by_caster()
         .filter(&caster_guid)
-        .map(|p| (p.scheduled_id, p.spell_id))
+        .map(|p| (p.scheduled_id, p.spell_id, p.target_guid))
         .collect();
     let interrupted = !hits.is_empty();
-    for (id, spell_id) in hits {
+    for (id, spell_id, target_guid) in hits {
         pending.scheduled_id().delete(id);
         clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
         // INTERRUPT signal: one game_spell_cast_event row (is_interrupted=true) per cancelled cast → the
@@ -397,11 +405,50 @@ pub(crate) fn interrupt_cast(ctx: &ReducerContext, caster_guid: u64) -> bool {
             is_interrupted: true,
             ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Interrupt)
         });
+        crate::hooks::fire_on_cast_finished(
+            ctx,
+            &crate::hooks::CastFinishedPayload {
+                caster_guid,
+                target_guid,
+                scheduled_id: id,
+                outcome: outcome.clone(),
+            },
+        );
     }
     if interrupted {
         log::info!("cast interrupted: caster {caster_guid}'s in-progress cast cancelled");
     }
     interrupted
+}
+
+/// Cancel only the named cast. A stale request cannot cancel its replacement.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn cancel_cast_attempt(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    scheduled_id: u64,
+) -> bool {
+    if !pending_cast(ctx, caster_guid).is_some_and(|cast| cast.scheduled_id == scheduled_id) {
+        return false;
+    }
+    interrupt_cast(ctx, caster_guid)
+}
+
+/// Expiry is a caller's action deadline, separate from the spell's scheduled completion time.
+/// No cast is removed before that deadline or after another cast replaced it.
+#[cfg_attr(not(all(has_packages, feature = "debug_reducers")), allow(dead_code))]
+pub(crate) fn expire_cast_attempt(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    scheduled_id: u64,
+    deadline_micros: i64,
+) -> bool {
+    if ctx.timestamp.to_micros_since_unix_epoch() < deadline_micros
+        || !pending_cast(ctx, caster_guid).is_some_and(|cast| cast.scheduled_id == scheduled_id)
+    {
+        return false;
+    }
+    interrupt_cast_with_outcome(ctx, caster_guid, CastFinish::Expired)
 }
 
 /// BREAK a channel on `caster_guid` — the ONE convergent break path for the four channel-interrupt triggers

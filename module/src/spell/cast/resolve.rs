@@ -58,6 +58,42 @@ pub(crate) fn resolve_cast_at(
     // create_ground_area.
     dest: Option<(f32, f32, f32)>,
 ) -> Result<(), String> {
+    resolve_cast_at_typed(
+        ctx,
+        caster_guid,
+        spell_id,
+        level,
+        target_guid,
+        is_completion,
+        client_initiated,
+        dest,
+    )
+    .map_err(Into::into)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_cast_at_typed(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    level: u8,
+    target_guid: u64,
+    // true ONLY when called from `fire_pending_cast` (a TIMED cast finishing its cast bar): written onto
+    // the cast-GO event so the gateway emits GO+COOLDOWN WITHOUT a second SMSG_SPELL_START(0) (the START
+    // was already sent at begin_cast). false for an instant cast, a channel, a creature cast, and a
+    // triggered cast — all of which still want the START(0)+GO+COOLDOWN instant packet sequence.
+    is_completion: bool,
+    // true ONLY on the player CMSG_CAST_SPELL path (088; threaded via begin_cast from the cast_spell
+    // reducer): the gateway sent that caster's START/RESULT/GO synchronously, so the relay suppresses
+    // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
+    // relay DELIVERS the caster's visual (they never had a synchronous send).
+    client_initiated: bool,
+    // The clicked GROUND point (118 phase 2), for a ground-targeted cast (CMSG_CAST_SPELL's
+    // DEST_LOCATION). `Some` → AREA effects splash from it and a ground patch anchors there; `None` for
+    // every non-ground cast (self/unit-target/creature/trigger). Threaded verbatim to select_targets +
+    // create_ground_area.
+    dest: Option<(f32, f32, f32)>,
+) -> Result<(), CastRefusal> {
     let hdr = ctx
         .db
         .game_spell()
@@ -683,7 +719,8 @@ pub(crate) fn start_creature_spell(
             false,
             None,
             route.admission,
-        ),
+        )
+        .map_err(Into::into),
         CreatureSpellStartMode::Triggered => {
             let origin = match route.admission {
                 CreatureSpellCasterAdmission::Living => CastOrigin::Triggered,
@@ -723,7 +760,7 @@ fn check_cast_gates(
     target_guid: u64,
     spell_id: u32,
     level: u8,
-) -> Result<(), String> {
+) -> Result<(), CastRefusal> {
     let allow_dead_creature = dead_callback_cast_admitted(ctx, caster.guid, spell_id);
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
@@ -740,7 +777,7 @@ fn check_cast_gates_with_admission(
     spell_id: u32,
     level: u8,
     allow_dead_creature: bool,
-) -> Result<(), String> {
+) -> Result<(), CastRefusal> {
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
     check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
@@ -752,7 +789,7 @@ fn check_cast_gate_prefix(
     effects: &[SpellEffect],
     target_guid: u64,
     allow_dead_creature: bool,
-) -> Result<(), String> {
+) -> Result<(), CastRefusal> {
     let caster_guid = caster.guid;
 
     // CC: an ACTION-blocked caster (stunned, polymorphed, OR feared) cannot cast. This is the chokepoint
@@ -761,13 +798,19 @@ fn check_cast_gate_prefix(
     // early-outs on this in tick_creatures). Baseline-safe: an un-CC'd caster has no CC aura → `false` →
     // unchanged.
     if is_action_blocked(ctx, caster_guid) {
-        return Err(format!("caster {caster_guid} cannot act (stun/poly/fear)"));
+        return Err(CastRefusal::new(
+            CastRefusalKind::CannotAct,
+            format!("caster {caster_guid} cannot act (stun/poly/fear)"),
+        ));
     }
 
     // Only a committed creature callback that can run after lethal damage may start or finish a cast
     // from its corpse. Player paths and ordinary creature casts keep the shared dead-caster refusal.
     if !caster_life_allows(caster.is_player(), caster.dead, allow_dead_creature) {
-        return Err(format!("caster {caster_guid} is dead"));
+        return Err(CastRefusal::new(
+            CastRefusalKind::Dead,
+            format!("caster {caster_guid} is dead"),
+        ));
     }
 
     // Taming is completion-gated and revalidated here before cost or any write. The handler repeats
@@ -789,7 +832,7 @@ fn check_cast_gate_suffix(
     target_guid: u64,
     spell_id: u32,
     level: u8,
-) -> Result<(), String> {
+) -> Result<(), CastRefusal> {
     let caster_guid = caster.guid;
     for effect in effects
         .iter()
@@ -806,10 +849,10 @@ fn check_cast_gate_suffix(
     // Defias Rogue Wizard L9-10 casts Frostbolt 13322 spell_level 20), and the leveling spine is a
     // player-only concept. The guard keeps player casts BYTE-IDENTICAL — see `level_gate_blocks`. [server]
     if level_gate_blocks(caster.is_player(), hdr.spell_level, level) {
-        return Err(format!(
+        return Err(CastRefusal::from(format!(
             "spell {spell_id} requires level {} (caster is level {level})",
             hdr.spell_level
-        ));
+        )));
     }
 
     // Stance gate (Tier 3a — Warrior stances): a stance-restricted ability (Stances usability mask != 0) is
@@ -819,10 +862,10 @@ fn check_cast_gate_suffix(
     // gates (after the level gate, before GCD/cost) so a wrong-stance cast spends nothing — the school-lockout
     // / react-window precedent. Keyed on the caster's `stance` field + the header mask, NEVER a spell id.
     if !stance_allows(hdr.stances, caster.stance) {
-        return Err(format!(
+        return Err(CastRefusal::from(format!(
             "spell {spell_id} cannot be cast in the caster's current stance ({})",
             caster.stance
-        ));
+        )));
     }
 
     // School-lockout gate (the Kick silence): a cast whose SCHOOL was just interrupted on this caster is
@@ -846,10 +889,10 @@ fn check_cast_gate_suffix(
         })
     {
         let _ = lock;
-        return Err(format!(
+        return Err(CastRefusal::from(format!(
             "spell {spell_id} school {} is locked (interrupted) for caster {caster_guid}",
             hdr.school_mask
-        ));
+        )));
     }
 
     // GCD gate (before cost so an on-cooldown cast spends nothing). The GCD is the per-CASTER row in
@@ -859,7 +902,10 @@ fn check_cast_gate_suffix(
             ctx.timestamp.to_micros_since_unix_epoch(),
             cd.ready_at.to_micros_since_unix_epoch(),
         ) {
-            return Err("spell not ready (global cooldown)".to_string());
+            return Err(CastRefusal::new(
+                CastRefusalKind::Cooldown,
+                "spell not ready (global cooldown)".to_string(),
+            ));
         }
     }
 
@@ -881,7 +927,10 @@ fn check_cast_gate_suffix(
                 ctx.timestamp.to_micros_since_unix_epoch(),
                 cd.ready_at.to_micros_since_unix_epoch(),
             ) {
-                return Err("spell not ready (cooldown)".to_string());
+                return Err(CastRefusal::new(
+                    CastRefusalKind::Cooldown,
+                    "spell not ready (cooldown)".to_string(),
+                ));
             }
         }
     }
@@ -898,16 +947,16 @@ fn check_cast_gate_suffix(
         if hdr.cast_flags & SPELL_ATTR_REQ_OVERPOWER != 0
             && !crate::combat::react_window_active(caster.overpower_until_ms, now_ms)
         {
-            return Err(format!(
+            return Err(CastRefusal::from(format!(
                 "spell {spell_id} requires an Overpower window (the target must have dodged your swing)"
-            ));
+            )));
         }
         if hdr.cast_flags & SPELL_ATTR_REQ_REVENGE != 0
             && !crate::combat::react_window_active(caster.revenge_until_ms, now_ms)
         {
-            return Err(format!(
+            return Err(CastRefusal::from(format!(
                 "spell {spell_id} requires a Revenge window (you must have dodged/parried/blocked)"
-            ));
+            )));
         }
     }
 
@@ -922,9 +971,12 @@ fn check_cast_gate_suffix(
             // share a map AND instance (work-item 190 slice 1) — a cross-map/cross-instance target is
             // unreachable (treat as out of range) before trusting it.
             if caster.map_id != target.map_id || caster.instance_id != target.instance_id {
-                return Err(format!(
-                    "target on another map (caster {} != target {})",
-                    caster.map_id, target.map_id
+                return Err(CastRefusal::new(
+                    CastRefusalKind::OtherPartition,
+                    format!(
+                        "target on another map (caster {} != target {})",
+                        caster.map_id, target.map_id
+                    ),
                 ));
             }
             let dist = distance_3d(caster.x, caster.y, caster.z, target.x, target.y, target.z);
@@ -937,9 +989,12 @@ fn check_cast_gate_suffix(
             // tight on a fleeing mob.
             const CAST_RANGE_LEEWAY_YD: f32 = 2.0 + 8.0 / 3.0; // ≈ 4.67 yd
             if dist > hdr.range_yd as f32 + CAST_RANGE_LEEWAY_YD {
-                return Err(format!(
-                    "target out of range ({dist:.1} yd > {} + {:.1} yd leeway)",
-                    hdr.range_yd, CAST_RANGE_LEEWAY_YD
+                return Err(CastRefusal::new(
+                    CastRefusalKind::OutOfRange,
+                    format!(
+                        "target out of range ({dist:.1} yd > {} + {:.1} yd leeway)",
+                        hdr.range_yd, CAST_RANGE_LEEWAY_YD
+                    ),
                 ));
             }
         }
@@ -978,9 +1033,9 @@ fn check_cast_gate_suffix(
                 if let Some(class) =
                     faction_target_violation(hits_enemy, hits_ally, friendly, hostile)
                 {
-                    return Err(format!(
+                    return Err(CastRefusal::from(format!(
                         "spell {spell_id} targets {class} — cannot be cast on this unit ({target_guid})"
-                    ));
+                    )));
                 }
             }
         }
@@ -1000,10 +1055,10 @@ fn check_cast_gate_suffix(
     if let Some(e) = effects.iter().find(|e| {
         e.kind & KIND_AURA_BIT != 0 && e.p1 != 0 && has_aura(ctx, target_guid, e.p1 as u32)
     }) {
-        return Err(format!(
+        return Err(CastRefusal::from(format!(
             "spell {spell_id} refused — target {target_guid} carries the linked debuff {} (Weakened-Soul-style lockout)",
             e.p1
-        ));
+        )));
     }
 
     // Blink (116) requires its teleport DISTANCE as data — the effect's DBC radius (`radius_yd`,
@@ -1014,10 +1069,10 @@ fn check_cast_gate_suffix(
         .iter()
         .find(|e| e.kind == E_BLINK && e.radius_yd <= 0.0)
     {
-        return Err(format!(
+        return Err(CastRefusal::from(format!(
             "spell {spell_id} (Blink) effect {} has no radius — teleport distance is unauthored data",
             e.effect_index
-        ));
+        )));
     }
     // A ground-AoE (118) with no radius is unauthored data — reject LOUD rather than spawn a 0-radius
     // area that silently damages nobody (same fail-loud stance as Blink's distance).
@@ -1025,10 +1080,10 @@ fn check_cast_gate_suffix(
         .iter()
         .find(|e| e.kind == E_PERSISTENT_AREA && e.radius_yd <= 0.0)
     {
-        return Err(format!(
+        return Err(CastRefusal::from(format!(
             "spell {spell_id} (ground-AoE) effect {} has no radius — area size is unauthored data",
             e.effect_index
-        ));
+        )));
     }
 
     // Scripted-effect gate: a cast carrying an E_SCRIPTED effect with a nonzero script_id must
@@ -1047,10 +1102,10 @@ fn check_cast_gate_suffix(
                 .find(e.script_id)
                 .is_some_and(|script| script.enabled)
     }) {
-        return Err(format!(
+        return Err(CastRefusal::from(format!(
             "spell {spell_id} effect {} names script {} which is missing or disabled",
             e.effect_index, e.script_id
-        ));
+        )));
     }
 
     // Rogue cast-gate flags (REQ_BEHIND / REQ_STEALTH + Sap's out-of-combat + humanoid constraints). All
@@ -1065,16 +1120,16 @@ fn check_cast_gate_suffix(
             let target = crate::helpers::live_entity(ctx, target_guid)
                 .map_err(|_| format!("spell {spell_id} target {target_guid} not in world"))?;
             if !is_behind(caster.x, caster.y, target.x, target.y, target.orientation) {
-                return Err(format!(
+                return Err(CastRefusal::from(format!(
                     "spell {spell_id} must be cast from BEHIND the target ({target_guid})"
-                ));
+                )));
             }
         }
         // REQ_STEALTH (Sap): the caster must be stealthed. Read BEFORE the break below.
         if hdr.cast_flags & SPELL_ATTR_REQ_STEALTH != 0 && !is_stealthed(ctx, caster_guid) {
-            return Err(format!(
+            return Err(CastRefusal::from(format!(
                 "spell {spell_id} requires stealth (caster {caster_guid} is not stealthed)"
-            ));
+            )));
         }
         // Sap-shaped opener constraints: an INCAP_OPENER spell (Sap) additionally requires the target to be
         // OUT of combat AND a HUMANOID creature (vanilla Sap). Keyed on the SEPARATE SPELL_ATTR_INCAP_OPENER
@@ -1084,9 +1139,9 @@ fn check_cast_gate_suffix(
         if hdr.cast_flags & SPELL_ATTR_INCAP_OPENER != 0 {
             if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
                 if target.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
-                    return Err(format!(
+                    return Err(CastRefusal::from(format!(
                         "spell {spell_id} cannot target a unit IN COMBAT ({target_guid})"
-                    ));
+                    )));
                 }
                 // Players are always Humanoid (no creature_template row) — a missing template would
                 // otherwise reject every player target.
@@ -1098,9 +1153,9 @@ fn check_cast_gate_suffix(
                         .find(target.entry)
                         .is_some_and(|t| t.creature_type == HUMANOID_TYPE);
                 if !is_humanoid {
-                    return Err(format!(
+                    return Err(CastRefusal::from(format!(
                         "spell {spell_id} can only target a Humanoid ({target_guid})"
-                    ));
+                    )));
                 }
             }
         }
@@ -1127,9 +1182,9 @@ fn check_cast_gate_suffix(
                 })
                 .unwrap_or(false);
         if !has_dagger {
-            return Err(format!(
+            return Err(CastRefusal::from(format!(
                 "spell {spell_id} requires a dagger equipped in the main hand (caster {caster_guid})"
-            ));
+            )));
         }
     }
 
@@ -1139,9 +1194,9 @@ fn check_cast_gate_suffix(
     // cost 90, Frost Armor cost 10). Gating on `is_player()` (not a spell-id branch) keeps player casts
     // BYTE-IDENTICAL and avoids wiring a mob mana column — see `cost_gate_blocks`. [server]
     if cost_gate_blocks(caster.is_player(), caster.power, hdr.cost) {
-        return Err(format!(
-            "not enough power: have {}, need {}",
-            caster.power, hdr.cost
+        return Err(CastRefusal::new(
+            CastRefusalKind::InsufficientPower,
+            format!("not enough power: have {}, need {}", caster.power, hdr.cost),
         ));
     }
 
@@ -1202,10 +1257,11 @@ pub(crate) fn begin_cast(
         dest,
         CreatureSpellCasterAdmission::Living,
     )
+    .map_err(Into::into)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn begin_cast_with_admission(
+pub(crate) fn begin_cast_with_admission(
     ctx: &ReducerContext,
     caster_guid: u64,
     spell_id: u32,
@@ -1214,7 +1270,7 @@ fn begin_cast_with_admission(
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
     admission: CreatureSpellCasterAdmission,
-) -> Result<(), String> {
+) -> Result<(), CastRefusal> {
     let hdr = ctx
         .db
         .game_spell()
@@ -1276,7 +1332,7 @@ fn begin_cast_with_admission(
     if !completed_channel && (cast_ms == 0 || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0) {
         // Instant / channel: resolves NOW (no pending cast bar), so it is NOT a completion — the gateway
         // sends the full instant START(0)+GO+COOLDOWN sequence.
-        let result = resolve_cast_at(
+        let result = resolve_cast_at_typed(
             ctx,
             caster_guid,
             spell_id,

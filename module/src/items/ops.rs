@@ -4,6 +4,7 @@
 //! reducer and its debug twin (see `reducers.rs`). All effects are additive: they touch only the item
 //! rows + the actor's health/money.
 
+use crate::actor::{ActionRefusal, ActionRefusalKind};
 use spacetimedb::{Identity, ReducerContext, Table};
 
 use lyracore_shared::constants::starter_item;
@@ -176,6 +177,16 @@ pub(crate) fn grant_item_property(
     count: u32,
     property: Option<u32>,
 ) -> Result<(), String> {
+    request_grant_item(ctx, player_guid, item_entry, count, property).map_err(Into::into)
+}
+
+pub(crate) fn request_grant_item(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    item_entry: u32,
+    count: u32,
+    property: Option<u32>,
+) -> Result<(), ActionRefusal> {
     let player = crate::helpers::live_entity(ctx, player_guid)
         .map_err(|_| "player not in world".to_string())?;
     let tmpl = ctx
@@ -184,7 +195,7 @@ pub(crate) fn grant_item_property(
         .entry()
         .find(item_entry)
         .ok_or_else(|| format!("no such item {item_entry}"))?;
-    store_item(
+    store_item_typed(
         ctx,
         player_guid,
         player.owner_identity,
@@ -203,10 +214,31 @@ pub(crate) fn store_item(
     player_guid: u64,
     owner_identity: spacetimedb::Identity,
     tmpl: &ItemTemplate,
-    mut count: u32,
+    count: u32,
     force_soulbound: bool,
     preselected_property: Option<u32>,
 ) -> Result<(), String> {
+    store_item_typed(
+        ctx,
+        player_guid,
+        owner_identity,
+        tmpl,
+        count,
+        force_soulbound,
+        preselected_property,
+    )
+    .map_err(Into::into)
+}
+
+fn store_item_typed(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    owner_identity: spacetimedb::Identity,
+    tmpl: &ItemTemplate,
+    mut count: u32,
+    force_soulbound: bool,
+    preselected_property: Option<u32>,
+) -> Result<(), ActionRefusal> {
     if count == 0 {
         return Ok(());
     }
@@ -231,7 +263,10 @@ pub(crate) fn store_item(
     });
     let new_stacks = remaining.div_ceil(max_stack);
     if new_stacks > super::inventory::count_free_inventory_slots(ctx, player_guid) {
-        return Err(lyracore_shared::mail::INVENTORY_FULL.to_owned());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::InventoryFull,
+            lyracore_shared::mail::INVENTORY_FULL,
+        ));
     }
     let mut properties = Vec::with_capacity(new_stacks as usize);
     for index in 0..new_stacks {
