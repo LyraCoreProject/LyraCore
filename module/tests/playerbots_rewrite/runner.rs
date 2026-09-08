@@ -393,6 +393,19 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     assert_eq!(runner(&node, bot)["objective_sequence"], objective_id);
     assert!(runner(&node, bot)["objective"].contains("deferred"));
     assert!(runner(&node, bot)["foreground"].contains("none"));
+    node.assert_call("playerbots_fixture_runner_survival", &[bot]);
+    node.assert_call("playerbots_fixture_runner_damage", &[bot, "0", "1"]);
+    let prior_move = node.query_rows("SELECT observed_micros FROM pkg_playerbots_action");
+    std::thread::sleep(Duration::from_secs(3));
+    let waiting = runner(&node, bot);
+    assert!(waiting["chosen"].contains("survival"));
+    assert!(waiting["chosen"].contains("hold"));
+    assert!(waiting["foreground"].contains("none"));
+    assert_eq!(waiting["route_expansions"], "0");
+    assert_eq!(
+        node.query_rows("SELECT observed_micros FROM pkg_playerbots_action"),
+        prior_move
+    );
     outcomes(&node);
 }
 
@@ -611,5 +624,35 @@ fn playerbots_runner_relinquishes_current_account_ownership_without_cancelling_h
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["objective"]
         .contains("completed")));
     assert!((position(&node, bot) - 1238.0).abs() < 0.1);
+    outcomes(&node);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_runner_observes_tactical_movement_without_advancing_the_home_clock() {
+    let (node, bots) = fixture("playerbots-runner-tactical", "1");
+    let bot = &bots[0];
+    node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    node.assert_call("playerbots_fixture_runner_clear_navigation", &[bot]);
+    let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
+    node.assert_call("playerbots_fixture_position", &[&target, "1400"]);
+    node.assert_sql(&format!(
+        "UPDATE game_creature_spawn SET x = 1400 WHERE guid = {target}"
+    ));
+    node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "cohort");
+    node.assert_call("playerbots_fixture_runner_damage", &[bot, &target, "1"]);
+    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
+        .contains("defense")));
+    let start = position(&node, bot);
+    std::thread::sleep(Duration::from_secs(12));
+    let observed = runner(&node, bot);
+    assert!(position(&node, bot) > start + 30.0);
+    assert!(observed["chosen"].contains("defense"));
+    assert!(!observed["failures"].contains("noMovement"));
+    assert_eq!(observed["retry_count"], "0");
+    assert!(!observed["movement_progress"].contains("none"));
+    assert!(observed["objective"].contains("last_verified_progress_micros = (none"));
     outcomes(&node);
 }
