@@ -428,7 +428,7 @@ pub(crate) fn cancel_cast_attempt(
     caster_guid: u64,
     scheduled_id: u64,
 ) -> bool {
-    if !pending_cast(ctx, caster_guid).is_some_and(|cast| cast.scheduled_id == scheduled_id) {
+    if pending_cast(ctx, caster_guid).is_none_or(|cast| cast.scheduled_id != scheduled_id) {
         return false;
     }
     interrupt_cast(ctx, caster_guid)
@@ -444,7 +444,7 @@ pub(crate) fn expire_cast_attempt(
     deadline_micros: i64,
 ) -> bool {
     if ctx.timestamp.to_micros_since_unix_epoch() < deadline_micros
-        || !pending_cast(ctx, caster_guid).is_some_and(|cast| cast.scheduled_id == scheduled_id)
+        || pending_cast(ctx, caster_guid).is_none_or(|cast| cast.scheduled_id != scheduled_id)
     {
         return false;
     }

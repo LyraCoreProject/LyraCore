@@ -100,7 +100,7 @@ fn fixture_role(name: &str, count: &str, role: &str) -> (Standalone, Vec<String>
 fn playerbots_a_long_bot_cast_waits_for_core_completion() {
     let (node, bots) = fixture("playerbots-cast", "1");
     let bot = &bots[0];
-    node.assert_call("playerbots_fixture_cast", &[&bot, &bot]);
+    node.assert_call("playerbots_fixture_cast", &[bot, bot]);
     let pending = node.query_rows("SELECT scheduled_id, caster_guid FROM game_pending_cast");
     assert_eq!(pending.len(), 1, "a five-second heal must leave a cast bar");
     assert_eq!(
@@ -120,10 +120,10 @@ fn playerbots_a_long_bot_cast_waits_for_core_completion() {
         .all(|r| r["kind"] != "2"),
         "the cast has not resolved yet"
     );
-    node.assert_call("playerbots_fixture_resume", &[&bot]);
+    node.assert_call("playerbots_fixture_resume", &[bot]);
     for target in [bot.as_str(), "0"] {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        node.assert_call("playerbots_fixture_cast", &[&bot, target]);
+        node.assert_call("playerbots_fixture_cast", &[bot, target]);
         assert_eq!(
             node.query_rows("SELECT scheduled_id, caster_guid FROM game_pending_cast"),
             pending,
