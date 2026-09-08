@@ -636,20 +636,19 @@ pub(crate) fn reconcile_profile_skill(
     let (admitted, identity_admitted, overflow) = if imported {
         let mut admitted = false;
         let mut identity_admitted = false;
-        let mut examined = 0usize;
         let mut overflow = false;
-        for row in ctx
+        for (examined, row) in ctx
             .db
             .game_skill_availability()
             .by_skill_line()
             .filter(&line)
             .take(PROFILE_SKILL_AVAILABILITY_LIMIT + 1)
+            .enumerate()
         {
             if examined == PROFILE_SKILL_AVAILABILITY_LIMIT {
                 overflow = true;
                 break;
             }
-            examined += 1;
             let identity_matches = profile_mask_admits(row.race_mask, actor.race())
                 && profile_mask_admits(row.class_mask, actor.class());
             identity_admitted |= identity_matches;
