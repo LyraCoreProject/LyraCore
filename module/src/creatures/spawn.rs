@@ -521,7 +521,8 @@ pub(crate) fn timer_never(ctx: &spacetimedb::ReducerContext) -> spacetimedb::Tim
     // `game_aura`'s `by_expiry`, and `gateway/tests/schema_parity.rs` checks columns/bindings, not
     // indexes, so the gateway is unaffected).
     index(accessor = by_respawn_at, btree(columns = [respawn_at])),
-    index(accessor = by_despawn_at, btree(columns = [despawn_at]))
+    index(accessor = by_despawn_at, btree(columns = [despawn_at])),
+    index(accessor = by_entry_map, btree(columns = [entry, map_id]))
 )]
 pub struct CreatureSpawn {
     #[primary_key]
@@ -560,6 +561,23 @@ pub struct CreatureSpawn {
     /// END-appended + defaulted (migration rule).
     #[default(0u64)]
     pub life_seq: u64,
+}
+
+/// Read stored spawn evidence for one creature entry without walking the world spawn table.
+/// Callers still inspect `game_world_entity` when they need a live target they can act on now.
+pub(crate) fn creature_spawn_evidence(
+    ctx: &ReducerContext,
+    entry: u32,
+    map_id: u32,
+    limit: usize,
+) -> Vec<CreatureSpawn> {
+    const MAX_RESULTS: usize = 128;
+    ctx.db
+        .game_creature_spawn()
+        .by_entry_map()
+        .filter((entry, map_id))
+        .take(limit.min(MAX_RESULTS))
+        .collect()
 }
 
 /// Which life of `creature_guid` is standing right now.

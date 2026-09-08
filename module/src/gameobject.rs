@@ -201,6 +201,10 @@ pub struct GameObjectUnlocked {
     // sentinel on every live row, so a `1..=now` range visits only DUE nodes — the same trick
     // `game_aura.by_next_tick` uses.
     index(accessor = by_respawn_at, btree(columns = [respawn_at_micros])),
+    index(
+        accessor = by_template_scope,
+        btree(columns = [template_entry, map_id, instance_id])
+    ),
     // The AOI cell index — exactly 3 columns, all matched by equality terms, which is the
     // only shape SpacetimeDB 2.7.1's subscription planner can serve (see the `cell` column).
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
@@ -285,6 +289,25 @@ pub struct GameObject {
     pub rotation_2: f32,
     #[default(0.0f32)]
     pub rotation_3: f32,
+}
+
+/// Read stored GameObject destination evidence through an exact template and partition index.
+/// State and distance decide whether a returned object can be used now. They do not erase the
+/// stored destination when every matching object is depleted or far away.
+pub(crate) fn gameobject_destination_evidence(
+    ctx: &ReducerContext,
+    template_entry: u32,
+    map_id: u32,
+    instance_id: u64,
+    limit: usize,
+) -> Vec<GameObject> {
+    const MAX_RESULTS: usize = 128;
+    ctx.db
+        .game_gameobject()
+        .by_template_scope()
+        .filter((template_entry, map_id, instance_id))
+        .take(limit.min(MAX_RESULTS))
+        .collect()
 }
 
 // ===========================================================================================
@@ -753,6 +776,46 @@ pub(crate) fn apply_pick_lock(
 /// Shared use-a-gameobject core for Character and debug paths. [`usable_go`] requires a live
 /// Character, a loaded GameObject template, the same map and instance, and use range before
 /// type-specific effects run. Supported lock-bearing types also apply [`locked_shut`] first. [entity]
+#[cfg_attr(
+    not(feature = "debug_reducers"),
+    allow(
+        dead_code,
+        reason = "the Package catalog executor is driven by its durable debug_reducers fixture"
+    )
+)]
+pub(crate) fn request_use_gameobject(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    go_guid: u64,
+) -> Result<(), crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
+
+    let go = ctx
+        .db
+        .game_gameobject()
+        .guid()
+        .find(go_guid)
+        .ok_or_else(|| {
+            ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such gameobject")
+        })?;
+    let caster = crate::helpers::live_entity(ctx, caster_guid)
+        .map_err(|_| ActionRefusal::new(ActionRefusalKind::MissingActor, "user not in world"))?;
+    if (caster.map_id, caster.instance_id) != (go.map_id, go.instance_id) {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "gameobject on another map or instance",
+        ));
+    }
+    let (dx, dy, dz) = (go.x - caster.x, go.y - caster.y, go.z - caster.z);
+    if dx * dx + dy * dy + dz * dz > USE_RANGE_SQ {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OutOfRange,
+            "gameobject out of range",
+        ));
+    }
+    apply_use_gameobject(ctx, caster_guid, go_guid).map_err(ActionRefusal::from)
+}
+
 pub(crate) fn apply_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,

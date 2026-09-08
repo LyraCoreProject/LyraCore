@@ -35,6 +35,8 @@
 //! | `reconcile_profile_item` | `items::request_profile_item` | bounded top-up + capacity/uniqueness gates |
 //! | `equip_profile_upgrade` | `items::apply_equip_profile_upgrade` | normal equip gates + preserves equal or stronger gear |
 //! | `use_gameobject` | `gameobject::apply_use_gameobject` | GO resolved by guid + range/use gates |
+//! | `request_use_gameobject` | `gameobject::request_use_gameobject` | typed target, partition, range, and use Refusal |
+//! | `import_revision` | `game_import_meta` read | current importer source and file identities for one family |
 //! | `repop` | `world::do_repop` | dead actor releases to the graveyard ghost |
 //! | `respond_resurrect` | `spell::do_resurrect_response` | consume the actor's pending rez offer; accept revives IN PLACE at the offer's % |
 //! | `spirit_res` | `world::do_spirit_healer_res` | ghost actor res at the spirit healer (sickness applies) |
@@ -52,7 +54,25 @@
 //! `packages/` drop-ins, discovered by `module/build.rs`). Both silence unused-import ONLY in the
 //! build where the consumer isn't compiled, and neither is a licence to keep a verb no tree calls.
 
+use crate::import_meta::game_import_meta;
 use spacetimedb::ReducerContext;
+
+pub(crate) struct ImportRevision {
+    pub source_sha: String,
+    pub file_hash: String,
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn import_revision(ctx: &ReducerContext, family: &str) -> Option<ImportRevision> {
+    ctx.db
+        .game_import_meta()
+        .family()
+        .find(family.to_string())
+        .map(|meta| ImportRevision {
+            source_sha: meta.source_sha,
+            file_hash: meta.file_hash,
+        })
+}
 
 // ---- combat ----
 
@@ -150,10 +170,11 @@ package_only! {
 
 // ---- NPC services / world ----
 
-debug_only! {
+package_only! {
     pub(crate) use crate::gameobject::apply_use_gameobject as use_gameobject;
-    pub(crate) use crate::trainer::apply_trainer_buy as trainer_buy;
+    pub(crate) use crate::gameobject::request_use_gameobject as request_use_gameobject;
 }
+debug_only! { pub(crate) use crate::trainer::apply_trainer_buy as trainer_buy; }
 package_only! {
     pub(crate) use crate::spell::do_resurrect_response as respond_resurrect;
     pub(crate) use crate::world::do_repop as repop;

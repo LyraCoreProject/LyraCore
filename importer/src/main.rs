@@ -466,14 +466,10 @@ mod qt {
     pub const LIMIT_TIME: usize = 19;
     pub const SPECIAL_FLAGS: usize = 21; // bit0 = QUEST_SPECIAL_FLAGS_REPEATABLE
     pub const PREV_QUEST_ID: usize = 22; // prerequisite quest (must be turned in first); 0 = none
-                                         // [V] NextQuestId/NextQuestInChain (the successor auto-offered on turn-in) — unverified column
-                                         // index (no cmangos dump in this sandbox to confirm against). Bracketed between the two
-                                         // already-trusted constants either side: 3 slots after PREV_QUEST_ID=22 (PrevQuestId, NextQuestId,
-                                         // ExclusiveGroup sit between), 2 slots before SRC_ITEM_ID=27. Coverage-printed at import time
-                                         // (chained-quest count) + a presence floor (`FLOOR_QUESTS_CHAINED`, importer/scripts/import-manifest.sh) —
-                                         // McBride's 783->7->15->21->54 chain (already verified via the working `prev_quest_id` import)
-                                         // should populate this symmetrically, so >=1 is a safe floor, unlike LIMIT_TIME above.
-    pub const NEXT_QUEST_IN_CHAIN: usize = 25;
+                                         // ClassicDB names columns 23 through 26 NextQuestId, ExclusiveGroup, BreadcrumbForQuestId,
+                                         // and NextQuestInChain. The forward chain is column 26. Quest 783 carries 0 at column 25 and 7
+                                         // at column 26, so using the breadcrumb column silently loses its link to quest 7.
+    pub const NEXT_QUEST_IN_CHAIN: usize = 26;
     pub const SRC_ITEM_ID: usize = 27; // SrcItemId — item HANDED to the player on accept (provided item)
     pub const SRC_ITEM_COUNT: usize = 28; // SrcItemCount (0 in the dump means 1)
     pub const TITLE: usize = 30;
@@ -8285,6 +8281,28 @@ mod tests {
         format!("({})", cols.join(","))
     }
 
+    /// The leading fields of ClassicDB's real quest 783 row. Keep the two adjacent zero and seven
+    /// values literal so this catches a column constant that drifts back to BreadcrumbForQuestId.
+    fn classicdb_quest_783_row() -> String {
+        let mut cols = vec!["0".to_string(); 123];
+        for (index, value) in [
+            (0, "783"),
+            (1, "2"),
+            (2, "9"),
+            (3, "1"),
+            (4, "255"),
+            (5, "1"),
+            (8, "77"),
+            (20, "8"),
+            (25, "0"),
+            (26, "7"),
+            (30, "'A Threat Within'"),
+        ] {
+            cols[index] = value.to_string();
+        }
+        format!("({})", cols.join(","))
+    }
+
     /// A tiny but REAL synthetic dump: one in-box creature (a quest giver) + its template + one
     /// quest + the giver relation linking them — just enough for `build_dump_plan` to run
     /// end-to-end (every family's prerequisite parsing touches this data) without a real cmangos
@@ -8943,6 +8961,33 @@ mod tests {
         // would pass even if reward_money_max_level silently came out wrong (e.g. always the unwrap_or(0)
         // default). Any FURTHER end-append is still expected to land after this triple, never between them.
         assert!(insert.contains(",501,3600,777"), "next_quest_id=501, limit_time=3600, reward_money_max_level=777 must thread through, in order, as END-appended columns: {insert}");
+    }
+
+    #[test]
+    fn classicdb_quest_783_uses_next_quest_in_chain_after_breadcrumb() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES (1,823,0,1,-8933.54,-136.523,83.4466,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `creature_questrelation` VALUES (823,783);",
+            creature_template_row(823, 0),
+            classicdb_quest_783_row(),
+        );
+        let mut args = test_args();
+        args.family = Some("quests".to_string());
+        let plan = build_dump_plan(&dump, &args, &None, &None).expect("quest import plan");
+        let insert = plan
+            .stmts
+            .iter()
+            .find(|statement| {
+                statement.starts_with("INSERT INTO game_quest_template")
+                    && statement.contains("(783,")
+            })
+            .expect("quest 783 insert");
+        assert!(
+            insert.contains(",false,7,0,"),
+            "quest 783 must retain its forward link to quest 7: {insert}"
+        );
     }
 
     #[test]
