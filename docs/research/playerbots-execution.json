@@ -303,20 +303,21 @@
       "prs": [
         {
           "url": "https://github.com/LyraCoreProject/LyraCore/pull/484",
-          "status": "draft"
+          "status": "draft",
+          "label": "Core #484"
         },
         {
           "url": "https://github.com/LyraCoreProject/packages/pull/26",
-          "status": "draft"
+          "status": "draft",
+          "label": "Package #26"
         }
       ],
       "evidence": [
-        "The populated preceding-Wasm upgrade passed again, preserving bot, goal, action, and quest rows before bounded runner backfill. Final migration evidence must be repeated after the action payload changes now in review.",
-        "The real ownership case passed with an active Account Claim while online remained false. Bot position held, a later human cast retained its identity through controller changes, and bot travel resumed after ownership ended.",
-        "Independent specification review found and then confirmed source fixes for Survival bypassing a deferred destination, false stalls during tactical movement, and a second cycle refusal being mistaken for completion. Final execution evidence is pending.",
-        "Independent standards review prompted action payload types, consistent Reason terminology, a separate cycle test, corrected consent ownership prose, and reuse of the core route limit. These corrections are in progress. Strategy defaults and priority adjustments remain because this ticket explicitly requires them.",
-        "The full Package-enabled Module library passed 1,630 tests after the behavior corrections and Character-read fix. Further debug, durable, default-inventory, binding, and CI checks must cover the final action types.",
-        "The prior consent implementation passed 1,523 default Module tests, 1,454 Gateway tests, five real durable cases, and exact parity for all 1,000 default Gateway binding files. These results precede the final combined source.",
+        "Independent Standards and Spec reviews are clear at core 41488bfe8fecae21498371e172969c01948e7bc2 and Package 2a7aeca404f3dcfa455a447e3216f4772f1feccb. The orchestrator reviewed the final serialization correction through Package 584d01b00b2b241b6d5667bb810b49af0430d634 against both axes. Review records are attached to both PRs.",
+        "Final Package-enabled Module library checks pass at the fixed source revisions: 1,631 normal and 1,632 debug tests. The full durable run uses clean committed trees and will retain the exact Wasm and input identities.",
+        "Current-core CI passes formatting, lint, Rust tests, Runtime Scripts, and Wasm compilation. Its test log includes 360 importer tests, 1,524 default Module tests, 1,454 Gateway tests with seven ignored, and 172 shared tests. The durable and binding job remains pending.",
+        "Current Package CI passes its firewall, Module compilation, and DataScript checks. The paired durable migration and behavior job remains pending.",
+        "Earlier real cases passed populated upgrade, bounded backfill, deferred low-health travel, tactical movement away from home, and human ownership handoff. Runs that overlapped source edits are excluded from final source-identity evidence.",
         "The preceding-build record identifies exact core and Package revisions, installed Package inventory, toolchain, per-file Package identities, and Wasm identity. The populated upgrade records both old and new Wasm identities."
       ],
       "notes": [
@@ -681,6 +682,6 @@
       "observations": {}
     }
   ],
-  "updated_at": "2026-09-08 14:32 UTC",
-  "summary": "PB-001 is complete. PB-002 has draft core and Package PRs, passing upgrade and human-ownership cases, and completed initial independent reviews. Review corrections and full checks are in progress. One of 12 implementation tickets is complete."
+  "updated_at": "2026-09-08 14:46 UTC",
+  "summary": "PB-001 is complete. Both source reviews for PB-002 are clear. Its final normal and debug library suites pass, and the clean durable run is in progress. Core and Package PRs remain under review. One of 12 implementation tickets is complete."
 }
