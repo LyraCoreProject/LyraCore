@@ -97,15 +97,20 @@ encounter content; the kernel exists for Packages.
 Existing verbs keep `fn verb(ctx, actor_guid, ..) -> Result<(), String>`. The table in
 `module/src/actor.rs` lists their contracts.
 
+`actor::cast_readiness(ctx, actor_guid, spell_id, target_guid)` applies the same read-only spellbook,
+supported-lifecycle, range, line-of-sight, and ordinary cast Gates used at cast start. A Package can
+turn an `OutOfRange` or `NoLineOfSight` Refusal into a movement prerequisite without spending power,
+starting a cooldown, or creating a cast.
+
 `actor::request_cast(ctx, actor_guid, spell_id, target_guid)` returns
 `Result<spell::CastStart, spell::CastRefusal>`. `Started` carries a Cast Handle. `Waiting` carries
 an existing cast's original identity, spell, target, and current due time, even when the new request
 names a different spell or target. It never restarts that cast. `Resolved` means effects dispatched
 synchronously, which does not imply a projectile hit. Channeled spells return `UnsupportedChannel`
 until bot requests can retain their lifecycle. Client casts keep their existing channel behavior.
-`actor::cast_at` is the compatibility adapter that discards this distinction. These explicit-guid
-requests preserve the Actor API's spellbook bypass. They do not prove the Character knows the spell;
-capability selection must enforce known, supported spells before proposing them.
+`actor::cast_at` is the compatibility adapter that discards this distinction. Character Actor
+requests require the spell in `game_player_spell`. Creature and triggered spell-engine entries keep
+their existing spellbook exemption.
 
 A scheduled cast ends through `on_cast_finished`. Its payload carries the caster, target, scheduled
 identity, and `spell::CastFinish`. Packages must match the scheduled identity before updating retained
@@ -114,6 +119,7 @@ does not fire this hook. `on_cast_resolved` keeps its existing effect-dispatch c
 
 `spell::pending_cast` reads the current Cast Handle by caster. Refusal kinds are supplied by the
 owning Gate. `Other` preserves a Gate's message when no current caller needs a separate policy.
+`UnlearnedSpell` and `NoLineOfSight` identify the spellbook and targeted visibility Gates.
 
 `spell::cancel_cast_attempt(ctx, caster_guid, scheduled_id)` cancels only that scheduled cast.
 `spell::expire_cast_attempt(ctx, caster_guid, scheduled_id, deadline_micros)` also requires the
@@ -123,6 +129,9 @@ caller's action deadline to have passed. They return whether they removed the ca
 `crate::helpers` holds the reads a Package needs before it acts: `live_entity`, `require_character`,
 `character_by_guid`, `character_by_name`, `entity_by_owner`, `acting_entity_by_guid`, `entities_near`,
 `nearest_entity`, `in_same_partition`, `require_operator`.
+
+`group::party_facts(ctx, character_guid)` reads the Character's local durable party mirror. It names
+the leader and every member, with nullable live position, health, and death facts for each member.
 
 ### Package Config
 

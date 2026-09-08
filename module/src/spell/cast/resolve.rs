@@ -823,6 +823,108 @@ fn check_cast_gate_prefix(
     Ok(())
 }
 
+fn target_kind_requires_los(target: u8) -> bool {
+    matches!(
+        target,
+        T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY | T_AREA_ENEMY | T_AREA_ALLY | T_CHAIN_ENEMY
+    )
+}
+
+fn targeted_los_applies(
+    caster_is_player: bool,
+    caster_guid: u64,
+    target_guid: u64,
+    effects: &[SpellEffect],
+) -> bool {
+    caster_is_player
+        && target_guid != 0
+        && target_guid != caster_guid
+        && effects
+            .iter()
+            .any(|effect| target_kind_requires_los(effect.target))
+}
+
+fn check_targeted_los(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    effects: &[SpellEffect],
+    target_guid: u64,
+) -> Result<(), CastRefusal> {
+    if !targeted_los_applies(caster.is_player(), caster.guid, target_guid, effects) {
+        return Ok(());
+    }
+    let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) else {
+        return Ok(());
+    };
+    if (caster.map_id, caster.instance_id) != (target.map_id, target.instance_id) {
+        return Ok(());
+    }
+    if !crate::nav::has_los(
+        ctx,
+        caster.map_id,
+        caster.instance_id,
+        (caster.x, caster.y, caster.z),
+        (target.x, target.y, target.z),
+    ) {
+        return Err(CastRefusal::new(
+            CastRefusalKind::NoLineOfSight,
+            format!("target {target_guid} is not in line of sight"),
+        ));
+    }
+    Ok(())
+}
+
+/// Read the Gates that own a direct cast start. Callers may use the typed result to plan a
+/// prerequisite, but the cast entry checks the same Gates again before it changes state.
+pub(crate) fn check_cast_start_gates(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    spell_id: u32,
+    target_guid: u64,
+    admission: CreatureSpellCasterAdmission,
+) -> Result<(), CastRefusal> {
+    let hdr = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .ok_or_else(|| format!("unknown spell {spell_id}"))?;
+    let mut effects: Vec<SpellEffect> = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .collect();
+    effects.sort_by_key(|effect| (effect.kind != E_INTERRUPT, effect.effect_index));
+    check_cast_gates_with_admission(
+        ctx,
+        caster,
+        &hdr,
+        &effects,
+        target_guid,
+        spell_id,
+        caster.level as u8,
+        admission == CreatureSpellCasterAdmission::DeadCreatureCallback,
+    )?;
+    check_targeted_los(ctx, caster, &effects, target_guid)
+}
+
+pub(crate) fn check_pending_cast_los(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    target_guid: u64,
+) -> Result<(), CastRefusal> {
+    let caster = crate::helpers::live_entity(ctx, caster_guid)?;
+    let effects: Vec<SpellEffect> = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .collect();
+    check_targeted_los(ctx, &caster, &effects, target_guid)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)] // One gate per refusal a cast can hit.
 fn check_cast_gate_suffix(
@@ -1298,6 +1400,7 @@ pub(crate) fn begin_cast_with_admission(
         level,
         admission == CreatureSpellCasterAdmission::DeadCreatureCallback,
     )?;
+    check_targeted_los(ctx, &caster, &effects, target_guid)?;
 
     // A NEW cast breaks any channel already in progress (vanilla: casting interrupts your channel). Fired
     // here at the cast ENTRY so it covers both the instant and the timed branch — and BEFORE the new
@@ -1399,6 +1502,27 @@ pub(crate) fn begin_cast_with_admission(
         ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Start)
     });
     Ok(CastStart::Started(cast.into()))
+}
+
+#[cfg(test)]
+mod companion_los_tests {
+    use super::*;
+
+    #[test]
+    fn los_target_kinds_exclude_self_and_scripted_spells() {
+        for target in [
+            T_TARGET_ENEMY,
+            T_TARGET_ALLY,
+            T_TARGET_ANY,
+            T_AREA_ENEMY,
+            T_AREA_ALLY,
+            T_CHAIN_ENEMY,
+        ] {
+            assert!(target_kind_requires_los(target));
+        }
+        assert!(!target_kind_requires_los(T_SELF));
+        assert!(!target_kind_requires_los(T_SCRIPTED));
+    }
 }
 
 /// True when a spell effect's `kind` should reach the passive-apply path (`apply_spell_auras`'s

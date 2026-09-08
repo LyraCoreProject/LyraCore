@@ -206,7 +206,9 @@ and authorizes no bot gameplay. Frozen cancels Foreground Actions and authorizes
 
 **Bot Objective**:
 A retained purpose with its destination, stage, deadline, catalog revision, and verified progress.
-Tactical interruption does not replace the objective.
+Tactical interruption does not replace the objective. A companion in a human-led party retains the
+leader identity while refreshing the destination from current party facts; that refresh does not
+replace a retained cast or its identity.
 
 **Foreground Action**:
 The single movement or cast retained by one Bot Controller generation.

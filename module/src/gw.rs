@@ -301,9 +301,9 @@ pub fn gw_cast_at(
     crate::actor::cast_at(ctx, actor_guid, spell_id, target_guid)
 }
 
-/// [`crate::spell::scheduler::apply_cast_spell_at`] behind the gateway gate — the GROUND-TARGET
+/// [`crate::spell::scheduler::apply_cast_spell_at`] behind the gateway gate. The GROUND-TARGET
 /// cast form (`CMSG`-routed `cast_spell_at`): spellbook + NaN + self-target-default gates, target
-/// coords carried. Distinct from [`gw_cast_at`], which is the unit-target instant core.
+/// coords carried. [`gw_cast_at`] is the unit-target Actor form and applies the same spellbook Gate.
 #[reducer]
 pub fn gw_cast_spell_at(
     ctx: &ReducerContext,
@@ -1323,9 +1323,9 @@ pub fn gw_loot_master_give(
 //  Spells (batch B)
 // ===========================================================================================
 
-/// [`crate::spell::do_cast_spell`] with the caster named by guid — the SPELLBOOK-GATED player cast
-/// (`target_guid == 0` self-casts). Distinct from [`gw_cast_at`], which drives `resolve_cast_at`
-/// directly and skips that gate.
+/// [`crate::spell::do_cast_spell`] with the caster named by guid. This is the client player-cast form
+/// (`target_guid == 0` self-casts). [`gw_cast_at`] applies the same spellbook and cast Gates through
+/// the typed Actor request.
 #[reducer]
 pub fn gw_cast_spell(
     ctx: &ReducerContext,

@@ -25,26 +25,29 @@ pub fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
         .game_pending_cast()
         .scheduled_id()
         .delete(sched.scheduled_id);
-    let result = resolve_cast_at_typed(
-        ctx,
-        sched.caster_guid,
-        sched.spell_id,
-        sched.level,
-        sched.target_guid,
-        // is_completion=true marks this as the TIMED cast finishing its bar (vs a genuine instant cast). The
-        // relay (subscriptions.rs on_cast) USES it: a timed completion sends GO ALONE (the begin already sent
-        // START(cast_time)); only a genuine instant (is_completion=false) sends the START(0)+GO pair. A 2nd
-        // START(0) at completion reset the cast bar to zero-length ("stuck on full") — the cast-lock bug.
-        true,
-        // NOT client-initiated (088): the completion GO must reach the caster via the relay — the
-        // synchronous send only covered the instant CMSG path, never a timed completion.
-        false,
-        // The clicked ground point carried across the cast bar (118 phase 2): a timed ground-AoE
-        // (Flamestrike) anchors its patch here at COMPLETION. `has_dest` false → None (every normal cast).
-        sched
-            .has_dest
-            .then_some((sched.dest_x, sched.dest_y, sched.dest_z)),
-    );
+    let result = check_pending_cast_los(ctx, sched.caster_guid, sched.spell_id, sched.target_guid)
+        .and_then(|()| {
+            resolve_cast_at_typed(
+                ctx,
+                sched.caster_guid,
+                sched.spell_id,
+                sched.level,
+                sched.target_guid,
+                // is_completion=true marks this as the TIMED cast finishing its bar (vs a genuine instant cast). The
+                // relay (subscriptions.rs on_cast) USES it: a timed completion sends GO ALONE (the begin already sent
+                // START(cast_time)); only a genuine instant (is_completion=false) sends the START(0)+GO pair. A 2nd
+                // START(0) at completion reset the cast bar to zero-length ("stuck on full") — the cast-lock bug.
+                true,
+                // NOT client-initiated (088): the completion GO must reach the caster via the relay — the
+                // synchronous send only covered the instant CMSG path, never a timed completion.
+                false,
+                // The clicked ground point carried across the cast bar (118 phase 2): a timed ground-AoE
+                // (Flamestrike) anchors its patch here at COMPLETION. `has_dest` false → None (every normal cast).
+                sched
+                    .has_dest
+                    .then_some((sched.dest_x, sched.dest_y, sched.dest_z)),
+            )
+        });
     clear_dead_callback_cast_admission(ctx, sched.caster_guid, sched.spell_id);
     if let Err(e) = &result {
         log::info!(
