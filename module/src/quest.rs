@@ -845,14 +845,13 @@ pub(crate) fn request_accept_quest(
         existing,
         deadline_micros,
     )
-    .map_err(Into::into)
 }
 
 /// The accept EFFECTS shared by [`apply_accept_quest`] and [`grant_quest_unchecked`] (the debug twin) —
 /// once every accept GATE has been checked (by the real accept) or deliberately skipped (by the harness
 /// grant), both paths do the identical work: grant the quest's provided "source" item (cmangos
 /// SrcItemId — the item HANDED to the player on accept, satisfying a COLLECT objective whose ReqItemId
-/// == SrcItemId; `?` rolls the whole accept back on a full backpack), size a zeroed progress vector to
+/// == SrcItemId; an item Refusal leaves the quest unchanged), size a zeroed progress vector to
 /// the quest's objective count (capped at [`MAX_OBJECTIVES`]), write the [`CharacterQuest`] row —
 /// UPDATED in place if `existing` names one (the repeatable/failed reset path, id kept — see
 /// `apply_accept_quest`'s duplicate guard), else a fresh insert — and fire the accept hook. The debug
@@ -865,9 +864,15 @@ fn apply_accept_effects(
     tmpl: &QuestTemplate,
     existing: Option<CharacterQuest>,
     deadline_micros: i64,
-) -> Result<(), String> {
+) -> Result<(), ActionRefusal> {
     if tmpl.src_item != 0 {
-        crate::items::grant_item(ctx, character_guid, tmpl.src_item, tmpl.src_item_count)?;
+        crate::items::request_grant_item(
+            ctx,
+            character_guid,
+            tmpl.src_item,
+            tmpl.src_item_count,
+            None,
+        )?;
     }
     let num_objectives = ctx
         .db
@@ -965,6 +970,7 @@ pub(crate) fn grant_quest_unchecked(
         None,
         0,
     )
+    .map_err(Into::into)
 }
 
 /// Pure choice-reward pick (testable without a live `ReducerContext`): given a quest's choice rows as
@@ -988,13 +994,9 @@ fn pick_choice_reward(
         .ok_or_else(|| format!("invalid reward choice {reward_index} for quest {quest_entry}"))
 }
 
-/// Turn quest `quest_entry` in to giver `giver_guid` for `player_guid` — the shared core behind the
-/// player `turn_in_quest` reducer and its debug twin. Validates: the player is in world + alive; the
-/// giver is a real creature in range that ENDS the quest; the player has it ACTIVE (a row, not yet
-/// rewarded); and every objective is complete. Then grants the rewards atomically — reward ITEMS first
-/// (the only step that can fail, on a full backpack, rolling the whole tx back so nothing is granted
-/// without the items landing), then money + XP — and marks the row `rewarded` (kept, to block a
-/// repeat). Reuses [`crate::items::grant_item`] + [`crate::xp::grant_xp`]. [entity]
+/// Turn in a completed quest through the giver and objective Gates. Resolve the reward choice,
+/// spell, and complete item exchange before changing items, money, XP, or the quest row.
+/// A caller may retain a Refusal without relying on reducer rollback.
 pub(crate) fn apply_turn_in_quest(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -1068,36 +1070,21 @@ pub(crate) fn request_turn_in_quest(
     }
     let owner_identity = player.owner_identity;
 
-    // Consume the COLLECT objectives' required items BEFORE granting rewards — frees the bag
-    // space the reward may need, and is atomic with the grant (any later Err rolls the whole tx back, so a
-    // failed turn-in neither eats the items nor hands out the reward). `quest_is_complete` already verified
-    // the player holds enough, so `remove_items` won't normally Err (it still does defensively).
-    let collect: Vec<_> = ctx
+    let collect: Vec<(u32, u32)> = ctx
         .db
         .game_quest_objective()
         .by_quest()
         .filter(&quest_entry)
         .filter(|o| o.kind == objective_kind::COLLECT_ITEM)
+        .map(|o| (o.target_entry, o.required_count))
         .collect();
-    for obj in collect {
-        crate::items::remove_items(ctx, player_guid, obj.target_entry, obj.required_count)?;
-    }
-
-    // Rewards. Items FIRST (the fallible step — a full backpack must fail the whole turn-in before any
-    // money/XP/state change; SpacetimeDB rolls the tx back on Err). Then money (saturating) + XP via the
-    // shared ding loop. The player entity is updated once after grant_xp folds in any level-ups.
-    for r in ctx
+    let mut rewards: Vec<(u32, u32)> = ctx
         .db
         .game_quest_reward_item()
         .by_quest()
         .filter(&quest_entry)
-    {
-        crate::items::request_grant_item(ctx, player_guid, r.item_entry, r.count, None)?;
-    }
-    // Choice reward (pick-1-of-N): grant the single row whose choice_index == reward_index, IN ADDITION to
-    // the guaranteed items above and atomic with them (any Err rolls the whole tx back, before money/XP).
-    // A quest with NO choice rows ignores reward_index; a choice-quest whose index matches no slot is
-    // REJECTED (the client must pick a valid slot) — never silently grant nothing / the wrong item.
+        .map(|reward| (reward.item_entry, reward.count))
+        .collect();
     let choices: Vec<(u8, u32, u32)> = ctx
         .db
         .game_quest_reward_choice()
@@ -1105,8 +1092,8 @@ pub(crate) fn request_turn_in_quest(
         .filter(&quest_entry)
         .map(|c| (c.choice_index, c.item_entry, c.count))
         .collect();
-    if let Some((item_entry, count)) = pick_choice_reward(&choices, reward_index, quest_entry)? {
-        crate::items::request_grant_item(ctx, player_guid, item_entry, count, None)?;
+    if let Some(reward) = pick_choice_reward(&choices, reward_index, quest_entry)? {
+        rewards.push(reward);
     }
     player.money = player.money.saturating_add(tmpl.reward_money);
     // Quest XP is scaled by the realm xp_rate at the source (like kill XP), so a custom-rate realm
@@ -1133,7 +1120,11 @@ pub(crate) fn request_turn_in_quest(
         player.money = player
             .money
             .saturating_add(lyracore_shared::quest::max_level_money_reward(xp));
-    } else {
+    }
+    // Packages may retain a Refusal and continue their reducer. The exchange resolves all item
+    // Gates before committing; every quest effect below this point is infallible.
+    crate::items::exchange_items(ctx, player_guid, &collect, &rewards)?;
+    if player.level < QUEST_MAX_LEVEL_PAYOUT {
         // "+N experience" feedback: a non-kill game_xp_event → SMSG_LOG_XPGAIN, mirroring the kill
         // (award_xp) and exploration paths. grant_xp itself deliberately never emits one, so quest XP
         // showed no floating text without this. killed_guid 0 = no source unit (the NonKill form).

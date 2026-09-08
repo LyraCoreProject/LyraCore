@@ -535,34 +535,52 @@ fn occupied_slots(ctx: &ReducerContext, player_guid: u64) -> std::collections::H
 
 /// Number of free carry slots across the backpack and all equipped bags.
 pub(crate) fn count_free_inventory_slots(ctx: &ReducerContext, player_guid: u64) -> u32 {
-    let templates = ctx.db.game_item_template();
     let owned: Vec<ItemInstance> = ctx
         .db
         .game_item_instance()
         .by_owner_guid()
         .filter(&player_guid)
         .collect();
-    let occupied: std::collections::HashSet<u8> = owned.iter().map(|i| i.slot).collect();
-    let backpack = (starter_item::BACKPACK_SLOT_0..BACKPACK_SLOT_END)
+    free_inventory_slots(&owned, |entry| {
+        ctx.db
+            .game_item_template()
+            .entry()
+            .find(entry)
+            .map_or(0, |t| t.container_slots)
+    })
+    .len() as u32
+}
+
+/// Free storage slots after the planned item consumption. Empty stacks no longer occupy a slot
+/// or provide bag capacity. Backpack slots precede equipped bags in their normal storage order.
+pub(super) fn free_inventory_slots(
+    owned: &[ItemInstance],
+    mut bag_capacity: impl FnMut(u32) -> u8,
+) -> Vec<u8> {
+    let occupied: std::collections::HashSet<u8> = owned
+        .iter()
+        .filter(|item| item.stack_count > 0)
+        .map(|item| item.slot)
+        .collect();
+    let mut free: Vec<u8> = (starter_item::BACKPACK_SLOT_0..BACKPACK_SLOT_END)
         .filter(|slot| !occupied.contains(slot))
-        .count() as u32;
-    let bags = (0..BAG_SLOT_COUNT)
-        .filter_map(|bag_idx| {
-            let bag = owned.iter().find(|i| i.slot == BAG_SLOT_START + bag_idx)?;
-            let capacity = templates
-                .entry()
-                .find(bag.entry)?
-                .container_slots
-                .min(MAX_BAG_SIZE);
-            let base = BAG_CONTENT_OFFSET + bag_idx * MAX_BAG_SIZE;
-            Some(
-                (0..capacity)
-                    .filter(|offset| !occupied.contains(&(base + offset)))
-                    .count() as u32,
-            )
-        })
-        .sum::<u32>();
-    backpack + bags
+        .collect();
+    for bag_idx in 0..BAG_SLOT_COUNT {
+        let Some(bag) = owned
+            .iter()
+            .find(|item| item.slot == BAG_SLOT_START + bag_idx && item.stack_count > 0)
+        else {
+            continue;
+        };
+        let capacity = bag_capacity(bag.entry).min(MAX_BAG_SIZE);
+        let base = BAG_CONTENT_OFFSET + bag_idx * MAX_BAG_SIZE;
+        free.extend(
+            (0..capacity)
+                .map(|offset| base + offset)
+                .filter(|slot| !occupied.contains(slot)),
+        );
+    }
+    free
 }
 
 pub(crate) fn first_free_backpack_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {

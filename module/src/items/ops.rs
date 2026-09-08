@@ -4,13 +4,13 @@
 //! reducer and its debug twin (see `reducers.rs`). All effects are additive: they touch only the item
 //! rows + the actor's health/money.
 
-use crate::actor::{ActionRefusal, ActionRefusalKind};
+use crate::actor::ActionRefusal;
 use spacetimedb::{Identity, ReducerContext, Table};
 
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
 
-use super::{allocate_item_guids, next_item_guid, refuse, select_property};
+use super::{next_item_guid, refuse, select_property};
 use crate::game_character; // the durable char holds `class` (the live WorldEntity does not)
 use crate::game_corpse_loot; // the loot.rs accessor trait — re-exported at crate root (`pub use loot::*`)
 use crate::game_gameobject;
@@ -20,8 +20,7 @@ use crate::game_world_entity; // gameobject (chest) loot source — apply_take_l
 
 use super::inventory::{first_free_backpack_slot, first_free_bag_slot, is_carried_slot};
 use super::rules::{
-    binds_on_grant, equip_slot, meets_required_level, merge_amount, resolve_equip_slot,
-    template_stat, EquipStat,
+    binds_on_grant, equip_slot, meets_required_level, resolve_equip_slot, template_stat, EquipStat,
 };
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, item_is_broken, ItemInstance,
@@ -157,10 +156,8 @@ pub(crate) fn grant_starter_item(
 /// quest turn-in rewards ([`crate::quest`]) and available to any other give-an-item path. Looks up the
 /// player (for the RLS `owner_identity`) and the item template (for durability), then delegates to
 /// `store_item`, which tops up an existing partial stack first and spills the remainder across as many
-/// backpack/bag slots as it takes. Returns `Err` (rolling the whole tx back) if the player isn't in
-/// world, the template is missing, or there's no room left — so a reward that can't be delivered fails
-/// the turn-in atomically rather than half-applying. `count` is floored at 1. Additive — inserts item
-/// row(s). [entity]
+/// backpack/bag slots as it takes. A Refusal leaves inventory unchanged. Quest turn-in uses
+/// `exchange_items` to plan all consumption and rewards together. `count` is floored at 1.
 pub(crate) fn grant_item(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -207,7 +204,7 @@ pub(crate) fn request_grant_item(
 }
 
 /// Add items to matching carried stacks, then free backpack or bag slots.
-/// Capacity and every Random Property are resolved before changing any item, so callers may
+/// Capacity, uniqueness and every Random Property are resolved before changing any item, so callers may
 /// handle an inventory-full Refusal without keeping a partial grant.
 pub(crate) fn store_item(
     ctx: &ReducerContext,
@@ -235,78 +232,16 @@ fn store_item_typed(
     player_guid: u64,
     owner_identity: spacetimedb::Identity,
     tmpl: &ItemTemplate,
-    mut count: u32,
+    count: u32,
     force_soulbound: bool,
     preselected_property: Option<u32>,
 ) -> Result<(), ActionRefusal> {
     if count == 0 {
         return Ok(());
     }
-    let instances = ctx.db.game_item_instance();
-    let max_stack = tmpl.max_stack.max(1);
-    let random_property_id = preselected_property
-        .map(Ok)
-        .unwrap_or_else(|| select_property(ctx, tmpl))?;
-    let mut partials: Vec<ItemInstance> = instances
-        .by_owner_guid()
-        .filter(&player_guid)
-        .filter(|i| {
-            is_carried_slot(i.slot)
-                && i.entry == tmpl.entry
-                && i.random_property_id == random_property_id
-                && i.stack_count < max_stack
-        })
-        .collect();
-    partials.sort_by_key(|i| i.slot);
-    let remaining = partials.iter().fold(count, |left, item| {
-        left.saturating_sub(max_stack - item.stack_count)
-    });
-    let new_stacks = remaining.div_ceil(max_stack);
-    if new_stacks > super::inventory::count_free_inventory_slots(ctx, player_guid) {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::InventoryFull,
-            lyracore_shared::mail::INVENTORY_FULL,
-        ));
-    }
-    let mut properties = Vec::with_capacity(new_stacks as usize);
-    for index in 0..new_stacks {
-        properties.push(if index == 0 || preselected_property.is_some() {
-            random_property_id
-        } else {
-            select_property(ctx, tmpl)?
-        });
-    }
-    let guids = allocate_item_guids(ctx, new_stacks as usize)?;
-    for mut item in partials {
-        let add = merge_amount(count, item.stack_count, max_stack);
-        if add == 0 {
-            break;
-        }
-        item.stack_count += add;
-        item.soulbound |= force_soulbound || binds_on_grant(tmpl.bonding);
-        count -= add;
-        instances.guid().update(item);
-    }
-    for (random_property_id, guid) in properties.into_iter().zip(guids) {
-        // The capacity check counted these same slots, and reducers cannot interleave.
-        let slot = free_slot(ctx, player_guid).expect("preflight reserved a free item slot");
-        let take = count.min(max_stack);
-        instances.insert(ItemInstance {
-            guid,
-            entry: tmpl.entry,
-            owner_identity,
-            owner_guid: player_guid,
-            slot,
-            stack_count: take,
-            durability: tmpl.max_durability,
-            created_at: ctx.timestamp,
-            enchant_id: 0,
-            soulbound: force_soulbound || binds_on_grant(tmpl.bonding),
-            random_property_id,
-        });
-        count -= take;
-    }
-    Ok(())
+    let mut plan = super::exchange::ItemStoragePlan::read(ctx, player_guid, owner_identity);
+    plan.grant(ctx, tmpl, count, force_soulbound, preselected_property)?;
+    plan.commit(ctx)
 }
 
 /// The next slot an incoming item can land in: backpack first (23..=38), then the content slots of
@@ -406,14 +341,13 @@ pub(crate) fn item_count(ctx: &ReducerContext, owner_guid: u64, item_entry: u32)
         .sum()
 }
 
-/// Remove exactly `count` units of `item_entry` from the player's stacks (lowest slot first), deleting an
-/// emptied row. `Err` if the player doesn't actually have enough (the caller's reducer rolls back, so a
-/// quest turn-in stays un-rewarded). Consumes a collect-quest's required items on turn-in (parity #4). [entity]
+/// Remove exactly `count` carried units, lowest slot first. Missing quantity leaves every item
+/// unchanged, even when the caller retains the Refusal and continues its reducer.
 pub(crate) fn remove_items(
     ctx: &ReducerContext,
     owner_guid: u64,
     item_entry: u32,
-    mut count: u32,
+    count: u32,
 ) -> Result<(), String> {
     let instances = ctx.db.game_item_instance();
     let mut stacks: Vec<ItemInstance> = instances
@@ -422,22 +356,17 @@ pub(crate) fn remove_items(
         // A turn-in consumes carried stacks only; the bank is never silently emptied.
         .filter(|i| is_carried_slot(i.slot) && i.entry == item_entry)
         .collect();
-    stacks.sort_by_key(|i| i.slot);
-    for mut inst in stacks {
-        if count == 0 {
-            break;
+    let original_counts: Vec<u32> = stacks.iter().map(|item| item.stack_count).collect();
+    super::exchange::consume_item_stacks(&mut stacks, item_entry, count).map_err(String::from)?;
+    for (inst, original_count) in stacks.into_iter().zip(original_counts) {
+        if inst.stack_count == original_count {
+            continue;
         }
-        let take = count.min(inst.stack_count);
-        inst.stack_count -= take;
-        count -= take;
         if inst.stack_count == 0 {
             instances.guid().delete(inst.guid);
         } else {
             instances.guid().update(inst);
         }
-    }
-    if count > 0 {
-        return Err(format!("missing {count} of item {item_entry}"));
     }
     Ok(())
 }
