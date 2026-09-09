@@ -758,6 +758,26 @@ pub enum PartyFactsUnavailableReason {
     FightLimit,
 }
 
+fn known_party_partition(
+    ctx: &ReducerContext,
+    member: &GroupMember,
+) -> Option<PartyPartitionFacts> {
+    ctx.db
+        .game_group_member_partition()
+        .character_guid()
+        .find(member.character_guid)
+        .filter(|partition| {
+            partition.group_id == member.group_id
+                && partition.member_active
+                && partition.state == PartyPartitionState::Known
+        })
+        .map(|partition| PartyPartitionFacts {
+            map_id: partition.map_id,
+            instance_id: partition.instance_id,
+            locator_revision: partition.locator_revision,
+        })
+}
+
 /// Read one Character's local durable party mirror, member facts, and enemies with current party
 /// melee, cast, threat, or control evidence. Membership remains useful when a member has no live
 /// entity on this Shard, so those facts are nullable.
@@ -818,21 +838,7 @@ pub fn party_facts(
             PartyMemberFacts {
                 character_guid: member.character_guid,
                 unit,
-                partition: ctx
-                    .db
-                    .game_group_member_partition()
-                    .character_guid()
-                    .find(member.character_guid)
-                    .filter(|partition| {
-                        partition.group_id == member.group_id
-                            && partition.member_active
-                            && partition.state == PartyPartitionState::Known
-                    })
-                    .map(|partition| PartyPartitionFacts {
-                        map_id: partition.map_id,
-                        instance_id: partition.instance_id,
-                        locator_revision: partition.locator_revision,
-                    }),
+                partition: known_party_partition(ctx, &member),
             }
         })
         .collect();
@@ -1680,9 +1686,8 @@ pub fn sync_group_mirror(
         return Err("group mirror has no Realm roster revision".to_string());
     }
     if members.len() > GROUP_MAX_MEMBERS || partitions.len() > GROUP_MAX_MEMBERS * 2 {
-        return Err(format!(
-            "group mirror exceeds the bounded current and departed party-member limit"
-        ));
+        return Err("group mirror exceeds the bounded current and departed party-member limit"
+            .to_string());
     }
     let mut partition_guids = std::collections::BTreeSet::new();
     for partition in &partitions {

@@ -1910,6 +1910,7 @@ pub fn release_player_transfer_arrival(
 /// Release only this intent's destination fence. An absent fence or a differently identified
 /// newer fence proves this crossing already released and is left untouched.
 #[reducer]
+#[allow(clippy::too_many_arguments)] // The reducer carries the complete durable crossing key.
 pub fn release_bot_transfer_arrival(
     ctx: &ReducerContext,
     transfer_id: u64,
