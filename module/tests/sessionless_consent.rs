@@ -321,6 +321,162 @@ fn transfer_intent_completion_requires_its_exact_claim_and_ready_arrival() {
 
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn pending_recovery_cannot_settle_a_later_return_crossing() {
+    let shard = stage("sessionless-realm-transfer-cas");
+    let actor = r#"{"guid":1,"ownership":null}"#;
+    let zero_identity = format!("0x{}", "00".repeat(32));
+    shard.assert_call("set_character_shard", &["1", "0", "0", actor]);
+    shard.assert_call(
+        "begin_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "1",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    shard.assert_call(
+        "finish_pending_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "1",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    shard.assert_call(
+        "begin_character_shard_transfer",
+        &[
+            "1",
+            "36",
+            "7",
+            "2",
+            "0",
+            "0",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    shard.assert_call(
+        "finish_pending_character_shard_transfer",
+        &[
+            "1",
+            "36",
+            "7",
+            "2",
+            "0",
+            "0",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    shard.assert_call(
+        "begin_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "3",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+
+    let before = shard.query_rows(
+        "SELECT character_guid, map_id, instance_id, revision, transfer_pending, \
+         pending_destination_map, pending_destination_instance FROM game_character_shard \
+         WHERE character_guid = 1",
+    );
+    let stale = call_capture(
+        &shard,
+        "finish_pending_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "1",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    let after_stale = shard.query_rows(
+        "SELECT character_guid, map_id, instance_id, revision, transfer_pending, \
+         pending_destination_map, pending_destination_instance FROM game_character_shard \
+         WHERE character_guid = 1",
+    );
+    shard.assert_call(
+        "finish_pending_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "3",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    let settled = shard.query_rows(
+        "SELECT character_guid, map_id, instance_id, revision, transfer_pending FROM \
+         game_character_shard WHERE character_guid = 1",
+    );
+    let evidence = serde_json::json!({
+        "new_return_phase": before,
+        "stale_recovery": stale,
+        "after_stale_recovery": after_stale,
+        "exact_recovery_settled": settled,
+    });
+    let path = support::log_dir().join(format!(
+        "{}-pending-transfer-recovery-cas.json",
+        shard.shard_name()
+    ));
+    std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    eprintln!("fixture evidence: {}", path.display());
+
+    assert!(
+        !evidence["stale_recovery"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["new_return_phase"],
+        evidence["after_stale_recovery"]
+    );
+    assert_eq!(evidence["exact_recovery_settled"][0]["revision"], "4");
+    assert_eq!(
+        evidence["exact_recovery_settled"][0]["transfer_pending"],
+        "false"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn admission_reads_current_consent_and_session_ownership() {
     let shard = stage("sessionless-admission");
     assert_refusal(

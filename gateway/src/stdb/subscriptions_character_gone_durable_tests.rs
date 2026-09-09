@@ -214,6 +214,8 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
             |roster| roster.members == [1, INSTANCES_SURVIVOR, OTHER_SURVIVOR]
         )));
     let roster = realm.group_roster(1).unwrap();
+    let group_id = roster.group_id;
+    let initial_roster_revision = roster.roster_revision;
     for (_, shard) in world.world_shards() {
         shard.sync_group_mirror(&roster).unwrap();
     }
@@ -283,7 +285,28 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     }));
     let survivors = realm.group_roster(INSTANCES_SURVIVOR).unwrap();
     assert_eq!(survivors.members, [INSTANCES_SURVIVOR, OTHER_SURVIVOR]);
+    assert!(survivors.roster_revision > initial_roster_revision);
     assert!(world.world_shards().into_iter().all(|(_, shard)| shard
         .group_roster(INSTANCES_SURVIVOR)
         .is_some_and(|roster| roster == survivors)));
+
+    let survivor_revision = survivors.roster_revision;
+    let output = cli.call(
+        standalone.server(),
+        INSTANCES,
+        "debug_delete_character",
+        &[&INSTANCES_SURVIVOR.to_string()],
+    );
+    standalone.assert_output_success(&output, "delete surviving party member");
+    assert!(poll_until(POLL_TIMEOUT, || {
+        reconciliation_is_idle(&observer)
+            && realm.group_roster(OTHER_SURVIVOR).is_none()
+            && realm
+                .group_roster_revision(group_id)
+                .is_ok_and(|revision| revision > survivor_revision)
+            && world
+                .world_shards()
+                .into_iter()
+                .all(|(_, shard)| shard.group_roster(OTHER_SURVIVOR).is_none())
+    }));
 }

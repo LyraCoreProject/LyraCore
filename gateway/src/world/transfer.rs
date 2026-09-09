@@ -68,6 +68,15 @@ pub struct EscrowedTransfer {
     pub blob: Vec<u8>,
 }
 
+/// The destination fence that licenses one exact Realm locator settlement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransferArrival {
+    pub character_guid: u64,
+    pub bot_source_identity: spacetimedb_sdk::Identity,
+    pub bot_transfer_intent_id: u64,
+    pub bot_controller_generation: u64,
+}
+
 /// One durable session-less crossing read from a World Shard.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BotTransferIntent {
@@ -261,16 +270,26 @@ pub(super) fn run_transfer_injected_for_intent(
         plan.dest_instance_id
     );
 
-    let mut owned_bot_intent = bot_intent.map(|(intent, token)| (intent.clone(), token));
-    let locator =
-        src.begin_shard_index_transfer(plan, owned_bot_intent.as_ref().map(|(intent, _)| intent))?;
+    let mut owned_bot_intent = bot_intent
+        .map(|(intent, token)| bind_bot_locator(src, intent, token).map(|intent| (intent, token)))
+        .transpose()?;
+    let locator = src.begin_shard_index_transfer(
+        plan,
+        owned_bot_intent
+            .as_ref()
+            .map(|(intent, token)| (intent, *token)),
+    )?;
+    if !locator.transfer_pending {
+        return Err(anyhow!(
+            "cross-Shard Transfer Realm phase is already settled"
+        ));
+    }
     // Publish Realm's pending phase before freezing the Character. A delayed Known snapshot carries
     // the same locator revision and loses to PendingTransfer on every World Shard.
     src.sync_transfer_pending(plan.character_guid)?;
     abort_point(abort_after, "sync_transfer_pending", plan.transfer_id);
     if let Some((intent, claim_token)) = &mut owned_bot_intent {
         if intent.source_locator_revision == 0 {
-            src.bind_bot_transfer_locator(intent, locator.revision, *claim_token)?;
             intent.source_locator_revision = locator.revision;
         } else if intent.source_locator_revision != locator.revision {
             return Err(anyhow!("bot Transfer Realm locator binding changed"));
@@ -321,39 +340,10 @@ pub(super) fn run_transfer_injected_for_intent(
     src.finish_transfer(escrow.transfer_id)?;
     abort_point(abort_after, "finish_transfer", escrow.transfer_id);
 
-    // 6. PUBLISH the character→shard index to REALM-CORE (the index was never written on transfer;
-    // realm-core's own requirement is that the escrow's finish_transfer step update it
-    // transactionally).
-    //
-    // Step 5's own transaction wrote this same `(guid, map, instance)` into the SOURCE database's
-    // `game_character_shard` — but there is no transaction spanning two SpacetimeDB databases, so
-    // realm-core's copy (the authoritative one, the one `home_shard` reads) cannot be written from
-    // inside it. This replicates it, and the placement is the whole of what makes it safe rather
-    // than a stale-index generator: it runs only after `finish_transfer` returned `Ok`, and it
-    // publishes the ESCROW's own destination fields — the same fields `do_finish` recorded from —
-    // so it can never name a destination for a transfer that did not settle.
-    //
-    // `?`, not best-effort: an index that silently stops being written is exactly the rot this
-    // ticket exists to remove. What a failure here costs, precisely — because `?` here is NOT free:
-    // steps 7 through 9 do not run, `run_transfer` returns Err, `MSG_MOVE_WORLDPORT_ACK` answers
-    // `SMSG_TRANSFER_ABORTED` and ends the session, and the character sits WHOLE BUT FENCED at the
-    // destination until the next login, whose `settle_transfer` takes the holder-is-owner arm and
-    // drops the fence. Nothing is lost or duplicated — but a player is kicked off a loading screen
-    // for a directory write, which is a real cost rather than the "not a login this could newly
-    // break" an earlier draft of this comment claimed. It fails on an unreachable realm-core (the
-    // world handshake fails closed on that too, but the handshake happened earlier in the session
-    // and realm-core can die in between) and on a module-side REFUSAL of `set_character_shard` —
-    // it is operator-gated.
-    //
-    // RESIDUAL WINDOW, stated honestly (adversarial review of this PR). If the gateway dies — or
-    // this call fails between 5 and 6, realm-core's index still names the OLD shard, and the
-    // recovery above does NOT repair it: it never re-enters `run_transfer`, so step 6 never runs
-    // again for that transfer. The fallback is `settle_home_shard`'s own holder lookup
-    // (`realm_core::locate_home_shard`), which probes and heals a stale entry on the
-    // character's NEXT WORLD ENTRY — not the next completed transfer, as it was before
-    // `settle_home_shard` read the realm-core index at all (it used to scan the connected shards
-    // unconditionally and never touch the index). The window is still
-    // real between here and that next login; it is no longer indefinite.
+    // 6. SETTLE Realm's exact pending phase. This compare-and-set carries the source partition,
+    // Realm revision, destination, and bot crossing identity captured before source freeze. A
+    // delayed worker cannot publish over a later crossing. If this required call is interrupted,
+    // `settle_transfer` recovers from the destination fence with the same exact predecessor.
     if let Some((intent, _)) = bot_intent {
         src.publish_bot_shard_index(intent)?;
     } else {
@@ -520,8 +510,10 @@ pub fn run_bot_transfer_intent(
         let Some(destination) =
             holder.shard_for_location(intent.destination_map, intent.destination_instance)
         else {
-            let bound = prepare_bot_locator(holder, &plan, intent, claim_token)?;
-            holder.publish_bot_shard_index(&bound)?;
+            let (bound, settled) = prepare_bot_locator(holder, &plan, intent, claim_token)?;
+            if !settled {
+                holder.publish_bot_shard_index(&bound)?;
+            }
             holder.sync_transfer_arrival(intent.bot_guid)?;
             holder.mark_bot_transfer_arrival_ready(
                 intent.id,
@@ -602,16 +594,37 @@ fn prepare_bot_locator(
     plan: &TransferPlan,
     intent: &BotTransferIntent,
     claim_token: u64,
-) -> Result<BotTransferIntent> {
-    let locator = holder.begin_shard_index_transfer(plan, Some(intent))?;
-    holder.sync_transfer_pending(intent.bot_guid)?;
-    let mut bound = intent.clone();
-    if bound.source_locator_revision == 0 {
-        holder.bind_bot_transfer_locator(&bound, locator.revision, claim_token)?;
-        bound.source_locator_revision = locator.revision;
-    } else if bound.source_locator_revision != locator.revision {
-        return Err(anyhow!("bot Transfer Realm locator binding changed"));
+) -> Result<(BotTransferIntent, bool)> {
+    let bound = bind_bot_locator(holder, intent, claim_token)?;
+    let locator = holder.begin_shard_index_transfer(plan, Some((&bound, claim_token)))?;
+    if locator.transfer_pending {
+        holder.sync_transfer_pending(intent.bot_guid)?;
     }
+    Ok((bound, !locator.transfer_pending))
+}
+
+fn bind_bot_locator(
+    holder: &dyn WorldStore,
+    intent: &BotTransferIntent,
+    claim_token: u64,
+) -> Result<BotTransferIntent> {
+    if intent.source_locator_revision != 0 {
+        return Ok(intent.clone());
+    }
+    let realm = holder.realm_store();
+    let source_revision = realm
+        .as_deref()
+        .unwrap_or(holder)
+        .realm_character_partition(intent.bot_guid)?
+        .filter(|row| {
+            !row.transfer_pending
+                && (row.map_id, row.instance_id) == (intent.source_map, intent.source_instance)
+        })
+        .ok_or_else(|| anyhow!("bot Transfer Realm source locator changed"))?
+        .revision;
+    holder.bind_bot_transfer_locator(intent, source_revision, claim_token)?;
+    let mut bound = intent.clone();
+    bound.source_locator_revision = source_revision;
     Ok(bound)
 }
 
@@ -631,11 +644,20 @@ pub fn settle_transfer(
 ) -> Result<()> {
     let transfer_id = transfer_id_for(character_guid);
     if holder.shard_name() == owner.shard_name() {
-        if let Some(destination) = owner.character_destination(character_guid) {
+        if let (Some(destination), Some(arrival)) = (
+            owner.character_destination(character_guid),
+            owner.transfer_arrival(transfer_id),
+        ) {
+            if arrival.bot_transfer_intent_id != 0 {
+                return Err(anyhow!(
+                    "session-less arrival is still owned by its Transfer Intent"
+                ));
+            }
             owner.finish_pending_shard_index_transfer(
                 character_guid,
                 destination.dest_map_id,
                 destination.dest_instance_id,
+                &arrival,
             )?;
         }
         if owner.has_arrival_fence(transfer_id) {

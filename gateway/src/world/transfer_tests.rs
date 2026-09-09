@@ -1135,11 +1135,23 @@ fn bot_pair(
     );
     let dst_db = FakeShardDb::empty();
     let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
+    let source_partition = if dest_map == 0 { (36, 7) } else { (0, 0) };
     let src = std::sync::Arc::new(InMemoryStore {
         shard: "world".into(),
         calls: calls.clone(),
         xdb: Some(src_db.clone()),
         location_shard: Some((dest_map, dest_instance, dst)),
+        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+            map_id: source_partition.0,
+            instance_id: source_partition.1,
+            revision: 3,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+            bot_transfer_intent_id: 0,
+            bot_controller_generation: 0,
+        })),
         ..Default::default()
     });
     (src, src_db, dst_db, calls)
@@ -1201,6 +1213,107 @@ fn a_durable_intent_resumes_from_destination_witnesses_after_source_finish() {
         .rposition(|(_, call)| call == "release_bot_transfer_arrival")
         .expect("the destination arrival fence must drop");
     assert!(ready < released, "{calls:?}");
+}
+
+#[test]
+fn a_same_shard_intent_resumes_after_the_realm_locator_settled() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    let holder = InMemoryStore {
+        shard: "instances".into(),
+        calls: calls.clone(),
+        xdb: Some(db),
+        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+            map_id: 0,
+            instance_id: 0,
+            revision: 3,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+            bot_transfer_intent_id: 0,
+            bot_controller_generation: 0,
+        })),
+        ..Default::default()
+    };
+    let intent = bot_intent();
+
+    super::transfer::run_bot_transfer_intent(&holder, &intent, 701)
+        .expect("the same-Shard crossing settles");
+    super::transfer::run_bot_transfer_intent(&holder, &intent, 702)
+        .expect("a retry resumes readiness from the exact settled Realm crossing");
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(_, call)| call == "publish_bot_shard_index")
+            .count(),
+        1,
+        "the settled retry must not begin or publish the crossing again: {calls:?}"
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(_, call)| call == "mark_bot_transfer_arrival_ready")
+            .count(),
+        2,
+        "the retry must reach the still-needed durable readiness step: {calls:?}"
+    );
+}
+
+#[test]
+fn an_old_bound_worker_cannot_mark_a_newer_realm_locator_pending() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    let newer = super::party::RealmCharacterPartition {
+        map_id: 0,
+        instance_id: 0,
+        revision: 5,
+        transfer_pending: false,
+        pending_destination_map: 0,
+        pending_destination_instance: 0,
+        bot_source_identity: SOURCE_MODULE,
+        bot_transfer_intent_id: 93,
+        bot_controller_generation: 6,
+    };
+    let holder = InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        xdb: Some(db),
+        realm_partition: std::sync::Mutex::new(Some(newer)),
+        ..Default::default()
+    };
+
+    let refusal = super::transfer::run_bot_transfer_intent(&holder, &bot_intent(), 701)
+        .expect_err("an old bound predecessor must lose before Realm is mutated");
+    assert!(
+        refusal.to_string().contains("source locator"),
+        "{refusal:#}"
+    );
+    assert_eq!(*holder.realm_partition.lock().unwrap(), Some(newer));
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, call)| call == "sync_transfer_pending"),
+        "no pending party fact may be published for the refused old crossing"
+    );
 }
 
 #[test]

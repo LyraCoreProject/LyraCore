@@ -136,6 +136,17 @@ pub trait WorldStore:
         Ok(())
     }
 
+    /// Whether this shard holds the destination fence for `transfer_id`. A normal resident has no
+    /// arrival to prepare, even though `release_transfer` remains safe to call speculatively.
+    fn has_arrival_fence(&self, _transfer_id: u64) -> bool {
+        false
+    }
+
+    /// Exact destination fence identity used by the Realm locator recovery compare-and-set.
+    fn transfer_arrival(&self, _transfer_id: u64) -> Option<transfer::TransferArrival> {
+        None
+    }
+
     /// Reconcile the arriving Character's authoritative party mirror before its destination fence
     /// drops. A single-database store and a test store without realm-wide parties have no work.
     fn sync_transfer_arrival(&self, _character_guid: u64) -> Result<()> {
@@ -169,20 +180,22 @@ pub trait WorldStore:
     fn begin_shard_index_transfer(
         &self,
         _plan: &transfer::TransferPlan,
-        bot_intent: Option<&transfer::BotTransferIntent>,
+        bot_intent: Option<(&transfer::BotTransferIntent, u64)>,
     ) -> Result<party::RealmCharacterPartition> {
         Ok(party::RealmCharacterPartition {
             map_id: 0,
             instance_id: 0,
-            revision: bot_intent.map_or(1, |intent| intent.source_locator_revision.max(1)),
+            revision: bot_intent.map_or(1, |(intent, _)| intent.source_locator_revision.max(1)),
             transfer_pending: true,
             pending_destination_map: _plan.dest_map_id,
             pending_destination_instance: _plan.dest_instance_id,
-            bot_source_identity: bot_intent.map_or(spacetimedb_sdk::Identity::ZERO, |intent| {
-                intent.source_module_identity
-            }),
-            bot_transfer_intent_id: bot_intent.map_or(0, |intent| intent.id),
-            bot_controller_generation: bot_intent.map_or(0, |intent| intent.controller_generation),
+            bot_source_identity: bot_intent
+                .map_or(spacetimedb_sdk::Identity::ZERO, |(intent, _)| {
+                    intent.source_module_identity
+                }),
+            bot_transfer_intent_id: bot_intent.map_or(0, |(intent, _)| intent.id),
+            bot_controller_generation: bot_intent
+                .map_or(0, |(intent, _)| intent.controller_generation),
         })
     }
 
@@ -204,6 +217,7 @@ pub trait WorldStore:
         _character_guid: u64,
         _destination_map: u32,
         _destination_instance: u64,
+        _arrival: &transfer::TransferArrival,
     ) -> Result<()> {
         Ok(())
     }

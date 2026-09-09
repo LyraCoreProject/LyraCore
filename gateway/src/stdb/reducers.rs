@@ -1308,16 +1308,28 @@ impl Coordinator {
     pub fn finish_pending_character_shard_transfer(
         &self,
         character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
         destination_map: u32,
         destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        transfer_intent_id: u64,
+        controller_generation: u64,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "finish_pending_character_shard_transfer",
             finish_pending_character_shard_transfer_then(
                 character_guid,
+                source_map,
+                source_instance,
+                source_revision,
                 destination_map,
                 destination_instance,
+                source_module_identity,
+                transfer_intent_id,
+                controller_generation,
                 self.session_actor(character_guid)
             )
         )

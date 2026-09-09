@@ -679,6 +679,8 @@ struct InMemoryStore {
     /// production that write goes to a third database (`realm_core()`); here it is just a map, so a
     /// test can assert the drive published the destination it settled on.
     realm_index: std::sync::Mutex<Vec<(u64, u32, u64)>>,
+    /// Realm-core's ordered transfer phase for cross-Shard caller tests.
+    realm_partition: std::sync::Mutex<Option<super::party::RealmCharacterPartition>>,
     /// When set, `publish_shard_index` fails with this message — an unreachable realm-core.
     publish_error: Option<String>,
     /// When set, every `movement_update` fails with this message. The case that matters is
@@ -1212,6 +1214,221 @@ impl WorldStore for InMemoryStore {
         self.xdb
             .as_ref()
             .is_some_and(|db| lk(&db.in_rows).contains_key(&transfer_id))
+    }
+
+    fn transfer_arrival(&self, transfer_id: u64) -> Option<super::transfer::TransferArrival> {
+        let db = self.xdb.as_ref()?;
+        let character_guid = *lk(&db.in_rows).get(&transfer_id)?;
+        let (source, intent_id, generation, _) = lk(&db.bot_arrivals)
+            .get(&transfer_id)
+            .copied()
+            .unwrap_or((spacetimedb_sdk::Identity::ZERO, 0, 0, 0));
+        Some(super::transfer::TransferArrival {
+            character_guid,
+            bot_source_identity: source,
+            bot_transfer_intent_id: intent_id,
+            bot_controller_generation: generation,
+        })
+    }
+
+    fn realm_character_partition(
+        &self,
+        _character_guid: u64,
+    ) -> Result<Option<super::party::RealmCharacterPartition>> {
+        Ok(*self.realm_partition.lock().unwrap())
+    }
+
+    fn begin_shard_index_transfer(
+        &self,
+        plan: &super::transfer::TransferPlan,
+        bot_intent: Option<(&super::transfer::BotTransferIntent, u64)>,
+    ) -> Result<super::party::RealmCharacterPartition> {
+        let mut phase = self.realm_partition.lock().unwrap();
+        let Some(current) = *phase else {
+            return Ok(super::party::RealmCharacterPartition {
+                map_id: 0,
+                instance_id: 0,
+                revision: bot_intent.map_or(1, |(intent, _)| intent.source_locator_revision.max(1)),
+                transfer_pending: true,
+                pending_destination_map: plan.dest_map_id,
+                pending_destination_instance: plan.dest_instance_id,
+                bot_source_identity: bot_intent
+                    .map_or(spacetimedb_sdk::Identity::ZERO, |(intent, _)| {
+                        intent.source_module_identity
+                    }),
+                bot_transfer_intent_id: bot_intent.map_or(0, |(intent, _)| intent.id),
+                bot_controller_generation: bot_intent
+                    .map_or(0, |(intent, _)| intent.controller_generation),
+            });
+        };
+        let (source_revision, crossing) = bot_intent.map_or(
+            (current.revision, (spacetimedb_sdk::Identity::ZERO, 0, 0)),
+            |(intent, _)| {
+                (
+                    intent.source_locator_revision,
+                    (
+                        intent.source_module_identity,
+                        intent.id,
+                        intent.controller_generation,
+                    ),
+                )
+            },
+        );
+        if !current.transfer_pending
+            && (current.map_id, current.instance_id, current.revision)
+                == (
+                    plan.dest_map_id,
+                    plan.dest_instance_id,
+                    source_revision.saturating_add(1),
+                )
+            && (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) == crossing
+        {
+            return Ok(current);
+        }
+        if current.transfer_pending || current.revision != source_revision {
+            return Err(anyhow!("Transfer Realm locator changed"));
+        }
+        let pending = super::party::RealmCharacterPartition {
+            transfer_pending: true,
+            pending_destination_map: plan.dest_map_id,
+            pending_destination_instance: plan.dest_instance_id,
+            bot_source_identity: crossing.0,
+            bot_transfer_intent_id: crossing.1,
+            bot_controller_generation: crossing.2,
+            ..current
+        };
+        *phase = Some(pending);
+        Ok(pending)
+    }
+
+    fn finish_player_shard_index_transfer(
+        &self,
+        plan: &super::transfer::TransferPlan,
+        _source_map: u32,
+        _source_instance: u64,
+        source_revision: u64,
+    ) -> Result<()> {
+        let mut phase = self.realm_partition.lock().unwrap();
+        let Some(current) = *phase else {
+            drop(phase);
+            return self.publish_shard_index(
+                plan.character_guid,
+                plan.dest_map_id,
+                plan.dest_instance_id,
+            );
+        };
+        if !current.transfer_pending || current.revision != source_revision {
+            return Err(anyhow!("Transfer Realm locator phase changed"));
+        }
+        *phase = Some(super::party::RealmCharacterPartition {
+            map_id: plan.dest_map_id,
+            instance_id: plan.dest_instance_id,
+            revision: source_revision + 1,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            ..current
+        });
+        Ok(())
+    }
+
+    fn bind_bot_transfer_locator(
+        &self,
+        _intent: &super::transfer::BotTransferIntent,
+        source_revision: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        let Some(current) = *self.realm_partition.lock().unwrap() else {
+            return Ok(());
+        };
+        if current.transfer_pending || current.revision != source_revision {
+            return Err(anyhow!("Transfer Intent Realm locator changed"));
+        }
+        Ok(())
+    }
+
+    fn publish_bot_shard_index(&self, intent: &super::transfer::BotTransferIntent) -> Result<()> {
+        self.rec("publish_bot_shard_index");
+        let mut phase = self.realm_partition.lock().unwrap();
+        let Some(current) = *phase else {
+            drop(phase);
+            return self.publish_shard_index(
+                intent.bot_guid,
+                intent.destination_map,
+                intent.destination_instance,
+            );
+        };
+        if !current.transfer_pending
+            || current.revision != intent.source_locator_revision
+            || (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) != (
+                intent.source_module_identity,
+                intent.id,
+                intent.controller_generation,
+            )
+        {
+            return Err(anyhow!("Transfer Realm locator phase changed"));
+        }
+        *phase = Some(super::party::RealmCharacterPartition {
+            map_id: intent.destination_map,
+            instance_id: intent.destination_instance,
+            revision: intent.source_locator_revision + 1,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            ..current
+        });
+        Ok(())
+    }
+
+    fn finish_pending_shard_index_transfer(
+        &self,
+        character_guid: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        arrival: &super::transfer::TransferArrival,
+    ) -> Result<()> {
+        if arrival.character_guid != character_guid {
+            return Err(anyhow!("arrival fence names another Character"));
+        }
+        let mut phase = self.realm_partition.lock().unwrap();
+        let Some(current) = *phase else {
+            return Ok(());
+        };
+        if !current.transfer_pending
+            || (
+                current.pending_destination_map,
+                current.pending_destination_instance,
+            ) != (destination_map, destination_instance)
+            || (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) != (
+                arrival.bot_source_identity,
+                arrival.bot_transfer_intent_id,
+                arrival.bot_controller_generation,
+            )
+        {
+            return Err(anyhow!("pending Realm Transfer phase changed"));
+        }
+        *phase = Some(super::party::RealmCharacterPartition {
+            map_id: destination_map,
+            instance_id: destination_instance,
+            revision: current.revision + 1,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            ..current
+        });
+        Ok(())
     }
 
     fn sync_transfer_arrival(&self, character_guid: u64) -> Result<()> {

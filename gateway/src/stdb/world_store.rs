@@ -256,6 +256,26 @@ impl WorldStore for Coordinator {
             .find(&transfer_id)
             .is_some()
     }
+
+    fn transfer_arrival(
+        &self,
+        transfer_id: u64,
+    ) -> Option<crate::world::transfer::TransferArrival> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_transfer_in()
+            .transfer_id()
+            .find(&transfer_id)
+            .map(|row| crate::world::transfer::TransferArrival {
+                character_guid: row.character_guid,
+                bot_source_identity: row.bot_intent_source,
+                bot_transfer_intent_id: row.bot_intent_id,
+                bot_controller_generation: row.bot_controller_generation,
+            })
+    }
+
     fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
         self.ensure_instance(instance_id, map_id, party_id)
     }
@@ -298,7 +318,7 @@ impl WorldStore for Coordinator {
     fn begin_shard_index_transfer(
         &self,
         plan: &crate::world::transfer::TransferPlan,
-        bot_intent: Option<&crate::world::transfer::BotTransferIntent>,
+        bot_intent: Option<(&crate::world::transfer::BotTransferIntent, u64)>,
     ) -> Result<crate::world::party::RealmCharacterPartition> {
         crate::realm_core::begin_shard_index_transfer(self, plan, bot_intent)
     }
@@ -324,12 +344,14 @@ impl WorldStore for Coordinator {
         character_guid: u64,
         destination_map: u32,
         destination_instance: u64,
+        arrival: &crate::world::transfer::TransferArrival,
     ) -> Result<()> {
         crate::realm_core::finish_pending_shard_index_transfer(
             self,
             character_guid,
             destination_map,
             destination_instance,
+            arrival,
         )
     }
 

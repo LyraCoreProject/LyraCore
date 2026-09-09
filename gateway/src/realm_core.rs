@@ -299,16 +299,9 @@ pub(crate) fn settle_shard_index<D: RealmDb>(db: &D, character_guid: u64) -> Opt
 /// can commit independently" is protecting: a stale-index generator writes the index for transfers
 /// that never happened, and this cannot.
 ///
-/// The residual window — the gateway dies between `finish_transfer` and this call, or this call
-/// itself fails — IS covered: `settle_home_shard`'s own index lookup,
-/// [`locate_home_shard`], probes and heals a stale entry on the next world entry for the character
-/// (the recovery path — `settle_transfer`'s holder-is-owner release — still does not re-enter
-/// `run_transfer`, so a missed publish is corrected by the NEXT login's probe, not retried
-/// immediately). Before that lookup existed this window was open indefinitely: `settle_shard_index`'s probe-and-heal
-/// hung off `WorldStore::home_shard`, which `stdb::world_store` overrides with `settle_home_shard`
-/// — and that override resolved the character by scanning the connected shards and never read or
-/// repaired the index, so a missed publish left realm-core's entry naming the old shard until the
-/// character's next COMPLETED TRANSFER rather than its next login.
+/// Destination recovery retains Realm's observed predecessor and the arrival fence's exact crossing
+/// identity, then supplies both to the same compare-and-set. A delayed recovery cannot settle a
+/// later crossing even when it returns to the same partition.
 pub(crate) fn publish_shard_index<D: RealmDb>(
     db: &D,
     character_guid: u64,
@@ -342,45 +335,75 @@ pub(crate) fn publish_bot_shard_index<D: RealmDb>(
 pub(crate) fn begin_shard_index_transfer<D: RealmDb>(
     db: &D,
     plan: &crate::world::transfer::TransferPlan,
-    bot_intent: Option<&crate::world::transfer::BotTransferIntent>,
+    bot_intent: Option<(&crate::world::transfer::BotTransferIntent, u64)>,
 ) -> Result<crate::world::party::RealmCharacterPartition> {
     let realm = db.realm_core()?;
     let locator = realm
         .realm_character_partition(plan.character_guid)?
         .ok_or_else(|| anyhow!("Transfer source has no Realm locator"))?;
-    let (source_map, source_instance, source_identity, intent_id, generation) = match bot_intent {
-        Some(intent) => {
-            if (locator.map_id, locator.instance_id) != (intent.source_map, intent.source_instance)
-            {
-                anyhow::bail!(
-                    "bot Transfer source locator is map {} instance {}, not intent {} source map {} instance {}",
+    let (source_map, source_instance, source_revision, source_identity, intent_id, generation) =
+        match bot_intent {
+            Some((intent, _claim_token)) => {
+                if intent.source_locator_revision == 0 {
+                    anyhow::bail!("bot Transfer has no bound Realm locator predecessor");
+                }
+                let crossing = (
+                    intent.source_module_identity,
+                    intent.id,
+                    intent.controller_generation,
+                );
+                if !locator.transfer_pending
+                    && (locator.map_id, locator.instance_id, locator.revision)
+                        == (
+                            intent.destination_map,
+                            intent.destination_instance,
+                            intent.source_locator_revision.saturating_add(1),
+                        )
+                    && (
+                        locator.bot_source_identity,
+                        locator.bot_transfer_intent_id,
+                        locator.bot_controller_generation,
+                    ) == crossing
+                {
+                    return Ok(locator);
+                }
+                if (locator.map_id, locator.instance_id)
+                    != (intent.source_map, intent.source_instance)
+                    || locator.revision != intent.source_locator_revision
+                {
+                    anyhow::bail!(
+                    "bot Transfer source locator is map {} instance {} revision {}, not intent {} source map {} instance {} revision {}",
                     locator.map_id,
                     locator.instance_id,
+                    locator.revision,
                     intent.id,
                     intent.source_map,
-                    intent.source_instance
+                    intent.source_instance,
+                    intent.source_locator_revision
                 );
+                }
+                (
+                    intent.source_map,
+                    intent.source_instance,
+                    intent.source_locator_revision,
+                    intent.source_module_identity,
+                    intent.id,
+                    intent.controller_generation,
+                )
             }
-            (
-                intent.source_map,
-                intent.source_instance,
-                intent.source_module_identity,
-                intent.id,
-                intent.controller_generation,
-            )
-        }
-        None => (
-            locator.map_id,
-            locator.instance_id,
-            spacetimedb_sdk::Identity::ZERO,
-            0,
-            0,
-        ),
-    };
+            None => (
+                locator.map_id,
+                locator.instance_id,
+                locator.revision,
+                spacetimedb_sdk::Identity::ZERO,
+                0,
+                0,
+            ),
+        };
     realm.begin_character_shard_transfer(
         source_map,
         source_instance,
-        locator.revision,
+        source_revision,
         plan.dest_map_id,
         plan.dest_instance_id,
         source_identity,
@@ -395,7 +418,7 @@ pub(crate) fn begin_shard_index_transfer<D: RealmDb>(
             .ok_or_else(|| anyhow!("Transfer source Realm locator disappeared"))?;
         if observed.transfer_pending
             && (observed.map_id, observed.instance_id, observed.revision)
-                == (source_map, source_instance, locator.revision)
+                == (source_map, source_instance, source_revision)
             && (
                 observed.pending_destination_map,
                 observed.pending_destination_instance,
@@ -447,12 +470,53 @@ pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
     character_guid: u64,
     destination_map: u32,
     destination_instance: u64,
+    arrival: &crate::world::transfer::TransferArrival,
 ) -> Result<()> {
     let realm = db.realm_core()?;
+    if arrival.character_guid != character_guid {
+        anyhow::bail!("arrival fence names another Character");
+    }
+    let phase = realm
+        .realm_character_partition(character_guid)?
+        .ok_or_else(|| anyhow!("Transfer destination has no Realm locator"))?;
+    let crossing = (
+        arrival.bot_source_identity,
+        arrival.bot_transfer_intent_id,
+        arrival.bot_controller_generation,
+    );
+    if !phase.transfer_pending
+        && (phase.map_id, phase.instance_id) == (destination_map, destination_instance)
+        && (
+            phase.bot_source_identity,
+            phase.bot_transfer_intent_id,
+            phase.bot_controller_generation,
+        ) == crossing
+    {
+        return Ok(());
+    }
+    if !phase.transfer_pending
+        || (
+            phase.pending_destination_map,
+            phase.pending_destination_instance,
+        ) != (destination_map, destination_instance)
+        || (
+            phase.bot_source_identity,
+            phase.bot_transfer_intent_id,
+            phase.bot_controller_generation,
+        ) != crossing
+    {
+        anyhow::bail!("destination fence does not match the pending Realm Transfer");
+    }
     realm.finish_pending_character_shard_transfer(
         character_guid,
+        phase.map_id,
+        phase.instance_id,
+        phase.revision,
         destination_map,
         destination_instance,
+        arrival.bot_source_identity,
+        arrival.bot_transfer_intent_id,
+        arrival.bot_controller_generation,
     )?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
@@ -460,7 +524,17 @@ pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
             .realm_character_partition(character_guid)?
             .is_some_and(|row| {
                 !row.transfer_pending
-                    && (row.map_id, row.instance_id) == (destination_map, destination_instance)
+                    && (row.map_id, row.instance_id, row.revision)
+                        == (
+                            destination_map,
+                            destination_instance,
+                            phase.revision.saturating_add(1),
+                        )
+                    && (
+                        row.bot_source_identity,
+                        row.bot_transfer_intent_id,
+                        row.bot_controller_generation,
+                    ) == crossing
             });
         if settled {
             return Ok(());

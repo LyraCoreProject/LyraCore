@@ -289,43 +289,57 @@ pub fn finish_character_shard_transfer(
 /// process-crash window after source finish, when the source plan is gone but the destination copy
 /// and Realm phase still identify the same landing partition.
 #[reducer]
+#[allow(clippy::too_many_arguments)] // Exact observed Realm phase, arrival crossing, and Actor are one CAS Gate.
 pub fn finish_pending_character_shard_transfer(
     ctx: &ReducerContext,
     character_guid: u64,
+    source_map_id: u32,
+    source_instance_id: u64,
+    source_revision: u64,
     destination_map_id: u32,
     destination_instance_id: u64,
+    source_module_identity: Identity,
+    transfer_intent_id: u64,
+    controller_generation: u64,
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
+    if source_revision == 0
+        || (source_module_identity == Identity::ZERO) != (transfer_intent_id == 0)
+    {
+        return Err("Transfer locator identity is incomplete".to_string());
+    }
     let table = ctx.db.game_character_shard();
     let current = table
         .character_guid()
         .find(character_guid)
         .ok_or_else(|| "Transfer destination has no Realm locator".to_string())?;
-    if !current.transfer_pending {
-        return if (current.map_id, current.instance_id)
-            == (destination_map_id, destination_instance_id)
-        {
-            Ok(())
-        } else {
-            Err("settled Realm locator names another partition".to_string())
-        };
-    }
-    if (
-        current.pending_destination_map,
-        current.pending_destination_instance,
-    ) != (destination_map_id, destination_instance_id)
+    if !current.transfer_pending
+        || (current.map_id, current.instance_id, current.revision)
+            != (source_map_id, source_instance_id, source_revision)
+        || (
+            current.pending_destination_map,
+            current.pending_destination_instance,
+        ) != (destination_map_id, destination_instance_id)
+        || (
+            current.bot_source_identity,
+            current.bot_transfer_intent_id,
+            current.bot_controller_generation,
+        ) != (
+            source_module_identity,
+            transfer_intent_id,
+            controller_generation,
+        )
     {
-        return Err("pending Realm Transfer names another destination".to_string());
+        return Err("pending Realm Transfer phase changed".to_string());
     }
     table.character_guid().update(CharacterShard {
         character_guid,
         map_id: destination_map_id,
         instance_id: destination_instance_id,
         updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
-        revision: current
-            .revision
+        revision: source_revision
             .checked_add(1)
             .ok_or_else(|| "Transfer Realm locator revision exhausted".to_string())?,
         bot_source_identity: current.bot_source_identity,
