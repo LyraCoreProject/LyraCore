@@ -378,16 +378,8 @@ fn playerbots_priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_f
         "SELECT scheduled_id, target_guid FROM game_pending_cast WHERE caster_guid = {priest}"
     ))[0]
         .clone();
-    assert_eq!(pending["target_guid"], *ally);
-    let starts = node.query_rows(&format!(
-        "SELECT * FROM game_spell_cast_event WHERE caster_guid = {priest} AND spell_id = {HEAL}"
-    ));
-    assert_eq!(
-        starts.iter().filter(|event| event["kind"] == "1").count(),
-        1,
-        "{starts:?}"
-    );
     evidence(&node, "heal-started");
+    assert_eq!(pending["target_guid"], *ally);
     let state = runner(&node, priest);
     let objective = state["objective_sequence"].clone();
     assert!(state["chosen"].contains("heal"));
@@ -404,29 +396,52 @@ fn playerbots_priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_f
         pending["scheduled_id"]
     );
     evidence(&node, "heal-retained-before-completion");
-    assert!(poll_until(POLL_TIMEOUT, || node
-        .query_rows(&format!(
-            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
-        ))
-        .is_empty()));
+    let cast_completed = poll_until(POLL_TIMEOUT, || {
+        let completed = runner(&node, priest);
+        completed["cast_progress"].contains(&format!(
+            "scheduled_id = {}, spell = {HEAL}, target = {ally}",
+            pending["scheduled_id"]
+        )) && node
+            .query_rows(&format!(
+                "SELECT cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {priest} AND spell_id = {HEAL}"
+            ))
+            .iter()
+            .any(|action| {
+                action["cast_id"] == pending["scheduled_id"]
+                    && action["outcome"] == "(castResolved = ())"
+            })
+            && node
+                .query_rows(&format!(
+                    "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
+                ))
+                .is_empty()
+    });
     let ally_after = node.query_rows(&format!(
         "SELECT health FROM game_world_entity WHERE guid = {ally}"
     ))[0]["health"]
         .parse::<u32>()
         .unwrap();
+    evidence(&node, "heal-completed");
+    assert!(cast_completed);
     assert!(ally_after > ally_before);
     due(&node, priest);
-    assert!(poll_until(POLL_TIMEOUT, || runner(&node, priest)["chosen"]
-        .contains("follow")));
-    let events = node.query_rows(&format!(
-        "SELECT * FROM game_spell_cast_event WHERE caster_guid = {priest} AND spell_id = {HEAL}"
+    let followed = poll_until(POLL_TIMEOUT, || {
+        runner(&node, priest)["chosen"].contains("follow")
+    });
+    let resumed = runner(&node, priest);
+    let completed = node.query_rows(&format!(
+        "SELECT cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {priest} AND spell_id = {HEAL}"
     ));
-    assert_eq!(
-        events.iter().filter(|event| event["kind"] == "2").count(),
-        1
-    );
-    assert_eq!(runner(&node, priest)["objective_sequence"], objective);
     evidence(&node, "heal-resume");
+    assert!(followed);
+    assert_eq!(completed.len(), 1, "{completed:?}");
+    assert_eq!(completed[0]["cast_id"], pending["scheduled_id"]);
+    assert_eq!(completed[0]["outcome"], "(castResolved = ())");
+    assert!(resumed["cast_progress"].contains(&format!(
+        "scheduled_id = {}, spell = {HEAL}, target = {ally}",
+        pending["scheduled_id"]
+    )));
+    assert_eq!(resumed["objective_sequence"], objective);
 }
 
 #[test]
