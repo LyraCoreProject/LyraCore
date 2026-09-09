@@ -707,6 +707,51 @@ pub struct PartyFactsUnavailable {
     pub reason: PartyFactsUnavailableReason,
 }
 
+/// Whether another current party member is certified in `partition`. This portal Gate reads only
+/// the bounded roster and exact member projections; combat facts cannot make location unavailable.
+pub(crate) fn has_known_party_member_in_partition(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    partition: (u32, u64),
+) -> Result<bool, PartyFactsUnavailableReason> {
+    let Some(member) = group_of(ctx, character_guid) else {
+        return Ok(false);
+    };
+    if ctx
+        .db
+        .game_group()
+        .group_id()
+        .find(member.group_id)
+        .is_none()
+    {
+        return Err(PartyFactsUnavailableReason::MissingGroup);
+    }
+    let members: Vec<_> = ctx
+        .db
+        .game_group_member()
+        .by_group()
+        .filter(&member.group_id)
+        .take(GROUP_MAX_MEMBERS + 1)
+        .collect();
+    if members.len() > GROUP_MAX_MEMBERS {
+        return Err(PartyFactsUnavailableReason::FightLimit);
+    }
+    Ok(members.into_iter().any(|candidate| {
+        candidate.character_guid != character_guid
+            && ctx
+                .db
+                .game_group_member_partition()
+                .character_guid()
+                .find(candidate.character_guid)
+                .is_some_and(|known| {
+                    known.group_id == member.group_id
+                        && known.member_active
+                        && known.state == PartyPartitionState::Known
+                        && (known.map_id, known.instance_id) == partition
+                })
+    }))
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartyFactsUnavailableReason {
     MissingGroup,

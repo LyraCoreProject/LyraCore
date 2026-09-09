@@ -1609,11 +1609,34 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    fn ensure_instance(&self, instance_id: u64, _map_id: u32, _party_id: u64) -> Result<()> {
+    fn instance_partition(&self, instance_id: u64) -> Option<(u32, u64)> {
+        self.xdb
+            .as_ref()
+            .and_then(|db| lk(&db.instance_partitions).get(&instance_id).copied())
+    }
+
+    fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
         let db = self.xstep("ensure_instance")?;
         if instance_id == 0 {
             return Err(anyhow!("instance 0 is the open world"));
         }
+        let existing = lk(&db.instance_partitions).get(&instance_id).copied();
+        match existing {
+            Some((existing_map, _)) if existing_map != map_id => {
+                return Err(anyhow!(
+                    "instance {instance_id} belongs to map {existing_map}, not map {map_id}"
+                ));
+            }
+            Some((_, existing_party))
+                if existing_party != party_id && !(existing_party == 0 && party_id != 0) =>
+            {
+                return Err(anyhow!(
+                    "instance {instance_id} belongs to party {existing_party}, not party {party_id}"
+                ));
+            }
+            _ => {}
+        }
+        lk(&db.instance_partitions).insert(instance_id, (map_id, party_id));
         // The module's own shape: a mirror of an instance that is ALREADY here joins it (early
         // return) instead of spawning a second population. `HashSet::insert` reports that for free,
         // and the count is what the second-party-member test asserts against.
@@ -10261,6 +10284,7 @@ struct FakeShardDb {
     /// Realm locator predecessor attached to each destination fence.
     arrival_sources: std::sync::Mutex<std::collections::HashMap<u64, (u32, u64, u64)>>,
     instances: std::sync::Mutex<std::collections::HashSet<u64>>,
+    instance_partitions: std::sync::Mutex<std::collections::HashMap<u64, (u32, u64)>>,
     /// Every instance id this database actually SPAWNED a population for — one entry per
     /// spawn, so "the second party member re-created the dungeon" is visible as a duplicate.
     populated: std::sync::Mutex<Vec<u64>>,
@@ -10270,6 +10294,10 @@ struct FakeShardDb {
 impl FakeShardDb {
     fn with_character(guid: u64, c: FakeChar) -> std::sync::Arc<Self> {
         let db = Self::default();
+        if c.instance_id != 0 {
+            lk(&db.instances).insert(c.instance_id);
+            lk(&db.instance_partitions).insert(c.instance_id, (c.map_id, 0));
+        }
         lk(&db.characters).insert(guid, c);
         std::sync::Arc::new(db)
     }

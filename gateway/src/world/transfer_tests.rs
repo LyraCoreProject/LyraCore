@@ -1225,6 +1225,32 @@ fn a_durable_intent_resumes_from_destination_witnesses_after_source_finish() {
 }
 
 #[test]
+fn the_source_instance_lease_survives_a_leave_and_rejoin_during_escrow() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    lk(&src_db.instance_partitions).insert(7, (36, 77));
+    lk(&src.mirror).push(super::party::GroupRoster {
+        group_id: 88,
+        roster_revision: 3,
+        leader_guid: BOT_GUID,
+        loot_method: 0,
+        loot_threshold: 2,
+        master_looter_guid: 0,
+        members: vec![BOT_GUID],
+        partitions: Vec::new(),
+    });
+    let intent = bot_intent();
+
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("the admitted instance identity drives the crossing");
+
+    assert_eq!(
+        lk(&dst_db.instance_partitions).get(&7),
+        Some(&(36, 77)),
+        "the current group cannot redirect an instance admitted under the earlier party lease"
+    );
+}
+
+#[test]
 fn a_same_shard_intent_resumes_after_the_realm_locator_settled() {
     let calls: ShardCallLog = Default::default();
     let db = FakeShardDb::with_character(
@@ -1699,11 +1725,22 @@ fn the_bots_party_is_readable_before_the_arrival_fence_drops() {
         super::party::Op::Invite(BOT_GUID),
     )
     .expect("the bot joins the leader's party");
+    let group_id = world
+        .group_roster(BOT_GUID)
+        .expect("the Realm roster read succeeds")
+        .expect("the bot's party exists")
+        .group_id;
+    lk(&src_db.instance_partitions).insert(7, (36, group_id));
 
     super::transfer::run_bot_transfer(world.as_ref(), BOT_GUID, 36, 7, "grouped follow")
         .expect("the crossing runs");
 
     assert!(dst_db.live(BOT_GUID), "the bot arrived");
+    assert_eq!(
+        lk(&dst_db.instance_partitions).get(&7),
+        Some(&(36, group_id)),
+        "the destination mirrors the source instance's durable party ownership"
+    );
     let roster = instances
         .group_roster(BOT_GUID)
         .expect("the mirror is readable")

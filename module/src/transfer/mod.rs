@@ -400,47 +400,20 @@ pub(crate) fn emit_bot_transfer_intent(
     reason: &str,
     controller_generation: u64,
 ) -> Result<u64, crate::actor::ActionRefusal> {
-    use crate::actor::{ActionRefusal, ActionRefusalKind};
-    let intents = ctx.db.game_bot_transfer_intent();
-    let pending: Vec<_> = intents.by_bot().filter(bot_guid).take(2).collect();
-    if pending.len() > 1 {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::TransferPending,
-            "Character has conflicting Transfer Intents",
-        ));
+    let existing = bot_transfer_intent_gate(ctx, bot_guid, destination, controller_generation)?;
+    if let Some(intent_id) = existing {
+        return Ok(intent_id);
     }
-    if let Some(existing) = pending.first() {
-        if existing.destination_map == destination.map_id
-            && existing.destination_instance == destination.instance_id
-            && existing.controller_generation == controller_generation
-        {
-            return Ok(existing.id);
-        }
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::TransferPending,
-            "Character already has a pending Transfer Intent",
-        ));
-    }
-    if intents
-        .iter()
-        .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT)
-        .count()
-        == lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT
-    {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::TransferPending,
-            "World Shard has too many pending Transfer Intents",
-        ));
-    }
-    crate::sessionless::action_gate(ctx, bot_guid)?;
     let source = ctx
         .db
         .game_world_entity()
         .guid()
         .find(bot_guid)
-        .ok_or_else(|| {
-            ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
-        })?;
+        .expect("the Transfer Intent Gate requires a live Character");
+    let intents = ctx.db.game_bot_transfer_intent();
+    if let Some(cast) = crate::spell::pending_cast(ctx, bot_guid) {
+        crate::spell::cancel_cast_attempt(ctx, bot_guid, cast.scheduled_id);
+    }
     let _ = crate::actor::stop_attack(ctx, bot_guid);
     ctx.db.game_creature_spline().guid().delete(bot_guid);
     crate::world::teleport_player(
@@ -470,6 +443,57 @@ pub(crate) fn emit_bot_transfer_intent(
         source_locator_revision: 0,
     });
     Ok(intent.id)
+}
+
+/// Check every fallible Transfer Intent condition before a caller writes prerequisite state.
+/// Returning an existing id preserves the writer's idempotence without repeating the placement.
+pub(crate) fn bot_transfer_intent_gate(
+    ctx: &ReducerContext,
+    bot_guid: u64,
+    destination: Destination,
+    controller_generation: u64,
+) -> Result<Option<u64>, crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
+    let intents = ctx.db.game_bot_transfer_intent();
+    let pending: Vec<_> = intents.by_bot().filter(bot_guid).take(2).collect();
+    if pending.len() > 1 {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::TransferPending,
+            "Character has conflicting Transfer Intents",
+        ));
+    }
+    if let Some(existing) = pending.first() {
+        if existing.destination_map == destination.map_id
+            && existing.destination_instance == destination.instance_id
+            && existing.controller_generation == controller_generation
+        {
+            return Ok(Some(existing.id));
+        }
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::TransferPending,
+            "Character already has a pending Transfer Intent",
+        ));
+    }
+    if intents
+        .iter()
+        .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT)
+        .count()
+        == lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::TransferPending,
+            "World Shard has too many pending Transfer Intents",
+        ));
+    }
+    crate::sessionless::action_gate(ctx, bot_guid)?;
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(bot_guid)
+        .ok_or_else(|| {
+            ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
+        })?;
+    Ok(None)
 }
 
 /// Bind the Realm locator predecessor while this worker owns the Transfer Intent. This happens

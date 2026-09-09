@@ -311,15 +311,30 @@ pub(super) fn run_transfer_injected_for_intent(
     // authority (it holds the blob, and its destination is the one the escrow was opened for).
     let escrow = escrow_after_begin(src, plan)?;
 
-    // 2. Mirror the instance BEFORE the import: the arriving character carries a
-    //    `game_instance_binding` naming this id, and `player_login`'s stranding guard diverts a
-    //    character whose `pending_instance_id` names an instance that does not exist here.
+    // 2. Mirror the instance BEFORE the import. The source lease fixes its map and party at portal
+    //    admission; a later leave or rejoin cannot redirect the already admitted crossing. The
+    //    arriving character carries a `game_instance_binding` naming this id, and `player_login`'s
+    //    stranding guard diverts a character whose `pending_instance_id` names an instance that
+    //    does not exist here.
     if escrow.dest_instance_id != 0 {
-        // Deliberate simplification: party_id 0 (solo). The destination only reads it in
-        // `resolve_or_create_instance`'s "the party's live instance" arm, which nothing on the
-        // instance shard reaches — every member arrives with their own binding, which resolves
-        // first. Upgrade path: realm-core owns party ids across shards.
-        dst.ensure_instance(escrow.dest_instance_id, escrow.dest_map_id, 0)?;
+        let (source_map, party_id) =
+            src.instance_partition(escrow.dest_instance_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "transfer {}: source instance {} has no durable lease",
+                        escrow.transfer_id,
+                        escrow.dest_instance_id
+                    )
+                })?;
+        if source_map != escrow.dest_map_id {
+            return Err(anyhow!(
+                "transfer {}: source instance {} belongs to map {source_map}, not destination map {}",
+                escrow.transfer_id,
+                escrow.dest_instance_id,
+                escrow.dest_map_id
+            ));
+        }
+        dst.ensure_instance(escrow.dest_instance_id, escrow.dest_map_id, party_id)?;
     }
     // Outside the `if`: the boundary exists whether or not the hop needed an instance mirrored, and
     // a same-map transfer must still be crashable "after ensure_instance".

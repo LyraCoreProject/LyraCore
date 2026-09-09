@@ -297,6 +297,17 @@ impl WorldStore for Coordinator {
             })
     }
 
+    fn instance_partition(&self, instance_id: u64) -> Option<(u32, u64)> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_instance()
+            .instance_id()
+            .find(&instance_id)
+            .map(|row| (row.map_id, row.party_id))
+    }
+
     fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
         self.ensure_instance(instance_id, map_id, party_id)
     }

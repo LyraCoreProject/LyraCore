@@ -286,4 +286,11 @@ or arrival; the proposed endpoint cannot establish either.
 
 `actor::sessionless_action_gate(ctx, character_guid)` checks current Account Claim and Fence ownership, Character availability, and World Session status before Package gameplay. It permits a missing live entity so Legacy can restore a body. Group admission also requires a live entity and current controller consent.
 
+`actor::area_trigger_route(ctx, trigger_id)` reads one exact imported AreaTrigger source volume and
+target map. It exposes the source center and containment rule for Candidate movement while keeping
+the landing coordinates private. `actor::enter_sessionless_areatrigger` rechecks the current body,
+volume, exact existing dungeon instance lease, and a Realm-certified party member in the expected
+partition before it applies the imported landing and writes one Transfer Intent. A Refusal leaves
+the Character, instance binding, and intent unchanged.
+
 `nav::LEG_MAX_EXPANSIONS` is the expansion cap used by `nav::route_step`. A Package can reserve that work before selecting movement.

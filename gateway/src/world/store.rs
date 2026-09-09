@@ -252,6 +252,13 @@ pub trait WorldStore:
         )
     }
 
+    /// The source-side lease for a named instance: its map and owning party. Portal admission
+    /// creates this before a cross-Shard Transfer, so it remains the authority if party membership
+    /// changes while the Character is in Escrow.
+    fn instance_partition(&self, _instance_id: u64) -> Option<(u32, u64)> {
+        None
+    }
+
     /// `ensure_instance` — mirror an instance id onto this shard, spawning its population once.
     fn ensure_instance(&self, _instance_id: u64, _map_id: u32, _party_id: u64) -> Result<()> {
         Err(anyhow!(
