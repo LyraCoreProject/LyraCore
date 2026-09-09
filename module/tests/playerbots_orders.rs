@@ -130,7 +130,7 @@ struct PrecedingOrders {
 
 fn preceding_orders() -> PrecedingOrders {
     let wasm_path = std::env::var_os("PLAYERBOTS_ORDERS_PRECEDING_WASM")
-        .expect("PLAYERBOTS_ORDERS_PRECEDING_WASM must name the merged PB-007 Wasm");
+        .expect("PLAYERBOTS_ORDERS_PRECEDING_WASM must name the merged PB-008 Wasm");
     let manifest_path = std::env::var_os("PLAYERBOTS_ORDERS_PRECEDING_MANIFEST")
         .expect("PLAYERBOTS_ORDERS_PRECEDING_MANIFEST must describe that Wasm build");
     let core_path = std::env::var_os("PLAYERBOTS_ORDERS_PRECEDING_CORE")
@@ -539,6 +539,70 @@ fn playerbots_stay_blocks_heal_positioning_but_allows_in_range_healing_and_survi
     evidence(&fixture, "stay-survival-interrupt");
     assert!(survival["chosen"].to_ascii_lowercase().contains("survival"));
     assert!(survival["chosen"].to_ascii_lowercase().contains("move"));
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_stay_blocks_a_recovery_position_selected_after_normal_recovery() {
+    let fixture = fixture("playerbots-orders-stay-recovery");
+    let node = &fixture.node;
+    node.assert_sql(
+        "DELETE FROM game_import_meta WHERE family = 'weather_seed' AND source_sha = '' AND file_hash = '' AND row_count = 2",
+    );
+    node.assert_call(
+        "playerbots_quest_loop_fixture_stage_named",
+        &[&fixture.priest],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_move",
+        &[&fixture.leader, "1240", "1200"],
+    );
+    issue(
+        &fixture,
+        &format!("follow|{}", fixture.priest),
+        &fixture.priest,
+        false,
+    );
+    node.assert_call(
+        "playerbots_recovery_fixture_block_companion",
+        &[&fixture.priest],
+    );
+    let recovery_selected = poll_until(std::time::Duration::from_secs(14), || {
+        pass(node, &fixture.priest);
+        let selected = runner(node, &fixture.priest)["chosen"]
+            .to_ascii_lowercase()
+            .contains("recoveryposition");
+        if !selected {
+            std::thread::sleep(std::time::Duration::from_millis(1_000));
+        }
+        selected
+    });
+    let before_stay = runner(node, &fixture.priest);
+    evidence(&fixture, "stay-recovery-position-selected");
+    assert!(recovery_selected, "{before_stay:?}");
+    assert!(before_stay["recovery"]
+        .to_ascii_lowercase()
+        .contains("position = (some"));
+
+    let held = entity(node, &fixture.priest);
+    issue(
+        &fixture,
+        &format!("stay|{}", fixture.priest),
+        &fixture.priest,
+        false,
+    );
+    pass(node, &fixture.priest);
+    let after_stay = runner(node, &fixture.priest);
+    std::thread::sleep(std::time::Duration::from_millis(1_000));
+    let after_wait = entity(node, &fixture.priest);
+    evidence(&fixture, "stay-blocks-recovery-position");
+    assert!(after_stay["chosen"].to_ascii_lowercase().contains("hold"));
+    assert!(after_stay["chosen"].to_ascii_lowercase().contains("stay"));
+    assert!(after_stay["recovery"]
+        .to_ascii_lowercase()
+        .contains("position = (some"));
+    assert_eq!(after_wait["x"], held["x"]);
+    assert_eq!(after_wait["y"], held["y"]);
 }
 
 #[test]
@@ -1100,14 +1164,14 @@ fn playerbots_human_party_suspends_then_rechecks_the_retained_solo_quest() {
 }
 
 #[test]
-#[ignore = "requires the merged PB-007 Wasm, SpacetimeDB, and the playerbots Package"]
-fn playerbots_populated_pb007_state_adds_empty_order_state_without_changing_current_work() {
+#[ignore = "requires the merged PB-008 Wasm, SpacetimeDB, and the playerbots Package"]
+fn playerbots_populated_pb008_state_adds_empty_order_state_without_changing_current_work() {
     let preceding = preceding_orders();
     assert_ne!(
         blake3::hash(&preceding.wasm),
         blake3::hash(support::module_bytes())
     );
-    let mut node = Standalone::start("playerbots-orders-pb007-migration");
+    let mut node = Standalone::start("playerbots-orders-pb008-migration");
     node.publish_module_bytes(&preceding.wasm);
     let imports =
         node.query_rows("SELECT family, source_sha, file_hash, row_count FROM game_import_meta");
@@ -1191,6 +1255,9 @@ fn playerbots_populated_pb007_state_adds_empty_order_state_without_changing_curr
     assert!(preceding_runner["foreground"]
         .to_ascii_lowercase()
         .contains("cast"));
+    assert!(preceding_runner["recovery"]
+        .to_ascii_lowercase()
+        .contains("some"));
 
     node.publish_module();
     let upgraded_runner = runner(&node, &guid);
