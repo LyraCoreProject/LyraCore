@@ -20,7 +20,6 @@ struct OrdersFixture {
     leader: String,
     enemies: Vec<String>,
     actor: String,
-    ownership: String,
 }
 
 fn runner(node: &Standalone, guid: &str) -> BTreeMap<String, String> {
@@ -158,7 +157,6 @@ fn fixture(name: &str) -> OrdersFixture {
         leader,
         enemies,
         actor,
-        ownership,
     };
     evidence(&fixture, "staged");
     fixture
@@ -469,8 +467,8 @@ fn playerbots_target_pulls_only_the_exact_eligible_creature_and_releases_control
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_orders_reject_forged_ownership_and_clear_after_party_authority_changes() {
-    let fixture = fixture("playerbots-orders-authority-change");
+fn playerbots_orders_reject_forged_issuer_ownership_before_queueing() {
+    let fixture = fixture("playerbots-orders-forged-issuer");
     let node = &fixture.node;
     let before = node
         .query_rows("SELECT id FROM game_party_command_intent")
@@ -494,6 +492,13 @@ fn playerbots_orders_reject_forged_ownership_and_clear_after_party_authority_cha
             .len(),
         before
     );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_assist_invalidates_when_the_named_member_leaves() {
+    let fixture = fixture("playerbots-orders-assist-member-left");
+    let node = &fixture.node;
     issue(
         &fixture,
         &format!("assist|{}|{}", fixture.warrior, fixture.priest),
@@ -518,30 +523,19 @@ fn playerbots_orders_reject_forged_ownership_and_clear_after_party_authority_cha
             fixture.warrior
         ))
         .is_empty());
+}
 
-    node.assert_call(
-        "playerbots_fixture_orders_party",
-        &[
-            &fixture.warrior,
-            &fixture.priest,
-            &fixture.mage,
-            &fixture.leader,
-            "0",
-        ],
-    );
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_orders_stop_when_the_bot_is_reclaimed_by_an_account() {
+    let fixture = fixture("playerbots-orders-bot-reclaimed");
+    let node = &fixture.node;
     let bot_account = node.query_rows(&format!(
         "SELECT account_id FROM game_character WHERE guid = {}",
         fixture.warrior
     ))[0]["account_id"]
         .clone();
     node.assert_call("claim_account", &[&bot_account, &fixture.warrior, "9010"]);
-    let bot_generation = node.query_rows(&format!(
-        "SELECT generation FROM game_account_claim WHERE account_id = {bot_account}"
-    ))[0]["generation"]
-        .clone();
-    let bot_ownership = format!(
-        r#"{{"account_id":{bot_account},"generation":{bot_generation},"request_nonce":9010}}"#
-    );
     let reclaimed =
         finish_refused_command(&fixture, &format!("follow|{}", fixture.warrior), 30_000);
     let reclaimed_receipt = node.query_rows(&format!(
@@ -564,15 +558,91 @@ fn playerbots_orders_reject_forged_ownership_and_clear_after_party_authority_cha
             fixture.warrior
         ))
         .is_empty());
-    node.assert_call("release_account_claim", &[&bot_ownership]);
+}
 
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_record_only_refuses_an_order_without_gameplay_writes() {
+    let fixture = fixture("playerbots-orders-record-only");
+    let node = &fixture.node;
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.warrior, "{\"recordOnly\":[]}"],
+    );
+    let entity_before = entity(node, &fixture.warrior);
+    let actions_before = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_action WHERE character_guid = {}",
+        fixture.warrior
+    ));
+    let pending_before = node.query_rows(&format!(
+        "SELECT * FROM game_pending_cast WHERE caster_guid = {}",
+        fixture.warrior
+    ));
+    let melee_before = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {}",
+        fixture.warrior
+    ));
+    let movement_before = node.query_rows(&format!(
+        "SELECT * FROM game_creature_spline WHERE guid = {}",
+        fixture.warrior
+    ));
+    let suppressed =
+        finish_refused_command(&fixture, &format!("follow|{}", fixture.warrior), 31_000);
+    let suppressed_receipt = node.query_rows(&format!(
+        "SELECT outcome FROM game_party_command_receipt WHERE intent_id = {suppressed}"
+    ));
+    evidence(&fixture, "record-only-order-suppressed");
+    assert!(suppressed_receipt[0]["outcome"]
+        .to_ascii_lowercase()
+        .contains("suppressed"));
+    assert_eq!(entity(node, &fixture.warrior), entity_before);
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_action WHERE character_guid = {}",
+            fixture.warrior
+        )),
+        actions_before
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_pending_cast WHERE caster_guid = {}",
+            fixture.warrior
+        )),
+        pending_before
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_melee_attack WHERE attacker_guid = {}",
+            fixture.warrior
+        )),
+        melee_before
+    );
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT * FROM game_creature_spline WHERE guid = {}",
+            fixture.warrior
+        )),
+        movement_before
+    );
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            fixture.warrior
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_order_clears_when_leadership_changes_and_preserves_the_role() {
+    let fixture = fixture("playerbots-orders-leadership-change");
+    let node = &fixture.node;
     issue(
         &fixture,
         &format!("follow|{}", fixture.warrior),
         &fixture.warrior,
         false,
     );
-    node.assert_call("release_account_claim", &[&fixture.ownership]);
     node.assert_call(
         "playerbots_fixture_orders_party",
         &[
