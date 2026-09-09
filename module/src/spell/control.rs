@@ -54,6 +54,12 @@ pub enum UnitControl {
     Rooted,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlReadError {
+    AuraLimit,
+    EffectLimit,
+}
+
 /// Read all control auras for one unit within a declared limit. Oversized state is unavailable, so
 /// an arbitrary prefix cannot decide whether the party may damage the unit.
 #[cfg_attr(not(has_packages), allow(dead_code))]
@@ -61,12 +67,12 @@ pub fn control_status(
     ctx: &ReducerContext,
     unit_guid: u64,
     limit: usize,
-) -> Result<Option<UnitControl>, ()> {
+) -> Result<Option<UnitControl>, ControlReadError> {
     let auras: Vec<_> = auras_on(ctx, unit_guid)
         .take(limit.saturating_add(1))
         .collect();
     if auras.len() > limit {
-        return Err(());
+        return Err(ControlReadError::AuraLimit);
     }
     let has = |mechanic| {
         auras
@@ -86,7 +92,10 @@ pub fn control_status(
 
 /// Classify a spell from its complete effect set. A spell has at most three effects.
 #[cfg_attr(not(has_packages), allow(dead_code))]
-pub fn spell_control(ctx: &ReducerContext, spell_id: u32) -> Result<Option<UnitControl>, ()> {
+pub fn spell_control(
+    ctx: &ReducerContext,
+    spell_id: u32,
+) -> Result<Option<UnitControl>, ControlReadError> {
     let effects: Vec<_> = ctx
         .db
         .game_spell_effect()
@@ -95,7 +104,7 @@ pub fn spell_control(ctx: &ReducerContext, spell_id: u32) -> Result<Option<UnitC
         .take(4)
         .collect();
     if effects.len() > 3 {
-        return Err(());
+        return Err(ControlReadError::EffectLimit);
     }
     let has = |mechanic| {
         effects.iter().any(|effect| {
