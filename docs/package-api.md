@@ -113,6 +113,9 @@ gear. These verbs do not authorize an Actor. A Package must first pass the same 
 Sessionless Action Gate as any other gameplay request. Their grants have no money cost because the
 selected profile is the source of the entitlement.
 
+`actor::reconcile_starter_role_spell_levels(ctx)` repairs source-derived training levels only on
+complete old curated header shapes. Imported or Operator-tuned rows remain authoritative.
+
 `actor::request_cast(ctx, actor_guid, spell_id, target_guid)` returns
 `Result<spell::CastStart, spell::CastRefusal>`. `Started` carries a Cast Handle. `Waiting` carries
 an existing cast's original identity, spell, target, and current due time, even when the new request

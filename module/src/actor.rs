@@ -36,6 +36,7 @@
 //! | `learn_profile_talent` | `talent::reconcile_profile_talent` | class/race/level/point/tier/prerequisite gates |
 //! | `reconcile_profile_item` | `items::request_profile_item` | bounded top-up + capacity/uniqueness gates |
 //! | `equip_profile_upgrade` | `items::apply_equip_profile_upgrade` | normal equip gates + preserves equal or stronger gear |
+//! | `reconcile_starter_role_spell_levels` | `seed::reconcile_curated_starter_role_levels` | repairs only exact old curated level-zero headers; preserves imported or tuned rows |
 //! | `use_gameobject` | `gameobject::apply_use_gameobject` | GO resolved by guid + range/use gates |
 //! | `request_use_gameobject` | `gameobject::request_use_gameobject` | typed target, partition, range, and use Refusal |
 //! | `import_revision` | `game_import_meta` read | current importer source and file identities for one family |
@@ -171,6 +172,7 @@ package_only! {
     pub(crate) use crate::skill::reconcile_profile_skill as reconcile_profile_skill;
     pub(crate) use crate::talent::reconcile_profile_talent as learn_profile_talent;
     pub(crate) use crate::talent::select_profile_talent as select_profile_talent;
+    pub(crate) use crate::seed::reconcile_curated_starter_role_levels as reconcile_starter_role_spell_levels;
 }
 
 // ---- NPC services / world ----
