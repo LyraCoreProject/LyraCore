@@ -924,7 +924,10 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
         ),
     );
     evidence(&topology, "distinct-source-receipt-before-transfer");
-    assert_eq!(same_numeric_id, claimed);
+    assert_eq!(
+        same_numeric_id, claimed,
+        "fresh source databases must allocate the same numeric intent id for this collision case"
+    );
     assert_ne!(
         second_source_intent.source_identity,
         claimed_intent.source_identity
