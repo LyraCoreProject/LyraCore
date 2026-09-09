@@ -201,7 +201,7 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
     let preceding = preceding_transfer();
     assert_eq!(
         preceding.manifest["core"],
-        "2f2b1f35dde90e52dd3b0d3e16d44bb3ffe41a2d"
+        "e025ab7696f557ff10a88a1bb33710e3066aedc3"
     );
     let current = support::module_bytes();
     assert_ne!(blake3::hash(&preceding.wasm), blake3::hash(current));
