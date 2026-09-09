@@ -216,12 +216,30 @@ impl Standalone {
     fn publish_bytes(&mut self, wasm: &[u8], extra: &[&str]) {
         let path = self.data_dir.join("published-module.wasm");
         fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
-        self.publish(&["--bin-path", path.to_str().unwrap()], extra);
+        let database = self.database.clone();
+        self.publish(&database, &["--bin-path", path.to_str().unwrap()], extra);
+    }
+
+    /// Publish the same private Wasm onto another database owned by this persistent node.
+    #[allow(dead_code)] // Used by the real multi-database Gateway Transfer caller.
+    pub fn publish_named_module_bytes(&mut self, database: &str, wasm: &[u8]) {
+        assert!(
+            self.storage == Storage::Disk,
+            "named databases need durable storage"
+        );
+        let path = self.data_dir.join("published-named-module.wasm");
+        fs::write(&path, wasm).expect("failed to copy private named Wasm artifact");
+        self.publish(database, &["--bin-path", path.to_str().unwrap()], &[]);
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
+        self.call_database(&self.database, reducer, args)
+    }
+
+    #[allow(dead_code)] // Used by multi-database Gateway Transfer callers.
+    pub fn call_database(&self, database: &str, reducer: &str, args: &[&str]) -> Output {
         let mut command = self.command();
-        command.args(["call", "-s", &self.server, &self.database, reducer]);
+        command.args(["call", "-s", &self.server, database, reducer]);
         command.args(args);
         command.output().expect("failed to call reducer")
     }
@@ -277,6 +295,11 @@ impl Standalone {
         self.assert_ok(&self.call(reducer, args));
     }
 
+    #[allow(dead_code)] // Used by multi-database Gateway Transfer callers.
+    pub fn assert_call_database(&self, database: &str, reducer: &str, args: &[&str]) {
+        self.assert_ok(&self.call_database(database, reducer, args));
+    }
+
     #[allow(dead_code)] // Paired with `publish_module_anonymous` for isolated local servers.
     pub fn assert_call_anonymous(&self, reducer: &str, args: &[&str]) {
         let mut command = self.command();
@@ -299,7 +322,16 @@ impl Standalone {
 
     #[allow(dead_code)] // Used by integration targets that inspect committed table state.
     pub fn query_rows(&self, query: &str) -> Vec<BTreeMap<String, String>> {
-        let output = self.sql(query);
+        self.query_database_rows(&self.database, query)
+    }
+
+    #[allow(dead_code)] // Used by multi-database Gateway Transfer callers.
+    pub fn query_database_rows(
+        &self,
+        database: &str,
+        query: &str,
+    ) -> Vec<BTreeMap<String, String>> {
+        let output = self.sql_database(database, query);
         self.assert_ok(&output);
         parse_text_rows(&String::from_utf8(output.stdout).expect("SQL output was not UTF-8"))
     }
@@ -327,13 +359,17 @@ impl Standalone {
     ///
     /// `spacetimedb-standalone` 2.7.1 segfaults while launching this module roughly once in a dozen
     /// publishes (SIGSEGV, no log line past `launching module`). Before the first successful publish
-    /// the fixture has staged no gameplay. Once a publish succeeds, every later failure is reported
-    /// without an automatic restart. Process-restart scenarios request that step explicitly.
-    fn publish(&mut self, source: &[&str], extra: &[&str]) {
+    /// a memory fixture has staged no gameplay. A disk fixture may also restart while publishing a
+    /// second named database because the first database survives that owned process replacement.
+    fn publish(&mut self, database: &str, source: &[&str], extra: &[&str]) {
         let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = module_dir.parent().unwrap();
         let mut attempts = Vec::new();
-        let allowed_attempts = if self.published { 1 } else { PUBLISH_ATTEMPTS };
+        let allowed_attempts = if self.published && self.storage == Storage::Memory {
+            1
+        } else {
+            PUBLISH_ATTEMPTS
+        };
         for attempt in 0..allowed_attempts {
             let mut command = self.command();
             command
@@ -341,7 +377,7 @@ impl Standalone {
                 .args(["publish", "-s", &self.server]);
             command.args(source);
             command.args(extra);
-            command.args(["-y", &self.database]);
+            command.args(["-y", database]);
             let output = command.output().expect("failed to start spacetime publish");
             if output.status.success() {
                 self.published = true;
@@ -420,6 +456,10 @@ impl Standalone {
     }
 
     fn sql(&self, query: &str) -> Output {
+        self.sql_database(&self.database, query)
+    }
+
+    fn sql_database(&self, database: &str, query: &str) -> Output {
         self.command()
             .args([
                 "sql",
@@ -427,7 +467,7 @@ impl Standalone {
                 &self.server,
                 "--format",
                 "text",
-                &self.database,
+                database,
                 query,
             ])
             .output()
