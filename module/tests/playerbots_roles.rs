@@ -181,7 +181,8 @@ fn cast_events(node: &Standalone, guid: &str, spell: u32) -> Vec<BTreeMap<String
 
 fn active_auras(node: &Standalone, guid: &str, spell: u32) -> Vec<BTreeMap<String, String>> {
     let mut rows = node.query_rows(&format!(
-        "SELECT * FROM game_aura WHERE target_guid = {guid} AND spell_id = {spell}"
+        "SELECT id, caster_guid, target_guid, spell_id, effect_id, applied_at, amount, stacks \
+         FROM game_aura WHERE target_guid = {guid} AND spell_id = {spell}"
     ));
     rows.sort_by_key(|row| row["id"].parse::<u64>().unwrap());
     rows
@@ -873,11 +874,21 @@ fn ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
             "playerbots_fixture_roles_stronger_fortitude",
             &[&fixture.leader, target],
         );
+        node.assert_call("playerbots_fixture_companion_health", &[target, "100"]);
+        let unit = entity(node, target);
+        assert_eq!(unit["health"], unit["max_health"]);
     }
     node.assert_call(
         "playerbots_fixture_roles_move",
         &[&fixture.leader, "1240", "1200"],
     );
+    assert!(node
+        .query_rows(&format!(
+            "SELECT spell_id FROM game_aura WHERE target_guid = {} AND spell_id = 1243",
+            fixture.leader
+        ))
+        .is_empty());
+    evidence(&fixture, "fortitude-range-staged");
     assert_eq!(
         node.query_rows("SELECT range_yd FROM game_spell WHERE spell_id = 1243")[0]["range_yd"],
         "30"
