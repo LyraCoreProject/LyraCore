@@ -5,7 +5,7 @@
 
 use crate::config::{GatewayConfig, ShardMap};
 use anyhow::{anyhow, Context, Result};
-use spacetimedb_sdk::{DbContext, SubscriptionHandle as _, Table};
+use spacetimedb_sdk::{DbContext, SubscriptionHandle as _, Table, TableWithPrimaryKey};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -70,13 +70,13 @@ pub(crate) struct LiveConn {
     /// Identity of this cache plus the Character-presence revision maintained by row callbacks.
     cache_generation: u64,
     character_revision: Arc<AtomicU64>,
-    party_memberships: Arc<RwLock<PartyMembershipIndex>>,
+    pub(crate) party_memberships: Arc<RwLock<PartyMembershipIndex>>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
 }
 
 #[derive(Default)]
-struct PartyMembershipIndex {
+pub(crate) struct PartyMembershipIndex {
     by_character: HashMap<u64, BTreeMap<u64, u64>>,
     by_group: HashMap<u64, BTreeMap<u64, u64>>,
 }
@@ -108,7 +108,7 @@ impl PartyMembershipIndex {
         }
     }
 
-    fn bounded_roster(
+    pub(crate) fn bounded_roster(
         &self,
         character_guid: u64,
         member_limit: usize,

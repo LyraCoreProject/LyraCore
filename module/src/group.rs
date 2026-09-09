@@ -36,8 +36,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
-/// Vanilla party size.
-pub const GROUP_MAX_MEMBERS: usize = 5;
+pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
 
 /// Group kill-reward radius² — members farther than this from the slain creature get neither XP
 /// nor quest credit. Vanilla's `sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE)` = 74.0 yd.

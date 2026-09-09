@@ -4,6 +4,9 @@
 //! a compile error on the gateway side instead of a runtime mismatch. Same precedent as
 //! `type_mask`/`npc_flags`.
 
+/// Vanilla party size. Realm authority and Gateway projections share this bound.
+pub const GROUP_MAX_MEMBERS: usize = 5;
+
 /// Group-event kinds (`game_group_event.kind`) — what SMSG the gateway relays.
 pub mod event_kind {
     /// You are invited (`other_*` = the inviter) → `SMSG_GROUP_INVITE`.

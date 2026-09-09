@@ -327,15 +327,17 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
             .iter()
             .find_map(|shard| shard.entity_partition(intent.issuer_guid))
     });
-    let member_partition = (intent.authority_member_guid != 0).then(|| {
-        source
-            .entity_partition(intent.authority_member_guid)
-            .or_else(|| {
-                world_shards
-                    .iter()
-                    .find_map(|shard| shard.entity_partition(intent.authority_member_guid))
-            })
-    });
+    let member_partition = (intent.authority_member_guid != 0)
+        .then(|| {
+            source
+                .entity_partition(intent.authority_member_guid)
+                .or_else(|| {
+                    world_shards
+                        .iter()
+                        .find_map(|shard| shard.entity_partition(intent.authority_member_guid))
+                })
+        })
+        .flatten();
     if let Some(bot_partition) = bot_partition {
         if issuer_partition != Some(bot_partition)
             || member_partition.is_some_and(|partition| partition != bot_partition)
