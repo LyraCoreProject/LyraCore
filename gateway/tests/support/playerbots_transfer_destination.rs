@@ -321,6 +321,16 @@ pub(crate) fn stage_retained_quest(
     let suspended = source_snapshot(topology, character_guid);
     topology.call(
         &topology.source_db,
+        "playerbots_transfer_fixture_stage",
+        &[
+            &character_guid.to_string(),
+            &transferred.leader_guid.to_string(),
+            "2",
+        ],
+    );
+    let routed = source_snapshot(topology, character_guid);
+    topology.call(
+        &topology.source_db,
         "playerbots_transfer_quest_execute",
         &[&character_guid.to_string()],
     );
@@ -329,6 +339,7 @@ pub(crate) fn stage_retained_quest(
         "expected_navigation": expected_navigation,
         "staged": staged,
         "suspended": suspended,
+        "routed": routed,
         "operation": operation,
     });
     evidence
@@ -419,6 +430,14 @@ pub(crate) fn assert_retained_quest_stage(evidence: &serde_json::Value) {
     assert_eq!(
         evidence["suspended"]["retained_quest"], evidence["staged"]["retained_quest"],
         "{evidence}"
+    );
+    assert_eq!(
+        evidence["routed"]["runner"], evidence["suspended"]["runner"],
+        "route staging changed the retained Runner: {evidence}"
+    );
+    assert_eq!(
+        evidence["routed"]["retained_quest"], evidence["staged"]["retained_quest"],
+        "route staging changed the retained Quest: {evidence}"
     );
     let operation_runner = exactly_one(
         evidence["operation"]["runner"].as_array().unwrap(),

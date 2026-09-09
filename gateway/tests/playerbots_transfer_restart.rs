@@ -2,6 +2,8 @@
 
 //! Real Gateway process recovery for one session-less cross-Shard Transfer.
 
+#[path = "support/playerbots_transfer_destination.rs"]
+mod playerbots_transfer_destination;
 #[path = "../../module/tests/support/mod.rs"]
 mod support;
 
@@ -150,6 +152,10 @@ impl TransferTopology {
             "playerbots_fixture_runner_pass_once",
             &[&bot.guid.to_string()],
         );
+        self.capture_transfer(bot);
+    }
+
+    fn capture_transfer(&self, bot: &mut TransferredBot) {
         let intents = self.query(
             &self.source_db,
             &format!(
@@ -787,6 +793,11 @@ fn assert_durable_phase(evidence: &serde_json::Value, step: &str) {
 }
 
 fn assert_postrelease_body(topology: &TransferTopology, bot: &TransferredBot, step: &str) {
+    topology.call(
+        &topology.destination_db,
+        "playerbots_fixture_companion_due",
+        &[&bot.guid.to_string()],
+    );
     let observed = support::poll_until(support::POLL_TIMEOUT, || {
         topology
             .query(
@@ -802,7 +813,10 @@ fn assert_postrelease_body(topology: &TransferTopology, bot: &TransferredBot, st
     let evidence = topology.save(
         bot,
         &format!("{step}-postrelease-body"),
-        serde_json::json!({ "body_observed": observed }),
+        serde_json::json!({
+            "body_observed": observed,
+            "normal_runner_due_requested": true,
+        }),
     );
     assert!(observed, "destination body was not rebuilt: {evidence}");
     assert_eq!(
@@ -994,4 +1008,106 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
         "{repaired}"
     );
     assert_party_mirror(&repaired);
+}
+
+fn run_quest_destination_case(name: &str, mode: u8) {
+    let (topology, mut bot) = TransferTopology::stage(name);
+    let source = playerbots_transfer_destination::stage_retained_quest(&topology, &bot);
+    topology.capture_transfer(&mut bot);
+    let source_evidence = topology.save(
+        &bot,
+        "quest-source-transfer",
+        serde_json::json!({ "quest_source": source }),
+    );
+    playerbots_transfer_destination::assert_retained_quest_stage(
+        &source_evidence["extra"]["quest_source"],
+    );
+
+    let catalogue =
+        playerbots_transfer_destination::stage_destination_catalogue(&topology, bot.guid, mode);
+    let catalogue_evidence = topology.save(
+        &bot,
+        "quest-destination-catalogue",
+        serde_json::json!({ "destination_catalogue": catalogue }),
+    );
+    playerbots_transfer_destination::assert_destination_catalogue(
+        &catalogue_evidence["extra"]["destination_catalogue"],
+    );
+
+    let mut gateway = topology.gateway(None, "quest-transfer");
+    let completed = support::poll_until(support::POLL_TIMEOUT, || {
+        topology
+            .query(
+                &topology.source_db,
+                &format!(
+                    "SELECT id FROM game_bot_transfer_intent WHERE bot_guid = {}",
+                    bot.guid
+                ),
+            )
+            .is_empty()
+            && topology
+                .query(
+                    &topology.destination_db,
+                    &format!(
+                        "SELECT transfer_id FROM game_transfer_in WHERE character_guid = {}",
+                        bot.guid
+                    ),
+                )
+                .is_empty()
+    });
+    let arrival = topology.save(
+        &bot,
+        "quest-destination-arrived",
+        serde_json::json!({
+            "completed": completed,
+            "gateway_log": gateway.log(),
+        }),
+    );
+    gateway.stop();
+    assert!(completed, "Quest Transfer did not complete: {arrival}");
+    assert_eq!(
+        rows(&arrival, &["state", "destination", "character"]).len(),
+        1,
+        "{arrival}"
+    );
+    assert!(
+        rows(&arrival, &["state", "source", "character"]).is_empty(),
+        "{arrival}"
+    );
+
+    let result = if mode == 1 {
+        playerbots_transfer_destination::case9_rebuilds_destination(&topology, &bot)
+    } else {
+        playerbots_transfer_destination::case10_records_incompatible_destination(&topology, &bot)
+    };
+    let evidence = topology.save(
+        &bot,
+        if mode == 1 {
+            "quest-destination-rebuilt"
+        } else {
+            "quest-destination-replaced"
+        },
+        serde_json::json!({ "result": result }),
+    );
+    if mode == 1 {
+        playerbots_transfer_destination::assert_case9_rebuilds_destination(
+            &evidence["extra"]["result"],
+        );
+    } else {
+        playerbots_transfer_destination::assert_case10_records_incompatible_destination(
+            &evidence["extra"]["result"],
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, the playerbots Package, and the Gateway binary"]
+fn playerbots_quest_transfer_rebuilds_its_destination_after_arrival() {
+    run_quest_destination_case("playerbots-transfer-quest-rebuilt", 1);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, the playerbots Package, and the Gateway binary"]
+fn playerbots_quest_transfer_records_an_incompatible_destination() {
+    run_quest_destination_case("playerbots-transfer-quest-replaced", 2);
 }
