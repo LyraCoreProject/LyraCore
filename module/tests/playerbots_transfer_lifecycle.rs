@@ -65,10 +65,108 @@ fn capture(node: &Standalone, guid: &str, case: &str, wasm: &[u8]) -> serde_json
         "spell_events": node.query_rows(&format!("SELECT kind, spell_id FROM game_spell_cast_event WHERE caster_guid = {guid} AND spell_id = {HEAL}")),
         "actions": node.query_rows(&format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid}")),
         "splines": node.query_rows(&format!("SELECT * FROM game_creature_spline WHERE guid = {guid}")),
+        "movement_schedule": node.query_rows("SELECT * FROM game_creature_move_schedule"),
     });
     let path = support::log_dir().join(format!("{}-{case}.json", node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
     evidence
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_process_restart_resumes_one_owned_movement_leg() {
+    let mut node = Standalone::start_persistent("playerbots-transfer-movement-restart");
+    node.publish_module();
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    node.assert_call("playerbots_spawn_role", &["1", "1200", "1200", "50", "0"]);
+    let guid = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
+        ["character_guid"]
+        .clone();
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "64"]);
+    node.assert_call("playerbots_fixture_prepare", &[]);
+    node.assert_call("playerbots_lifecycle_stage_movement", &[&guid]);
+    let before = capture(
+        &node,
+        &guid,
+        "before-movement-restart",
+        support::module_bytes(),
+    );
+    assert_eq!(before["splines"].as_array().unwrap().len(), 1, "{before}");
+    assert!(before["runner"][0]["foreground"]
+        .as_str()
+        .unwrap()
+        .contains("movement"));
+    let dx = before["splines"][0]["dx"]
+        .as_str()
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    let dy = before["splines"][0]["dy"]
+        .as_str()
+        .unwrap()
+        .parse::<f32>()
+        .unwrap();
+    node.restart_persistent();
+    let after = capture(
+        &node,
+        &guid,
+        "after-movement-restart",
+        support::module_bytes(),
+    );
+    assert_ne!(before["process_id"], after["process_id"]);
+    assert_eq!(before["program"], after["program"]);
+    assert_eq!(before["splines"], after["splines"]);
+    assert_eq!(before["movement_schedule"], after["movement_schedule"]);
+    assert_eq!(before["entity"], after["entity"]);
+    for field in [
+        "generation",
+        "objective_sequence",
+        "objective",
+        "foreground",
+    ] {
+        assert_eq!(
+            before["runner"][0][field], after["runner"][0][field],
+            "{field}"
+        );
+    }
+    let arrived = poll_until(Duration::from_secs(45), || {
+        let rows = node.query_rows(&format!(
+            "SELECT x, y FROM game_world_entity WHERE guid = {guid}"
+        ));
+        let x = rows[0]["x"].parse::<f32>().unwrap();
+        let y = rows[0]["y"].parse::<f32>().unwrap();
+        (x - dx).abs() < 0.05 && (y - dy).abs() < 0.05
+    });
+    let arrival = capture(
+        &node,
+        &guid,
+        "resumed-movement-leg",
+        support::module_bytes(),
+    );
+    assert!(arrived, "{arrival}");
+    assert!(arrival["splines"].as_array().unwrap().is_empty());
+    assert_ne!(arrival["entity"][0]["x"], before["entity"][0]["x"]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let observed = capture(
+        &node,
+        &guid,
+        "observed-resumed-movement",
+        support::module_bytes(),
+    );
+    assert_eq!(
+        observed["runner"][0]["generation"],
+        before["runner"][0]["generation"]
+    );
+    assert_eq!(
+        observed["runner"][0]["objective_sequence"],
+        before["runner"][0]["objective_sequence"]
+    );
+    assert!(!observed["runner"][0]["movement_progress"]
+        .as_str()
+        .unwrap()
+        .contains("none"));
 }
 
 fn runner(node: &Standalone, guid: &str) -> BTreeMap<String, String> {
