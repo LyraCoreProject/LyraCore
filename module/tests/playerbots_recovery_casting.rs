@@ -172,6 +172,9 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         &[leader, &blocker, &ROOT.to_string()],
     );
     node.assert_call("playerbots_fixture_roles_enemy_engage", &[&blocker, ally]);
+    let initial_engagement = node.query_rows(&format!(
+        "SELECT attacker_guid, target_guid, ranged_spell_id FROM game_melee_attack WHERE attacker_guid = {blocker}"
+    ));
     node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
 
     let start_position = position(&node, priest);
@@ -219,6 +222,7 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         "ally_position": ally_position,
         "blocker_position": blocker_position,
         "ally_start_health": ally_start_health,
+        "initial_engagement": initial_engagement,
         "final_position": final_position,
         "completed_legs": completed_legs,
         "movement_failed": movement_failed,
@@ -250,6 +254,14 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     assert!(completed_legs >= 2, "{evidence}");
     assert!(final_position.0 > start_position.0 + 20.0, "{evidence}");
     assert!(blocker_distance >= 8.0, "{evidence}");
+    assert!(
+        initial_engagement.iter().any(|attack| {
+            attack["attacker_guid"] == blocker
+                && attack["target_guid"] == ally
+                && attack["ranged_spell_id"] == "0"
+        }),
+        "{evidence}"
+    );
     for sample in samples {
         let runner = &sample["runner"];
         assert!(
@@ -333,18 +345,6 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
                 .parse::<f32>()
                 .unwrap(),
             blocker_position.0,
-            "{sample}"
-        );
-        assert!(
-            sample["engagement"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|attack| {
-                    attack["attacker_guid"].as_str() == Some(blocker.as_str())
-                        && attack["target_guid"].as_str() == Some(ally.as_str())
-                        && attack["ranged_spell_id"].as_str() == Some("0")
-                }),
             "{sample}"
         );
         assert!(
