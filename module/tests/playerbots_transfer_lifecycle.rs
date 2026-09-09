@@ -4,7 +4,7 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use support::{poll_until, Standalone};
 
 const HEAL: u32 = 5_090_100;
@@ -42,12 +42,20 @@ fn digest_files(path: &Path, digest: &mut blake3::Hasher) {
 }
 
 fn capture(node: &Standalone, guid: &str, case: &str, wasm: &[u8]) -> serde_json::Value {
+    let captured_micros = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros(),
+    )
+    .unwrap();
     let core = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let package = core.join("packages/playerbots");
     let mut content = blake3::Hasher::new();
     digest_files(&package, &mut content);
     let evidence = serde_json::json!({
         "case": case,
+        "captured_micros": captured_micros,
         "tested_core": git(core, &["rev-parse", "HEAD"]),
         "tested_collection": git(&package, &["rev-parse", "HEAD"]),
         "core_dirty": !git(core, &["status", "--porcelain"]).is_empty(),
@@ -66,10 +74,154 @@ fn capture(node: &Standalone, guid: &str, case: &str, wasm: &[u8]) -> serde_json
         "actions": node.query_rows(&format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid}")),
         "splines": node.query_rows(&format!("SELECT * FROM game_creature_spline WHERE guid = {guid}")),
         "movement_schedule": node.query_rows("SELECT * FROM game_creature_move_schedule"),
+        "provisioning": node.query_rows(&format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}")),
+        "character": node.query_rows(&format!("SELECT level, xp, money FROM game_character WHERE guid = {guid}")),
+        "items": sorted(node, &format!("SELECT guid, entry, stack_count FROM game_item_instance WHERE owner_guid = {guid}")),
+        "skills": sorted(node, &format!("SELECT skill_line, current, max_rank FROM game_player_skill WHERE character_guid = {guid}")),
+        "spells": sorted(node, &format!("SELECT spell_id FROM game_player_spell WHERE character_guid = {guid}")),
+        "talents": sorted(node, &format!("SELECT talent_id, rank FROM game_character_talent WHERE character_guid = {guid}")),
     });
     let path = support::log_dir().join(format!("{}-{case}.json", node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
     evidence
+}
+
+fn sorted(node: &Standalone, query: &str) -> Vec<BTreeMap<String, String>> {
+    let mut rows = node.query_rows(query);
+    rows.sort();
+    rows
+}
+
+fn item_count(node: &Standalone, guid: &str, entry: u32) -> u32 {
+    node.query_rows(&format!(
+        "SELECT stack_count FROM game_item_instance WHERE owner_guid = {guid} AND entry = {entry}"
+    ))
+    .iter()
+    .map(|row| row["stack_count"].parse::<u32>().unwrap())
+    .sum()
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_process_restart_resumes_provisioning_without_duplicate_grants() {
+    let mut node = Standalone::start_persistent("playerbots-transfer-provision-restart");
+    node.publish_module();
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    node.assert_call("playerbots_spawn_role", &["1", "1200", "1200", "50", "0"]);
+    let guid = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
+        ["character_guid"]
+        .clone();
+    node.assert_call("debug_set_level", &[&guid, "20"]);
+    node.assert_call("playerbots_fixture_provision_catalog", &[]);
+    node.assert_call("playerbots_fixture_provision_complete_profile", &[&guid]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    assert_eq!(item_count(&node, &guid, 4496), 0);
+    for _ in 0..32 {
+        node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+        if item_count(&node, &guid, 4496) == 4 {
+            break;
+        }
+    }
+    let before = capture(
+        &node,
+        &guid,
+        "before-provision-restart",
+        support::module_bytes(),
+    );
+    assert_eq!(item_count(&node, &guid, 4496), 4, "{before}");
+    let cursor = before["provisioning"][0]["action_cursor"]
+        .as_str()
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    assert!(cursor > 0);
+    let bags: Vec<_> = before["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["entry"] == "4496")
+        .cloned()
+        .collect();
+    node.restart_persistent();
+    let after = capture(
+        &node,
+        &guid,
+        "after-provision-restart",
+        support::module_bytes(),
+    );
+    assert_ne!(before["process_id"], after["process_id"]);
+    for field in [
+        "program",
+        "provisioning",
+        "character",
+        "items",
+        "skills",
+        "spells",
+        "talents",
+    ] {
+        assert_eq!(before[field], after[field], "{field}");
+    }
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+    let advanced = capture(
+        &node,
+        &guid,
+        "first-resumed-provision-step",
+        support::module_bytes(),
+    );
+    assert!(
+        advanced["provisioning"][0]["action_cursor"]
+            .as_str()
+            .unwrap()
+            .parse::<u16>()
+            .unwrap()
+            > cursor
+    );
+    for _ in 0..32 {
+        let state = node.query_rows(&format!(
+            "SELECT cause FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
+        ));
+        if state[0]["cause"].to_ascii_lowercase().contains("periodic") {
+            break;
+        }
+        node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+    }
+    let completed = capture(
+        &node,
+        &guid,
+        "completed-resumed-provisioning",
+        support::module_bytes(),
+    );
+    assert!(completed["provisioning"][0]["cause"]
+        .as_str()
+        .unwrap()
+        .to_ascii_lowercase()
+        .contains("periodic"));
+    assert_eq!(completed["provisioning"][0]["action_cursor"], "0");
+    for field in ["character", "skills", "spells", "talents"] {
+        assert_eq!(
+            before[field], completed[field],
+            "completed grant changed: {field}"
+        );
+    }
+    let after_bags: Vec<_> = completed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["entry"] == "4496")
+        .cloned()
+        .collect();
+    assert_eq!(after_bags, bags);
+    for (entry, count) in [
+        (4496, 4),
+        (117, 10),
+        (118, 5),
+        (1251, 5),
+        (2512, 200),
+        (6948, 1),
+    ] {
+        assert_eq!(item_count(&node, &guid, entry), count, "item {entry}");
+    }
 }
 
 #[test]
@@ -94,6 +246,7 @@ fn playerbots_process_restart_resumes_one_owned_movement_leg() {
         support::module_bytes(),
     );
     assert_eq!(before["splines"].as_array().unwrap().len(), 1, "{before}");
+    assert_eq!(before["runner"][0]["movement_progress"], "null");
     assert!(before["runner"][0]["foreground"]
         .as_str()
         .unwrap()
@@ -163,10 +316,38 @@ fn playerbots_process_restart_resumes_one_owned_movement_leg() {
         observed["runner"][0]["objective_sequence"],
         before["runner"][0]["objective_sequence"]
     );
-    assert!(!observed["runner"][0]["movement_progress"]
-        .as_str()
+    let progress = observed["runner"][0]["movement_progress"].as_str().unwrap();
+    assert!(
+        (sats_number::<f32>(progress, "x") - dx).abs() < 0.05,
+        "{observed}"
+    );
+    assert!(
+        (sats_number::<f32>(progress, "y") - dy).abs() < 0.05,
+        "{observed}"
+    );
+    assert!(
+        sats_number::<u64>(progress, "observed_micros")
+            >= arrival["captured_micros"].as_u64().unwrap(),
+        "{observed}"
+    );
+}
+
+fn sats_number<T: std::str::FromStr>(value: &str, field: &str) -> T
+where
+    T::Err: std::fmt::Debug,
+{
+    let key = format!("{field} = ");
+    assert_eq!(value.matches(&key).count(), 1, "{value}");
+    value
+        .split_once(&key)
         .unwrap()
-        .contains("none"));
+        .1
+        .split([',', ')'])
+        .next()
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
 }
 
 fn runner(node: &Standalone, guid: &str) -> BTreeMap<String, String> {
