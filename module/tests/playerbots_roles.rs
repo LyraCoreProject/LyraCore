@@ -397,31 +397,50 @@ fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
         ))
         .is_empty());
 
+    node.assert_call(
+        "playerbots_fixture_roles_cancel_renew",
+        &[&fixture.leader],
+    );
     node.assert_call("playerbots_fixture_roles_priest_mana", &[&fixture.priest]);
     node.assert_call(
         "playerbots_fixture_companion_health",
         &[&fixture.leader, "25"],
     );
+    let before_direct = entity(node, &fixture.leader)["health"]
+        .parse::<u32>()
+        .unwrap();
+    let mut pending = None;
     let direct_started = poll_until(POLL_TIMEOUT, || {
         pass(node, &fixture.priest);
-        !node
+        pending = node
             .query_rows(&format!(
                 "SELECT * FROM game_pending_cast WHERE caster_guid = {} AND spell_id = 2050 AND target_guid = {}",
                 fixture.priest, fixture.leader
             ))
-            .is_empty()
+            .into_iter()
+            .next();
+        pending.is_some()
     });
+    let power_at_start = entity(node, &fixture.priest)["power"].clone();
     evidence(&fixture, "lesser-heal-started");
     assert!(direct_started);
-    assert_eq!(entity(node, &fixture.priest)["power"], "70");
+    let pending = pending.expect("Lesser Heal pending cast missing after admission");
+    assert_eq!(pending["caster_guid"], fixture.priest);
+    assert_eq!(pending["spell_id"], "2050");
+    assert_eq!(pending["target_guid"], fixture.leader);
+    assert_eq!(power_at_start, "100");
+    let scheduled_id = pending["scheduled_id"].clone();
     let direct_finished = poll_until(POLL_TIMEOUT, || {
         let state = runner(node, &fixture.priest);
-        state["cast_progress"].contains("spell = 2050")
+        state["cast_progress"].contains(&format!("scheduled_id = {scheduled_id}"))
+            && state["cast_progress"].contains("spell = 2050")
             && state["cast_progress"].contains(&format!("target = {}", fixture.leader))
+            && state["last_outcome"].contains("cast_finished = (resolved")
+            && entity(node, &fixture.priest)["power"] == "70"
             && entity(node, &fixture.leader)["health"]
                 .parse::<u32>()
                 .unwrap()
-                > 30
+                > before_direct
     });
     evidence(&fixture, "lesser-heal-finished");
     assert!(direct_finished);
