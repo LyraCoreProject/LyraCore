@@ -460,19 +460,23 @@ pub(super) fn run_transfer_injected_for_intent(
     //    best-effort: the character is already whole on the destination, so a failure here is a
     //    performance wart (an idle population on the source until its 30-minute empty reap), never
     //    a correctness one — and failing the login over it would be strictly worse for the player.
-    if escrow.dest_instance_id != 0 {
-        if let Err(e) = src.evict_instance_population(escrow.dest_instance_id) {
-            log::warn!(
-                "transfer {}: could not evict instance {} population from {} ({e:#}) — the run is \
-                 fine, but that shard keeps ticking a dungeon nobody is in until the reaper takes it",
-                escrow.transfer_id,
-                escrow.dest_instance_id,
-                src.shard_name()
-            );
-        }
-    }
+    evict_finished_instance(src, escrow.transfer_id, escrow.dest_instance_id);
     abort_point(abort_after, "evict_instance_population", escrow.transfer_id);
     Ok(())
+}
+
+fn evict_finished_instance(source: &dyn WorldStore, transfer_id: u64, instance_id: u64) {
+    if instance_id == 0 {
+        return;
+    }
+    if let Err(error) = source.evict_instance_population(instance_id) {
+        log::warn!(
+            "transfer {transfer_id}: could not evict instance {instance_id} population from {} \
+             ({error:#}); the run is complete, but that shard keeps ticking an empty dungeon until \
+             the reaper takes it",
+            source.shard_name()
+        );
+    }
 }
 
 /// Drive one Shard crossing for a character with **no session** — a playerbot following its party
@@ -574,6 +578,8 @@ pub(super) fn run_bot_transfer_intent_injected(
         {
             destination.release_bot_transfer_arrival(transfer_id, intent)?;
             abort_point(abort_after, "release_transfer", transfer_id);
+            evict_finished_instance(holder, transfer_id, intent.destination_instance);
+            abort_point(abort_after, "evict_instance_population", transfer_id);
         } else if holder.character_destination(intent.bot_guid).is_none() {
             return Err(anyhow!(
                 "bot transfer: ready intent {} cannot resolve its destination map {} instance {}",
