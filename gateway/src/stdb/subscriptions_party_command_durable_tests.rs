@@ -6,6 +6,7 @@ use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
 use crate::stdb::bindings::GamePartyCommandIntentTableAccess;
 use crate::world::party::{self, CompanionCommandOutcome};
+use crate::world::WorldStore;
 use spacetimedb_sdk::Table;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -565,13 +566,48 @@ fn sql_string(cell: &str) -> String {
         .unwrap_or_else(|error| panic!("malformed SQL string cell {cell:?}: {error}"))
 }
 
-fn terminal_messages(cli: &PrivateCli, server: &str, source: &str) -> usize {
-    cli.rows(
+fn terminal_messages_for(
+    cli: &PrivateCli,
+    server: &str,
+    source: &str,
+    intent_id: u64,
+) -> Vec<String> {
+    cli.json_rows(
         server,
         source,
-        "SELECT id FROM game_addon_message WHERE cmd = 'playerbots.order.result'",
+        "SELECT payload FROM game_addon_message WHERE cmd = 'playerbots.order.result'",
     )
-    .len()
+    .into_iter()
+    .filter_map(|row| {
+        row.first()
+            .and_then(serde_json::Value::as_str)
+            .filter(|payload| payload.starts_with(&format!("{intent_id}|")))
+            .map(str::to_string)
+    })
+    .collect()
+}
+
+fn transfer_destination_observation(
+    topology: &CommandTopology,
+    target: &dyn WorldStore,
+    character_guid: u64,
+    map_id: u32,
+    instance_id: u64,
+) -> (bool, BTreeMap<String, String>) {
+    let visible = poll_until(POLL_TIMEOUT, || {
+        target
+            .character_destination(character_guid)
+            .is_some_and(|plan| (plan.dest_map_id, plan.dest_instance_id) == (map_id, instance_id))
+    });
+    let committed = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        &format!(
+            "SELECT map_id, pending_instance_id FROM game_character WHERE guid = {character_guid}"
+        ),
+    );
+    (visible, committed)
 }
 
 fn git(path: &std::path::Path, args: &[&str]) -> String {
@@ -744,21 +780,27 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     );
     let claimed_intent = cached_intent(&source, claimed);
     source.claim_party_command_intent(claimed, 101).unwrap();
-    evidence(&topology, "claim-without-ack");
-    assert_eq!(
-        terminal_messages(&topology.cli, topology.node.server(), topology.source()),
-        0
+    let claimed_replies = terminal_messages_for(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        claimed,
     );
+    evidence(&topology, "claim-without-ack");
+    assert!(claimed_replies.is_empty());
     std::thread::sleep(std::time::Duration::from_millis(2_100));
     assert_eq!(
         party::run_party_command_intent(&source, &claimed_intent, 102).unwrap(),
         CompanionCommandOutcome::Applied
     );
-    evidence(&topology, "claim-lease-recovered");
-    assert_eq!(
-        terminal_messages(&topology.cli, topology.node.server(), topology.source()),
-        1
+    let claimed_replies = terminal_messages_for(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        claimed,
     );
+    evidence(&topology, "claim-lease-recovered");
+    assert_eq!(claimed_replies, vec![format!("{claimed}|Applied")]);
 
     let after_claim = row(
         &topology.cli,
@@ -815,11 +857,87 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
             topology.target_party.warrior
         ),
     );
-    assert_ne!(after_target["revision"], after_claim["revision"]);
-    assert_eq!(
-        terminal_messages(&topology.cli, topology.node.server(), topology.source()),
-        1
+    let target_replies = terminal_messages_for(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        target_applied,
     );
+    evidence(&topology, "target-receipt-without-source-ack");
+    assert_ne!(after_target["revision"], after_claim["revision"]);
+    assert!(target_replies.is_empty());
+
+    let mut rollover_outcomes = Vec::new();
+    for sequence in 0..9 {
+        let mut rollover = admitted.clone();
+        rollover.intent_id = target_applied + 1_000 + sequence;
+        rollover.issuer_sequence = admitted.issuer_sequence + 1 + sequence;
+        rollover.kind = if sequence % 2 == 0 { 0 } else { 1 };
+        rollover_outcomes.push(target.apply_admitted_party_command(&rollover));
+    }
+    let after_rollover = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        &format!(
+            "SELECT revision, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            topology.target_party.warrior
+        ),
+    );
+    evidence(&topology, "target-history-rolled-before-transfer");
+    assert!(
+        rollover_outcomes
+            .iter()
+            .all(|outcome| matches!(outcome, Ok(CompanionCommandOutcome::Applied))),
+        "history rollover outcomes: {rollover_outcomes:?}"
+    );
+    assert_ne!(after_rollover, after_target);
+    assert!(!after_rollover["history"].contains(&format!("intent_id = {target_applied},")));
+
+    install_authority(
+        &topology.cli,
+        topology.node.server(),
+        &topology.realm,
+        &topology.target,
+        &topology.target_party,
+        topology.source_two_party.leader,
+    );
+    let (_runtime_two, source_two) =
+        topology.coordinator(&topology.source_two, "party-command-source-two");
+    let same_numeric_id = queue(
+        &topology.cli,
+        topology.node.server(),
+        &topology.source_two,
+        &topology.actor_two,
+        &format!("follow|{}", topology.target_party.warrior),
+    );
+    let second_source_intent = cached_intent(&source_two, same_numeric_id);
+    let second_source_outcome =
+        party::run_party_command_intent(&source_two, &second_source_intent, 301);
+    let before_delayed_retry = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        &format!(
+            "SELECT revision, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            topology.target_party.warrior
+        ),
+    );
+    evidence(&topology, "distinct-source-receipt-before-transfer");
+    assert_eq!(
+        same_numeric_id, claimed,
+        "fresh source databases must allocate the same numeric intent id for this collision case"
+    );
+    assert_ne!(
+        second_source_intent.source_identity,
+        claimed_intent.source_identity
+    );
+    assert_eq!(
+        second_source_outcome.unwrap(),
+        CompanionCommandOutcome::Applied
+    );
+    assert_ne!(before_delayed_retry, after_rollover);
+
     topology.cli.call(
         topology.node.server(),
         &topology.target,
@@ -835,6 +953,21 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
             r#""party-command-receipt""#,
         ],
     );
+    let (destination_visible, committed_destination) = transfer_destination_observation(
+        &topology,
+        &target,
+        topology.target_party.warrior,
+        destination_map,
+        0,
+    );
+    evidence(&topology, "transfer-destination-visible-before-escrow");
+    assert!(destination_visible);
+    assert_eq!(committed_destination["map_id"], destination_map.to_string());
+    assert_eq!(committed_destination["pending_instance_id"], "0");
+    let transfer_plan = target
+        .character_destination(topology.target_party.warrior)
+        .expect("Gateway must retain the observed transfer destination");
+    target.begin_transfer(&transfer_plan).unwrap();
     let mut delayed_admitted = admitted.clone();
     delayed_admitted.intent_id = target_applied.saturating_add(1_000_000);
     let in_transit = target
@@ -926,42 +1059,15 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
             topology.target_party.warrior
         ),
     );
-    assert_eq!(after_transfer_retry, after_target);
-    topology.cli.call(
-        topology.node.server(),
-        topology.source(),
-        "playerbots_fixture_orders_partition",
-        &[
-            &topology.source_one_party.leader.to_string(),
-            &destination_map.to_string(),
-            "0",
-        ],
-    );
-    for sequence in 0..9 {
-        let operation = if sequence % 2 == 0 { "follow" } else { "stay" };
-        let later_id = queue(
-            &topology.cli,
-            topology.node.server(),
-            topology.source(),
-            &topology.actor_one,
-            &format!("{operation}|{}", topology.target_party.warrior),
-        );
-        let later = cached_intent(&source, later_id);
-        let outcome = party::run_party_command_intent(&source, &later, 220 + sequence).unwrap();
-        assert!(matches!(
-            outcome,
-            CompanionCommandOutcome::Applied | CompanionCommandOutcome::Unchanged
-        ));
-    }
-    let before_delayed_retry = row(
+    let target_replies = terminal_messages_for(
         &topology.cli,
         topology.node.server(),
         topology.source(),
-        &format!(
-            "SELECT revision, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
-            topology.target_party.warrior
-        ),
+        target_applied,
     );
+    evidence(&topology, "target-receipt-source-finalized");
+    assert_eq!(after_transfer_retry, before_delayed_retry);
+    assert_eq!(target_replies, vec![format!("{target_applied}|Applied")]);
     evidence(&topology, "target-receipt-after-history-rollover");
     assert_eq!(
         source.apply_admitted_party_command(&admitted).unwrap(),
@@ -981,48 +1087,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
         recovered, before_delayed_retry,
         "receipt retry reapplied the order"
     );
-    assert_eq!(
-        terminal_messages(&topology.cli, topology.node.server(), topology.source()),
-        11
-    );
 
-    install_authority(
-        &topology.cli,
-        topology.node.server(),
-        &topology.realm,
-        topology.source(),
-        &topology.target_party,
-        topology.source_two_party.leader,
-    );
-    let (_runtime_two, source_two) =
-        topology.coordinator(&topology.source_two, "party-command-source-two");
-    topology.cli.call(
-        topology.node.server(),
-        &topology.source_two,
-        "playerbots_fixture_orders_partition",
-        &[
-            &topology.source_two_party.leader.to_string(),
-            &destination_map.to_string(),
-            "0",
-        ],
-    );
-    let same_numeric_id = queue(
-        &topology.cli,
-        topology.node.server(),
-        &topology.source_two,
-        &topology.actor_two,
-        &format!("follow|{}", topology.target_party.warrior),
-    );
-    assert_eq!(same_numeric_id, claimed);
-    let second_source_intent = cached_intent(&source_two, same_numeric_id);
-    assert_ne!(
-        second_source_intent.source_identity,
-        claimed_intent.source_identity
-    );
-    assert_eq!(
-        party::run_party_command_intent(&source_two, &second_source_intent, 301).unwrap(),
-        CompanionCommandOutcome::Applied
-    );
     let receipts = topology.cli.rows(
         topology.node.server(),
         topology.source(),
@@ -1308,6 +1373,17 @@ fn companion_command_receipt_stays_with_a_same_database_transfer() {
             r#""party-command-same-database""#,
         ],
     );
+    let (destination_visible, committed_destination) = transfer_destination_observation(
+        &topology,
+        &target,
+        topology.target_party.warrior,
+        destination_map,
+        0,
+    );
+    evidence(&topology, "same-database-transfer-destination-visible");
+    assert!(destination_visible);
+    assert_eq!(committed_destination["map_id"], destination_map.to_string());
+    assert_eq!(committed_destination["pending_instance_id"], "0");
     crate::world::transfer::run_bot_transfer(
         &target,
         topology.target_party.warrior,
@@ -1421,10 +1497,6 @@ fn companion_command_lost_receipt_after_guarantee_reports_unknown_without_reappl
             "{intent_id}|OutcomeUnknown"
         ))]]
     );
-    assert_eq!(
-        terminal_messages(&topology.cli, topology.node.server(), topology.source()),
-        1
-    );
 }
 
 #[test]
@@ -1515,8 +1587,6 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
             topology.target_party.warrior
         ),
     );
-    let messages_before =
-        terminal_messages(&topology.cli, topology.node.server(), topology.source());
     let waiting_id = queue(
         &topology.cli,
         topology.node.server(),
@@ -1544,14 +1614,17 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
             topology.target_party.warrior
         ),
     );
+    let waiting_replies = terminal_messages_for(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        waiting_id,
+    );
     evidence(&topology, "capacity-wait-no-ack");
     assert_eq!(pending["pending"], "true");
     assert!(pending["state"].to_ascii_lowercase().contains("pending"));
     assert_eq!(after_wait, before);
-    assert_eq!(
-        terminal_messages(&topology.cli, topology.node.server(), topology.source()),
-        messages_before
-    );
+    assert!(waiting_replies.is_empty());
 
     let mut blocked = Vec::new();
     for _ in 0..16 {
@@ -1596,6 +1669,26 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
             == "true"
     }));
 
+    for (offset, intent_id) in blocked.iter().enumerate() {
+        let claim_token = 4_000 + offset as u64;
+        source
+            .claim_party_command_intent(*intent_id, claim_token)
+            .unwrap();
+        source
+            .defer_party_command_intent(*intent_id, claim_token)
+            .unwrap();
+    }
+    let retry_head = row(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &format!(
+            "SELECT head_intent_id FROM game_party_command_dispatch_lane WHERE lane = {warrior_lane}"
+        ),
+    );
+    evidence(&topology, "capacity-wait-rotated-back-to-head");
+    assert_eq!(retry_head["head_intent_id"], waiting_id.to_string());
+
     topology.cli.call(
         topology.node.server(),
         &topology.target,
@@ -1606,11 +1699,14 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
         party::run_party_command_intent(&source, &waiting, 2_001).unwrap(),
         CompanionCommandOutcome::Unchanged
     );
-    evidence(&topology, "capacity-retry-applied");
-    assert_eq!(
-        terminal_messages(&topology.cli, topology.node.server(), topology.source()),
-        messages_before + 1
+    let waiting_replies = terminal_messages_for(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        waiting_id,
     );
+    evidence(&topology, "capacity-retry-applied");
+    assert_eq!(waiting_replies, vec![format!("{waiting_id}|Unchanged")]);
 
     let expiry_id = blocked[0];
     let expiry = cached_intent(&source, expiry_id);
