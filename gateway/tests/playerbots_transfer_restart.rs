@@ -673,7 +673,18 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
     let mut expected_guids = vec![bot_guid, leader_guid];
     expected_guids.sort_unstable();
     assert_eq!(member_guids, expected_guids, "{evidence}");
-    for partition in rows(evidence, &["state", "realm", "partitions"]) {
+    let partitions = rows(evidence, &["state", "realm", "partitions"]);
+    let mut partition_guids: Vec<_> = partitions
+        .iter()
+        .map(|partition| {
+            text_field(partition, "character_guid")
+                .parse::<u64>()
+                .unwrap()
+        })
+        .collect();
+    partition_guids.sort_unstable();
+    assert_eq!(partition_guids, expected_guids, "{evidence}");
+    for partition in partitions {
         let guid = text_field(partition, "character_guid")
             .parse::<u64>()
             .unwrap();
@@ -695,13 +706,6 @@ fn assert_gameplay_fences(evidence: &serde_json::Value, position: usize) {
                 "destination gameplay started before release: {evidence}"
             );
         }
-    }
-    if position >= 10 {
-        assert_eq!(
-            rows(evidence, &["state", "destination", "live"]).len(),
-            1,
-            "release did not materialize the destination body: {evidence}"
-        );
     }
     if position >= 2 {
         for table in ["runner", "actions", "movement", "pending_cast", "melee"] {
@@ -782,6 +786,38 @@ fn assert_durable_phase(evidence: &serde_json::Value, step: &str) {
     }
 }
 
+fn assert_postrelease_body(topology: &TransferTopology, bot: &TransferredBot, step: &str) {
+    let observed = support::poll_until(support::POLL_TIMEOUT, || {
+        topology
+            .query(
+                &topology.destination_db,
+                &format!(
+                    "SELECT guid FROM game_world_entity WHERE guid = {}",
+                    bot.guid
+                ),
+            )
+            .len()
+            == 1
+    });
+    let evidence = topology.save(
+        bot,
+        &format!("{step}-postrelease-body"),
+        serde_json::json!({ "body_observed": observed }),
+    );
+    assert!(observed, "destination body was not rebuilt: {evidence}");
+    assert_eq!(
+        rows(&evidence, &["state", "destination", "live"]).len(),
+        1,
+        "{evidence}"
+    );
+    for table in ["runner", "actions", "movement", "pending_cast", "melee"] {
+        assert!(
+            rows(&evidence, &["state", "source", table]).is_empty(),
+            "source-local work returned after release: {evidence}"
+        );
+    }
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, the playerbots Package, and the Gateway binary"]
 fn playerbots_gateway_process_restart_resumes_every_committed_transfer_phase() {
@@ -798,6 +834,14 @@ fn playerbots_gateway_process_restart_resumes_every_committed_transfer_phase() {
         );
         assert_abort(&evidence, step);
         assert_durable_phase(&evidence, step);
+        if ABORT_STEPS
+            .iter()
+            .position(|candidate| *candidate == step)
+            .unwrap()
+            >= 10
+        {
+            assert_postrelease_body(&topology, &bot, step);
+        }
     }
 
     let mut gateway = topology.gateway(None, "completed");
