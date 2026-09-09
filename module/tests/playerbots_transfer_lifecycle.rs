@@ -465,6 +465,7 @@ fn stage_completed_quest(node: &Standalone, guid: &str) {
     node.assert_call("import_nav_chunks", &[&rows.join(";")]);
     node.assert_call("debug_set_nav_enabled", &["true"]);
     node.assert_call("playerbots_fixture_provision_catalog", &[]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[guid, "64"]);
     node.assert_call(
         "playerbots_quest_loop_fixture_stage_simple_gameobject",
@@ -518,7 +519,7 @@ fn playerbots_module_replacement_does_not_repeat_a_completed_quest_reward() {
     );
     assert_eq!(before["quests"].as_array().unwrap().len(), 1);
     assert_eq!(before["quests"][0]["quest_entry"], "50970");
-    assert_eq!(before["quests"][0]["counts"], "[1]");
+    assert_eq!(before["quests"][0]["counts"], "1");
     assert_eq!(before["quests"][0]["rewarded"], "true");
     assert_eq!(before["turnins"].as_array().unwrap().len(), 1);
     assert_eq!(before["turnins"][0]["turnin_count"], "1");
@@ -552,7 +553,7 @@ fn playerbots_module_replacement_does_not_repeat_a_completed_quest_reward() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|row| row["quest_entry"] == "50970" && row["kind"] == "turnInQuest")
+        .filter(|row| row["quest_entry"] == "50970" && row["kind"] == "(turnInQuest = ())")
         .cloned()
         .collect();
     assert_eq!(completed_actions.len(), 1, "{before}");
@@ -607,7 +608,7 @@ fn playerbots_module_replacement_does_not_repeat_a_completed_quest_reward() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|row| row["quest_entry"] == "50970" && row["kind"] == "turnInQuest")
+        .filter(|row| row["quest_entry"] == "50970" && row["kind"] == "(turnInQuest = ())")
         .cloned()
         .collect();
     assert_eq!(resumed_actions, completed_actions);
