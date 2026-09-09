@@ -330,7 +330,8 @@ fn enter_transferred_actor(
         shard.shard_name(),
         &format!("SELECT username FROM game_account WHERE id = {account_id}"),
     );
-    let username = account["username"].clone();
+    let raw_username = account["username"].clone();
+    let username = sql_string(&raw_username);
     let realm = shard.realm_core().unwrap();
     realm.provision_account(&username, &[], &[]).unwrap();
     let mut realm_account = None;
@@ -371,21 +372,40 @@ fn enter_transferred_actor(
         shard.shard_name(),
         &format!("SELECT id, username FROM game_account WHERE id = {account_id}"),
     );
-    assert_eq!(realm_stored["username"], username);
-    assert_eq!(shard_stored["username"], username);
+    let realm_cached = realm
+        .account_by_username(&username)
+        .unwrap()
+        .map(|account| account.id);
+    let shard_cached = shard
+        .account_by_username(&username)
+        .unwrap()
+        .map(|account| account.id);
+    let session_record = serde_json::json!({
+        "raw_shard_username": raw_username,
+        "decoded_username": username,
+        "realm_database": realm.shard_name(),
+        "shard_database": shard.shard_name(),
+        "realm_sql_account": realm_stored,
+        "shard_sql_account": shard_stored,
+        "realm_cached_account_id": realm_cached,
+        "shard_cached_account_id": shard_cached,
+        "realm_session_visible": realm.session_key(realm_account_id).unwrap().is_some(),
+        "shard_session_visible": shard.session_key(account_id).unwrap().is_some(),
+    });
+    let path = crate::durable_test_support::log_dir().join(format!(
+        "{}-transferred-issuer-session.json",
+        topology.node.shard_name()
+    ));
+    std::fs::write(path, serde_json::to_vec_pretty(&session_record).unwrap()).unwrap();
+    assert_eq!(sql_string(&realm_stored["username"]), username);
+    assert_eq!(sql_string(&shard_stored["username"]), username);
     assert!(
         session_visible,
         "session transaction was not visible in both Coordinator caches; Realm SQL: \
          {realm_stored:?}; Shard SQL: {shard_stored:?}"
     );
-    assert_eq!(
-        realm.account_by_username(&username).unwrap().unwrap().id,
-        realm_account_id
-    );
-    assert_eq!(
-        shard.account_by_username(&username).unwrap().unwrap().id,
-        account_id
-    );
+    assert_eq!(realm_cached, Some(realm_account_id));
+    assert_eq!(shard_cached, Some(account_id));
     topology.cli.call(
         topology.node.server(),
         shard.shard_name(),
@@ -478,6 +498,11 @@ fn row(cli: &PrivateCli, server: &str, database: &str, query: &str) -> BTreeMap<
     let rows = cli.rows(server, database, query);
     assert_eq!(rows.len(), 1, "{query}: {rows:?}");
     rows[0].clone()
+}
+
+fn sql_string(cell: &str) -> String {
+    serde_json::from_str(cell)
+        .unwrap_or_else(|error| panic!("malformed SQL string cell {cell:?}: {error}"))
 }
 
 fn terminal_messages(cli: &PrivateCli, server: &str, source: &str) -> usize {
@@ -1002,12 +1027,13 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
             topology.source_one_party.leader
         ),
     );
+    let source_character_name = sql_string(&source_character["name"]);
     let destination_name_collision = topology.cli.rows(
         topology.node.server(),
         &topology.target,
         &format!(
             "SELECT guid FROM game_character WHERE name = '{}'",
-            source_character["name"]
+            source_character_name
         ),
     );
     let source_range = row(
@@ -1097,6 +1123,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
         &target,
         topology.source_one_party.leader,
     );
+    evidence(&topology, "issuer-transfer-session-visible");
     let newer_id = queue(
         &topology.cli,
         topology.node.server(),

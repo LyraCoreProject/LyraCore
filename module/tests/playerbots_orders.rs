@@ -765,6 +765,12 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         .to_ascii_lowercase()
         .contains("applied"));
     assert_eq!(recovered["revision"], retained_revision);
+    let recovered_approach = runner(node, &fixture.warrior);
+    assert!(recovered_approach["chosen"].contains("move"));
+    assert!(recovered_approach["chosen"].contains(chosen.as_str()));
+    finish_movement(node, &fixture.warrior);
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "assist-target-recovered-melee");
     assert_eq!(
         node.query_rows(&format!(
             "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
