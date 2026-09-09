@@ -115,6 +115,7 @@ pub struct PartyCommandIntent {
     pub id: u64,
     pub source_identity: Identity,
     pub issuer_guid: u64,
+    pub reply_identity: Identity,
     pub issuer_sequence: u64,
     pub command: ParsedClientCommand,
     pub created_micros: i64,
@@ -230,9 +231,13 @@ pub(crate) fn send(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload
     let Some(c) = ctx.db.game_character().guid().find(character_guid) else {
         return;
     };
+    send_to_identity(ctx, c.owner_identity, cmd, payload);
+}
+
+fn send_to_identity(ctx: &ReducerContext, recipient_identity: Identity, cmd: &str, payload: &str) {
     ctx.db.game_addon_message().insert(AddonMessage {
         id: 0,
-        recipient_identity: c.owner_identity,
+        recipient_identity,
         cmd: cmd.to_string(),
         payload: payload.to_string(),
         created_at: ctx.timestamp,
@@ -260,6 +265,15 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
             match crate::GAME_CLIENT_COMMAND.and_then(|handler| (handler.parse)(other, payload)) {
                 Some(Ok(command)) => {
                     let now = ctx.timestamp.to_micros_since_unix_epoch();
+                    let Some(reply_identity) = ctx
+                        .db
+                        .game_character()
+                        .guid()
+                        .find(character_guid)
+                        .map(|character| character.owner_identity)
+                    else {
+                        return;
+                    };
                     let issuers = ctx.db.game_party_command_issuer();
                     let current_issuer = issuers.character_guid().find(character_guid);
                     let issuer_sequence = current_issuer
@@ -284,6 +298,7 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
                             id: 0,
                             source_identity: ctx.database_identity(),
                             issuer_guid: character_guid,
+                            reply_identity,
                             issuer_sequence,
                             command,
                             created_micros: now,
@@ -485,13 +500,12 @@ pub fn finish_party_command_intent(
     intent.pending = false;
     intent.claim_until_micros = 0;
     intent.result_reap_micros = now.saturating_add(COMMAND_RESULT_WINDOW_MICROS);
-    let issuer_guid = intent.issuer_guid;
     let response_id = intent.id;
     retire_party_command_intent(ctx, &intent)?;
     table.id().update(intent);
-    send(
+    send_to_identity(
         ctx,
-        issuer_guid,
+        intent.reply_identity,
         "playerbots.order.result",
         &format!("{response_id}|{}", outcome.tag()),
     );

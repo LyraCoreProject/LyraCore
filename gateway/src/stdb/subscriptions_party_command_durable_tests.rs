@@ -959,6 +959,16 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     let older_receipt = target
         .confirm_party_command_receipt(older.source_identity, older_id)
         .unwrap();
+    let older_reply = topology
+        .cli
+        .rows(
+            topology.node.server(),
+            topology.source(),
+            "SELECT payload FROM game_addon_message WHERE cmd = 'playerbots.order.result'",
+        )
+        .into_iter()
+        .find(|row| row["payload"].starts_with(&format!("{older_id}|")))
+        .expect("old source result reply missing after issuer Transfer");
     evidence(
         &topology,
         "issuer-transfer-newer-command-fences-older-source",
@@ -966,6 +976,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     assert_eq!(after_older, after_newer);
     assert!(after_older["order"].to_ascii_lowercase().contains("follow"));
     assert_eq!(older_receipt, Some(CompanionCommandOutcome::Superseded));
+    assert!(older_reply["payload"].contains("Superseded"));
 }
 
 #[test]
