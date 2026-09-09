@@ -1226,6 +1226,54 @@ fn a_durable_intent_resumes_from_destination_witnesses_after_source_finish() {
 }
 
 #[test]
+fn a_bot_abort_at_every_transfer_step_recovers_from_durable_witnesses() {
+    for (index, step) in super::transfer::BOT_ABORT_STEPS.iter().enumerate() {
+        let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+        let mut intent = bot_intent();
+        intent.source_locator_revision = 0;
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::transfer::run_bot_transfer_intent_injected(
+                src.as_ref(),
+                &intent,
+                701,
+                Some(*step),
+            )
+        }));
+        assert!(first.is_err(), "bot Transfer did not stop after {step}");
+        assert!(
+            src_db.has(BOT_GUID) || dst_db.has(BOT_GUID),
+            "bot has no durable copy after {step}"
+        );
+        assert!(
+            !(src_db.live(BOT_GUID) && dst_db.live(BOT_GUID)),
+            "bot is live on both Shards after {step}"
+        );
+
+        let mut resumed = intent.clone();
+        resumed.source_locator_revision = 3;
+        resumed.arrival_ready = index
+            >= super::transfer::BOT_ABORT_STEPS
+                .iter()
+                .position(|name| *name == "mark_bot_transfer_arrival_ready")
+                .unwrap();
+        super::transfer::run_bot_transfer_intent_injected(src.as_ref(), &resumed, 702, None)
+            .unwrap_or_else(|error| panic!("bot Transfer recovery after {step} failed: {error:#}"));
+        assert!(
+            !src_db.has(BOT_GUID),
+            "source still holds the bot after {step}"
+        );
+        assert!(
+            dst_db.live(BOT_GUID),
+            "destination did not release after {step}"
+        );
+        assert!(
+            src_db.settled() && dst_db.settled(),
+            "escrow remains after {step}"
+        );
+    }
+}
+
+#[test]
 fn the_source_instance_lease_survives_a_leave_and_rejoin_during_escrow() {
     let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
     lk(&src_db.instance_partitions).insert(7, (36, 77));

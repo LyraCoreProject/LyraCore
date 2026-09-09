@@ -128,6 +128,24 @@ pub const ABORT_STEPS: [&str; 10] = [
     "evict_instance_population",
 ];
 
+/// Bot crossings add source binding and arrival-ready witnesses around the shared Transfer. Keep a
+/// distinct sequence so the established human matrix remains exact while the session-less process
+/// restart caller can stop after every committed phase it owns.
+pub const BOT_ABORT_STEPS: [&str; 12] = [
+    "bind_bot_transfer_locator",
+    "sync_transfer_pending",
+    "begin_transfer",
+    "ensure_instance",
+    "import_character_blob",
+    "confirm_import",
+    "finish_transfer",
+    "publish_shard_index",
+    "sync_transfer_arrival",
+    "mark_bot_transfer_arrival_ready",
+    "release_transfer",
+    "evict_instance_population",
+];
+
 /// Deliberate, injected death — the `kill -9` half of the gateway-kill recovery requirement (a
 /// scripted kill at each transfer step must recover with the character whole on exactly one shard
 /// and the client able to reconnect).
@@ -306,7 +324,9 @@ pub(super) fn run_transfer_injected_for_intent(
     );
 
     let owned_bot_intent = bot_intent
-        .map(|(intent, token)| bind_bot_locator(src, intent, token).map(|intent| (intent, token)))
+        .map(|(intent, token)| {
+            bind_bot_locator(src, intent, token, abort_after).map(|intent| (intent, token))
+        })
         .transpose()?;
     let locator = src.begin_shard_index_transfer(
         plan,
@@ -420,6 +440,11 @@ pub(super) fn run_transfer_injected_for_intent(
             intent.controller_generation,
             claim_token,
         )?;
+        abort_point(
+            abort_after,
+            "mark_bot_transfer_arrival_ready",
+            escrow.transfer_id,
+        );
     }
 
     // 8. RELEASE: the arrival copy's fence drops and the character is live at the destination.
@@ -524,11 +549,31 @@ pub fn run_bot_transfer_intent(
     intent: &BotTransferIntent,
     claim_token: u64,
 ) -> Result<()> {
+    let abort_after = std::env::var("LYRACORE_TRANSFER_ABORT_AFTER").ok();
+    if let Some(step) = abort_after.as_deref() {
+        if !BOT_ABORT_STEPS.contains(&step) {
+            log::error!(
+                "LYRACORE_TRANSFER_ABORT_AFTER={step} names no bot Transfer step; valid steps: \
+                 {BOT_ABORT_STEPS:?}"
+            );
+        }
+    }
+    run_bot_transfer_intent_injected(holder, intent, claim_token, abort_after.as_deref())
+}
+
+pub(super) fn run_bot_transfer_intent_injected(
+    holder: &dyn WorldStore,
+    intent: &BotTransferIntent,
+    claim_token: u64,
+    abort_after: Option<&str>,
+) -> Result<()> {
+    let transfer_id = transfer_id_for(intent.bot_guid);
     if intent.arrival_ready {
         if let Some(destination) =
             holder.shard_for_location(intent.destination_map, intent.destination_instance)
         {
-            destination.release_bot_transfer_arrival(transfer_id_for(intent.bot_guid), intent)?;
+            destination.release_bot_transfer_arrival(transfer_id, intent)?;
+            abort_point(abort_after, "release_transfer", transfer_id);
         } else if holder.character_destination(intent.bot_guid).is_none() {
             return Err(anyhow!(
                 "bot transfer: ready intent {} cannot resolve its destination map {} instance {}",
@@ -559,24 +604,28 @@ pub fn run_bot_transfer_intent(
         let Some(destination) =
             holder.shard_for_location(intent.destination_map, intent.destination_instance)
         else {
-            let (bound, settled) = prepare_bot_locator(holder, &plan, intent, claim_token)?;
+            let (bound, settled) =
+                prepare_bot_locator(holder, &plan, intent, claim_token, abort_after)?;
             if !settled {
                 holder.publish_bot_shard_index(&bound)?;
+                abort_point(abort_after, "publish_shard_index", transfer_id);
             }
             holder.sync_transfer_arrival(intent.bot_guid)?;
+            abort_point(abort_after, "sync_transfer_arrival", transfer_id);
             holder.mark_bot_transfer_arrival_ready(
                 intent.id,
                 intent.bot_guid,
                 intent.controller_generation,
                 claim_token,
             )?;
+            abort_point(abort_after, "mark_bot_transfer_arrival_ready", transfer_id);
             return Ok(());
         };
         return run_transfer_injected_for_intent(
             holder,
             destination.as_ref(),
             &plan,
-            None,
+            abort_after,
             Some((intent, claim_token)),
         );
     }
@@ -617,7 +666,7 @@ pub fn run_bot_transfer_intent(
             intent.destination_instance
         ));
     }
-    if !destination.bot_transfer_arrival_matches(transfer_id_for(intent.bot_guid), intent) {
+    if !destination.bot_transfer_arrival_matches(transfer_id, intent) {
         return Err(anyhow!(
             "bot transfer: destination {} does not hold the exact arrival fence for source {} \
              intent {} generation {}",
@@ -628,14 +677,19 @@ pub fn run_bot_transfer_intent(
         ));
     }
     holder.publish_bot_shard_index(intent)?;
+    abort_point(abort_after, "publish_shard_index", transfer_id);
     destination.sync_transfer_arrival(intent.bot_guid)?;
+    abort_point(abort_after, "sync_transfer_arrival", transfer_id);
     holder.mark_bot_transfer_arrival_ready(
         intent.id,
         intent.bot_guid,
         intent.controller_generation,
         claim_token,
     )?;
-    destination.release_bot_transfer_arrival(transfer_id_for(intent.bot_guid), intent)
+    abort_point(abort_after, "mark_bot_transfer_arrival_ready", transfer_id);
+    destination.release_bot_transfer_arrival(transfer_id, intent)?;
+    abort_point(abort_after, "release_transfer", transfer_id);
+    Ok(())
 }
 
 fn prepare_bot_locator(
@@ -643,11 +697,17 @@ fn prepare_bot_locator(
     plan: &TransferPlan,
     intent: &BotTransferIntent,
     claim_token: u64,
+    abort_after: Option<&str>,
 ) -> Result<(BotTransferIntent, bool)> {
-    let bound = bind_bot_locator(holder, intent, claim_token)?;
+    let bound = bind_bot_locator(holder, intent, claim_token, abort_after)?;
     let locator = holder.begin_shard_index_transfer(plan, Some((&bound, claim_token)))?;
     if locator.transfer_pending {
         holder.sync_transfer_pending(intent.bot_guid)?;
+        abort_point(
+            abort_after,
+            "sync_transfer_pending",
+            transfer_id_for(intent.bot_guid),
+        );
     }
     Ok((bound, !locator.transfer_pending))
 }
@@ -656,6 +716,7 @@ fn bind_bot_locator(
     holder: &dyn WorldStore,
     intent: &BotTransferIntent,
     claim_token: u64,
+    abort_after: Option<&str>,
 ) -> Result<BotTransferIntent> {
     if intent.source_locator_revision != 0 {
         return Ok(intent.clone());
@@ -672,6 +733,11 @@ fn bind_bot_locator(
         .ok_or_else(|| anyhow!("bot Transfer Realm source locator changed"))?
         .revision;
     holder.bind_bot_transfer_locator(intent, source_revision, claim_token)?;
+    abort_point(
+        abort_after,
+        "bind_bot_transfer_locator",
+        transfer_id_for(intent.bot_guid),
+    );
     let mut bound = intent.clone();
     bound.source_locator_revision = source_revision;
     Ok(bound)
