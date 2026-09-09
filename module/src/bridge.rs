@@ -13,7 +13,7 @@
 //! `game_client_command!`. Parsing queues only a pending intent. Gateway certifies Realm-core party
 //! authority before the target World Shard applies gameplay.
 
-use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
+use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::{game_character, game_group, game_group_member};
 
@@ -281,12 +281,14 @@ pub fn finish_party_command_intent(
     intent.pending = false;
     intent.claim_until_micros = 0;
     intent.result_reap_micros = now.saturating_add(COMMAND_RESULT_WINDOW_MICROS);
-    table.id().update(intent.clone());
+    let issuer_guid = intent.issuer_guid;
+    let response_id = intent.id;
+    table.id().update(intent);
     send(
         ctx,
-        intent.issuer_guid,
+        issuer_guid,
         "playerbots.order.result",
-        &format!("{}|{}", intent.id, outcome.tag()),
+        &format!("{response_id}|{}", outcome.tag()),
     );
     Ok(())
 }
