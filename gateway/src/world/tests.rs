@@ -1405,6 +1405,7 @@ impl WorldStore for InMemoryStore {
         source_revision: u64,
         _claim_token: u64,
     ) -> Result<()> {
+        self.rec("bind_bot_transfer_locator");
         let Some(current) = *self.realm_partition.lock().unwrap() else {
             return Ok(());
         };

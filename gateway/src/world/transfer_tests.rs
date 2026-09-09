@@ -1228,7 +1228,7 @@ fn a_durable_intent_resumes_from_destination_witnesses_after_source_finish() {
 #[test]
 fn a_bot_abort_at_every_transfer_step_recovers_from_durable_witnesses() {
     for (index, step) in super::transfer::BOT_ABORT_STEPS.iter().enumerate() {
-        let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+        let (src, src_db, dst_db, calls) = bot_pair(36, 7);
         let mut intent = bot_intent();
         intent.source_locator_revision = 0;
         let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1239,7 +1239,26 @@ fn a_bot_abort_at_every_transfer_step_recovers_from_durable_witnesses() {
                 Some(*step),
             )
         }));
-        assert!(first.is_err(), "bot Transfer did not stop after {step}");
+        let panic = first.expect_err("the injected bot Transfer abort must unwind the test driver");
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(
+            message,
+            Some("LYRACORE_TRANSFER_ABORT_AFTER: injected abort"),
+            "bot Transfer stopped for another reason after {step}"
+        );
+        let committed_call = match *step {
+            "publish_shard_index" => "publish_bot_shard_index",
+            "release_transfer" => "release_bot_transfer_arrival",
+            other => other,
+        };
+        assert_eq!(
+            calls.lock().unwrap().last().map(|(_, call)| call.as_str()),
+            Some(committed_call),
+            "the abort must follow the named committed call for {step}"
+        );
         assert!(
             src_db.has(BOT_GUID) || dst_db.has(BOT_GUID),
             "bot has no durable copy after {step}"
@@ -1250,6 +1269,9 @@ fn a_bot_abort_at_every_transfer_step_recovers_from_durable_witnesses() {
         );
 
         let mut resumed = intent.clone();
+        // A real restarted worker receives these two fields from its retained source intent. This
+        // lower-rung Fake supplies the same durable resume input explicitly; the process caller
+        // must query the row instead.
         resumed.source_locator_revision = 3;
         resumed.arrival_ready = index
             >= super::transfer::BOT_ABORT_STEPS
