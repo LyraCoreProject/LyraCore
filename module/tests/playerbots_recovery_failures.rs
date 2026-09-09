@@ -489,6 +489,20 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
         "{stopped}"
     );
     assert!(
+        stopped["runner"][0]["failures"]
+            .as_str()
+            .unwrap()
+            .contains("questTargetMissing"),
+        "{stopped}"
+    );
+    assert!(
+        stopped["runner"][0]["chosen"]
+            .as_str()
+            .unwrap()
+            .contains("reason = (quest"),
+        "{stopped}"
+    );
+    assert!(
         !stopped["runner"][0]["foreground"]
             .as_str()
             .unwrap()
@@ -502,6 +516,113 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
                 && transition.contains("outcome = (cancelled")
         }),
         "{stopped}"
+    );
+
+    node.assert_call(
+        "playerbots_recovery_fixture_restore_simple_gameobject",
+        &[&guid],
+    );
+    std::thread::sleep(PASS_INTERVAL);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let resumed = serde_json::json!({
+        "retained": node.query_rows(&format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}")),
+        "runner": node.query_rows(&format!("SELECT character_guid, objective_sequence, objective, foreground, chosen, failures, recovery, history FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
+        "quest": quest(&node, &guid, RESPAWN_QUEST),
+        "gameobject": node.query_rows(&format!("SELECT guid, x, y, z, state FROM game_gameobject WHERE guid = {RESPAWNING_GAMEOBJECT}")),
+        "movement": node.query_rows(&format!("SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {guid}")),
+        "actions": actions(&node, &guid),
+    });
+    save(&node, "gameobject-approach-resumed", resumed.clone());
+    assert_eq!(resumed["retained"], started["retained"], "{resumed}");
+    assert_eq!(resumed["quest"], accepted["quest"], "{resumed}");
+    assert_eq!(
+        resumed["runner"][0]["objective_sequence"], started["runner"][0]["objective_sequence"],
+        "{resumed}"
+    );
+    assert_eq!(
+        resumed["gameobject"].as_array().unwrap().len(),
+        1,
+        "{resumed}"
+    );
+    assert!(
+        resumed["runner"][0]["chosen"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("gameObject = {RESPAWNING_GAMEOBJECT}")),
+        "{resumed}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_does_not_retain_a_missing_gameobject_with_a_changed_objective() {
+    let (node, guid) = fixture(
+        "playerbots-recovery-gameobject-capability-changed",
+        "playerbots_quest_loop_fixture_stage_simple_gameobject",
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let accepted = serde_json::json!({
+        "retained": node.query_rows(&format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}")),
+        "runner": runner(&node, &guid),
+        "quest": quest(&node, &guid, RESPAWN_QUEST),
+        "gameobject": node.query_rows(&format!("SELECT guid FROM game_gameobject WHERE guid = {RESPAWNING_GAMEOBJECT}")),
+    });
+    save(&node, "gameobject-capability-accepted", accepted.clone());
+
+    node.assert_call(
+        "playerbots_recovery_fixture_remove_simple_gameobject_and_objective",
+        &[],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let refused = serde_json::json!({
+        "admission": node.query_rows(&format!("SELECT considered_quest, selected_quest, state, missing_capability, detail FROM pkg_playerbots_quest_admission WHERE character_guid = {guid}")),
+        "retained": node.query_rows(&format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}")),
+        "runner": runner(&node, &guid),
+        "quest": quest(&node, &guid, RESPAWN_QUEST),
+        "gameobject": node.query_rows(&format!("SELECT guid FROM game_gameobject WHERE guid = {RESPAWNING_GAMEOBJECT}")),
+        "objective": node.query_rows(&format!("SELECT id FROM game_quest_objective WHERE quest_entry = {RESPAWN_QUEST}")),
+        "actions": actions(&node, &guid),
+    });
+    save(&node, "gameobject-capability-refused", refused.clone());
+    assert_eq!(
+        accepted["retained"].as_array().unwrap().len(),
+        1,
+        "{accepted}"
+    );
+    assert_eq!(accepted["quest"]["counts"], "0", "{accepted}");
+    assert_eq!(refused["quest"], accepted["quest"], "{refused}");
+    assert!(
+        refused["gameobject"].as_array().unwrap().is_empty(),
+        "{refused}"
+    );
+    assert!(
+        refused["objective"].as_array().unwrap().is_empty(),
+        "{refused}"
+    );
+    assert!(
+        refused["retained"].as_array().unwrap().is_empty(),
+        "{refused}"
+    );
+    assert!(
+        refused["admission"][0]["missing_capability"]
+            .as_str()
+            .unwrap()
+            .contains("objectiveMismatch"),
+        "{refused}"
+    );
+    assert!(
+        refused["runner"][0]["objective"]
+            .as_str()
+            .unwrap()
+            .contains("returnHome"),
+        "{refused}"
+    );
+    assert!(
+        !refused["runner"][0]["foreground"]
+            .as_str()
+            .unwrap()
+            .contains(&RESPAWNING_GAMEOBJECT.to_string()),
+        "{refused}"
     );
 }
 
