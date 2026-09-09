@@ -121,6 +121,9 @@ fn snapshot(
         "engagement": node.query_rows(&format!(
             "SELECT attacker_guid, target_guid, ranged_spell_id FROM game_melee_attack WHERE attacker_guid = {blocker}"
         )),
+        "threat": node.query_rows(&format!(
+            "SELECT source_guid, threat FROM game_threat WHERE creature_guid = {blocker}"
+        )),
         "root": node.query_rows(&format!(
             "SELECT target_guid, caster_guid, spell_id, eff_kind, eff_p0 FROM game_aura WHERE target_guid = {blocker} AND spell_id = {ROOT}"
         )),
@@ -169,7 +172,7 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     );
     node.assert_call(
         "playerbots_fixture_roles_control",
-        &[leader, &blocker, &ROOT.to_string()],
+        &[ally, &blocker, &ROOT.to_string()],
     );
     node.assert_call("playerbots_fixture_roles_enemy_engage", &[&blocker, ally]);
     let initial_engagement = node.query_rows(&format!(
@@ -350,7 +353,7 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         assert!(
             sample["root"].as_array().unwrap().iter().any(|aura| {
                 aura["target_guid"].as_str() == Some(blocker.as_str())
-                    && aura["caster_guid"].as_str() == Some(leader.as_str())
+                    && aura["caster_guid"].as_str() == Some(ally.as_str())
                     && aura["spell_id"].as_str() == Some("50021")
                     && aura["eff_p0"].as_str() == Some("2")
             }),
