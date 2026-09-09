@@ -327,7 +327,7 @@ mod tests {
             destination_raw.1.clone(),
             old.2.clone(),
         );
-        let transfer_id = 7001;
+        let transfer_id = crate::world::transfer::transfer_id_for(1);
         winner
             .begin_transfer(&crate::world::transfer::TransferPlan {
                 transfer_id,
