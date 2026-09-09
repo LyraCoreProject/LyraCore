@@ -2750,8 +2750,9 @@ pub(crate) fn apply_abandon_quest(
 #[cfg(test)]
 mod tests {
     use super::{
-        eventai_credit_recipient_set, is_expired, pick_choice_reward, EventAiQuestCreditContext,
-        QuestCreditRecipientPolicy, QUEST_MAX_LEVEL_PAYOUT,
+        eventai_credit_recipient_set, is_expired, pick_choice_reward, AreaTriggerRoute,
+        AreaTriggerVolume, EventAiQuestCreditContext, QuestCreditRecipientPolicy,
+        QUEST_MAX_LEVEL_PAYOUT,
     };
 
     fn quest_credit_context() -> EventAiQuestCreditContext {
@@ -2898,7 +2899,6 @@ mod tests {
     #[test]
     fn areatrigger_sphere_includes_its_three_dimensional_boundary() {
         let route = AreaTriggerRoute {
-            trigger_id: 1,
             source_map: 0,
             source_x: 10.0,
             source_y: 20.0,
@@ -2924,7 +2924,6 @@ mod tests {
     #[test]
     fn areatrigger_box_applies_yaw_before_its_half_extents() {
         let route = AreaTriggerRoute {
-            trigger_id: 1,
             source_map: 0,
             source_x: 10.0,
             source_y: 20.0,
@@ -2950,7 +2949,6 @@ mod tests {
     #[test]
     fn areatrigger_route_refuses_non_finite_coordinates_and_invalid_shapes() {
         let mut route = AreaTriggerRoute {
-            trigger_id: 1,
             source_map: 0,
             source_x: 10.0,
             source_y: 20.0,
