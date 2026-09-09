@@ -170,7 +170,13 @@ struct RoleParty {
     map_id: u32,
 }
 
-fn stage_roles(cli: &PrivateCli, server: &str, database: &str, guid_base: u64) -> RoleParty {
+fn stage_roles(
+    cli: &PrivateCli,
+    server: &str,
+    database: &str,
+    guid_base: u64,
+    name_namespace: u8,
+) -> RoleParty {
     cli.call(server, database, "claim_operator", &[]);
     cli.call(
         server,
@@ -218,6 +224,14 @@ fn stage_roles(cli: &PrivateCli, server: &str, database: &str, guid_base: u64) -
         database,
         "playerbots_fixture_roles_stage",
         &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let mut name_args = args.to_vec();
+    name_args.push(name_namespace.to_string());
+    cli.call(
+        server,
+        database,
+        "playerbots_fixture_orders_names",
+        &name_args.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     let map_id = cli.rows(
         server,
@@ -401,12 +415,18 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "source_issuers": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_issuer"),
         "source_dispatch_lanes": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_dispatch_lane"),
         "source_results": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
+        "source_characters": topology.cli.rows(topology.node.server(), topology.source(), "SELECT guid, name FROM game_character"),
+        "source_guid_range": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_guid_range"),
         "source_two_intents": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_party_command_intent"),
         "source_two_issuers": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_party_command_issuer"),
         "source_two_results": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
+        "source_two_characters": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT guid, name FROM game_character"),
+        "source_two_guid_range": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_guid_range"),
         "target_receipts": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_receipt"),
         "target_issuers": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_issuer"),
         "target_orders": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM pkg_playerbots_companion_order"),
+        "target_characters": topology.cli.rows(topology.node.server(), &topology.target, "SELECT guid, name FROM game_character"),
+        "target_guid_range": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_guid_range"),
         "source_receipts": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_receipt"),
         "source_orders": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM pkg_playerbots_companion_order"),
         "realm_groups": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_group"),
@@ -444,9 +464,9 @@ impl CommandTopology {
         for database in [&target, &realm, &source_two] {
             cli.publish(node.server(), database);
         }
-        let source_one_party = stage_roles(&cli, node.server(), &source, 1_000_000);
-        let target_party = stage_roles(&cli, node.server(), &target, 2_000_000);
-        let source_two_party = stage_roles(&cli, node.server(), &source_two, 3_000_000);
+        let source_one_party = stage_roles(&cli, node.server(), &source, 0, 0);
+        let target_party = stage_roles(&cli, node.server(), &target, 1_000_000_000, 1);
+        let source_two_party = stage_roles(&cli, node.server(), &source_two, 2_000_000_000, 2);
         cli.call(node.server(), &realm, "claim_operator", &[]);
         install_authority(
             &cli,
@@ -857,8 +877,42 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
             topology.source_one_party.leader
         ),
     );
+    let source_character = row(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &format!(
+            "SELECT guid, name FROM game_character WHERE guid = {}",
+            topology.source_one_party.leader
+        ),
+    );
+    let destination_name_collision = topology.cli.rows(
+        topology.node.server(),
+        &topology.source_two,
+        &format!(
+            "SELECT guid FROM game_character WHERE name = '{}'",
+            source_character["name"]
+        ),
+    );
+    let source_range = row(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        "SELECT base, size FROM game_guid_range WHERE id = 0",
+    );
+    let destination_range = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.source_two,
+        "SELECT base, size FROM game_guid_range WHERE id = 0",
+    );
     evidence(&topology, "issuer-command-queued-before-transfer");
     assert!(released_claim.is_empty());
+    assert!(destination_name_collision.is_empty());
+    assert_eq!(source_range["base"], "0");
+    assert_eq!(destination_range["base"], "2000000000");
+    assert_eq!(source_range["size"], "1000000000");
+    assert_eq!(destination_range["size"], "1000000000");
 
     topology.cli.call(
         topology.node.server(),
