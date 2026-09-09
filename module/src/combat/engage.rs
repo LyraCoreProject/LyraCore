@@ -505,7 +505,7 @@ pub struct RangedImpactSchedule {
 /// attack-self checks stay with the callers: they run BEFORE this block, and the ranged path
 /// additionally wedges its "a ranged weapon must be equipped" check between them, so the order in
 /// which a doubly-invalid command reports its reason is preserved exactly.
-fn validate_attack_target(
+pub(crate) fn validate_attack_target(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target_guid: u64,
