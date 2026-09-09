@@ -546,6 +546,7 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "source_dispatch_lanes": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_dispatch_lane"),
         "source_results": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
         "source_accounts": topology.cli.rows(topology.node.server(), topology.source(), "SELECT id, username FROM game_account"),
+        "source_account_claims": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_account_claim"),
         "source_characters": topology.cli.rows(topology.node.server(), topology.source(), "SELECT guid, name FROM game_character"),
         "source_guid_range": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_guid_range"),
         "source_two_intents": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_party_command_intent"),
@@ -1010,11 +1011,12 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
         "release_account_claim",
         &[&ownership],
     );
-    let released_claim = topology.cli.rows(
+    let released_claim = row(
+        &topology.cli,
         topology.node.server(),
         topology.source(),
         &format!(
-            "SELECT account_id FROM game_account_claim WHERE character_guid = {}",
+            "SELECT account_id, generation, request_nonce, character_guid, closed FROM game_account_claim WHERE character_guid = {}",
             topology.source_one_party.leader
         ),
     );
@@ -1049,7 +1051,17 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
         "SELECT base, size FROM game_guid_range WHERE id = 0",
     );
     evidence(&topology, "issuer-command-queued-before-transfer");
-    assert!(released_claim.is_empty());
+    assert_eq!(released_claim["account_id"], source_account_id);
+    assert_eq!(
+        released_claim["generation"],
+        actor["ownership"]["some"]["generation"].to_string()
+    );
+    assert_eq!(released_claim["request_nonce"], "9010");
+    assert_eq!(
+        released_claim["character_guid"],
+        topology.source_one_party.leader.to_string()
+    );
+    assert_eq!(released_claim["closed"], "true");
     assert_eq!(
         target_account["id"], source_account_id,
         "the private destination must preserve the transferred Account id"

@@ -351,14 +351,15 @@ fn select_and_engage(node: &Standalone, member_guid: &str, target_guid: &str) {
     );
 }
 
-fn finish_movement(node: &Standalone, guid: &str) {
-    let leg = node
-        .query_rows(&format!(
-            "SELECT spline_id, dx, dy FROM game_creature_spline WHERE guid = {guid}"
-        ))
-        .into_iter()
-        .next()
-        .expect("expected a real movement leg");
+fn movement_leg(node: &Standalone, guid: &str) -> Option<BTreeMap<String, String>> {
+    node.query_rows(&format!(
+        "SELECT spline_id, dx, dy FROM game_creature_spline WHERE guid = {guid}"
+    ))
+    .into_iter()
+    .next()
+}
+
+fn finish_movement(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>) {
     let spline_id = leg["spline_id"].clone();
     let destination_x: f32 = leg["dx"].parse().unwrap();
     let destination_y: f32 = leg["dy"].parse().unwrap();
@@ -592,6 +593,9 @@ fn playerbots_stay_blocks_a_recovery_position_selected_after_normal_recovery() {
         "playerbots_quest_loop_fixture_stage_named",
         &[&fixture.priest],
     );
+    for guid in [&fixture.warrior, &fixture.mage] {
+        node.assert_call("playerbots_fixture_companion_health", &[guid, "100"]);
+    }
     node.assert_call(
         "playerbots_fixture_roles_move",
         &[&fixture.leader, "1240", "1200"],
@@ -658,11 +662,13 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         &fixture.warrior,
         true,
     );
+    let initial_leg = movement_leg(node, &fixture.warrior);
     let approach = runner(node, &fixture.warrior);
     evidence(&fixture, "assist-named-fight-approach");
     assert!(approach["chosen"].contains("move"));
     assert!(approach["chosen"].contains(chosen.as_str()));
-    finish_movement(node, &fixture.warrior);
+    let initial_leg = initial_leg.expect("expected a real movement leg");
+    finish_movement(node, &fixture.warrior, &initial_leg);
     pass(node, &fixture.warrior);
     let melee = node.query_rows(&format!(
         "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
@@ -759,6 +765,7 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
     node.assert_call("playerbots_fixture_orders_restore_target", &[chosen]);
     select_and_engage(node, &fixture.leader, chosen);
     pass(node, &fixture.warrior);
+    let recovered_leg = movement_leg(node, &fixture.warrior);
     evidence(&fixture, "assist-target-recovered");
     let recovered = order(node, &fixture.warrior);
     assert!(recovered["last_outcome"]
@@ -768,7 +775,8 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
     let recovered_approach = runner(node, &fixture.warrior);
     assert!(recovered_approach["chosen"].contains("move"));
     assert!(recovered_approach["chosen"].contains(chosen.as_str()));
-    finish_movement(node, &fixture.warrior);
+    let recovered_leg = recovered_leg.expect("expected a real movement leg");
+    finish_movement(node, &fixture.warrior, &recovered_leg);
     pass(node, &fixture.warrior);
     evidence(&fixture, "assist-target-recovered-melee");
     assert_eq!(
