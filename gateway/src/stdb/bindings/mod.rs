@@ -319,8 +319,8 @@ pub mod faction_template_type;
 pub mod faction_type;
 pub mod fence_account_reducer;
 pub mod finalize_vmap_nav_coverage_reducer;
-pub mod finish_party_command_intent_reducer;
 pub mod finish_character_shard_transfer_reducer;
+pub mod finish_party_command_intent_reducer;
 pub mod finish_pending_character_shard_transfer_reducer;
 pub mod finish_transfer_reducer;
 pub mod fire_eventai_forced_despawn_reducer;
@@ -1363,8 +1363,8 @@ pub use faction_template_type::FactionTemplate;
 pub use faction_type::Faction;
 pub use fence_account_reducer::fence_account;
 pub use finalize_vmap_nav_coverage_reducer::finalize_vmap_nav_coverage;
-pub use finish_party_command_intent_reducer::finish_party_command_intent;
 pub use finish_character_shard_transfer_reducer::finish_character_shard_transfer;
+pub use finish_party_command_intent_reducer::finish_party_command_intent;
 pub use finish_pending_character_shard_transfer_reducer::finish_pending_character_shard_transfer;
 pub use finish_transfer_reducer::finish_transfer;
 pub use fire_eventai_forced_despawn_reducer::fire_eventai_forced_despawn;
@@ -2954,10 +2954,6 @@ pub enum Reducer {
     FinalizeVmapNavCoverage {
         generation_id: u64,
     },
-    FinishPartyCommandIntent {
-        intent_id: u64,
-        claim_token: u64,
-        outcome: CommandOutcome,
     FinishCharacterShardTransfer {
         character_guid: u64,
         source_map_id: u32,
@@ -2969,6 +2965,11 @@ pub enum Reducer {
         transfer_intent_id: u64,
         controller_generation: u64,
         request_actor: SessionActor,
+    },
+    FinishPartyCommandIntent {
+        intent_id: u64,
+        claim_token: u64,
+        outcome: CommandOutcome,
     },
     FinishPendingCharacterShardTransfer {
         character_guid: u64,
@@ -4180,8 +4181,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::ExpireEventaiSummon { .. } => "expire_eventai_summon",
             Reducer::FenceAccount { .. } => "fence_account",
             Reducer::FinalizeVmapNavCoverage { .. } => "finalize_vmap_nav_coverage",
-            Reducer::FinishPartyCommandIntent { .. } => "finish_party_command_intent",
             Reducer::FinishCharacterShardTransfer { .. } => "finish_character_shard_transfer",
+            Reducer::FinishPartyCommandIntent { .. } => "finish_party_command_intent",
             Reducer::FinishPendingCharacterShardTransfer { .. } => {
                 "finish_pending_character_shard_transfer"
             }
@@ -5934,14 +5935,6 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
 }             => __sats::bsatn::to_vec(&finalize_vmap_nav_coverage_reducer::FinalizeVmapNavCoverageArgs {
                 generation_id: generation_id.clone(),
 }),
-            Reducer::FinishPartyCommandIntent{
-                intent_id,
-                claim_token,
-                outcome,
-}             => __sats::bsatn::to_vec(&finish_party_command_intent_reducer::FinishPartyCommandIntentArgs {
-                intent_id: intent_id.clone(),
-                claim_token: claim_token.clone(),
-                outcome: outcome.clone(),
             Reducer::FinishCharacterShardTransfer{
                 character_guid,
                 source_map_id,
@@ -5964,6 +5957,15 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 transfer_intent_id: transfer_intent_id.clone(),
                 controller_generation: controller_generation.clone(),
                 request_actor: request_actor.clone(),
+}),
+            Reducer::FinishPartyCommandIntent{
+                intent_id,
+                claim_token,
+                outcome,
+}             => __sats::bsatn::to_vec(&finish_party_command_intent_reducer::FinishPartyCommandIntentArgs {
+                intent_id: intent_id.clone(),
+                claim_token: claim_token.clone(),
+                outcome: outcome.clone(),
 }),
             Reducer::FinishPendingCharacterShardTransfer{
                 character_guid,
