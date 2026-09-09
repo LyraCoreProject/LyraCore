@@ -1137,7 +1137,7 @@ impl WorldStore for Coordinator {
             .db
             .game_world_entity()
             .guid()
-            .find(guid)
+            .find(&guid)
             .map(|entity| (entity.map_id, entity.instance_id))
     }
 
