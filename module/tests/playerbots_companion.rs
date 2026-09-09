@@ -361,14 +361,14 @@ fn playerbots_missing_group_parent_holds_the_companion_objective() {
 fn playerbots_priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_follow() {
     let (node, bots) = fixture("playerbots-companion-heal");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
-    select(&node, priest, "cohort");
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
     let ally_before = node.query_rows(&format!(
         "SELECT health FROM game_world_entity WHERE guid = {ally}"
     ))[0]["health"]
         .parse::<u32>()
         .unwrap();
-    due(&node, priest);
+    pass_once(&node, priest);
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows(&format!(
             "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
@@ -387,7 +387,7 @@ fn playerbots_priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_f
         "playerbots_fixture_companion_move",
         &[leader, "1240", "1200"],
     );
-    due(&node, priest);
+    pass_once(&node, priest);
     assert_eq!(runner(&node, priest)["objective_sequence"], objective);
     assert_eq!(
         node.query_rows(&format!(
@@ -424,6 +424,12 @@ fn playerbots_priest_retains_one_ally_cast_while_the_leader_moves_then_resumes_f
     evidence(&node, "heal-completed");
     assert!(cast_completed);
     assert!(ally_after > ally_before);
+    node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
+    let satisfied = node.query_rows(&format!(
+        "SELECT health, max_health FROM game_world_entity WHERE guid = {ally}"
+    ));
+    evidence(&node, "heal-satisfied-before-follow");
+    assert_eq!(satisfied[0]["health"], satisfied[0]["max_health"]);
     due(&node, priest);
     let followed = poll_until(POLL_TIMEOUT, || {
         runner(&node, priest)["chosen"].contains("follow")
