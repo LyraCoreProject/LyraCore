@@ -1671,14 +1671,14 @@ fn a_destination_this_shard_already_serves_is_a_completed_crossing() {
     assert!(calls.lock().unwrap().is_empty(), "and no step may run");
 }
 
-/// **AC: group membership survives the crossing, through the realm group authority.**
+/// **AC: group membership survives a mirror failure during the crossing.**
 ///
 /// The bot is invited on the open-world shard and answers for itself (it has no client), then
 /// crosses. Realm-core owns the membership the whole time; what this pins is that the shard the bot
 /// ARRIVES on can read its party, which is what its kill-XP split, quest credit and loot rules run
 /// against.
 #[test]
-fn the_bots_party_is_readable_before_the_arrival_fence_drops() {
+fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
     use super::party_tests::{character, GINGER};
     let calls: ShardCallLog = Default::default();
     let realm = std::sync::Arc::new(InMemoryStore {
@@ -1731,9 +1731,41 @@ fn the_bots_party_is_readable_before_the_arrival_fence_drops() {
         .expect("the bot's party exists")
         .group_id;
     lk(&src_db.instance_partitions).insert(7, (36, group_id));
+    instances
+        .mirror_failures
+        .store(1, std::sync::atomic::Ordering::SeqCst);
 
-    super::transfer::run_bot_transfer(world.as_ref(), BOT_GUID, 36, 7, "grouped follow")
-        .expect("the crossing runs");
+    let intent = bot_intent();
+    let first = super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 701)
+        .expect_err("the destination mirror interruption must keep the arrival fenced");
+    assert!(
+        first
+            .to_string()
+            .contains("World Shard mirror connection interrupted"),
+        "{first:#}"
+    );
+    assert!(
+        !src_db.has(BOT_GUID) && dst_db.has(BOT_GUID) && !dst_db.live(BOT_GUID),
+        "the source is finished while the destination arrival remains fenced"
+    );
+    {
+        let first_calls = calls.lock().unwrap();
+        assert!(
+            first_calls
+                .iter()
+                .any(|(_, call)| call == "sync_group_mirror"),
+            "the required mirror write must be attempted: {first_calls:?}"
+        );
+        assert!(
+            !first_calls.iter().any(|(_, call)| {
+                call == "mark_bot_transfer_arrival_ready" || call == "release_bot_transfer_arrival"
+            }),
+            "a failed mirror cannot mark or release the arrival: {first_calls:?}"
+        );
+    }
+
+    super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 702)
+        .expect("the next claimed worker repeats the mirror and completes the crossing");
 
     assert!(dst_db.live(BOT_GUID), "the bot arrived");
     assert_eq!(
@@ -1758,9 +1790,16 @@ fn the_bots_party_is_readable_before_the_arrival_fence_drops() {
         .iter()
         .rposition(|(_, call)| call == "sync_transfer_arrival")
         .expect("the Transfer arrival step must complete");
+    let ready = calls
+        .iter()
+        .rposition(|(_, call)| call == "mark_bot_transfer_arrival_ready")
+        .expect("the source intent must record destination preparation");
     let released = calls
         .iter()
-        .rposition(|(_, call)| call == "release_transfer")
+        .rposition(|(_, call)| call == "release_bot_transfer_arrival")
         .expect("the destination fence must drop");
-    assert!(mirror < prepared && prepared < released, "{calls:?}");
+    assert!(
+        mirror < prepared && prepared < ready && ready < released,
+        "{calls:?}"
+    );
 }
