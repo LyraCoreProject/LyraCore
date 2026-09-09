@@ -99,6 +99,107 @@ fn git(path: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
+fn digest_files(path: &std::path::Path, digest: &mut blake3::Hasher) {
+    let mut children: Vec<_> = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    children.sort();
+    digest.update(&(children.len() as u64).to_le_bytes());
+    for child in children {
+        let name = child.file_name().unwrap().as_encoded_bytes();
+        digest.update(&(name.len() as u64).to_le_bytes());
+        digest.update(name);
+        digest.update(&[u8::from(child.is_dir())]);
+        if child.is_dir() {
+            digest_files(&child, digest);
+        } else {
+            let bytes = std::fs::read(&child).unwrap();
+            digest.update(&(bytes.len() as u64).to_le_bytes());
+            digest.update(&bytes);
+        }
+    }
+}
+
+struct PrecedingOrders {
+    wasm: Vec<u8>,
+    manifest: serde_json::Value,
+}
+
+fn preceding_orders() -> PrecedingOrders {
+    let wasm_path = std::env::var_os("PLAYERBOTS_ORDERS_PRECEDING_WASM")
+        .expect("PLAYERBOTS_ORDERS_PRECEDING_WASM must name the merged PB-007 Wasm");
+    let manifest_path = std::env::var_os("PLAYERBOTS_ORDERS_PRECEDING_MANIFEST")
+        .expect("PLAYERBOTS_ORDERS_PRECEDING_MANIFEST must describe that Wasm build");
+    let core_path = std::env::var_os("PLAYERBOTS_ORDERS_PRECEDING_CORE")
+        .expect("PLAYERBOTS_ORDERS_PRECEDING_CORE must name the clean merged Core checkout");
+    let collection_path = std::env::var_os("PLAYERBOTS_ORDERS_PRECEDING_COLLECTION").expect(
+        "PLAYERBOTS_ORDERS_PRECEDING_COLLECTION must name the clean merged Package checkout",
+    );
+    let core_path = std::path::Path::new(&core_path);
+    let collection_path = std::path::Path::new(&collection_path);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+    let wasm = std::fs::read(&wasm_path).unwrap();
+    let mut package_digest = blake3::Hasher::new();
+    digest_files(&collection_path.join("playerbots"), &mut package_digest);
+    for (field, expected) in [
+        ("core", git(core_path, &["rev-parse", "HEAD"])),
+        ("collection", git(collection_path, &["rev-parse", "HEAD"])),
+        ("core_tree", git(core_path, &["rev-parse", "HEAD^{tree}"])),
+        (
+            "collection_tree",
+            git(collection_path, &["rev-parse", "HEAD^{tree}"]),
+        ),
+        (
+            "playerbots_tree",
+            git(collection_path, &["rev-parse", "HEAD:playerbots"]),
+        ),
+        (
+            "package_content_identity",
+            package_digest.finalize().to_hex().to_string(),
+        ),
+    ] {
+        assert_eq!(manifest[field], expected, "preceding manifest {field}");
+    }
+    assert_eq!(manifest["core_dirty"], false);
+    assert_eq!(manifest["collection_dirty"], false);
+    assert_eq!(manifest["rust"], "1.93.0");
+    assert_eq!(manifest["spacetimedb"], "2.7.1");
+    assert_eq!(manifest["target"], "wasm32-unknown-unknown");
+    assert_eq!(manifest["profile"], "release");
+    assert_eq!(manifest["features"], serde_json::json!(["debug_reducers"]));
+    assert_eq!(manifest["wasm_bytes"].as_u64(), Some(wasm.len() as u64));
+    assert!(git(core_path, &["status", "--porcelain"]).is_empty());
+    assert!(git(collection_path, &["status", "--porcelain"]).is_empty());
+    let sha256 = std::process::Command::new("sha256sum")
+        .arg(&wasm_path)
+        .output()
+        .unwrap();
+    assert!(sha256.status.success());
+    let sha256 = String::from_utf8(sha256.stdout).unwrap();
+    assert_eq!(
+        sha256.split_whitespace().next().unwrap(),
+        manifest["wasm_sha256"].as_str().unwrap()
+    );
+    PrecedingOrders { wasm, manifest }
+}
+
+fn stage_quest_geometry(node: &Standalone) {
+    let x0 = lyracore_shared::terrain::cell_index(1_150.0).unwrap();
+    let x1 = lyracore_shared::terrain::cell_index(1_400.0).unwrap();
+    let y0 = lyracore_shared::terrain::cell_index(1_150.0).unwrap();
+    let y1 = lyracore_shared::terrain::cell_index(1_250.0).unwrap();
+    let mut rows = Vec::new();
+    for cell_x in x0.min(x1)..=x0.max(x1) {
+        for cell_y in y0.min(y1)..=y0.max(y1) {
+            rows.push(format!("0,{cell_x},{cell_y},50,,"));
+        }
+    }
+    node.assert_call("import_nav_chunks", &[&rows.join(";")]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+}
+
 fn fixture(name: &str) -> OrdersFixture {
     let mut node = Standalone::start(name);
     node.publish_module();
@@ -767,6 +868,148 @@ fn playerbots_human_party_suspends_then_rechecks_the_retained_solo_quest() {
         ))[0]["role"],
         TANK
     );
+}
+
+#[test]
+#[ignore = "requires the merged PB-007 Wasm, SpacetimeDB, and the playerbots Package"]
+fn playerbots_populated_pb007_state_adds_empty_order_state_without_changing_current_work() {
+    let preceding = preceding_orders();
+    assert_ne!(
+        blake3::hash(&preceding.wasm),
+        blake3::hash(support::module_bytes())
+    );
+    let mut node = Standalone::start("playerbots-orders-pb007-migration");
+    node.publish_module_bytes(&preceding.wasm);
+    let imports =
+        node.query_rows("SELECT family, source_sha, file_hash, row_count FROM game_import_meta");
+    assert_eq!(imports.len(), 1, "unexpected preceding Import Catalogue");
+    assert_eq!(imports[0]["family"], "weather_seed");
+    assert_eq!(imports[0]["source_sha"], "");
+    assert_eq!(imports[0]["file_hash"], "");
+    assert_eq!(imports[0]["row_count"], "2");
+    node.assert_sql(
+        "DELETE FROM game_import_meta WHERE family = 'weather_seed' AND source_sha = '' AND file_hash = '' AND row_count = 2",
+    );
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    stage_quest_geometry(&node);
+    node.assert_call("playerbots_spawn_role", &["1", "1200", "1200", "50", "0"]);
+    let guid = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
+        ["character_guid"]
+        .clone();
+    node.assert_call("playerbots_select_controller", &[&guid, "{\"cohort\":[]}"]);
+    node.assert_call("debug_learn_spell", &[&guid, "355"]);
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+    node.assert_sql(&format!(
+        "UPDATE pkg_playerbots_provisioning SET next_repair_micros = 9223372036854775807 WHERE character_guid = {guid}"
+    ));
+    node.assert_call("playerbots_quest_fixture_stage", &[&guid]);
+    node.assert_call(
+        "playerbots_quest_fixture_move_creature_spawn",
+        &["6", "1230"],
+    );
+    node.assert_call("playerbots_quest_fixture_refresh", &[]);
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
+    node.assert_call("playerbots_fixture_runner_stage", &[&guid, "true"]);
+    node.assert_sql("UPDATE game_spell SET cast_time_ms = 60000 WHERE spell_id = 5090100");
+    let foreground_started = poll_until(POLL_TIMEOUT, || {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let runner = runner(&node, &guid);
+        runner["objective"].to_ascii_lowercase().contains("quest")
+            && runner["foreground"].to_ascii_lowercase().contains("cast")
+            && runner["foreground"].contains("spell = 5090100")
+    });
+    node.assert_call("playerbots_fixture_freeze", &[&guid]);
+    let preceding_runner = runner(&node, &guid);
+    let preceding_quest = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+    ));
+    let preceding_cast = node.query_rows(&format!(
+        "SELECT * FROM game_pending_cast WHERE caster_guid = {guid}"
+    ));
+    let preceding_bot = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_bot WHERE character_guid = {guid}"
+    ));
+    let preceding_provisioning = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
+    ));
+    std::fs::write(
+        support::log_dir().join(format!(
+            "{}-orders-populated-predecessor.json",
+            node.shard_name()
+        )),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "preceding_build": preceding.manifest.clone(),
+            "runner": preceding_runner,
+            "quest_purpose": preceding_quest,
+            "pending_cast": preceding_cast,
+            "bot": preceding_bot,
+            "provisioning": preceding_provisioning,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        foreground_started,
+        "preceding foreground cast did not start"
+    );
+    assert_eq!(preceding_quest.len(), 1);
+    assert_eq!(preceding_quest[0]["quest_entry"], "7");
+    assert_eq!(preceding_cast.len(), 1);
+    assert!(preceding_runner["objective"]
+        .to_ascii_lowercase()
+        .contains("quest"));
+    assert!(preceding_runner["foreground"]
+        .to_ascii_lowercase()
+        .contains("cast"));
+
+    node.publish_module();
+    let upgraded_runner = runner(&node, &guid);
+    let upgraded_quest = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+    ));
+    let upgraded_cast = node.query_rows(&format!(
+        "SELECT * FROM game_pending_cast WHERE caster_guid = {guid}"
+    ));
+    let upgraded_bot = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_bot WHERE character_guid = {guid}"
+    ));
+    let upgraded_provisioning = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
+    ));
+    let orders = node.query_rows("SELECT * FROM pkg_playerbots_companion_order");
+    std::fs::write(
+        support::log_dir().join(format!(
+            "{}-orders-populated-migration.json",
+            node.shard_name()
+        )),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "preceding_build": preceding.manifest,
+            "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
+            "preceding_runner": preceding_runner,
+            "upgraded_runner": upgraded_runner,
+            "preceding_quest_purpose": preceding_quest,
+            "upgraded_quest_purpose": upgraded_quest,
+            "preceding_pending_cast": preceding_cast,
+            "upgraded_pending_cast": upgraded_cast,
+            "preceding_bot": preceding_bot,
+            "upgraded_bot": upgraded_bot,
+            "preceding_provisioning": preceding_provisioning,
+            "upgraded_provisioning": upgraded_provisioning,
+            "orders": orders,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for (field, value) in &preceding_runner {
+        assert_eq!(&upgraded_runner[field], value, "runner field {field}");
+    }
+    assert_eq!(upgraded_runner["companion_order_revision"], "0");
+    assert_eq!(upgraded_quest, preceding_quest);
+    assert_eq!(upgraded_cast, preceding_cast);
+    assert_eq!(upgraded_bot, preceding_bot);
+    assert_eq!(upgraded_provisioning, preceding_provisioning);
+    assert!(orders.is_empty());
 }
 
 #[test]
