@@ -42,6 +42,8 @@ pub(crate) struct TransferTopology {
 pub(crate) struct TransferredBot {
     pub(crate) guid: u64,
     pub(crate) leader_guid: u64,
+    pub(crate) priest_guid: u64,
+    pub(crate) mage_guid: u64,
     pub(crate) intent_id: u64,
     pub(crate) generation: u64,
     pub(crate) objective_identity: u64,
@@ -99,22 +101,29 @@ impl TransferTopology {
             .iter()
             .find(|bot| bot["class"] == "5" && bot["role"] == "1")
             .expect("Priest Healer missing")["character_guid"]
-            .clone();
+            .parse::<u64>()
+            .unwrap();
         let mage = bots
             .iter()
             .find(|bot| bot["class"] == "8" && bot["role"] == "2")
             .expect("Mage Damage missing")["character_guid"]
-            .clone();
+            .parse::<u64>()
+            .unwrap();
         topology.call(
             &topology.source_db,
             "playerbots_fixture_roles_stage",
-            &[&companion.to_string(), &priest, &mage, &leader.to_string()],
+            &[
+                &companion.to_string(),
+                &priest.to_string(),
+                &mage.to_string(),
+                &leader.to_string(),
+            ],
         );
-        for guid in [companion.to_string(), priest, mage] {
+        for guid in [companion, priest, mage] {
             topology.call(
                 &topology.source_db,
                 "playerbots_fixture_provision_steps",
-                &[&guid, "32"],
+                &[&guid.to_string(), "32"],
             );
         }
         topology.call(
@@ -123,6 +132,8 @@ impl TransferTopology {
             &[
                 &companion.to_string(),
                 &leader.to_string(),
+                &priest.to_string(),
+                &mage.to_string(),
                 "0",
                 "0",
                 &DESTINATION_MAP.to_string(),
@@ -134,6 +145,8 @@ impl TransferTopology {
             TransferredBot {
                 guid: companion,
                 leader_guid: leader,
+                priest_guid: priest,
+                mage_guid: mage,
                 intent_id: 0,
                 generation: 0,
                 objective_identity: 0,
@@ -197,6 +210,8 @@ impl TransferTopology {
             "bot": {
                 "guid": bot.guid,
                 "leader_guid": bot.leader_guid,
+                "priest_guid": bot.priest_guid,
+                "mage_guid": bot.mage_guid,
                 "intent_id": bot.intent_id,
                 "generation": bot.generation,
                 "objective_identity": bot.objective_identity,
@@ -676,7 +691,12 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
         .map(|member| text_field(member, "character_guid").parse::<u64>().unwrap())
         .collect();
     member_guids.sort_unstable();
-    let mut expected_guids = vec![bot_guid, leader_guid];
+    let mut expected_guids = vec![
+        bot_guid,
+        leader_guid,
+        bot["priest_guid"].as_u64().unwrap(),
+        bot["mage_guid"].as_u64().unwrap(),
+    ];
     expected_guids.sort_unstable();
     assert_eq!(member_guids, expected_guids, "{evidence}");
     let partitions = rows(evidence, &["state", "realm", "partitions"]);
@@ -695,8 +715,13 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
             .parse::<u64>()
             .unwrap();
         assert!(expected_guids.contains(&guid), "{evidence}");
-        assert_u64_field(partition, "map_id", u64::from(DESTINATION_MAP));
-        assert_u64_field(partition, "instance_id", DESTINATION_INSTANCE);
+        if guid == bot_guid || guid == leader_guid {
+            assert_u64_field(partition, "map_id", u64::from(DESTINATION_MAP));
+            assert_u64_field(partition, "instance_id", DESTINATION_INSTANCE);
+        } else {
+            assert_u64_field(partition, "map_id", 0);
+            assert_u64_field(partition, "instance_id", 0);
+        }
     }
 }
 
@@ -920,7 +945,13 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
     topology.call(
         &topology.destination_db,
         "playerbots_transfer_gateway_mirror_fault",
-        &["true", &bot.guid.to_string(), &bot.leader_guid.to_string()],
+        &[
+            "true",
+            &bot.guid.to_string(),
+            &bot.leader_guid.to_string(),
+            &bot.priest_guid.to_string(),
+            &bot.mage_guid.to_string(),
+        ],
     );
     let faulted = topology.save(&bot, "mirror-fault-staged", serde_json::json!({}));
     let mut interrupted = topology.gateway(None, "mirror-interrupted");
@@ -977,7 +1008,13 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
     topology.call(
         &topology.destination_db,
         "playerbots_transfer_gateway_mirror_fault",
-        &["false", &bot.guid.to_string(), &bot.leader_guid.to_string()],
+        &[
+            "false",
+            &bot.guid.to_string(),
+            &bot.leader_guid.to_string(),
+            &bot.priest_guid.to_string(),
+            &bot.mage_guid.to_string(),
+        ],
     );
     let mut resumed = topology.gateway(None, "mirror-repaired");
     let completed = support::poll_until(support::POLL_TIMEOUT, || {
@@ -1004,7 +1041,7 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
     );
     assert_eq!(
         rows(&repaired, &["state", "destination", "members"]).len(),
-        2,
+        4,
         "{repaired}"
     );
     assert_party_mirror(&repaired);
