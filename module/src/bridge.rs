@@ -228,7 +228,7 @@ pub struct AddonMessage {
 /// the durable character row (its owner binding) — a logged-out recipient's row is inserted and
 /// simply reaped unread (the 1s event TTL), which is the right semantics for UI state.
 pub(crate) fn send(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str) {
-    let Some(c) = ctx.db.game_character().guid().find(character_guid) else {
+    let Some(c) = crate::helpers::character_by_guid(ctx, character_guid) else {
         return;
     };
     send_to_identity(ctx, c.owner_identity, cmd, payload);
@@ -265,12 +265,9 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
             match crate::GAME_CLIENT_COMMAND.and_then(|handler| (handler.parse)(other, payload)) {
                 Some(Ok(command)) => {
                     let now = ctx.timestamp.to_micros_since_unix_epoch();
-                    let Some(reply_identity) = ctx
-                        .db
-                        .game_character()
-                        .guid()
-                        .find(character_guid)
-                        .map(|character| character.owner_identity)
+                    let Some(reply_identity) =
+                        crate::helpers::character_by_guid(ctx, character_guid)
+                            .map(|character| character.owner_identity)
                     else {
                         return;
                     };
@@ -544,7 +541,7 @@ pub fn apply_admitted_party_command(
     if crate::transfer::is_in_transit(ctx, bot_guid) {
         return Err("TransferInProgress".to_string());
     }
-    if ctx.db.game_character().guid().find(bot_guid).is_none() {
+    if crate::helpers::character_by_guid(ctx, bot_guid).is_none() {
         return Err("NotCharacterHolder".to_string());
     }
     let now = ctx.timestamp.to_micros_since_unix_epoch();
@@ -635,10 +632,7 @@ pub fn confirm_party_command_holder(ctx: &ReducerContext, bot_guid: u64) -> Resu
     if crate::transfer::is_in_transit(ctx, bot_guid) {
         return Err("TransferInProgress".to_string());
     }
-    ctx.db
-        .game_character()
-        .guid()
-        .find(bot_guid)
+    crate::helpers::character_by_guid(ctx, bot_guid)
         .is_some()
         .then_some(())
         .ok_or_else(|| CommandOutcome::MissingBot.tag().to_string())

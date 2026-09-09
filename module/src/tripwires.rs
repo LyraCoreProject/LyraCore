@@ -72,6 +72,10 @@ pub(crate) mod character_owned_tripwire {
             "short-lived intent consumed by the Gateway or event GC",
         ),
         (
+            &["game_party_command_intent"],
+            "source Module command relay retained through issuer Transfer until Gateway finalization or event GC",
+        ),
+        (
             &[
                 "game_channel_event",
                 "game_chat_event",
