@@ -7,7 +7,7 @@ mod playerbots_transfer_destination;
 #[path = "../../module/tests/support/mod.rs"]
 mod support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 const DESTINATION_MAP: u32 = 36;
 const DESTINATION_INSTANCE: u64 = 5_098_078;
 const GROUP: u64 = 5_098_000;
+const ASSIST_PRIEST: (f32, f32, f32) = (-10.0, -385.475, 62.4561);
+const ASSIST_LEADER: (f32, f32, f32) = (-14.5732, -410.475, 62.4561);
 const ABORT_STEPS: [&str; 12] = [
     "bind_bot_transfer_locator",
     "sync_transfer_pending",
@@ -228,6 +230,11 @@ impl TransferTopology {
                 "pending_cast": self.query(&self.source_db, &format!("SELECT * FROM game_pending_cast WHERE caster_guid = {}", bot.guid)),
                 "melee": self.query(&self.source_db, &format!("SELECT * FROM game_melee_attack WHERE attacker_guid = {}", bot.guid)),
                 "instance": self.query(&self.source_db, &format!("SELECT * FROM game_instance WHERE instance_id = {DESTINATION_INSTANCE}")),
+                "assist": self.query(&self.source_db, "SELECT * FROM pkg_playerbots_transfer_assist_source WHERE id = 0"),
+                "order": self.query(&self.source_db, &format!("SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}", bot.guid)),
+                "partitions": self.query(&self.source_db, &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}")),
+                "leader_live": self.query(&self.source_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.leader_guid)),
+                "priest_live": self.query(&self.source_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.priest_guid)),
             },
             "destination": {
                 "module_identity": self.query(&self.destination_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
@@ -244,6 +251,9 @@ impl TransferTopology {
                 "members": self.query(&self.destination_db, &format!("SELECT * FROM game_group_member WHERE group_id = {GROUP}")),
                 "partitions": self.query(&self.destination_db, &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}")),
                 "instance": self.query(&self.destination_db, &format!("SELECT * FROM game_instance WHERE instance_id = {DESTINATION_INSTANCE}")),
+                "order": self.query(&self.destination_db, &format!("SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}", bot.guid)),
+                "leader_live": self.query(&self.destination_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.leader_guid)),
+                "priest_live": self.query(&self.destination_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.priest_guid)),
             },
             "realm": {
                 "module_identity": self.query(&self.realm_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
@@ -461,6 +471,148 @@ fn timestamp_micros(value: &str) -> i64 {
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     let days_since_epoch = era * 146_097 + day_of_era - 719_468;
     (((days_since_epoch * 24 + hour) * 60 + minute) * 60 + second) * 1_000_000 + micros
+}
+
+fn issue_assist_order(topology: &TransferTopology, bot: &TransferredBot) {
+    topology.call(
+        &topology.source_db,
+        "provision_account",
+        &[r#""PB010ASSIST""#, "[]", "[]"],
+    );
+    let account = exactly_one(
+        &topology.query(
+            &topology.source_db,
+            "SELECT id FROM game_account WHERE username = 'PB010ASSIST'",
+        ),
+        "Assist leader account",
+    )["id"]
+        .clone();
+    topology.call(
+        &topology.source_db,
+        "playerbots_fixture_orders_account",
+        &[&bot.leader_guid.to_string(), &account],
+    );
+    topology.call(
+        &topology.source_db,
+        "claim_account",
+        &[&account, &bot.leader_guid.to_string(), "5098012"],
+    );
+    let generation = exactly_one(
+        &topology.query(
+            &topology.source_db,
+            &format!("SELECT generation FROM game_account_claim WHERE account_id = {account}"),
+        ),
+        "Assist leader Account Claim",
+    )["generation"]
+        .clone();
+    let actor = serde_json::json!({
+        "guid": bot.leader_guid,
+        "ownership": {"some": {
+            "account_id": account.parse::<u64>().unwrap(),
+            "generation": generation.parse::<u64>().unwrap(),
+            "request_nonce": 5_098_012,
+        }},
+    })
+    .to_string();
+    let payload = format!("assist|{}|{}", bot.guid, bot.priest_guid);
+    topology.call(
+        &topology.source_db,
+        "gw_client_command",
+        &[
+            &actor,
+            r#""playerbots.order""#,
+            &serde_json::to_string(&payload).unwrap(),
+        ],
+    );
+    let intents = topology.query(
+        &topology.source_db,
+        "SELECT id FROM game_party_command_intent WHERE pending = true",
+    );
+    let intent = parse_u64(exactly_one(&intents, "Assist command intent"), "id");
+    topology.call(
+        &topology.source_db,
+        "playerbots_fixture_orders_drive",
+        &[
+            &intent.to_string(),
+            &intent
+                .checked_add(5_098_100)
+                .expect("Assist fixture claim token exhausted")
+                .to_string(),
+            &bot.guid.to_string(),
+            "true",
+        ],
+    );
+}
+
+fn stage_assist_destination(
+    topology: &TransferTopology,
+    bot: &TransferredBot,
+) -> serde_json::Value {
+    topology.call(&topology.destination_db, "install_guid_range", &["1000000"]);
+    topology.call(
+        &topology.destination_db,
+        "playerbots_spawn",
+        &["4", "1200", "1200", "50"],
+    );
+    let mut destination = topology.query(
+        &topology.destination_db,
+        "SELECT character_guid, class, role FROM pkg_playerbots_bot",
+    );
+    destination.sort_by_key(|row| parse_u64(row, "character_guid"));
+    let mut source = topology.query(
+        &topology.source_db,
+        "SELECT character_guid, class, role FROM pkg_playerbots_bot",
+    );
+    source.sort_by_key(|row| parse_u64(row, "character_guid"));
+    let matching_role_identities = destination == source;
+    topology.call(
+        &topology.destination_db,
+        "debug_delete_character",
+        &[&bot.guid.to_string()],
+    );
+    topology.call(
+        &topology.destination_db,
+        "debug_delete_character",
+        &[&bot.mage_guid.to_string()],
+    );
+    topology.call(
+        &topology.destination_db,
+        "playerbots_transfer_assist_destination_stage",
+        &[
+            &bot.guid.to_string(),
+            &bot.leader_guid.to_string(),
+            &bot.priest_guid.to_string(),
+            &bot.mage_guid.to_string(),
+        ],
+    );
+    let points = [(-14.5732, -385.475, 62.4561), ASSIST_PRIEST, ASSIST_LEADER];
+    topology.call(&topology.destination_db, "debug_set_nav_enabled", &["true"]);
+    let mut cells = BTreeSet::new();
+    for (x, y, z) in points {
+        let cell_x = lyracore_shared::terrain::cell_index(x).unwrap();
+        let cell_y = lyracore_shared::terrain::cell_index(y).unwrap();
+        if cells.insert((cell_x, cell_y)) {
+            let chunk = format!("{DESTINATION_MAP},{cell_x},{cell_y},{z},,");
+            topology.call(
+                &topology.destination_db,
+                "import_nav_chunks_append",
+                &[&chunk],
+            );
+        }
+    }
+    serde_json::json!({
+        "source_roles": source,
+        "destination_roles": destination,
+        "matching_role_identities": matching_role_identities,
+        "navigation_cells": cells
+            .into_iter()
+            .map(|(cell_x, cell_y)| serde_json::json!({
+                "map_id": DESTINATION_MAP,
+                "cell_x": cell_x,
+                "cell_y": cell_y,
+            }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn sorted_rows(evidence: &serde_json::Value, path: &[&str], key: &str) -> Vec<serde_json::Value> {
@@ -1147,4 +1299,264 @@ fn playerbots_quest_transfer_rebuilds_its_destination_after_arrival() {
 #[ignore = "requires SpacetimeDB, Wasm, the playerbots Package, and the Gateway binary"]
 fn playerbots_quest_transfer_records_an_incompatible_destination() {
     run_quest_destination_case("playerbots-transfer-quest-replaced", 2);
+}
+
+fn assert_assist_source_ready(evidence: &serde_json::Value) {
+    let bot = &evidence["state"]["bot"];
+    let guid = bot["guid"].as_u64().unwrap();
+    let leader = bot["leader_guid"].as_u64().unwrap();
+    let priest = bot["priest_guid"].as_u64().unwrap();
+    let assist = row(evidence, &["state", "source", "assist"]);
+    assert_u64_field(assist, "bot_guid", guid);
+    assert_u64_field(assist, "leader_guid", leader);
+    assert_u64_field(assist, "selected_priest_guid", priest);
+    assert_eq!(assist["destination_map"], DESTINATION_MAP.to_string());
+    assert_eq!(
+        assist["destination_instance"],
+        DESTINATION_INSTANCE.to_string()
+    );
+    let order = row(evidence, &["state", "source", "order"]);
+    assert_eq!(order["active"], "true", "{evidence}");
+    assert_eq!(order["issuer_guid"], leader.to_string(), "{evidence}");
+    assert_eq!(
+        order["order"],
+        format!("(assist = (member_guid = {priest}))"),
+        "{evidence}"
+    );
+    let intent = row(evidence, &["state", "source", "intent"]);
+    assert_eq!(intent["destination_map"], DESTINATION_MAP.to_string());
+    assert_eq!(
+        intent["destination_instance"],
+        DESTINATION_INSTANCE.to_string()
+    );
+    let runner = row(evidence, &["state", "source", "runner"]);
+    let checkpoint = text_field(runner, "transfer_checkpoint");
+    assert!(
+        checkpoint.contains("(companion =")
+            && checkpoint.contains(&format!("member_guid = {priest}")),
+        "{evidence}"
+    );
+    assert!(
+        rows(evidence, &["state", "source", "leader_live"]).is_empty()
+            && rows(evidence, &["state", "source", "priest_live"]).is_empty(),
+        "source retained a remote party body: {evidence}"
+    );
+    let destination_leader = row(evidence, &["state", "destination", "leader_live"]);
+    let destination_priest = row(evidence, &["state", "destination", "priest_live"]);
+    for (body, guid, position) in [
+        (destination_leader, leader, ASSIST_LEADER),
+        (destination_priest, priest, ASSIST_PRIEST),
+    ] {
+        assert_u64_field(body, "guid", guid);
+        assert_u64_field(body, "map_id", u64::from(DESTINATION_MAP));
+        assert_u64_field(body, "instance_id", DESTINATION_INSTANCE);
+        for (field, expected) in [("x", position.0), ("y", position.1), ("z", position.2)] {
+            let actual = text_field(body, field).parse::<f32>().unwrap();
+            assert!((actual - expected).abs() < 0.01, "{field}: {evidence}");
+        }
+    }
+    for member in [leader, priest] {
+        let realm_partition = rows(evidence, &["state", "realm", "partitions"])
+            .iter()
+            .find(|row| row["character_guid"] == member.to_string())
+            .unwrap_or_else(|| panic!("Realm partition {member} absent: {evidence}"));
+        assert_eq!(realm_partition["map_id"], DESTINATION_MAP.to_string());
+        assert_eq!(
+            realm_partition["instance_id"],
+            DESTINATION_INSTANCE.to_string()
+        );
+        assert_eq!(realm_partition["locator_revision"], "2");
+        assert_eq!(realm_partition["state"], "(known = ())");
+    }
+}
+
+fn assist_follow_observations(
+    topology: &TransferTopology,
+    bot: &TransferredBot,
+) -> serde_json::Value {
+    let deadline = Instant::now() + support::POLL_TIMEOUT;
+    let mut samples = Vec::new();
+    loop {
+        topology.call(
+            &topology.destination_db,
+            "playerbots_fixture_companion_due",
+            &[&bot.guid.to_string()],
+        );
+        topology.call(
+            &topology.destination_db,
+            "playerbots_fixture_runner_pass_once",
+            &[&bot.guid.to_string()],
+        );
+        let runner = topology.query(
+            &topology.destination_db,
+            &format!(
+                "SELECT foreground FROM pkg_playerbots_runner WHERE character_guid = {}",
+                bot.guid
+            ),
+        );
+        let movement = topology.query(
+            &topology.destination_db,
+            &format!(
+                "SELECT * FROM game_creature_spline WHERE guid = {}",
+                bot.guid
+            ),
+        );
+        let selected = runner.first().is_some_and(|row| {
+            row["foreground"].contains(&format!("action = (move = (entity = {}))", bot.priest_guid))
+                && row["foreground"].contains("reason = (follow = ())")
+        }) && movement.len() == 1;
+        samples.push(serde_json::json!({
+            "runner": runner,
+            "movement": movement,
+            "selected_priest": selected,
+        }));
+        if selected || Instant::now() >= deadline {
+            return serde_json::json!({
+                "selected_priest": selected,
+                "samples": samples,
+            });
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn point(row: &serde_json::Value, fields: [&str; 3]) -> (f64, f64, f64) {
+    let value = |field| text_field(row, field).parse::<f64>().unwrap();
+    (value(fields[0]), value(fields[1]), value(fields[2]))
+}
+
+fn distance(left: (f64, f64, f64), right: (f64, f64, f64)) -> f64 {
+    ((left.0 - right.0).powi(2) + (left.1 - right.1).powi(2) + (left.2 - right.2).powi(2)).sqrt()
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, the playerbots Package, and the Gateway binary"]
+fn playerbots_assist_keeps_its_selected_member_after_arrival() {
+    let (topology, mut bot) = TransferTopology::stage("playerbots-transfer-assist-arrival");
+    issue_assist_order(&topology, &bot);
+    topology.call(
+        &topology.source_db,
+        "playerbots_transfer_fixture_entry_route_stage",
+        &[&bot.guid.to_string(), &bot.leader_guid.to_string()],
+    );
+    topology.call(
+        &topology.source_db,
+        "playerbots_transfer_assist_source_stage",
+        &[
+            &bot.guid.to_string(),
+            &bot.leader_guid.to_string(),
+            &bot.priest_guid.to_string(),
+        ],
+    );
+    topology.call(
+        &topology.realm_db,
+        "playerbots_transfer_gateway_assist_realm_stage",
+        &[
+            &bot.guid.to_string(),
+            &bot.leader_guid.to_string(),
+            &bot.priest_guid.to_string(),
+            &bot.mage_guid.to_string(),
+            "0",
+            "0",
+            &DESTINATION_MAP.to_string(),
+            &DESTINATION_INSTANCE.to_string(),
+        ],
+    );
+    let destination_stage = stage_assist_destination(&topology, &bot);
+    topology.call(
+        &topology.source_db,
+        "playerbots_fixture_runner_pass_once",
+        &[&bot.guid.to_string()],
+    );
+    topology.capture_transfer(&mut bot);
+    let ready = topology.save(
+        &bot,
+        "assist-source-ready",
+        serde_json::json!({ "destination_stage": destination_stage }),
+    );
+    assert_eq!(
+        ready["extra"]["destination_stage"]["matching_role_identities"], true,
+        "{ready}"
+    );
+    assert_assist_source_ready(&ready);
+
+    let mut gateway = topology.gateway(None, "assist-crossing");
+    let completed = support::poll_until(support::POLL_TIMEOUT, || {
+        topology
+            .query(
+                &topology.source_db,
+                &format!(
+                    "SELECT id FROM game_bot_transfer_intent WHERE bot_guid = {}",
+                    bot.guid
+                ),
+            )
+            .is_empty()
+            && topology
+                .query(
+                    &topology.destination_db,
+                    &format!(
+                        "SELECT transfer_id FROM game_transfer_in WHERE character_guid = {}",
+                        bot.guid
+                    ),
+                )
+                .is_empty()
+    });
+    let arrived = topology.save(
+        &bot,
+        "assist-arrived",
+        serde_json::json!({
+            "completed": completed,
+            "gateway_log": gateway.log(),
+        }),
+    );
+    gateway.stop();
+    assert!(completed, "Assist Transfer did not complete: {arrived}");
+    assert!(
+        rows(&arrived, &["state", "source", "character"]).is_empty(),
+        "{arrived}"
+    );
+    let destination_order = row(&arrived, &["state", "destination", "order"]);
+    assert_eq!(
+        destination_order["order"],
+        format!("(assist = (member_guid = {}))", bot.priest_guid),
+        "{arrived}"
+    );
+    assert_postrelease_body(&topology, &bot, "assist-arrived");
+
+    let observations = assist_follow_observations(&topology, &bot);
+    let followed = topology.save(
+        &bot,
+        "assist-followed-selected-priest",
+        serde_json::json!({ "observations": observations }),
+    );
+    assert_eq!(
+        followed["extra"]["observations"]["selected_priest"], true,
+        "{followed}"
+    );
+    let runner = row(&followed, &["state", "destination", "runner"]);
+    let foreground = text_field(runner, "foreground");
+    assert!(
+        foreground.contains(&format!("action = (move = (entity = {}))", bot.priest_guid))
+            && !foreground.contains(&format!("action = (move = (entity = {}))", bot.leader_guid)),
+        "{followed}"
+    );
+    let movement = row(&followed, &["state", "destination", "movement"]);
+    let start = point(movement, ["sx", "sy", "sz"]);
+    let destination = point(movement, ["dx", "dy", "dz"]);
+    let priest = point(
+        row(&followed, &["state", "destination", "priest_live"]),
+        ["x", "y", "z"],
+    );
+    let leader = point(
+        row(&followed, &["state", "destination", "leader_live"]),
+        ["x", "y", "z"],
+    );
+    assert!(
+        distance(destination, priest) + 0.1 < distance(start, priest),
+        "movement did not approach selected Priest: {followed}"
+    );
+    assert!(
+        distance(destination, leader) > distance(start, leader),
+        "movement fell back toward party leader: {followed}"
+    );
 }
