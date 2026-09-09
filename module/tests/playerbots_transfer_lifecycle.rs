@@ -241,12 +241,21 @@ fn playerbots_process_restart_resumes_one_owned_movement_leg() {
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "64"]);
     node.assert_call("playerbots_fixture_prepare", &[]);
     node.assert_call("playerbots_lifecycle_stage_movement", &[&guid]);
+    let started = poll_until(Duration::from_secs(10), || {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let moving = runner(&node, &guid)["foreground"].contains("movement");
+        if !moving {
+            std::thread::sleep(Duration::from_millis(1100));
+        }
+        moving
+    });
     let before = capture(
         &node,
         &guid,
         "before-movement-restart",
         support::module_bytes(),
     );
+    assert!(started, "{before}");
     assert_eq!(before["splines"].as_array().unwrap().len(), 1, "{before}");
     assert_eq!(before["runner"][0]["movement_progress"], "(none = ())");
     assert!(before["runner"][0]["foreground"]
