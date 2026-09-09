@@ -55,6 +55,34 @@ impl Coordinator {
         self.group_roster_by_id(group_id)
     }
 
+    /// Read only the bounded roster projection accepted by companion-command authority.
+    pub fn party_command_group_roster(
+        &self,
+        character_guid: u64,
+    ) -> anyhow::Result<Option<crate::world::party::GroupRoster>> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let Some((group_id, members)) = guard
+            .party_memberships
+            .read()
+            .unwrap()
+            .bounded_roster(character_guid, lyracore_shared::group::GROUP_MAX_MEMBERS)?
+        else {
+            return Ok(None);
+        };
+        let Some(group) = db.game_group().group_id().find(&group_id) else {
+            return Ok(None);
+        };
+        Ok(Some(crate::world::party::GroupRoster {
+            group_id,
+            leader_guid: group.leader_guid,
+            loot_method: group.loot_method,
+            loot_threshold: group.loot_threshold,
+            master_looter_guid: group.master_looter_guid,
+            members,
+        }))
+    }
+
     /// [`group_roster`](Self::group_roster) keyed by the group itself — the read the mirror push
     /// needs for a party the acting character has just LEFT (their own membership row is gone, but
     /// the remaining members' rows still have to reach every shard).

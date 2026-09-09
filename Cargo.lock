@@ -1801,6 +1801,7 @@ name = "lyracore-gateway"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "dhat",
  "env_logger",
  "getrandom 0.3.4",

@@ -5,8 +5,8 @@
 
 use crate::config::{GatewayConfig, ShardMap};
 use anyhow::{anyhow, Context, Result};
-use spacetimedb_sdk::{DbContext, SubscriptionHandle as _, Table};
-use std::collections::HashMap;
+use spacetimedb_sdk::{DbContext, SubscriptionHandle as _, Table, TableWithPrimaryKey};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -70,8 +70,102 @@ pub(crate) struct LiveConn {
     /// Identity of this cache plus the Character-presence revision maintained by row callbacks.
     cache_generation: u64,
     character_revision: Arc<AtomicU64>,
+    pub(crate) party_memberships: Arc<RwLock<PartyMembershipIndex>>,
     /// Keeps this role's subscription active for the connection's lifetime.
     _sub: SubscriptionHandle,
+}
+
+#[derive(Default)]
+pub(crate) struct PartyMembershipIndex {
+    by_character: HashMap<u64, BTreeMap<u64, u64>>,
+    by_group: HashMap<u64, BTreeMap<u64, u64>>,
+}
+
+impl PartyMembershipIndex {
+    fn insert(&mut self, row: &GroupMember) {
+        self.by_character
+            .entry(row.character_guid)
+            .or_default()
+            .insert(row.id, row.group_id);
+        self.by_group
+            .entry(row.group_id)
+            .or_default()
+            .insert(row.id, row.character_guid);
+    }
+
+    fn remove(&mut self, row: &GroupMember) {
+        if let Some(rows) = self.by_character.get_mut(&row.character_guid) {
+            rows.remove(&row.id);
+            if rows.is_empty() {
+                self.by_character.remove(&row.character_guid);
+            }
+        }
+        if let Some(rows) = self.by_group.get_mut(&row.group_id) {
+            rows.remove(&row.id);
+            if rows.is_empty() {
+                self.by_group.remove(&row.group_id);
+            }
+        }
+    }
+
+    pub(crate) fn bounded_roster(
+        &self,
+        character_guid: u64,
+        member_limit: usize,
+    ) -> Result<Option<(u64, Vec<u64>)>> {
+        let Some(memberships) = self.by_character.get(&character_guid) else {
+            return Ok(None);
+        };
+        if memberships.len() != 1 {
+            anyhow::bail!("party command character has more than one membership");
+        }
+        let group_id = *memberships.values().next().expect("one membership");
+        let Some(group) = self.by_group.get(&group_id) else {
+            return Ok(None);
+        };
+        let members: Vec<_> = group.values().take(member_limit + 1).copied().collect();
+        if members.len() > member_limit {
+            anyhow::bail!("party command roster exceeds the member limit");
+        }
+        Ok(Some((group_id, members)))
+    }
+}
+
+#[cfg(test)]
+mod party_membership_index_tests {
+    use super::{GroupMember, PartyMembershipIndex};
+
+    fn member(id: u64, group_id: u64, character_guid: u64) -> GroupMember {
+        GroupMember {
+            id,
+            group_id,
+            character_guid,
+            owner_identity: spacetimedb_sdk::Identity::ZERO,
+        }
+    }
+
+    #[test]
+    fn command_rosters_use_join_order_and_refuse_duplicate_or_oversized_membership() {
+        let mut index = PartyMembershipIndex::default();
+        let first = member(2, 7, 102);
+        let second = member(1, 7, 101);
+        index.insert(&first);
+        index.insert(&second);
+        assert_eq!(
+            index.bounded_roster(102, 2).unwrap(),
+            Some((7, vec![101, 102]))
+        );
+        assert!(index.bounded_roster(102, 1).is_err());
+
+        let duplicate = member(3, 8, 102);
+        index.insert(&duplicate);
+        assert!(index.bounded_roster(102, 5).is_err());
+        index.remove(&duplicate);
+        assert_eq!(
+            index.bounded_roster(102, 2).unwrap(),
+            Some((7, vec![101, 102]))
+        );
+    }
 }
 
 type PumpWork<C = DbConnection> = Box<dyn FnOnce(&C) + Send>;
@@ -506,6 +600,8 @@ pub(crate) struct CoordinatorInner {
     /// lands, calls use another healthy pipe or the watchdogged coordinator connection.
     call_pipes: Vec<CallPipe>,
     call_pipe_next: std::sync::atomic::AtomicUsize,
+    /// Edge-triggered diagnosis for a persistent Module/Gateway dispatch-lane mismatch.
+    pub(crate) party_command_lane_overflow: AtomicBool,
     /// The per-shard movement batch — the hot path pushes one `GwMove` per inbound
     /// heartbeat and the 40ms flush task sends the whole tick as ONE `gw_movement_batch`
     /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
@@ -647,6 +743,23 @@ fn connect_subscribed(
 
     let conn = Arc::new(conn);
     let (pump, pump_commands) = start_pump(&conn, &role_label)?;
+    let party_memberships = Arc::new(RwLock::new(PartyMembershipIndex::default()));
+    let inserted_memberships = party_memberships.clone();
+    conn.db.game_group_member().on_insert(move |_ctx, row| {
+        inserted_memberships.write().unwrap().insert(row);
+    });
+    let deleted_memberships = party_memberships.clone();
+    conn.db.game_group_member().on_delete(move |_ctx, row| {
+        deleted_memberships.write().unwrap().remove(row);
+    });
+    let updated_memberships = party_memberships.clone();
+    conn.db
+        .game_group_member()
+        .on_update(move |_ctx, old, new| {
+            let mut memberships = updated_memberships.write().unwrap();
+            memberships.remove(old);
+            memberships.insert(new);
+        });
     let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let tx_err = tx.clone();
     let applied_commands = pump_commands.clone();
@@ -694,6 +807,7 @@ fn connect_subscribed(
         pump_commands,
         cache_generation: LIVE_CONN_GENERATION.fetch_add(1, Ordering::Relaxed),
         character_revision: Arc::new(AtomicU64::new(0)),
+        party_memberships,
         _sub: sub,
     })
 }
@@ -875,6 +989,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // published, or `connect_blocking`'s subscription fails to apply (`coordinator_queries`'s own
         // doc comment).
         "SELECT * FROM game_bot_invite_intent",
+        "SELECT * FROM game_party_command_intent WHERE pending = true",
+        "SELECT * FROM game_party_command_dispatch_lane",
+        "SELECT * FROM game_party_command_receipt",
         // Bot-initiated Shard crossings, here for every reason the invite intent above is: a bot has
         // no session, so no other connection could see the row, and it rides the BASE list because a
         // single-database realm writes the same rows (the relay finds nothing to cross there and
@@ -2297,6 +2414,7 @@ impl Coordinator {
             sharded_tables,
             call_pipes,
             call_pipe_next: std::sync::atomic::AtomicUsize::new(0),
+            party_command_lane_overflow: AtomicBool::new(false),
             motion_batch: MovementBatch::new(),
             on_reconnect: Mutex::new(Vec::new()),
         });

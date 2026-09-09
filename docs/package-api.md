@@ -38,6 +38,7 @@ which must be written literally.
 |---|---|
 | `crate::game_hook!(EVENT, fn NAME(ctx, payload) { .. })` | a notify handler for one hook event |
 | `crate::game_tick_pass!(fn NAME(ctx) { .. })` | a periodic pass, run at the end of every `tick_creatures` tick (0.5s), after every core pass |
+| `crate::game_client_command!(PARSE, APPLY)` | the single Package parser and admitted apply operation for authenticated addon commands |
 | `crate::character_owned!(delete \| restamp \| transfer \| not_transported, ..)` | a Package table's character-keyed sweeps and its cross-shard transport arm |
 | `crate::encounter_package!(BINDING, fn NAME(ctx, instance_id, signal) { .. })` | encounter authority for one Encounter Binding |
 
@@ -96,6 +97,11 @@ encounter content; the kernel exists for Packages.
 `crate::actor` holds explicit-guid operations with the Gates of the core operation each names.
 Existing verbs keep `fn verb(ctx, actor_guid, ..) -> Result<(), String>`. The table in
 `module/src/actor.rs` lists their contracts.
+
+The same root exposes the typed client-command parser and admitted apply values, the target Receipt
+capacity that bounds retained per-issuer command fences, and the exact `companion_target_facts`
+read. Core authenticates the issuer and the Gateway certifies Realm-core party authority before a
+Package receives an admitted command.
 
 `actor::cast_readiness(ctx, actor_guid, spell_id, target_guid)` applies the same read-only spellbook,
 supported-lifecycle, range, line-of-sight, and ordinary cast Gates used at cast start. A Package can
@@ -195,7 +201,7 @@ quest      script_binding     spell      stats      terrain   transfer
 world      xp
 ```
 
-Plus, at the crate root: any `game_*` name (a table accessor, `game_hook!`, `game_tick_pass!`), any
+Plus, at the crate root: any `game_*` name (a table accessor or registration marker), any
 `pkg_*` name (a Package's own generated root module), any type name in UpperCamelCase (a row or
 payload type), `character_owned!`, `encounter_package!`, and `CHARACTER_OWNED_TABLES`.
 

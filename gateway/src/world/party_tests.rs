@@ -117,6 +117,7 @@ pub(super) fn party_topology_with(
         // The bot is in BOTH, which is the production shape a playerbot has (spawned straight into
         // the entity table, never logged in) and the case the two gates disagree about.
         live_guids: vec![GINGER, TRIN, BOT],
+        entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (TRIN, 0, 0), (BOT, 0, 0)]),
         offline_guids: vec![DORMANT, BOT],
         ..Default::default()
     });
@@ -126,6 +127,7 @@ pub(super) fn party_topology_with(
         realm: Some(realm.clone()),
         characters: vec![character(VIM, "Vim"), character(FAR_BOT, "Farbotty")],
         live_guids: vec![VIM, FAR_BOT],
+        entity_partitions: std::sync::Mutex::new(vec![(VIM, 0, 0), (FAR_BOT, 0, 0)]),
         offline_guids: vec![FAR_BOT],
         mirror_error: mirror_error.map(|e| e.to_string()),
         ..Default::default()
@@ -151,6 +153,327 @@ pub(super) fn party_topology() -> (
 pub(super) fn form_split_party(world: &InMemoryStore, instances: &InMemoryStore) {
     party::run(world, 7, GINGER, party::Op::Invite(VIM)).expect("the invite crosses");
     party::run(instances, 8, VIM, party::Op::Accept).expect("the accept lands");
+}
+
+fn command_intent(bot_guid: u64) -> party::PartyCommandIntent {
+    party::PartyCommandIntent {
+        id: 41,
+        source_identity: spacetimedb_sdk::Identity::from_byte_array([7; 32]),
+        issuer_guid: GINGER,
+        issuer_sequence: 1,
+        kind: 0,
+        bot_guid,
+        authority_member_guid: 0,
+        exact_target_guid: 0,
+        expires_micros: i64::MAX,
+    }
+}
+
+#[test]
+fn a_companion_command_uses_realm_authority_and_the_bots_actual_world_shard() {
+    let (realm, world, instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    let outcome =
+        party::run_party_command_intent(world.as_ref(), &command_intent(FAR_BOT), 9001).unwrap();
+    assert_eq!(outcome, party::CompanionCommandOutcome::Applied);
+    assert_eq!(instances.admitted_party_commands.lock().unwrap().len(), 1);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+    assert_eq!(world.party_command_finishes.lock().unwrap().len(), 1);
+    assert!(realm.group_roster(GINGER).unwrap().is_some());
+}
+
+#[test]
+fn changed_leadership_is_terminal_before_target_application() {
+    let (realm, world, _instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    let group_id = realm.party.lock().unwrap().group_of(GINGER).unwrap();
+    realm
+        .party
+        .lock()
+        .unwrap()
+        .groups
+        .iter_mut()
+        .find(|(id, ..)| *id == group_id)
+        .unwrap()
+        .1 = BOT;
+    let outcome = party::run_party_command_intent(world.as_ref(), &command_intent(BOT), 9).unwrap();
+    assert_eq!(outcome, party::CompanionCommandOutcome::NotLeader);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+    assert_eq!(world.party_command_finishes.lock().unwrap()[0].2, outcome);
+}
+
+#[test]
+fn configured_realm_core_unavailability_fails_closed() {
+    let store = InMemoryStore {
+        characters: vec![character(BOT, "Bot")],
+        entity_in_world: true,
+        entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (BOT, 0, 0)]),
+        party_command_realm_error: Some("Realm-core unavailable".into()),
+        ..Default::default()
+    };
+    let error = party::run_party_command_intent(&store, &command_intent(BOT), 9).unwrap_err();
+    assert!(error.to_string().contains("Realm-core unavailable"));
+    assert!(store.party_command_finishes.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_missing_bot_is_terminal_before_party_authority_is_consulted() {
+    let (_realm, world, _instances, _) = party_topology();
+    let outcome =
+        party::run_party_command_intent(world.as_ref(), &command_intent(99_999), 9).unwrap();
+    assert_eq!(outcome, party::CompanionCommandOutcome::MissingBot);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_nonmember_assist_target_is_refused_by_realm_authority() {
+    let (_realm, world, _instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    let mut intent = command_intent(BOT);
+    intent.kind = 2;
+    intent.authority_member_guid = TRIN;
+    let outcome = party::run_party_command_intent(world.as_ref(), &intent, 9).unwrap();
+    assert_eq!(outcome, party::CompanionCommandOutcome::NotMember);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_stale_target_mirror_cannot_grant_command_authority() {
+    let (_realm, world, _instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    world
+        .mirror
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .for_each(|roster| roster.members.retain(|member| *member != BOT));
+    let outcome = party::run_party_command_intent(world.as_ref(), &command_intent(BOT), 9).unwrap();
+    assert_eq!(outcome, party::CompanionCommandOutcome::StalePartyMirror);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_oversized_cached_roster_is_not_sent_for_command_authority() {
+    let mut members = vec![GINGER, BOT];
+    members.extend(
+        (0..lyracore_shared::group::GROUP_MAX_MEMBERS).map(|offset| 80_000 + offset as u64),
+    );
+    let store = InMemoryStore {
+        entity_in_world: true,
+        characters: vec![character(GINGER, "Ginger"), character(BOT, "Bot")],
+        entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (BOT, 0, 0)]),
+        mirror: std::sync::Mutex::new(vec![party::GroupRoster {
+            group_id: 7,
+            leader_guid: GINGER,
+            members,
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+
+    let error = party::run_party_command_intent(&store, &command_intent(BOT), 9).unwrap_err();
+
+    assert!(error.to_string().contains("member limit"));
+    assert!(store.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn realm_admission_rejects_a_roster_changed_after_the_gateway_read() {
+    let (realm, world, instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    party::run(world.as_ref(), 8, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    let mut changed = realm.group_roster(GINGER).unwrap().unwrap().members;
+    changed.retain(|guid| *guid != BOT);
+    *realm.party_command_authority_members.lock().unwrap() = Some(changed);
+
+    let outcome =
+        party::run_party_command_intent(world.as_ref(), &command_intent(FAR_BOT), 9).unwrap();
+
+    assert_eq!(outcome, party::CompanionCommandOutcome::StalePartyMirror);
+    assert!(instances.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_unavailable_receipt_shard_keeps_the_source_intent_pending() {
+    let (_realm, world, instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    *instances.party_command_receipt_error.lock().unwrap() =
+        Some("receipt read unavailable".to_string());
+
+    let error =
+        party::run_party_command_intent(world.as_ref(), &command_intent(FAR_BOT), 9).unwrap_err();
+
+    assert!(error.to_string().contains("receipt read unavailable"));
+    assert!(world.party_command_finishes.lock().unwrap().is_empty());
+    assert!(instances.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_in_transit_holder_is_retried_without_a_missing_bot_result() {
+    let (_realm, world, instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    instances
+        .party_command_in_transit
+        .lock()
+        .unwrap()
+        .push(FAR_BOT);
+
+    let error =
+        party::run_party_command_intent(world.as_ref(), &command_intent(FAR_BOT), 9).unwrap_err();
+
+    assert!(error.to_string().contains("Transfer"));
+    assert!(world.party_command_finishes.lock().unwrap().is_empty());
+    assert!(instances.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_remote_party_member_cannot_direct_a_bot_in_another_partition() {
+    let (_realm, world, instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    instances
+        .entity_partitions
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .find(|(guid, _, _)| *guid == FAR_BOT)
+        .unwrap()
+        .1 = 1;
+    let outcome =
+        party::run_party_command_intent(world.as_ref(), &command_intent(FAR_BOT), 9).unwrap();
+    assert_eq!(outcome, party::CompanionCommandOutcome::WrongPartition);
+    assert!(instances.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_bot_without_a_partition_cannot_reach_target_application() {
+    let (_realm, world, _instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    world
+        .entity_partitions
+        .lock()
+        .unwrap()
+        .retain(|(guid, _, _)| *guid != BOT);
+
+    let outcome = party::run_party_command_intent(world.as_ref(), &command_intent(BOT), 9).unwrap();
+
+    assert_eq!(outcome, party::CompanionCommandOutcome::WrongPartition);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_assist_member_without_a_partition_cannot_reach_target_application() {
+    let (_realm, world, _instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    party::run(world.as_ref(), 8, GINGER, party::Op::Invite(TRIN)).unwrap();
+    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    world
+        .entity_partitions
+        .lock()
+        .unwrap()
+        .retain(|(guid, _, _)| *guid != TRIN);
+    let mut intent = command_intent(BOT);
+    intent.kind = 2;
+    intent.authority_member_guid = TRIN;
+
+    let outcome = party::run_party_command_intent(world.as_ref(), &intent, 10).unwrap();
+
+    assert_eq!(outcome, party::CompanionCommandOutcome::WrongPartition);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_unsharded_gateway_uses_the_owning_local_party_authority() {
+    let roster = party::GroupRoster {
+        group_id: 7,
+        leader_guid: GINGER,
+        members: vec![GINGER, BOT],
+        ..Default::default()
+    };
+    let store = InMemoryStore {
+        characters: vec![character(BOT, "Bot")],
+        entity_in_world: true,
+        entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (BOT, 0, 0)]),
+        mirror: std::sync::Mutex::new(vec![roster]),
+        ..Default::default()
+    };
+    let outcome = party::run_party_command_intent(&store, &command_intent(BOT), 9).unwrap();
+    assert_eq!(outcome, party::CompanionCommandOutcome::Applied);
+    assert_eq!(store.admitted_party_commands.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_target_receipt_finishes_a_crashed_attempt_without_reapplying() {
+    let (_realm, world, instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    let intent = command_intent(FAR_BOT);
+    let authority = world
+        .realm
+        .as_ref()
+        .unwrap()
+        .group_roster(GINGER)
+        .unwrap()
+        .unwrap();
+    let admitted = party::AdmittedCompanionCommand {
+        source_identity: intent.source_identity,
+        intent_id: intent.id,
+        issuer_guid: intent.issuer_guid,
+        issuer_sequence: intent.issuer_sequence,
+        group_id: authority.group_id,
+        leader_guid: authority.leader_guid,
+        members: authority.members,
+        kind: intent.kind,
+        bot_guid: intent.bot_guid,
+        authority_member_guid: 0,
+        exact_target_guid: 0,
+        expires_micros: i64::MAX - 1,
+        receipt_retain_until_micros: i64::MAX,
+    };
+    assert_eq!(
+        instances.apply_admitted_party_command(&admitted).unwrap(),
+        party::CompanionCommandOutcome::Applied
+    );
+    let outcome = party::run_party_command_intent(world.as_ref(), &intent, 10).unwrap();
+    assert_eq!(outcome, party::CompanionCommandOutcome::Applied);
+    assert_eq!(instances.admitted_party_commands.lock().unwrap().len(), 1);
+    assert_eq!(world.party_command_finishes.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn an_expired_intent_past_the_receipt_guarantee_reports_unknown() {
+    let store = InMemoryStore::default();
+    let mut intent = command_intent(BOT);
+    intent.expires_micros = 0;
+
+    let outcome = party::finish_expired_party_command_intent(&store, &intent, 55).unwrap();
+
+    assert_eq!(outcome, party::CompanionCommandOutcome::OutcomeUnknown);
+    assert_eq!(
+        store.party_command_finishes.lock().unwrap()[0],
+        (
+            intent.id,
+            55,
+            party::CompanionCommandOutcome::OutcomeUnknown
+        )
+    );
+}
+
+#[test]
+fn equal_numeric_intents_from_distinct_modules_have_distinct_receipts() {
+    let (_realm, world, instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(FAR_BOT)).unwrap();
+    let first = command_intent(FAR_BOT);
+    let mut second = first.clone();
+    second.source_identity = spacetimedb_sdk::Identity::from_byte_array([8; 32]);
+    assert_eq!(
+        party::run_party_command_intent(world.as_ref(), &first, 11).unwrap(),
+        party::CompanionCommandOutcome::Applied
+    );
+    assert_eq!(
+        party::run_party_command_intent(world.as_ref(), &second, 12).unwrap(),
+        party::CompanionCommandOutcome::Applied
+    );
+    assert_eq!(instances.admitted_party_commands.lock().unwrap().len(), 2);
+    assert_eq!(instances.party_command_receipts.lock().unwrap().len(), 2);
 }
 
 /// **AC: an invite works across a shard boundary.**
@@ -210,7 +533,8 @@ fn a_cross_shard_invite_and_accept_form_one_party_on_realm_core() {
         "no party op reached realm-core; calls were {ops:?}"
     );
     assert!(
-        !ops.iter().any(|(_, call)| call == "group_invite" || call == "group_accept"),
+        !ops.iter()
+            .any(|(_, call)| call == "group_invite" || call == "group_accept"),
         "a multi-database gateway must not run the party op on a world shard's own tables — that is \
          exactly the shard-local behaviour realm-wide party routing removes. Calls were {ops:?}"
     );
@@ -976,7 +1300,10 @@ fn a_players_invite_to_a_session_less_bot_is_answered_by_the_bot_itself() {
     // ARGUMENT, so the gateway could trivially accept as somebody else. The bot acts as ITSELF.
     assert_eq!(
         party_state.ops.clone(),
-        vec![(realm_op::INVITE, GINGER, BOT, 0, 0), (realm_op::ACCEPT, BOT, 0, 0, 0)],
+        vec![
+            (realm_op::INVITE, GINGER, BOT, 0, 0),
+            (realm_op::ACCEPT, BOT, 0, 0, 0)
+        ],
         "the accept must run on realm-core with the BOT as the actor — never the inviter, and never 0"
     );
 }
@@ -1065,7 +1392,10 @@ fn the_bots_new_membership_is_mirrored_onto_its_own_shard_by_the_same_op() {
         "the bot's own shard must already hold the roster — it is what `group_leader_entity` reads"
     );
     assert_eq!(
-        world.group_roster_by_id(group_id).unwrap().map(|r| r.leader_guid),
+        world
+            .group_roster_by_id(group_id)
+            .unwrap()
+            .map(|r| r.leader_guid),
         Some(GINGER),
         "and the leader in that mirror is the PLAYER: the follow-the-leader pass resolves its anchor \
          from `game_group.leader_guid` and never asks whether the leader is a bot"
@@ -1177,7 +1507,11 @@ fn the_bot_answers_within_the_invite_op_itself_with_no_second_call() {
         "joined already"
     );
     assert!(
-        !calls.lock().unwrap().iter().any(|(shard, call)| shard != "lyracore-realm"
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(shard, call)| shard != "lyracore-realm"
             && (call == "group_accept" || call == "group_invite")),
         "the answer must never run on a world shard's own party tables — that would write membership \
          the authority does not have. Calls were {:?}",
@@ -1347,7 +1681,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     for _ in 0..WORLD_ENTRY_PACKETS {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
             Ok(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r)) if r.member == "Nobodyatall" => {
-                break
+                break;
             }
             Ok(_) => {}
             Err(_) => break, // the deadline fired — the assertions below say what was missing
@@ -1742,7 +2076,8 @@ fn an_unsharded_deployment_still_routes_a_bot_invite_through_realm_group_op() {
 
     let log = calls.lock().unwrap().clone();
     assert!(
-        log.iter().any(|(shard, call)| shard == "world" && call == "realm_group_op"),
+        log.iter()
+            .any(|(shard, call)| shard == "world" && call == "realm_group_op"),
         "an unsharded deployment must still use the guid-based realm_group_op — a bot has no account \
          connection for `run`'s unsharded arm to call the player-facing reducers as. Calls were {log:?}"
     );

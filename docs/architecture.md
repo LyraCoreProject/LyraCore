@@ -411,6 +411,18 @@ from outside any one Shard. Before executing an invite, each callback asks the W
 atomically delete its intent row. Only the successful Gateway calls `realm_group_op`; callbacks in
 other Gateway processes and callbacks installed after a reconnect stop when the row is gone.
 
+Authenticated Companion Orders use a different relay because target application and the source
+reply can commit on different World Shards. `game_party_command_intent` remains pending in a fixed
+set of fair dispatch lanes while the Gateway certifies the exact current Realm-core roster and
+compares the target Shard's local Group mirror. The target transaction keeps a Command Receipt
+keyed by source Module Identity and intent id. The bounded receipt window travels with its Character
+through Escrow. A retry confirms the receipt on every healthy World Shard before applying gameplay,
+then finishes the source intent and addon reply in one transaction. An unavailable Shard leaves the
+intent pending; an intent recovered after its receipt guarantee ends reports an unknown outcome
+instead of claiming that gameplay did not run. The authenticated issuer's Character-owned sequence
+also travels through Escrow. The target records that causal fence even for an unchanged order and
+refuses a delayed older command before it can replace newer intent.
+
 The owner token bypasses recipient RLS, so delivery is gated gateway-side: recipient-keyed lookups
 plus the `private_recipient_audience` predicate for the private tier, per-viewer gates for the
 broadcast tier.

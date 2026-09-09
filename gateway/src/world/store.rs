@@ -194,6 +194,11 @@ pub trait WorldStore:
         Ok(self.realm_store())
     }
 
+    /// Realm-core for companion command authority. Configured outages fail closed.
+    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        Ok(self.realm_store())
+    }
+
     /// Every connected WORLD shard's handle (realm-core excluded — it owns no gameplay reads). The
     /// fan-out set for the roster mirror; empty on a single-database gateway, which is what makes the
     /// mirror push a no-op there.
@@ -201,9 +206,72 @@ pub trait WorldStore:
         Vec::new()
     }
 
+    /// Every configured World Shard for command receipt and holder admission. Missing or unhealthy
+    /// members are an infrastructure error because absence cannot be certified on a partial set.
+    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
+        Ok(self.world_stores())
+    }
+
     /// Admit and claim one Group Intent against current World Shard state. Refusals include a
     /// consumed intent or suppressed action. Transport failures remain distinct.
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<party::PartyOutcome>;
+
+    fn claim_party_command_intent(&self, _intent_id: u64, _claim_token: u64) -> Result<()> {
+        Err(anyhow!(
+            "this store does not host companion command intents"
+        ))
+    }
+
+    fn admit_party_command_authority(
+        &self,
+        _group_id: u64,
+        _leader_guid: u64,
+        _bot_guid: u64,
+        _authority_member_guid: u64,
+        _expected_members: Vec<u64>,
+    ) -> Result<party::CompanionCommandOutcome> {
+        Err(anyhow!(
+            "this store does not host realm-wide party authority"
+        ))
+    }
+
+    fn apply_admitted_party_command(
+        &self,
+        _command: &party::AdmittedCompanionCommand,
+    ) -> Result<party::CompanionCommandOutcome> {
+        Err(anyhow!(
+            "this store does not host companion command application"
+        ))
+    }
+
+    fn finish_party_command_intent(
+        &self,
+        _intent_id: u64,
+        _claim_token: u64,
+        _outcome: party::CompanionCommandOutcome,
+    ) -> Result<()> {
+        Err(anyhow!(
+            "this store does not host companion command intents"
+        ))
+    }
+
+    fn confirm_party_command_receipt(
+        &self,
+        _source_identity: spacetimedb_sdk::Identity,
+        _intent_id: u64,
+    ) -> Result<Option<party::CompanionCommandOutcome>> {
+        Ok(None)
+    }
+
+    fn confirm_party_command_holder(&self, _bot_guid: u64) -> Result<party::PartyCommandHolder> {
+        Err(anyhow!(
+            "this store does not host companion command targets"
+        ))
+    }
+
+    fn entity_partition(&self, _guid: u64) -> Option<(u32, u64)> {
+        None
+    }
 
     /// Acknowledged World Shard admission for one automatic group action. A later controller
     /// selection cannot undo admission or membership already committed on Realm-core.
@@ -238,6 +306,22 @@ pub trait WorldStore:
     /// realm-core, a mirror on a world shard. `None` = not in a party there.
     fn group_roster(&self, _character_guid: u64) -> Result<Option<party::GroupRoster>> {
         Ok(None)
+    }
+
+    /// Bounded party projection used by companion-command authority. An oversized or otherwise
+    /// unreadable projection is an infrastructure failure, never proof of membership.
+    fn party_command_group_roster(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<party::GroupRoster>> {
+        let roster = self.group_roster(character_guid)?;
+        if roster
+            .as_ref()
+            .is_some_and(|roster| roster.members.len() > lyracore_shared::group::GROUP_MAX_MEMBERS)
+        {
+            anyhow::bail!("party command roster exceeds the member limit");
+        }
+        Ok(roster)
     }
 
     /// [`group_roster`](Self::group_roster) keyed by the group — the read the mirror push needs for a

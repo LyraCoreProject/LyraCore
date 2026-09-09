@@ -11,6 +11,9 @@
 use spacetimedb::{log, ReducerContext, SpacetimeType};
 
 use super::TransferOut;
+use crate::bridge::{
+    game_party_command_issuer, game_party_command_receipt, PartyCommandIssuer, PartyCommandReceipt,
+};
 use crate::items::{game_item_instance, ItemInstance};
 
 #[path = "legacy_item_rows.rs"]
@@ -31,6 +34,8 @@ pub(crate) const HOT_TABLES: &[&str] = &[
     "game_player_skill",
     "game_player_spell",
     "game_character_talent",
+    "game_party_command_issuer",
+    "game_party_command_receipt",
     // Hot-state audit: a buff/debuff bar (and Stealth, which is presence-only — no timer
     // to stream in "behind" anything) is exactly the first-frame-visible state this mark describes.
     "game_aura",
@@ -142,6 +147,56 @@ pub struct ManifestEntry {
 pub struct TableRows {
     pub table: String,
     pub rows: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CommandIssuerImportRefusal {
+    TooManyRows { count: usize },
+    OwnerMismatch { expected: u64, actual: u64 },
+    DestinationConflict { character_guid: u64 },
+}
+
+impl std::fmt::Display for CommandIssuerImportRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyRows { count } => {
+                write!(
+                    f,
+                    "COMMAND_ISSUER_CARDINALITY: payload contains {count} rows"
+                )
+            }
+            Self::OwnerMismatch { expected, actual } => write!(
+                f,
+                "COMMAND_ISSUER_OWNER_MISMATCH: expected Character {expected}, found {actual}"
+            ),
+            Self::DestinationConflict { character_guid } => write!(
+                f,
+                "COMMAND_ISSUER_CONFLICT: destination already has Character {character_guid}"
+            ),
+        }
+    }
+}
+
+pub(crate) fn admit_command_issuer_import(
+    character_guid: u64,
+    rows: &[PartyCommandIssuer],
+    destination_exists: bool,
+) -> Result<(), CommandIssuerImportRefusal> {
+    if rows.len() > 1 {
+        return Err(CommandIssuerImportRefusal::TooManyRows { count: rows.len() });
+    }
+    if let Some(row) = rows.first() {
+        if row.character_guid != character_guid {
+            return Err(CommandIssuerImportRefusal::OwnerMismatch {
+                expected: character_guid,
+                actual: row.character_guid,
+            });
+        }
+    }
+    if destination_exists {
+        return Err(CommandIssuerImportRefusal::DestinationConflict { character_guid });
+    }
+    Ok(())
 }
 
 // ===========================================================================================
@@ -382,6 +437,24 @@ pub(crate) fn import_rows(
     let payload = legacy_item_rows::prepare(payload)?;
     if let Some(entry) = payload
         .iter()
+        .find(|entry| entry.table == "game_party_command_issuer")
+    {
+        let mut outcome = Ok(());
+        let rows = decode_rows::<PartyCommandIssuer>(&entry.rows, &mut outcome);
+        outcome?;
+        admit_command_issuer_import(
+            character_guid,
+            &rows,
+            ctx.db
+                .game_party_command_issuer()
+                .character_guid()
+                .find(character_guid)
+                .is_some(),
+        )
+        .map_err(|refusal| refusal.to_string())?;
+    }
+    if let Some(entry) = payload
+        .iter()
         .find(|entry| entry.table == "game_item_instance")
     {
         let mut outcome = Ok(());
@@ -401,6 +474,51 @@ pub(crate) fn import_rows(
                 return Err(format!(
                     "ITEM_GUID_CONFLICT: item {} for Character {character_guid}",
                     row.guid
+                ));
+            }
+        }
+    }
+    if let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_party_command_receipt")
+    {
+        let mut outcome = Ok(());
+        let rows = decode_rows::<PartyCommandReceipt>(&entry.rows, &mut outcome);
+        outcome?;
+        let current_count = ctx
+            .db
+            .game_party_command_receipt()
+            .by_bot()
+            .filter(&character_guid)
+            .take(crate::bridge::RECEIPT_CAPACITY + 1)
+            .count();
+        if rows.len() > crate::bridge::RECEIPT_CAPACITY
+            || current_count.saturating_add(rows.len()) > crate::bridge::RECEIPT_CAPACITY
+        {
+            return Err(format!(
+                "COMMAND_RECEIPT_CAPACITY: Character {character_guid} has {current_count} local and {} arriving receipts",
+                rows.len()
+            ));
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        for row in rows {
+            if row.bot_guid != character_guid {
+                return Err(format!(
+                    "COMMAND_RECEIPT_OWNER_MISMATCH: receipt {} belongs to Character {}",
+                    row.receipt_key, row.bot_guid
+                ));
+            }
+            if !keys.insert(row.receipt_key.clone())
+                || ctx
+                    .db
+                    .game_party_command_receipt()
+                    .receipt_key()
+                    .find(&row.receipt_key)
+                    .is_some()
+            {
+                return Err(format!(
+                    "COMMAND_RECEIPT_KEY_CONFLICT: receipt {} for Character {character_guid}",
+                    row.receipt_key
                 ));
             }
         }

@@ -45,6 +45,7 @@
 //! | `spirit_res` | `world::do_spirit_healer_res` | ghost actor res at the spirit healer (sickness applies) |
 //! | `accept_group_invite` | `group::accept_invite_for` | pending invite exists + inviter still leads + group not full; roster events fire |
 //! | `set_sessionless_action_consent` | `sessionless::set_sessionless_action_consent` | update Package consent and clear unclaimed Group Intents atomically |
+//! | `companion_target_facts` | `group::companion_target_facts` | exact hostile creature + partition/death/control gates; never selects a substitute |
 //! | `system_message` | `chat::emit_system_message` | recipient exists and is online on this Shard; text is trimmed, bounded, and non-empty |
 //!
 //! Adding a verb = add the row above + the `use ... as` below; if the underlying core is still
@@ -146,6 +147,9 @@ package_only! {
     pub(crate) use crate::quest::apply_turn_in_quest as turn_in_quest;
     pub(crate) use crate::quest::request_turn_in_quest as request_turn_in_quest;
 }
+
+#[cfg(all(has_packages, feature = "debug_reducers"))]
+pub(crate) use crate::bridge::playerbots_fixture_command_drive as fixture_command_drive;
 debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest; }
 
 // ---- loot / inventory / vendor ----
@@ -195,6 +199,11 @@ package_only! {
     pub(crate) use crate::group::accept_invite_for as accept_group_invite;
     pub(crate) use crate::sessionless::set_sessionless_action_consent as set_sessionless_action_consent;
     pub(crate) use crate::sessionless::action_gate as sessionless_action_gate;
+    pub(crate) use crate::group::companion_target_facts as companion_target_facts;
+    pub(crate) use crate::bridge::AdmittedClientCommand as AdmittedClientCommand;
+    pub(crate) use crate::bridge::CommandOutcome as CommandOutcome;
+    pub(crate) use crate::bridge::ParsedClientCommand as ParsedClientCommand;
+    pub(crate) use crate::bridge::RECEIPT_CAPACITY as COMMAND_RECEIPT_CAPACITY;
 }
 
 /// A Refusal classified at the operation's Gate. Detail preserves existing client messages.

@@ -281,6 +281,7 @@ struct InMemoryStore {
     /// The auctioneer's house and faction verdict returned to the focused auction seam.
     auction_interaction: Option<AuctionInteraction>,
     moves: std::sync::Mutex<Vec<MoveRecord>>,
+    client_commands: std::sync::Mutex<Vec<(u64, u64, String, String)>>,
     /// Vendor stock the seam's `vendor_stock` read returns (empty by default).
     vendor_stock: Vec<codec::VendorItemView>,
     /// Imported item templates the query path resolves by entry. Keeping this keyed fixture here
@@ -641,6 +642,23 @@ struct InMemoryStore {
     party_group_ids_error: std::sync::Mutex<Option<String>>,
     /// When set, deleted Character cleanup cannot reach Realm-core.
     party_cleanup_realm_error: Option<String>,
+    party_command_realm_error: Option<String>,
+    party_command_claims: std::sync::Mutex<Vec<(u64, u64)>>,
+    party_command_finishes:
+        std::sync::Mutex<Vec<(u64, u64, super::party::CompanionCommandOutcome)>>,
+    admitted_party_commands: std::sync::Mutex<Vec<super::party::AdmittedCompanionCommand>>,
+    party_command_apply_outcome: Option<super::party::CompanionCommandOutcome>,
+    party_command_receipt_error: std::sync::Mutex<Option<String>>,
+    party_command_authority_members: std::sync::Mutex<Option<Vec<u64>>>,
+    party_command_in_transit: std::sync::Mutex<Vec<u64>>,
+    party_command_receipts: std::sync::Mutex<
+        Vec<(
+            spacetimedb_sdk::Identity,
+            u64,
+            super::party::CompanionCommandOutcome,
+        )>,
+    >,
+    entity_partitions: std::sync::Mutex<Vec<(u64, u32, u64)>>,
     /// The transfer step to fail at, simulating a gateway killed before that step's
     /// transaction committed. `None` = nothing fails.
     kill_at: Option<String>,
@@ -1360,11 +1378,15 @@ impl WorldStore for InMemoryStore {
     }
     fn client_command(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _cmd: String,
-        _payload: String,
+        account_id: u64,
+        self_guid: u64,
+        cmd: String,
+        payload: String,
     ) -> Result<()> {
+        self.client_commands
+            .lock()
+            .unwrap()
+            .push((account_id, self_guid, cmd, payload));
         Ok(())
     }
 
@@ -2441,6 +2463,136 @@ impl WorldStore for InMemoryStore {
         Ok(self.realm_store())
     }
 
+    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.party_command_realm_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.realm_store())
+    }
+
+    fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
+        self.party_command_claims
+            .lock()
+            .unwrap()
+            .push((intent_id, claim_token));
+        Ok(())
+    }
+
+    fn admit_party_command_authority(
+        &self,
+        group_id: u64,
+        leader_guid: u64,
+        bot_guid: u64,
+        authority_member_guid: u64,
+        mut expected_members: Vec<u64>,
+    ) -> Result<super::party::CompanionCommandOutcome> {
+        let roster = self.group_roster(leader_guid)?;
+        let Some(roster) = roster else {
+            return Ok(super::party::CompanionCommandOutcome::NotMember);
+        };
+        if roster.group_id != group_id || roster.leader_guid != leader_guid {
+            return Ok(super::party::CompanionCommandOutcome::NotLeader);
+        }
+        expected_members.sort_unstable();
+        let mut current_members = self
+            .party_command_authority_members
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| roster.members.clone());
+        current_members.sort_unstable();
+        if expected_members != current_members {
+            return Ok(super::party::CompanionCommandOutcome::StalePartyMirror);
+        }
+        if !roster.members.contains(&bot_guid)
+            || (authority_member_guid != 0 && !roster.members.contains(&authority_member_guid))
+        {
+            return Ok(super::party::CompanionCommandOutcome::NotMember);
+        }
+        Ok(super::party::CompanionCommandOutcome::Applied)
+    }
+
+    fn apply_admitted_party_command(
+        &self,
+        command: &super::party::AdmittedCompanionCommand,
+    ) -> Result<super::party::CompanionCommandOutcome> {
+        self.admitted_party_commands
+            .lock()
+            .unwrap()
+            .push(command.clone());
+        let outcome = self
+            .party_command_apply_outcome
+            .unwrap_or(super::party::CompanionCommandOutcome::Applied);
+        if outcome != super::party::CompanionCommandOutcome::WaitingForCapacity {
+            self.party_command_receipts.lock().unwrap().push((
+                command.source_identity,
+                command.intent_id,
+                outcome,
+            ));
+        }
+        Ok(outcome)
+    }
+
+    fn finish_party_command_intent(
+        &self,
+        intent_id: u64,
+        claim_token: u64,
+        outcome: super::party::CompanionCommandOutcome,
+    ) -> Result<()> {
+        self.party_command_finishes
+            .lock()
+            .unwrap()
+            .push((intent_id, claim_token, outcome));
+        Ok(())
+    }
+
+    fn confirm_party_command_receipt(
+        &self,
+        source_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+    ) -> Result<Option<super::party::CompanionCommandOutcome>> {
+        if let Some(error) = self.party_command_receipt_error.lock().unwrap().as_ref() {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self
+            .party_command_receipts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(source, id, _)| *source == source_identity && *id == intent_id)
+            .map(|(_, _, outcome)| *outcome))
+    }
+
+    fn confirm_party_command_holder(&self, guid: u64) -> Result<super::party::PartyCommandHolder> {
+        Ok(
+            if self
+                .party_command_in_transit
+                .lock()
+                .unwrap()
+                .contains(&guid)
+            {
+                super::party::PartyCommandHolder::InTransit
+            } else if self
+                .characters
+                .iter()
+                .any(|character| character.guid == guid)
+            {
+                super::party::PartyCommandHolder::Present
+            } else {
+                super::party::PartyCommandHolder::Missing
+            },
+        )
+    }
+
+    fn entity_partition(&self, guid: u64) -> Option<(u32, u64)> {
+        self.entity_partitions
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(candidate, _, _)| *candidate == guid)
+            .map(|(_, map, instance)| (*map, *instance))
+    }
+
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
         self.peers
             .lock()
@@ -2448,6 +2600,13 @@ impl WorldStore for InMemoryStore {
             .iter()
             .map(|p| p.clone() as std::sync::Arc<dyn WorldStore>)
             .collect()
+    }
+
+    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.world_shard_set_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.world_stores())
     }
 
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<PartyOutcome> {
@@ -5495,7 +5654,10 @@ fn non_movement_opcode_flushes_pending_heartbeat_before_being_handled() {
             "baseline + exactly ONE flushed heartbeat — if coalescing weren't happening, all 3 \
              heartbeats would have forwarded individually (4 total), not 2"
         );
-        assert!((moves[1].1 - 30.0).abs() < 0.01, "the flushed heartbeat must carry the LATEST superseding position, not an earlier dropped one");
+        assert!(
+            (moves[1].1 - 30.0).abs() < 0.01,
+            "the flushed heartbeat must carry the LATEST superseding position, not an earlier dropped one"
+        );
     }
 
     drop(client);

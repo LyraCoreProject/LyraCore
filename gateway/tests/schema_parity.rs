@@ -51,10 +51,10 @@
 //!      order. Reordering/renaming/adding/removing a real field changes the true `Debug` order and
 //!      fails this assertion first.
 //!   2. **Types**: each field is read back off the real instance BY NAME (`&inst.<field>`, which
-//!      only compiles against the struct's REAL current field), and its `AlgebraicType` is
-//!      computed via that field's OWN `SpacetimeType::make_type` — every SATS primitive,
-//!      `Identity`, `Timestamp`, `Option<T>`, and `Vec<T>` already implements `SpacetimeType`;
-//!      only the OUTER row struct is missing it. (`Identity`/`Timestamp` need no special-case
+//!      only compiles against the struct's REAL current field). Primitive and container fields
+//!      delegate to their own `SpacetimeType::make_type`. Generated nested command products read
+//!      their real fields the same way. Generated command sums use exhaustive variant matches and
+//!      assert each variant's actual BSATN tag. (`Identity`/`Timestamp` need no special-case
 //!      mapping: the gateway's `spacetimedb_sdk::Identity`/`Timestamp` and the module's
 //!      `spacetimedb::Identity`/`Timestamp` are the literal same `spacetimedb_lib` type — both
 //!      crates unify on `spacetimedb-lib`/`spacetimedb-sats` 2.7.1 in this workspace's one
@@ -90,7 +90,7 @@
 mod bindings;
 
 use spacetimedb_lib::db::raw_def::v9::RawModuleDefV9Builder;
-use spacetimedb_lib::{AlgebraicType, ProductType, SpacetimeType};
+use spacetimedb_lib::{AlgebraicType, ProductType, SpacetimeType, SumType};
 
 // ---------------------------------------------------------------------------------------------
 // Sentinel: builds ONE real, validly-typed instance of a binding struct so we can read its real
@@ -160,9 +160,187 @@ impl<T: Sentinel> Sentinel for Vec<T> {
     }
 }
 
-/// `T::make_type` inferred from the REAL field's type via `&inst.field` — never hand-typed.
-fn field_shape<T: SpacetimeType>(_value: &T, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
-    T::make_type(ts)
+/// Derive a schema from the binding field's real type and value.
+trait BindingFieldShape {
+    fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType;
+}
+
+macro_rules! binding_field_shape_via_spacetime_type {
+    ($($t:ty),+ $(,)?) => {
+        $(impl BindingFieldShape for $t {
+            fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+                <$t as SpacetimeType>::make_type(ts)
+            }
+        })+
+    };
+}
+
+binding_field_shape_via_spacetime_type!(
+    bool,
+    u8,
+    u16,
+    u32,
+    u64,
+    u128,
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    f32,
+    f64,
+    String,
+    spacetimedb_lib::Identity,
+    spacetimedb_lib::Timestamp,
+    spacetimedb_lib::ScheduleAt,
+);
+
+impl<T: SpacetimeType> BindingFieldShape for Option<T> {
+    fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+        <Self as SpacetimeType>::make_type(ts)
+    }
+}
+
+impl<T: SpacetimeType> BindingFieldShape for Vec<T> {
+    fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+        <Self as SpacetimeType>::make_type(ts)
+    }
+}
+
+impl Sentinel for bindings::parsed_client_command_type::ParsedClientCommand {
+    fn sentinel() -> Self {
+        Self {
+            kind: 0,
+            bot_guid: 0,
+            authority_member_guid: 0,
+            exact_target_guid: 0,
+        }
+    }
+}
+
+impl BindingFieldShape for bindings::parsed_client_command_type::ParsedClientCommand {
+    fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+        let fields = [
+            "kind",
+            "bot_guid",
+            "authority_member_guid",
+            "exact_target_guid",
+        ];
+        assert_eq!(top_level_debug_fields(&format!("{self:?}")), fields);
+        AlgebraicType::Product(
+            [
+                ("kind", field_shape(&self.kind, ts)),
+                ("bot_guid", field_shape(&self.bot_guid, ts)),
+                (
+                    "authority_member_guid",
+                    field_shape(&self.authority_member_guid, ts),
+                ),
+                (
+                    "exact_target_guid",
+                    field_shape(&self.exact_target_guid, ts),
+                ),
+            ]
+            .into(),
+        )
+    }
+}
+
+impl Sentinel for bindings::command_outcome_type::CommandOutcome {
+    fn sentinel() -> Self {
+        Self::Applied
+    }
+}
+
+impl BindingFieldShape for bindings::command_outcome_type::CommandOutcome {
+    fn binding_field_shape(&self, _ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+        use bindings::command_outcome_type::CommandOutcome;
+
+        match self {
+            CommandOutcome::Applied
+            | CommandOutcome::Unchanged
+            | CommandOutcome::Malformed
+            | CommandOutcome::NotLeader
+            | CommandOutcome::NotMember
+            | CommandOutcome::StalePartyMirror
+            | CommandOutcome::WrongAccount
+            | CommandOutcome::MissingBot
+            | CommandOutcome::WrongPartition
+            | CommandOutcome::Suppressed
+            | CommandOutcome::TargetDead
+            | CommandOutcome::TargetUnavailable
+            | CommandOutcome::TargetControlled
+            | CommandOutcome::Expired
+            | CommandOutcome::WaitingForCapacity
+            | CommandOutcome::OutcomeUnknown
+            | CommandOutcome::Superseded => {}
+        }
+        let variants = [
+            ("Applied", CommandOutcome::Applied),
+            ("Unchanged", CommandOutcome::Unchanged),
+            ("Malformed", CommandOutcome::Malformed),
+            ("NotLeader", CommandOutcome::NotLeader),
+            ("NotMember", CommandOutcome::NotMember),
+            ("StalePartyMirror", CommandOutcome::StalePartyMirror),
+            ("WrongAccount", CommandOutcome::WrongAccount),
+            ("MissingBot", CommandOutcome::MissingBot),
+            ("WrongPartition", CommandOutcome::WrongPartition),
+            ("Suppressed", CommandOutcome::Suppressed),
+            ("TargetDead", CommandOutcome::TargetDead),
+            ("TargetUnavailable", CommandOutcome::TargetUnavailable),
+            ("TargetControlled", CommandOutcome::TargetControlled),
+            ("Expired", CommandOutcome::Expired),
+            ("WaitingForCapacity", CommandOutcome::WaitingForCapacity),
+            ("OutcomeUnknown", CommandOutcome::OutcomeUnknown),
+            ("Superseded", CommandOutcome::Superseded),
+        ];
+        for (tag, (name, value)) in variants.iter().enumerate() {
+            assert_eq!(
+                spacetimedb_lib::bsatn::to_vec(value).expect("command outcome serializes"),
+                [tag as u8],
+                "CommandOutcome::{name} no longer has its published BSATN tag"
+            );
+        }
+        AlgebraicType::Sum(
+            variants
+                .map(|(name, _)| (name, AlgebraicType::Product(ProductType::unit())))
+                .into(),
+        )
+    }
+}
+
+impl Sentinel for bindings::command_intent_state_type::CommandIntentState {
+    fn sentinel() -> Self {
+        Self::Pending
+    }
+}
+
+impl BindingFieldShape for bindings::command_intent_state_type::CommandIntentState {
+    fn binding_field_shape(&self, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+        use bindings::command_intent_state_type::CommandIntentState;
+        use bindings::command_outcome_type::CommandOutcome;
+
+        match self {
+            CommandIntentState::Pending | CommandIntentState::Finished(_) => {}
+        }
+        assert_eq!(
+            spacetimedb_lib::bsatn::to_vec(&CommandIntentState::Pending)
+                .expect("pending command state serializes"),
+            [0]
+        );
+        assert_eq!(
+            spacetimedb_lib::bsatn::to_vec(&CommandIntentState::Finished(CommandOutcome::Applied))
+                .expect("finished command state serializes"),
+            [1, 0]
+        );
+        AlgebraicType::Sum(SumType::from([
+            ("Pending", AlgebraicType::Product(ProductType::unit())),
+            ("Finished", CommandOutcome::Applied.binding_field_shape(ts)),
+        ]))
+    }
+}
+
+fn field_shape<T: BindingFieldShape>(value: &T, ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+    value.binding_field_shape(ts)
 }
 
 /// Extract the top-level `field_name:` identifiers from a derived `Debug` output of the shape
@@ -453,6 +631,17 @@ parity_test!(parity_game_bot_invite_intent, "game_bot_invite_intent", lyracore_m
 // `world::transfer::run_bot_transfer` relay — the transfer twin of the row above.
 parity_test!(parity_game_bot_transfer_intent, "game_bot_transfer_intent", lyracore_module::BotTransferIntent, bindings::bot_transfer_intent_type::BotTransferIntent, {
     id, bot_guid, destination_map, destination_instance, reason, created_at,
+});
+parity_test!(parity_game_party_command_intent, "game_party_command_intent", lyracore_module::PartyCommandIntent, bindings::party_command_intent_type::PartyCommandIntent, {
+    id, source_identity, issuer_guid, reply_identity, issuer_sequence, command, created_micros,
+    expires_micros, result_reap_micros, claim_token, claim_until_micros, pending, state,
+    dispatch_lane, dispatch_next,
+});
+parity_test!(parity_game_party_command_dispatch_lane, "game_party_command_dispatch_lane", lyracore_module::PartyCommandDispatchLane, bindings::party_command_dispatch_lane_type::PartyCommandDispatchLane, {
+    lane, head_intent_id, tail_intent_id,
+});
+parity_test!(parity_game_party_command_receipt, "game_party_command_receipt", lyracore_module::PartyCommandReceipt, bindings::party_command_receipt_type::PartyCommandReceipt, {
+    id, receipt_key, source_identity, intent_id, bot_guid, outcome, retain_until_micros,
 });
 // The private per-recipient whisper relay, now readable on TWO connections — the
 // per-player one under RLS (unchanged) and realm-core's coordinator, which self-filters on the
@@ -852,6 +1041,9 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_levelup_event",
     "game_bot_invite_intent",
     "game_bot_transfer_intent",
+    "game_party_command_intent",
+    "game_party_command_dispatch_lane",
+    "game_party_command_receipt",
     "game_addon_message",
     "game_character_explored",
     "game_account",

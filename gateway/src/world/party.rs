@@ -42,7 +42,7 @@ use anyhow::Result;
 
 use super::{send, Outbound, SessionTx, WorldStore};
 use crate::codec;
-use lyracore_shared::group::{bot_op, realm_op, GroupRefusal};
+use lyracore_shared::group::{bot_op, realm_op, GroupRefusal, COMMAND_RESULT_WINDOW_MICROS};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
 /// One party, as the database that holds it sees it. Read from realm-core it is the authority; read
@@ -102,6 +102,273 @@ pub enum Op {
 pub(crate) enum PartyOutcome {
     Ran,
     Refused(GroupRefusal),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompanionCommandOutcome {
+    Applied,
+    Unchanged,
+    Malformed,
+    NotLeader,
+    NotMember,
+    StalePartyMirror,
+    WrongAccount,
+    MissingBot,
+    WrongPartition,
+    Suppressed,
+    TargetDead,
+    TargetUnavailable,
+    TargetControlled,
+    Expired,
+    WaitingForCapacity,
+    OutcomeUnknown,
+    Superseded,
+}
+
+#[derive(Clone, Debug)]
+pub struct PartyCommandIntent {
+    pub id: u64,
+    pub source_identity: spacetimedb_sdk::Identity,
+    pub issuer_guid: u64,
+    pub issuer_sequence: u64,
+    pub kind: u8,
+    pub bot_guid: u64,
+    pub authority_member_guid: u64,
+    pub exact_target_guid: u64,
+    pub expires_micros: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct AdmittedCompanionCommand {
+    pub source_identity: spacetimedb_sdk::Identity,
+    pub intent_id: u64,
+    pub issuer_guid: u64,
+    pub issuer_sequence: u64,
+    pub group_id: u64,
+    pub leader_guid: u64,
+    pub members: Vec<u64>,
+    pub kind: u8,
+    pub bot_guid: u64,
+    pub authority_member_guid: u64,
+    pub exact_target_guid: u64,
+    pub expires_micros: i64,
+    pub receipt_retain_until_micros: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartyCommandHolder {
+    Present,
+    Missing,
+    InTransit,
+}
+
+fn receipt_anywhere<St: WorldStore + ?Sized>(
+    source: &St,
+    source_identity: spacetimedb_sdk::Identity,
+    intent_id: u64,
+) -> Result<Option<CompanionCommandOutcome>> {
+    let mut found = source.confirm_party_command_receipt(source_identity, intent_id)?;
+    for shard in source.party_command_worlds()? {
+        if let Some(outcome) = shard.confirm_party_command_receipt(source_identity, intent_id)? {
+            if found.is_some_and(|previous| previous != outcome) {
+                anyhow::bail!(
+                    "party command receipt {source_identity}/{intent_id} has conflicting outcomes"
+                );
+            }
+            found = Some(outcome);
+        }
+    }
+    Ok(found)
+}
+
+pub(crate) fn finish_expired_party_command_intent<St: WorldStore + ?Sized>(
+    source: &St,
+    intent: &PartyCommandIntent,
+    claim_token: u64,
+) -> Result<CompanionCommandOutcome> {
+    let outcome =
+        receipt_anywhere(source, intent.source_identity, intent.id)?.unwrap_or_else(|| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as i64;
+            if now
+                >= intent
+                    .expires_micros
+                    .saturating_add(COMMAND_RESULT_WINDOW_MICROS)
+            {
+                CompanionCommandOutcome::OutcomeUnknown
+            } else {
+                CompanionCommandOutcome::Expired
+            }
+        });
+    source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+    Ok(outcome)
+}
+
+fn same_authority(left: &GroupRoster, right: &GroupRoster) -> bool {
+    let mut left_members = left.members.clone();
+    let mut right_members = right.members.clone();
+    left_members.sort_unstable();
+    right_members.sort_unstable();
+    left.group_id == right.group_id
+        && left.leader_guid == right.leader_guid
+        && left_members == right_members
+}
+
+/// Claim, certify on Realm-core, compare the target mirror, apply once, then finalize at source.
+/// The Realm-core Durable Request is the authority point; a later party change cannot recall an
+/// already applied order. Every retry before target application repeats this operation.
+pub(crate) fn run_party_command_intent<St: WorldStore>(
+    source: &St,
+    intent: &PartyCommandIntent,
+    claim_token: u64,
+) -> Result<CompanionCommandOutcome> {
+    source.claim_party_command_intent(intent.id, claim_token)?;
+
+    if let Some(outcome) = receipt_anywhere(source, intent.source_identity, intent.id)? {
+        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+        return Ok(outcome);
+    }
+
+    let world_shards = source.party_command_worlds()?;
+    let target: &dyn WorldStore;
+    let owned_target;
+    if world_shards.is_empty() {
+        match source.confirm_party_command_holder(intent.bot_guid)? {
+            PartyCommandHolder::Present => {}
+            PartyCommandHolder::InTransit => anyhow::bail!("party command bot is in Transfer"),
+            PartyCommandHolder::Missing => {
+                let outcome = CompanionCommandOutcome::MissingBot;
+                source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+                return Ok(outcome);
+            }
+        }
+        target = source;
+    } else {
+        let mut holders = Vec::new();
+        let mut in_transit = false;
+        for shard in &world_shards {
+            match shard.confirm_party_command_holder(intent.bot_guid)? {
+                PartyCommandHolder::Present => holders.push(shard.clone()),
+                PartyCommandHolder::InTransit => in_transit = true,
+                PartyCommandHolder::Missing => {}
+            }
+        }
+        if in_transit {
+            anyhow::bail!("party command bot is in Transfer");
+        }
+        let Some(holder) = holders.pop() else {
+            let outcome = CompanionCommandOutcome::MissingBot;
+            source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+            return Ok(outcome);
+        };
+        if !holders.is_empty() {
+            anyhow::bail!(
+                "bot {} has more than one live World Shard holder",
+                intent.bot_guid
+            );
+        }
+        owned_target = holder;
+        target = owned_target.as_ref();
+    }
+
+    let owned_realm;
+    let realm: &dyn WorldStore = match source.party_command_realm()? {
+        Some(handle) => {
+            owned_realm = handle;
+            owned_realm.as_ref()
+        }
+        None => source,
+    };
+    let Some(authority) = realm.party_command_group_roster(intent.issuer_guid)? else {
+        let outcome = CompanionCommandOutcome::NotMember;
+        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+        return Ok(outcome);
+    };
+    let outcome = if authority.leader_guid != intent.issuer_guid {
+        Some(CompanionCommandOutcome::NotLeader)
+    } else if !authority.members.contains(&intent.bot_guid)
+        || (intent.authority_member_guid != 0
+            && !authority.members.contains(&intent.authority_member_guid))
+    {
+        Some(CompanionCommandOutcome::NotMember)
+    } else {
+        None
+    };
+    if let Some(outcome) = outcome {
+        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+        return Ok(outcome);
+    }
+    let authority_outcome = realm.admit_party_command_authority(
+        authority.group_id,
+        intent.issuer_guid,
+        intent.bot_guid,
+        intent.authority_member_guid,
+        authority.members.clone(),
+    )?;
+    if authority_outcome != CompanionCommandOutcome::Applied {
+        let outcome = authority_outcome;
+        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+        return Ok(outcome);
+    }
+    let local = target.party_command_group_roster(intent.bot_guid)?;
+    if local
+        .as_ref()
+        .is_none_or(|local| !same_authority(local, &authority))
+    {
+        let outcome = CompanionCommandOutcome::StalePartyMirror;
+        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+        return Ok(outcome);
+    }
+    let bot_partition = target.entity_partition(intent.bot_guid);
+    let issuer_partition = source.entity_partition(intent.issuer_guid).or_else(|| {
+        world_shards
+            .iter()
+            .find_map(|shard| shard.entity_partition(intent.issuer_guid))
+    });
+    let member_partition = (intent.authority_member_guid != 0)
+        .then(|| {
+            source
+                .entity_partition(intent.authority_member_guid)
+                .or_else(|| {
+                    world_shards
+                        .iter()
+                        .find_map(|shard| shard.entity_partition(intent.authority_member_guid))
+                })
+        })
+        .flatten();
+    let member_partition_required = intent.authority_member_guid != 0;
+    if bot_partition.is_none()
+        || issuer_partition != bot_partition
+        || (member_partition_required && member_partition != bot_partition)
+    {
+        let outcome = CompanionCommandOutcome::WrongPartition;
+        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+        return Ok(outcome);
+    }
+    let admitted = AdmittedCompanionCommand {
+        source_identity: intent.source_identity,
+        intent_id: intent.id,
+        issuer_guid: intent.issuer_guid,
+        issuer_sequence: intent.issuer_sequence,
+        group_id: authority.group_id,
+        leader_guid: authority.leader_guid,
+        members: authority.members,
+        kind: intent.kind,
+        bot_guid: intent.bot_guid,
+        authority_member_guid: intent.authority_member_guid,
+        exact_target_guid: intent.exact_target_guid,
+        expires_micros: intent.expires_micros,
+        receipt_retain_until_micros: intent
+            .expires_micros
+            .saturating_add(COMMAND_RESULT_WINDOW_MICROS),
+    };
+    let outcome = target.apply_admitted_party_command(&admitted)?;
+    if outcome != CompanionCommandOutcome::WaitingForCapacity {
+        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+    }
+    Ok(outcome)
 }
 
 impl From<GroupRefusal> for PartyOutcome {
@@ -692,7 +959,9 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
     let now = match realm.group_roster(self_guid) {
         Ok(r) => r,
         Err(e) => {
-            log::warn!("party: could not read the realm-core roster for {self_guid} ({e:#}) — the shard mirrors keep their previous roster until the next op or world entry");
+            log::warn!(
+                "party: could not read the realm-core roster for {self_guid} ({e:#}) — the shard mirrors keep their previous roster until the next op or world entry"
+            );
             return;
         }
     };
@@ -712,7 +981,9 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
             // shards keep a party that no longer exists and its members stay grouped locally.
             Ok(None) => GroupRoster::disbanded(group_id),
             Err(e) => {
-                log::warn!("party: could not read realm-core group {group_id} ({e:#}) — shard mirrors unchanged");
+                log::warn!(
+                    "party: could not read realm-core group {group_id} ({e:#}) — shard mirrors unchanged"
+                );
                 continue;
             }
         };

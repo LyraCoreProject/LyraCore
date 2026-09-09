@@ -18,6 +18,7 @@ use crate::codec;
 use crate::realm_core::SessionKey;
 use crate::world::{SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
+use super::bindings::game_world_entity_table::GameWorldEntityTableAccess;
 use super::bindings::GwMove;
 use super::connection::{CharacterPresenceSnapshot, Coordinator};
 use super::views::{AccountRow, RealmRow};
@@ -1061,6 +1062,14 @@ impl WorldStore for Coordinator {
             .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
     }
 
+    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if !self.is_sharded() {
+            return Ok(None);
+        }
+        self.realm_core()
+            .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
+    }
+
     /// Every connected WORLD shard (realm-core excluded by `ShardMap::shards`, as always) — the
     /// mirror fan-out set. Empty when unsharded, so the push costs a single-database gateway nothing.
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
@@ -1073,8 +1082,83 @@ impl WorldStore for Coordinator {
             .collect()
     }
 
+    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
+        if !self.is_sharded() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .configured_world_shards()?
+            .into_iter()
+            .map(|coordinator| std::sync::Arc::new(coordinator) as std::sync::Arc<dyn WorldStore>)
+            .collect())
+    }
+
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<crate::world::party::PartyOutcome> {
         self.claim_bot_invite_intent(intent_id)
+    }
+
+    fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
+        Coordinator::claim_party_command_intent(self, intent_id, claim_token)
+    }
+
+    fn admit_party_command_authority(
+        &self,
+        group_id: u64,
+        leader_guid: u64,
+        bot_guid: u64,
+        authority_member_guid: u64,
+        expected_members: Vec<u64>,
+    ) -> Result<crate::world::party::CompanionCommandOutcome> {
+        Coordinator::admit_party_command_authority(
+            self,
+            group_id,
+            leader_guid,
+            bot_guid,
+            authority_member_guid,
+            expected_members,
+        )
+    }
+
+    fn apply_admitted_party_command(
+        &self,
+        command: &crate::world::party::AdmittedCompanionCommand,
+    ) -> Result<crate::world::party::CompanionCommandOutcome> {
+        Coordinator::apply_admitted_party_command(self, command)
+    }
+
+    fn finish_party_command_intent(
+        &self,
+        intent_id: u64,
+        claim_token: u64,
+        outcome: crate::world::party::CompanionCommandOutcome,
+    ) -> Result<()> {
+        Coordinator::finish_party_command_intent(self, intent_id, claim_token, outcome)
+    }
+
+    fn confirm_party_command_receipt(
+        &self,
+        source_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+    ) -> Result<Option<crate::world::party::CompanionCommandOutcome>> {
+        Coordinator::confirm_party_command_receipt(self, source_identity, intent_id)
+    }
+
+    fn confirm_party_command_holder(
+        &self,
+        bot_guid: u64,
+    ) -> Result<crate::world::party::PartyCommandHolder> {
+        Coordinator::confirm_party_command_holder(self, bot_guid)
+    }
+
+    fn entity_partition(&self, guid: u64) -> Option<(u32, u64)> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_world_entity()
+            .guid()
+            .find(&guid)
+            .map(|entity| (entity.map_id, entity.instance_id))
     }
 
     fn admit_sessionless_group_action(
@@ -1107,6 +1191,13 @@ impl WorldStore for Coordinator {
         character_guid: u64,
     ) -> Result<Option<crate::world::party::GroupRoster>> {
         Ok(self.group_roster(character_guid))
+    }
+
+    fn party_command_group_roster(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<crate::world::party::GroupRoster>> {
+        self.party_command_group_roster(character_guid)
     }
 
     fn group_roster_by_id(
@@ -1539,7 +1630,10 @@ mod routing_call_site_tests {
                  crate::realm_core::publish_shard_index(self, character_guid, map_id, instance_id) }",
             ),
         ] {
-            let got = code_of(method).split_whitespace().collect::<Vec<_>>().join(" ");
+            let got = code_of(method)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             let want = want.split_whitespace().collect::<Vec<_>>().join(" ");
             assert_eq!(
                 got.trim_end_matches('}').trim_end(),

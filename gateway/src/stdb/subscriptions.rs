@@ -32,6 +32,9 @@ use super::views::{corpse_view, entity_view, go_view, hunter_pet_protocol_view};
 use super::world_index::{CellKey, EntityLayer};
 use super::world_view::{self, Viewer, WorldView};
 
+#[cfg(test)]
+static DURABLE_TOPOLOGY_ENV_LOCK: Mutex<()> = Mutex::new(());
+
 /// RAII guard for one world session's shared-view registration, held by the world connection.
 /// Dropping the guard makes the session unreachable from every shard-level dispatcher.
 pub struct PlayerSubscriptions {
@@ -3367,6 +3370,71 @@ fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<
     }
 }
 impl Coordinator {
+    pub fn spawn_party_command_relay(&self) {
+        for shard in self.all_shards() {
+            let polling_shard = shard.clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("party-command-dispatch".into())
+                .spawn(move || loop {
+                    polling_shard.dispatch_party_command_intents();
+                    std::thread::sleep(Duration::from_millis(100));
+                })
+            {
+                log::error!("could not start party command dispatcher: {error}");
+            }
+        }
+    }
+
+    fn dispatch_party_command_intents(&self) {
+        const DISPATCH_LANE_LIMIT: usize = lyracore_shared::group::COMMAND_DISPATCH_LANES as usize;
+        let pending = {
+            let live = self.0.coord();
+            let lanes: Vec<_> = live
+                .conn
+                .db
+                .game_party_command_dispatch_lane()
+                .iter()
+                .take(DISPATCH_LANE_LIMIT + 1)
+                .map(|lane| lane.head_intent_id)
+                .collect();
+            if lanes.len() > DISPATCH_LANE_LIMIT {
+                if !self
+                    .0
+                    .party_command_lane_overflow
+                    .swap(true, Ordering::AcqRel)
+                {
+                    log::error!(
+                        "party command dispatcher found more than {DISPATCH_LANE_LIMIT} lanes; \
+                         command dispatch on this Shard is stopped until the Module and Gateway \
+                         lane counts agree"
+                    );
+                }
+                return;
+            }
+            if self
+                .0
+                .party_command_lane_overflow
+                .swap(false, Ordering::AcqRel)
+            {
+                log::info!("party command dispatcher lane count recovered on this Shard");
+            }
+            lanes
+                .into_iter()
+                .filter_map(|head_intent_id| {
+                    live.conn
+                        .db
+                        .game_party_command_intent()
+                        .id()
+                        .find(&head_intent_id)
+                        .map(|row| party_command_intent(&row))
+                })
+                .collect::<Vec<_>>()
+        };
+        for intent in pending {
+            attempt_party_command(self, intent);
+        }
+    }
+
     /// Prepare and register one live viewer. Row callbacks are already armed once per shard in
     /// `world_view::arm_shard`; this method registers no callback of its own.
     pub fn subscribe_player_events(
@@ -3582,6 +3650,59 @@ impl Coordinator {
             view: Some(view),
         })
     }
+}
+
+fn party_command_intent(row: &PartyCommandIntent) -> crate::world::party::PartyCommandIntent {
+    crate::world::party::PartyCommandIntent {
+        id: row.id,
+        source_identity: row.source_identity,
+        issuer_guid: row.issuer_guid,
+        issuer_sequence: row.issuer_sequence,
+        kind: row.command.kind,
+        bot_guid: row.command.bot_guid,
+        authority_member_guid: row.command.authority_member_guid,
+        exact_target_guid: row.command.exact_target_guid,
+        expires_micros: row.expires_micros,
+    }
+}
+
+fn attempt_party_command(store: &Coordinator, intent: crate::world::party::PartyCommandIntent) {
+    let claim_token = next_party_command_claim_token();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as i64;
+    if now >= intent.expires_micros {
+        if let Err(error) =
+            crate::world::party::finish_expired_party_command_intent(store, &intent, claim_token)
+        {
+            log::debug!("party command intent {} expiry retry: {error}", intent.id);
+            let _ = store.defer_party_command_intent(intent.id, claim_token);
+        }
+        return;
+    }
+    match crate::world::party::run_party_command_intent(store, &intent, claim_token) {
+        Ok(crate::world::party::CompanionCommandOutcome::WaitingForCapacity) => {
+            if let Err(error) = store.defer_party_command_intent(intent.id, claim_token) {
+                log::debug!("party command intent {} defer: {error}", intent.id);
+            }
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::debug!("party command intent {} retry: {error}", intent.id);
+            let _ = store.defer_party_command_intent(intent.id, claim_token);
+        }
+    }
+}
+
+fn next_party_command_claim_token() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    (time ^ NEXT.fetch_add(1, Ordering::Relaxed)).max(1)
 }
 
 impl Coordinator {
@@ -7231,13 +7352,16 @@ mod tests {
     fn the_10s_task_warns_on_a_fanout_collapse_b1() {
         let body = crate::test_scan::code_of(include_str!("../world/mod.rs"), "pub async fn run(");
         assert!(
-            body.contains("crate::stdb::subscriptions::fanout_health_step(fan, fanout, submitted_delta)"),
+            body.contains(
+                "crate::stdb::subscriptions::fanout_health_step(fan, fanout, submitted_delta)"
+            ),
             "the 10s task no longer runs the fan-out collapse check — peer movement can degrade by \
              40% and the log will say nothing but a MOTIONSTAT line nobody can calibrate. Body \
              was:\n{body}"
         );
         assert!(
-            body.contains("if let Some(low_windows) = fanout_warn {") && body.contains("log::warn!"),
+            body.contains("if let Some(low_windows) = fanout_warn {")
+                && body.contains("log::warn!"),
             "the fan-out verdict is computed but no longer WARNED — the whole point is that it says \
              something out loud. Body was:\n{body}"
         );
@@ -7247,3 +7371,7 @@ mod tests {
 #[cfg(test)]
 #[path = "subscriptions_character_gone_durable_tests.rs"]
 mod character_gone_durable_tests;
+
+#[cfg(test)]
+#[path = "subscriptions_party_command_durable_tests.rs"]
+mod party_command_durable_tests;

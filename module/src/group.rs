@@ -36,8 +36,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
-/// Vanilla party size.
-pub const GROUP_MAX_MEMBERS: usize = 5;
+pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
 
 /// Group kill-reward radius² — members farther than this from the slain creature get neither XP
 /// nor quest credit. Vanilla's `sWorld.getConfig(CONFIG_FLOAT_GROUP_XP_DISTANCE)` = 74.0 yd.
@@ -519,6 +518,129 @@ pub struct PartyEnemyFacts {
     pub current_target_guid: Option<u64>,
     pub top_threat_guid: Option<u64>,
     pub control: Option<crate::spell::UnitControl>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompanionTargetFacts {
+    pub guid: u64,
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub health: u32,
+    pub max_health: u32,
+}
+
+/// Resolve only the named hostile creature. This exact read permits a designated pull without
+/// widening the party fight scan or choosing a substitute target.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub fn companion_target_facts(
+    ctx: &ReducerContext,
+    bot_guid: u64,
+    target_guid: u64,
+) -> Result<CompanionTargetFacts, crate::bridge::CommandOutcome> {
+    let bot = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(bot_guid)
+        .ok_or(crate::bridge::CommandOutcome::MissingBot)?;
+    let target = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .ok_or(crate::bridge::CommandOutcome::TargetUnavailable)?;
+    if (bot.map_id, bot.instance_id) != (target.map_id, target.instance_id) {
+        return Err(crate::bridge::CommandOutcome::WrongPartition);
+    }
+    if target.dead || target.health == 0 {
+        return Err(crate::bridge::CommandOutcome::TargetDead);
+    }
+    if target.is_player() || !crate::combat::may_harm(ctx, &bot, &target) {
+        return Err(crate::bridge::CommandOutcome::TargetUnavailable);
+    }
+    if crate::spell::control_status(ctx, target_guid, 64)
+        .map_err(|_| crate::bridge::CommandOutcome::TargetUnavailable)?
+        .is_some()
+    {
+        return Err(crate::bridge::CommandOutcome::TargetControlled);
+    }
+    Ok(CompanionTargetFacts {
+        guid: target.guid,
+        map_id: target.map_id,
+        instance_id: target.instance_id,
+        x: target.x,
+        y: target.y,
+        z: target.z,
+        health: target.health,
+        max_health: target.max_health,
+    })
+}
+
+/// Recheck the Gateway-certified authority projection and the bot Gate in the target transaction.
+/// `None` means Package application may proceed; `Some` is a terminal typed Refusal.
+pub(crate) fn admit_party_command(
+    ctx: &ReducerContext,
+    admitted: &crate::bridge::AdmittedClientCommand,
+) -> Option<crate::bridge::CommandOutcome> {
+    use crate::bridge::CommandOutcome;
+
+    if let Err(refusal) = crate::sessionless::action_gate(ctx, admitted.command.bot_guid) {
+        return Some(match refusal.kind {
+            crate::actor::ActionRefusalKind::MissingActor => CommandOutcome::MissingBot,
+            crate::actor::ActionRefusalKind::CannotAct => CommandOutcome::WrongAccount,
+            _ => CommandOutcome::Suppressed,
+        });
+    }
+    if let Err(refusal) = crate::sessionless::group_action_gate(ctx, admitted.command.bot_guid) {
+        return Some(match refusal {
+            lyracore_shared::group::GroupRefusal::ActorUnavailable => CommandOutcome::MissingBot,
+            lyracore_shared::group::GroupRefusal::ActionSuppressed => CommandOutcome::Suppressed,
+            _ => CommandOutcome::Suppressed,
+        });
+    }
+    let Some(member) = group_of(ctx, admitted.command.bot_guid) else {
+        return Some(CommandOutcome::StalePartyMirror);
+    };
+    let Some(group) = ctx.db.game_group().group_id().find(member.group_id) else {
+        return Some(CommandOutcome::StalePartyMirror);
+    };
+    let mut local: Vec<_> = ctx
+        .db
+        .game_group_member()
+        .by_group()
+        .filter(&member.group_id)
+        .take(GROUP_MAX_MEMBERS + 1)
+        .map(|row| row.character_guid)
+        .collect();
+    let mut certified = admitted.members.clone();
+    local.sort_unstable();
+    certified.sort_unstable();
+    if local.len() > GROUP_MAX_MEMBERS
+        || member.group_id != admitted.group_id
+        || group.leader_guid != admitted.leader_guid
+        || admitted.leader_guid != admitted.issuer_guid
+        || local != certified
+    {
+        return Some(CommandOutcome::StalePartyMirror);
+    }
+    if admitted.command.authority_member_guid != 0
+        && !local.contains(&admitted.command.authority_member_guid)
+    {
+        return Some(CommandOutcome::NotMember);
+    }
+    if admitted.command.exact_target_guid != 0 {
+        if let Err(outcome) = companion_target_facts(
+            ctx,
+            admitted.command.bot_guid,
+            admitted.command.exact_target_guid,
+        ) {
+            return Some(outcome);
+        }
+    }
+    None
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1416,6 +1538,65 @@ pub fn sync_group_mirror(
             character_guid: guid,
             owner_identity,
         });
+    }
+    Ok(())
+}
+
+/// Acknowledged Realm-core party authority read for one companion command attempt.
+#[reducer]
+pub fn admit_party_command_authority(
+    ctx: &ReducerContext,
+    group_id: u64,
+    leader_guid: u64,
+    bot_guid: u64,
+    authority_member_guid: u64,
+    mut expected_members: Vec<u64>,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let group = ctx
+        .db
+        .game_group()
+        .group_id()
+        .find(group_id)
+        .ok_or_else(|| {
+            crate::bridge::CommandOutcome::StalePartyMirror
+                .tag()
+                .to_string()
+        })?;
+    if group.leader_guid != leader_guid {
+        return Err(crate::bridge::CommandOutcome::NotLeader.tag().to_string());
+    }
+    let members = ctx.db.game_group_member();
+    let mut current_members: Vec<_> = members
+        .by_group()
+        .filter(&group_id)
+        .take(GROUP_MAX_MEMBERS + 1)
+        .map(|member| member.character_guid)
+        .collect();
+    if current_members.len() > GROUP_MAX_MEMBERS || expected_members.len() > GROUP_MAX_MEMBERS {
+        return Err(crate::bridge::CommandOutcome::StalePartyMirror
+            .tag()
+            .to_string());
+    }
+    current_members.sort_unstable();
+    expected_members.sort_unstable();
+    if current_members != expected_members {
+        return Err(crate::bridge::CommandOutcome::StalePartyMirror
+            .tag()
+            .to_string());
+    }
+    for guid in [leader_guid, bot_guid, authority_member_guid]
+        .into_iter()
+        .filter(|guid| *guid != 0)
+    {
+        if members
+            .by_character()
+            .filter(&guid)
+            .next()
+            .is_none_or(|member| member.group_id != group_id)
+        {
+            return Err(crate::bridge::CommandOutcome::NotMember.tag().to_string());
+        }
     }
     Ok(())
 }
