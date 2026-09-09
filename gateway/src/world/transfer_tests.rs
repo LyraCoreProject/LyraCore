@@ -1754,9 +1754,15 @@ fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
             Some((&intent, 701)),
         )
     }));
-    assert!(
-        prepared.is_err(),
-        "the driver must stop after Realm settlement"
+    let panic = prepared.expect_err("the driver must stop after Realm settlement");
+    let message = panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+    assert_eq!(
+        message,
+        Some("LYRACORE_TRANSFER_ABORT_AFTER: injected abort"),
+        "the driver stopped for another reason before the mirror failure"
     );
     assert!(
         !src_db.has(BOT_GUID) && dst_db.has(BOT_GUID) && !dst_db.live(BOT_GUID),
