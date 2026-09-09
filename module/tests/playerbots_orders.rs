@@ -53,6 +53,8 @@ fn evidence(fixture: &OrdersFixture, case: &str) {
         .parent()
         .unwrap();
     let package = root.join("packages/playerbots");
+    let mut package_digest = blake3::Hasher::new();
+    digest_files(&package, &mut package_digest);
     let path = support::log_dir().join(format!("{}-{case}.json", node.shard_name()));
     let record = serde_json::json!({
         "case": case,
@@ -63,6 +65,7 @@ fn evidence(fixture: &OrdersFixture, case: &str) {
         "core_dirty": !git(root, &["status", "--porcelain"]).is_empty(),
         "collection_dirty": !git(&package, &["status", "--porcelain"]).is_empty(),
         "module_wasm_identity": blake3::hash(support::module_bytes()).to_hex().to_string(),
+        "package_content_identity": package_digest.finalize().to_hex().to_string(),
         "orders": node.query_rows("SELECT * FROM pkg_playerbots_companion_order"),
         "intents": node.query_rows("SELECT * FROM game_party_command_intent"),
         "issuers": node.query_rows("SELECT * FROM game_party_command_issuer"),
@@ -336,6 +339,17 @@ fn pass(node: &Standalone, guid: &str) {
     node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
 }
 
+fn select_and_engage(node: &Standalone, member_guid: &str, target_guid: &str) {
+    node.assert_call(
+        "playerbots_fixture_roles_select",
+        &[member_guid, target_guid],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_engage",
+        &[member_guid, target_guid],
+    );
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_orders_authenticate_follow_and_do_not_restart_a_retained_cast() {
@@ -432,9 +446,11 @@ fn playerbots_each_issuer_fence_survives_intervening_leadership() {
     );
     let intervening = queue_as(node, &second_actor, &format!("stay|{}", fixture.warrior));
     let intervening_token = (17_000 + intervening.parse::<u64>().unwrap()).to_string();
+    node.assert_call("claim_party_command_intent", &[&older, &older_token]);
+    node.assert_call("defer_party_command_intent", &[&older, &older_token]);
     node.assert_call(
         "playerbots_fixture_command_drive",
-        &[&intervening, &intervening_token, &fixture.warrior, "false"],
+        &[&intervening, &intervening_token],
     );
     let applied_intervening = order(node, &fixture.warrior);
     assert_eq!(applied_intervening["issuer_guid"], fixture.mage);
@@ -608,10 +624,7 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
     let node = &fixture.node;
     let chosen = &fixture.enemies[1];
     let unrelated = &fixture.enemies[0];
-    node.assert_call(
-        "playerbots_fixture_roles_engage",
-        &[&fixture.leader, chosen],
-    );
+    select_and_engage(node, &fixture.leader, chosen);
     issue(
         &fixture,
         &format!("assist|{}|{}", fixture.warrior, fixture.leader),
@@ -658,10 +671,7 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         ))
         .is_empty());
 
-    node.assert_call(
-        "playerbots_fixture_roles_engage",
-        &[&fixture.leader, chosen],
-    );
+    select_and_engage(node, &fixture.leader, chosen);
     pass(node, &fixture.warrior);
     assert_eq!(
         node.query_rows(&format!(
@@ -684,10 +694,7 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         "playerbots_fixture_roles_clear_control",
         &[&fixture.leader, chosen],
     );
-    node.assert_call(
-        "playerbots_fixture_roles_engage",
-        &[&fixture.leader, chosen],
-    );
+    select_and_engage(node, &fixture.leader, chosen);
     pass(node, &fixture.warrior);
 
     node.assert_call("playerbots_fixture_orders_target_state", &[chosen, "1"]);
@@ -697,10 +704,7 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         .to_ascii_lowercase()
         .contains("wrongpartition"));
     node.assert_call("playerbots_fixture_orders_target_state", &[chosen, "2"]);
-    node.assert_call(
-        "playerbots_fixture_roles_engage",
-        &[&fixture.leader, chosen],
-    );
+    select_and_engage(node, &fixture.leader, chosen);
     pass(node, &fixture.warrior);
 
     node.assert_call("playerbots_fixture_orders_target_state", &[chosen, "0"]);
@@ -710,10 +714,7 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         .to_ascii_lowercase()
         .contains("targetdead"));
     node.assert_call("playerbots_fixture_orders_target_state", &[chosen, "2"]);
-    node.assert_call(
-        "playerbots_fixture_roles_engage",
-        &[&fixture.leader, chosen],
-    );
+    select_and_engage(node, &fixture.leader, chosen);
     pass(node, &fixture.warrior);
 
     node.assert_call("playerbots_fixture_roles_despawn", &[chosen]);
@@ -723,10 +724,7 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         .to_ascii_lowercase()
         .contains("targetunavailable"));
     node.assert_call("playerbots_fixture_orders_restore_target", &[chosen]);
-    node.assert_call(
-        "playerbots_fixture_roles_engage",
-        &[&fixture.leader, chosen],
-    );
+    select_and_engage(node, &fixture.leader, chosen);
     pass(node, &fixture.warrior);
     evidence(&fixture, "assist-target-recovered");
     let recovered = order(node, &fixture.warrior);
