@@ -1709,6 +1709,17 @@ fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
         xdb: Some(src_db.clone()),
         realm: Some(realm.clone()),
         location_shard: Some((36, 7, instances.clone())),
+        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+            map_id: 0,
+            instance_id: 0,
+            revision: 3,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+            bot_transfer_intent_id: 0,
+            bot_controller_generation: 0,
+        })),
         characters: vec![character(GINGER, "Ginger"), character(BOT_GUID, "Botty")],
         // The production shape of a playerbot: a live entity that never logged in.
         live_guids: vec![GINGER, BOT_GUID],
