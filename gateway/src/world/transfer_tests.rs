@@ -199,6 +199,7 @@ fn a_character_moves_whole_between_two_databases_with_its_rows() {
                 // realm-core learns where the character settled HERE — after the escrow's own
                 // transaction committed, before the arrival copy goes live.
                 ("world".to_string(), "publish_shard_index".to_string()),
+                ("instances".to_string(), "sync_transfer_arrival".to_string()),
                 ("instances".to_string(), "release_transfer".to_string()),
                 ("world".to_string(), "evict_instance_population".to_string()),
             ],
@@ -1486,7 +1487,7 @@ fn the_bots_party_is_readable_before_the_arrival_fence_drops() {
         .expect("the Transfer arrival step must complete");
     let released = calls
         .iter()
-        .position(|(_, call)| call == "release_transfer")
+        .rposition(|(_, call)| call == "release_transfer")
         .expect("the destination fence must drop");
     assert!(mirror < prepared && prepared < released, "{calls:?}");
 }
