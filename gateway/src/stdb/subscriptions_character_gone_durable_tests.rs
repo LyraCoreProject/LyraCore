@@ -66,13 +66,18 @@ impl Drop for PrivateCli {
 struct TopologyEnv {
     shard_map: Option<std::ffi::OsString>,
     realm_core: Option<std::ffi::OsString>,
+    _guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl TopologyEnv {
     fn install(shard_map: &str, realm_core: &str) -> Self {
+        let guard = DURABLE_TOPOLOGY_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = Self {
             shard_map: std::env::var_os("LYRACORE_SHARD_MAP"),
             realm_core: std::env::var_os("LYRACORE_REALM_CORE"),
+            _guard: guard,
         };
         std::env::set_var("LYRACORE_SHARD_MAP", shard_map);
         std::env::set_var("LYRACORE_REALM_CORE", realm_core);

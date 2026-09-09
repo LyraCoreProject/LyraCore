@@ -32,6 +32,9 @@ use super::views::{corpse_view, entity_view, go_view, hunter_pet_protocol_view};
 use super::world_index::{CellKey, EntityLayer};
 use super::world_view::{self, Viewer, WorldView};
 
+#[cfg(test)]
+static DURABLE_TOPOLOGY_ENV_LOCK: Mutex<()> = Mutex::new(());
+
 /// RAII guard for one world session's shared-view registration, held by the world connection.
 /// Dropping the guard makes the session unreachable from every shard-level dispatcher.
 pub struct PlayerSubscriptions {

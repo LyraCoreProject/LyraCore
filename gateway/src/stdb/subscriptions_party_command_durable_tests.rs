@@ -1,6 +1,6 @@
 //! Private multi-database proof for companion-command replay and capacity.
 
-use super::{party_command_intent, Coordinator};
+use super::{party_command_intent, Coordinator, DURABLE_TOPOLOGY_ENV_LOCK};
 use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
@@ -11,12 +11,11 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::{Command, Output};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::MutexGuard;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TANK: &str = "0";
 const WARRIOR: &str = "1";
-static TOPOLOGY_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct PrivateCli {
     config: PathBuf,
@@ -187,7 +186,7 @@ struct TopologyEnv {
 
 impl TopologyEnv {
     fn install(shard_map: &str, realm: &str) -> Self {
-        let guard = TOPOLOGY_ENV_LOCK
+        let guard = DURABLE_TOPOLOGY_ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let values = [
