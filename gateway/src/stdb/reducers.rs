@@ -1254,6 +1254,8 @@ impl Coordinator {
         )
     }
 
+    // The arguments mirror the Realm reducer's exact Transfer Gate.
+    #[allow(clippy::too_many_arguments)]
     pub fn begin_character_shard_transfer(
         &self,
         source_map: u32,
@@ -1333,6 +1335,8 @@ impl Coordinator {
         )
     }
 
+    // The arguments mirror the Realm reducer's exact Transfer Gate.
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_pending_character_shard_transfer(
         &self,
         character_guid: u64,

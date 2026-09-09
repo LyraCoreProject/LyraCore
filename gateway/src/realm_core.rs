@@ -15,7 +15,7 @@
 //!
 //! The same one the transfer transport uses, and for the same reason: make the
 //! PRODUCTION function generic over the store type, and put the store behind a small trait. So
-//! [`RealmDb`] is `Coordinator` reduced to the fifteen calls the realm-core split actually makes;
+//! [`RealmDb`] is `Coordinator` reduced to the calls the realm-core split actually makes;
 //! `Coordinator` implements it by forwarding to its own inherent methods (Rust resolves inherent
 //! methods first, so those forwards are views, not recursion), and [`fake::Handle`] implements it
 //! over an in-memory two-database topology. Every function below is then run BY THE TESTS, not
@@ -107,6 +107,56 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     fn character_shard(&self, guid: u64) -> Option<(u32, u64)>;
     /// Write `guid`'s location into this database's character→shard index.
     fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()>;
+    /// Read the ordered Realm partition and any pending Transfer phase.
+    fn realm_character_partition(
+        &self,
+        guid: u64,
+    ) -> Result<Option<crate::world::party::RealmCharacterPartition>>;
+    /// Begin one exact Realm Transfer phase from its observed predecessor.
+    // The arguments preserve the Realm reducer's predecessor, destination, and crossing Gate.
+    #[allow(clippy::too_many_arguments)]
+    fn begin_character_shard_transfer(
+        &self,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        character_guid: u64,
+    ) -> Result<()>;
+    /// Settle the Realm phase for one exact session-less Transfer.
+    fn finish_character_shard_transfer(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()>;
+    /// Settle the Realm phase for one exact player Transfer.
+    fn finish_player_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+    ) -> Result<()>;
+    /// Resume settlement from an exact destination arrival fence.
+    // The arguments preserve the Realm reducer's predecessor, destination, and crossing Gate.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_pending_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        transfer_intent_id: u64,
+        controller_generation: u64,
+    ) -> Result<()>;
     /// Does THIS database hold an in-flight escrow (`game_transfer_out`) for `guid`? A shard
     /// answering `true` is the SOURCE of a resumed transfer and wins outright over any shard merely
     /// holding a durable row for the guid — see [`locate_home_shard`]. The one method here whose
@@ -319,7 +369,7 @@ pub(crate) fn publish_bot_shard_index<D: RealmDb>(
     let realm = db.realm_core()?;
     realm.finish_character_shard_transfer(intent)?;
     wait_for_settled_locator(
-        realm.as_ref(),
+        &realm,
         intent.bot_guid,
         intent.destination_map,
         intent.destination_instance,
@@ -456,7 +506,7 @@ pub(crate) fn finish_player_shard_index_transfer<D: RealmDb>(
         plan.dest_instance_id,
     )?;
     wait_for_settled_locator(
-        realm.as_ref(),
+        &realm,
         plan.character_guid,
         plan.dest_map_id,
         plan.dest_instance_id,
@@ -560,8 +610,8 @@ pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
     }
 }
 
-fn wait_for_settled_locator(
-    realm: &dyn crate::world::WorldStore,
+fn wait_for_settled_locator<D: RealmDb>(
+    realm: &D,
     character_guid: u64,
     destination_map: u32,
     destination_instance: u64,
@@ -787,8 +837,8 @@ pub(crate) fn resolve_delete_shard<D: RealmDb>(db: &D, guid: u64) -> Result<Opti
 
 /// An in-memory realm: N databases, a shard map, and a liveness switch for realm-core.
 ///
-/// It models exactly the four facts the realm-core split reads — accounts, sessions, character
-/// locations and the shard index — per database, plus a per-database ACCESS LOG so a test can
+/// It models the realm-core facts this file reads, including Account, Session and ordered Character
+/// partition state, plus a per-database ACCESS LOG so a test can
 /// assert not just *what* answer a function gave but *which database it asked*. That log is what
 /// turns "reads SRP6 material off the world DB" from an unobservable mutation into a named failure.
 #[cfg(test)]
@@ -816,6 +866,8 @@ pub(crate) mod fake {
         pub characters: Mutex<HashMap<u64, (u64, (u32, u64))>>,
         /// `game_character_shard`.
         pub shard_index: Mutex<HashMap<u64, (u32, u64)>>,
+        /// Ordered `game_character_shard` Transfer phases used by the crossing tests.
+        pub shard_phases: Mutex<HashMap<u64, crate::world::party::RealmCharacterPartition>>,
         /// The node-issued identity of this database's per-account player connection.
         pub identities: Mutex<HashMap<u64, [u8; 32]>>,
         /// How many identities this database has ever minted. Stamped into every identity so
@@ -880,6 +932,117 @@ pub(crate) mod fake {
                 .dbs
                 .get(name)
                 .expect("no such database in the fake realm")
+        }
+
+        fn stored_partition(
+            &self,
+            guid: u64,
+        ) -> Option<crate::world::party::RealmCharacterPartition> {
+            let phases = self.store().shard_phases.lock().unwrap();
+            phases
+                .get(&guid)
+                .copied()
+                .or_else(|| self.indexed_partition(guid))
+        }
+
+        fn indexed_partition(
+            &self,
+            guid: u64,
+        ) -> Option<crate::world::party::RealmCharacterPartition> {
+            self.store()
+                .shard_index
+                .lock()
+                .unwrap()
+                .get(&guid)
+                .map(
+                    |&(map_id, instance_id)| crate::world::party::RealmCharacterPartition {
+                        map_id,
+                        instance_id,
+                        revision: 1,
+                        transfer_pending: false,
+                        pending_destination_map: 0,
+                        pending_destination_instance: 0,
+                        bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+                        bot_transfer_intent_id: 0,
+                        bot_controller_generation: 0,
+                    },
+                )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn settle_partition(
+            &self,
+            guid: u64,
+            source_map: u32,
+            source_instance: u64,
+            source_revision: u64,
+            destination_map: u32,
+            destination_instance: u64,
+            source_identity: spacetimedb_sdk::Identity,
+            intent_id: u64,
+            generation: u64,
+        ) -> Result<()> {
+            if source_revision == 0
+                || (source_identity == spacetimedb_sdk::Identity::ZERO) != (intent_id == 0)
+            {
+                return Err(anyhow!("Transfer locator identity is incomplete"));
+            }
+            let db = self.store();
+            let mut phases = db.shard_phases.lock().unwrap();
+            let current = phases
+                .get(&guid)
+                .copied()
+                .or_else(|| self.indexed_partition(guid))
+                .ok_or_else(|| anyhow!("Transfer source has no Realm locator"))?;
+            let crossing = (source_identity, intent_id, generation);
+            if !current.transfer_pending
+                && (current.map_id, current.instance_id, current.revision)
+                    == (
+                        destination_map,
+                        destination_instance,
+                        source_revision.saturating_add(1),
+                    )
+                && (
+                    current.bot_source_identity,
+                    current.bot_transfer_intent_id,
+                    current.bot_controller_generation,
+                ) == crossing
+            {
+                return Ok(());
+            }
+            if !current.transfer_pending
+                || (current.map_id, current.instance_id, current.revision)
+                    != (source_map, source_instance, source_revision)
+                || (
+                    current.pending_destination_map,
+                    current.pending_destination_instance,
+                ) != (destination_map, destination_instance)
+                || (
+                    current.bot_source_identity,
+                    current.bot_transfer_intent_id,
+                    current.bot_controller_generation,
+                ) != crossing
+            {
+                return Err(anyhow!("Transfer Realm locator phase changed"));
+            }
+            let revision = source_revision
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("Transfer Realm locator revision exhausted"))?;
+            let settled = crate::world::party::RealmCharacterPartition {
+                map_id: destination_map,
+                instance_id: destination_instance,
+                revision,
+                transfer_pending: false,
+                pending_destination_map: 0,
+                pending_destination_instance: 0,
+                ..current
+            };
+            phases.insert(guid, settled);
+            db.shard_index
+                .lock()
+                .unwrap()
+                .insert(guid, (destination_map, destination_instance));
+            Ok(())
         }
     }
 
@@ -1062,16 +1225,195 @@ pub(crate) mod fake {
         fn character_shard(&self, guid: u64) -> Option<(u32, u64)> {
             let db = self.store();
             db.note(&format!("character_shard({guid})"));
-            db.shard_index.lock().unwrap().get(&guid).copied()
+            self.stored_partition(guid)
+                .map(|partition| (partition.map_id, partition.instance_id))
         }
         fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()> {
             let db = self.store();
             db.note(&format!("set_character_shard({guid})"));
+            let mut phases = db.shard_phases.lock().unwrap();
+            let current = phases
+                .get(&guid)
+                .copied()
+                .or_else(|| self.indexed_partition(guid));
+            if current.is_some_and(|row| row.transfer_pending) {
+                return Err(anyhow!("Character has a pending Realm Transfer phase"));
+            }
+            let same_partition =
+                current.is_some_and(|row| (row.map_id, row.instance_id) == (map_id, instance_id));
+            phases.insert(
+                guid,
+                crate::world::party::RealmCharacterPartition {
+                    map_id,
+                    instance_id,
+                    revision: current.map_or(1, |row| {
+                        if same_partition {
+                            row.revision.max(1)
+                        } else {
+                            row.revision.max(1).saturating_add(1)
+                        }
+                    }),
+                    transfer_pending: false,
+                    pending_destination_map: 0,
+                    pending_destination_instance: 0,
+                    bot_source_identity: current
+                        .filter(|_| same_partition)
+                        .map_or(spacetimedb_sdk::Identity::ZERO, |row| {
+                            row.bot_source_identity
+                        }),
+                    bot_transfer_intent_id: current
+                        .filter(|_| same_partition)
+                        .map_or(0, |row| row.bot_transfer_intent_id),
+                    bot_controller_generation: current
+                        .filter(|_| same_partition)
+                        .map_or(0, |row| row.bot_controller_generation),
+                },
+            );
             db.shard_index
                 .lock()
                 .unwrap()
                 .insert(guid, (map_id, instance_id));
             Ok(())
+        }
+        fn realm_character_partition(
+            &self,
+            guid: u64,
+        ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
+            self.store()
+                .note(&format!("realm_character_partition({guid})"));
+            Ok(self.stored_partition(guid))
+        }
+        fn begin_character_shard_transfer(
+            &self,
+            source_map: u32,
+            source_instance: u64,
+            source_revision: u64,
+            destination_map: u32,
+            destination_instance: u64,
+            source_module_identity: spacetimedb_sdk::Identity,
+            intent_id: u64,
+            controller_generation: u64,
+            character_guid: u64,
+        ) -> Result<()> {
+            let db = self.store();
+            db.note(&format!("begin_character_shard_transfer({character_guid})"));
+            if source_revision == 0
+                || (source_module_identity == spacetimedb_sdk::Identity::ZERO) != (intent_id == 0)
+            {
+                return Err(anyhow!("Transfer locator identity is incomplete"));
+            }
+            let mut phases = db.shard_phases.lock().unwrap();
+            let current = phases
+                .get(&character_guid)
+                .copied()
+                .or_else(|| self.indexed_partition(character_guid))
+                .ok_or_else(|| anyhow!("Transfer source has no Realm locator"))?;
+            let crossing = (source_module_identity, intent_id, controller_generation);
+            if current.transfer_pending
+                && (current.map_id, current.instance_id, current.revision)
+                    == (source_map, source_instance, source_revision)
+                && (
+                    current.pending_destination_map,
+                    current.pending_destination_instance,
+                ) == (destination_map, destination_instance)
+                && (
+                    current.bot_source_identity,
+                    current.bot_transfer_intent_id,
+                    current.bot_controller_generation,
+                ) == crossing
+            {
+                return Ok(());
+            }
+            if current.transfer_pending
+                || (current.map_id, current.instance_id, current.revision)
+                    != (source_map, source_instance, source_revision)
+            {
+                return Err(anyhow!("Transfer Realm locator changed"));
+            }
+            phases.insert(
+                character_guid,
+                crate::world::party::RealmCharacterPartition {
+                    transfer_pending: true,
+                    pending_destination_map: destination_map,
+                    pending_destination_instance: destination_instance,
+                    bot_source_identity: source_module_identity,
+                    bot_transfer_intent_id: intent_id,
+                    bot_controller_generation: controller_generation,
+                    ..current
+                },
+            );
+            Ok(())
+        }
+        fn finish_character_shard_transfer(
+            &self,
+            intent: &crate::world::transfer::BotTransferIntent,
+        ) -> Result<()> {
+            self.store().note(&format!(
+                "finish_character_shard_transfer({})",
+                intent.bot_guid
+            ));
+            self.settle_partition(
+                intent.bot_guid,
+                intent.source_map,
+                intent.source_instance,
+                intent.source_locator_revision,
+                intent.destination_map,
+                intent.destination_instance,
+                intent.source_module_identity,
+                intent.id,
+                intent.controller_generation,
+            )
+        }
+        fn finish_player_character_shard_transfer(
+            &self,
+            character_guid: u64,
+            source_map: u32,
+            source_instance: u64,
+            source_revision: u64,
+            destination_map: u32,
+            destination_instance: u64,
+        ) -> Result<()> {
+            self.store().note(&format!(
+                "finish_player_character_shard_transfer({character_guid})"
+            ));
+            self.settle_partition(
+                character_guid,
+                source_map,
+                source_instance,
+                source_revision,
+                destination_map,
+                destination_instance,
+                spacetimedb_sdk::Identity::ZERO,
+                0,
+                0,
+            )
+        }
+        fn finish_pending_character_shard_transfer(
+            &self,
+            character_guid: u64,
+            source_map: u32,
+            source_instance: u64,
+            source_revision: u64,
+            destination_map: u32,
+            destination_instance: u64,
+            source_module_identity: spacetimedb_sdk::Identity,
+            transfer_intent_id: u64,
+            controller_generation: u64,
+        ) -> Result<()> {
+            self.store().note(&format!(
+                "finish_pending_character_shard_transfer({character_guid})"
+            ));
+            self.settle_partition(
+                character_guid,
+                source_map,
+                source_instance,
+                source_revision,
+                destination_map,
+                destination_instance,
+                source_module_identity,
+                transfer_intent_id,
+                controller_generation,
+            )
         }
         fn has_escrow(&self, guid: u64) -> bool {
             let db = self.store();
@@ -2094,6 +2436,49 @@ mod tests {
     }
 
     #[test]
+    fn the_realm_fake_refuses_a_repair_during_transfer_and_keeps_both_views_coherent() {
+        let h = realm(&[WORLD, CORE], "", Some(CORE));
+        let realm = h.at(CORE);
+        realm
+            .store()
+            .shard_index
+            .lock()
+            .unwrap()
+            .insert(100, (0, 0));
+        realm
+            .begin_character_shard_transfer(
+                0,
+                0,
+                1,
+                36,
+                7,
+                spacetimedb_sdk::Identity::ZERO,
+                0,
+                0,
+                100,
+            )
+            .expect("the player Transfer becomes pending");
+        assert!(
+            realm.set_character_shard(100, 36, 7).is_err(),
+            "an ordinary repair must not replace a pending Transfer phase"
+        );
+        realm
+            .finish_player_character_shard_transfer(100, 0, 0, 1, 36, 7)
+            .expect("the exact player crossing settles");
+        realm
+            .set_character_shard(100, 0, 0)
+            .expect("a later settled repair succeeds");
+        assert_eq!(realm.character_shard(100), Some((0, 0)));
+        let partition = realm
+            .realm_character_partition(100)
+            .expect("partition read")
+            .expect("partition row");
+        assert_eq!((partition.map_id, partition.instance_id), (0, 0));
+        assert_eq!(partition.revision, 3);
+        assert!(!partition.transfer_pending);
+    }
+
+    #[test]
     fn publishing_the_index_fails_loudly_when_realm_core_is_unreachable() {
         let h = realm_with_dead_core(&[WORLD, INSTANCES, CORE], "36:*=instances", CORE);
         assert!(
@@ -2114,11 +2499,9 @@ mod tests {
     /// `CtxShard`: a `contains` scan is defeated by leaving the old text in a dead branch, equality
     /// is not. If a change here is deliberate, re-bless it with the same care.
     ///
-    /// `has_escrow` is the one method whose forward is not BARE — it narrows `escrow_row`'s
-    /// `Option<TransferOut>` to a bool — and it is spelled out below for the same reason: the
-    /// narrowing itself cannot pick the wrong database, but a change to it (e.g. reading a
-    /// different table, or always answering `false`) is exactly the kind of edit this test exists
-    /// to catch.
+    /// Two forwards adapt their inherent return shape: `realm_character_partition` adds the
+    /// fallible trait wrapper, and `has_escrow` narrows `Option<TransferOut>` to a bool. Both are
+    /// spelled out below. Neither adaptation chooses a database or changes the returned fact.
     #[test]
     fn the_coordinator_forwards_are_views_not_logic() {
         let src = include_str!("stdb/world_store.rs");
@@ -2159,6 +2542,31 @@ mod tests {
             fn character_shard(&self, guid: u64) -> Option<(u32, u64)> { self.character_shard(guid) } \
             fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()> { \
             self.set_character_shard(guid, map_id, instance_id) } \
+            fn realm_character_partition( &self, guid: u64, ) \
+            -> Result<Option<crate::world::party::RealmCharacterPartition>> { \
+            Ok(self.realm_character_partition(guid)) } \
+            fn begin_character_shard_transfer( &self, source_map: u32, source_instance: u64, \
+            source_revision: u64, destination_map: u32, destination_instance: u64, \
+            source_module_identity: spacetimedb_sdk::Identity, intent_id: u64, \
+            controller_generation: u64, character_guid: u64, ) -> Result<()> { \
+            self.begin_character_shard_transfer( source_map, source_instance, source_revision, \
+            destination_map, destination_instance, source_module_identity, intent_id, \
+            controller_generation, character_guid, ) } \
+            fn finish_character_shard_transfer( &self, \
+            intent: &crate::world::transfer::BotTransferIntent, ) -> Result<()> { \
+            self.finish_character_shard_transfer(intent) } \
+            fn finish_player_character_shard_transfer( &self, character_guid: u64, \
+            source_map: u32, source_instance: u64, source_revision: u64, destination_map: u32, \
+            destination_instance: u64, ) -> Result<()> { \
+            self.finish_player_character_shard_transfer( character_guid, source_map, \
+            source_instance, source_revision, destination_map, destination_instance, ) } \
+            fn finish_pending_character_shard_transfer( &self, character_guid: u64, \
+            source_map: u32, source_instance: u64, source_revision: u64, destination_map: u32, \
+            destination_instance: u64, source_module_identity: spacetimedb_sdk::Identity, \
+            transfer_intent_id: u64, controller_generation: u64, ) -> Result<()> { \
+            self.finish_pending_character_shard_transfer( character_guid, source_map, \
+            source_instance, source_revision, destination_map, destination_instance, \
+            source_module_identity, transfer_intent_id, controller_generation, ) } \
             fn has_escrow(&self, guid: u64) -> bool { self.escrow_row(guid).is_some() } \
             fn session_count(&self) -> usize { self.session_count() } \
             fn record_shard_load( &self, shard: &str, writer_occupancy_pct: f32, sessions: u32, \

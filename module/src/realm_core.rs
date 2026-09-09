@@ -26,7 +26,7 @@
 //! names actually holds the character row, and otherwise falls back to probing the connected shards
 //! and writes the corrected entry back (`gateway/src/config.rs::resolve_home_shard`, and the tests
 //! there). So a stale — or entirely absent, or maliciously wrong — index entry costs one extra cache
-//! probe at login and then heals a settled row. Party partition projection uses only its ordered
+//! lookup at login and then heals a settled row. Party partition projection uses only its ordered
 //! Realm revision and pending phase; a Transfer compare-and-set prevents an old worker from moving
 //! that state backward.
 

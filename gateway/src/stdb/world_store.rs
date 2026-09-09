@@ -1600,9 +1600,9 @@ impl WorldStore for Coordinator {
 ///
 /// This block is the ONE layer `realm_core.rs`'s fake substitutes for wholesale, so it is pinned by
 /// exact-shape equality in `realm_core::tests::the_coordinator_forwards_are_views_not_logic`. Keep
-/// it a block of forwards; any logic that grows here is untested by construction. `has_escrow` is
-/// the one method that narrows its inherent counterpart (`escrow_row`'s `Option<TransferOut>`) to a
-/// bool rather than forwarding it bare — see that test's doc for why this one is still safe.
+/// it a block of forwards; any logic that grows here is untested by construction. Two methods adapt
+/// their inherent return type: `realm_character_partition` adds `Result`, while `has_escrow`
+/// narrows `Option<TransferOut>` to a bool. See that test's doc for why these remain safe.
 impl crate::realm_core::RealmDb for Coordinator {
     fn shard_name(&self) -> &str {
         self.shard_name()
@@ -1658,6 +1658,84 @@ impl crate::realm_core::RealmDb for Coordinator {
     }
     fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()> {
         self.set_character_shard(guid, map_id, instance_id)
+    }
+    fn realm_character_partition(
+        &self,
+        guid: u64,
+    ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
+        Ok(self.realm_character_partition(guid))
+    }
+    fn begin_character_shard_transfer(
+        &self,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        character_guid: u64,
+    ) -> Result<()> {
+        self.begin_character_shard_transfer(
+            source_map,
+            source_instance,
+            source_revision,
+            destination_map,
+            destination_instance,
+            source_module_identity,
+            intent_id,
+            controller_generation,
+            character_guid,
+        )
+    }
+    fn finish_character_shard_transfer(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        self.finish_character_shard_transfer(intent)
+    }
+    fn finish_player_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+    ) -> Result<()> {
+        self.finish_player_character_shard_transfer(
+            character_guid,
+            source_map,
+            source_instance,
+            source_revision,
+            destination_map,
+            destination_instance,
+        )
+    }
+    fn finish_pending_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        transfer_intent_id: u64,
+        controller_generation: u64,
+    ) -> Result<()> {
+        self.finish_pending_character_shard_transfer(
+            character_guid,
+            source_map,
+            source_instance,
+            source_revision,
+            destination_map,
+            destination_instance,
+            source_module_identity,
+            transfer_intent_id,
+            controller_generation,
+        )
     }
     fn has_escrow(&self, guid: u64) -> bool {
         self.escrow_row(guid).is_some()
