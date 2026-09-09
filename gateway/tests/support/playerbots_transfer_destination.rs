@@ -13,10 +13,6 @@ const DESTINATION_REPLACEMENT_GUID: u64 = (0xF130u64 << 48) | (823u64 << 24) | 1
 const REBUILT_CONTENT: &str = "playerbots-transfer-destination-q7-v1";
 const REPLACEMENT_CONTENT: &str = "playerbots-transfer-destination-q5261-v1";
 const ROLES_GROUP: u64 = 5_098_000;
-const PRIEST: u8 = 5;
-const MAGE: u8 = 8;
-const HEALER: u8 = 1;
-const DAMAGE: u8 = 2;
 
 type Row = BTreeMap<String, String>;
 type EvidenceRow = serde_json::Map<String, serde_json::Value>;
@@ -102,35 +98,20 @@ fn retained(topology: &TransferTopology, guid: u64) -> Vec<Row> {
     )
 }
 
-fn role_member(topology: &TransferTopology, class: u8, role: u8) -> u64 {
-    let rows = topology.query(
-        &topology.source_db,
-        &format!(
-            "SELECT character_guid FROM pkg_playerbots_bot WHERE class = {class} AND role = {role}"
-        ),
-    );
-    number(
-        query_one(&rows, "private role party member"),
-        "character_guid",
-    )
-}
-
 fn set_companion_party_membership(
     topology: &TransferTopology,
     database: &str,
     transferred: &TransferredBot,
     mode: u8,
 ) {
-    let priest = role_member(topology, PRIEST, HEALER);
-    let mage = role_member(topology, MAGE, DAMAGE);
     let actor = format!(r#"{{"guid":{},"ownership":null}}"#, transferred.leader_guid);
     topology.call(
         database,
         "playerbots_fixture_orders_party_as",
         &[
             &transferred.guid.to_string(),
-            &priest.to_string(),
-            &mage.to_string(),
+            &transferred.priest_guid.to_string(),
+            &transferred.mage_guid.to_string(),
             &transferred.leader_guid.to_string(),
             &mode.to_string(),
             &actor,
