@@ -7,6 +7,7 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -194,6 +195,10 @@ impl TransferTopology {
                 "escrow": self.query(&self.source_db, &format!("SELECT * FROM game_transfer_out WHERE character_guid = {}", bot.guid)),
                 "intent": self.query(&self.source_db, &format!("SELECT * FROM game_bot_transfer_intent WHERE bot_guid = {}", bot.guid)),
                 "runner": self.query(&self.source_db, &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {}", bot.guid)),
+                "actions": self.query(&self.source_db, &format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {}", bot.guid)),
+                "movement": self.query(&self.source_db, &format!("SELECT * FROM game_creature_spline WHERE guid = {}", bot.guid)),
+                "pending_cast": self.query(&self.source_db, &format!("SELECT * FROM game_pending_cast WHERE caster_guid = {}", bot.guid)),
+                "melee": self.query(&self.source_db, &format!("SELECT * FROM game_melee_attack WHERE attacker_guid = {}", bot.guid)),
                 "instance": self.query(&self.source_db, &format!("SELECT * FROM game_instance WHERE instance_id = {DESTINATION_INSTANCE}")),
             },
             "destination": {
@@ -201,7 +206,12 @@ impl TransferTopology {
                 "live": self.query(&self.destination_db, &format!("SELECT guid, map_id, instance_id FROM game_world_entity WHERE guid = {}", bot.guid)),
                 "arrival": self.query(&self.destination_db, &format!("SELECT * FROM game_transfer_in WHERE character_guid = {}", bot.guid)),
                 "runner": self.query(&self.destination_db, &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {}", bot.guid)),
+                "actions": self.query(&self.destination_db, &format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {}", bot.guid)),
+                "movement": self.query(&self.destination_db, &format!("SELECT * FROM game_creature_spline WHERE guid = {}", bot.guid)),
+                "pending_cast": self.query(&self.destination_db, &format!("SELECT * FROM game_pending_cast WHERE caster_guid = {}", bot.guid)),
+                "melee": self.query(&self.destination_db, &format!("SELECT * FROM game_melee_attack WHERE attacker_guid = {}", bot.guid)),
                 "group": self.query(&self.destination_db, &format!("SELECT * FROM game_group WHERE group_id = {GROUP}")),
+                "roster": self.query(&self.destination_db, &format!("SELECT * FROM game_group_roster_revision WHERE group_id = {GROUP}")),
                 "members": self.query(&self.destination_db, &format!("SELECT * FROM game_group_member WHERE group_id = {GROUP}")),
                 "partitions": self.query(&self.destination_db, &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}")),
                 "instance": self.query(&self.destination_db, &format!("SELECT * FROM game_instance WHERE instance_id = {DESTINATION_INSTANCE}")),
@@ -209,6 +219,7 @@ impl TransferTopology {
             "realm": {
                 "locator": self.query(&self.realm_db, &format!("SELECT * FROM game_character_shard WHERE character_guid = {}", bot.guid)),
                 "group": self.query(&self.realm_db, &format!("SELECT * FROM game_group WHERE group_id = {GROUP}")),
+                "roster": self.query(&self.realm_db, &format!("SELECT * FROM game_group_roster_revision WHERE group_id = {GROUP}")),
                 "members": self.query(&self.realm_db, &format!("SELECT * FROM game_group_member WHERE group_id = {GROUP}")),
                 "partitions": self.query(&self.realm_db, &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}")),
             },
@@ -294,7 +305,7 @@ impl GatewayProcess {
         }
     }
 
-    fn wait_for_abort(&mut self, step: &str) -> String {
+    fn wait_for_exit(&mut self, step: &str) -> serde_json::Value {
         let deadline = Instant::now() + support::POLL_TIMEOUT;
         let status = loop {
             if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
@@ -309,16 +320,12 @@ impl GatewayProcess {
         };
         let _ = self.child.take();
         let log = self.log();
-        assert!(
-            !status.success(),
-            "Gateway exited successfully after {step}\n{log}"
-        );
-        assert!(
-            log.contains(&format!("LYRACORE_TRANSFER_ABORT_AFTER={step}"))
-                && log.contains("step committed"),
-            "Gateway exited at another boundary after {step}\n{log}"
-        );
-        log
+        serde_json::json!({
+            "success": status.success(),
+            "code": status.code(),
+            "signal": status.signal(),
+            "log": log,
+        })
     }
 
     fn log(&self) -> String {
@@ -382,17 +389,253 @@ fn rows<'a>(evidence: &'a serde_json::Value, path: &[&str]) -> &'a Vec<serde_jso
     value.as_array().unwrap()
 }
 
+fn row<'a>(evidence: &'a serde_json::Value, path: &[&str]) -> &'a serde_json::Value {
+    let rows = rows(evidence, path);
+    assert_eq!(rows.len(), 1, "expected one row at {path:?}: {evidence}");
+    &rows[0]
+}
+
+fn text_field<'a>(row: &'a serde_json::Value, field: &str) -> &'a str {
+    row[field]
+        .as_str()
+        .unwrap_or_else(|| panic!("missing {field} in {row}"))
+}
+
+fn assert_u64_field(row: &serde_json::Value, field: &str, expected: u64) {
+    assert_eq!(text_field(row, field), expected.to_string(), "{row}");
+}
+
+fn timestamp_micros(value: &str) -> i64 {
+    let number = |range: std::ops::Range<usize>| value[range].parse::<i64>().unwrap();
+    assert!(value.ends_with("+00:00"), "unexpected timestamp {value}");
+    let year = number(0..4);
+    let month = number(5..7);
+    let day = number(8..10);
+    let hour = number(11..13);
+    let minute = number(14..16);
+    let second = number(17..19);
+    let micros = number(20..26);
+    let shifted_year = year - i64::from(month <= 2);
+    let era = if shifted_year >= 0 {
+        shifted_year
+    } else {
+        shifted_year - 399
+    } / 400;
+    let year_of_era = shifted_year - era * 400;
+    let shifted_month = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days_since_epoch = era * 146_097 + day_of_era - 719_468;
+    (((days_since_epoch * 24 + hour) * 60 + minute) * 60 + second) * 1_000_000 + micros
+}
+
+fn sorted_rows(evidence: &serde_json::Value, path: &[&str], key: &str) -> Vec<serde_json::Value> {
+    let mut rows = rows(evidence, path).clone();
+    rows.sort_by(|left, right| text_field(left, key).cmp(text_field(right, key)));
+    rows
+}
+
+fn assert_same_fields(
+    left: &serde_json::Value,
+    right: &serde_json::Value,
+    fields: &[&str],
+    evidence: &serde_json::Value,
+) {
+    for field in fields {
+        assert_eq!(left[*field], right[*field], "{field} differs: {evidence}");
+    }
+}
+
+fn assert_abort(evidence: &serde_json::Value, step: &str) {
+    let exit = &evidence["extra"]["gateway_exit"];
+    assert_eq!(exit["success"], false, "{evidence}");
+    assert_eq!(
+        exit["signal"], 6,
+        "Gateway did not exit by SIGABRT: {evidence}"
+    );
+    let log = exit["log"].as_str().unwrap_or_default();
+    assert!(
+        log.contains(&format!("LYRACORE_TRANSFER_ABORT_AFTER={step}"))
+            && log.contains("step committed"),
+        "Gateway exited at another boundary after {step}: {evidence}"
+    );
+}
+
+fn assert_crossing_identity(evidence: &serde_json::Value, position: usize) {
+    let intent = row(evidence, &["state", "source", "intent"]);
+    let bot = &evidence["state"]["bot"];
+    assert_u64_field(intent, "id", bot["intent_id"].as_u64().unwrap());
+    assert_u64_field(intent, "bot_guid", bot["guid"].as_u64().unwrap());
+    assert_u64_field(
+        intent,
+        "controller_generation",
+        bot["generation"].as_u64().unwrap(),
+    );
+    if position == 0 {
+        assert_ne!(intent["source_locator_revision"], "0", "{evidence}");
+    }
+    if (4..10).contains(&position) {
+        let arrival = row(evidence, &["state", "destination", "arrival"]);
+        assert_u64_field(arrival, "transfer_id", bot["guid"].as_u64().unwrap());
+        assert_u64_field(arrival, "character_guid", bot["guid"].as_u64().unwrap());
+        assert_same_fields(intent, arrival, &["source_locator_revision"], evidence);
+        assert_eq!(
+            intent["source_module_identity"], arrival["bot_intent_source"],
+            "{evidence}"
+        );
+        assert_eq!(intent["id"], arrival["bot_intent_id"], "{evidence}");
+        assert_eq!(
+            intent["controller_generation"], arrival["bot_controller_generation"],
+            "{evidence}"
+        );
+        assert_eq!(intent["source_map"], arrival["source_map_id"], "{evidence}");
+        assert_eq!(
+            intent["source_instance"], arrival["source_instance_id"],
+            "{evidence}"
+        );
+        assert_eq!(
+            arrival["bot_intent_created_micros"],
+            timestamp_micros(text_field(intent, "created_at")).to_string(),
+            "{evidence}"
+        );
+    }
+}
+
+fn assert_locator(evidence: &serde_json::Value, position: usize) {
+    let intent = row(evidence, &["state", "source", "intent"]);
+    let locator = row(evidence, &["state", "realm", "locator"]);
+    if position == 0 {
+        assert_eq!(locator["transfer_pending"], "false", "{evidence}");
+        assert_eq!(locator["map_id"], intent["source_map"], "{evidence}");
+        assert_eq!(
+            locator["instance_id"], intent["source_instance"],
+            "{evidence}"
+        );
+        assert_eq!(
+            locator["revision"], intent["source_locator_revision"],
+            "{evidence}"
+        );
+    } else if position < 7 {
+        assert_eq!(locator["transfer_pending"], "true", "{evidence}");
+        assert_eq!(locator["map_id"], intent["source_map"], "{evidence}");
+        assert_eq!(
+            locator["instance_id"], intent["source_instance"],
+            "{evidence}"
+        );
+        assert_eq!(
+            locator["pending_destination_map"], intent["destination_map"],
+            "{evidence}"
+        );
+        assert_eq!(
+            locator["pending_destination_instance"], intent["destination_instance"],
+            "{evidence}"
+        );
+    } else {
+        assert_eq!(locator["transfer_pending"], "false", "{evidence}");
+        assert_eq!(locator["map_id"], DESTINATION_MAP.to_string(), "{evidence}");
+        assert_eq!(
+            locator["instance_id"],
+            DESTINATION_INSTANCE.to_string(),
+            "{evidence}"
+        );
+    }
+    if position > 0 {
+        assert_eq!(
+            locator["bot_source_identity"], intent["source_module_identity"],
+            "{evidence}"
+        );
+        assert_eq!(
+            locator["bot_transfer_intent_id"], intent["id"],
+            "{evidence}"
+        );
+        assert_eq!(
+            locator["bot_controller_generation"], intent["controller_generation"],
+            "{evidence}"
+        );
+    }
+}
+
+fn assert_party_mirror(evidence: &serde_json::Value) {
+    assert_same_fields(
+        row(evidence, &["state", "destination", "group"]),
+        row(evidence, &["state", "realm", "group"]),
+        &[
+            "group_id",
+            "leader_guid",
+            "loot_method",
+            "loot_threshold",
+            "rr_cursor",
+            "master_looter_guid",
+        ],
+        evidence,
+    );
+    assert_same_fields(
+        row(evidence, &["state", "destination", "roster"]),
+        row(evidence, &["state", "realm", "roster"]),
+        &["group_id", "revision", "active"],
+        evidence,
+    );
+    assert_eq!(
+        sorted_rows(
+            evidence,
+            &["state", "destination", "members"],
+            "character_guid",
+        ),
+        sorted_rows(evidence, &["state", "realm", "members"], "character_guid"),
+        "{evidence}"
+    );
+    assert_eq!(
+        sorted_rows(
+            evidence,
+            &["state", "destination", "partitions"],
+            "character_guid",
+        ),
+        sorted_rows(
+            evidence,
+            &["state", "realm", "partitions"],
+            "character_guid",
+        ),
+        "{evidence}"
+    );
+}
+
+fn assert_gameplay_fences(evidence: &serde_json::Value, position: usize) {
+    if position < 10 {
+        assert!(
+            rows(evidence, &["state", "destination", "live"]).is_empty(),
+            "arrival became live before release: {evidence}"
+        );
+        for table in ["actions", "movement", "pending_cast", "melee"] {
+            assert!(
+                rows(evidence, &["state", "destination", table]).is_empty(),
+                "destination gameplay started before release: {evidence}"
+            );
+        }
+    }
+    if (2..10).contains(&position) {
+        for table in ["runner", "actions", "movement", "pending_cast", "melee"] {
+            assert!(
+                rows(evidence, &["state", "source", table]).is_empty(),
+                "source-local work survived Escrow: {evidence}"
+            );
+        }
+    }
+}
+
 fn assert_durable_phase(evidence: &serde_json::Value, step: &str) {
+    let position = ABORT_STEPS
+        .iter()
+        .position(|candidate| *candidate == step)
+        .unwrap();
     let source_character = rows(evidence, &["state", "source", "character"]);
     let destination_character = rows(evidence, &["state", "destination", "character"]);
-    let source_live = rows(evidence, &["state", "source", "live"]);
-    let destination_live = rows(evidence, &["state", "destination", "live"]);
     assert!(
         source_character.len() + destination_character.len() >= 1,
         "no durable Character after {step}: {evidence}"
     );
     assert!(
-        source_live.is_empty() || destination_live.is_empty(),
+        rows(evidence, &["state", "source", "live"]).is_empty()
+            || rows(evidence, &["state", "destination", "live"]).is_empty(),
         "two live bodies after {step}: {evidence}"
     );
     assert_eq!(
@@ -400,14 +643,10 @@ fn assert_durable_phase(evidence: &serde_json::Value, step: &str) {
         1,
         "the crashed worker consumed its intent after {step}: {evidence}"
     );
-    let position = ABORT_STEPS
-        .iter()
-        .position(|candidate| *candidate == step)
-        .unwrap();
-    let intent = &rows(evidence, &["state", "source", "intent"])[0];
-    if position == 0 {
-        assert_ne!(intent["source_locator_revision"], "0", "{evidence}");
-    }
+    assert_crossing_identity(evidence, position);
+    assert_locator(evidence, position);
+    assert_gameplay_fences(evidence, position);
+
     if position >= 2 {
         assert_eq!(
             rows(evidence, &["state", "source", "escrow"]).len(),
@@ -441,27 +680,14 @@ fn assert_durable_phase(evidence: &serde_json::Value, step: &str) {
         );
     }
     if position >= 8 {
-        assert_eq!(
-            rows(evidence, &["state", "destination", "group"]).len(),
-            1,
-            "party mirror is absent after {step}: {evidence}"
-        );
-    }
-    let locator = &rows(evidence, &["state", "realm", "locator"])[0];
-    if position == 1 {
-        assert_eq!(locator["transfer_pending"], "true", "{evidence}");
-    }
-    if position >= 7 {
-        assert_eq!(locator["transfer_pending"], "false", "{evidence}");
-        assert_eq!(locator["map_id"], DESTINATION_MAP.to_string(), "{evidence}");
-        assert_eq!(
-            locator["instance_id"],
-            DESTINATION_INSTANCE.to_string(),
-            "{evidence}"
-        );
+        assert_party_mirror(evidence);
     }
     if position >= 9 {
-        assert_eq!(intent["arrival_ready"], "true", "{evidence}");
+        assert_eq!(
+            row(evidence, &["state", "source", "intent"])["arrival_ready"],
+            "true",
+            "{evidence}"
+        );
     }
 }
 
@@ -473,8 +699,13 @@ fn playerbots_gateway_process_restart_resumes_every_committed_transfer_phase() {
 
     for step in ABORT_STEPS {
         let mut gateway = topology.gateway(Some(step), step);
-        let log = gateway.wait_for_abort(step);
-        let evidence = topology.save(&bot, step, serde_json::json!({ "gateway_log": log }));
+        let gateway_exit = gateway.wait_for_exit(step);
+        let evidence = topology.save(
+            &bot,
+            step,
+            serde_json::json!({ "gateway_exit": gateway_exit }),
+        );
+        assert_abort(&evidence, step);
         assert_durable_phase(&evidence, step);
     }
 
@@ -528,12 +759,13 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
     let (topology, mut bot) = TransferTopology::stage("playerbots-transfer-gateway-mirror");
     topology.begin_transfer(&mut bot);
     let mut first = topology.gateway(Some("publish_shard_index"), "mirror-realm-settled");
-    let first_log = first.wait_for_abort("publish_shard_index");
+    let first_exit = first.wait_for_exit("publish_shard_index");
     let settled = topology.save(
         &bot,
         "mirror-realm-settled",
-        serde_json::json!({ "gateway_log": first_log }),
+        serde_json::json!({ "gateway_exit": first_exit }),
     );
+    assert_abort(&settled, "publish_shard_index");
     assert_durable_phase(&settled, "publish_shard_index");
 
     topology.call(
@@ -554,6 +786,9 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
     );
     interrupted.stop();
     assert!(attempted, "mirror failure was not observed: {failed}");
+    assert_crossing_identity(&failed, 7);
+    assert_locator(&failed, 7);
+    assert_gameplay_fences(&failed, 8);
     assert_eq!(
         rows(&failed, &["state", "destination", "arrival"]).len(),
         1,
@@ -561,6 +796,26 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
     );
     let intent = &rows(&failed, &["state", "source", "intent"])[0];
     assert_eq!(intent["arrival_ready"], "false", "{failed}");
+    let destination_group = row(&failed, &["state", "destination", "group"]);
+    let realm_group = row(&failed, &["state", "realm", "group"]);
+    assert_eq!(
+        destination_group["rr_cursor"],
+        u32::MAX.to_string(),
+        "{failed}"
+    );
+    assert_eq!(realm_group["rr_cursor"], "0", "{failed}");
+    assert_same_fields(
+        destination_group,
+        realm_group,
+        &[
+            "group_id",
+            "leader_guid",
+            "loot_method",
+            "loot_threshold",
+            "master_looter_guid",
+        ],
+        &failed,
+    );
 
     topology.call(
         &topology.destination_db,
@@ -595,4 +850,5 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
         2,
         "{repaired}"
     );
+    assert_party_mirror(&repaired);
 }
