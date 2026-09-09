@@ -67,6 +67,7 @@ fn fixture(name: &str, mode: u8) -> TransferFixture {
         .find(|bot| bot["class"] == "8" && bot["role"] == "2")
         .unwrap()["character_guid"]
         .clone();
+    node.assert_call("playerbots_fixture_prepare", &[]);
     node.assert_call(
         "playerbots_fixture_roles_stage",
         &[&companion, &priest, &mage, &leader],
@@ -109,7 +110,7 @@ fn capture(fixture: &TransferFixture, case: &str) -> serde_json::Value {
         },
         "runner": node.query_rows(&format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {companion}")),
         "bot": node.query_rows(&format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {companion}")),
-        "character": node.query_rows(&format!("SELECT guid, map_id, pending_instance_id, x, y, z FROM game_character WHERE guid = {companion}")),
+        "character": node.query_rows(&format!("SELECT guid, map_id, pending_instance_id, x, y, z, health FROM game_character WHERE guid = {companion}")),
         "leader_character": node.query_rows(&format!("SELECT guid, map_id, pending_instance_id, x, y, z FROM game_character WHERE guid = {leader}")),
         "leader_partition": node.query_rows(&format!("SELECT character_guid, map_id, instance_id, locator_revision, state FROM game_group_member_partition WHERE character_guid = {leader}")),
         "source_instance": node.query_rows("SELECT instance_id, map_id, party_id FROM game_instance WHERE instance_id = 5098078"),
@@ -120,6 +121,8 @@ fn capture(fixture: &TransferFixture, case: &str) -> serde_json::Value {
         "action": node.query_rows(&format!("SELECT kind, target_guid, spell_id, quest_entry, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {companion}")),
         "movement": node.query_rows(&format!("SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {companion}")),
         "pending_cast": node.query_rows(&format!("SELECT scheduled_id, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {companion}")),
+        "cast_spell": node.query_rows("SELECT spell_id, cast_time_ms FROM game_spell WHERE spell_id = 5090100"),
+        "known_cast_spell": node.query_rows(&format!("SELECT spell_id FROM game_player_spell WHERE character_guid = {companion} AND spell_id = 5090100")),
         "attack": node.query_rows(&format!("SELECT attacker_guid, target_guid FROM game_melee_attack WHERE attacker_guid = {companion}")),
     });
     let path = support::log_dir().join(format!("{}-{case}.json", node.shard_name()));
@@ -270,12 +273,25 @@ fn playerbots_companion_enters_the_areatrigger_with_normalized_transfer_state() 
 fn playerbots_transfer_advances_generation_and_rejects_the_source_cast_completion() {
     let fixture = fixture("playerbots-transfer-source-cast", 2);
     fixture.node.assert_call(
+        "playerbots_fixture_companion_health",
+        &[&fixture.companion, "50"],
+    );
+    fixture.node.assert_call(
         "playerbots_fixture_cast",
         &[&fixture.companion, &fixture.companion],
     );
     let started = capture(&fixture, "source-cast-started");
     let pending = started["pending_cast"].as_array().unwrap();
     assert_eq!(pending.len(), 1, "{started}");
+    assert_eq!(
+        started["cast_spell"][0]["cast_time_ms"], "5000",
+        "{started}"
+    );
+    assert_eq!(
+        started["known_cast_spell"].as_array().unwrap().len(),
+        1,
+        "{started}"
+    );
     let scheduled_id = pending[0]["scheduled_id"].clone();
 
     fixture
@@ -333,6 +349,14 @@ fn playerbots_transfer_advances_generation_and_rejects_the_source_cast_completio
                     && row["cast_id"] == scheduled_id
                     && row["outcome"] == "(cancelled = ())"
             }),
+        "{after_deadline}"
+    );
+    assert_eq!(
+        after_deadline["character"][0]["health"], entered["character"][0]["health"],
+        "the rejected source completion cannot apply its heal after Transfer: {after_deadline}"
+    );
+    assert_eq!(
+        after_deadline["runner"][0]["cast_progress"], "null",
         "{after_deadline}"
     );
 }
