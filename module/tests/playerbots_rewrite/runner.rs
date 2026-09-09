@@ -344,9 +344,14 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     node.assert_sql("DELETE FROM game_melee_schedule");
     select(&node, bot, "cohort");
-    assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
-        .contains("returnHome")));
-    let objective_id = runner(&node, bot)["objective_sequence"].clone();
+    let waiting = poll_until(POLL_TIMEOUT, || {
+        runner(&node, bot)["chosen"].contains("quest")
+    });
+    outcomes(&node);
+    assert!(waiting);
+    let initial = runner(&node, bot);
+    assert!(initial["objective"].contains("returnHome"));
+    let objective_id = initial["objective_sequence"].clone();
     let target = ((0xF130u64 << 48) | (5_090_101u64 << 24) | 1).to_string();
     node.assert_call("playerbots_fixture_runner_damage", &[bot, &target, "1"]);
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
@@ -359,12 +364,20 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
     assert!(defended["objective"].contains("last_verified_progress_micros = (none"));
     assert!(defended["quest_progress"].contains("credit = 0"));
     node.assert_call("playerbots_fixture_credit_kill", &[bot]);
+    let credited = poll_until(POLL_TIMEOUT, || {
+        let observed = runner(&node, bot);
+        observed["quest_progress"].contains("credit = 1")
+            && !observed["combat_progress"].contains("none")
+    });
+    outcomes(&node);
+    assert!(credited);
+    assert_eq!(runner(&node, bot)["objective_sequence"], objective_id);
+    node.assert_call("gw_abandon_quest", &[&support::actor(bot), "50909"]);
     node.assert_call("playerbots_fixture_runner_clear_navigation", &[bot]);
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["objective"]
         .contains("completed")));
     let resumed = runner(&node, bot);
     assert_eq!(resumed["objective_sequence"], objective_id);
-    assert!(resumed["quest_progress"].contains("credit = 1"));
     assert!(!resumed["combat_progress"].contains("none"));
     outcomes(&node);
 }
@@ -376,10 +389,13 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    node.assert_call("gw_abandon_quest", &[&support::actor(bot), "50909"]);
     select(&node, bot, "cohort");
-    assert!(poll_until(Duration::from_secs(38), || runner(&node, bot)
-        ["objective"]
-        .contains("deferred")));
+    let deferred = poll_until(Duration::from_secs(38), || {
+        runner(&node, bot)["objective"].contains("deferred")
+    });
+    outcomes(&node);
+    assert!(deferred);
     let deferred = runner(&node, bot);
     assert_eq!(deferred["retry_count"], "3");
     assert!(deferred["failures"].contains("noMovement"));

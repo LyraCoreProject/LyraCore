@@ -278,14 +278,26 @@ pub(crate) fn corpse_access_gate(
     actor_guid: u64,
     corpse_guid: u64,
 ) -> Result<(), String> {
+    corpse_access(ctx, actor_guid, corpse_guid).map_err(|refusal| {
+        super::refused(
+            refusal,
+            &format!("actor_guid={actor_guid} corpse_guid={corpse_guid}"),
+        )
+    })
+}
+
+/// Typed Loot Tag Gate for in-module Actor requests. The reducer adapter above keeps the stable
+/// wire tag for legacy callers; Package callers retain the refusal without parsing that tag.
+pub(crate) fn corpse_access(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    corpse_guid: u64,
+) -> Result<(), LootRefusal> {
     let eligible = corpse_eligible_recipients(ctx, corpse_guid);
     if corpse_eligible_for_access(&eligible, actor_guid) {
         return Ok(());
     }
-    Err(super::refused(
-        LootRefusal::LootTagIneligible,
-        &format!("actor_guid={actor_guid} corpse_guid={corpse_guid}"),
-    ))
+    Err(LootRefusal::LootTagIneligible)
 }
 
 /// Clear a creature's live Loot Tag at combat end or despawn. Corpse and other dynamic flags stay

@@ -19,8 +19,10 @@
 //! | `accept_quest` | `quest::apply_accept_quest` | alive + giver in range offering the quest + level/race/class/prereq/duplicate gates |
 //! | `stage_quest` | `quest::grant_quest_unchecked` | HARNESS/BOT staging: same row shape, all accept gates SKIPPED (giver-less) |
 //! | `turn_in_quest` | `quest::apply_turn_in_quest` | alive + giver in range ending the quest + objectives complete; rewards atomic |
-//! | `open_creature_loot` | `loot::open_creature_corpse` | alive + dead creature corpse on the same map within 10yd + Loot Tag eligibility; authorizes the following read |
-//! | `take_loot` | `items::apply_take_loot` | alive + corpse/GO on same map within 10yd + Loot Tag eligibility for creatures + slot occupied; inventory-full rolls back |
+//! | `open_creature_loot` | `loot::open_creature_corpse` | legacy result adapter used by the Gateway |
+//! | `request_open_creature_loot` | `loot::request_open_creature_corpse` | typed open acceptance or Refusal; applies the same corpse and Loot Tag Gates |
+//! | `take_loot` | `items::apply_take_loot` | legacy result adapter used by the existing rest-and-loot goal |
+//! | `request_take_loot` | `items::request_take_loot` | typed take completion or Refusal; inventory-full leaves the item and Loot Source unchanged |
 //! | `loot_money` | `loot::apply_loot_money` | alive + dead creature corpse, same map, 10yd, money > 0 + Loot Tag eligibility |
 //! | `buy_item` | `items::apply_buy_item` | vendor in range + stocked + money; stacks/slots validated |
 //! | `sell_item` | `items::apply_item_sell` | vendor in range + sellable item in slot; feeds the buyback ring |
@@ -35,6 +37,8 @@
 //! | `reconcile_profile_item` | `items::request_profile_item` | bounded top-up + capacity/uniqueness gates |
 //! | `equip_profile_upgrade` | `items::apply_equip_profile_upgrade` | normal equip gates + preserves equal or stronger gear |
 //! | `use_gameobject` | `gameobject::apply_use_gameobject` | GO resolved by guid + range/use gates |
+//! | `request_use_gameobject` | `gameobject::request_use_gameobject` | typed target, partition, range, and use Refusal |
+//! | `import_revision` | `game_import_meta` read | current importer source and file identities for one family |
 //! | `repop` | `world::do_repop` | dead actor releases to the graveyard ghost |
 //! | `respond_resurrect` | `spell::do_resurrect_response` | consume the actor's pending rez offer; accept revives IN PLACE at the offer's % |
 //! | `spirit_res` | `world::do_spirit_healer_res` | ghost actor res at the spirit healer (sickness applies) |
@@ -52,7 +56,26 @@
 //! `packages/` drop-ins, discovered by `module/build.rs`). Both silence unused-import ONLY in the
 //! build where the consumer isn't compiled, and neither is a licence to keep a verb no tree calls.
 
+use crate::import_meta::game_import_meta;
 use spacetimedb::ReducerContext;
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) struct ImportRevision {
+    pub source_sha: String,
+    pub file_hash: String,
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn import_revision(ctx: &ReducerContext, family: &str) -> Option<ImportRevision> {
+    ctx.db
+        .game_import_meta()
+        .family()
+        .find(family.to_string())
+        .map(|meta| ImportRevision {
+            source_sha: meta.source_sha,
+            file_hash: meta.file_hash,
+        })
+}
 
 // ---- combat ----
 
@@ -126,12 +149,14 @@ debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest;
 
 // ---- loot / inventory / vendor ----
 
+pub(crate) use crate::loot::open_creature_corpse as open_creature_loot;
 package_only! {
     pub(crate) use crate::items::apply_item_use as use_item;
-    pub(crate) use crate::loot::open_creature_corpse as open_creature_loot;
+    pub(crate) use crate::loot::request_open_creature_corpse as request_open_creature_loot;
     pub(crate) use crate::items::apply_take_loot as take_loot;
     pub(crate) use crate::items::request_profile_item as reconcile_profile_item;
     pub(crate) use crate::items::apply_equip_profile_upgrade as equip_profile_upgrade;
+    pub(crate) use crate::items::request_take_loot as request_take_loot;
     // `loot_money` also feeds playerbots' drink-at-rest behavior (work-item 154).
     pub(crate) use crate::loot::apply_loot_money as loot_money;
 }
@@ -150,10 +175,11 @@ package_only! {
 
 // ---- NPC services / world ----
 
-debug_only! {
+package_only! {
     pub(crate) use crate::gameobject::apply_use_gameobject as use_gameobject;
-    pub(crate) use crate::trainer::apply_trainer_buy as trainer_buy;
+    pub(crate) use crate::gameobject::request_use_gameobject as request_use_gameobject;
 }
+debug_only! { pub(crate) use crate::trainer::apply_trainer_buy as trainer_buy; }
 package_only! {
     pub(crate) use crate::spell::do_resurrect_response as respond_resurrect;
     pub(crate) use crate::world::do_repop as repop;

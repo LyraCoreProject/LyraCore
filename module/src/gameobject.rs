@@ -201,6 +201,10 @@ pub struct GameObjectUnlocked {
     // sentinel on every live row, so a `1..=now` range visits only DUE nodes — the same trick
     // `game_aura.by_next_tick` uses.
     index(accessor = by_respawn_at, btree(columns = [respawn_at_micros])),
+    index(
+        accessor = by_template_scope,
+        btree(columns = [template_entry, map_id, instance_id])
+    ),
     // The AOI cell index — exactly 3 columns, all matched by equality terms, which is the
     // only shape SpacetimeDB 2.7.1's subscription planner can serve (see the `cell` column).
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
@@ -285,6 +289,26 @@ pub struct GameObject {
     pub rotation_2: f32,
     #[default(0.0f32)]
     pub rotation_3: f32,
+}
+
+/// Read stored GameObject destination evidence through an exact template and partition index.
+/// State and distance decide whether a returned object can be used now. They do not erase the
+/// stored destination when every matching object is depleted or far away.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn gameobject_destination_evidence(
+    ctx: &ReducerContext,
+    template_entry: u32,
+    map_id: u32,
+    instance_id: u64,
+    limit: usize,
+) -> Vec<GameObject> {
+    const MAX_RESULTS: usize = 128;
+    ctx.db
+        .game_gameobject()
+        .by_template_scope()
+        .filter((template_entry, map_id, instance_id))
+        .take(limit.min(MAX_RESULTS))
+        .collect()
 }
 
 // ===========================================================================================
@@ -643,39 +667,55 @@ fn locked_shut(ctx: &ReducerContext, go_guid: u64, lock_id: u32) -> bool {
             .is_none()
 }
 
-/// The GO target-acquisition gate shared by [`apply_pick_lock`] and [`apply_use_gameobject`]:
-/// resolve the GameObject + its template, resolve the caster's live entity, and confirm they
-/// share a map+instance and are within [`USE_RANGE_SQ`]. Every error string below is preserved verbatim
-/// from both call sites (the two ~30-line blocks were byte-identical before this extraction).
+/// The typed GameObject target Gate shared by lock picking and both use adapters. It resolves the
+/// GameObject, template and live Character, then applies partition and range Gates once.
 fn usable_go(
     ctx: &ReducerContext,
     caster_guid: u64,
     go_guid: u64,
-) -> Result<(GameObject, GameObjectTemplate), String> {
+) -> Result<(GameObject, GameObjectTemplate), crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
+
     let go = ctx
         .db
         .game_gameobject()
         .guid()
         .find(go_guid)
-        .ok_or_else(|| "no such gameobject".to_string())?;
+        .ok_or_else(|| {
+            ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such gameobject")
+        })?;
     let player = crate::helpers::live_entity(ctx, caster_guid)
-        .map_err(|_| "user not in world".to_string())?;
+        .map_err(|_| ActionRefusal::new(ActionRefusalKind::MissingActor, "user not in world"))?;
     if player.map_id != go.map_id {
-        return Err("gameobject on another map".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "gameobject on another map",
+        ));
     }
     if player.instance_id != go.instance_id {
-        return Err("gameobject in another instance".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "gameobject in another instance",
+        ));
     }
     let (dx, dy, dz) = (go.x - player.x, go.y - player.y, go.z - player.z);
     if dx * dx + dy * dy + dz * dz > USE_RANGE_SQ {
-        return Err("gameobject out of range".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OutOfRange,
+            "gameobject out of range",
+        ));
     }
     let tmpl = ctx
         .db
         .game_gameobject_template()
         .entry()
         .find(go.template_entry)
-        .ok_or_else(|| format!("no gameobject template {}", go.template_entry))?;
+        .ok_or_else(|| {
+            ActionRefusal::new(
+                ActionRefusalKind::MissingTarget,
+                format!("no gameobject template {}", go.template_entry),
+            )
+        })?;
     Ok((go, tmpl))
 }
 
@@ -692,7 +732,7 @@ pub(crate) fn apply_pick_lock(
     caster_guid: u64,
     go_guid: u64,
 ) -> Result<(), String> {
-    let (_go, tmpl) = usable_go(ctx, caster_guid, go_guid)?;
+    let (_go, tmpl) = usable_go(ctx, caster_guid, go_guid).map_err(String::from)?;
     if tmpl.lock_id == 0 {
         return Err("it is not locked".to_string());
     }
@@ -753,6 +793,16 @@ pub(crate) fn apply_pick_lock(
 /// Shared use-a-gameobject core for Character and debug paths. [`usable_go`] requires a live
 /// Character, a loaded GameObject template, the same map and instance, and use range before
 /// type-specific effects run. Supported lock-bearing types also apply [`locked_shut`] first. [entity]
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn request_use_gameobject(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    go_guid: u64,
+) -> Result<(), crate::actor::ActionRefusal> {
+    let (go, tmpl) = usable_go(ctx, caster_guid, go_guid)?;
+    use_resolved_gameobject(ctx, caster_guid, go, tmpl).map_err(Into::into)
+}
+
 pub(crate) fn apply_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -761,7 +811,16 @@ pub(crate) fn apply_use_gameobject(
     // Map + instance gated (190 slice 2 — GO rows carry `instance_id` now): a player may only use
     // a GO in THEIR OWN instance (dungeon doors/chests are per-instance copies; the static
     // instance-0 originals on a dungeon map are the copy SOURCES, unreachable from inside a run).
-    let (mut go, tmpl) = usable_go(ctx, caster_guid, go_guid)?;
+    let (go, tmpl) = usable_go(ctx, caster_guid, go_guid).map_err(String::from)?;
+    use_resolved_gameobject(ctx, caster_guid, go, tmpl)
+}
+
+fn use_resolved_gameobject(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    mut go: GameObject,
+    tmpl: GameObjectTemplate,
+) -> Result<(), String> {
     // Snapshot for the on_go_used notify hook fired at the success exit below — `go` is moved into
     // an update (or deleted by a pool reroll) inside the dispatch arms. The instance is the GO
     // ROW'S OWN (190 slice 2, per 228's documented splice note; equal to the user's after the gate

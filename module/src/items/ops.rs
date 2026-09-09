@@ -4,7 +4,7 @@
 //! reducer and its debug twin (see `reducers.rs`). All effects are additive: they touch only the item
 //! rows + the actor's health/money.
 
-use crate::actor::ActionRefusal;
+use crate::actor::{ActionRefusal, ActionRefusalKind};
 use spacetimedb::{Identity, ReducerContext, Table};
 
 use lyracore_shared::constants::starter_item;
@@ -752,7 +752,8 @@ pub(crate) fn apply_death_durability_loss(ctx: &ReducerContext, player_guid: u64
     }
 }
 
-/// Shared take-an-item-from-a-corpse logic for the player + debug paths (`CMSG_AUTOSTORE_LOOT_ITEM`):
+/// Typed take-an-item-from-a-corpse request for Package callers and the legacy player adapter
+/// (`CMSG_AUTOSTORE_LOOT_ITEM`):
 /// move one `game_corpse_loot` item into the looter's backpack. Validates the looter is in world and
 /// alive, the corpse exists / is dead / is on the same map; resolves the loot row at `loot_slot`, mints
 /// a fresh owned `ItemInstance` in the first free backpack slot, then DELETES the consumed loot row.
@@ -761,20 +762,22 @@ pub(crate) fn apply_death_durability_loss(ctx: &ReducerContext, player_guid: u64
 /// missing/alive/on another map, the Loot Tag excludes the looter, the slot has no loot, the item
 /// template is missing, or the backpack is full. Creature corpses clone quest rows to their resolved
 /// eligibility set. GameObjects retain their current-group clone behavior. [entity]
-pub(crate) fn apply_take_loot(
+pub(crate) fn request_take_loot(
     ctx: &ReducerContext,
     player_guid: u64,
     corpse_guid: u64,
     loot_slot: u8,
-) -> Result<(), String> {
+) -> Result<(), ActionRefusal> {
     let entities = ctx.db.game_world_entity();
-    let player = entities
-        .guid()
-        .find(player_guid)
-        .ok_or_else(|| "looter not in world".to_string())?;
+    let player = entities.guid().find(player_guid).ok_or_else(|| {
+        ActionRefusal::new(ActionRefusalKind::MissingActor, "looter not in world")
+    })?;
     // Death is server-authoritative everywhere — a dead/ghost looter can't take loot (mirrors loot_money).
     if player.dead {
-        return Err("dead players cannot loot".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::DeadActor,
+            "dead players cannot loot",
+        ));
     }
     // The loot source is EITHER a dead creature corpse (game_world_entity) OR a used gameobject
     // (game_gameobject — a chest, whose `use_gameobject` rolled rows into game_corpse_loot keyed on its
@@ -783,7 +786,10 @@ pub(crate) fn apply_take_loot(
     let (src_map, src_instance, sx, sy, sz, source_is_corpse) =
         if let Some(corpse) = entities.guid().find(corpse_guid) {
             if !corpse.dead {
-                return Err("target is not a corpse".to_string());
+                return Err(ActionRefusal::new(
+                    ActionRefusalKind::MissingTarget,
+                    "target is not a corpse",
+                ));
             }
             (
                 corpse.map_id,
@@ -796,13 +802,27 @@ pub(crate) fn apply_take_loot(
         } else if let Some(go) = ctx.db.game_gameobject().guid().find(corpse_guid) {
             (go.map_id, go.instance_id, go.x, go.y, go.z, false)
         } else {
-            return Err("no such loot source".to_string());
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::MissingTarget,
+                "no such loot source",
+            ));
         };
     if source_is_corpse {
-        crate::loot::corpse_access_gate(ctx, player_guid, corpse_guid)?;
+        crate::loot::corpse_access(ctx, player_guid, corpse_guid).map_err(|refusal| {
+            ActionRefusal::new(
+                ActionRefusalKind::CannotAct,
+                crate::loot::refused(
+                    refusal,
+                    &format!("actor_guid={player_guid} corpse_guid={corpse_guid}"),
+                ),
+            )
+        })?;
     }
     if src_map != player.map_id {
-        return Err("loot on another map".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "loot on another map",
+        ));
     }
     // Instance gate (190 slice 2 review HIGH): instances overlay IDENTICAL coordinates, so the
     // range gate below is routinely satisfiable across the instance wall — party B's looter in
@@ -810,14 +830,20 @@ pub(crate) fn apply_take_loot(
     // loot path with no slice-1 DEFERRED marker, so the gate sweep missed it: the module is the
     // authority regardless of what any client shows.
     if src_instance != player.instance_id {
-        return Err("loot in another instance".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "loot in another instance",
+        ));
     }
     // Range gate (anti-exploit), mirroring the money path `loot_money` — a client can't autostore a
     // corpse's item from across the map. Shares the same `LOOT_RANGE_SQ` (10 yd)² so the loot paths
     // never drift.
     let (dx, dy, dz) = (sx - player.x, sy - player.y, sz - player.z);
     if dx * dx + dy * dy + dz * dz > crate::loot::LOOT_RANGE_SQ {
-        return Err("loot out of range".to_string());
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OutOfRange,
+            "loot out of range",
+        ));
     }
     // The specific loot-window row the client asked for. `by_corpse` then match the slot index.
     let loot = ctx.db.game_corpse_loot();
@@ -825,7 +851,9 @@ pub(crate) fn apply_take_loot(
         .by_corpse()
         .filter(&corpse_guid)
         .find(|l| l.slot == loot_slot)
-        .ok_or_else(|| "no loot in that slot".to_string())?;
+        .ok_or_else(|| {
+            ActionRefusal::new(ActionRefusalKind::MissingTarget, "no loot in that slot")
+        })?;
     // Quest-only rows (work-item 187 slice 0): the TAKER's OWN need is re-validated server-side (the
     // gateway's window is a display hint, not authoritative) — an unreserved row (`reserved_for == 0`,
     // the shared row nobody has split yet) is claimable by anyone who currently needs it; an already
@@ -834,13 +862,14 @@ pub(crate) fn apply_take_loot(
     if row.quest_only {
         let needs = crate::loot::killer_needs_item(ctx, Some(player_guid), row.item_entry);
         if !crate::loot::quest_take_allowed(row.reserved_for, player_guid, needs) {
-            return Err(
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::CannotAct,
                 if row.reserved_for != 0 && row.reserved_for != player_guid {
-                    "this item is reserved for another player".to_string()
+                    "this item is reserved for another player"
                 } else {
-                    "you do not need this quest item".to_string()
+                    "you do not need this quest item"
                 },
-            );
+            ));
         }
     } else if !crate::loot::group_loot_take_allowed(
         row.withheld,
@@ -853,22 +882,30 @@ pub(crate) fn apply_take_loot(
         // (`reserved_for`), a MASTER-only row, or a round-robin/below-threshold row designated to
         // someone else all reject the plain autostore path here — server-authoritative, the gateway's
         // per-viewer loot-window filter (`reads.rs`) is a display hint only.
-        return Err(if row.master_only {
-            "this item requires the master looter to distribute it".to_string()
-        } else {
-            "this item belongs to another looter right now".to_string()
-        });
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            if row.master_only {
+                "this item requires the master looter to distribute it"
+            } else {
+                "this item belongs to another looter right now"
+            },
+        ));
     }
     let tmpl = ctx
         .db
         .game_item_template()
         .entry()
         .find(row.item_entry)
-        .ok_or_else(|| format!("no template for item entry {}", row.item_entry))?;
+        .ok_or_else(|| {
+            ActionRefusal::new(
+                ActionRefusalKind::MissingTarget,
+                format!("no template for item entry {}", row.item_entry),
+            )
+        })?;
     // Auto-store with stacking (parity): a looted stackable tops up a matching partial stack first,
     // then spills into free slots (visible only to its owner via owner_identity). `?` so an inventory-full
     // loot rolls back and the loot row stays for a retry.
-    store_item(
+    store_item_typed(
         ctx,
         player_guid,
         player.owner_identity,
@@ -921,6 +958,15 @@ pub(crate) fn apply_take_loot(
         },
     );
     Ok(())
+}
+
+pub(crate) fn apply_take_loot(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    corpse_guid: u64,
+    loot_slot: u8,
+) -> Result<(), String> {
+    request_take_loot(ctx, player_guid, corpse_guid, loot_slot).map_err(Into::into)
 }
 
 #[cfg(test)]
