@@ -34,7 +34,9 @@ pub mod aura_stack_condition_type;
 pub mod aura_type;
 pub mod authored_idle_movement_type;
 pub mod authored_walking_mode_type;
+pub mod begin_character_shard_transfer_reducer;
 pub mod begin_transfer_reducer;
+pub mod bind_bot_transfer_locator_reducer;
 pub mod bot_invite_intent_type;
 pub mod bot_transfer_intent_type;
 pub mod breath_relay_event_type;
@@ -318,6 +320,8 @@ pub mod faction_type;
 pub mod fence_account_reducer;
 pub mod finalize_vmap_nav_coverage_reducer;
 pub mod finish_party_command_intent_reducer;
+pub mod finish_character_shard_transfer_reducer;
+pub mod finish_pending_character_shard_transfer_reducer;
 pub mod finish_transfer_reducer;
 pub mod fire_eventai_forced_despawn_reducer;
 pub mod fire_pending_cast_reducer;
@@ -455,7 +459,9 @@ pub mod game_ground_area_schedule_table;
 pub mod game_ground_area_table;
 pub mod game_group_event_table;
 pub mod game_group_invite_table;
+pub mod game_group_member_partition_table;
 pub mod game_group_member_table;
+pub mod game_group_roster_revision_table;
 pub mod game_group_table;
 pub mod game_guid_allocator_table;
 pub mod game_guid_range_registry_table;
@@ -619,7 +625,9 @@ pub mod ground_area_schedule_type;
 pub mod ground_area_type;
 pub mod group_event_type;
 pub mod group_invite_type;
+pub mod group_member_partition_type;
 pub mod group_member_type;
+pub mod group_roster_revision_type;
 pub mod group_type;
 pub mod guid_allocator_type;
 pub mod guid_range_assignment_type;
@@ -744,6 +752,7 @@ pub mod import_map_regions_reducer;
 pub mod import_meta_type;
 pub mod import_nav_chunks_append_reducer;
 pub mod import_nav_chunks_reducer;
+pub mod import_player_character_blob_reducer;
 pub mod import_terrain_chunks_append_reducer;
 pub mod import_terrain_chunks_reducer;
 pub mod import_verified_rajaxx_projection_type;
@@ -797,6 +806,7 @@ pub mod party_command_dispatch_lane_type;
 pub mod party_command_intent_type;
 pub mod party_command_issuer_type;
 pub mod party_command_receipt_type;
+pub mod party_partition_state_type;
 pub mod patrol_intent_type;
 pub mod patrol_pause_type;
 pub mod pending_cast_type;
@@ -924,6 +934,7 @@ pub mod relay_terminate_when_type;
 pub mod relay_world_state_type;
 pub mod release_account_claim_reducer;
 pub mod release_bot_transfer_arrival_reducer;
+pub mod release_player_transfer_arrival_reducer;
 pub mod release_transfer_reducer;
 pub mod remove_aura_instruction_type;
 pub mod remove_guardians_instruction_type;
@@ -1067,7 +1078,9 @@ pub use aura_stack_condition_type::AuraStackCondition;
 pub use aura_type::Aura;
 pub use authored_idle_movement_type::AuthoredIdleMovement;
 pub use authored_walking_mode_type::AuthoredWalkingMode;
+pub use begin_character_shard_transfer_reducer::begin_character_shard_transfer;
 pub use begin_transfer_reducer::begin_transfer;
+pub use bind_bot_transfer_locator_reducer::bind_bot_transfer_locator;
 pub use bot_invite_intent_type::BotInviteIntent;
 pub use bot_transfer_intent_type::BotTransferIntent;
 pub use breath_relay_event_type::BreathRelayEvent;
@@ -1351,6 +1364,8 @@ pub use faction_type::Faction;
 pub use fence_account_reducer::fence_account;
 pub use finalize_vmap_nav_coverage_reducer::finalize_vmap_nav_coverage;
 pub use finish_party_command_intent_reducer::finish_party_command_intent;
+pub use finish_character_shard_transfer_reducer::finish_character_shard_transfer;
+pub use finish_pending_character_shard_transfer_reducer::finish_pending_character_shard_transfer;
 pub use finish_transfer_reducer::finish_transfer;
 pub use fire_eventai_forced_despawn_reducer::fire_eventai_forced_despawn;
 pub use fire_pending_cast_reducer::fire_pending_cast;
@@ -1488,7 +1503,9 @@ pub use game_ground_area_schedule_table::*;
 pub use game_ground_area_table::*;
 pub use game_group_event_table::*;
 pub use game_group_invite_table::*;
+pub use game_group_member_partition_table::*;
 pub use game_group_member_table::*;
+pub use game_group_roster_revision_table::*;
 pub use game_group_table::*;
 pub use game_guid_allocator_table::*;
 pub use game_guid_range_registry_table::*;
@@ -1652,7 +1669,9 @@ pub use ground_area_schedule_type::GroundAreaSchedule;
 pub use ground_area_type::GroundArea;
 pub use group_event_type::GroupEvent;
 pub use group_invite_type::GroupInvite;
+pub use group_member_partition_type::GroupMemberPartition;
 pub use group_member_type::GroupMember;
+pub use group_roster_revision_type::GroupRosterRevision;
 pub use group_type::Group;
 pub use guid_allocator_type::GuidAllocator;
 pub use guid_range_assignment_type::GuidRangeAssignment;
@@ -1777,6 +1796,7 @@ pub use import_map_regions_reducer::import_map_regions;
 pub use import_meta_type::ImportMeta;
 pub use import_nav_chunks_append_reducer::import_nav_chunks_append;
 pub use import_nav_chunks_reducer::import_nav_chunks;
+pub use import_player_character_blob_reducer::import_player_character_blob;
 pub use import_terrain_chunks_append_reducer::import_terrain_chunks_append;
 pub use import_terrain_chunks_reducer::import_terrain_chunks;
 pub use import_verified_rajaxx_projection_type::ImportVerifiedRajaxxProjection;
@@ -1830,6 +1850,7 @@ pub use party_command_dispatch_lane_type::PartyCommandDispatchLane;
 pub use party_command_intent_type::PartyCommandIntent;
 pub use party_command_issuer_type::PartyCommandIssuer;
 pub use party_command_receipt_type::PartyCommandReceipt;
+pub use party_partition_state_type::PartyPartitionState;
 pub use patrol_intent_type::PatrolIntent;
 pub use patrol_pause_type::PatrolPause;
 pub use pending_cast_type::PendingCast;
@@ -1957,6 +1978,7 @@ pub use relay_terminate_when_type::RelayTerminateWhen;
 pub use relay_world_state_type::RelayWorldState;
 pub use release_account_claim_reducer::release_account_claim;
 pub use release_bot_transfer_arrival_reducer::release_bot_transfer_arrival;
+pub use release_player_transfer_arrival_reducer::release_player_transfer_arrival;
 pub use release_transfer_reducer::release_transfer;
 pub use remove_aura_instruction_type::RemoveAuraInstruction;
 pub use remove_guardians_instruction_type::RemoveGuardiansInstruction;
@@ -2120,6 +2142,18 @@ pub enum Reducer {
         packed: String,
     },
     ArmAllPools,
+    BeginCharacterShardTransfer {
+        character_guid: u64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_revision: u64,
+        destination_map_id: u32,
+        destination_instance_id: u64,
+        source_module_identity: __sdk::Identity,
+        transfer_intent_id: u64,
+        controller_generation: u64,
+        request_actor: SessionActor,
+    },
     BeginTransfer {
         transfer_id: u64,
         request_actor: SessionActor,
@@ -2130,6 +2164,15 @@ pub enum Reducer {
         dest_z: f32,
         dest_o: f32,
         cross_database: bool,
+    },
+    BindBotTransferLocator {
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_locator_revision: u64,
     },
     ClaimAccount {
         account_id: u64,
@@ -2915,6 +2958,29 @@ pub enum Reducer {
         intent_id: u64,
         claim_token: u64,
         outcome: CommandOutcome,
+    FinishCharacterShardTransfer {
+        character_guid: u64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_revision: u64,
+        destination_map_id: u32,
+        destination_instance_id: u64,
+        source_module_identity: __sdk::Identity,
+        transfer_intent_id: u64,
+        controller_generation: u64,
+        request_actor: SessionActor,
+    },
+    FinishPendingCharacterShardTransfer {
+        character_guid: u64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_revision: u64,
+        destination_map_id: u32,
+        destination_instance_id: u64,
+        source_module_identity: __sdk::Identity,
+        transfer_intent_id: u64,
+        controller_generation: u64,
+        request_actor: SessionActor,
     },
     FinishTransfer {
         transfer_id: u64,
@@ -3402,6 +3468,9 @@ pub enum Reducer {
         intent_id: u64,
         controller_generation: u64,
         intent_created_micros: i64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_locator_revision: u64,
         request_actor: SessionActor,
     },
     ImportCharacter {
@@ -3447,6 +3516,14 @@ pub enum Reducer {
     },
     ImportNavChunksAppend {
         packed: String,
+    },
+    ImportPlayerCharacterBlob {
+        transfer_id: u64,
+        blob: Vec<u8>,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_locator_revision: u64,
+        request_actor: SessionActor,
     },
     ImportTerrainChunks {
         packed: String,
@@ -3738,6 +3815,17 @@ pub enum Reducer {
         intent_id: u64,
         controller_generation: u64,
         intent_created_micros: i64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_locator_revision: u64,
+    },
+    ReleasePlayerTransferArrival {
+        transfer_id: u64,
+        character_guid: u64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_locator_revision: u64,
+        request_actor: SessionActor,
     },
     ReleaseTransfer {
         transfer_id: u64,
@@ -3820,6 +3908,8 @@ pub enum Reducer {
         master_looter_guid: u64,
         members: Vec<u64>,
         request_actor: SessionActor,
+        partitions: Vec<GroupMemberPartition>,
+        roster_revision: u64,
     },
     TickAuras {
         schedule: AuraSchedule,
@@ -3865,7 +3955,9 @@ impl __sdk::Reducer for Reducer {
             Reducer::ApplyAdmittedPartyCommand { .. } => "apply_admitted_party_command",
             Reducer::ApplyPackageDeltas { .. } => "apply_package_deltas",
             Reducer::ArmAllPools => "arm_all_pools",
+            Reducer::BeginCharacterShardTransfer { .. } => "begin_character_shard_transfer",
             Reducer::BeginTransfer { .. } => "begin_transfer",
+            Reducer::BindBotTransferLocator { .. } => "bind_bot_transfer_locator",
             Reducer::ClaimAccount { .. } => "claim_account",
             Reducer::ClaimBotInviteIntent { .. } => "claim_bot_invite_intent",
             Reducer::ClaimBotTransferIntent { .. } => "claim_bot_transfer_intent",
@@ -4089,6 +4181,10 @@ impl __sdk::Reducer for Reducer {
             Reducer::FenceAccount { .. } => "fence_account",
             Reducer::FinalizeVmapNavCoverage { .. } => "finalize_vmap_nav_coverage",
             Reducer::FinishPartyCommandIntent { .. } => "finish_party_command_intent",
+            Reducer::FinishCharacterShardTransfer { .. } => "finish_character_shard_transfer",
+            Reducer::FinishPendingCharacterShardTransfer { .. } => {
+                "finish_pending_character_shard_transfer"
+            }
             Reducer::FinishTransfer { .. } => "finish_transfer",
             Reducer::FireEventaiForcedDespawn { .. } => "fire_eventai_forced_despawn",
             Reducer::FirePendingCast { .. } => "fire_pending_cast",
@@ -4212,6 +4308,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ImportMapRegions { .. } => "import_map_regions",
             Reducer::ImportNavChunks { .. } => "import_nav_chunks",
             Reducer::ImportNavChunksAppend { .. } => "import_nav_chunks_append",
+            Reducer::ImportPlayerCharacterBlob { .. } => "import_player_character_blob",
             Reducer::ImportTerrainChunks { .. } => "import_terrain_chunks",
             Reducer::ImportTerrainChunksAppend { .. } => "import_terrain_chunks_append",
             Reducer::ImportVmapChunks { .. } => "import_vmap_chunks",
@@ -4271,6 +4368,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RecordShardLoad { .. } => "record_shard_load",
             Reducer::ReleaseAccountClaim { .. } => "release_account_claim",
             Reducer::ReleaseBotTransferArrival { .. } => "release_bot_transfer_arrival",
+            Reducer::ReleasePlayerTransferArrival { .. } => "release_player_transfer_arrival",
             Reducer::ReleaseTransfer { .. } => "release_transfer",
             Reducer::RenewAccountClaim { .. } => "renew_account_claim",
             Reducer::RenewAccountFence { .. } => "renew_account_fence",
@@ -4377,7 +4475,30 @@ impl __sdk::Reducer for Reducer {
 }),
             Reducer::ArmAllPools => __sats::bsatn::to_vec(&arm_all_pools_reducer::ArmAllPoolsArgs {
                 }),
-Reducer::BeginTransfer{
+Reducer::BeginCharacterShardTransfer{
+                character_guid,
+                source_map_id,
+                source_instance_id,
+                source_revision,
+                destination_map_id,
+                destination_instance_id,
+                source_module_identity,
+                transfer_intent_id,
+                controller_generation,
+                request_actor,
+}             => __sats::bsatn::to_vec(&begin_character_shard_transfer_reducer::BeginCharacterShardTransferArgs {
+                character_guid: character_guid.clone(),
+                source_map_id: source_map_id.clone(),
+                source_instance_id: source_instance_id.clone(),
+                source_revision: source_revision.clone(),
+                destination_map_id: destination_map_id.clone(),
+                destination_instance_id: destination_instance_id.clone(),
+                source_module_identity: source_module_identity.clone(),
+                transfer_intent_id: transfer_intent_id.clone(),
+                controller_generation: controller_generation.clone(),
+                request_actor: request_actor.clone(),
+}),
+            Reducer::BeginTransfer{
                 transfer_id,
                 request_actor,
                 dest_map_id,
@@ -4397,6 +4518,23 @@ Reducer::BeginTransfer{
                 dest_z: dest_z.clone(),
                 dest_o: dest_o.clone(),
                 cross_database: cross_database.clone(),
+}),
+            Reducer::BindBotTransferLocator{
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token,
+                source_map,
+                source_instance,
+                source_locator_revision,
+}             => __sats::bsatn::to_vec(&bind_bot_transfer_locator_reducer::BindBotTransferLocatorArgs {
+                intent_id: intent_id.clone(),
+                bot_guid: bot_guid.clone(),
+                controller_generation: controller_generation.clone(),
+                claim_token: claim_token.clone(),
+                source_map: source_map.clone(),
+                source_instance: source_instance.clone(),
+                source_locator_revision: source_locator_revision.clone(),
 }),
             Reducer::ClaimAccount{
                 account_id,
@@ -5804,6 +5942,51 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
                 outcome: outcome.clone(),
+            Reducer::FinishCharacterShardTransfer{
+                character_guid,
+                source_map_id,
+                source_instance_id,
+                source_revision,
+                destination_map_id,
+                destination_instance_id,
+                source_module_identity,
+                transfer_intent_id,
+                controller_generation,
+                request_actor,
+}             => __sats::bsatn::to_vec(&finish_character_shard_transfer_reducer::FinishCharacterShardTransferArgs {
+                character_guid: character_guid.clone(),
+                source_map_id: source_map_id.clone(),
+                source_instance_id: source_instance_id.clone(),
+                source_revision: source_revision.clone(),
+                destination_map_id: destination_map_id.clone(),
+                destination_instance_id: destination_instance_id.clone(),
+                source_module_identity: source_module_identity.clone(),
+                transfer_intent_id: transfer_intent_id.clone(),
+                controller_generation: controller_generation.clone(),
+                request_actor: request_actor.clone(),
+}),
+            Reducer::FinishPendingCharacterShardTransfer{
+                character_guid,
+                source_map_id,
+                source_instance_id,
+                source_revision,
+                destination_map_id,
+                destination_instance_id,
+                source_module_identity,
+                transfer_intent_id,
+                controller_generation,
+                request_actor,
+}             => __sats::bsatn::to_vec(&finish_pending_character_shard_transfer_reducer::FinishPendingCharacterShardTransferArgs {
+                character_guid: character_guid.clone(),
+                source_map_id: source_map_id.clone(),
+                source_instance_id: source_instance_id.clone(),
+                source_revision: source_revision.clone(),
+                destination_map_id: destination_map_id.clone(),
+                destination_instance_id: destination_instance_id.clone(),
+                source_module_identity: source_module_identity.clone(),
+                transfer_intent_id: transfer_intent_id.clone(),
+                controller_generation: controller_generation.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::FinishTransfer{
                 transfer_id,
@@ -6667,6 +6850,9 @@ Reducer::GwIgnoreTrade{
                 intent_id,
                 controller_generation,
                 intent_created_micros,
+                source_map_id,
+                source_instance_id,
+                source_locator_revision,
                 request_actor,
 }             => __sats::bsatn::to_vec(&import_bot_character_blob_reducer::ImportBotCharacterBlobArgs {
                 transfer_id: transfer_id.clone(),
@@ -6675,6 +6861,9 @@ Reducer::GwIgnoreTrade{
                 intent_id: intent_id.clone(),
                 controller_generation: controller_generation.clone(),
                 intent_created_micros: intent_created_micros.clone(),
+                source_map_id: source_map_id.clone(),
+                source_instance_id: source_instance_id.clone(),
+                source_locator_revision: source_locator_revision.clone(),
                 request_actor: request_actor.clone(),
 }),
             Reducer::ImportCharacter{
@@ -6750,6 +6939,21 @@ Reducer::GwIgnoreTrade{
                 packed,
 }             => __sats::bsatn::to_vec(&import_nav_chunks_append_reducer::ImportNavChunksAppendArgs {
                 packed: packed.clone(),
+}),
+            Reducer::ImportPlayerCharacterBlob{
+                transfer_id,
+                blob,
+                source_map_id,
+                source_instance_id,
+                source_locator_revision,
+                request_actor,
+}             => __sats::bsatn::to_vec(&import_player_character_blob_reducer::ImportPlayerCharacterBlobArgs {
+                transfer_id: transfer_id.clone(),
+                blob: blob.clone(),
+                source_map_id: source_map_id.clone(),
+                source_instance_id: source_instance_id.clone(),
+                source_locator_revision: source_locator_revision.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::ImportTerrainChunks{
                 packed,
@@ -7274,6 +7478,9 @@ Reducer::RecordRegionLoad{
                 intent_id,
                 controller_generation,
                 intent_created_micros,
+                source_map_id,
+                source_instance_id,
+                source_locator_revision,
 }             => __sats::bsatn::to_vec(&release_bot_transfer_arrival_reducer::ReleaseBotTransferArrivalArgs {
                 transfer_id: transfer_id.clone(),
                 bot_guid: bot_guid.clone(),
@@ -7281,6 +7488,24 @@ Reducer::RecordRegionLoad{
                 intent_id: intent_id.clone(),
                 controller_generation: controller_generation.clone(),
                 intent_created_micros: intent_created_micros.clone(),
+                source_map_id: source_map_id.clone(),
+                source_instance_id: source_instance_id.clone(),
+                source_locator_revision: source_locator_revision.clone(),
+}),
+            Reducer::ReleasePlayerTransferArrival{
+                transfer_id,
+                character_guid,
+                source_map_id,
+                source_instance_id,
+                source_locator_revision,
+                request_actor,
+}             => __sats::bsatn::to_vec(&release_player_transfer_arrival_reducer::ReleasePlayerTransferArrivalArgs {
+                transfer_id: transfer_id.clone(),
+                character_guid: character_guid.clone(),
+                source_map_id: source_map_id.clone(),
+                source_instance_id: source_instance_id.clone(),
+                source_locator_revision: source_locator_revision.clone(),
+                request_actor: request_actor.clone(),
 }),
             Reducer::ReleaseTransfer{
                 transfer_id,
@@ -7420,6 +7645,8 @@ Reducer::ResumeRelayArrival{
                 master_looter_guid,
                 members,
                 request_actor,
+                partitions,
+                roster_revision,
 }             => __sats::bsatn::to_vec(&sync_group_mirror_reducer::SyncGroupMirrorArgs {
                 group_id: group_id.clone(),
                 leader_guid: leader_guid.clone(),
@@ -7428,6 +7655,8 @@ Reducer::ResumeRelayArrival{
                 master_looter_guid: master_looter_guid.clone(),
                 members: members.clone(),
                 request_actor: request_actor.clone(),
+                partitions: partitions.clone(),
+                roster_revision: roster_revision.clone(),
 }),
             Reducer::TickAuras{
                 schedule,
@@ -7610,6 +7839,8 @@ pub struct DbUpdate {
     game_group_event: __sdk::TableUpdate<GroupEvent>,
     game_group_invite: __sdk::TableUpdate<GroupInvite>,
     game_group_member: __sdk::TableUpdate<GroupMember>,
+    game_group_member_partition: __sdk::TableUpdate<GroupMemberPartition>,
+    game_group_roster_revision: __sdk::TableUpdate<GroupRosterRevision>,
     game_guid_allocator: __sdk::TableUpdate<GuidAllocator>,
     game_guid_range: __sdk::TableUpdate<GuidRange>,
     game_guid_range_registry: __sdk::TableUpdate<GuidRangeAssignment>,
@@ -8176,6 +8407,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_group_member" => db_update
                     .game_group_member
                     .append(game_group_member_table::parse_table_update(table_update)?),
+                "game_group_member_partition" => db_update.game_group_member_partition.append(
+                    game_group_member_partition_table::parse_table_update(table_update)?,
+                ),
+                "game_group_roster_revision" => db_update.game_group_roster_revision.append(
+                    game_group_roster_revision_table::parse_table_update(table_update)?,
+                ),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(game_guid_allocator_table::parse_table_update(table_update)?),
@@ -9202,6 +9439,18 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_group_member = cache
             .apply_diff_to_table::<GroupMember>("game_group_member", &self.game_group_member)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_group_member_partition = cache
+            .apply_diff_to_table::<GroupMemberPartition>(
+                "game_group_member_partition",
+                &self.game_group_member_partition,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
+        diff.game_group_roster_revision = cache
+            .apply_diff_to_table::<GroupRosterRevision>(
+                "game_group_roster_revision",
+                &self.game_group_roster_revision,
+            )
+            .with_updates_by_pk(|row| &row.group_id);
         diff.game_guid_allocator = cache
             .apply_diff_to_table::<GuidAllocator>("game_guid_allocator", &self.game_guid_allocator)
             .with_updates_by_pk(|row| &row.id);
@@ -10127,6 +10376,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_group_member" => db_update
                     .game_group_member
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_group_member_partition" => db_update
+                    .game_group_member_partition
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_group_roster_revision" => db_update
+                    .game_group_roster_revision
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10902,6 +11157,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_group_member" => db_update
                     .game_group_member
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_group_member_partition" => db_update
+                    .game_group_member_partition
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_group_roster_revision" => db_update
+                    .game_group_roster_revision
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_guid_allocator" => db_update
                     .game_guid_allocator
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -11430,6 +11691,8 @@ pub struct AppliedDiff<'r> {
     game_group_event: __sdk::TableAppliedDiff<'r, GroupEvent>,
     game_group_invite: __sdk::TableAppliedDiff<'r, GroupInvite>,
     game_group_member: __sdk::TableAppliedDiff<'r, GroupMember>,
+    game_group_member_partition: __sdk::TableAppliedDiff<'r, GroupMemberPartition>,
+    game_group_roster_revision: __sdk::TableAppliedDiff<'r, GroupRosterRevision>,
     game_guid_allocator: __sdk::TableAppliedDiff<'r, GuidAllocator>,
     game_guid_range: __sdk::TableAppliedDiff<'r, GuidRange>,
     game_guid_range_registry: __sdk::TableAppliedDiff<'r, GuidRangeAssignment>,
@@ -12167,6 +12430,16 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<GroupMember>(
             "game_group_member",
             &self.game_group_member,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GroupMemberPartition>(
+            "game_group_member_partition",
+            &self.game_group_member_partition,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<GroupRosterRevision>(
+            "game_group_roster_revision",
+            &self.game_group_roster_revision,
             event,
         );
         callbacks.invoke_table_row_callbacks::<GuidAllocator>(
@@ -13567,6 +13840,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_group_event_table::register_table(client_cache);
         game_group_invite_table::register_table(client_cache);
         game_group_member_table::register_table(client_cache);
+        game_group_member_partition_table::register_table(client_cache);
+        game_group_roster_revision_table::register_table(client_cache);
         game_guid_allocator_table::register_table(client_cache);
         game_guid_range_table::register_table(client_cache);
         game_guid_range_registry_table::register_table(client_cache);
@@ -13823,6 +14098,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_group_event",
         "game_group_invite",
         "game_group_member",
+        "game_group_member_partition",
+        "game_group_roster_revision",
         "game_guid_allocator",
         "game_guid_range",
         "game_guid_range_registry",

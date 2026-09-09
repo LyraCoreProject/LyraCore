@@ -4,6 +4,7 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::group_member_partition_type::GroupMemberPartition;
 use super::session_actor_type::SessionActor;
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
@@ -16,6 +17,8 @@ pub(super) struct SyncGroupMirrorArgs {
     pub master_looter_guid: u64,
     pub members: Vec<u64>,
     pub request_actor: SessionActor,
+    pub partitions: Vec<GroupMemberPartition>,
+    pub roster_revision: u64,
 }
 
 impl From<SyncGroupMirrorArgs> for super::Reducer {
@@ -28,6 +31,8 @@ impl From<SyncGroupMirrorArgs> for super::Reducer {
             master_looter_guid: args.master_looter_guid,
             members: args.members,
             request_actor: args.request_actor,
+            partitions: args.partitions,
+            roster_revision: args.roster_revision,
         }
     }
 }
@@ -56,6 +61,8 @@ pub trait sync_group_mirror {
         master_looter_guid: u64,
         members: Vec<u64>,
         request_actor: SessionActor,
+        partitions: Vec<GroupMemberPartition>,
+        roster_revision: u64,
     ) -> __sdk::Result<()> {
         self.sync_group_mirror_then(
             group_id,
@@ -65,6 +72,8 @@ pub trait sync_group_mirror {
             master_looter_guid,
             members,
             request_actor,
+            partitions,
+            roster_revision,
             |_, _| {},
         )
     }
@@ -84,6 +93,8 @@ pub trait sync_group_mirror {
         master_looter_guid: u64,
         members: Vec<u64>,
         request_actor: SessionActor,
+        partitions: Vec<GroupMemberPartition>,
+        roster_revision: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -101,6 +112,8 @@ impl sync_group_mirror for super::RemoteReducers {
         master_looter_guid: u64,
         members: Vec<u64>,
         request_actor: SessionActor,
+        partitions: Vec<GroupMemberPartition>,
+        roster_revision: u64,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -115,6 +128,8 @@ impl sync_group_mirror for super::RemoteReducers {
                 master_looter_guid,
                 members,
                 request_actor,
+                partitions,
+                roster_revision,
             },
             callback,
         )

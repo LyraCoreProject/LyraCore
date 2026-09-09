@@ -4,94 +4,81 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+use super::session_actor_type::SessionActor;
+
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
-pub(super) struct ReleaseBotTransferArrivalArgs {
+pub(super) struct ImportPlayerCharacterBlobArgs {
     pub transfer_id: u64,
-    pub bot_guid: u64,
-    pub source_module_identity: __sdk::Identity,
-    pub intent_id: u64,
-    pub controller_generation: u64,
-    pub intent_created_micros: i64,
+    pub blob: Vec<u8>,
     pub source_map_id: u32,
     pub source_instance_id: u64,
     pub source_locator_revision: u64,
+    pub request_actor: SessionActor,
 }
 
-impl From<ReleaseBotTransferArrivalArgs> for super::Reducer {
-    fn from(args: ReleaseBotTransferArrivalArgs) -> Self {
-        Self::ReleaseBotTransferArrival {
+impl From<ImportPlayerCharacterBlobArgs> for super::Reducer {
+    fn from(args: ImportPlayerCharacterBlobArgs) -> Self {
+        Self::ImportPlayerCharacterBlob {
             transfer_id: args.transfer_id,
-            bot_guid: args.bot_guid,
-            source_module_identity: args.source_module_identity,
-            intent_id: args.intent_id,
-            controller_generation: args.controller_generation,
-            intent_created_micros: args.intent_created_micros,
+            blob: args.blob,
             source_map_id: args.source_map_id,
             source_instance_id: args.source_instance_id,
             source_locator_revision: args.source_locator_revision,
+            request_actor: args.request_actor,
         }
     }
 }
 
-impl __sdk::InModule for ReleaseBotTransferArrivalArgs {
+impl __sdk::InModule for ImportPlayerCharacterBlobArgs {
     type Module = super::RemoteModule;
 }
 
 #[allow(non_camel_case_types)]
-/// Extension trait for access to the reducer `release_bot_transfer_arrival`.
+/// Extension trait for access to the reducer `import_player_character_blob`.
 ///
 /// Implemented for [`super::RemoteReducers`].
-pub trait release_bot_transfer_arrival {
-    /// Request that the remote module invoke the reducer `release_bot_transfer_arrival` to run as soon as possible.
+pub trait import_player_character_blob {
+    /// Request that the remote module invoke the reducer `import_player_character_blob` to run as soon as possible.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and this method provides no way to listen for its completion status.
-    /// /// Use [`release_bot_transfer_arrival:release_bot_transfer_arrival_then`] to run a callback after the reducer completes.
-    fn release_bot_transfer_arrival(
+    /// /// Use [`import_player_character_blob:import_player_character_blob_then`] to run a callback after the reducer completes.
+    fn import_player_character_blob(
         &self,
         transfer_id: u64,
-        bot_guid: u64,
-        source_module_identity: __sdk::Identity,
-        intent_id: u64,
-        controller_generation: u64,
-        intent_created_micros: i64,
+        blob: Vec<u8>,
         source_map_id: u32,
         source_instance_id: u64,
         source_locator_revision: u64,
+        request_actor: SessionActor,
     ) -> __sdk::Result<()> {
-        self.release_bot_transfer_arrival_then(
+        self.import_player_character_blob_then(
             transfer_id,
-            bot_guid,
-            source_module_identity,
-            intent_id,
-            controller_generation,
-            intent_created_micros,
+            blob,
             source_map_id,
             source_instance_id,
             source_locator_revision,
+            request_actor,
             |_, _| {},
         )
     }
 
-    /// Request that the remote module invoke the reducer `release_bot_transfer_arrival` to run as soon as possible,
+    /// Request that the remote module invoke the reducer `import_player_character_blob` to run as soon as possible,
     /// registering `callback` to run when we are notified that the reducer completed.
     ///
     /// This method returns immediately, and errors only if we are unable to send the request.
     /// The reducer will run asynchronously in the future,
     ///  and its status can be observed with the `callback`.
-    fn release_bot_transfer_arrival_then(
+    fn import_player_character_blob_then(
         &self,
         transfer_id: u64,
-        bot_guid: u64,
-        source_module_identity: __sdk::Identity,
-        intent_id: u64,
-        controller_generation: u64,
-        intent_created_micros: i64,
+        blob: Vec<u8>,
         source_map_id: u32,
         source_instance_id: u64,
         source_locator_revision: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -99,34 +86,28 @@ pub trait release_bot_transfer_arrival {
     ) -> __sdk::Result<()>;
 }
 
-impl release_bot_transfer_arrival for super::RemoteReducers {
-    fn release_bot_transfer_arrival_then(
+impl import_player_character_blob for super::RemoteReducers {
+    fn import_player_character_blob_then(
         &self,
         transfer_id: u64,
-        bot_guid: u64,
-        source_module_identity: __sdk::Identity,
-        intent_id: u64,
-        controller_generation: u64,
-        intent_created_micros: i64,
+        blob: Vec<u8>,
         source_map_id: u32,
         source_instance_id: u64,
         source_locator_revision: u64,
+        request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
             + 'static,
     ) -> __sdk::Result<()> {
         self.imp.invoke_reducer_with_callback(
-            ReleaseBotTransferArrivalArgs {
+            ImportPlayerCharacterBlobArgs {
                 transfer_id,
-                bot_guid,
-                source_module_identity,
-                intent_id,
-                controller_generation,
-                intent_created_micros,
+                blob,
                 source_map_id,
                 source_instance_id,
                 source_locator_revision,
+                request_actor,
             },
             callback,
         )

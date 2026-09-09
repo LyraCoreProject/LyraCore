@@ -18,6 +18,9 @@ pub struct BotTransferIntent {
     pub claim_until_micros: i64,
     pub arrival_ready: bool,
     pub source_module_identity: __sdk::Identity,
+    pub source_map: u32,
+    pub source_instance: u64,
+    pub source_locator_revision: u64,
 }
 
 impl __sdk::InModule for BotTransferIntent {
@@ -39,6 +42,9 @@ pub struct BotTransferIntentCols {
     pub claim_until_micros: __sdk::__query_builder::Col<BotTransferIntent, i64>,
     pub arrival_ready: __sdk::__query_builder::Col<BotTransferIntent, bool>,
     pub source_module_identity: __sdk::__query_builder::Col<BotTransferIntent, __sdk::Identity>,
+    pub source_map: __sdk::__query_builder::Col<BotTransferIntent, u32>,
+    pub source_instance: __sdk::__query_builder::Col<BotTransferIntent, u64>,
+    pub source_locator_revision: __sdk::__query_builder::Col<BotTransferIntent, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for BotTransferIntent {
@@ -64,6 +70,12 @@ impl __sdk::__query_builder::HasCols for BotTransferIntent {
             source_module_identity: __sdk::__query_builder::Col::new(
                 table_name,
                 "source_module_identity",
+            ),
+            source_map: __sdk::__query_builder::Col::new(table_name, "source_map"),
+            source_instance: __sdk::__query_builder::Col::new(table_name, "source_instance"),
+            source_locator_revision: __sdk::__query_builder::Col::new(
+                table_name,
+                "source_locator_revision",
             ),
         }
     }

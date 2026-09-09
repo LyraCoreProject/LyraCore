@@ -15,6 +15,9 @@ pub(super) struct ImportBotCharacterBlobArgs {
     pub intent_id: u64,
     pub controller_generation: u64,
     pub intent_created_micros: i64,
+    pub source_map_id: u32,
+    pub source_instance_id: u64,
+    pub source_locator_revision: u64,
     pub request_actor: SessionActor,
 }
 
@@ -27,6 +30,9 @@ impl From<ImportBotCharacterBlobArgs> for super::Reducer {
             intent_id: args.intent_id,
             controller_generation: args.controller_generation,
             intent_created_micros: args.intent_created_micros,
+            source_map_id: args.source_map_id,
+            source_instance_id: args.source_instance_id,
+            source_locator_revision: args.source_locator_revision,
             request_actor: args.request_actor,
         }
     }
@@ -55,6 +61,9 @@ pub trait import_bot_character_blob {
         intent_id: u64,
         controller_generation: u64,
         intent_created_micros: i64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_locator_revision: u64,
         request_actor: SessionActor,
     ) -> __sdk::Result<()> {
         self.import_bot_character_blob_then(
@@ -64,6 +73,9 @@ pub trait import_bot_character_blob {
             intent_id,
             controller_generation,
             intent_created_micros,
+            source_map_id,
+            source_instance_id,
+            source_locator_revision,
             request_actor,
             |_, _| {},
         )
@@ -83,6 +95,9 @@ pub trait import_bot_character_blob {
         intent_id: u64,
         controller_generation: u64,
         intent_created_micros: i64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_locator_revision: u64,
         request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -100,6 +115,9 @@ impl import_bot_character_blob for super::RemoteReducers {
         intent_id: u64,
         controller_generation: u64,
         intent_created_micros: i64,
+        source_map_id: u32,
+        source_instance_id: u64,
+        source_locator_revision: u64,
         request_actor: SessionActor,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
@@ -114,6 +132,9 @@ impl import_bot_character_blob for super::RemoteReducers {
                 intent_id,
                 controller_generation,
                 intent_created_micros,
+                source_map_id,
+                source_instance_id,
+                source_locator_revision,
                 request_actor,
             },
             callback,

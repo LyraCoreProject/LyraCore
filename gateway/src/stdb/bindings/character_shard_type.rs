@@ -11,6 +11,13 @@ pub struct CharacterShard {
     pub map_id: u32,
     pub instance_id: u64,
     pub updated_micros: i64,
+    pub revision: u64,
+    pub bot_source_identity: __sdk::Identity,
+    pub bot_transfer_intent_id: u64,
+    pub bot_controller_generation: u64,
+    pub transfer_pending: bool,
+    pub pending_destination_map: u32,
+    pub pending_destination_instance: u64,
 }
 
 impl __sdk::InModule for CharacterShard {
@@ -25,6 +32,13 @@ pub struct CharacterShardCols {
     pub map_id: __sdk::__query_builder::Col<CharacterShard, u32>,
     pub instance_id: __sdk::__query_builder::Col<CharacterShard, u64>,
     pub updated_micros: __sdk::__query_builder::Col<CharacterShard, i64>,
+    pub revision: __sdk::__query_builder::Col<CharacterShard, u64>,
+    pub bot_source_identity: __sdk::__query_builder::Col<CharacterShard, __sdk::Identity>,
+    pub bot_transfer_intent_id: __sdk::__query_builder::Col<CharacterShard, u64>,
+    pub bot_controller_generation: __sdk::__query_builder::Col<CharacterShard, u64>,
+    pub transfer_pending: __sdk::__query_builder::Col<CharacterShard, bool>,
+    pub pending_destination_map: __sdk::__query_builder::Col<CharacterShard, u32>,
+    pub pending_destination_instance: __sdk::__query_builder::Col<CharacterShard, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for CharacterShard {
@@ -35,6 +49,28 @@ impl __sdk::__query_builder::HasCols for CharacterShard {
             map_id: __sdk::__query_builder::Col::new(table_name, "map_id"),
             instance_id: __sdk::__query_builder::Col::new(table_name, "instance_id"),
             updated_micros: __sdk::__query_builder::Col::new(table_name, "updated_micros"),
+            revision: __sdk::__query_builder::Col::new(table_name, "revision"),
+            bot_source_identity: __sdk::__query_builder::Col::new(
+                table_name,
+                "bot_source_identity",
+            ),
+            bot_transfer_intent_id: __sdk::__query_builder::Col::new(
+                table_name,
+                "bot_transfer_intent_id",
+            ),
+            bot_controller_generation: __sdk::__query_builder::Col::new(
+                table_name,
+                "bot_controller_generation",
+            ),
+            transfer_pending: __sdk::__query_builder::Col::new(table_name, "transfer_pending"),
+            pending_destination_map: __sdk::__query_builder::Col::new(
+                table_name,
+                "pending_destination_map",
+            ),
+            pending_destination_instance: __sdk::__query_builder::Col::new(
+                table_name,
+                "pending_destination_instance",
+            ),
         }
     }
 }
