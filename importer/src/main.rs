@@ -56,6 +56,7 @@ mod eventai;
 mod eventai_presentation;
 mod go_model;
 mod item_property;
+mod m2_collision;
 mod nav;
 mod pack_client;
 mod package_delta;

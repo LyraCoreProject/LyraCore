@@ -122,48 +122,18 @@ fn wmo_tris(chain: &mut PatchChain, name: &str) -> Result<Vec<WmoTri>> {
     Ok(tris)
 }
 
-/// M2 bounding (collision) mesh, model-local coords. Vanilla names end `.mdx` → archive `.m2`.
-/// Parse failures return an EMPTY mesh with a warning (240 finding: 6/75 Northshire M2s —
-/// all decorative particle props — fail upstream parsing; skipping loses nothing collidable).
-/// `pub(crate)` so `go_model.rs` can load a door's bounding mesh without a full placement.
-pub(crate) fn m2_tris(chain: &mut PatchChain, name: &str) -> Vec<Tri> {
+/// M2 collision mesh in model-local coordinates. Missing or malformed collision is an import
+/// failure, since publishing an empty mesh would mark missing obstacles as clear ground.
+pub(crate) fn m2_tris(chain: &mut PatchChain, name: &str) -> Result<Vec<Tri>> {
     let m2_name = name
         .rsplit_once('.')
         .map(|(stem, _)| format!("{stem}.m2"))
         .unwrap_or_else(|| name.to_string());
-    let Ok(bytes) = chain.read_file(&m2_name) else {
-        eprintln!("nav: WARN M2 unreadable, skipping: {m2_name}");
-        return Vec::new();
-    };
-    let model = match wow_m2::parse_m2(&mut Cursor::new(&bytes)) {
-        Ok(wow_m2::M2Format::Legacy(m) | wow_m2::M2Format::Chunked(m)) => m,
-        Err(e) => {
-            eprintln!("nav: WARN M2 parse failed, skipping: {m2_name} ({e})");
-            return Vec::new();
-        }
-    };
-    let vb = &model.raw_data.bounding_vertices; // 12 bytes per vec3<f32>
-    let ib = &model.raw_data.bounding_triangles; // 2 bytes per u16 index
-    let verts: Vec<[f32; 3]> = vb
-        .chunks_exact(12)
-        .map(|c| {
-            [
-                f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
-                f32::from_le_bytes([c[4], c[5], c[6], c[7]]),
-                f32::from_le_bytes([c[8], c[9], c[10], c[11]]),
-            ]
-        })
-        .collect();
-    let idx: Vec<u16> = ib
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
-    idx.chunks_exact(3)
-        .filter_map(|t| {
-            let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
-            Some([*verts.get(a)?, *verts.get(b)?, *verts.get(c)?])
-        })
-        .collect()
+    let bytes = chain
+        .read_file(&m2_name)
+        .with_context(|| format!("reading M2 {m2_name}"))?;
+    crate::m2_collision::triangles(&bytes)
+        .with_context(|| format!("reading collision from M2 {m2_name}"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -591,7 +561,7 @@ pub(crate) fn load_meshes(
             let mesh = if p.is_wmo {
                 Mesh::Wmo(wmo_tris(chain, &p.name)?)
             } else {
-                Mesh::M2(m2_tris(chain, &p.name))
+                Mesh::M2(m2_tris(chain, &p.name)?)
             };
             meshes.insert(p.name.clone(), mesh);
         }
@@ -605,7 +575,7 @@ pub(crate) fn load_mesh(chain: &mut PatchChain, placement: &Placement) -> Result
     if placement.is_wmo {
         Ok(Mesh::Wmo(wmo_tris(chain, &placement.name)?))
     } else {
-        Ok(Mesh::M2(m2_tris(chain, &placement.name)))
+        Ok(Mesh::M2(m2_tris(chain, &placement.name)?))
     }
 }
 
@@ -673,7 +643,10 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         batches.len()
     );
     if !args.apply {
-        println!("-- DRY RUN: would call import_nav_chunks (batch 0, clears) + {} × import_nav_chunks_append", batches.len().saturating_sub(1));
+        println!(
+            "-- DRY RUN: would call import_nav_chunks (batch 0, clears) + {} × import_nav_chunks_append",
+            batches.len().saturating_sub(1)
+        );
         return Ok(());
     }
     for (i, batch) in batches.iter().enumerate() {
