@@ -246,11 +246,24 @@ fn resume_follow_after_provisioning(
         "SELECT role FROM pkg_playerbots_bot WHERE character_guid = {guid}"
     ))[0]["role"]
         .clone();
+    let starting_applied_count = node
+        .query_rows(&format!(
+            "SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
+        ))
+        .first()
+        .map(|row| row["history"].matches("(applied =").count())
+        .unwrap_or_default();
     node.assert_call("playerbots_fixture_provision_due", &[guid]);
     let mut saw_provisioning = false;
     for pass in 1..=PASS_LIMIT {
         pass_once(node, guid);
         let state = runner(node, guid);
+        let provisioning_history = node.query_rows(&format!(
+            "SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
+        ))[0]["history"]
+            .clone();
+        saw_provisioning |=
+            provisioning_history.matches("(applied =").count() > starting_applied_count;
         evidence(node, &format!("{case}-pass-{pass}"));
         assert_eq!(state["objective_sequence"], objective_sequence);
         assert!(state["objective"].contains("companion"), "{state:?}");
