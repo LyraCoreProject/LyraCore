@@ -4,7 +4,7 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use support::{poll_until, Standalone};
 
 const HEAL: u32 = 5_090_100;
@@ -68,12 +68,14 @@ fn capture(node: &Standalone, guid: &str, case: &str, wasm: &[u8]) -> serde_json
         "process_id": node.process_id(),
         "content": "declared private lifecycle fixture; no imported world or client geometry",
         "runner": node.query_rows(&format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
-        "entity": node.query_rows(&format!("SELECT guid, health, max_health, x, y, z, map_id, instance_id FROM game_world_entity WHERE guid = {guid}")),
+        "entity": node.query_rows(&format!("SELECT guid, health, max_health, level, xp, money, x, y, z, map_id, instance_id FROM game_world_entity WHERE guid = {guid}")),
         "pending_cast": node.query_rows(&format!("SELECT * FROM game_pending_cast WHERE caster_guid = {guid}")),
         "spell_events": node.query_rows(&format!("SELECT kind, spell_id FROM game_spell_cast_event WHERE caster_guid = {guid} AND spell_id = {HEAL}")),
         "actions": node.query_rows(&format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid}")),
         "splines": node.query_rows(&format!("SELECT * FROM game_creature_spline WHERE guid = {guid}")),
         "movement_schedule": node.query_rows("SELECT * FROM game_creature_move_schedule"),
+        "quests": sorted(node, &format!("SELECT * FROM game_character_quest WHERE character_guid = {guid}")),
+        "turnins": sorted(node, &format!("SELECT * FROM pkg_playerbots_quest_turnin_fixture WHERE character_guid = {guid}")),
         "provisioning": node.query_rows(&format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}")),
         "character": node.query_rows(&format!("SELECT level, xp, money FROM game_character WHERE guid = {guid}")),
         "items": sorted(node, &format!("SELECT guid, entry, stack_count FROM game_item_instance WHERE owner_guid = {guid}")),
@@ -444,4 +446,169 @@ fn playerbots_module_replacement_retains_one_cast_and_controller_generation() {
     let events = completed["spell_events"].as_array().unwrap();
     assert_eq!(events.iter().filter(|row| row["kind"] == "1").count(), 1);
     assert_eq!(events.iter().filter(|row| row["kind"] == "2").count(), 1);
+}
+
+fn stage_completed_quest(node: &Standalone, guid: &str) {
+    let imports =
+        node.query_rows("SELECT family, source_sha, file_hash, row_count FROM game_import_meta");
+    assert_eq!(imports.len(), 1, "unexpected initial Import Catalogue");
+    assert_eq!(imports[0]["family"], "weather_seed");
+    assert_eq!(imports[0]["source_sha"], "");
+    assert_eq!(imports[0]["file_hash"], "");
+    assert_eq!(imports[0]["row_count"], "2");
+    node.assert_sql("DELETE FROM game_import_meta WHERE family = 'weather_seed' AND source_sha = '' AND file_hash = '' AND row_count = 2");
+    let x = lyracore_shared::terrain::cell_index(1200.0).unwrap();
+    let y = lyracore_shared::terrain::cell_index(1200.0).unwrap();
+    let rows: Vec<_> = (x - 1..=x + 1)
+        .flat_map(|cx| (y - 1..=y + 1).map(move |cy| format!("0,{cx},{cy},50,,")))
+        .collect();
+    node.assert_call("import_nav_chunks", &[&rows.join(";")]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    node.assert_call("playerbots_fixture_provision_catalog", &[]);
+    node.assert_call("playerbots_fixture_provision_steps", &[guid, "64"]);
+    node.assert_call(
+        "playerbots_quest_loop_fixture_stage_simple_gameobject",
+        &[guid],
+    );
+    node.assert_sql("INSERT INTO game_quest_reward_item (id, quest_entry, item_entry, count) VALUES (5091090, 50970, 117, 2)");
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[guid]);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_module_replacement_does_not_repeat_a_completed_quest_reward() {
+    let mut node = Standalone::start("playerbots-transfer-quest-replacement");
+    node.publish_module();
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    node.assert_call(
+        "playerbots_spawn_class_role",
+        &["1", "1200", "1200", "50", "8", "2"],
+    );
+    let guid = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
+        ["character_guid"]
+        .clone();
+    stage_completed_quest(&node, &guid);
+    let staged = capture(&node, &guid, "quest-before-begin", support::module_bytes());
+    let food_before = item_count(&node, &guid, 117);
+    assert_eq!(food_before, 10, "{staged}");
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let quests = node.query_rows(&format!("SELECT rewarded FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 50970"));
+        if quests.first().is_some_and(|row| row["rewarded"] == "true") {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let failed = capture(
+                &node,
+                &guid,
+                "quest-completion-failed",
+                support::module_bytes(),
+            );
+            panic!("Quest did not complete through the runner: {failed}");
+        }
+        std::thread::sleep(Duration::from_millis(1250));
+    }
+    let before = capture(
+        &node,
+        &guid,
+        "completed-quest-before-replacement",
+        support::module_bytes(),
+    );
+    assert_eq!(before["quests"].as_array().unwrap().len(), 1);
+    assert_eq!(before["quests"][0]["quest_entry"], "50970");
+    assert_eq!(before["quests"][0]["counts"], "[1]");
+    assert_eq!(before["quests"][0]["rewarded"], "true");
+    assert_eq!(before["turnins"].as_array().unwrap().len(), 1);
+    assert_eq!(before["turnins"][0]["turnin_count"], "1");
+    assert_eq!(item_count(&node, &guid, 117), food_before + 2);
+    assert!(
+        before["entity"][0]["xp"]
+            .as_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            > staged["entity"][0]["xp"]
+                .as_str()
+                .unwrap()
+                .parse::<u32>()
+                .unwrap()
+    );
+    assert_eq!(
+        before["entity"][0]["money"]
+            .as_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap(),
+        staged["entity"][0]["money"]
+            .as_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            + 3
+    );
+    let completed_actions: Vec<_> = before["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["quest_entry"] == "50970" && row["kind"] == "turnInQuest")
+        .cloned()
+        .collect();
+    assert_eq!(completed_actions.len(), 1, "{before}");
+    assert!(completed_actions[0]["outcome"]
+        .as_str()
+        .unwrap()
+        .contains("completed"));
+    let replacement = replacement_bytes(&node);
+    node.publish_module_bytes(&replacement);
+    let after = capture(
+        &node,
+        &guid,
+        "completed-quest-after-replacement",
+        &replacement,
+    );
+    assert_ne!(before["program"], after["program"]);
+    assert_eq!(before["process_id"], after["process_id"]);
+    for field in ["quests", "turnins", "items", "actions", "character"] {
+        assert_eq!(before[field], after[field], "{field}");
+    }
+    for field in [
+        "generation",
+        "objective_sequence",
+        "objective",
+        "foreground",
+    ] {
+        assert_eq!(
+            before["runner"][0][field], after["runner"][0][field],
+            "{field}"
+        );
+    }
+    for _ in 0..10 {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        std::thread::sleep(Duration::from_millis(1250));
+    }
+    let resumed = capture(
+        &node,
+        &guid,
+        "completed-quest-after-resumed-decisions",
+        &replacement,
+    );
+    for field in ["quests", "turnins", "items", "character"] {
+        assert_eq!(before[field], resumed[field], "{field}");
+    }
+    for field in ["xp", "money", "level"] {
+        assert_eq!(
+            before["entity"][0][field], resumed["entity"][0][field],
+            "{field}"
+        );
+    }
+    let resumed_actions: Vec<_> = resumed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["quest_entry"] == "50970" && row["kind"] == "turnInQuest")
+        .cloned()
+        .collect();
+    assert_eq!(resumed_actions, completed_actions);
 }
