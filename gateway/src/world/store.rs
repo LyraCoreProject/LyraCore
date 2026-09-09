@@ -314,6 +314,22 @@ pub trait WorldStore:
         Ok(None)
     }
 
+    /// Bounded party projection used by companion-command authority. An oversized or otherwise
+    /// unreadable projection is an infrastructure failure, never proof of membership.
+    fn party_command_group_roster(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<party::GroupRoster>> {
+        let roster = self.group_roster(character_guid)?;
+        if roster
+            .as_ref()
+            .is_some_and(|roster| roster.members.len() > lyracore_shared::group::GROUP_MAX_MEMBERS)
+        {
+            anyhow::bail!("party command roster exceeds the member limit");
+        }
+        Ok(roster)
+    }
+
     /// [`group_roster`](Self::group_roster) keyed by the group — the read the mirror push needs for a
     /// party the acting character has just left.
     fn group_roster_by_id(&self, _group_id: u64) -> Result<Option<party::GroupRoster>> {

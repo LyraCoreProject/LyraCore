@@ -269,24 +269,21 @@ fn fixture(name: &str) -> OrdersFixture {
 }
 
 fn queue(fixture: &OrdersFixture, payload: &str) -> String {
-    let before: u64 = fixture
-        .node
+    queue_as(&fixture.node, &fixture.actor, payload)
+}
+
+fn queue_as(node: &Standalone, actor: &str, payload: &str) -> String {
+    let before: u64 = node
         .query_rows("SELECT id FROM game_party_command_intent")
         .iter()
         .map(|row| row["id"].parse().unwrap())
         .max()
         .unwrap_or(0);
-    fixture.node.assert_call(
+    node.assert_call(
         "gw_client_command",
-        &[
-            &fixture.actor,
-            r#""playerbots.order""#,
-            &format!(r#""{payload}""#),
-        ],
+        &[actor, r#""playerbots.order""#, &format!(r#""{payload}""#)],
     );
-    fixture
-        .node
-        .query_rows("SELECT id FROM game_party_command_intent")
+    node.query_rows("SELECT id FROM game_party_command_intent")
         .into_iter()
         .map(|row| row["id"].parse::<u64>().unwrap())
         .filter(|id| *id > before)
@@ -387,8 +384,8 @@ fn playerbots_orders_authenticate_follow_and_do_not_restart_a_retained_cast() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_newer_order_fences_a_delayed_older_apply() {
-    let fixture = fixture("playerbots-orders-causal-fence");
+fn playerbots_each_issuer_fence_survives_intervening_leadership() {
+    let fixture = fixture("playerbots-orders-causal-fence-leader-cycle");
     let node = &fixture.node;
     let older = queue(&fixture, &format!("stay|{}", fixture.warrior));
     let newer = queue(&fixture, &format!("follow|{}", fixture.warrior));
@@ -411,8 +408,31 @@ fn playerbots_newer_order_fences_a_delayed_older_apply() {
             "2",
         ],
     );
-    pass(node, &fixture.warrior);
-    let cleared = order(node, &fixture.warrior);
+    node.assert_call("provision_account", &[r#""PB009SECONDLEADER""#, "[]", "[]"]);
+    let second_account = node
+        .query_rows("SELECT id FROM game_account WHERE username = 'PB009SECONDLEADER'")[0]["id"]
+        .clone();
+    node.assert_call(
+        "playerbots_fixture_orders_account",
+        &[&fixture.mage, &second_account],
+    );
+    node.assert_call("claim_account", &[&second_account, &fixture.mage, "9010"]);
+    let generation = node.query_rows(&format!(
+        "SELECT generation FROM game_account_claim WHERE account_id = {second_account}"
+    ))[0]["generation"]
+        .clone();
+    let second_actor = format!(
+        r#"{{"guid":{},"ownership":{{"some":{{"account_id":{},"generation":{},"request_nonce":9010}}}}}}"#,
+        fixture.mage, second_account, generation
+    );
+    let intervening = queue_as(node, &second_actor, &format!("stay|{}", fixture.warrior));
+    let intervening_token = (17_000 + intervening.parse::<u64>().unwrap()).to_string();
+    node.assert_call(
+        "playerbots_fixture_command_drive",
+        &[&intervening, &intervening_token, &fixture.warrior, "false"],
+    );
+    let applied_intervening = order(node, &fixture.warrior);
+    assert_eq!(applied_intervening["issuer_guid"], fixture.mage);
     node.assert_call(
         "playerbots_fixture_orders_party",
         &[
@@ -429,7 +449,7 @@ fn playerbots_newer_order_fences_a_delayed_older_apply() {
     let receipt = node.query_rows(&format!(
         "SELECT outcome FROM game_party_command_receipt WHERE intent_id = {older}"
     ));
-    evidence(&fixture, "older-order-superseded-after-newer-applied");
+    evidence(&fixture, "older-order-superseded-after-intervening-leader");
     assert_eq!(sequences.len(), 2);
     let older_sequence: u64 = sequences.iter().find(|row| row["id"] == older).unwrap()
         ["issuer_sequence"]
@@ -440,12 +460,15 @@ fn playerbots_newer_order_fences_a_delayed_older_apply() {
         .parse()
         .unwrap();
     assert!(older_sequence < newer_sequence);
-    assert_eq!(cleared["active"], "false");
-    assert_eq!(cleared["revision"], applied_newer["revision"]);
-    assert_eq!(after_delayed, cleared);
-    assert!(after_delayed["order"]
+    assert!(applied_newer["order"]
         .to_ascii_lowercase()
         .contains("follow"));
+    assert_eq!(after_delayed, applied_intervening);
+    assert!(after_delayed["order"].to_ascii_lowercase().contains("stay"));
+    assert!(after_delayed["issuer_fences"].contains(&format!(
+        "issuer_guid = {}, sequence = {}",
+        fixture.leader, newer_sequence
+    )));
     assert!(receipt[0]["outcome"]
         .to_ascii_lowercase()
         .contains("superseded"));

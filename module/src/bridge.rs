@@ -501,11 +501,12 @@ pub fn finish_party_command_intent(
     intent.claim_until_micros = 0;
     intent.result_reap_micros = now.saturating_add(COMMAND_RESULT_WINDOW_MICROS);
     let response_id = intent.id;
+    let reply_identity = intent.reply_identity;
     retire_party_command_intent(ctx, &intent)?;
     table.id().update(intent);
     send_to_identity(
         ctx,
-        intent.reply_identity,
+        reply_identity,
         "playerbots.order.result",
         &format!("{response_id}|{}", outcome.tag()),
     );
@@ -590,6 +591,9 @@ pub fn apply_admitted_party_command(
             (handler.apply)(ctx, &command)
         })
     });
+    if outcome == CommandOutcome::WaitingForCapacity {
+        return Err(outcome.tag().to_string());
+    }
     receipts.insert(PartyCommandReceipt {
         id: 0,
         receipt_key: party_command_receipt_key(source_identity, intent_id),

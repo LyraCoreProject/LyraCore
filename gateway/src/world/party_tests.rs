@@ -252,6 +252,30 @@ fn a_stale_target_mirror_cannot_grant_command_authority() {
 }
 
 #[test]
+fn an_oversized_cached_roster_is_not_sent_for_command_authority() {
+    let mut members = vec![GINGER, BOT];
+    members.extend(
+        (0..lyracore_shared::group::GROUP_MAX_MEMBERS).map(|offset| 80_000 + offset as u64),
+    );
+    let store = InMemoryStore {
+        entity_in_world: true,
+        entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (BOT, 0, 0)]),
+        mirror: std::sync::Mutex::new(vec![party::GroupRoster {
+            group_id: 7,
+            leader_guid: GINGER,
+            members,
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+
+    let error = party::run_party_command_intent(&store, &command_intent(BOT), 9).unwrap_err();
+
+    assert!(error.to_string().contains("member limit"));
+    assert!(store.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
 fn realm_admission_rejects_a_roster_changed_after_the_gateway_read() {
     let (realm, world, instances, _) = party_topology();
     party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();

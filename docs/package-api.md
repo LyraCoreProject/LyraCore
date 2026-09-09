@@ -98,9 +98,10 @@ encounter content; the kernel exists for Packages.
 Existing verbs keep `fn verb(ctx, actor_guid, ..) -> Result<(), String>`. The table in
 `module/src/actor.rs` lists their contracts.
 
-The same root exposes the typed client-command parser and admitted apply values, plus the exact
-`companion_target_facts` read. Core authenticates the issuer and the Gateway certifies Realm-core
-party authority before a Package receives an admitted command.
+The same root exposes the typed client-command parser and admitted apply values, the target Receipt
+capacity that bounds retained per-issuer command fences, and the exact `companion_target_facts`
+read. Core authenticates the issuer and the Gateway certifies Realm-core party authority before a
+Package receives an admitted command.
 
 `actor::cast_readiness(ctx, actor_guid, spell_id, target_guid)` applies the same read-only spellbook,
 supported-lifecycle, range, line-of-sight, and ordinary cast Gates used at cast start. A Package can

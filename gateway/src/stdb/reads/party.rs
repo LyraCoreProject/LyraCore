@@ -55,6 +55,52 @@ impl Coordinator {
         self.group_roster_by_id(group_id)
     }
 
+    /// Read only the bounded roster projection accepted by companion-command authority.
+    pub fn party_command_group_roster(
+        &self,
+        character_guid: u64,
+    ) -> anyhow::Result<Option<crate::world::party::GroupRoster>> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let mut memberships = db
+            .game_group_member()
+            .iter()
+            .filter(|member| member.character_guid == character_guid)
+            .take(2);
+        let Some(group_id) = memberships.next().map(|member| member.group_id) else {
+            return Ok(None);
+        };
+        if memberships.next().is_some() {
+            anyhow::bail!("party command character has more than one membership");
+        }
+        let Some(group) = db
+            .game_group()
+            .iter()
+            .find(|group| group.group_id == group_id)
+        else {
+            return Ok(None);
+        };
+        let mut rows: Vec<(u64, u64)> = db
+            .game_group_member()
+            .iter()
+            .filter(|member| member.group_id == group_id)
+            .take(lyracore_shared::group::GROUP_MAX_MEMBERS + 1)
+            .map(|member| (member.id, member.character_guid))
+            .collect();
+        if rows.len() > lyracore_shared::group::GROUP_MAX_MEMBERS {
+            anyhow::bail!("party command roster exceeds the member limit");
+        }
+        rows.sort_unstable();
+        Ok(Some(crate::world::party::GroupRoster {
+            group_id,
+            leader_guid: group.leader_guid,
+            loot_method: group.loot_method,
+            loot_threshold: group.loot_threshold,
+            master_looter_guid: group.master_looter_guid,
+            members: rows.into_iter().map(|(_, guid)| guid).collect(),
+        }))
+    }
+
     /// [`group_roster`](Self::group_roster) keyed by the group itself — the read the mirror push
     /// needs for a party the acting character has just LEFT (their own membership row is gone, but
     /// the remaining members' rows still have to reach every shard).

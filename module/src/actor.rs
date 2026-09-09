@@ -203,6 +203,7 @@ package_only! {
     pub(crate) use crate::bridge::AdmittedClientCommand as AdmittedClientCommand;
     pub(crate) use crate::bridge::CommandOutcome as CommandOutcome;
     pub(crate) use crate::bridge::ParsedClientCommand as ParsedClientCommand;
+    pub(crate) use crate::bridge::RECEIPT_CAPACITY as COMMAND_RECEIPT_CAPACITY;
 }
 
 /// A Refusal classified at the operation's Gate. Detail preserves existing client messages.

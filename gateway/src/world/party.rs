@@ -239,10 +239,10 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
             PartyCommandHolder::Present => {}
             PartyCommandHolder::InTransit => anyhow::bail!("party command bot is in Transfer"),
             PartyCommandHolder::Missing => {
-            let outcome = CompanionCommandOutcome::MissingBot;
-            source.finish_party_command_intent(intent.id, claim_token, outcome)?;
-            return Ok(outcome);
-        }
+                let outcome = CompanionCommandOutcome::MissingBot;
+                source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+                return Ok(outcome);
+            }
         }
         target = source;
     } else {
@@ -281,7 +281,7 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
         }
         None => source,
     };
-    let Some(authority) = realm.group_roster(intent.issuer_guid)? else {
+    let Some(authority) = realm.party_command_group_roster(intent.issuer_guid)? else {
         let outcome = CompanionCommandOutcome::NotMember;
         source.finish_party_command_intent(intent.id, claim_token, outcome)?;
         return Ok(outcome);
@@ -300,19 +300,19 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
         source.finish_party_command_intent(intent.id, claim_token, outcome)?;
         return Ok(outcome);
     }
-    if let outcome @ (CompanionCommandOutcome::NotLeader | CompanionCommandOutcome::NotMember) =
-        realm.admit_party_command_authority(
-            authority.group_id,
-            intent.issuer_guid,
-            intent.bot_guid,
-            intent.authority_member_guid,
-            authority.members.clone(),
-        )?
-    {
+    let authority_outcome = realm.admit_party_command_authority(
+        authority.group_id,
+        intent.issuer_guid,
+        intent.bot_guid,
+        intent.authority_member_guid,
+        authority.members.clone(),
+    )?;
+    if authority_outcome != CompanionCommandOutcome::Applied {
+        let outcome = authority_outcome;
         source.finish_party_command_intent(intent.id, claim_token, outcome)?;
         return Ok(outcome);
     }
-    let local = target.group_roster(intent.bot_guid)?;
+    let local = target.party_command_group_roster(intent.bot_guid)?;
     if local
         .as_ref()
         .is_none_or(|local| !same_authority(local, &authority))
@@ -338,12 +338,12 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
     });
     if let Some(bot_partition) = bot_partition {
         if issuer_partition != Some(bot_partition)
-        || member_partition.is_some_and(|partition| partition != bot_partition)
-    {
-        let outcome = CompanionCommandOutcome::WrongPartition;
-        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
-        return Ok(outcome);
-    }
+            || member_partition.is_some_and(|partition| partition != bot_partition)
+        {
+            let outcome = CompanionCommandOutcome::WrongPartition;
+            source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+            return Ok(outcome);
+        }
     }
     let admitted = AdmittedCompanionCommand {
         source_identity: intent.source_identity,

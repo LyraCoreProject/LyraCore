@@ -1197,6 +1197,13 @@ impl WorldStore for Coordinator {
         Ok(self.group_roster(character_guid))
     }
 
+    fn party_command_group_roster(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<crate::world::party::GroupRoster>> {
+        self.party_command_group_roster(character_guid)
+    }
+
     fn group_roster_by_id(
         &self,
         group_id: u64,
