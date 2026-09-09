@@ -116,10 +116,69 @@ fn row(node: &Standalone, query: &str) -> BTreeMap<String, String> {
     rows.remove(0)
 }
 
-fn state(node: &Standalone, guid: &str) -> serde_json::Value {
+fn populate_companion_order(node: &Standalone, solo_guid: &str) -> String {
+    for (count, role) in [("2", "0"), ("1", "1"), ("1", "2")] {
+        node.assert_call(
+            "playerbots_spawn_role",
+            &[count, "1200", "1200", "50", role],
+        );
+    }
+    let mut bots = node.query_rows("SELECT character_guid, role FROM pkg_playerbots_bot");
+    bots.retain(|bot| bot["character_guid"] != solo_guid);
+    bots.sort_by_key(|bot| bot["character_guid"].parse::<u64>().unwrap());
+    let warriors: Vec<_> = bots.iter().filter(|bot| bot["role"] == "0").collect();
+    let warrior = &warriors[0]["character_guid"];
+    let leader = &warriors[1]["character_guid"];
+    let priest = &bots.iter().find(|bot| bot["role"] == "1").unwrap()["character_guid"];
+    let mage = &bots.iter().find(|bot| bot["role"] == "2").unwrap()["character_guid"];
+    node.assert_call(
+        "playerbots_fixture_roles_stage",
+        &[warrior, priest, mage, leader],
+    );
+    node.assert_call("provision_account", &[r#""PB010UPGRADE""#, "[]", "[]"]);
+    let account = row(
+        node,
+        "SELECT id FROM game_account WHERE username = 'PB010UPGRADE'",
+    )["id"]
+        .clone();
+    node.assert_call("playerbots_fixture_orders_account", &[leader, &account]);
+    node.assert_call("claim_account", &[&account, leader, "9010"]);
+    let generation = row(
+        node,
+        &format!("SELECT generation FROM game_account_claim WHERE account_id = {account}"),
+    )["generation"]
+        .clone();
+    let actor = serde_json::json!({
+        "guid": leader.parse::<u64>().unwrap(),
+        "ownership": {"some": {
+            "account_id": account.parse::<u64>().unwrap(),
+            "generation": generation.parse::<u64>().unwrap(),
+            "request_nonce": 9010,
+        }},
+    })
+    .to_string();
+    node.assert_call(
+        "gw_client_command",
+        &[
+            &actor,
+            r#""playerbots.order""#,
+            &format!(r#""stay|{priest}""#),
+        ],
+    );
+    let intent = row(node, "SELECT id FROM game_party_command_intent")["id"].clone();
+    node.assert_call(
+        "playerbots_fixture_orders_drive",
+        &[&intent, "10001", priest, "true"],
+    );
+    priest.clone()
+}
+
+fn state(node: &Standalone, guid: &str, companion: &str) -> serde_json::Value {
     serde_json::json!({
         "program": node.query_rows("SELECT program_hash FROM st_module"),
         "runner": row(node, &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
+        "companion_runner": row(node, &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {companion}")),
+        "orders": node.query_rows("SELECT * FROM pkg_playerbots_companion_order"),
         "retained_quest": node.query_rows(&format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}")),
         "quests": node.query_rows(&format!("SELECT * FROM game_character_quest WHERE character_guid = {guid}")),
         "pending_cast": node.query_rows(&format!("SELECT * FROM game_pending_cast WHERE caster_guid = {guid}")),
@@ -170,6 +229,8 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
         row(&node, "SELECT character_guid FROM pkg_playerbots_bot")["character_guid"].clone();
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     node.assert_call("debug_learn_spell", &[&guid, "355"]);
+    node.assert_call("playerbots_fixture_provision_catalog", &[]);
+    node.assert_call("playerbots_fixture_provision_complete_profile", &[&guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
     node.assert_sql(&format!("UPDATE pkg_playerbots_provisioning SET next_repair_micros = 9223372036854775807 WHERE character_guid = {guid}"));
     node.assert_call("playerbots_quest_fixture_stage", &[&guid]);
@@ -179,6 +240,7 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
     );
     node.assert_call("playerbots_quest_fixture_refresh", &[]);
     node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
+    let companion = populate_companion_order(&node, &guid);
     node.assert_call("playerbots_fixture_runner_stage", &[&guid, "true"]);
     node.assert_sql("UPDATE game_spell SET cast_time_ms = 60000 WHERE spell_id = 5090100");
     let pending = poll_until(Duration::from_secs(30), || {
@@ -191,7 +253,7 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
         ready
     });
     node.assert_call("playerbots_fixture_freeze", &[&guid]);
-    let before = state(&node, &guid);
+    let before = state(&node, &guid, &companion);
     let before_pid = node.process_id();
     save(
         &node,
@@ -214,7 +276,32 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
     assert!(before["runner"]["companion_order_revision"].is_string());
     assert_eq!(before["retained_quest"].as_array().unwrap().len(), 1);
     assert_eq!(before["retained_quest"][0]["quest_entry"], "7");
+    assert_eq!(before["quests"].as_array().unwrap().len(), 1);
+    assert_eq!(before["quests"][0]["quest_entry"], "7");
+    assert_eq!(before["quests"][0]["counts"], "0");
+    assert_eq!(before["quests"][0]["rewarded"], "false");
     assert_eq!(before["provisioning"].as_array().unwrap().len(), 1);
+    assert!(
+        before["provisioning"][0]["action_cursor"]
+            .as_str()
+            .unwrap()
+            .parse::<u16>()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(before["orders"].as_array().unwrap().len(), 1);
+    assert_eq!(before["orders"][0]["character_guid"], companion);
+    assert_eq!(before["orders"][0]["active"], "true");
+    assert_eq!(before["orders"][0]["revision"], "1");
+    assert!(before["orders"][0]["order"]
+        .as_str()
+        .unwrap()
+        .contains("stay"));
+    assert!(before["orders"][0]["history"]
+        .as_str()
+        .unwrap()
+        .contains("intent_id = 1"));
+    assert_eq!(before["companion_runner"]["companion_order_revision"], "1");
     for field in ["bot_intents", "source_escrows", "arrivals"] {
         assert!(
             before[field].as_array().unwrap().is_empty(),
@@ -222,7 +309,7 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
         );
     }
     node.publish_module_bytes(current);
-    let after = state(&node, &guid);
+    let after = state(&node, &guid, &companion);
     let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
@@ -246,18 +333,21 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
     );
     assert_eq!(node.process_id(), before_pid);
     assert_ne!(before["program"], after["program"]);
-    for (field, value) in before["runner"].as_object().unwrap() {
+    for runner in ["runner", "companion_runner"] {
+        for (field, value) in before[runner].as_object().unwrap() {
+            assert_eq!(
+                &after[runner][field], value,
+                "retained {runner} field {field}"
+            );
+        }
         assert_eq!(
-            &after["runner"][field], value,
-            "retained runner field {field}"
+            after[runner].as_object().unwrap().len(),
+            before[runner].as_object().unwrap().len() + 1
         );
+        assert_eq!(after[runner]["transfer_checkpoint"], "(none = ())");
     }
-    assert_eq!(
-        after["runner"].as_object().unwrap().len(),
-        before["runner"].as_object().unwrap().len() + 1
-    );
-    assert_eq!(after["runner"]["transfer_checkpoint"], "(none = ())");
     for field in [
+        "orders",
         "retained_quest",
         "quests",
         "pending_cast",
