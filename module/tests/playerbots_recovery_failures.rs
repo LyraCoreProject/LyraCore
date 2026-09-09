@@ -282,7 +282,10 @@ fn playerbots_recovery_full_bag_refuses_boundedly_then_resumes_after_inventory_s
             .is_some_and(|rows| rows.iter().any(|row| {
                 row["received_count"] == "8"
                     && row["peak_carried_count"] == "8"
-                    && row["last_source_guid"] == LOOT_SOURCE.to_string()
+                    && row["last_source_guid"]
+                        .as_str()
+                        .and_then(|guid| guid.parse::<u64>().ok())
+                        == Some(LOOT_SOURCE)
             })),
         "{final_state}"
     );
