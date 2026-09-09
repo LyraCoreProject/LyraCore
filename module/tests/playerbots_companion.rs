@@ -578,17 +578,29 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
         ))
         .is_empty()));
     evidence(&node, "target-retention-cast-complete");
+    let completed_cast = runner(&node, priest)["cast_progress"].clone();
 
     node.assert_call("playerbots_fixture_companion_health", &[ally, "100"]);
+    node.assert_call("playerbots_fixture_cast", &[priest, leader]);
+    let cooldown = node.query_rows(&format!(
+        "SELECT outcome FROM pkg_playerbots_action WHERE character_guid = {priest}"
+    ));
+    evidence(&node, "target-retention-gcd");
+    assert!(
+        cooldown
+            .iter()
+            .any(|action| action["outcome"].contains("cooldown")),
+        "{cooldown:?}"
+    );
     pass_once(&node, priest);
     let replaced = runner(&node, priest);
     evidence(&node, "target-retention");
     assert!(node
         .query_rows(&format!(
-            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest} AND scheduled_id = {}",
-            pending["scheduled_id"]
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {priest}"
         ))
         .is_empty());
+    assert_eq!(replaced["cast_progress"], completed_cast);
     assert!(replaced["companion_heal_target_guid"].contains(leader));
     assert!(replaced["chosen"].contains(leader), "{replaced:?}");
 }
