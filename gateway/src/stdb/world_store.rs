@@ -266,15 +266,13 @@ impl WorldStore for Coordinator {
         self.release_transfer(transfer_id)
     }
 
-    fn has_arrival_fence(&self, transfer_id: u64) -> bool {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_transfer_in()
-            .transfer_id()
-            .find(&transfer_id)
-            .is_some()
+    fn release_player_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        character_guid: u64,
+        source: crate::world::transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        Coordinator::release_player_transfer_arrival(self, transfer_id, character_guid, source)
     }
 
     fn transfer_arrival(
@@ -1313,6 +1311,9 @@ impl WorldStore for Coordinator {
                     && arrival.bot_intent_id == intent.id
                     && arrival.bot_controller_generation == intent.controller_generation
                     && arrival.bot_intent_created_micros == intent.created_micros
+                    && arrival.source_map_id == intent.source_map
+                    && arrival.source_instance_id == intent.source_instance
+                    && arrival.source_locator_revision == intent.source_locator_revision
             })
     }
 

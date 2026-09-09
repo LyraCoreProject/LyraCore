@@ -1228,10 +1228,31 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    fn has_arrival_fence(&self, transfer_id: u64) -> bool {
-        self.xdb
-            .as_ref()
-            .is_some_and(|db| lk(&db.in_rows).contains_key(&transfer_id))
+    fn release_player_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        character_guid: u64,
+        source: super::transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        self.xstep("release_transfer")?;
+        let Some(db) = self.xdb.as_ref() else {
+            return Ok(());
+        };
+        if transfer_id != character_guid || source.revision == 0 {
+            return Err(anyhow!("player Transfer arrival identity is invalid"));
+        }
+        if lk(&db.in_rows).get(&transfer_id) != Some(&character_guid) {
+            return Ok(());
+        }
+        if lk(&db.bot_arrivals).contains_key(&transfer_id)
+            || lk(&db.arrival_sources).get(&transfer_id)
+                != Some(&(source.map_id, source.instance_id, source.revision))
+        {
+            return Ok(());
+        }
+        lk(&db.in_rows).remove(&transfer_id);
+        lk(&db.arrival_sources).remove(&transfer_id);
+        Ok(())
     }
 
     fn transfer_arrival(&self, transfer_id: u64) -> Option<super::transfer::TransferArrival> {

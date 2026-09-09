@@ -55,6 +55,27 @@ fn taxi_reply_matches(
 }
 
 impl Coordinator {
+    /// `release_player_transfer_arrival`, with the exact Realm locator predecessor carried by the
+    /// destination fence.
+    pub fn release_player_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        character_guid: u64,
+        source: crate::world::transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "release_player_transfer_arrival",
+            release_player_transfer_arrival_then(
+                transfer_id,
+                character_guid,
+                source.map_id,
+                source.instance_id,
+                source.revision
+            )
+        )
+    }
+
     pub fn claim_bot_transfer_intent(
         &self,
         intent_id: u64,

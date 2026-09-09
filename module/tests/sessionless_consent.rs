@@ -651,7 +651,10 @@ fn suppressed_consent_travels_with_the_character_through_export_and_import() {
         "import_player_character_blob",
         &["1", &blob, "0", "0", "1", actor],
     );
-    destination.assert_call("release_transfer", &["1", actor]);
+    destination.assert_call(
+        "release_player_transfer_arrival",
+        &["1", "1", "0", "0", "1"],
+    );
     destination.assert_call("debug_spawn_player_entity", &["1"]);
     let rows = destination
         .query_rows("SELECT * FROM game_sessionless_action_consent WHERE character_guid = 1");
@@ -747,7 +750,7 @@ fn generic_release_cannot_clear_a_bot_owned_arrival() {
         evidence["generic_release"]["output"]
             .as_str()
             .unwrap()
-            .contains("owned by its Transfer Intent"),
+            .contains("requires its exact release reducer"),
         "{evidence}"
     );
     assert_eq!(

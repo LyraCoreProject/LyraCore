@@ -326,14 +326,15 @@ pub(super) fn run_transfer_injected_for_intent(
     abort_point(abort_after, "ensure_instance", escrow.transfer_id);
 
     // 3. MATERIALISE at the destination. Idempotent on the transfer id (the in-row PK).
+    let source = RealmLocatorPredecessor {
+        map_id: locator.map_id,
+        instance_id: locator.instance_id,
+        revision: locator.revision,
+    };
     dst.import_character_blob(
         escrow.transfer_id,
         &escrow.blob,
-        RealmLocatorPredecessor {
-            map_id: locator.map_id,
-            instance_id: locator.instance_id,
-            revision: locator.revision,
-        },
+        source,
         bot_intent.map(|(intent, _)| intent),
     )?;
     abort_point(abort_after, "import_character_blob", escrow.transfer_id);
@@ -386,7 +387,7 @@ pub(super) fn run_transfer_injected_for_intent(
     if let Some((intent, _)) = bot_intent {
         dst.release_bot_transfer_arrival(escrow.transfer_id, intent)?;
     } else {
-        dst.release_transfer(escrow.transfer_id)?;
+        dst.release_player_transfer_arrival(escrow.transfer_id, escrow.character_guid, source)?;
     }
     abort_point(abort_after, "release_transfer", escrow.transfer_id);
 
@@ -651,24 +652,36 @@ pub fn settle_transfer(
 ) -> Result<()> {
     let transfer_id = transfer_id_for(character_guid);
     if holder.shard_name() == owner.shard_name() {
-        if let (Some(destination), Some(arrival)) = (
-            owner.character_destination(character_guid),
-            owner.transfer_arrival(transfer_id),
-        ) {
+        let arrival = owner.transfer_arrival(transfer_id);
+        if let Some(arrival) = arrival {
             if arrival.bot_transfer_intent_id != 0 {
                 return Err(anyhow!(
                     "session-less arrival is still owned by its Transfer Intent"
                 ));
             }
-            owner.finish_pending_shard_index_transfer(
-                character_guid,
-                destination.dest_map_id,
-                destination.dest_instance_id,
-                &arrival,
-            )?;
-        }
-        if owner.has_arrival_fence(transfer_id) {
+            if arrival.source_locator_revision != 0 {
+                let destination = owner
+                    .character_destination(character_guid)
+                    .ok_or_else(|| anyhow!("arrival has no destination Character"))?;
+                owner.finish_pending_shard_index_transfer(
+                    character_guid,
+                    destination.dest_map_id,
+                    destination.dest_instance_id,
+                    &arrival,
+                )?;
+            }
             owner.sync_transfer_arrival(character_guid)?;
+            if arrival.source_locator_revision != 0 {
+                return owner.release_player_transfer_arrival(
+                    transfer_id,
+                    character_guid,
+                    RealmLocatorPredecessor {
+                        map_id: arrival.source_map,
+                        instance_id: arrival.source_instance,
+                        revision: arrival.source_locator_revision,
+                    },
+                );
+            }
         }
         return owner.release_transfer(transfer_id);
     }
@@ -680,8 +693,8 @@ pub fn settle_transfer(
         // the module's `plan_begin` reads the out-row OR the in-row as "this id is already
         // escrowed for this character" and answers `BeginPlan::Replay`, so `begin_transfer` below
         // would report success while freezing nothing, and the character could never leave this
-        // shard again. Clearing a human fence first is safe by construction: `release_transfer`
-        // refuses both a local out-row and a session-less fence owned by an intent.
+        // shard again. Only a migrated blank fence clears here. The reducer refuses a local
+        // out-row and every new crossing carrying an exact identity.
         holder.release_transfer(transfer_id)?;
     }
     // Resume the escrow if one exists — its destination, not the character row's, is the

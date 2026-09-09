@@ -1385,6 +1385,56 @@ fn a_human_arrival_cannot_settle_a_later_same_destination_crossing() {
 }
 
 #[test]
+fn an_old_human_worker_cannot_release_a_newer_arrival_fence() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    lk(&db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&db.arrival_sources).insert(BOT_GUID, (0, 0, 3));
+    let destination = InMemoryStore {
+        shard: "instances".into(),
+        calls,
+        xdb: Some(db.clone()),
+        ..Default::default()
+    };
+
+    destination
+        .release_player_transfer_arrival(
+            BOT_GUID,
+            BOT_GUID,
+            super::transfer::RealmLocatorPredecessor {
+                map_id: 0,
+                instance_id: 0,
+                revision: 1,
+            },
+        )
+        .expect("a stale exact release is an idempotent no-op");
+    assert_eq!(lk(&db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+    assert_eq!(lk(&db.arrival_sources).get(&BOT_GUID), Some(&(0, 0, 3)));
+    assert!(!db.live(BOT_GUID));
+
+    destination
+        .release_player_transfer_arrival(
+            BOT_GUID,
+            BOT_GUID,
+            super::transfer::RealmLocatorPredecessor {
+                map_id: 0,
+                instance_id: 0,
+                revision: 3,
+            },
+        )
+        .expect("the worker carrying the current predecessor releases the arrival");
+    assert!(!lk(&db.in_rows).contains_key(&BOT_GUID));
+    assert!(db.live(BOT_GUID));
+}
+
+#[test]
 fn a_ready_intent_completes_after_the_bot_has_crossed_onward() {
     let (src, src_db, dst_db, calls) = bot_pair(36, 7);
     let intent = bot_intent();

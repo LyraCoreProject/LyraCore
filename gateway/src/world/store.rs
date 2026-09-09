@@ -137,15 +137,20 @@ pub trait WorldStore:
         ))
     }
 
-    /// `release_transfer` — drop a human arrival copy's fence. Replay-safe when absent; a
-    /// session-less fence refuses because its exact Transfer Intent owns release.
+    /// `release_transfer` — drop a migrated blank arrival fence. New human and session-less
+    /// arrivals refuse because their exact crossing-specific reducer owns release.
     fn release_transfer(&self, _transfer_id: u64) -> Result<()> {
         Ok(())
     }
 
-    /// Whether this shard holds the destination fence for `transfer_id`.
-    fn has_arrival_fence(&self, _transfer_id: u64) -> bool {
-        false
+    /// Release one exact human arrival fence.
+    fn release_player_transfer_arrival(
+        &self,
+        _transfer_id: u64,
+        _character_guid: u64,
+        _source: transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host player Transfer arrivals"))
     }
 
     /// Exact destination fence identity used by the Realm locator recovery compare-and-set.

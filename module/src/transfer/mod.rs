@@ -1800,8 +1800,9 @@ pub(crate) fn apply_confirm<S: ShardLedger>(sink: &mut S, transfer_id: u64) -> R
 /// the source copy), and only then this — so between them the character is durable on both sides
 /// but LIVE on neither, never the reverse.
 ///
-/// Refuses while a local out-row exists, or while the destination fence belongs to a session-less
-/// Transfer Intent. The exact bot release reducer owns that second case.
+/// Refuses while a local out-row exists, or while the destination fence carries a new exact
+/// crossing identity. Only a migrated blank fence uses this reducer; new human and session-less
+/// crossings use their exact release reducers.
 #[reducer]
 pub fn release_transfer(
     ctx: &ReducerContext,
@@ -1815,11 +1816,47 @@ pub fn release_transfer(
         .game_transfer_in()
         .transfer_id()
         .find(transfer_id)
-        .is_some_and(|arrival| arrival.bot_intent_id != 0)
+        .is_some_and(|arrival| arrival.bot_intent_id != 0 || arrival.source_locator_revision != 0)
     {
         return Err(format!(
-            "transfer {transfer_id}: session-less arrival is owned by its Transfer Intent"
+            "transfer {transfer_id}: identified arrival requires its exact release reducer"
         ));
+    }
+    apply_release(&mut CtxShard { ctx }, transfer_id)
+}
+
+/// Release only the human arrival carrying this Realm locator predecessor. A different exact
+/// predecessor belongs to another crossing and remains fenced.
+#[reducer]
+pub fn release_player_transfer_arrival(
+    ctx: &ReducerContext,
+    transfer_id: u64,
+    character_guid: u64,
+    source_map_id: u32,
+    source_instance_id: u64,
+    source_locator_revision: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    if transfer_id != character_guid || source_locator_revision == 0 {
+        return Err("player Transfer arrival identity is invalid".to_string());
+    }
+    let Some(arrival) = ctx.db.game_transfer_in().transfer_id().find(transfer_id) else {
+        return Ok(());
+    };
+    if arrival.character_guid != character_guid {
+        return Err(format!(
+            "transfer {transfer_id}: arrival belongs to character {}, not {character_guid}",
+            arrival.character_guid
+        ));
+    }
+    if arrival.bot_intent_id != 0
+        || (
+            arrival.source_map_id,
+            arrival.source_instance_id,
+            arrival.source_locator_revision,
+        ) != (source_map_id, source_instance_id, source_locator_revision)
+    {
+        return Ok(());
     }
     apply_release(&mut CtxShard { ctx }, transfer_id)
 }
