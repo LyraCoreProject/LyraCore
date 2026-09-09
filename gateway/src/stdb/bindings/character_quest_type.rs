@@ -57,7 +57,6 @@ impl __sdk::__query_builder::HasCols for CharacterQuest {
 pub struct CharacterQuestIxCols {
     pub character_guid: __sdk::__query_builder::IxCol<CharacterQuest, u64>,
     pub id: __sdk::__query_builder::IxCol<CharacterQuest, u64>,
-    pub quest_entry: __sdk::__query_builder::IxCol<CharacterQuest, u32>,
 }
 
 impl __sdk::__query_builder::HasIxCols for CharacterQuest {
@@ -66,7 +65,6 @@ impl __sdk::__query_builder::HasIxCols for CharacterQuest {
         CharacterQuestIxCols {
             character_guid: __sdk::__query_builder::IxCol::new(table_name, "character_guid"),
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
-            quest_entry: __sdk::__query_builder::IxCol::new(table_name, "quest_entry"),
         }
     }
 }
