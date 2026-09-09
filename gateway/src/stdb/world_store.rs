@@ -295,6 +295,60 @@ impl WorldStore for Coordinator {
         crate::realm_core::publish_shard_index(self, character_guid, map_id, instance_id)
     }
 
+    fn begin_shard_index_transfer(
+        &self,
+        plan: &crate::world::transfer::TransferPlan,
+        bot_intent: Option<&crate::world::transfer::BotTransferIntent>,
+    ) -> Result<crate::world::party::RealmCharacterPartition> {
+        crate::realm_core::begin_shard_index_transfer(self, plan, bot_intent)
+    }
+
+    fn finish_player_shard_index_transfer(
+        &self,
+        plan: &crate::world::transfer::TransferPlan,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+    ) -> Result<()> {
+        crate::realm_core::finish_player_shard_index_transfer(
+            self,
+            plan,
+            source_map,
+            source_instance,
+            source_revision,
+        )
+    }
+
+    fn finish_pending_shard_index_transfer(
+        &self,
+        character_guid: u64,
+        destination_map: u32,
+        destination_instance: u64,
+    ) -> Result<()> {
+        crate::realm_core::finish_pending_shard_index_transfer(
+            self,
+            character_guid,
+            destination_map,
+            destination_instance,
+        )
+    }
+
+    fn bind_bot_transfer_locator(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+        source_revision: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        self.bind_bot_transfer_locator(intent, source_revision, claim_token)
+    }
+
+    fn publish_bot_shard_index(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        crate::realm_core::publish_bot_shard_index(self, intent)
+    }
+
     /// The character-select list, UNIONED across every connected shard.
     ///
     /// A character that logged out inside a dungeon lives on the instance shard, not the realm
@@ -1085,6 +1139,10 @@ impl WorldStore for Coordinator {
         crate::world::party::sync_transfer_arrival_mirror(self, character_guid)
     }
 
+    fn sync_transfer_pending(&self, character_guid: u64) -> Result<()> {
+        crate::world::party::sync_transfer_arrival_mirror(self, character_guid)
+    }
+
     /// Every connected WORLD shard (realm-core excluded by `ShardMap::shards`, as always) — the
     /// mirror fan-out set. Empty when unsharded, so the push costs a single-database gateway nothing.
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
@@ -1275,6 +1333,10 @@ impl WorldStore for Coordinator {
         Ok(self.group_roster_by_id(group_id))
     }
 
+    fn group_roster_revision(&self, group_id: u64) -> Result<u64> {
+        Ok(self.group_roster_revision(group_id))
+    }
+
     fn realm_character_partition(
         &self,
         character_guid: u64,
@@ -1286,6 +1348,16 @@ impl WorldStore for Coordinator {
             );
         }
         Ok(self.realm_character_partition(character_guid))
+    }
+
+    fn party_holder_observation(
+        &self,
+        character_guid: u64,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Result<crate::world::party::PartyHolderObservation> {
+        let serves_locator = self.shard_for_location(map_id, instance_id).is_none();
+        self.stable_party_holder_observation(character_guid, serves_locator)
     }
 
     fn party_cleanup_group_roster_by_id(

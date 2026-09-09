@@ -1226,6 +1226,124 @@ impl Coordinator {
         )
     }
 
+    pub fn begin_character_shard_transfer(
+        &self,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        character_guid: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "begin_character_shard_transfer",
+            begin_character_shard_transfer_then(
+                character_guid,
+                source_map,
+                source_instance,
+                source_revision,
+                destination_map,
+                destination_instance,
+                source_module_identity,
+                intent_id,
+                controller_generation,
+                self.session_actor(character_guid)
+            )
+        )
+    }
+
+    pub fn finish_character_shard_transfer(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "finish_character_shard_transfer",
+            finish_character_shard_transfer_then(
+                intent.bot_guid,
+                intent.source_map,
+                intent.source_instance,
+                intent.source_locator_revision,
+                intent.destination_map,
+                intent.destination_instance,
+                intent.source_module_identity,
+                intent.id,
+                intent.controller_generation,
+                self.session_actor(intent.bot_guid)
+            )
+        )
+    }
+
+    pub fn finish_player_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "finish_character_shard_transfer",
+            finish_character_shard_transfer_then(
+                character_guid,
+                source_map,
+                source_instance,
+                source_revision,
+                destination_map,
+                destination_instance,
+                spacetimedb_sdk::Identity::ZERO,
+                0,
+                0,
+                self.session_actor(character_guid)
+            )
+        )
+    }
+
+    pub fn finish_pending_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        destination_map: u32,
+        destination_instance: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "finish_pending_character_shard_transfer",
+            finish_pending_character_shard_transfer_then(
+                character_guid,
+                destination_map,
+                destination_instance,
+                self.session_actor(character_guid)
+            )
+        )
+    }
+
+    pub fn bind_bot_transfer_locator(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+        source_revision: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "bind_bot_transfer_locator",
+            bind_bot_transfer_locator_then(
+                intent.id,
+                intent.bot_guid,
+                intent.controller_generation,
+                claim_token,
+                intent.source_map,
+                intent.source_instance,
+                source_revision
+            )
+        )
+    }
+
     /// Set the player's current target (`CMSG_SET_SELECTION`, Tier 2 / N3) over the coordinator
     /// connection so the module attributes it to the caller. `target_guid` 0 clears it.
     pub fn set_target(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
@@ -3210,7 +3328,8 @@ impl Coordinator {
                 roster.master_looter_guid,
                 roster.members.clone(),
                 self.session_actor(0),
-                partitions
+                partitions,
+                roster.roster_revision
             )
         )
     }

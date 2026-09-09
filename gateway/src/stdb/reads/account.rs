@@ -189,6 +189,12 @@ impl Coordinator {
                 map_id: row.map_id,
                 instance_id: row.instance_id,
                 revision: row.revision,
+                transfer_pending: row.transfer_pending,
+                pending_destination_map: row.pending_destination_map,
+                pending_destination_instance: row.pending_destination_instance,
+                bot_source_identity: row.bot_source_identity,
+                bot_transfer_intent_id: row.bot_transfer_intent_id,
+                bot_controller_generation: row.bot_controller_generation,
             })
     }
 

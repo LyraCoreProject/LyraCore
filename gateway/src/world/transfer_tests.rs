@@ -191,6 +191,8 @@ fn a_character_moves_whole_between_two_databases_with_its_rows() {
                 // one no-op reducer call on a fresh transfer and is the same cheap release the
                 // already-home path makes.
                 ("world".to_string(), "release_transfer".to_string()),
+                // Realm-core's pending phase is mirrored before the source can disappear.
+                ("world".to_string(), "sync_transfer_pending".to_string()),
                 ("world".to_string(), "begin_transfer".to_string()),
                 ("instances".to_string(), "ensure_instance".to_string()),
                 ("instances".to_string(), "import_character_blob".to_string()),
@@ -1102,6 +1104,9 @@ fn bot_intent() -> super::transfer::BotTransferIntent {
         controller_generation: 4,
         arrival_ready: false,
         source_module_identity: SOURCE_MODULE,
+        source_map: 0,
+        source_instance: 0,
+        source_locator_revision: 3,
     }
 }
 
@@ -1483,7 +1488,7 @@ fn the_bots_party_is_readable_before_the_arrival_fence_drops() {
         .expect("the authoritative roster must be written");
     let prepared = calls
         .iter()
-        .position(|(_, call)| call == "sync_transfer_arrival")
+        .rposition(|(_, call)| call == "sync_transfer_arrival")
         .expect("the Transfer arrival step must complete");
     let released = calls
         .iter()

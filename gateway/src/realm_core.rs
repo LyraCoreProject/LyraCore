@@ -31,7 +31,7 @@
 //! mutation tool can only ask whether a test fails and no headless test can drive the real
 //! connection. The same holds here.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
 use crate::config::{HomeShard, ShardMap};
 use crate::stdb::{AccountRow, RealmRow};
@@ -317,6 +317,191 @@ pub(crate) fn publish_shard_index<D: RealmDb>(
 ) -> Result<()> {
     db.realm_core()?
         .set_character_shard(character_guid, map_id, instance_id)
+}
+
+pub(crate) fn publish_bot_shard_index<D: RealmDb>(
+    db: &D,
+    intent: &crate::world::transfer::BotTransferIntent,
+) -> Result<()> {
+    let realm = db.realm_core()?;
+    realm.finish_character_shard_transfer(intent)?;
+    wait_for_settled_locator(
+        realm.as_ref(),
+        intent.bot_guid,
+        intent.destination_map,
+        intent.destination_instance,
+        intent.source_locator_revision.saturating_add(1),
+        Some((
+            intent.source_module_identity,
+            intent.id,
+            intent.controller_generation,
+        )),
+    )
+}
+
+pub(crate) fn begin_shard_index_transfer<D: RealmDb>(
+    db: &D,
+    plan: &crate::world::transfer::TransferPlan,
+    bot_intent: Option<&crate::world::transfer::BotTransferIntent>,
+) -> Result<crate::world::party::RealmCharacterPartition> {
+    let realm = db.realm_core()?;
+    let locator = realm
+        .realm_character_partition(plan.character_guid)?
+        .ok_or_else(|| anyhow!("Transfer source has no Realm locator"))?;
+    let (source_map, source_instance, source_identity, intent_id, generation) = match bot_intent {
+        Some(intent) => {
+            if (locator.map_id, locator.instance_id) != (intent.source_map, intent.source_instance)
+            {
+                anyhow::bail!(
+                    "bot Transfer source locator is map {} instance {}, not intent {} source map {} instance {}",
+                    locator.map_id,
+                    locator.instance_id,
+                    intent.id,
+                    intent.source_map,
+                    intent.source_instance
+                );
+            }
+            (
+                intent.source_map,
+                intent.source_instance,
+                intent.source_module_identity,
+                intent.id,
+                intent.controller_generation,
+            )
+        }
+        None => (
+            locator.map_id,
+            locator.instance_id,
+            spacetimedb_sdk::Identity::ZERO,
+            0,
+            0,
+        ),
+    };
+    realm.begin_character_shard_transfer(
+        source_map,
+        source_instance,
+        locator.revision,
+        plan.dest_map_id,
+        plan.dest_instance_id,
+        source_identity,
+        intent_id,
+        generation,
+        plan.character_guid,
+    )?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let observed = realm
+            .realm_character_partition(plan.character_guid)?
+            .ok_or_else(|| anyhow!("Transfer source Realm locator disappeared"))?;
+        if observed.transfer_pending
+            && (observed.map_id, observed.instance_id, observed.revision)
+                == (source_map, source_instance, locator.revision)
+            && (
+                observed.pending_destination_map,
+                observed.pending_destination_instance,
+            ) == (plan.dest_map_id, plan.dest_instance_id)
+            && (
+                observed.bot_source_identity,
+                observed.bot_transfer_intent_id,
+                observed.bot_controller_generation,
+            ) == (source_identity, intent_id, generation)
+        {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("Realm pending Transfer phase was not observable within 3s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    Ok(locator)
+}
+
+pub(crate) fn finish_player_shard_index_transfer<D: RealmDb>(
+    db: &D,
+    plan: &crate::world::transfer::TransferPlan,
+    source_map: u32,
+    source_instance: u64,
+    source_revision: u64,
+) -> Result<()> {
+    let realm = db.realm_core()?;
+    realm.finish_player_character_shard_transfer(
+        plan.character_guid,
+        source_map,
+        source_instance,
+        source_revision,
+        plan.dest_map_id,
+        plan.dest_instance_id,
+    )?;
+    wait_for_settled_locator(
+        realm.as_ref(),
+        plan.character_guid,
+        plan.dest_map_id,
+        plan.dest_instance_id,
+        source_revision.saturating_add(1),
+        Some((spacetimedb_sdk::Identity::ZERO, 0, 0)),
+    )
+}
+
+pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
+    db: &D,
+    character_guid: u64,
+    destination_map: u32,
+    destination_instance: u64,
+) -> Result<()> {
+    let realm = db.realm_core()?;
+    realm.finish_pending_character_shard_transfer(
+        character_guid,
+        destination_map,
+        destination_instance,
+    )?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let settled = realm
+            .realm_character_partition(character_guid)?
+            .is_some_and(|row| {
+                !row.transfer_pending
+                    && (row.map_id, row.instance_id) == (destination_map, destination_instance)
+            });
+        if settled {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("settled Realm Transfer was not observable within 3s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn wait_for_settled_locator(
+    realm: &dyn crate::world::WorldStore,
+    character_guid: u64,
+    destination_map: u32,
+    destination_instance: u64,
+    revision: u64,
+    crossing: Option<(spacetimedb_sdk::Identity, u64, u64)>,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let observed = realm
+            .realm_character_partition(character_guid)?
+            .ok_or_else(|| anyhow!("settled Realm locator disappeared"))?;
+        let observed_crossing = (
+            observed.bot_source_identity,
+            observed.bot_transfer_intent_id,
+            observed.bot_controller_generation,
+        );
+        if !observed.transfer_pending
+            && (observed.map_id, observed.instance_id, observed.revision)
+                == (destination_map, destination_instance, revision)
+            && crossing.is_none_or(|expected| expected == observed_crossing)
+        {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("settled Realm Transfer was not observable within 3s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 // ===============================================================================================

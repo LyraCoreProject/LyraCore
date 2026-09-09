@@ -80,6 +80,9 @@ pub struct BotTransferIntent {
     pub controller_generation: u64,
     pub arrival_ready: bool,
     pub source_module_identity: spacetimedb_sdk::Identity,
+    pub source_map: u32,
+    pub source_instance: u64,
+    pub source_locator_revision: u64,
 }
 
 /// The transfer id for a character. See the module doc: the guid IS the id.
@@ -87,12 +90,13 @@ pub fn transfer_id_for(character_guid: u64) -> u64 {
     character_guid
 }
 
-/// The nine step boundaries `LYRACORE_TRANSFER_ABORT_AFTER` can name, in drive order. These are the
+/// The ten step boundaries `LYRACORE_TRANSFER_ABORT_AFTER` can name, in drive order. These are the
 /// `WorldStore` method names — the same vocabulary the headless crash-matrix test already speaks —
 /// so a step name is greppable straight to the call it follows. The list is also the drive's own
 /// sequence: `an_unset_transfer_abort_injection_changes_nothing` asserts the two are equal, so a
 /// step added to the drive without a crash point here is a hole in the gateway-kill recovery matrix.
-pub const ABORT_STEPS: [&str; 9] = [
+pub const ABORT_STEPS: [&str; 10] = [
+    "sync_transfer_pending",
     "begin_transfer",
     "ensure_instance",
     "import_character_blob",
@@ -183,7 +187,7 @@ fn abort_point(abort_after: Option<&str>, step: &str, transfer_id: u64) {
 /// `LYRACORE_TRANSFER_ABORT_AFTER=<step>` makes each crash point deterministic: the named step runs,
 /// commits, and then the process aborts (see
 /// [`die_by_injection`]). The accepted names are [`ABORT_STEPS`]. Unset — the only configuration any
-/// real run has, costs one `env::var` per transfer and nine `Option<&str>` compares that all miss.
+/// real run has, costs one `env::var` per transfer and ten `Option<&str>` compares that all miss.
 pub fn run_transfer(src: &dyn WorldStore, dst: &dyn WorldStore, plan: &TransferPlan) -> Result<()> {
     // Deliberate simplification: ONE env read, threaded down as a plain `Option<&str>` rather than
     // re-read at each step — which also lets the tests drive every crash point without mutating
@@ -256,6 +260,25 @@ pub(super) fn run_transfer_injected_for_intent(
         plan.dest_map_id,
         plan.dest_instance_id
     );
+
+    let mut owned_bot_intent = bot_intent.map(|(intent, token)| (intent.clone(), token));
+    let locator =
+        src.begin_shard_index_transfer(plan, owned_bot_intent.as_ref().map(|(intent, _)| intent))?;
+    // Publish Realm's pending phase before freezing the Character. A delayed Known snapshot carries
+    // the same locator revision and loses to PendingTransfer on every World Shard.
+    src.sync_transfer_pending(plan.character_guid)?;
+    abort_point(abort_after, "sync_transfer_pending", plan.transfer_id);
+    if let Some((intent, claim_token)) = &mut owned_bot_intent {
+        if intent.source_locator_revision == 0 {
+            src.bind_bot_transfer_locator(intent, locator.revision, *claim_token)?;
+            intent.source_locator_revision = locator.revision;
+        } else if intent.source_locator_revision != locator.revision {
+            return Err(anyhow!("bot Transfer Realm locator binding changed"));
+        }
+    }
+    let bot_intent = owned_bot_intent
+        .as_ref()
+        .map(|(intent, token)| (intent, *token));
 
     // 1. FREEZE + SERIALIZE on the source, in one transaction. Idempotent on the transfer id.
     src.begin_transfer(plan)?;
@@ -331,11 +354,16 @@ pub(super) fn run_transfer_injected_for_intent(
     // `settle_home_shard` read the realm-core index at all (it used to scan the connected shards
     // unconditionally and never touch the index). The window is still
     // real between here and that next login; it is no longer indefinite.
-    src.publish_shard_index(
-        escrow.character_guid,
-        escrow.dest_map_id,
-        escrow.dest_instance_id,
-    )?;
+    if let Some((intent, _)) = bot_intent {
+        src.publish_bot_shard_index(intent)?;
+    } else {
+        src.finish_player_shard_index_transfer(
+            plan,
+            locator.map_id,
+            locator.instance_id,
+            locator.revision,
+        )?;
+    }
     abort_point(abort_after, "publish_shard_index", escrow.transfer_id);
 
     // 7. PARTY MIRROR: required before release so the first destination action reads the current
@@ -388,7 +416,7 @@ pub(super) fn run_transfer_injected_for_intent(
 ///
 /// A player's crossing is driven inside its own loading screen: the client acks
 /// (`MSG_MOVE_WORLDPORT_ACK`), `route_home` resolves the owning shard and `settle_transfer` runs the
-/// nine steps. A bot has no client to ack, so the module writes a `game_bot_transfer_intent` row
+/// ten steps. A bot has no client to ack, so the module writes a `game_bot_transfer_intent` row
 /// instead and the coordinator relay (`stdb::subscriptions`) calls this. The transfer itself is
 /// unchanged — the same `settle_transfer`, the same escrow, the same Package-registered transfer
 /// arms — because the only thing a bot was ever missing is the driver.
@@ -492,6 +520,8 @@ pub fn run_bot_transfer_intent(
         let Some(destination) =
             holder.shard_for_location(intent.destination_map, intent.destination_instance)
         else {
+            let bound = prepare_bot_locator(holder, &plan, intent, claim_token)?;
+            holder.publish_bot_shard_index(&bound)?;
             holder.sync_transfer_arrival(intent.bot_guid)?;
             holder.mark_bot_transfer_arrival_ready(
                 intent.id,
@@ -556,11 +586,7 @@ pub fn run_bot_transfer_intent(
             intent.controller_generation
         ));
     }
-    holder.publish_shard_index(
-        intent.bot_guid,
-        intent.destination_map,
-        intent.destination_instance,
-    )?;
+    holder.publish_bot_shard_index(intent)?;
     destination.sync_transfer_arrival(intent.bot_guid)?;
     holder.mark_bot_transfer_arrival_ready(
         intent.id,
@@ -569,6 +595,24 @@ pub fn run_bot_transfer_intent(
         claim_token,
     )?;
     destination.release_bot_transfer_arrival(transfer_id_for(intent.bot_guid), intent)
+}
+
+fn prepare_bot_locator(
+    holder: &dyn WorldStore,
+    plan: &TransferPlan,
+    intent: &BotTransferIntent,
+    claim_token: u64,
+) -> Result<BotTransferIntent> {
+    let locator = holder.begin_shard_index_transfer(plan, Some(intent))?;
+    holder.sync_transfer_pending(intent.bot_guid)?;
+    let mut bound = intent.clone();
+    if bound.source_locator_revision == 0 {
+        holder.bind_bot_transfer_locator(&bound, locator.revision, claim_token)?;
+        bound.source_locator_revision = locator.revision;
+    } else if bound.source_locator_revision != locator.revision {
+        return Err(anyhow!("bot Transfer Realm locator binding changed"));
+    }
+    Ok(bound)
 }
 
 /// Put `character_guid` on the shard that owns its location, if it is not there already, and clear
@@ -587,6 +631,13 @@ pub fn settle_transfer(
 ) -> Result<()> {
     let transfer_id = transfer_id_for(character_guid);
     if holder.shard_name() == owner.shard_name() {
+        if let Some(destination) = owner.character_destination(character_guid) {
+            owner.finish_pending_shard_index_transfer(
+                character_guid,
+                destination.dest_map_id,
+                destination.dest_instance_id,
+            )?;
+        }
         if owner.has_arrival_fence(transfer_id) {
             owner.sync_transfer_arrival(character_guid)?;
         }

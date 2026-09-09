@@ -142,6 +142,11 @@ pub trait WorldStore:
         Ok(())
     }
 
+    /// Publish Realm's pending partition before the source is frozen.
+    fn sync_transfer_pending(&self, _character_guid: u64) -> Result<()> {
+        Ok(())
+    }
+
     /// `set_character_shard` on the REALM-CORE handle — publish where a settled transfer put the
     /// character. Called by `transfer::run_transfer` immediately after
     /// `finish_transfer` commits, so it can only ever name a destination the escrow actually
@@ -157,6 +162,69 @@ pub trait WorldStore:
         _instance_id: u64,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Record Realm-core's pending phase before the source is frozen and return its predecessor
+    /// locator revision. Single-database stores have no remote phase.
+    fn begin_shard_index_transfer(
+        &self,
+        _plan: &transfer::TransferPlan,
+        bot_intent: Option<&transfer::BotTransferIntent>,
+    ) -> Result<party::RealmCharacterPartition> {
+        Ok(party::RealmCharacterPartition {
+            map_id: 0,
+            instance_id: 0,
+            revision: bot_intent.map_or(1, |intent| intent.source_locator_revision.max(1)),
+            transfer_pending: true,
+            pending_destination_map: _plan.dest_map_id,
+            pending_destination_instance: _plan.dest_instance_id,
+            bot_source_identity: bot_intent.map_or(spacetimedb_sdk::Identity::ZERO, |intent| {
+                intent.source_module_identity
+            }),
+            bot_transfer_intent_id: bot_intent.map_or(0, |intent| intent.id),
+            bot_controller_generation: bot_intent.map_or(0, |intent| intent.controller_generation),
+        })
+    }
+
+    /// Settle a player crossing against the predecessor returned by
+    /// [`begin_shard_index_transfer`](Self::begin_shard_index_transfer).
+    fn finish_player_shard_index_transfer(
+        &self,
+        plan: &transfer::TransferPlan,
+        _source_map: u32,
+        _source_instance: u64,
+        _source_revision: u64,
+    ) -> Result<()> {
+        self.publish_shard_index(plan.character_guid, plan.dest_map_id, plan.dest_instance_id)
+    }
+
+    /// Resume a Realm pending phase from the destination Character after source finish.
+    fn finish_pending_shard_index_transfer(
+        &self,
+        _character_guid: u64,
+        _destination_map: u32,
+        _destination_instance: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Bind this claimed intent to the Realm locator it is about to move from.
+    fn bind_bot_transfer_locator(
+        &self,
+        _intent: &transfer::BotTransferIntent,
+        _source_revision: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not bind bot Transfer locators"))
+    }
+
+    /// Compare-and-set Realm-core's locator for one exact session-less crossing.
+    fn publish_bot_shard_index(&self, intent: &transfer::BotTransferIntent) -> Result<()> {
+        self.publish_shard_index(
+            intent.bot_guid,
+            intent.destination_map,
+            intent.destination_instance,
+        )
     }
 
     /// `ensure_instance` — mirror an instance id onto this shard, spawning its population once.
@@ -365,12 +433,33 @@ pub trait WorldStore:
         Ok(None)
     }
 
+    /// Realm-core's durable order for a complete party roster, including a disbanded party.
+    fn group_roster_revision(&self, _group_id: u64) -> Result<u64> {
+        Ok(1)
+    }
+
     /// Realm-core's ordered locator for one Character. World Shards never supply this fact.
     fn realm_character_partition(
         &self,
         _character_guid: u64,
     ) -> Result<Option<party::RealmCharacterPartition>> {
         Ok(None)
+    }
+
+    /// One healthy, internally consistent cache observation used to certify a party partition.
+    fn party_holder_observation(
+        &self,
+        character_guid: u64,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Result<party::PartyHolderObservation> {
+        Ok(party::PartyHolderObservation {
+            serves_locator: self.shard_for_location(map_id, instance_id).is_none(),
+            has_escrow: self.escrowed_transfer(character_guid).is_some(),
+            character_partition: self
+                .character_destination(character_guid)
+                .map(|character| (character.dest_map_id, character.dest_instance_id)),
+        })
     }
 
     /// Authoritative roster read used to repair mirrors after deleted Character cleanup. A

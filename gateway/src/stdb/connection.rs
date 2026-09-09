@@ -1215,6 +1215,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // shared dispatch selects the recipient by guid. The event and member tables live in the
         // base list. The group row itself stays sharded-only.
         queries.push("SELECT * FROM game_group");
+        queries.push("SELECT * FROM game_group_roster_revision");
         // Loot rolls — a DIFFERENT reason than every table above: nothing here is a CLIENT
         // relay (`game_group_event` still carries every wire-visible roll transition, unchanged). The
         // gateway's own loot-roll relay (`world::loot::relay_tick`) needs these two PRIVATE tables to
@@ -1660,6 +1661,7 @@ mod coordinator_query_tests {
         // them on every coordinator (a cache-only subscription with the flag off: the realm
         // relay registers only on multi-database gateways, so there is no double delivery).
         "SELECT * FROM game_group",
+        "SELECT * FROM game_group_roster_revision",
         // The loot-roll pair: both PRIVATE, no per-player subscriber to duplicate — the restart hazard alone is why
         // they belong on this list (a module published before they exist refuses the subscription).
         "SELECT * FROM game_loot_roll",

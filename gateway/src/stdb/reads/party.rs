@@ -8,6 +8,40 @@ use super::super::bindings::*;
 use super::super::connection::Coordinator;
 
 impl Coordinator {
+    pub(crate) fn stable_party_holder_observation(
+        &self,
+        character_guid: u64,
+        serves_locator: bool,
+    ) -> Result<crate::world::party::PartyHolderObservation> {
+        let guard = self.0.coord();
+        if !guard.is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for party partition certification",
+                self.shard_name()
+            );
+        }
+        let has_escrow = guard
+            .conn
+            .db
+            .game_transfer_out()
+            .by_character()
+            .filter(&character_guid)
+            .next()
+            .is_some();
+        let character_partition = guard
+            .conn
+            .db
+            .game_character()
+            .guid()
+            .find(&character_guid)
+            .map(|character| (character.map_id, character.pending_instance_id));
+        Ok(crate::world::party::PartyHolderObservation {
+            serves_locator,
+            has_escrow,
+            character_partition,
+        })
+    }
+
     /// Every party in this Realm-core or World Shard cache.
     pub fn party_group_ids(&self) -> Vec<u64> {
         self.0
@@ -117,6 +151,11 @@ impl Coordinator {
             .collect();
         Some(crate::world::party::GroupRoster {
             group_id,
+            roster_revision: db
+                .game_group_roster_revision()
+                .group_id()
+                .find(group_id)
+                .map_or(1, |row| row.revision),
             leader_guid: group.leader_guid,
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
@@ -124,6 +163,18 @@ impl Coordinator {
             members: rows.into_iter().map(|(_, guid)| guid).collect(),
             partitions,
         })
+    }
+
+    /// Realm-core's roster order survives disband in `game_group_roster_revision`.
+    pub fn group_roster_revision(&self, group_id: u64) -> u64 {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_group_roster_revision()
+            .group_id()
+            .find(group_id)
+            .map_or(1, |row| row.revision)
     }
 
     /// Every UNRESOLVED `game_loot_roll` row on THIS handle's database, joined with its votes.

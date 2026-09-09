@@ -106,6 +106,17 @@ pub struct GroupMember {
     pub owner_identity: Identity,
 }
 
+/// Realm-core's order for one complete party roster and each World Shard mirror's last accepted
+/// value. The row survives disband so a delayed pre-disband snapshot cannot recreate the party.
+/// Realm-core owns increments; World Shards only copy the supplied value in [`sync_group_mirror`].
+#[table(accessor = game_group_roster_revision, public)]
+pub struct GroupRosterRevision {
+    #[primary_key]
+    pub group_id: u64,
+    pub revision: u64,
+    pub active: bool,
+}
+
 /// Realm-core-certified partition state for one mirrored party member. This local projection
 /// carries no position and names no Shard. The Realm membership row and locator revisions order
 /// delayed Gateway fanout without relying on clocks from different databases.
@@ -1487,6 +1498,7 @@ pub fn realm_group_op(
     use lyracore_shared::group::realm_op;
     // An op byte this module does not know is a gateway newer than the module — a deployment fault,
     // not a party outcome, so it stays an untagged error the gateway treats as a failure.
+    let before_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
     let ran = match op {
         realm_op::INVITE => invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid),
         realm_op::ACCEPT => accept_invite_on(ctx, Plane::RealmCore, actor_guid),
@@ -1497,7 +1509,86 @@ pub fn realm_group_op(
         realm_op::LOOT_METHOD => set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b),
         other => return Err(format!("unknown realm group op {other}")),
     };
-    ran.map_err(|error| group_op_error(error, &format!("realm group op {op} for {actor_guid}")))
+    ran.map_err(|error| group_op_error(error, &format!("realm group op {op} for {actor_guid}")))?;
+    if matches!(
+        op,
+        realm_op::ACCEPT | realm_op::LEAVE | realm_op::UNINVITE | realm_op::LOOT_METHOD
+    ) {
+        let after_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
+        let touched: std::collections::BTreeSet<_> = before_groups
+            .iter()
+            .chain(after_groups.iter())
+            .copied()
+            .collect();
+        for group_id in touched {
+            advance_group_revision(
+                ctx,
+                group_id,
+                before_groups.contains(&group_id),
+                after_groups.contains(&group_id),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn realm_op_groups(
+    ctx: &ReducerContext,
+    op: u8,
+    actor_guid: u64,
+    target_guid: u64,
+) -> std::collections::BTreeSet<u64> {
+    use lyracore_shared::group::realm_op;
+    let mut guids = vec![actor_guid];
+    if target_guid != 0 {
+        guids.push(target_guid);
+    }
+    if op == realm_op::ACCEPT {
+        if let Some(invite) = ctx
+            .db
+            .game_group_invite()
+            .by_target()
+            .filter(&actor_guid)
+            .next()
+        {
+            guids.push(invite.inviter_guid);
+        }
+    }
+    guids
+        .into_iter()
+        .filter_map(|guid| {
+            ctx.db
+                .game_group_member()
+                .by_character()
+                .filter(&guid)
+                .next()
+                .map(|member| member.group_id)
+        })
+        .filter(|group_id| ctx.db.game_group().group_id().find(*group_id).is_some())
+        .collect()
+}
+
+fn advance_group_revision(ctx: &ReducerContext, group_id: u64, was_active: bool, active: bool) {
+    let table = ctx.db.game_group_roster_revision();
+    let current = table.group_id().find(group_id);
+    let revision = next_group_revision(current.as_ref().map(|row| row.revision), was_active);
+    let row = GroupRosterRevision {
+        group_id,
+        revision,
+        active,
+    };
+    if current.is_some() {
+        table.group_id().update(row);
+    } else {
+        table.insert(row);
+    }
+}
+
+fn next_group_revision(current: Option<u64>, was_active: bool) -> u64 {
+    current
+        .unwrap_or(u64::from(was_active))
+        .checked_add(1)
+        .expect("party roster revision exhausted")
 }
 
 /// Replace this database's MIRROR of one party with realm-core's authoritative roster.
@@ -1533,11 +1624,15 @@ pub fn sync_group_mirror(
     members: Vec<u64>,
     request_actor: crate::SessionActor,
     partitions: Vec<GroupMemberPartition>,
+    roster_revision: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     if group_id == 0 {
         return Err("group 0 is not a party".to_string());
+    }
+    if roster_revision == 0 {
+        return Err("group mirror has no Realm roster revision".to_string());
     }
     if members.len() > GROUP_MAX_MEMBERS || partitions.len() > GROUP_MAX_MEMBERS * 2 {
         return Err(format!(
@@ -1562,15 +1657,53 @@ pub fn sync_group_mirror(
     let groups = ctx.db.game_group();
     let member_tbl = ctx.db.game_group_member();
     let partition_tbl = ctx.db.game_group_member_partition();
-    let stale_partitions: Vec<_> = partition_tbl
-        .by_group()
-        .filter(&group_id)
-        .filter(|partition| partition.member_active && !members.contains(&partition.character_guid))
-        .collect();
-    for mut partition in stale_partitions {
-        partition.member_active = false;
-        partition.state = PartyPartitionState::Unknown;
-        partition_tbl.character_guid().update(partition);
+    let revisions = ctx.db.game_group_roster_revision();
+    let current_revision = revisions.group_id().find(group_id);
+    let incoming_active = !members.is_empty();
+    match roster_update(
+        current_revision
+            .as_ref()
+            .map(|current| (current.revision, current.active)),
+        roster_revision,
+        incoming_active,
+    ) {
+        RosterUpdate::Keep => return Ok(()),
+        RosterUpdate::Conflict => {
+            return Err("group mirror conflicts with the accepted roster state".to_string());
+        }
+        RosterUpdate::Apply => {}
+    }
+    if current_revision
+        .as_ref()
+        .is_some_and(|current| current.revision == roster_revision)
+    {
+        if let Some(group) = groups.group_id().find(group_id) {
+            if incoming_active
+                && (group.leader_guid != leader_guid
+                    || group.loot_method != loot_method_setting
+                    || group.loot_threshold != loot_threshold
+                    || group.master_looter_guid != master_looter_guid)
+            {
+                return Err("group mirror conflicts with the accepted party rules".to_string());
+            }
+        }
+    }
+    let advances_roster = current_revision
+        .as_ref()
+        .is_none_or(|current| roster_revision > current.revision);
+    if advances_roster {
+        let stale_partitions: Vec<_> = partition_tbl
+            .by_group()
+            .filter(&group_id)
+            .filter(|partition| {
+                partition.member_active && !members.contains(&partition.character_guid)
+            })
+            .collect();
+        for mut partition in stale_partitions {
+            partition.member_active = false;
+            partition.state = PartyPartitionState::Unknown;
+            partition_tbl.character_guid().update(partition);
+        }
     }
     for partition in partitions {
         match partition_tbl
@@ -1593,16 +1726,18 @@ pub fn sync_group_mirror(
             }
         }
     }
-    let effective_members: Vec<_> = members
-        .iter()
-        .copied()
-        .filter(|guid| {
-            partition_tbl
-                .character_guid()
-                .find(*guid)
-                .is_some_and(|row| row.member_active && row.group_id == group_id)
-        })
+    let effective_members: Vec<_> = partition_tbl
+        .by_group()
+        .filter(&group_id)
+        .filter(|row| row.member_active)
+        .map(|row| (row.membership_revision, row.character_guid))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|(_, guid)| guid)
         .collect();
+    if effective_members != members {
+        return Err("group mirror roster conflicts with its accepted revision".to_string());
+    }
     let current: Vec<(u64, u64)> = member_tbl
         .by_group()
         .filter(&group_id)
@@ -1617,6 +1752,16 @@ pub fn sync_group_mirror(
     }
     if effective_members.is_empty() {
         groups.group_id().delete(group_id);
+        let row = GroupRosterRevision {
+            group_id,
+            revision: roster_revision,
+            active: false,
+        };
+        if current_revision.is_some() {
+            revisions.group_id().update(row);
+        } else {
+            revisions.insert(row);
+        }
         return Ok(());
     }
     // A character is in at most one group (the `by_character` uniqueness the whole system assumes),
@@ -1628,7 +1773,6 @@ pub fn sync_group_mirror(
             member_tbl.id().delete(m.id);
         }
     }
-    let complete_roster = effective_members.len() == members.len();
     let effective_leader = if effective_members.contains(&leader_guid) {
         leader_guid
     } else {
@@ -1638,14 +1782,10 @@ pub fn sync_group_mirror(
     };
     match groups.group_id().find(group_id) {
         Some(mut g) => {
-            if complete_roster {
-                g.leader_guid = effective_leader;
-                g.loot_method = loot_method_setting;
-                g.loot_threshold = loot_threshold;
-                g.master_looter_guid = master_looter_guid;
-            } else if !effective_members.contains(&g.leader_guid) {
-                g.leader_guid = effective_leader;
-            }
+            g.leader_guid = effective_leader;
+            g.loot_method = loot_method_setting;
+            g.loot_threshold = loot_threshold;
+            g.master_looter_guid = master_looter_guid;
             groups.group_id().update(g);
         }
         None => {
@@ -1675,6 +1815,16 @@ pub fn sync_group_mirror(
             character_guid: guid,
             owner_identity,
         });
+    }
+    let row = GroupRosterRevision {
+        group_id,
+        revision: roster_revision,
+        active: true,
+    };
+    if current_revision.is_some() {
+        revisions.group_id().update(row);
+    } else {
+        revisions.insert(row);
     }
     Ok(())
 }
@@ -1736,6 +1886,29 @@ pub fn admit_party_command_authority(
         }
     }
     Ok(())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RosterUpdate {
+    Keep,
+    Apply,
+    Conflict,
+}
+
+fn roster_update(
+    current: Option<(u64, bool)>,
+    incoming_revision: u64,
+    incoming_active: bool,
+) -> RosterUpdate {
+    let Some((current_revision, current_active)) = current else {
+        return RosterUpdate::Apply;
+    };
+    match incoming_revision.cmp(&current_revision) {
+        std::cmp::Ordering::Less => RosterUpdate::Keep,
+        std::cmp::Ordering::Greater => RosterUpdate::Apply,
+        std::cmp::Ordering::Equal if current_active == incoming_active => RosterUpdate::Apply,
+        std::cmp::Ordering::Equal => RosterUpdate::Conflict,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PartitionUpdate {
     Keep,
@@ -2056,6 +2229,38 @@ mod tests {
         assert_eq!(
             partition_update(&removed, &rejoined),
             PartitionUpdate::Replace
+        );
+    }
+
+    #[test]
+    fn complete_roster_revision_orders_members_rules_and_disband() {
+        assert_eq!(next_group_revision(None, false), 1, "new party");
+        assert_eq!(next_group_revision(None, true), 2, "migrated live party");
+        assert_eq!(
+            next_group_revision(Some(7), true),
+            8,
+            "existing party change"
+        );
+        assert_eq!(roster_update(None, 1, true), RosterUpdate::Apply);
+        assert_eq!(
+            roster_update(Some((2, true)), 1, true),
+            RosterUpdate::Keep,
+            "a delayed pre-join roster cannot remove the newer member or restore old rules"
+        );
+        assert_eq!(
+            roster_update(Some((2, true)), 3, true),
+            RosterUpdate::Apply,
+            "a revisioned leave or leadership/loot change replaces the complete roster"
+        );
+        assert_eq!(
+            roster_update(Some((4, false)), 3, true),
+            RosterUpdate::Keep,
+            "the durable disband tombstone survives restart and rejects an older live roster"
+        );
+        assert_eq!(
+            roster_update(Some((4, false)), 4, true),
+            RosterUpdate::Conflict,
+            "equal-revision state cannot revive a disbanded party"
         );
     }
 

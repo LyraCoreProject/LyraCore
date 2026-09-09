@@ -3826,6 +3826,9 @@ impl Coordinator {
                 controller_generation: row.controller_generation,
                 arrival_ready: row.arrival_ready,
                 source_module_identity: row.source_module_identity,
+                source_map: row.source_map,
+                source_instance: row.source_instance,
+                source_locator_revision: row.source_locator_revision,
             };
             attempt_bot_transfer(self, &intent);
         }

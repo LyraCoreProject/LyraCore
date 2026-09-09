@@ -258,6 +258,10 @@ World Shard that holds the Character. It carries no position or Shard name. Pend
 transiently unknown location, and removed membership remain explicit states and cannot become a
 companion destination.
 
+**Roster Revision**:
+Realm-core's monotonic order for one complete party member list, leader, and loot rules. A World
+Shard keeps the last accepted value after disband. Older snapshots cannot change its party mirror.
+
 **Recovery Scan**:
 A bounded scan of healing rotations that retains its last completed result while reading the next
 batch. The scan can be pending or complete; its result distinguishes unread, missing, and a selected

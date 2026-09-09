@@ -349,6 +349,14 @@ pub struct BotTransferIntent {
     /// Shard-local, so this is part of the crossing identity on the destination fence.
     #[default(Identity::ZERO)]
     pub source_module_identity: Identity,
+    /// Realm locator predecessor captured before this source is escrowed. The Gateway binds the
+    /// revision under the active claim, then Realm-core compare-and-sets from this exact partition.
+    #[default(0u32)]
+    pub source_map: u32,
+    #[default(0u64)]
+    pub source_instance: u64,
+    #[default(0u64)]
+    pub source_locator_revision: u64,
 }
 
 /// Send a session-less Character to `destination`, through the Gateway.
@@ -417,12 +425,14 @@ pub(crate) fn emit_bot_transfer_intent(
         ));
     }
     crate::sessionless::action_gate(ctx, bot_guid)?;
-    if ctx.db.game_world_entity().guid().find(bot_guid).is_none() {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::MissingActor,
-            "Character is not in world",
-        ));
-    }
+    let source = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(bot_guid)
+        .ok_or_else(|| {
+            ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
+        })?;
     let _ = crate::actor::stop_attack(ctx, bot_guid);
     ctx.db.game_creature_spline().guid().delete(bot_guid);
     crate::world::teleport_player(
@@ -447,8 +457,56 @@ pub(crate) fn emit_bot_transfer_intent(
         claim_until_micros: 0,
         arrival_ready: false,
         source_module_identity: ctx.database_identity(),
+        source_map: source.map_id,
+        source_instance: source.instance_id,
+        source_locator_revision: 0,
     });
     Ok(intent.id)
+}
+
+/// Bind the Realm locator predecessor while this worker owns the Transfer Intent. This happens
+/// before escrow begins, so a later Realm compare-and-set can reject a worker from an old crossing.
+#[reducer]
+#[allow(clippy::too_many_arguments)] // Exact intent claim and Realm predecessor are one wire Gate.
+pub fn bind_bot_transfer_locator(
+    ctx: &ReducerContext,
+    intent_id: u64,
+    bot_guid: u64,
+    controller_generation: u64,
+    claim_token: u64,
+    source_map: u32,
+    source_instance: u64,
+    source_locator_revision: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    if source_locator_revision == 0 {
+        return Err("Realm locator revision 0 is invalid".to_string());
+    }
+    let intents = ctx.db.game_bot_transfer_intent();
+    let mut intent = intents
+        .id()
+        .find(intent_id)
+        .ok_or_else(|| "Transfer Intent is gone".to_string())?;
+    if (
+        intent.bot_guid,
+        intent.controller_generation,
+        intent.claim_token,
+    ) != (bot_guid, controller_generation, claim_token)
+        || claim_token == 0
+    {
+        return Err("Transfer Intent claim changed".to_string());
+    }
+    if (intent.source_map, intent.source_instance) != (source_map, source_instance) {
+        return Err("Transfer Intent source partition changed".to_string());
+    }
+    if intent.source_locator_revision != 0
+        && intent.source_locator_revision != source_locator_revision
+    {
+        return Err("Transfer Intent Realm locator changed".to_string());
+    }
+    intent.source_locator_revision = source_locator_revision;
+    intents.id().update(intent);
+    Ok(())
 }
 
 /// Claim one exact Transfer Intent. A live foreign lease normally spaces competing drivers; after

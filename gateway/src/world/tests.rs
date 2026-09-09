@@ -1220,6 +1220,12 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
+    fn sync_transfer_pending(&self, character_guid: u64) -> Result<()> {
+        super::party::sync_transfer_arrival_mirror(self, character_guid)?;
+        self.xstep("sync_transfer_pending")?;
+        Ok(())
+    }
+
     fn mark_bot_transfer_arrival_ready(
         &self,
         _intent_id: u64,
@@ -9876,6 +9882,7 @@ impl FakeParty {
             *self.groups.iter().find(|(g, ..)| *g == group_id)?;
         Some(super::party::GroupRoster {
             group_id: gid,
+            roster_revision: 1,
             leader_guid: leader,
             loot_method: method,
             loot_threshold: threshold,
