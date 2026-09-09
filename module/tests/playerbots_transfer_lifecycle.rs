@@ -248,7 +248,7 @@ fn playerbots_process_restart_resumes_one_owned_movement_leg() {
         support::module_bytes(),
     );
     assert_eq!(before["splines"].as_array().unwrap().len(), 1, "{before}");
-    assert_eq!(before["runner"][0]["movement_progress"], "null");
+    assert_eq!(before["runner"][0]["movement_progress"], "(none = ())");
     assert!(before["runner"][0]["foreground"]
         .as_str()
         .unwrap()
