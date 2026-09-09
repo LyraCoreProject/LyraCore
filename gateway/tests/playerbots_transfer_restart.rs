@@ -975,7 +975,7 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
         assert!(expected_guids.contains(&guid), "{evidence}");
         let member = members
             .iter()
-            .find(|member| member["character_guid"] == guid.to_string())
+            .find(|member| text_field(member, "character_guid").parse::<u64>().unwrap() == guid)
             .unwrap();
         assert_eq!(partition["membership_revision"], member["id"], "{evidence}");
         if guid == bot_guid || guid == leader_guid {
@@ -1001,7 +1001,7 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
         ),
     ] {
         let locator = row(evidence, &["state", "realm", locator_name]);
-        let holder = if locator["map_id"] == DESTINATION_MAP.to_string() {
+        let holder = if text_field(locator, "map_id").parse::<u32>().unwrap() == DESTINATION_MAP {
             "destination"
         } else {
             "source"
@@ -1540,7 +1540,7 @@ fn assert_assist_source_ready(evidence: &serde_json::Value) {
     for member in [leader, priest] {
         let realm_partition = rows(evidence, &["state", "realm", "partitions"])
             .iter()
-            .find(|row| row["character_guid"] == member.to_string())
+            .find(|row| text_field(row, "character_guid").parse::<u64>().unwrap() == member)
             .unwrap_or_else(|| panic!("Realm partition {member} absent: {evidence}"));
         assert_eq!(realm_partition["map_id"], DESTINATION_MAP.to_string());
         assert_eq!(
@@ -1612,12 +1612,17 @@ fn assert_assist_party_mirror(evidence: &serde_json::Value) {
         let locator = row(evidence, &["state", "realm", locator_name]);
         let partition = partitions
             .iter()
-            .find(|partition| partition["character_guid"] == guid.to_string())
+            .find(|partition| {
+                text_field(partition, "character_guid")
+                    .parse::<u64>()
+                    .unwrap()
+                    == guid
+            })
             .unwrap_or_else(|| panic!("destination partition {guid} absent: {evidence}"));
         assert_eq!(partition["group_id"], GROUP.to_string(), "{evidence}");
         let authority_member = realm_members
             .iter()
-            .find(|member| member["character_guid"] == guid.to_string())
+            .find(|member| text_field(member, "character_guid").parse::<u64>().unwrap() == guid)
             .unwrap();
         assert_eq!(
             partition["membership_revision"], authority_member["id"],
