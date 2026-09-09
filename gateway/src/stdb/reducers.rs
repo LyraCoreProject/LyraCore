@@ -129,6 +129,8 @@ impl Coordinator {
         )
     }
 
+    // The arguments mirror the World reducer's exact Transfer Gate.
+    #[allow(clippy::too_many_arguments)]
     pub fn release_bot_transfer_arrival(
         &self,
         transfer_id: u64,
