@@ -13,6 +13,11 @@ pub struct BotTransferIntent {
     pub destination_instance: u64,
     pub reason: String,
     pub created_at: __sdk::Timestamp,
+    pub controller_generation: u64,
+    pub claim_token: u64,
+    pub claim_until_micros: i64,
+    pub arrival_ready: bool,
+    pub source_module_identity: __sdk::Identity,
 }
 
 impl __sdk::InModule for BotTransferIntent {
@@ -29,6 +34,11 @@ pub struct BotTransferIntentCols {
     pub destination_instance: __sdk::__query_builder::Col<BotTransferIntent, u64>,
     pub reason: __sdk::__query_builder::Col<BotTransferIntent, String>,
     pub created_at: __sdk::__query_builder::Col<BotTransferIntent, __sdk::Timestamp>,
+    pub controller_generation: __sdk::__query_builder::Col<BotTransferIntent, u64>,
+    pub claim_token: __sdk::__query_builder::Col<BotTransferIntent, u64>,
+    pub claim_until_micros: __sdk::__query_builder::Col<BotTransferIntent, i64>,
+    pub arrival_ready: __sdk::__query_builder::Col<BotTransferIntent, bool>,
+    pub source_module_identity: __sdk::__query_builder::Col<BotTransferIntent, __sdk::Identity>,
 }
 
 impl __sdk::__query_builder::HasCols for BotTransferIntent {
@@ -44,6 +54,17 @@ impl __sdk::__query_builder::HasCols for BotTransferIntent {
             ),
             reason: __sdk::__query_builder::Col::new(table_name, "reason"),
             created_at: __sdk::__query_builder::Col::new(table_name, "created_at"),
+            controller_generation: __sdk::__query_builder::Col::new(
+                table_name,
+                "controller_generation",
+            ),
+            claim_token: __sdk::__query_builder::Col::new(table_name, "claim_token"),
+            claim_until_micros: __sdk::__query_builder::Col::new(table_name, "claim_until_micros"),
+            arrival_ready: __sdk::__query_builder::Col::new(table_name, "arrival_ready"),
+            source_module_identity: __sdk::__query_builder::Col::new(
+                table_name,
+                "source_module_identity",
+            ),
         }
     }
 }
@@ -52,6 +73,7 @@ impl __sdk::__query_builder::HasCols for BotTransferIntent {
 ///
 /// Provides typed access to indexed columns for query building.
 pub struct BotTransferIntentIxCols {
+    pub bot_guid: __sdk::__query_builder::IxCol<BotTransferIntent, u64>,
     pub id: __sdk::__query_builder::IxCol<BotTransferIntent, u64>,
 }
 
@@ -59,6 +81,7 @@ impl __sdk::__query_builder::HasIxCols for BotTransferIntent {
     type IxCols = BotTransferIntentIxCols;
     fn ix_cols(table_name: &'static str) -> Self::IxCols {
         BotTransferIntentIxCols {
+            bot_guid: __sdk::__query_builder::IxCol::new(table_name, "bot_guid"),
             id: __sdk::__query_builder::IxCol::new(table_name, "id"),
         }
     }

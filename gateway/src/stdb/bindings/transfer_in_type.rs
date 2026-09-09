@@ -11,6 +11,10 @@ pub struct TransferIn {
     pub character_guid: u64,
     pub blob: Vec<u8>,
     pub created_micros: i64,
+    pub bot_intent_id: u64,
+    pub bot_controller_generation: u64,
+    pub bot_intent_created_micros: i64,
+    pub bot_intent_source: __sdk::Identity,
 }
 
 impl __sdk::InModule for TransferIn {
@@ -25,6 +29,10 @@ pub struct TransferInCols {
     pub character_guid: __sdk::__query_builder::Col<TransferIn, u64>,
     pub blob: __sdk::__query_builder::Col<TransferIn, Vec<u8>>,
     pub created_micros: __sdk::__query_builder::Col<TransferIn, i64>,
+    pub bot_intent_id: __sdk::__query_builder::Col<TransferIn, u64>,
+    pub bot_controller_generation: __sdk::__query_builder::Col<TransferIn, u64>,
+    pub bot_intent_created_micros: __sdk::__query_builder::Col<TransferIn, i64>,
+    pub bot_intent_source: __sdk::__query_builder::Col<TransferIn, __sdk::Identity>,
 }
 
 impl __sdk::__query_builder::HasCols for TransferIn {
@@ -35,6 +43,16 @@ impl __sdk::__query_builder::HasCols for TransferIn {
             character_guid: __sdk::__query_builder::Col::new(table_name, "character_guid"),
             blob: __sdk::__query_builder::Col::new(table_name, "blob"),
             created_micros: __sdk::__query_builder::Col::new(table_name, "created_micros"),
+            bot_intent_id: __sdk::__query_builder::Col::new(table_name, "bot_intent_id"),
+            bot_controller_generation: __sdk::__query_builder::Col::new(
+                table_name,
+                "bot_controller_generation",
+            ),
+            bot_intent_created_micros: __sdk::__query_builder::Col::new(
+                table_name,
+                "bot_intent_created_micros",
+            ),
+            bot_intent_source: __sdk::__query_builder::Col::new(table_name, "bot_intent_source"),
         }
     }
 }

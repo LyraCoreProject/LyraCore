@@ -58,6 +58,7 @@ pub mod character_type;
 pub mod chat_event_type;
 pub mod claim_account_reducer;
 pub mod claim_bot_invite_intent_reducer;
+pub mod claim_bot_transfer_intent_reducer;
 pub mod claim_guid_range_reducer;
 pub mod claim_operator_reducer;
 pub mod claim_party_command_intent_reducer;
@@ -68,6 +69,7 @@ pub mod combat_event_type;
 pub mod combo_point_type;
 pub mod command_intent_state_type;
 pub mod command_outcome_type;
+pub mod complete_bot_transfer_intent_reducer;
 pub mod confirm_import_reducer;
 pub mod confirm_party_command_holder_reducer;
 pub mod confirm_party_command_receipt_reducer;
@@ -120,6 +122,7 @@ pub mod creature_waypoint_type;
 pub mod death_condition_type;
 pub mod debug_accept_quest_reducer;
 pub mod debug_add_threat_reducer;
+pub mod debug_admit_sessionless_action_reducer;
 pub mod debug_apply_damage_reducer;
 pub mod debug_apply_lethal_damage_floor_fixture_reducer;
 pub mod debug_arm_instance_tick_reducer;
@@ -725,6 +728,7 @@ pub mod hunter_pet_protocol_type;
 pub mod hunter_pet_type;
 pub mod idle_movement_intent_type;
 pub mod immobilization_instruction_type;
+pub mod import_bot_character_blob_reducer;
 pub mod import_character_blob_reducer;
 pub mod import_character_reducer;
 pub mod import_creature_ai_definitions_append_reducer;
@@ -768,6 +772,7 @@ pub mod mail_escrow_reaper_schedule_type;
 pub mod mail_escrow_type;
 pub mod mail_type;
 pub mod map_region_type;
+pub mod mark_bot_transfer_arrival_ready_reducer;
 pub mod melee_attack_type;
 pub mod melee_schedule_type;
 pub mod missing_text_template_no_effect_type;
@@ -918,6 +923,7 @@ pub mod relay_terminate_type;
 pub mod relay_terminate_when_type;
 pub mod relay_world_state_type;
 pub mod release_account_claim_reducer;
+pub mod release_bot_transfer_arrival_reducer;
 pub mod release_transfer_reducer;
 pub mod remove_aura_instruction_type;
 pub mod remove_guardians_instruction_type;
@@ -1085,6 +1091,7 @@ pub use character_type::Character;
 pub use chat_event_type::ChatEvent;
 pub use claim_account_reducer::claim_account;
 pub use claim_bot_invite_intent_reducer::claim_bot_invite_intent;
+pub use claim_bot_transfer_intent_reducer::claim_bot_transfer_intent;
 pub use claim_guid_range_reducer::claim_guid_range;
 pub use claim_operator_reducer::claim_operator;
 pub use claim_party_command_intent_reducer::claim_party_command_intent;
@@ -1095,6 +1102,7 @@ pub use combat_event_type::CombatEvent;
 pub use combo_point_type::ComboPoint;
 pub use command_intent_state_type::CommandIntentState;
 pub use command_outcome_type::CommandOutcome;
+pub use complete_bot_transfer_intent_reducer::complete_bot_transfer_intent;
 pub use confirm_import_reducer::confirm_import;
 pub use confirm_party_command_holder_reducer::confirm_party_command_holder;
 pub use confirm_party_command_receipt_reducer::confirm_party_command_receipt;
@@ -1147,6 +1155,7 @@ pub use creature_waypoint_type::CreatureWaypoint;
 pub use death_condition_type::DeathCondition;
 pub use debug_accept_quest_reducer::debug_accept_quest;
 pub use debug_add_threat_reducer::debug_add_threat;
+pub use debug_admit_sessionless_action_reducer::debug_admit_sessionless_action;
 pub use debug_apply_damage_reducer::debug_apply_damage;
 pub use debug_apply_lethal_damage_floor_fixture_reducer::debug_apply_lethal_damage_floor_fixture;
 pub use debug_arm_instance_tick_reducer::debug_arm_instance_tick;
@@ -1752,6 +1761,7 @@ pub use hunter_pet_protocol_type::HunterPetProtocol;
 pub use hunter_pet_type::HunterPet;
 pub use idle_movement_intent_type::IdleMovementIntent;
 pub use immobilization_instruction_type::ImmobilizationInstruction;
+pub use import_bot_character_blob_reducer::import_bot_character_blob;
 pub use import_character_blob_reducer::import_character_blob;
 pub use import_character_reducer::import_character;
 pub use import_creature_ai_definitions_append_reducer::import_creature_ai_definitions_append;
@@ -1795,6 +1805,7 @@ pub use mail_escrow_reaper_schedule_type::MailEscrowReaperSchedule;
 pub use mail_escrow_type::MailEscrow;
 pub use mail_type::Mail;
 pub use map_region_type::MapRegion;
+pub use mark_bot_transfer_arrival_ready_reducer::mark_bot_transfer_arrival_ready;
 pub use melee_attack_type::MeleeAttack;
 pub use melee_schedule_type::MeleeSchedule;
 pub use missing_text_template_no_effect_type::MissingTextTemplateNoEffect;
@@ -1945,6 +1956,7 @@ pub use relay_terminate_type::RelayTerminate;
 pub use relay_terminate_when_type::RelayTerminateWhen;
 pub use relay_world_state_type::RelayWorldState;
 pub use release_account_claim_reducer::release_account_claim;
+pub use release_bot_transfer_arrival_reducer::release_bot_transfer_arrival;
 pub use release_transfer_reducer::release_transfer;
 pub use remove_aura_instruction_type::RemoveAuraInstruction;
 pub use remove_guardians_instruction_type::RemoveGuardiansInstruction;
@@ -2127,6 +2139,12 @@ pub enum Reducer {
     ClaimBotInviteIntent {
         intent_id: u64,
     },
+    ClaimBotTransferIntent {
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    },
     ClaimGuidRange {
         shard_name: String,
         current_mark: u64,
@@ -2142,6 +2160,12 @@ pub enum Reducer {
     },
     CloseAccountFence {
         token: WorldSessionToken,
+    },
+    CompleteBotTransferIntent {
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
     },
     ConfirmImport {
         transfer_id: u64,
@@ -2175,6 +2199,9 @@ pub enum Reducer {
         creature_guid: u64,
         source_guid: u64,
         amount: i64,
+    },
+    DebugAdmitSessionlessAction {
+        character_guid: u64,
     },
     DebugApplyDamage {
         target_guid: u64,
@@ -3368,6 +3395,15 @@ pub enum Reducer {
         request_actor: SessionActor,
         slot: u8,
     },
+    ImportBotCharacterBlob {
+        transfer_id: u64,
+        blob: Vec<u8>,
+        source_module_identity: __sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        intent_created_micros: i64,
+        request_actor: SessionActor,
+    },
     ImportCharacter {
         transfer_id: u64,
     },
@@ -3426,6 +3462,12 @@ pub enum Reducer {
     },
     InstallGuidRange {
         base: u64,
+    },
+    MarkBotTransferArrivalReady {
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
     },
     OnDisconnect,
     PlayerbotsFixtureCommandApply {
@@ -3689,6 +3731,14 @@ pub enum Reducer {
     ReleaseAccountClaim {
         token: WorldSessionToken,
     },
+    ReleaseBotTransferArrival {
+        transfer_id: u64,
+        bot_guid: u64,
+        source_module_identity: __sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        intent_created_micros: i64,
+    },
     ReleaseTransfer {
         transfer_id: u64,
         request_actor: SessionActor,
@@ -3818,17 +3868,20 @@ impl __sdk::Reducer for Reducer {
             Reducer::BeginTransfer { .. } => "begin_transfer",
             Reducer::ClaimAccount { .. } => "claim_account",
             Reducer::ClaimBotInviteIntent { .. } => "claim_bot_invite_intent",
+            Reducer::ClaimBotTransferIntent { .. } => "claim_bot_transfer_intent",
             Reducer::ClaimGuidRange { .. } => "claim_guid_range",
             Reducer::ClaimOperator => "claim_operator",
             Reducer::ClaimPartyCommandIntent { .. } => "claim_party_command_intent",
             Reducer::ClearPromotedLootRoll { .. } => "clear_promoted_loot_roll",
             Reducer::CloseAccountFence { .. } => "close_account_fence",
+            Reducer::CompleteBotTransferIntent { .. } => "complete_bot_transfer_intent",
             Reducer::ConfirmImport { .. } => "confirm_import",
             Reducer::ConfirmPartyCommandHolder { .. } => "confirm_party_command_holder",
             Reducer::ConfirmPartyCommandReceipt { .. } => "confirm_party_command_receipt",
             Reducer::CreateCharacter { .. } => "create_character",
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
             Reducer::DebugAddThreat { .. } => "debug_add_threat",
+            Reducer::DebugAdmitSessionlessAction { .. } => "debug_admit_sessionless_action",
             Reducer::DebugApplyDamage { .. } => "debug_apply_damage",
             Reducer::DebugApplyLethalDamageFloorFixture { .. } => {
                 "debug_apply_lethal_damage_floor_fixture"
@@ -4140,6 +4193,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::GwUnequipItem { .. } => "gw_unequip_item",
             Reducer::GwUseGameobject { .. } => "gw_use_gameobject",
             Reducer::GwUseItem { .. } => "gw_use_item",
+            Reducer::ImportBotCharacterBlob { .. } => "import_bot_character_blob",
             Reducer::ImportCharacter { .. } => "import_character",
             Reducer::ImportCharacterBlob { .. } => "import_character_blob",
             Reducer::ImportCreatureAiDefinitions { .. } => "import_creature_ai_definitions",
@@ -4163,6 +4217,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ImportVmapChunks { .. } => "import_vmap_chunks",
             Reducer::ImportVmapChunksAppend { .. } => "import_vmap_chunks_append",
             Reducer::InstallGuidRange { .. } => "install_guid_range",
+            Reducer::MarkBotTransferArrivalReady { .. } => "mark_bot_transfer_arrival_ready",
             Reducer::OnDisconnect => "on_disconnect",
             Reducer::PlayerbotsFixtureCommandApply { .. } => "playerbots_fixture_command_apply",
             Reducer::PlayerbotsFixtureCommandApplyAfterGateChange { .. } => {
@@ -4215,6 +4270,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RecordRegionLoad { .. } => "record_region_load",
             Reducer::RecordShardLoad { .. } => "record_shard_load",
             Reducer::ReleaseAccountClaim { .. } => "release_account_claim",
+            Reducer::ReleaseBotTransferArrival { .. } => "release_bot_transfer_arrival",
             Reducer::ReleaseTransfer { .. } => "release_transfer",
             Reducer::RenewAccountClaim { .. } => "renew_account_claim",
             Reducer::RenewAccountFence { .. } => "renew_account_fence",
@@ -4356,6 +4412,17 @@ Reducer::BeginTransfer{
 }             => __sats::bsatn::to_vec(&claim_bot_invite_intent_reducer::ClaimBotInviteIntentArgs {
                 intent_id: intent_id.clone(),
 }),
+            Reducer::ClaimBotTransferIntent{
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token,
+}             => __sats::bsatn::to_vec(&claim_bot_transfer_intent_reducer::ClaimBotTransferIntentArgs {
+                intent_id: intent_id.clone(),
+                bot_guid: bot_guid.clone(),
+                controller_generation: controller_generation.clone(),
+                claim_token: claim_token.clone(),
+}),
             Reducer::ClaimGuidRange{
                 shard_name,
                 current_mark,
@@ -4383,6 +4450,17 @@ Reducer::ClaimPartyCommandIntent{
                 token,
 }             => __sats::bsatn::to_vec(&close_account_fence_reducer::CloseAccountFenceArgs {
                 token: token.clone(),
+}),
+            Reducer::CompleteBotTransferIntent{
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token,
+}             => __sats::bsatn::to_vec(&complete_bot_transfer_intent_reducer::CompleteBotTransferIntentArgs {
+                intent_id: intent_id.clone(),
+                bot_guid: bot_guid.clone(),
+                controller_generation: controller_generation.clone(),
+                claim_token: claim_token.clone(),
 }),
             Reducer::ConfirmImport{
                 transfer_id,
@@ -4443,6 +4521,11 @@ Reducer::ClaimPartyCommandIntent{
                 creature_guid: creature_guid.clone(),
                 source_guid: source_guid.clone(),
                 amount: amount.clone(),
+}),
+            Reducer::DebugAdmitSessionlessAction{
+                character_guid,
+}             => __sats::bsatn::to_vec(&debug_admit_sessionless_action_reducer::DebugAdmitSessionlessActionArgs {
+                character_guid: character_guid.clone(),
 }),
             Reducer::DebugApplyDamage{
                 target_guid,
@@ -6577,6 +6660,23 @@ Reducer::GwIgnoreTrade{
                 request_actor: request_actor.clone(),
                 slot: slot.clone(),
 }),
+            Reducer::ImportBotCharacterBlob{
+                transfer_id,
+                blob,
+                source_module_identity,
+                intent_id,
+                controller_generation,
+                intent_created_micros,
+                request_actor,
+}             => __sats::bsatn::to_vec(&import_bot_character_blob_reducer::ImportBotCharacterBlobArgs {
+                transfer_id: transfer_id.clone(),
+                blob: blob.clone(),
+                source_module_identity: source_module_identity.clone(),
+                intent_id: intent_id.clone(),
+                controller_generation: controller_generation.clone(),
+                intent_created_micros: intent_created_micros.clone(),
+                request_actor: request_actor.clone(),
+}),
             Reducer::ImportCharacter{
                 transfer_id,
 }             => __sats::bsatn::to_vec(&import_character_reducer::ImportCharacterArgs {
@@ -6675,6 +6775,17 @@ Reducer::GwIgnoreTrade{
                 base,
 }             => __sats::bsatn::to_vec(&install_guid_range_reducer::InstallGuidRangeArgs {
                 base: base.clone(),
+}),
+            Reducer::MarkBotTransferArrivalReady{
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token,
+}             => __sats::bsatn::to_vec(&mark_bot_transfer_arrival_ready_reducer::MarkBotTransferArrivalReadyArgs {
+                intent_id: intent_id.clone(),
+                bot_guid: bot_guid.clone(),
+                controller_generation: controller_generation.clone(),
+                claim_token: claim_token.clone(),
 }),
             Reducer::OnDisconnect => __sats::bsatn::to_vec(&on_disconnect_reducer::OnDisconnectArgs {
                 }),
@@ -7155,6 +7266,21 @@ Reducer::RecordRegionLoad{
                 token,
 }             => __sats::bsatn::to_vec(&release_account_claim_reducer::ReleaseAccountClaimArgs {
                 token: token.clone(),
+}),
+            Reducer::ReleaseBotTransferArrival{
+                transfer_id,
+                bot_guid,
+                source_module_identity,
+                intent_id,
+                controller_generation,
+                intent_created_micros,
+}             => __sats::bsatn::to_vec(&release_bot_transfer_arrival_reducer::ReleaseBotTransferArrivalArgs {
+                transfer_id: transfer_id.clone(),
+                bot_guid: bot_guid.clone(),
+                source_module_identity: source_module_identity.clone(),
+                intent_id: intent_id.clone(),
+                controller_generation: controller_generation.clone(),
+                intent_created_micros: intent_created_micros.clone(),
 }),
             Reducer::ReleaseTransfer{
                 transfer_id,
