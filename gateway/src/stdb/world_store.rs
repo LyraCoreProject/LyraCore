@@ -19,6 +19,7 @@ use crate::realm_core::SessionKey;
 use crate::world::{SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
 use super::bindings::game_world_entity_table::GameWorldEntityTableAccess;
+use super::bindings::game_instance_table::GameInstanceTableAccess;
 use super::bindings::game_transfer_in_table::GameTransferInTableAccess;
 use super::bindings::GwMove;
 use super::connection::{CharacterPresenceSnapshot, Coordinator};

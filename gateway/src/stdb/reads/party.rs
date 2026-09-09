@@ -24,10 +24,9 @@ impl Coordinator {
             .conn
             .db
             .game_transfer_out()
-            .by_character()
-            .filter(&character_guid)
-            .next()
-            .is_some();
+            .transfer_id()
+            .find(&crate::world::transfer::transfer_id_for(character_guid))
+            .is_some_and(|row| row.character_guid == character_guid);
         let character_partition = guard
             .conn
             .db
@@ -154,7 +153,7 @@ impl Coordinator {
             roster_revision: db
                 .game_group_roster_revision()
                 .group_id()
-                .find(group_id)
+                .find(&group_id)
                 .map_or(1, |row| row.revision),
             leader_guid: group.leader_guid,
             loot_method: group.loot_method,
@@ -173,7 +172,7 @@ impl Coordinator {
             .db
             .game_group_roster_revision()
             .group_id()
-            .find(group_id)
+            .find(&group_id)
             .map_or(1, |row| row.revision)
     }
 
