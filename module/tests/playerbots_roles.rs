@@ -229,11 +229,12 @@ fn node_evidence(node: &Standalone, case: &str) {
         "runners": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
         "entities": node.query_rows("SELECT guid, entry, level, x, y, z, health, max_health, power, max_power, dead, target_guid FROM game_world_entity"),
         "spells": node.query_rows("SELECT character_guid, spell_id FROM game_player_spell"),
-        "spell_headers": node.query_rows("SELECT spell_id, cost, spell_level, range_yd FROM game_spell WHERE spell_id = 133 OR spell_id = 139 OR spell_id = 168 OR spell_id = 355 OR spell_id = 585 OR spell_id = 1243 OR spell_id = 2050 OR spell_id = 6673 OR spell_id = 7386"),
+        "spell_headers": node.query_rows("SELECT spell_id, cost, cast_time_ms, spell_level, range_yd FROM game_spell WHERE spell_id = 133 OR spell_id = 139 OR spell_id = 168 OR spell_id = 355 OR spell_id = 585 OR spell_id = 1243 OR spell_id = 2050 OR spell_id = 6673 OR spell_id = 7386"),
         "cooldowns": node.query_rows("SELECT * FROM game_spell_cooldown"),
         "provisioning": node.query_rows("SELECT * FROM pkg_playerbots_provisioning"),
         "auras": node.query_rows("SELECT id, target_guid, caster_guid, spell_id, eff_kind, eff_p0 FROM game_aura"),
         "casts": node.query_rows("SELECT * FROM game_spell_cast_event"),
+        "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "melee": node.query_rows("SELECT * FROM game_melee_attack"),
         "threat": node.query_rows("SELECT * FROM game_threat"),
         "splines": node.query_rows("SELECT * FROM game_creature_spline"),
@@ -947,6 +948,114 @@ fn playerbots_ally_buff_retains_its_target_through_range_repair_and_does_not_rep
         runner(node, &fixture.priest)["cast_progress"],
         fortitude_progress
     );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_urgent_heal_releases_only_the_interrupted_buff_target() {
+    let fixture = fixture("playerbots-roles-buff-interrupted-by-heal", 10);
+    let node = &fixture.node;
+    node.assert_call(
+        "playerbots_fixture_roles_prepare_fortitude",
+        &[&fixture.priest],
+    );
+    node.assert_call(
+        "playerbots_fixture_provision_steps",
+        &[&fixture.priest, "1"],
+    );
+    node.assert_call("playerbots_fixture_roles_slow_fortitude", &[]);
+    assert_eq!(
+        node.query_rows("SELECT cast_time_ms FROM game_spell WHERE spell_id = 1243")[0]
+            ["cast_time_ms"],
+        "60000"
+    );
+    for target in [&fixture.warrior, &fixture.priest, &fixture.mage] {
+        node.assert_call(
+            "playerbots_fixture_roles_stronger_fortitude",
+            &[&fixture.leader, target],
+        );
+        node.assert_call("playerbots_fixture_companion_health", &[target, "100"]);
+    }
+
+    let buff_started = poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.priest);
+        !node
+            .query_rows(&format!(
+                "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {} AND spell_id = 1243 AND target_guid = {}",
+                fixture.priest, fixture.leader
+            ))
+            .is_empty()
+    });
+    evidence(&fixture, "buff-started-before-heal");
+    assert!(buff_started);
+    let pending = node.query_rows(&format!(
+        "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {} AND spell_id = 1243 AND target_guid = {}",
+        fixture.priest, fixture.leader
+    ))[0]
+        .clone();
+    let buff = runner(node, &fixture.priest);
+    assert!(
+        buff["companion_buff_target_guid"].contains(&fixture.leader),
+        "{buff:?}"
+    );
+
+    node.assert_call(
+        "playerbots_fixture_roles_move",
+        &[&fixture.mage, "1300", "1200"],
+    );
+    node.assert_call(
+        "playerbots_fixture_companion_health",
+        &[&fixture.mage, "25"],
+    );
+    let priest_x = entity(node, &fixture.priest)["x"].parse::<f32>().unwrap();
+    let mage_x = entity(node, &fixture.mage)["x"].parse::<f32>().unwrap();
+    let renew_range = node.query_rows("SELECT range_yd FROM game_spell WHERE spell_id = 139")[0]
+        ["range_yd"]
+        .parse::<f32>()
+        .unwrap();
+    evidence(&fixture, "heal-out-of-range-staged");
+    assert!((mage_x - priest_x).abs() > renew_range);
+    pass(node, &fixture.priest);
+    evidence(&fixture, "buff-interrupted-by-heal");
+
+    let healing = runner(node, &fixture.priest);
+    assert!(healing["chosen"].contains("castingPosition"), "{healing:?}");
+    assert!(healing["chosen"].contains(&fixture.mage), "{healing:?}");
+    assert!(
+        healing["companion_heal_target_guid"].contains(&fixture.mage),
+        "{healing:?}"
+    );
+    assert!(
+        healing["companion_buff_target_guid"].contains("none"),
+        "{healing:?}"
+    );
+    assert!(healing["foreground"].contains("movement"), "{healing:?}");
+    assert!(node
+        .query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {}",
+            fixture.priest
+        ))
+        .is_empty());
+    let cancelled = node.query_rows(&format!(
+        "SELECT cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {} AND spell_id = 1243 AND cast_id = {}",
+        fixture.priest, pending["scheduled_id"]
+    ));
+    assert_eq!(cancelled.len(), 1, "{cancelled:?}");
+    assert_eq!(cancelled[0]["outcome"], "(cancelled = ())");
+    let cancelled_transition = format!(
+        "chosen = (some = (id = (action = (cast = (target = {}, spell = 1243)), reason = (buff = ()), objective = {}), priority = 300)), outcome = (cancelled = ()))",
+        fixture.leader, buff["objective_sequence"]
+    );
+    assert!(
+        healing["history"].contains(&cancelled_transition),
+        "{healing:?}"
+    );
+    assert!(node
+        .query_rows(&format!(
+            "SELECT id FROM game_aura WHERE target_guid = {} AND spell_id = 1243",
+            fixture.leader
+        ))
+        .is_empty());
 }
 
 #[test]
