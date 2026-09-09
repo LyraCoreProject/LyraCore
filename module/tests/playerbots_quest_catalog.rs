@@ -828,6 +828,8 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
     run_once(&node);
     let waiting = runner(&node, bot);
+    let path = support::log_dir().join(format!("{}-waiting-runner.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&waiting).unwrap()).unwrap();
     assert_eq!(waiting["objective"], deferred["objective"]);
     assert_eq!(
         waiting["deferred_destinations"],
