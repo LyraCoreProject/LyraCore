@@ -166,6 +166,8 @@ fn snapshot(party: &Party, phase: &str, mode: u8) -> serde_json::Value {
         bots.insert(guid.clone(), serde_json::json!({
             "order": one(&party.node, &format!("SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {guid}")),
             "runner": one(&party.node, &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
+            "character": party.node.query_rows(&format!("SELECT guid, map_id, pending_instance_id, x, y, z FROM game_character WHERE guid = {guid}")),
+            "movement": party.node.query_rows(&format!("SELECT * FROM game_creature_spline WHERE guid = {guid}")),
             "entity": party.node.query_rows(&format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid}")),
             "intent": party.node.query_rows(&format!("SELECT * FROM game_bot_transfer_intent WHERE bot_guid = {guid}")),
             "cast": party.node.query_rows(&format!("SELECT * FROM game_pending_cast WHERE caster_guid = {guid}")),
@@ -178,6 +180,10 @@ fn snapshot(party: &Party, phase: &str, mode: u8) -> serde_json::Value {
     digest(&package, &mut content);
     let record = serde_json::json!({
         "phase": phase, "mode": mode, "bots": bots,
+        "leader_entity": party.node.query_rows(&format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", party.leader)),
+        "leader_character": party.node.query_rows(&format!("SELECT guid, map_id, pending_instance_id, x, y, z FROM game_character WHERE guid = {}", party.leader)),
+        "target_entity": party.node.query_rows(&format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {TARGET}")),
+        "movement_tick": party.node.query_rows("SELECT * FROM game_creature_move_schedule"),
         "tested_core": git(core, &["rev-parse", "HEAD"]),
         "tested_collection": git(&package, &["rev-parse", "HEAD"]),
         "core_dirty": !git(core, &["status", "--porcelain"]).is_empty(),
@@ -186,6 +192,7 @@ fn snapshot(party: &Party, phase: &str, mode: u8) -> serde_json::Value {
         "module_wasm_identity": blake3::hash(support::module_bytes()).to_hex().to_string(),
         "partition_input_scope": "declared later Realm inputs applied through the Module mirror; real Gateway crossing and return route remain separate",
         "geometry": "declared flat source navigation at the audited trigger 78 coordinates; no imported floor or client claim",
+        "movement_schedule": "next ordinary Core movement tick declared sixty seconds before orders; Target cancellation must remove the retained leg before that tick",
         "source_audit": "pb010-imported-portal-source-14cda70a",
         "partitions": party.node.query_rows("SELECT * FROM game_group_member_partition WHERE group_id = 5098000"),
         "portal": party.node.query_rows("SELECT * FROM game_area_trigger WHERE id = 78"),
@@ -199,9 +206,157 @@ fn snapshot(party: &Party, phase: &str, mode: u8) -> serde_json::Value {
     record
 }
 
+fn partition<'a>(snapshot: &'a serde_json::Value, guid: &str) -> &'a serde_json::Value {
+    let rows: Vec<_> = snapshot["partitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["character_guid"] == guid)
+        .collect();
+    assert_eq!(rows.len(), 1, "partition {guid}: {snapshot}");
+    rows[0]
+}
+
+fn assert_body(row: &serde_json::Value, map: &str, instance: &str) {
+    assert_eq!(row["map_id"], map, "{row}");
+    assert_eq!(row["instance_id"], instance, "{row}");
+}
+
+fn assert_initial_orders(party: &Party, before: &serde_json::Value) {
+    let bodies = before["leader_entity"].as_array().unwrap();
+    assert_eq!(bodies.len(), 1, "{before}");
+    assert_body(&bodies[0], "0", "0");
+    assert_eq!(before["target_entity"].as_array().unwrap().len(), 1);
+    assert_body(&before["target_entity"][0], "0", "0");
+    for guid in party.bots.iter().chain(std::iter::once(&party.leader)) {
+        let p = partition(before, guid);
+        assert_eq!(p["group_id"], "5098000");
+        assert_eq!(p["member_active"], "true");
+        assert_eq!(p["state"], "(known = ())");
+        assert_eq!(p["locator_revision"], "1");
+        assert_body(p, "0", "0");
+    }
+    for (index, guid) in party.bots.iter().enumerate() {
+        let bot = &before["bots"][guid];
+        let order = &bot["order"];
+        assert_eq!(order["character_guid"], *guid);
+        assert_eq!(order["issuer_guid"], party.leader);
+        assert_eq!(order["group_id"], "5098000");
+        assert_eq!(order["active"], "true");
+        assert_eq!(order["revision"], "1");
+        assert!(
+            order["issuer_sequence"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                > 0
+        );
+        let expected = match index {
+            0 => format!("(follow = (leader_guid = {}))", party.leader),
+            1 => {
+                let entity = &bot["entity"][0];
+                format!(
+                    "(stay = (map_id = 0, instance_id = 0, x = {}, y = {}, z = {}))",
+                    entity["x"].as_str().unwrap(),
+                    entity["y"].as_str().unwrap(),
+                    entity["z"].as_str().unwrap()
+                )
+            }
+            2 => format!("(assist = (member_guid = {}))", party.bots[1]),
+            3 => format!("(target = (target_guid = {TARGET}))"),
+            _ => unreachable!(),
+        };
+        assert_eq!(order["order"], expected, "{before}");
+    }
+    let target = &before["bots"][&party.bots[3]];
+    assert!(
+        target["runner"]["foreground"]
+            .as_str()
+            .unwrap()
+            .contains("move"),
+        "{before}"
+    );
+    assert_eq!(target["movement"].as_array().unwrap().len(), 1, "{before}");
+}
+
+fn assert_remote_inputs(
+    party: &Party,
+    before: &serde_json::Value,
+    remote: &serde_json::Value,
+    mode: u8,
+) {
+    assert!(
+        remote["leader_entity"].as_array().unwrap().is_empty(),
+        "{remote}"
+    );
+    assert_eq!(remote["leader_character"].as_array().unwrap().len(), 1);
+    assert_eq!(remote["leader_character"][0]["map_id"], "36");
+    assert_eq!(
+        remote["leader_character"][0]["pending_instance_id"],
+        "5098078"
+    );
+    for guid in party.bots.iter().chain(std::iter::once(&party.leader)) {
+        let old = partition(before, guid);
+        let current = partition(remote, guid);
+        let remote_member = *guid == party.leader || (mode == 1 && *guid == party.bots[1]);
+        let mut expected = old.clone();
+        if remote_member {
+            expected["map_id"] = "36".into();
+            expected["instance_id"] = "5098078".into();
+            expected["locator_revision"] = (old["locator_revision"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                + 1)
+            .to_string()
+            .into();
+        }
+        assert_eq!(*current, expected, "{guid}: {remote}");
+    }
+    for (index, guid) in party.bots.iter().enumerate() {
+        let old = &before["bots"][guid];
+        let current = &remote["bots"][guid];
+        assert_eq!(current["order"], old["order"], "{remote}");
+        assert_eq!(current["runner"], old["runner"], "{remote}");
+        if mode == 1 && index == 1 {
+            assert!(current["entity"].as_array().unwrap().is_empty(), "{remote}");
+            assert_eq!(current["character"][0]["map_id"], "36");
+            assert_eq!(current["character"][0]["pending_instance_id"], "5098078");
+        } else {
+            assert_eq!(current["entity"], old["entity"], "{remote}");
+            assert_eq!(current["character"], old["character"], "{remote}");
+        }
+    }
+    if mode == 2 {
+        assert_body(&remote["target_entity"][0], "36", "5098078");
+    } else {
+        assert_eq!(remote["target_entity"], before["target_entity"]);
+    }
+    assert_eq!(
+        remote["bots"][&party.bots[3]]["movement"], before["bots"][&party.bots[3]]["movement"],
+        "the real Target leg must still be pending before the ordinary decision: {remote}"
+    );
+}
+
 fn order_decisions(mode: u8) {
     let party = setup(mode);
+    let target_started = support::poll_until(Duration::from_secs(10), || {
+        party
+            .node
+            .assert_call("playerbots_fixture_runner_pass_once", &[&party.bots[3]]);
+        !party
+            .node
+            .query_rows(&format!(
+                "SELECT guid FROM game_creature_spline WHERE guid = {}",
+                party.bots[3]
+            ))
+            .is_empty()
+    });
     let before = snapshot(&party, "before-remote-member", mode);
+    assert!(target_started, "Target approach did not start: {before}");
+    assert_initial_orders(&party, &before);
     assert_eq!(before["partitions"].as_array().unwrap().len(), 5);
     assert_eq!(before["portal"].as_array().unwrap().len(), 1);
     assert_eq!(before["route"].as_array().unwrap().len(), 1);
@@ -237,6 +392,8 @@ fn order_decisions(mode: u8) {
             &mode.to_string(),
         ],
     );
+    let remote = snapshot(&party, "remote-inputs-before-decisions", mode);
+    assert_remote_inputs(&party, &before, &remote, mode);
     for _ in 0..5 {
         std::thread::sleep(Duration::from_millis(1100));
         for (index, guid) in party.bots.iter().enumerate() {
@@ -274,6 +431,10 @@ fn order_decisions(mode: u8) {
             );
         }
         if mode == 1 && index == 1 {
+            assert_eq!(
+                current, &remote["bots"][guid],
+                "remote Priest changed without a decision: {after}"
+            );
             continue;
         }
         let follows_crossing = index == 0 || (mode == 1 && index == 2);
@@ -336,6 +497,11 @@ fn order_decisions(mode: u8) {
         );
         assert!(target_bot["cast"].as_array().unwrap().is_empty());
         assert!(target_bot["attack"].as_array().unwrap().is_empty());
+        assert!(
+            target_bot["movement"].as_array().unwrap().is_empty(),
+            "stale Target leg survived: {after}"
+        );
+        assert_eq!(target_bot["runner"]["foreground"], "(none = ())", "{after}");
     }
 }
 
