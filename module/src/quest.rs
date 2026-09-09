@@ -2386,8 +2386,10 @@ pub(crate) fn area_trigger_route(
     route.valid().then_some(route)
 }
 
-/// Enter an imported portal for a session-less Character following a party member's certified
-/// partition. The operation does not grant explore credit; it applies only the portal effect.
+/// Enter an imported portal for a session-less Character. Dungeon entry requires a party member's
+/// certified destination instance. An open-world exit needs no remote member because the imported
+/// route itself fixes instance zero. The operation does not grant explore credit; it applies only
+/// the portal effect.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn enter_sessionless_areatrigger(
     ctx: &ReducerContext,
@@ -2442,22 +2444,24 @@ pub(crate) fn enter_sessionless_areatrigger(
             "AreaTrigger does not enter the expected party partition",
         ));
     }
-    let party_member_at_destination = crate::group::has_known_party_member_in_partition(
-        ctx,
-        character_guid,
-        (expected_map, expected_instance),
-    )
-    .map_err(|_| {
-        ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "party partition facts are unavailable",
+    if crate::instance::is_dungeon_map(expected_map) {
+        let party_member_at_destination = crate::group::has_known_party_member_in_partition(
+            ctx,
+            character_guid,
+            (expected_map, expected_instance),
         )
-    })?;
-    if !party_member_at_destination {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "no party member is certified in the expected partition",
-        ));
+        .map_err(|_| {
+            ActionRefusal::new(
+                ActionRefusalKind::OtherPartition,
+                "party partition facts are unavailable",
+            )
+        })?;
+        if !party_member_at_destination {
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::OtherPartition,
+                "no party member is certified in the expected partition",
+            ));
+        }
     }
     let destination = crate::transfer::Destination {
         map_id: expected_map,
@@ -2499,7 +2503,7 @@ pub(crate) fn enter_sessionless_areatrigger(
             instance_id: destination_instance,
             ..destination
         },
-        "party AreaTrigger",
+        "sessionless AreaTrigger",
         controller_generation,
     )
 }

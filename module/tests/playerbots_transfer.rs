@@ -304,6 +304,52 @@ fn playerbots_pending_transfer_intent_keeps_the_admitted_instance_lease() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_legacy_crossing_uses_the_runner_transfer_checkpoint() {
+    let fixture = fixture("playerbots-transfer-legacy-checkpoint", 2);
+    fixture.node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.companion, "{\"legacy\":[]}"],
+    );
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let evidence = capture(&fixture, "legacy-checkpoint");
+
+    assert_eq!(
+        evidence["intent"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert!(
+        evidence["intent"][0]["controller_generation"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > 0,
+        "{evidence}"
+    );
+    assert!(
+        evidence["runner"][0]["transfer_checkpoint"]
+            .as_str()
+            .unwrap()
+            .contains("5098078"),
+        "{evidence}"
+    );
+    assert!(
+        evidence["action"].as_array().unwrap().iter().any(|row| {
+            row["kind"] == "transfer"
+                && row["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("transferAccepted")
+        }),
+        "{evidence}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_missing_supported_route_records_a_finite_transfer_stop() {
     let fixture = fixture("playerbots-transfer-route-missing", 0);
     fixture
