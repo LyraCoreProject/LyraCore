@@ -331,6 +331,14 @@ fn config(server: &str, source: &str, token: &str, name: &str) -> GatewayConfig 
 }
 
 fn cached_intent(source: &Coordinator, id: u64) -> party::PartyCommandIntent {
+    cached_intent_when(source, id, |_| true)
+}
+
+fn cached_intent_when(
+    source: &Coordinator,
+    id: u64,
+    predicate: impl Fn(&crate::stdb::bindings::PartyCommandIntent) -> bool,
+) -> party::PartyCommandIntent {
     let mut found = None;
     assert!(poll_until(POLL_TIMEOUT, || {
         found = source
@@ -340,7 +348,7 @@ fn cached_intent(source: &Coordinator, id: u64) -> party::PartyCommandIntent {
             .db
             .game_party_command_intent()
             .iter()
-            .find(|row| row.id == id)
+            .find(|row| row.id == id && predicate(row))
             .map(|row| party_command_intent(&row));
         found.is_some()
     }));
@@ -771,7 +779,7 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
         "playerbots_fixture_command_expire",
         &[&expiry_id.to_string()],
     );
-    let expired = cached_intent(&source, expiry_id);
+    let expired = cached_intent_when(&source, expiry_id, |row| row.expires_micros == 0);
     assert_eq!(
         party::finish_expired_party_command_intent(&source, &expired, 3_002).unwrap(),
         CompanionCommandOutcome::Expired
