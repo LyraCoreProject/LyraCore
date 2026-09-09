@@ -53,6 +53,17 @@ pub(crate) struct TransferredBot {
 
 impl TransferTopology {
     fn stage(name: &str) -> (Self, TransferredBot) {
+        Self::stage_with_destination(name, true)
+    }
+
+    fn stage_assist(name: &str) -> (Self, TransferredBot) {
+        Self::stage_with_destination(name, false)
+    }
+
+    fn stage_with_destination(
+        name: &str,
+        stage_generic_destination: bool,
+    ) -> (Self, TransferredBot) {
         let mut node = support::Standalone::start_persistent(name);
         let source_db = node.shard_name().to_owned();
         let destination_db = format!("{source_db}-destination");
@@ -126,6 +137,59 @@ impl TransferTopology {
                 &topology.source_db,
                 "playerbots_fixture_provision_steps",
                 &[&guid.to_string(), "32"],
+            );
+        }
+        if stage_generic_destination {
+            topology.call(&topology.destination_db, "install_guid_range", &["1000000"]);
+            topology.call(
+                &topology.destination_db,
+                "playerbots_spawn",
+                &["4", "1200", "1200", "50"],
+            );
+            let destination_roles = topology.query(
+                &topology.destination_db,
+                "SELECT character_guid, class, role FROM pkg_playerbots_bot",
+            );
+            assert_eq!(
+                destination_roles.len(),
+                4,
+                "destination role roster changed: {destination_roles:?}"
+            );
+            for (guid, class, role) in [
+                (companion, 1, 0),
+                (leader, 1, 0),
+                (priest, 5, 1),
+                (mage, 8, 2),
+            ] {
+                assert!(
+                    destination_roles.iter().any(|row| {
+                        parse_u64(row, "character_guid") == guid
+                            && row["class"] == class.to_string()
+                            && row["role"] == role.to_string()
+                    }),
+                    "destination role identity changed: {destination_roles:?}"
+                );
+            }
+            for guid in [companion, priest, mage] {
+                topology.call(
+                    &topology.destination_db,
+                    "debug_delete_character",
+                    &[&guid.to_string()],
+                );
+            }
+            topology.call(
+                &topology.destination_db,
+                "playerbots_transfer_gateway_destination_leader_stage",
+                &[
+                    &companion.to_string(),
+                    &leader.to_string(),
+                    &priest.to_string(),
+                    &mage.to_string(),
+                    "0",
+                    "0",
+                    &DESTINATION_MAP.to_string(),
+                    &DESTINATION_INSTANCE.to_string(),
+                ],
             );
         }
         topology.call(
@@ -221,6 +285,9 @@ impl TransferTopology {
             "source": {
                 "module_identity": self.query(&self.source_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
                 "character": self.query(&self.source_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.guid)),
+                "leader_character": self.query(&self.source_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.leader_guid)),
+                "priest_character": self.query(&self.source_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.priest_guid)),
+                "mage_character": self.query(&self.source_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.mage_guid)),
                 "live": self.query(&self.source_db, &format!("SELECT guid, map_id, instance_id FROM game_world_entity WHERE guid = {}", bot.guid)),
                 "escrow": self.query(&self.source_db, &format!("SELECT * FROM game_transfer_out WHERE character_guid = {}", bot.guid)),
                 "intent": self.query(&self.source_db, &format!("SELECT * FROM game_bot_transfer_intent WHERE bot_guid = {}", bot.guid)),
@@ -232,6 +299,9 @@ impl TransferTopology {
                 "instance": self.query(&self.source_db, &format!("SELECT * FROM game_instance WHERE instance_id = {DESTINATION_INSTANCE}")),
                 "assist": self.query(&self.source_db, "SELECT * FROM pkg_playerbots_transfer_assist_source WHERE id = 0"),
                 "order": self.query(&self.source_db, &format!("SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}", bot.guid)),
+                "group": self.query(&self.source_db, &format!("SELECT * FROM game_group WHERE group_id = {GROUP}")),
+                "roster": self.query(&self.source_db, &format!("SELECT * FROM game_group_roster_revision WHERE group_id = {GROUP}")),
+                "members": self.query(&self.source_db, &format!("SELECT * FROM game_group_member WHERE group_id = {GROUP}")),
                 "partitions": self.query(&self.source_db, &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}")),
                 "leader_live": self.query(&self.source_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.leader_guid)),
                 "priest_live": self.query(&self.source_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.priest_guid)),
@@ -241,6 +311,9 @@ impl TransferTopology {
             "destination": {
                 "module_identity": self.query(&self.destination_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
                 "character": self.query(&self.destination_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.guid)),
+                "leader_character": self.query(&self.destination_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.leader_guid)),
+                "priest_character": self.query(&self.destination_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.priest_guid)),
+                "mage_character": self.query(&self.destination_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.mage_guid)),
                 "live": self.query(&self.destination_db, &format!("SELECT guid, map_id, instance_id FROM game_world_entity WHERE guid = {}", bot.guid)),
                 "arrival": self.query(&self.destination_db, &format!("SELECT * FROM game_transfer_in WHERE character_guid = {}", bot.guid)),
                 "runner": self.query(&self.destination_db, &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {}", bot.guid)),
@@ -258,11 +331,15 @@ impl TransferTopology {
                 "priest_live": self.query(&self.destination_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.priest_guid)),
                 "leader_bot": self.query(&self.destination_db, &format!("SELECT character_guid, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {}", bot.leader_guid)),
                 "priest_bot": self.query(&self.destination_db, &format!("SELECT character_guid, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {}", bot.priest_guid)),
+                "companion_bot": self.query(&self.destination_db, &format!("SELECT character_guid, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {}", bot.guid)),
                 "movement_tick": self.query(&self.destination_db, "SELECT * FROM game_creature_move_schedule"),
             },
             "realm": {
                 "module_identity": self.query(&self.realm_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
                 "locator": self.query(&self.realm_db, &format!("SELECT * FROM game_character_shard WHERE character_guid = {}", bot.guid)),
+                "leader_locator": self.query(&self.realm_db, &format!("SELECT * FROM game_character_shard WHERE character_guid = {}", bot.leader_guid)),
+                "priest_locator": self.query(&self.realm_db, &format!("SELECT * FROM game_character_shard WHERE character_guid = {}", bot.priest_guid)),
+                "mage_locator": self.query(&self.realm_db, &format!("SELECT * FROM game_character_shard WHERE character_guid = {}", bot.mage_guid)),
                 "group": self.query(&self.realm_db, &format!("SELECT * FROM game_group WHERE group_id = {GROUP}")),
                 "roster": self.query(&self.realm_db, &format!("SELECT * FROM game_group_roster_revision WHERE group_id = {GROUP}")),
                 "members": self.query(&self.realm_db, &format!("SELECT * FROM game_group_member WHERE group_id = {GROUP}")),
@@ -812,47 +889,47 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
     let bot = &evidence["state"]["bot"];
     let bot_guid = bot["guid"].as_u64().unwrap();
     let leader_guid = bot["leader_guid"].as_u64().unwrap();
-    assert_same_fields(
-        row(evidence, &["state", "destination", "group"]),
-        row(evidence, &["state", "realm", "group"]),
-        &[
-            "group_id",
-            "leader_guid",
-            "loot_method",
-            "loot_threshold",
-            "rr_cursor",
-            "master_looter_guid",
-        ],
-        evidence,
-    );
-    assert_same_fields(
-        row(evidence, &["state", "destination", "roster"]),
-        row(evidence, &["state", "realm", "roster"]),
-        &["group_id", "revision", "active"],
-        evidence,
-    );
-    assert_eq!(
-        sorted_rows(
+    let realm_members = rows(evidence, &["state", "realm", "members"]);
+    for shard in ["source", "destination"] {
+        assert_same_fields(
+            row(evidence, &["state", shard, "group"]),
+            row(evidence, &["state", "realm", "group"]),
+            &[
+                "group_id",
+                "leader_guid",
+                "loot_method",
+                "loot_threshold",
+                "rr_cursor",
+                "master_looter_guid",
+            ],
             evidence,
-            &["state", "destination", "members"],
-            "character_guid",
-        ),
-        sorted_rows(evidence, &["state", "realm", "members"], "character_guid"),
-        "{evidence}"
-    );
-    assert_eq!(
-        sorted_rows(
+        );
+        assert_same_fields(
+            row(evidence, &["state", shard, "roster"]),
+            row(evidence, &["state", "realm", "roster"]),
+            &["group_id", "revision", "active"],
             evidence,
-            &["state", "destination", "partitions"],
-            "character_guid",
-        ),
-        sorted_rows(
-            evidence,
-            &["state", "realm", "partitions"],
-            "character_guid",
-        ),
-        "{evidence}"
-    );
+        );
+        let shard_members = rows(evidence, &["state", shard, "members"]);
+        assert_eq!(shard_members.len(), realm_members.len(), "{evidence}");
+        for member in shard_members {
+            let guid = text_field(member, "character_guid");
+            let authority = realm_members
+                .iter()
+                .find(|authority| text_field(authority, "character_guid") == guid)
+                .unwrap_or_else(|| panic!("Realm member {guid} absent: {evidence}"));
+            assert_eq!(member["group_id"], authority["group_id"], "{evidence}");
+        }
+        assert_eq!(
+            sorted_rows(evidence, &["state", shard, "partitions"], "character_guid"),
+            sorted_rows(
+                evidence,
+                &["state", "realm", "partitions"],
+                "character_guid",
+            ),
+            "{evidence}"
+        );
+    }
     let realm_group = row(evidence, &["state", "realm", "group"]);
     assert_u64_field(realm_group, "group_id", GROUP);
     assert_u64_field(realm_group, "leader_guid", leader_guid);
@@ -886,6 +963,11 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
             .parse::<u64>()
             .unwrap();
         assert!(expected_guids.contains(&guid), "{evidence}");
+        let member = members
+            .iter()
+            .find(|member| member["character_guid"] == guid.to_string())
+            .unwrap();
+        assert_eq!(partition["membership_revision"], member["id"], "{evidence}");
         if guid == bot_guid || guid == leader_guid {
             assert_u64_field(partition, "map_id", u64::from(DESTINATION_MAP));
             assert_u64_field(partition, "instance_id", DESTINATION_INSTANCE);
@@ -893,6 +975,34 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
             assert_u64_field(partition, "map_id", 0);
             assert_u64_field(partition, "instance_id", 0);
         }
+    }
+    for (guid, locator_name, character_name) in [
+        (bot_guid, "locator", "character"),
+        (leader_guid, "leader_locator", "leader_character"),
+        (
+            bot["priest_guid"].as_u64().unwrap(),
+            "priest_locator",
+            "priest_character",
+        ),
+        (
+            bot["mage_guid"].as_u64().unwrap(),
+            "mage_locator",
+            "mage_character",
+        ),
+    ] {
+        let locator = row(evidence, &["state", "realm", locator_name]);
+        let holder = if locator["map_id"] == DESTINATION_MAP.to_string() {
+            "destination"
+        } else {
+            "source"
+        };
+        let character = row(evidence, &["state", holder, character_name]);
+        assert_u64_field(character, "guid", guid);
+        assert_eq!(character["map_id"], locator["map_id"], "{evidence}");
+        assert_eq!(
+            character["pending_instance_id"], locator["instance_id"],
+            "{evidence}"
+        );
     }
 }
 
@@ -1125,6 +1235,25 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
         ],
     );
     let faulted = topology.save(&bot, "mirror-fault-staged", serde_json::json!({}));
+    assert_same_fields(
+        row(&faulted, &["state", "source", "group"]),
+        row(&faulted, &["state", "realm", "group"]),
+        &[
+            "group_id",
+            "leader_guid",
+            "loot_method",
+            "loot_threshold",
+            "rr_cursor",
+            "master_looter_guid",
+        ],
+        &faulted,
+    );
+    assert_same_fields(
+        row(&faulted, &["state", "source", "roster"]),
+        row(&faulted, &["state", "realm", "roster"]),
+        &["group_id", "revision", "active"],
+        &faulted,
+    );
     let mut interrupted = topology.gateway(None, "mirror-interrupted");
     let attempted = support::poll_until(support::POLL_TIMEOUT, || {
         let log = interrupted.log();
@@ -1157,20 +1286,16 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
     assert_eq!(intent["arrival_ready"], "false", "{failed}");
     let destination_group = row(&failed, &["state", "destination", "group"]);
     let realm_group = row(&failed, &["state", "realm", "group"]);
-    assert_eq!(
-        destination_group["rr_cursor"],
-        u32::MAX.to_string(),
-        "{failed}"
-    );
-    assert_eq!(realm_group["rr_cursor"], "0", "{failed}");
+    assert_eq!(destination_group["loot_method"], "3", "{failed}");
+    assert_eq!(realm_group["loot_method"], "0", "{failed}");
     assert_same_fields(
         destination_group,
         realm_group,
         &[
             "group_id",
             "leader_guid",
-            "loot_method",
             "loot_threshold",
+            "rr_cursor",
             "master_looter_guid",
         ],
         &failed,
@@ -1348,6 +1473,20 @@ fn assert_assist_source_ready(evidence: &serde_json::Value) {
         intent["destination_instance"],
         DESTINATION_INSTANCE.to_string()
     );
+    let transfer_actions: Vec<_> = rows(evidence, &["state", "source", "actions"])
+        .iter()
+        .filter(|action| action["kind"] == "(transfer = ())")
+        .collect();
+    assert_eq!(
+        transfer_actions.len(),
+        1,
+        "expected one ordinary source Transfer action: {evidence}"
+    );
+    assert!(
+        text_field(transfer_actions[0], "outcome")
+            .contains(&format!("transferAccepted = {}", text_field(intent, "id"))),
+        "source Transfer action does not own the exact intent: {evidence}"
+    );
     let runner = row(evidence, &["state", "source", "runner"]);
     let checkpoint = text_field(runner, "transfer_checkpoint");
     assert!(
@@ -1355,11 +1494,7 @@ fn assert_assist_source_ready(evidence: &serde_json::Value) {
             && checkpoint.contains(&format!("member_guid = {priest}")),
         "{evidence}"
     );
-    assert!(
-        rows(evidence, &["state", "source", "leader_live"]).is_empty()
-            && rows(evidence, &["state", "source", "priest_live"]).is_empty(),
-        "source retained a remote party body: {evidence}"
-    );
+    assert_assist_source_bodies_absent(evidence);
     assert!(
         rows(evidence, &["state", "source", "leader_bot"]).is_empty(),
         "source leader is still a bot: {evidence}"
@@ -1404,6 +1539,113 @@ fn assert_assist_source_ready(evidence: &serde_json::Value) {
         );
         assert_eq!(realm_partition["locator_revision"], "2");
         assert_eq!(realm_partition["state"], "(known = ())");
+    }
+}
+
+fn assert_assist_source_bodies_absent(evidence: &serde_json::Value) {
+    assert!(
+        rows(evidence, &["state", "source", "leader_live"]).is_empty()
+            && rows(evidence, &["state", "source", "priest_live"]).is_empty(),
+        "source retained or rebuilt a remote party body: {evidence}"
+    );
+}
+
+fn assert_assist_party_mirror(evidence: &serde_json::Value) {
+    for table in ["group", "roster"] {
+        assert_eq!(
+            rows(evidence, &["state", "destination", table]),
+            rows(evidence, &["state", "realm", table]),
+            "Assist destination {table} differs from Realm: {evidence}"
+        );
+    }
+    let destination_members = rows(evidence, &["state", "destination", "members"]);
+    let realm_members = rows(evidence, &["state", "realm", "members"]);
+    assert_eq!(destination_members.len(), realm_members.len(), "{evidence}");
+    for member in destination_members {
+        let guid = member["character_guid"].as_str().unwrap();
+        let authority = realm_members
+            .iter()
+            .find(|authority| authority["character_guid"] == guid)
+            .unwrap_or_else(|| panic!("Realm member {guid} absent: {evidence}"));
+        assert_eq!(member["group_id"], authority["group_id"], "{evidence}");
+    }
+    let bot = &evidence["state"]["bot"];
+    let expected = [
+        (
+            bot["guid"].as_u64().unwrap(),
+            "locator",
+            "character",
+            DESTINATION_MAP,
+            DESTINATION_INSTANCE,
+        ),
+        (
+            bot["leader_guid"].as_u64().unwrap(),
+            "leader_locator",
+            "leader_character",
+            DESTINATION_MAP,
+            DESTINATION_INSTANCE,
+        ),
+        (
+            bot["priest_guid"].as_u64().unwrap(),
+            "priest_locator",
+            "priest_character",
+            DESTINATION_MAP,
+            DESTINATION_INSTANCE,
+        ),
+        (
+            bot["mage_guid"].as_u64().unwrap(),
+            "mage_locator",
+            "mage_character",
+            0,
+            0,
+        ),
+    ];
+    let partitions = rows(evidence, &["state", "destination", "partitions"]);
+    assert_eq!(partitions.len(), expected.len(), "{evidence}");
+    for (guid, locator_name, character_name, map_id, instance_id) in expected {
+        let locator = row(evidence, &["state", "realm", locator_name]);
+        let partition = partitions
+            .iter()
+            .find(|partition| partition["character_guid"] == guid.to_string())
+            .unwrap_or_else(|| panic!("destination partition {guid} absent: {evidence}"));
+        assert_eq!(partition["group_id"], GROUP.to_string(), "{evidence}");
+        let authority_member = realm_members
+            .iter()
+            .find(|member| member["character_guid"] == guid.to_string())
+            .unwrap();
+        assert_eq!(
+            partition["membership_revision"], authority_member["id"],
+            "{evidence}"
+        );
+        assert_eq!(partition["member_active"], "true", "{evidence}");
+        assert_eq!(partition["state"], "(known = ())", "{evidence}");
+        assert_eq!(locator["map_id"], map_id.to_string(), "{evidence}");
+        assert_eq!(
+            locator["instance_id"],
+            instance_id.to_string(),
+            "{evidence}"
+        );
+        assert_eq!(partition["map_id"], locator["map_id"], "{evidence}");
+        assert_eq!(
+            partition["instance_id"], locator["instance_id"],
+            "{evidence}"
+        );
+        assert_eq!(
+            partition["locator_revision"], locator["revision"],
+            "{evidence}"
+        );
+        let holder = if map_id == DESTINATION_MAP {
+            "destination"
+        } else {
+            "source"
+        };
+        let character = row(evidence, &["state", holder, character_name]);
+        assert_u64_field(character, "guid", guid);
+        assert_eq!(character["map_id"], locator["map_id"], "{evidence}");
+        assert_eq!(
+            character["pending_instance_id"], locator["instance_id"],
+            "{evidence}"
+        );
     }
 }
 
@@ -1523,7 +1765,7 @@ fn distance(left: (f64, f64, f64), right: (f64, f64, f64)) -> f64 {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, the playerbots Package, and the Gateway binary"]
 fn playerbots_assist_keeps_its_selected_member_after_arrival() {
-    let (topology, mut bot) = TransferTopology::stage("playerbots-transfer-assist-arrival");
+    let (topology, mut bot) = TransferTopology::stage_assist("playerbots-transfer-assist-arrival");
     topology.call(
         &topology.source_db,
         "playerbots_transfer_fixture_entry_route_stage",
@@ -1602,6 +1844,8 @@ fn playerbots_assist_keeps_its_selected_member_after_arrival() {
     );
     gateway.stop();
     assert!(completed, "Assist Transfer did not complete: {arrived}");
+    assert_assist_source_bodies_absent(&arrived);
+    assert_assist_party_mirror(&arrived);
     assert!(
         rows(&arrived, &["state", "source", "character"]).is_empty(),
         "{arrived}"
@@ -1653,6 +1897,38 @@ fn playerbots_assist_keeps_its_selected_member_after_arrival() {
         distance(destination, leader) > distance(start, leader),
         "movement fell back toward party leader: {queued}"
     );
+    assert_assist_source_bodies_absent(&queued);
+
+    topology.call(
+        &topology.destination_db,
+        "playerbots_fixture_freeze",
+        &[&bot.guid.to_string()],
+    );
+    let parked = topology.save(
+        &bot,
+        "assist-decision-parked",
+        serde_json::json!({
+            "scope": "the decision scheduler is parked after selection; the declared Core movement tick and selected leg remain ordinary",
+        }),
+    );
+    assert_eq!(
+        parked["state"]["destination"]["runner"], queued["state"]["destination"]["runner"],
+        "parking changed the selected work: {parked}"
+    );
+    assert_eq!(
+        parked["state"]["destination"]["movement"], queued["state"]["destination"]["movement"],
+        "parking changed the selected leg: {parked}"
+    );
+    assert_eq!(
+        parked["state"]["destination"]["movement_tick"],
+        queued["state"]["destination"]["movement_tick"],
+        "parking changed the declared Core movement tick: {parked}"
+    );
+    assert_eq!(
+        row(&parked, &["state", "destination", "companion_bot"])["next_think_micros"],
+        i64::MAX.to_string(),
+        "companion decision scheduler was not parked: {parked}"
+    );
 
     let progress = assist_progress_observations(&topology, &bot, start, priest, leader);
     let followed = topology.save(
@@ -1664,9 +1940,10 @@ fn playerbots_assist_keeps_its_selected_member_after_arrival() {
         followed["extra"]["progress"]["progressed_toward_priest"], true,
         "{followed}"
     );
+    assert_assist_source_bodies_absent(&followed);
     assert_ne!(
         followed["state"]["destination"]["movement_tick"],
-        queued["state"]["destination"]["movement_tick"],
+        parked["state"]["destination"]["movement_tick"],
         "the ordinary Core movement tick did not execute: {followed}"
     );
 }
