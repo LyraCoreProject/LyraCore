@@ -533,10 +533,33 @@ fn playerbots_quest_purpose_survives_interruption_death_and_retreats_to_an_obser
                 .first()
                 .is_some_and(|row| !row["safe_position"].contains("none"))
     });
-    let retained = query_one(
-        &node,
-        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-    );
+    let movement_deadline = Instant::now() + Duration::from_secs(30);
+    let retained = loop {
+        let retained = query_one(
+            &node,
+            &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+        );
+        let safe_x = structured_number(&retained["safe_position"], "x")
+            .parse::<f32>()
+            .unwrap();
+        let safe_y = structured_number(&retained["safe_position"], "y")
+            .parse::<f32>()
+            .unwrap();
+        let entity = query_one(
+            &node,
+            &format!("SELECT x, y FROM game_world_entity WHERE guid = {guid}"),
+        );
+        let x = entity["x"].parse::<f32>().unwrap();
+        let y = entity["y"].parse::<f32>().unwrap();
+        if (x - safe_x).powi(2) + (y - safe_y).powi(2) > 3.0f32.powi(2) {
+            break retained;
+        }
+        if Instant::now() >= movement_deadline {
+            record(&node, "survival-interruption-movement-timeout");
+            panic!("bot did not move away from its retained safe position");
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    };
     let objective = query_one(
         &node,
         &format!("SELECT objective, objective_sequence FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
@@ -547,7 +570,6 @@ fn playerbots_quest_purpose_survives_interruption_death_and_retreats_to_an_obser
     assert!(!safe.contains("none"));
     assert!(!safe.contains("guid"));
 
-    node.assert_call("playerbots_fixture_runner_survival", &[&guid]);
     let before_hit = query_one(
         &node,
         &format!("SELECT health, max_health FROM game_world_entity WHERE guid = {guid}"),
@@ -559,23 +581,45 @@ fn playerbots_quest_purpose_survives_interruption_death_and_retreats_to_an_obser
     );
     let incoming_damage = max_health / 2;
     node.assert_call(
-        "playerbots_fixture_runner_damage",
+        "playerbots_fixture_runner_survival_hit",
         &[&guid, &CREATURE_6.to_string(), &incoming_damage.to_string()],
     );
     let after_hit = query_one(
         &node,
         &format!("SELECT health, dead FROM game_world_entity WHERE guid = {guid}"),
     );
+    let interrupted = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+    );
+    let retained_after_interruption = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+    );
+    let character_after_interruption = query_one(
+        &node,
+        &format!("SELECT * FROM game_world_entity WHERE guid = {guid}"),
+    );
+    std::fs::write(
+        support::log_dir().join(format!("{}-survival-interruption.json", node.shard_name())),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "retained_before_interruption": &retained,
+            "retained_after_interruption": &retained_after_interruption,
+            "before_hit": &before_hit,
+            "after_hit": &after_hit,
+            "character_after_interruption": &character_after_interruption,
+            "runner_after_interruption": &interrupted,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    record(&node, "survival-interruption");
+
     assert!(
         after_hit["health"].parse::<u32>().unwrap() < before_hit["health"].parse::<u32>().unwrap(),
         "incoming combat did not change authoritative health"
     );
     assert_eq!(after_hit["dead"], "false");
-    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
-    let interrupted = query_one(
-        &node,
-        &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
-    );
     assert!(
         interrupted["chosen"].contains("survival"),
         "{interrupted:?}"
@@ -593,25 +637,36 @@ fn playerbots_quest_purpose_survives_interruption_death_and_retreats_to_an_obser
         interrupted["objective_sequence"],
         objective["objective_sequence"]
     );
-    assert_eq!(
-        query_one(
-            &node,
-            &format!("SELECT safe_position FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-        )["safe_position"],
-        safe
-    );
+    assert_eq!(retained_after_interruption["safe_position"], safe);
 
     node.assert_call(
-        "playerbots_fixture_runner_damage",
+        "playerbots_fixture_runner_survival_hit",
         &[&guid, &CREATURE_6.to_string(), "10000"],
     );
-    assert_eq!(
-        query_one(
-            &node,
-            &format!("SELECT dead FROM game_world_entity WHERE guid = {guid}"),
-        )["dead"],
-        "true"
+    let lethal_character = query_one(
+        &node,
+        &format!("SELECT * FROM game_world_entity WHERE guid = {guid}"),
     );
+    let lethal_runner = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+    );
+    let lethal_retained = query_one(
+        &node,
+        &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+    );
+    std::fs::write(
+        support::log_dir().join(format!("{}-survival-death-hit.json", node.shard_name())),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "character": &lethal_character,
+            "runner": &lethal_runner,
+            "retained_quest": &lethal_retained,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    record(&node, "survival-death-hit");
+    assert_eq!(lethal_character["dead"], "true");
     drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
         query_one(
             node,
@@ -721,14 +776,13 @@ fn playerbots_survival_preempts_an_unavailable_quest_rotation() {
         std::thread::sleep(Duration::from_millis(250));
     };
     node.assert_call("playerbots_fixture_roles_overflow", &[&guid, "0"]);
-    node.assert_call("playerbots_fixture_runner_survival", &[&guid]);
     let before_hit = query_one(
         &node,
         &format!("SELECT health, max_health FROM game_world_entity WHERE guid = {guid}"),
     );
     let incoming_damage = before_hit["max_health"].parse::<u32>().unwrap() / 2;
     node.assert_call(
-        "playerbots_fixture_runner_damage",
+        "playerbots_fixture_runner_survival_hit",
         &[&guid, &CREATURE_6.to_string(), &incoming_damage.to_string()],
     );
     let after_hit = query_one(
@@ -740,7 +794,6 @@ fn playerbots_survival_preempts_an_unavailable_quest_rotation() {
         "incoming combat did not change authoritative health"
     );
     assert_eq!(after_hit["dead"], "false");
-    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let runner = query_one(
         &node,
         &format!(
