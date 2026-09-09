@@ -806,7 +806,23 @@ fn playerbots_recovery_records_a_controlled_quest_while_survival_takes_priority(
     node.publish_module();
     record_inputs(&node);
     let guid = prepare(&node);
+    stage_quest_geometry(&node);
+    node.assert_call("playerbots_fixture_position", &[&guid, "1340"]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let approach = snapshot(&node, &guid, Duration::ZERO);
+    let safe = row(
+        &node,
+        &format!("SELECT safe_position FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
+    );
+    let moved = poll_until(Duration::from_secs(5), || {
+        row(
+            &node,
+            &format!("SELECT x FROM game_world_entity WHERE guid = {guid}"),
+        )["x"]
+            .parse::<f32>()
+            .unwrap()
+            > 1343.0
+    });
     for offset in 0..10u64 {
         node.assert_call(
             "playerbots_fixture_roles_control",
@@ -823,11 +839,33 @@ fn playerbots_recovery_records_a_controlled_quest_while_survival_takes_priority(
     std::fs::write(
         path,
         serde_json::to_vec_pretty(&serde_json::json!({
+            "approach": approach, "safe": safe, "moved": moved,
             "before": before, "after": after, "attacks": attacks,
         }))
         .unwrap(),
     )
     .unwrap();
+    assert!(moved, "{before}");
+    assert!(safe["safe_position"].contains("x = 1340"), "{safe:?}");
+    assert!(
+        approach["runner"]["foreground"]
+            .as_str()
+            .unwrap()
+            .contains("movement"),
+        "{approach}"
+    );
+    assert!(
+        after["character"]["health"]
+            .as_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            < before["character"]["health"]
+                .as_str()
+                .unwrap()
+                .parse::<u32>()
+                .unwrap()
+    );
     assert!(
         after["runner"]["chosen"]
             .as_str()
