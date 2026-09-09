@@ -111,6 +111,7 @@ pub struct Standalone {
 }
 
 impl Standalone {
+    #[allow(dead_code)] // Integration callers select either ephemeral or persistent storage.
     pub fn start(test_name: &str) -> Self {
         Self::start_with_storage(test_name, Storage::Memory)
     }
