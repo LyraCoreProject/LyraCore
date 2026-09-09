@@ -3535,29 +3535,6 @@ fn command_refusal(error: &anyhow::Error) -> Option<CompanionCommandOutcome> {
     })
 }
 
-fn command_outcome(row: super::bindings::CommandOutcome) -> CompanionCommandOutcome {
-    use super::bindings::CommandOutcome as Row;
-    match row {
-        Row::Applied => CompanionCommandOutcome::Applied,
-        Row::Unchanged => CompanionCommandOutcome::Unchanged,
-        Row::Malformed => CompanionCommandOutcome::Malformed,
-        Row::NotLeader => CompanionCommandOutcome::NotLeader,
-        Row::NotMember => CompanionCommandOutcome::NotMember,
-        Row::StalePartyMirror => CompanionCommandOutcome::StalePartyMirror,
-        Row::WrongAccount => CompanionCommandOutcome::WrongAccount,
-        Row::MissingBot => CompanionCommandOutcome::MissingBot,
-        Row::WrongPartition => CompanionCommandOutcome::WrongPartition,
-        Row::Suppressed => CompanionCommandOutcome::Suppressed,
-        Row::TargetDead => CompanionCommandOutcome::TargetDead,
-        Row::TargetUnavailable => CompanionCommandOutcome::TargetUnavailable,
-        Row::TargetControlled => CompanionCommandOutcome::TargetControlled,
-        Row::Expired => CompanionCommandOutcome::Expired,
-        Row::WaitingForCapacity => CompanionCommandOutcome::WaitingForCapacity,
-        Row::OutcomeUnknown => CompanionCommandOutcome::OutcomeUnknown,
-        Row::Superseded => CompanionCommandOutcome::Superseded,
-    }
-}
-
 fn command_outcome_binding(outcome: CompanionCommandOutcome) -> super::bindings::CommandOutcome {
     use super::bindings::CommandOutcome as Row;
     match outcome {

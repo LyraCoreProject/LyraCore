@@ -222,12 +222,6 @@ pub trait WorldStore:
         ))
     }
 
-    fn defer_party_command_intent(&self, _intent_id: u64, _claim_token: u64) -> Result<()> {
-        Err(anyhow!(
-            "this store does not host companion command intents"
-        ))
-    }
-
     fn admit_party_command_authority(
         &self,
         _group_id: u64,

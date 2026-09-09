@@ -1101,10 +1101,6 @@ impl WorldStore for Coordinator {
         Coordinator::claim_party_command_intent(self, intent_id, claim_token)
     }
 
-    fn defer_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
-        Coordinator::defer_party_command_intent(self, intent_id, claim_token)
-    }
-
     fn admit_party_command_authority(
         &self,
         group_id: u64,
