@@ -595,6 +595,9 @@ parity_test!(parity_game_region_assignment, "game_region_assignment", lyracore_m
 parity_test!(parity_game_group, "game_group", lyracore_module::Group, bindings::group_type::Group, {
     group_id, leader_guid, loot_method, loot_threshold, rr_cursor, master_looter_guid,
 });
+parity_test!(parity_game_group_roster_revision, "game_group_roster_revision", lyracore_module::GroupRosterRevision, bindings::group_roster_revision_type::GroupRosterRevision, {
+    group_id, revision, active,
+});
 parity_test!(parity_game_group_member, "game_group_member", lyracore_module::GroupMember, bindings::group_member_type::GroupMember, {
     id, group_id, character_guid, owner_identity,
 });
@@ -1064,6 +1067,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_map_region",
     "game_region_assignment",
     "game_group",
+    "game_group_roster_revision",
     "game_group_member",
     "game_creature_quest_tap",
     "game_creature_quest_tap_member",
