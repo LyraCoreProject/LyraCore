@@ -849,6 +849,16 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
         "release_account_claim",
         &[&ownership],
     );
+    let released_claim = topology.cli.rows(
+        topology.node.server(),
+        topology.source(),
+        &format!(
+            "SELECT account_id FROM game_account_claim WHERE character_guid = {}",
+            topology.source_one_party.leader
+        ),
+    );
+    evidence(&topology, "issuer-command-queued-before-transfer");
+    assert!(released_claim.is_empty());
 
     topology.cli.call(
         topology.node.server(),
