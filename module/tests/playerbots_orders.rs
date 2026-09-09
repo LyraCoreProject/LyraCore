@@ -191,6 +191,18 @@ fn queue(fixture: &OrdersFixture, payload: &str) -> String {
         .to_string()
 }
 
+fn finish_refused_command(fixture: &OrdersFixture, payload: &str, token_base: u64) -> String {
+    let intent = queue(fixture, payload);
+    let token = (token_base + intent.parse::<u64>().unwrap()).to_string();
+    fixture
+        .node
+        .assert_call("playerbots_fixture_command_apply", &[&intent, &token]);
+    fixture
+        .node
+        .assert_call("playerbots_fixture_command_finish", &[&intent, &token]);
+    intent
+}
+
 fn issue(fixture: &OrdersFixture, payload: &str, bot: &str, run_once: bool) -> String {
     let intent = queue(fixture, payload);
     fixture.node.assert_call(
@@ -419,6 +431,40 @@ fn playerbots_target_pulls_only_the_exact_eligible_creature_and_releases_control
         ))
         .is_empty());
     assert!(!runner(node, &fixture.warrior)["chosen"].contains(nearer));
+
+    let dead = &fixture.enemies[1];
+    node.assert_call("playerbots_fixture_orders_target_state", &[dead, "0"]);
+    let dead_intent = finish_refused_command(
+        &fixture,
+        &format!("target|{}|{dead}", fixture.warrior),
+        25_000,
+    );
+    let remote = &fixture.enemies[0];
+    node.assert_call("playerbots_fixture_orders_target_state", &[remote, "1"]);
+    let remote_intent = finish_refused_command(
+        &fixture,
+        &format!("target|{}|{remote}", fixture.warrior),
+        26_000,
+    );
+    let refusals = node.query_rows(&format!(
+        "SELECT intent_id, outcome FROM game_party_command_receipt WHERE intent_id = {dead_intent} OR intent_id = {remote_intent}"
+    ));
+    evidence(&fixture, "target-dead-and-remote-refused");
+    assert_eq!(refusals.len(), 2, "{refusals:?}");
+    assert!(refusals.iter().any(|row| {
+        row["intent_id"] == dead_intent
+            && row["outcome"].to_ascii_lowercase().contains("targetdead")
+    }));
+    assert!(refusals.iter().any(|row| {
+        row["intent_id"] == remote_intent
+            && row["outcome"]
+                .to_ascii_lowercase()
+                .contains("wrongpartition")
+    }));
+    assert_eq!(
+        order(node, &fixture.warrior)["revision"],
+        controlled["revision"]
+    );
 }
 
 #[test]
@@ -496,16 +542,8 @@ fn playerbots_orders_reject_forged_ownership_and_clear_after_party_authority_cha
     let bot_ownership = format!(
         r#"{{"account_id":{bot_account},"generation":{bot_generation},"request_nonce":9010}}"#
     );
-    let reclaimed = queue(&fixture, &format!("follow|{}", fixture.warrior));
-    let reclaimed_token = (30_000 + reclaimed.parse::<u64>().unwrap()).to_string();
-    node.assert_call(
-        "playerbots_fixture_command_apply",
-        &[&reclaimed, &reclaimed_token],
-    );
-    node.assert_call(
-        "playerbots_fixture_command_finish",
-        &[&reclaimed, &reclaimed_token],
-    );
+    let reclaimed =
+        finish_refused_command(&fixture, &format!("follow|{}", fixture.warrior), 30_000);
     let reclaimed_receipt = node.query_rows(&format!(
         "SELECT outcome FROM game_party_command_receipt WHERE intent_id = {reclaimed}"
     ));
