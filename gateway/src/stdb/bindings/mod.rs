@@ -69,6 +69,8 @@ pub mod combo_point_type;
 pub mod command_intent_state_type;
 pub mod command_outcome_type;
 pub mod confirm_import_reducer;
+pub mod confirm_party_command_holder_reducer;
+pub mod confirm_party_command_receipt_reducer;
 pub mod contact_entry_type;
 pub mod corpse_loot_eligible_type;
 pub mod corpse_loot_type;
@@ -277,6 +279,7 @@ pub mod debug_verify_ranged_lethal_damage_floor_fixture_reducer;
 pub mod debug_vmap_area_info_reducer;
 pub mod debug_vmap_ray_instance_reducer;
 pub mod debug_vmap_ray_reducer;
+pub mod defer_party_command_intent_reducer;
 pub mod delete_character_reducer;
 pub mod discard_vmap_generation_reducer;
 pub mod dr_state_type;
@@ -501,7 +504,9 @@ pub mod game_object_unlocked_type;
 pub mod game_operator_table;
 pub mod game_package_config_table;
 pub mod game_package_import_table;
+pub mod game_party_command_dispatch_lane_table;
 pub mod game_party_command_intent_table;
+pub mod game_party_command_issuer_table;
 pub mod game_party_command_receipt_table;
 pub mod game_pending_cast_table;
 pub mod game_pending_spell_impact_table;
@@ -783,7 +788,9 @@ pub mod out_of_combat_sight_condition_type;
 pub mod package_config_type;
 pub mod package_import_type;
 pub mod parsed_client_command_type;
+pub mod party_command_dispatch_lane_type;
 pub mod party_command_intent_type;
+pub mod party_command_issuer_type;
 pub mod party_command_receipt_type;
 pub mod patrol_intent_type;
 pub mod patrol_pause_type;
@@ -798,8 +805,10 @@ pub mod player_action_type;
 pub mod player_reputation_type;
 pub mod player_skill_type;
 pub mod player_spell_type;
+pub mod playerbots_fixture_command_apply_after_gate_change_reducer;
 pub mod playerbots_fixture_command_apply_reducer;
 pub mod playerbots_fixture_command_drive_reducer;
+pub mod playerbots_fixture_command_expire_after_receipt_window_reducer;
 pub mod playerbots_fixture_command_expire_reducer;
 pub mod playerbots_fixture_command_finish_reducer;
 pub mod playerbots_fixture_command_release_receipt_reducer;
@@ -1087,6 +1096,8 @@ pub use combo_point_type::ComboPoint;
 pub use command_intent_state_type::CommandIntentState;
 pub use command_outcome_type::CommandOutcome;
 pub use confirm_import_reducer::confirm_import;
+pub use confirm_party_command_holder_reducer::confirm_party_command_holder;
+pub use confirm_party_command_receipt_reducer::confirm_party_command_receipt;
 pub use contact_entry_type::ContactEntry;
 pub use corpse_loot_eligible_type::CorpseLootEligible;
 pub use corpse_loot_type::CorpseLoot;
@@ -1295,6 +1306,7 @@ pub use debug_verify_ranged_lethal_damage_floor_fixture_reducer::debug_verify_ra
 pub use debug_vmap_area_info_reducer::debug_vmap_area_info;
 pub use debug_vmap_ray_instance_reducer::debug_vmap_ray_instance;
 pub use debug_vmap_ray_reducer::debug_vmap_ray;
+pub use defer_party_command_intent_reducer::defer_party_command_intent;
 pub use delete_character_reducer::delete_character;
 pub use discard_vmap_generation_reducer::discard_vmap_generation;
 pub use dr_state_type::DrState;
@@ -1519,7 +1531,9 @@ pub use game_object_unlocked_type::GameObjectUnlocked;
 pub use game_operator_table::*;
 pub use game_package_config_table::*;
 pub use game_package_import_table::*;
+pub use game_party_command_dispatch_lane_table::*;
 pub use game_party_command_intent_table::*;
+pub use game_party_command_issuer_table::*;
 pub use game_party_command_receipt_table::*;
 pub use game_pending_cast_table::*;
 pub use game_pending_spell_impact_table::*;
@@ -1801,7 +1815,9 @@ pub use out_of_combat_sight_condition_type::OutOfCombatSightCondition;
 pub use package_config_type::PackageConfig;
 pub use package_import_type::PackageImport;
 pub use parsed_client_command_type::ParsedClientCommand;
+pub use party_command_dispatch_lane_type::PartyCommandDispatchLane;
 pub use party_command_intent_type::PartyCommandIntent;
+pub use party_command_issuer_type::PartyCommandIssuer;
 pub use party_command_receipt_type::PartyCommandReceipt;
 pub use patrol_intent_type::PatrolIntent;
 pub use patrol_pause_type::PatrolPause;
@@ -1816,8 +1832,10 @@ pub use player_action_type::PlayerAction;
 pub use player_reputation_type::PlayerReputation;
 pub use player_skill_type::PlayerSkill;
 pub use player_spell_type::PlayerSpell;
+pub use playerbots_fixture_command_apply_after_gate_change_reducer::playerbots_fixture_command_apply_after_gate_change;
 pub use playerbots_fixture_command_apply_reducer::playerbots_fixture_command_apply;
 pub use playerbots_fixture_command_drive_reducer::playerbots_fixture_command_drive;
+pub use playerbots_fixture_command_expire_after_receipt_window_reducer::playerbots_fixture_command_expire_after_receipt_window;
 pub use playerbots_fixture_command_expire_reducer::playerbots_fixture_command_expire;
 pub use playerbots_fixture_command_finish_reducer::playerbots_fixture_command_finish;
 pub use playerbots_fixture_command_release_receipt_reducer::playerbots_fixture_command_release_receipt;
@@ -2058,6 +2076,7 @@ pub enum Reducer {
         leader_guid: u64,
         bot_guid: u64,
         authority_member_guid: u64,
+        expected_members: Vec<u64>,
     },
     AdmitSessionlessGroupAction {
         character_guid: u64,
@@ -2073,6 +2092,7 @@ pub enum Reducer {
         source_identity: __sdk::Identity,
         intent_id: u64,
         issuer_guid: u64,
+        issuer_sequence: u64,
         group_id: u64,
         leader_guid: u64,
         members: Vec<u64>,
@@ -2126,6 +2146,13 @@ pub enum Reducer {
     ConfirmImport {
         transfer_id: u64,
         request_actor: SessionActor,
+    },
+    ConfirmPartyCommandHolder {
+        bot_guid: u64,
+    },
+    ConfirmPartyCommandReceipt {
+        source_identity: __sdk::Identity,
+        intent_id: u64,
     },
     CreateCharacter {
         account_id: u64,
@@ -2816,6 +2843,10 @@ pub enum Reducer {
         z_1: f32,
         instance_id: u64,
     },
+    DeferPartyCommandIntent {
+        intent_id: u64,
+        claim_token: u64,
+    },
     DeleteCharacter {
         account_id: u64,
         request_actor: SessionActor,
@@ -3401,11 +3432,19 @@ pub enum Reducer {
         intent_id: u64,
         claim_token: u64,
     },
+    PlayerbotsFixtureCommandApplyAfterGateChange {
+        intent_id: u64,
+        claim_token: u64,
+        mode: u8,
+    },
     PlayerbotsFixtureCommandDrive {
         intent_id: u64,
         claim_token: u64,
     },
     PlayerbotsFixtureCommandExpire {
+        intent_id: u64,
+    },
+    PlayerbotsFixtureCommandExpireAfterReceiptWindow {
         intent_id: u64,
     },
     PlayerbotsFixtureCommandFinish {
@@ -3785,6 +3824,8 @@ impl __sdk::Reducer for Reducer {
             Reducer::ClearPromotedLootRoll { .. } => "clear_promoted_loot_roll",
             Reducer::CloseAccountFence { .. } => "close_account_fence",
             Reducer::ConfirmImport { .. } => "confirm_import",
+            Reducer::ConfirmPartyCommandHolder { .. } => "confirm_party_command_holder",
+            Reducer::ConfirmPartyCommandReceipt { .. } => "confirm_party_command_receipt",
             Reducer::CreateCharacter { .. } => "create_character",
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
             Reducer::DebugAddThreat { .. } => "debug_add_threat",
@@ -3984,6 +4025,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::DebugVmapAreaInfo { .. } => "debug_vmap_area_info",
             Reducer::DebugVmapRay { .. } => "debug_vmap_ray",
             Reducer::DebugVmapRayInstance { .. } => "debug_vmap_ray_instance",
+            Reducer::DeferPartyCommandIntent { .. } => "defer_party_command_intent",
             Reducer::DeleteCharacter { .. } => "delete_character",
             Reducer::DiscardVmapGeneration { .. } => "discard_vmap_generation",
             Reducer::EnsureInstance { .. } => "ensure_instance",
@@ -4123,8 +4165,14 @@ impl __sdk::Reducer for Reducer {
             Reducer::InstallGuidRange { .. } => "install_guid_range",
             Reducer::OnDisconnect => "on_disconnect",
             Reducer::PlayerbotsFixtureCommandApply { .. } => "playerbots_fixture_command_apply",
+            Reducer::PlayerbotsFixtureCommandApplyAfterGateChange { .. } => {
+                "playerbots_fixture_command_apply_after_gate_change"
+            }
             Reducer::PlayerbotsFixtureCommandDrive { .. } => "playerbots_fixture_command_drive",
             Reducer::PlayerbotsFixtureCommandExpire { .. } => "playerbots_fixture_command_expire",
+            Reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindow { .. } => {
+                "playerbots_fixture_command_expire_after_receipt_window"
+            }
             Reducer::PlayerbotsFixtureCommandFinish { .. } => "playerbots_fixture_command_finish",
             Reducer::PlayerbotsFixtureCommandReleaseReceipt { .. } => {
                 "playerbots_fixture_command_release_receipt"
@@ -4210,11 +4258,13 @@ impl __sdk::Reducer for Reducer {
                 leader_guid,
                 bot_guid,
                 authority_member_guid,
+                expected_members,
 }             => __sats::bsatn::to_vec(&admit_party_command_authority_reducer::AdmitPartyCommandAuthorityArgs {
                 group_id: group_id.clone(),
                 leader_guid: leader_guid.clone(),
                 bot_guid: bot_guid.clone(),
                 authority_member_guid: authority_member_guid.clone(),
+                expected_members: expected_members.clone(),
 }),
             Reducer::AdmitSessionlessGroupAction{
                 character_guid,
@@ -4237,6 +4287,7 @@ impl __sdk::Reducer for Reducer {
                 source_identity,
                 intent_id,
                 issuer_guid,
+                issuer_sequence,
                 group_id,
                 leader_guid,
                 members,
@@ -4250,6 +4301,7 @@ impl __sdk::Reducer for Reducer {
                 source_identity: source_identity.clone(),
                 intent_id: intent_id.clone(),
                 issuer_guid: issuer_guid.clone(),
+                issuer_sequence: issuer_sequence.clone(),
                 group_id: group_id.clone(),
                 leader_guid: leader_guid.clone(),
                 members: members.clone(),
@@ -4338,6 +4390,18 @@ Reducer::ClaimPartyCommandIntent{
 }             => __sats::bsatn::to_vec(&confirm_import_reducer::ConfirmImportArgs {
                 transfer_id: transfer_id.clone(),
                 request_actor: request_actor.clone(),
+}),
+            Reducer::ConfirmPartyCommandHolder{
+                bot_guid,
+}             => __sats::bsatn::to_vec(&confirm_party_command_holder_reducer::ConfirmPartyCommandHolderArgs {
+                bot_guid: bot_guid.clone(),
+}),
+            Reducer::ConfirmPartyCommandReceipt{
+                source_identity,
+                intent_id,
+}             => __sats::bsatn::to_vec(&confirm_party_command_receipt_reducer::ConfirmPartyCommandReceiptArgs {
+                source_identity: source_identity.clone(),
+                intent_id: intent_id.clone(),
 }),
             Reducer::CreateCharacter{
                 account_id,
@@ -5577,6 +5641,13 @@ Reducer::DebugVerifyRangedLethalDamageFloorFixture{
                 z_1: z_1.clone(),
                 instance_id: instance_id.clone(),
 }),
+            Reducer::DeferPartyCommandIntent{
+                intent_id,
+                claim_token,
+}             => __sats::bsatn::to_vec(&defer_party_command_intent_reducer::DeferPartyCommandIntentArgs {
+                intent_id: intent_id.clone(),
+                claim_token: claim_token.clone(),
+}),
             Reducer::DeleteCharacter{
                 account_id,
                 request_actor,
@@ -6614,6 +6685,15 @@ Reducer::PlayerbotsFixtureCommandApply{
                 intent_id: intent_id.clone(),
                 claim_token: claim_token.clone(),
 }),
+            Reducer::PlayerbotsFixtureCommandApplyAfterGateChange{
+                intent_id,
+                claim_token,
+                mode,
+}             => __sats::bsatn::to_vec(&playerbots_fixture_command_apply_after_gate_change_reducer::PlayerbotsFixtureCommandApplyAfterGateChangeArgs {
+                intent_id: intent_id.clone(),
+                claim_token: claim_token.clone(),
+                mode: mode.clone(),
+}),
             Reducer::PlayerbotsFixtureCommandDrive{
                 intent_id,
                 claim_token,
@@ -6624,6 +6704,11 @@ Reducer::PlayerbotsFixtureCommandApply{
             Reducer::PlayerbotsFixtureCommandExpire{
                 intent_id,
 }             => __sats::bsatn::to_vec(&playerbots_fixture_command_expire_reducer::PlayerbotsFixtureCommandExpireArgs {
+                intent_id: intent_id.clone(),
+}),
+            Reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindow{
+                intent_id,
+}             => __sats::bsatn::to_vec(&playerbots_fixture_command_expire_after_receipt_window_reducer::PlayerbotsFixtureCommandExpireAfterReceiptWindowArgs {
                 intent_id: intent_id.clone(),
 }),
             Reducer::PlayerbotsFixtureCommandFinish{
@@ -7437,7 +7522,9 @@ pub struct DbUpdate {
     game_operator: __sdk::TableUpdate<Operator>,
     game_package_config: __sdk::TableUpdate<PackageConfig>,
     game_package_import: __sdk::TableUpdate<PackageImport>,
+    game_party_command_dispatch_lane: __sdk::TableUpdate<PartyCommandDispatchLane>,
     game_party_command_intent: __sdk::TableUpdate<PartyCommandIntent>,
+    game_party_command_issuer: __sdk::TableUpdate<PartyCommandIssuer>,
     game_party_command_receipt: __sdk::TableUpdate<PartyCommandReceipt>,
     game_pending_cast: __sdk::TableUpdate<PendingCast>,
     game_pending_spell_impact: __sdk::TableUpdate<PendingSpellImpact>,
@@ -8081,8 +8168,16 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_package_import" => db_update
                     .game_package_import
                     .append(game_package_import_table::parse_table_update(table_update)?),
+                "game_party_command_dispatch_lane" => {
+                    db_update.game_party_command_dispatch_lane.append(
+                        game_party_command_dispatch_lane_table::parse_table_update(table_update)?,
+                    )
+                }
                 "game_party_command_intent" => db_update.game_party_command_intent.append(
                     game_party_command_intent_table::parse_table_update(table_update)?,
+                ),
+                "game_party_command_issuer" => db_update.game_party_command_issuer.append(
+                    game_party_command_issuer_table::parse_table_update(table_update)?,
                 ),
                 "game_party_command_receipt" => db_update.game_party_command_receipt.append(
                     game_party_command_receipt_table::parse_table_update(table_update)?,
@@ -9131,12 +9226,24 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_package_import = cache
             .apply_diff_to_table::<PackageImport>("game_package_import", &self.game_package_import)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_party_command_dispatch_lane = cache
+            .apply_diff_to_table::<PartyCommandDispatchLane>(
+                "game_party_command_dispatch_lane",
+                &self.game_party_command_dispatch_lane,
+            )
+            .with_updates_by_pk(|row| &row.lane);
         diff.game_party_command_intent = cache
             .apply_diff_to_table::<PartyCommandIntent>(
                 "game_party_command_intent",
                 &self.game_party_command_intent,
             )
             .with_updates_by_pk(|row| &row.id);
+        diff.game_party_command_issuer = cache
+            .apply_diff_to_table::<PartyCommandIssuer>(
+                "game_party_command_issuer",
+                &self.game_party_command_issuer,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
         diff.game_party_command_receipt = cache
             .apply_diff_to_table::<PartyCommandReceipt>(
                 "game_party_command_receipt",
@@ -10008,8 +10115,14 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_package_import" => db_update
                     .game_package_import
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_party_command_dispatch_lane" => db_update
+                    .game_party_command_dispatch_lane
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_party_command_intent" => db_update
                     .game_party_command_intent
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_party_command_issuer" => db_update
+                    .game_party_command_issuer
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_party_command_receipt" => db_update
                     .game_party_command_receipt
@@ -10777,8 +10890,14 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_package_import" => db_update
                     .game_package_import
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_party_command_dispatch_lane" => db_update
+                    .game_party_command_dispatch_lane
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_party_command_intent" => db_update
                     .game_party_command_intent
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_party_command_issuer" => db_update
+                    .game_party_command_issuer
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_party_command_receipt" => db_update
                     .game_party_command_receipt
@@ -11223,7 +11342,9 @@ pub struct AppliedDiff<'r> {
     game_operator: __sdk::TableAppliedDiff<'r, Operator>,
     game_package_config: __sdk::TableAppliedDiff<'r, PackageConfig>,
     game_package_import: __sdk::TableAppliedDiff<'r, PackageImport>,
+    game_party_command_dispatch_lane: __sdk::TableAppliedDiff<'r, PartyCommandDispatchLane>,
     game_party_command_intent: __sdk::TableAppliedDiff<'r, PartyCommandIntent>,
+    game_party_command_issuer: __sdk::TableAppliedDiff<'r, PartyCommandIssuer>,
     game_party_command_receipt: __sdk::TableAppliedDiff<'r, PartyCommandReceipt>,
     game_pending_cast: __sdk::TableAppliedDiff<'r, PendingCast>,
     game_pending_spell_impact: __sdk::TableAppliedDiff<'r, PendingSpellImpact>,
@@ -12104,9 +12225,19 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             &self.game_package_import,
             event,
         );
+        callbacks.invoke_table_row_callbacks::<PartyCommandDispatchLane>(
+            "game_party_command_dispatch_lane",
+            &self.game_party_command_dispatch_lane,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<PartyCommandIntent>(
             "game_party_command_intent",
             &self.game_party_command_intent,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<PartyCommandIssuer>(
+            "game_party_command_issuer",
+            &self.game_party_command_issuer,
             event,
         );
         callbacks.invoke_table_row_callbacks::<PartyCommandReceipt>(
@@ -13348,7 +13479,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_operator_table::register_table(client_cache);
         game_package_config_table::register_table(client_cache);
         game_package_import_table::register_table(client_cache);
+        game_party_command_dispatch_lane_table::register_table(client_cache);
         game_party_command_intent_table::register_table(client_cache);
+        game_party_command_issuer_table::register_table(client_cache);
         game_party_command_receipt_table::register_table(client_cache);
         game_pending_cast_table::register_table(client_cache);
         game_pending_spell_impact_table::register_table(client_cache);
@@ -13602,7 +13735,9 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_operator",
         "game_package_config",
         "game_package_import",
+        "game_party_command_dispatch_lane",
         "game_party_command_intent",
+        "game_party_command_issuer",
         "game_party_command_receipt",
         "game_pending_cast",
         "game_pending_spell_impact",

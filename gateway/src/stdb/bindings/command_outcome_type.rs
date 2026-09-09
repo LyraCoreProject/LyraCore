@@ -37,6 +37,10 @@ pub enum CommandOutcome {
     Expired,
 
     WaitingForCapacity,
+
+    OutcomeUnknown,
+
+    Superseded,
 }
 
 impl __sdk::InModule for CommandOutcome {

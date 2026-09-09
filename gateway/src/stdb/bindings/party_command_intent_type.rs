@@ -13,6 +13,8 @@ pub struct PartyCommandIntent {
     pub id: u64,
     pub source_identity: __sdk::Identity,
     pub issuer_guid: u64,
+    pub reply_identity: __sdk::Identity,
+    pub issuer_sequence: u64,
     pub command: ParsedClientCommand,
     pub created_micros: i64,
     pub expires_micros: i64,
@@ -21,6 +23,8 @@ pub struct PartyCommandIntent {
     pub claim_until_micros: i64,
     pub pending: bool,
     pub state: CommandIntentState,
+    pub dispatch_lane: u8,
+    pub dispatch_next: u64,
 }
 
 impl __sdk::InModule for PartyCommandIntent {
@@ -34,6 +38,8 @@ pub struct PartyCommandIntentCols {
     pub id: __sdk::__query_builder::Col<PartyCommandIntent, u64>,
     pub source_identity: __sdk::__query_builder::Col<PartyCommandIntent, __sdk::Identity>,
     pub issuer_guid: __sdk::__query_builder::Col<PartyCommandIntent, u64>,
+    pub reply_identity: __sdk::__query_builder::Col<PartyCommandIntent, __sdk::Identity>,
+    pub issuer_sequence: __sdk::__query_builder::Col<PartyCommandIntent, u64>,
     pub command: __sdk::__query_builder::Col<PartyCommandIntent, ParsedClientCommand>,
     pub created_micros: __sdk::__query_builder::Col<PartyCommandIntent, i64>,
     pub expires_micros: __sdk::__query_builder::Col<PartyCommandIntent, i64>,
@@ -42,6 +48,8 @@ pub struct PartyCommandIntentCols {
     pub claim_until_micros: __sdk::__query_builder::Col<PartyCommandIntent, i64>,
     pub pending: __sdk::__query_builder::Col<PartyCommandIntent, bool>,
     pub state: __sdk::__query_builder::Col<PartyCommandIntent, CommandIntentState>,
+    pub dispatch_lane: __sdk::__query_builder::Col<PartyCommandIntent, u8>,
+    pub dispatch_next: __sdk::__query_builder::Col<PartyCommandIntent, u64>,
 }
 
 impl __sdk::__query_builder::HasCols for PartyCommandIntent {
@@ -51,6 +59,8 @@ impl __sdk::__query_builder::HasCols for PartyCommandIntent {
             id: __sdk::__query_builder::Col::new(table_name, "id"),
             source_identity: __sdk::__query_builder::Col::new(table_name, "source_identity"),
             issuer_guid: __sdk::__query_builder::Col::new(table_name, "issuer_guid"),
+            reply_identity: __sdk::__query_builder::Col::new(table_name, "reply_identity"),
+            issuer_sequence: __sdk::__query_builder::Col::new(table_name, "issuer_sequence"),
             command: __sdk::__query_builder::Col::new(table_name, "command"),
             created_micros: __sdk::__query_builder::Col::new(table_name, "created_micros"),
             expires_micros: __sdk::__query_builder::Col::new(table_name, "expires_micros"),
@@ -59,6 +69,8 @@ impl __sdk::__query_builder::HasCols for PartyCommandIntent {
             claim_until_micros: __sdk::__query_builder::Col::new(table_name, "claim_until_micros"),
             pending: __sdk::__query_builder::Col::new(table_name, "pending"),
             state: __sdk::__query_builder::Col::new(table_name, "state"),
+            dispatch_lane: __sdk::__query_builder::Col::new(table_name, "dispatch_lane"),
+            dispatch_next: __sdk::__query_builder::Col::new(table_name, "dispatch_next"),
         }
     }
 }

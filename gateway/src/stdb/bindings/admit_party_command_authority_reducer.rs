@@ -11,6 +11,7 @@ pub(super) struct AdmitPartyCommandAuthorityArgs {
     pub leader_guid: u64,
     pub bot_guid: u64,
     pub authority_member_guid: u64,
+    pub expected_members: Vec<u64>,
 }
 
 impl From<AdmitPartyCommandAuthorityArgs> for super::Reducer {
@@ -20,6 +21,7 @@ impl From<AdmitPartyCommandAuthorityArgs> for super::Reducer {
             leader_guid: args.leader_guid,
             bot_guid: args.bot_guid,
             authority_member_guid: args.authority_member_guid,
+            expected_members: args.expected_members,
         }
     }
 }
@@ -45,12 +47,14 @@ pub trait admit_party_command_authority {
         leader_guid: u64,
         bot_guid: u64,
         authority_member_guid: u64,
+        expected_members: Vec<u64>,
     ) -> __sdk::Result<()> {
         self.admit_party_command_authority_then(
             group_id,
             leader_guid,
             bot_guid,
             authority_member_guid,
+            expected_members,
             |_, _| {},
         )
     }
@@ -67,6 +71,7 @@ pub trait admit_party_command_authority {
         leader_guid: u64,
         bot_guid: u64,
         authority_member_guid: u64,
+        expected_members: Vec<u64>,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -81,6 +86,7 @@ impl admit_party_command_authority for super::RemoteReducers {
         leader_guid: u64,
         bot_guid: u64,
         authority_member_guid: u64,
+        expected_members: Vec<u64>,
 
         callback: impl FnOnce(&super::ReducerEventContext, Result<Result<(), String>, __sdk::InternalError>)
             + Send
@@ -92,6 +98,7 @@ impl admit_party_command_authority for super::RemoteReducers {
                 leader_guid,
                 bot_guid,
                 authority_member_guid,
+                expected_members,
             },
             callback,
         )
