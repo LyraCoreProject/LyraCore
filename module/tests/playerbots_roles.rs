@@ -852,6 +852,31 @@ fn ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
             && state["companion_buff_target_guid"].contains(&fixture.leader)
     }));
     evidence(&fixture, "fortitude-range-repair");
+    node.assert_call(
+        "playerbots_fixture_companion_wall",
+        &[&fixture.priest, &fixture.leader],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_move",
+        &[&fixture.leader, "1210", "1200"],
+    );
+    assert!(poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.priest);
+        let state = runner(node, &fixture.priest);
+        state["chosen"].contains("buffPosition")
+            && state["companion_buff_target_guid"].contains(&fixture.leader)
+            && node
+                .query_rows(&format!(
+                    "SELECT spell_id FROM game_aura WHERE target_guid = {} AND spell_id = 1243",
+                    fixture.leader
+                ))
+                .is_empty()
+    }));
+    evidence(&fixture, "fortitude-los-repair");
+    node.assert_call(
+        "playerbots_fixture_runner_clear_navigation",
+        &[&fixture.priest],
+    );
     let completed = poll_until(POLL_TIMEOUT, || {
         pass(node, &fixture.priest);
         !node
@@ -922,6 +947,26 @@ fn bounded_role_reads_record_typed_holds() {
         node.assert_call("playerbots_fixture_roles_clear_overflow", &[]);
     }
 
+    node.assert_call("playerbots_fixture_roles_priest_mana", &[&fixture.priest]);
+    node.assert_call(
+        "playerbots_fixture_companion_health",
+        &[&fixture.leader, "40"],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_overflow",
+        &[&fixture.warrior, "1"],
+    );
+    pass(node, &fixture.priest);
+    evidence(&fixture, "buff-aura-limit-heal");
+    let state = runner(node, &fixture.priest);
+    assert!(state["chosen"].contains("heal"), "{state:?}");
+    assert!(
+        state["companion_heal_target_guid"].contains(&fixture.leader),
+        "{state:?}"
+    );
+    assert!(state["failures"].contains("buffAuraLimit"), "{state:?}");
+    node.assert_call("playerbots_fixture_roles_clear_overflow", &[]);
+
     node.assert_call(
         "playerbots_fixture_roles_overflow",
         &[&fixture.warrior, "3"],
@@ -931,6 +976,26 @@ fn bounded_role_reads_record_typed_holds() {
     let state = runner(node, &fixture.warrior);
     assert!(state["chosen"].contains("partyUnavailable"), "{state:?}");
     assert!(state["failures"].contains("fightLimit"), "{state:?}");
+    node.assert_call("playerbots_fixture_roles_clear_overflow", &[]);
+
+    node.assert_call(
+        "playerbots_fixture_roles_move",
+        &[&fixture.warrior, "1100", "1200"],
+    );
+    node.assert_call(
+        "playerbots_fixture_companion_health",
+        &[&fixture.warrior, "50"],
+    );
+    node.assert_call("playerbots_fixture_runner_survival", &[&fixture.warrior]);
+    node.assert_call(
+        "playerbots_fixture_roles_overflow",
+        &[&fixture.warrior, "0"],
+    );
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "rotation-limit-survival");
+    let state = runner(node, &fixture.warrior);
+    assert!(state["chosen"].contains("survival"), "{state:?}");
+    assert!(state["failures"].contains("rotationLimit"), "{state:?}");
 }
 
 #[test]
