@@ -338,14 +338,14 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
                 })
         })
         .flatten();
-    if let Some(bot_partition) = bot_partition {
-        if issuer_partition != Some(bot_partition)
-            || member_partition.is_some_and(|partition| partition != bot_partition)
-        {
-            let outcome = CompanionCommandOutcome::WrongPartition;
-            source.finish_party_command_intent(intent.id, claim_token, outcome)?;
-            return Ok(outcome);
-        }
+    let member_partition_required = intent.authority_member_guid != 0;
+    if bot_partition.is_none()
+        || issuer_partition != bot_partition
+        || (member_partition_required && member_partition != bot_partition)
+    {
+        let outcome = CompanionCommandOutcome::WrongPartition;
+        source.finish_party_command_intent(intent.id, claim_token, outcome)?;
+        return Ok(outcome);
     }
     let admitted = AdmittedCompanionCommand {
         source_identity: intent.source_identity,

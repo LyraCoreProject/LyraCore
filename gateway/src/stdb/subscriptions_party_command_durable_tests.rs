@@ -11,10 +11,12 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TANK: &str = "0";
 const WARRIOR: &str = "1";
+static TOPOLOGY_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct PrivateCli {
     config: PathBuf,
@@ -180,10 +182,14 @@ fn structured_sql_rows_reject_malformed_output() {
 
 struct TopologyEnv {
     previous: Vec<(&'static str, Option<OsString>)>,
+    _guard: MutexGuard<'static, ()>,
 }
 
 impl TopologyEnv {
     fn install(shard_map: &str, realm: &str) -> Self {
+        let guard = TOPOLOGY_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let values = [
             ("LYRACORE_SHARD_MAP", shard_map),
             ("LYRACORE_REALM_CORE", realm),
@@ -198,7 +204,10 @@ impl TopologyEnv {
                 (*name, prior)
             })
             .collect();
-        Self { previous }
+        Self {
+            previous,
+            _guard: guard,
+        }
     }
 }
 

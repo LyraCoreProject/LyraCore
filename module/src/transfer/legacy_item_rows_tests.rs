@@ -218,6 +218,13 @@ fn malformed_legacy_rows_and_duplicate_format_aliases_are_refused() {
     assert!(prepare(&[old, new.remove(0)])
         .unwrap_err()
         .contains("repeats table"));
+    let repeated = TableRows {
+        table: "game_aura".to_owned(),
+        rows: Vec::new(),
+    };
+    assert!(prepare(&[repeated.clone(), repeated])
+        .unwrap_err()
+        .contains("repeats table"));
 }
 
 #[test]

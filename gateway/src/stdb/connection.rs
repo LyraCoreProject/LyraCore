@@ -600,6 +600,8 @@ pub(crate) struct CoordinatorInner {
     /// lands, calls use another healthy pipe or the watchdogged coordinator connection.
     call_pipes: Vec<CallPipe>,
     call_pipe_next: std::sync::atomic::AtomicUsize,
+    /// Edge-triggered diagnosis for a persistent Module/Gateway dispatch-lane mismatch.
+    pub(crate) party_command_lane_overflow: AtomicBool,
     /// The per-shard movement batch — the hot path pushes one `GwMove` per inbound
     /// heartbeat and the 40ms flush task sends the whole tick as ONE `gw_movement_batch`
     /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
@@ -2412,6 +2414,7 @@ impl Coordinator {
             sharded_tables,
             call_pipes,
             call_pipe_next: std::sync::atomic::AtomicUsize::new(0),
+            party_command_lane_overflow: AtomicBool::new(false),
             motion_batch: MovementBatch::new(),
             on_reconnect: Mutex::new(Vec::new()),
         });

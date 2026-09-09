@@ -11,7 +11,9 @@
 use spacetimedb::{log, ReducerContext, SpacetimeType};
 
 use super::TransferOut;
-use crate::bridge::{game_party_command_receipt, PartyCommandReceipt};
+use crate::bridge::{
+    game_party_command_issuer, game_party_command_receipt, PartyCommandIssuer, PartyCommandReceipt,
+};
 use crate::items::{game_item_instance, ItemInstance};
 
 #[path = "legacy_item_rows.rs"]
@@ -145,6 +147,56 @@ pub struct ManifestEntry {
 pub struct TableRows {
     pub table: String,
     pub rows: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CommandIssuerImportRefusal {
+    TooManyRows { count: usize },
+    OwnerMismatch { expected: u64, actual: u64 },
+    DestinationConflict { character_guid: u64 },
+}
+
+impl std::fmt::Display for CommandIssuerImportRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyRows { count } => {
+                write!(
+                    f,
+                    "COMMAND_ISSUER_CARDINALITY: payload contains {count} rows"
+                )
+            }
+            Self::OwnerMismatch { expected, actual } => write!(
+                f,
+                "COMMAND_ISSUER_OWNER_MISMATCH: expected Character {expected}, found {actual}"
+            ),
+            Self::DestinationConflict { character_guid } => write!(
+                f,
+                "COMMAND_ISSUER_CONFLICT: destination already has Character {character_guid}"
+            ),
+        }
+    }
+}
+
+pub(crate) fn admit_command_issuer_import(
+    character_guid: u64,
+    rows: &[PartyCommandIssuer],
+    destination_exists: bool,
+) -> Result<(), CommandIssuerImportRefusal> {
+    if rows.len() > 1 {
+        return Err(CommandIssuerImportRefusal::TooManyRows { count: rows.len() });
+    }
+    if let Some(row) = rows.first() {
+        if row.character_guid != character_guid {
+            return Err(CommandIssuerImportRefusal::OwnerMismatch {
+                expected: character_guid,
+                actual: row.character_guid,
+            });
+        }
+    }
+    if destination_exists {
+        return Err(CommandIssuerImportRefusal::DestinationConflict { character_guid });
+    }
+    Ok(())
 }
 
 // ===========================================================================================
@@ -383,6 +435,24 @@ pub(crate) fn import_rows(
     payload: &[TableRows],
 ) -> Result<(), String> {
     let payload = legacy_item_rows::prepare(payload)?;
+    if let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_party_command_issuer")
+    {
+        let mut outcome = Ok(());
+        let rows = decode_rows::<PartyCommandIssuer>(&entry.rows, &mut outcome);
+        outcome?;
+        admit_command_issuer_import(
+            character_guid,
+            &rows,
+            ctx.db
+                .game_party_command_issuer()
+                .character_guid()
+                .find(character_guid)
+                .is_some(),
+        )
+        .map_err(|refusal| refusal.to_string())?;
+    }
     if let Some(entry) = payload
         .iter()
         .find(|entry| entry.table == "game_item_instance")

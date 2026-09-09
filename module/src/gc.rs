@@ -159,8 +159,8 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     }
 
     // Gateway reconciles an expired pending command against every target receipt before recording
-    // its result. Core therefore reaps only terminal source rows here. Both indexed drains are
-    // bounded so an outage cannot turn recovery into one unbounded transaction.
+    // its result. Pending rows keep result_reap_micros at i64::MAX; finish sets the finite deadline,
+    // so the bounded index prefix below contains only terminal rows under Core's write contract.
     const COMMAND_REAP_LIMIT: usize = 64;
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     let intents = ctx.db.game_party_command_intent();

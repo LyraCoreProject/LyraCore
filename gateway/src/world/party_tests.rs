@@ -345,6 +345,43 @@ fn a_remote_party_member_cannot_direct_a_bot_in_another_partition() {
 }
 
 #[test]
+fn a_bot_without_a_partition_cannot_reach_target_application() {
+    let (_realm, world, _instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    world
+        .entity_partitions
+        .lock()
+        .unwrap()
+        .retain(|(guid, _, _)| *guid != BOT);
+
+    let outcome = party::run_party_command_intent(world.as_ref(), &command_intent(BOT), 9).unwrap();
+
+    assert_eq!(outcome, party::CompanionCommandOutcome::WrongPartition);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_assist_member_without_a_partition_cannot_reach_target_application() {
+    let (_realm, world, _instances, _) = party_topology();
+    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(BOT)).unwrap();
+    party::run(world.as_ref(), 8, GINGER, party::Op::Invite(TRIN)).unwrap();
+    party::run(world.as_ref(), 9, TRIN, party::Op::Accept).unwrap();
+    world
+        .entity_partitions
+        .lock()
+        .unwrap()
+        .retain(|(guid, _, _)| *guid != TRIN);
+    let mut intent = command_intent(BOT);
+    intent.kind = 2;
+    intent.authority_member_guid = TRIN;
+
+    let outcome = party::run_party_command_intent(world.as_ref(), &intent, 10).unwrap();
+
+    assert_eq!(outcome, party::CompanionCommandOutcome::WrongPartition);
+    assert!(world.admitted_party_commands.lock().unwrap().is_empty());
+}
+
+#[test]
 fn an_unsharded_gateway_uses_the_owning_local_party_authority() {
     let roster = party::GroupRoster {
         group_id: 7,

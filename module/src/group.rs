@@ -1558,7 +1558,11 @@ pub fn admit_party_command_authority(
         .game_group()
         .group_id()
         .find(group_id)
-        .ok_or_else(|| crate::bridge::CommandOutcome::NotMember.tag().to_string())?;
+        .ok_or_else(|| {
+            crate::bridge::CommandOutcome::StalePartyMirror
+                .tag()
+                .to_string()
+        })?;
     if group.leader_guid != leader_guid {
         return Err(crate::bridge::CommandOutcome::NotLeader.tag().to_string());
     }

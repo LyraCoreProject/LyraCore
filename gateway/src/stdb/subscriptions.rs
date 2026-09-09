@@ -3395,8 +3395,25 @@ impl Coordinator {
                 .map(|lane| lane.head_intent_id)
                 .collect();
             if lanes.len() > DISPATCH_LANE_LIMIT {
-                log::error!("party command dispatcher found more than {DISPATCH_LANE_LIMIT} lanes");
+                if !self
+                    .0
+                    .party_command_lane_overflow
+                    .swap(true, Ordering::AcqRel)
+                {
+                    log::error!(
+                        "party command dispatcher found more than {DISPATCH_LANE_LIMIT} lanes; \
+                         command dispatch on this Shard is stopped until the Module and Gateway \
+                         lane counts agree"
+                    );
+                }
                 return;
+            }
+            if self
+                .0
+                .party_command_lane_overflow
+                .swap(false, Ordering::AcqRel)
+            {
+                log::info!("party command dispatcher lane count recovered on this Shard");
             }
             lanes
                 .into_iter()

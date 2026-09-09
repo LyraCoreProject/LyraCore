@@ -77,6 +77,53 @@ fn generated_table_names_look_like_real_accessors() {
 }
 
 #[test]
+fn command_issuer_import_accepts_only_its_arriving_character() {
+    let owned = crate::bridge::PartyCommandIssuer {
+        character_guid: GUID,
+        last_sequence: 7,
+    };
+    let foreign = crate::bridge::PartyCommandIssuer {
+        character_guid: GUID + 1,
+        last_sequence: 8,
+    };
+
+    assert_eq!(admit_command_issuer_import(GUID, &[], false), Ok(()));
+    assert_eq!(admit_command_issuer_import(GUID, &[owned], false), Ok(()));
+    assert_eq!(
+        admit_command_issuer_import(GUID, &[foreign], false),
+        Err(CommandIssuerImportRefusal::OwnerMismatch {
+            expected: GUID,
+            actual: GUID + 1,
+        })
+    );
+}
+
+#[test]
+fn command_issuer_import_rejects_extra_rows_and_destination_conflicts() {
+    let rows = [
+        crate::bridge::PartyCommandIssuer {
+            character_guid: GUID,
+            last_sequence: 7,
+        },
+        crate::bridge::PartyCommandIssuer {
+            character_guid: GUID,
+            last_sequence: 8,
+        },
+    ];
+
+    assert_eq!(
+        admit_command_issuer_import(GUID, &rows, false),
+        Err(CommandIssuerImportRefusal::TooManyRows { count: 2 })
+    );
+    assert_eq!(
+        admit_command_issuer_import(GUID, &rows[..1], true),
+        Err(CommandIssuerImportRefusal::DestinationConflict {
+            character_guid: GUID,
+        })
+    );
+}
+
+#[test]
 fn hot_marks_name_only_real_manifest_tables() {
     let m = manifest();
     for h in HOT_TABLES {
