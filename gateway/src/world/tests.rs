@@ -1426,24 +1426,48 @@ impl WorldStore for InMemoryStore {
                 intent.destination_instance,
             );
         };
+        let settled_revision = intent
+            .source_locator_revision
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("Transfer Realm locator revision exhausted"))?;
+        let crossing = (
+            intent.source_module_identity,
+            intent.id,
+            intent.controller_generation,
+        );
+        if !current.transfer_pending
+            && (current.map_id, current.instance_id, current.revision)
+                == (
+                    intent.destination_map,
+                    intent.destination_instance,
+                    settled_revision,
+                )
+            && (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) == crossing
+        {
+            return Ok(());
+        }
         if !current.transfer_pending
             || current.revision != intent.source_locator_revision
+            || (
+                current.pending_destination_map,
+                current.pending_destination_instance,
+            ) != (intent.destination_map, intent.destination_instance)
             || (
                 current.bot_source_identity,
                 current.bot_transfer_intent_id,
                 current.bot_controller_generation,
-            ) != (
-                intent.source_module_identity,
-                intent.id,
-                intent.controller_generation,
-            )
+            ) != crossing
         {
             return Err(anyhow!("Transfer Realm locator phase changed"));
         }
         *phase = Some(super::party::RealmCharacterPartition {
             map_id: intent.destination_map,
             instance_id: intent.destination_instance,
-            revision: intent.source_locator_revision + 1,
+            revision: settled_revision,
             transfer_pending: false,
             pending_destination_map: 0,
             pending_destination_instance: 0,
