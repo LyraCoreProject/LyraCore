@@ -1056,7 +1056,10 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
         released_claim["generation"],
         actor["ownership"]["some"]["generation"].to_string()
     );
-    assert_eq!(released_claim["request_nonce"], "9010");
+    assert_eq!(
+        released_claim["request_nonce"],
+        actor["ownership"]["some"]["request_nonce"].to_string()
+    );
     assert_eq!(
         released_claim["character_guid"],
         topology.source_one_party.leader.to_string()
