@@ -347,6 +347,11 @@ mod tests {
         let escrow = winner.escrow_row(1).unwrap();
         assert_eq!(escrow.transfer_id, transfer_id);
         assert_eq!(escrow.character_guid, 1);
+        let source = crate::world::transfer::RealmLocatorPredecessor {
+            map_id: 0,
+            instance_id: 0,
+            revision: 1,
+        };
         let refused = |result: Result<()>| {
             let error = result.unwrap_err();
             assert!(
@@ -354,12 +359,12 @@ mod tests {
                 "{error:#}"
             );
         };
-        refused(stale_destination.import_character_blob(transfer_id, &escrow.blob));
+        refused(stale_destination.import_player_character_blob(transfer_id, &escrow.blob, source));
         assert!(destination_fixture
             .query_rows("SELECT * FROM game_transfer_in")
             .is_empty());
         destination
-            .import_character_blob(transfer_id, &escrow.blob)
+            .import_player_character_blob(transfer_id, &escrow.blob, source)
             .unwrap();
         let arrivals = destination_fixture.query_rows("SELECT * FROM game_transfer_in");
         assert_eq!(arrivals[0]["transfer_id"], transfer_id.to_string());
@@ -377,12 +382,14 @@ mod tests {
             1
         );
         winner.finish_transfer(transfer_id).unwrap();
-        refused(stale_destination.release_transfer(transfer_id));
+        refused(stale_destination.release_player_transfer_arrival(transfer_id, 1, source));
         assert_eq!(
             destination_fixture.query_rows("SELECT * FROM game_transfer_in"),
             arrivals
         );
-        destination.release_transfer(transfer_id).unwrap();
+        destination
+            .release_player_transfer_arrival(transfer_id, 1, source)
+            .unwrap();
         assert!(fixture
             .query_rows("SELECT guid FROM game_character WHERE guid = 1")
             .is_empty());

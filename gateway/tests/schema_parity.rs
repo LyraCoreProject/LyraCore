@@ -579,7 +579,9 @@ parity_test!(parity_game_session, "game_session", lyracore_module::Session, bind
     account_id, session_key, identity, created_at, expires_at,
 });
 parity_test!(parity_game_character_shard, "game_character_shard", lyracore_module::CharacterShard, bindings::character_shard_type::CharacterShard, {
-    character_guid, map_id, instance_id, updated_micros,
+    character_guid, map_id, instance_id, updated_micros, revision, bot_source_identity,
+    bot_transfer_intent_id, bot_controller_generation, transfer_pending, pending_destination_map,
+    pending_destination_instance,
 });
 parity_test!(parity_game_map_region, "game_map_region", lyracore_module::MapRegion, bindings::map_region_type::MapRegion, {
     key, map_id, region_id, gx_min, gx_max, gy_min, gy_max,
@@ -632,6 +634,7 @@ parity_test!(parity_game_bot_invite_intent, "game_bot_invite_intent", lyracore_m
 parity_test!(parity_game_bot_transfer_intent, "game_bot_transfer_intent", lyracore_module::BotTransferIntent, bindings::bot_transfer_intent_type::BotTransferIntent, {
     id, bot_guid, destination_map, destination_instance, reason, created_at,
     controller_generation, claim_token, claim_until_micros, arrival_ready, source_module_identity,
+    source_map, source_instance, source_locator_revision,
 });
 parity_test!(parity_game_party_command_intent, "game_party_command_intent", lyracore_module::PartyCommandIntent, bindings::party_command_intent_type::PartyCommandIntent, {
     id, source_identity, issuer_guid, reply_identity, issuer_sequence, command, created_micros,
@@ -863,6 +866,7 @@ parity_test!(parity_game_transfer_out, "game_transfer_out", lyracore_module::Tra
 parity_test!(parity_game_transfer_in, "game_transfer_in", lyracore_module::TransferIn, bindings::transfer_in_type::TransferIn, {
     transfer_id, character_guid, blob, created_micros, bot_intent_id,
     bot_controller_generation, bot_intent_created_micros, bot_intent_source,
+    source_map_id, source_instance_id, source_locator_revision,
 });
 parity_test!(parity_game_spell_chain, "game_spell_chain", lyracore_module::SpellChain, bindings::spell_chain_type::SpellChain, {
     spell_id, prev_spell, first_spell, rank, req_spell,

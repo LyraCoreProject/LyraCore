@@ -2914,16 +2914,6 @@ impl Coordinator {
         )
     }
 
-    /// `import_character_blob` — materialise the arrival copy at the destination from the blob the
-    /// gateway carried. Idempotent on `transfer_id`.
-    pub fn import_character_blob(&self, transfer_id: u64, blob: &[u8]) -> Result<()> {
-        call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "import_character_blob",
-            import_character_blob_then(transfer_id, blob.to_vec(), self.session_actor(0))
-        )
-    }
-
     /// `import_player_character_blob`, with the Realm locator predecessor written as part of the
     /// destination import transaction.
     pub fn import_player_character_blob(
