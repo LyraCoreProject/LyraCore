@@ -157,6 +157,16 @@ fn playerbots_recovery_changes_a_stalled_attack_then_defers_without_false_progre
         "{:?}",
         samples[0]
     );
+    assert!(samples[0]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| {
+            action["outcome"]
+                .as_str()
+                .unwrap()
+                .contains("attackAccepted")
+        }));
     let initial_health = samples[0]["target"]["health"].as_str().unwrap();
     for sample in &samples {
         assert_eq!(sample["target"]["health"].as_str().unwrap(), initial_health);
@@ -179,7 +189,13 @@ fn playerbots_recovery_changes_a_stalled_attack_then_defers_without_false_progre
     );
     let deferred = samples
         .iter()
-        .find(|sample| sample["runner"]["deferred_destinations"].as_str().unwrap() != "[]")
+        .find(|sample| {
+            !sample["runner"]["deferred_destinations"]
+                .as_str()
+                .unwrap()
+                .trim_matches(['[', ']', ' '])
+                .is_empty()
+        })
         .expect("blocked destination was never deferred");
     assert!(
         deferred["elapsed_seconds"].as_f64().unwrap() <= 32.0,
