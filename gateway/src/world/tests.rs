@@ -643,6 +643,7 @@ struct InMemoryStore {
     /// When set, deleted Character cleanup cannot reach Realm-core.
     party_cleanup_realm_error: Option<String>,
     party_command_realm_error: Option<String>,
+    transfer_realm_error: Option<String>,
     party_command_claims: std::sync::Mutex<Vec<(u64, u64)>>,
     party_command_finishes:
         std::sync::Mutex<Vec<(u64, u64, super::party::CompanionCommandOutcome)>>,
@@ -1234,10 +1235,10 @@ impl WorldStore for InMemoryStore {
         character_guid: u64,
         source: super::transfer::RealmLocatorPredecessor,
     ) -> Result<()> {
-        self.xstep("release_transfer")?;
         let Some(db) = self.xdb.as_ref() else {
             return Ok(());
         };
+        self.xstep("release_transfer")?;
         if transfer_id != character_guid || source.revision == 0 {
             return Err(anyhow!("player Transfer arrival identity is invalid"));
         }
@@ -2928,6 +2929,13 @@ impl WorldStore for InMemoryStore {
 
     fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
         if let Some(error) = &self.party_command_realm_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.realm_store())
+    }
+
+    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.transfer_realm_error {
             return Err(anyhow!(error.clone()));
         }
         Ok(self.realm_store())

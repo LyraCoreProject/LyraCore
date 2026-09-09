@@ -1194,6 +1194,14 @@ impl WorldStore for Coordinator {
         crate::world::party::sync_transfer_arrival_mirror(self, character_guid)
     }
 
+    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if !self.is_sharded() {
+            return Ok(None);
+        }
+        self.realm_core()
+            .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
+    }
+
     fn sync_transfer_pending(&self, character_guid: u64) -> Result<()> {
         crate::world::party::sync_transfer_arrival_mirror(self, character_guid)
     }

@@ -1532,6 +1532,100 @@ fn an_old_human_worker_cannot_release_a_newer_arrival_fence() {
 }
 
 #[test]
+fn a_ready_local_intent_releases_its_exact_arrival_fence() {
+    let intent = super::transfer::BotTransferIntent {
+        arrival_ready: true,
+        ..bot_intent()
+    };
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    lk(&db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&db.arrival_sources).insert(
+        BOT_GUID,
+        (
+            intent.source_map,
+            intent.source_instance,
+            intent.source_locator_revision,
+        ),
+    );
+    lk(&db.bot_arrivals).insert(
+        BOT_GUID,
+        (
+            SOURCE_MODULE,
+            intent.id,
+            intent.controller_generation,
+            intent.created_micros,
+        ),
+    );
+    let holder = InMemoryStore {
+        shard: "instances".into(),
+        xdb: Some(db.clone()),
+        ..Default::default()
+    };
+
+    super::transfer::run_bot_transfer_intent(&holder, &intent, 701)
+        .expect("the current holder serves and releases the exact arrival");
+
+    assert!(!lk(&db.in_rows).contains_key(&BOT_GUID));
+    assert!(db.live(BOT_GUID));
+}
+
+#[test]
+fn a_ready_intent_keeps_retrying_when_the_local_character_is_elsewhere() {
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 0,
+            instance_id: 0,
+            payload: "gear+spells".into(),
+        },
+    );
+    let holder = InMemoryStore {
+        shard: "world".into(),
+        xdb: Some(db.clone()),
+        ..Default::default()
+    };
+    let ready = super::transfer::BotTransferIntent {
+        arrival_ready: true,
+        ..bot_intent()
+    };
+
+    let error = super::transfer::run_bot_transfer_intent(&holder, &ready, 701)
+        .expect_err("an unrelated local Character cannot prove the destination released");
+
+    assert!(error.to_string().contains("cannot resolve its destination"));
+    assert!(holder.calls.lock().unwrap().is_empty());
+    assert_eq!(db.get(BOT_GUID).unwrap().map_id, 0);
+}
+
+#[test]
+fn an_unbound_intent_waits_for_configured_realm_core() {
+    let (src, src_db, dst_db, calls) = bot_pair(36, 7);
+    let mut holder = std::sync::Arc::try_unwrap(src).ok().unwrap();
+    holder.transfer_realm_error = Some("configured Realm-core is unavailable".into());
+    let intent = super::transfer::BotTransferIntent {
+        source_locator_revision: 0,
+        ..bot_intent()
+    };
+
+    let error = super::transfer::run_bot_transfer_intent(&holder, &intent, 701)
+        .expect_err("the World Shard's local locator cannot replace Realm-core authority");
+
+    assert!(error
+        .to_string()
+        .contains("configured Realm-core is unavailable"));
+    assert!(calls.lock().unwrap().is_empty());
+    assert!(src_db.has(BOT_GUID));
+    assert!(!dst_db.has(BOT_GUID));
+}
+
+#[test]
 fn a_ready_intent_completes_after_the_bot_has_crossed_onward() {
     let (src, src_db, dst_db, calls) = bot_pair(36, 7);
     let intent = bot_intent();

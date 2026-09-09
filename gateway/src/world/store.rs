@@ -305,6 +305,12 @@ pub trait WorldStore:
         Ok(self.realm_store())
     }
 
+    /// Realm-core for Transfer locator authority. Only an unsharded Realm uses the local Store;
+    /// an unavailable configured Realm-core is an infrastructure failure.
+    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        Ok(self.realm_store())
+    }
+
     /// Every connected WORLD shard's handle (realm-core excluded — it owns no gameplay reads). The
     /// fan-out set for the roster mirror; empty on a single-database gateway, which is what makes the
     /// mirror push a no-op there.

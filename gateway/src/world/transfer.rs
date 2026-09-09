@@ -573,21 +573,29 @@ pub(super) fn run_bot_transfer_intent_injected(
 ) -> Result<()> {
     let transfer_id = transfer_id_for(intent.bot_guid);
     if intent.arrival_ready {
-        if let Some(destination) =
-            holder.shard_for_location(intent.destination_map, intent.destination_instance)
-        {
-            destination.release_bot_transfer_arrival(transfer_id, intent)?;
-            abort_point(abort_after, "release_transfer", transfer_id);
-            evict_finished_instance(holder, transfer_id, intent.destination_instance);
-            abort_point(abort_after, "evict_instance_population", transfer_id);
-        } else if holder.character_destination(intent.bot_guid).is_none() {
-            return Err(anyhow!(
-                "bot transfer: ready intent {} cannot resolve its destination map {} instance {}",
-                intent.id,
-                intent.destination_map,
-                intent.destination_instance
-            ));
-        }
+        let routed = holder.shard_for_location(intent.destination_map, intent.destination_instance);
+        let destination = match routed.as_deref() {
+            Some(destination) => destination,
+            None => {
+                let local = holder.character_destination(intent.bot_guid);
+                if !local.is_some_and(|plan| {
+                    (plan.dest_map_id, plan.dest_instance_id)
+                        == (intent.destination_map, intent.destination_instance)
+                }) {
+                    return Err(anyhow!(
+                        "bot transfer: ready intent {} cannot resolve its destination map {} instance {}",
+                        intent.id,
+                        intent.destination_map,
+                        intent.destination_instance
+                    ));
+                }
+                holder
+            }
+        };
+        destination.release_bot_transfer_arrival(transfer_id, intent)?;
+        abort_point(abort_after, "release_transfer", transfer_id);
+        evict_finished_instance(holder, transfer_id, intent.destination_instance);
+        abort_point(abort_after, "evict_instance_population", transfer_id);
         return Ok(());
     }
     if let Some(plan) = holder.character_destination(intent.bot_guid) {
@@ -727,7 +735,7 @@ fn bind_bot_locator(
     if intent.source_locator_revision != 0 {
         return Ok(intent.clone());
     }
-    let realm = holder.realm_store();
+    let realm = holder.transfer_realm()?;
     let source_revision = realm
         .as_deref()
         .unwrap_or(holder)
