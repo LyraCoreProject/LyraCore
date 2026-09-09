@@ -121,7 +121,7 @@ fn actions(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
 
 fn runner(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     node.query_rows(&format!(
-        "SELECT character_guid, objective_sequence, objective, chosen, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        "SELECT character_guid, objective_sequence, objective, foreground, chosen, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
     ))
 }
 
@@ -464,7 +464,7 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let stopped = serde_json::json!({
         "retained": node.query_rows(&format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}")),
-        "runner": node.query_rows(&format!("SELECT character_guid, objective_sequence, objective, foreground, chosen, failures, recovery, history FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
+        "runner": node.query_rows(&format!("SELECT character_guid, observed_micros, next_eligible_micros, objective_sequence, objective, foreground, chosen, failures, recovery, history, last_outcome FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
         "quest": quest(&node, &guid, RESPAWN_QUEST),
         "gameobject": node.query_rows(&format!("SELECT guid, x, y, z, state FROM game_gameobject WHERE guid = {RESPAWNING_GAMEOBJECT}")),
         "movement": node.query_rows(&format!("SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {guid}")),
@@ -489,17 +489,23 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
         "{stopped}"
     );
     assert!(
-        stopped["runner"][0]["failures"]
+        stopped["runner"][0]["next_eligible_micros"]
             .as_str()
             .unwrap()
-            .contains("questTargetMissing"),
+            .parse::<i64>()
+            .unwrap()
+            > stopped["runner"][0]["observed_micros"]
+                .as_str()
+                .unwrap()
+                .parse::<i64>()
+                .unwrap(),
         "{stopped}"
     );
     assert!(
-        stopped["runner"][0]["chosen"]
+        stopped["runner"][0]["last_outcome"]
             .as_str()
             .unwrap()
-            .contains("reason = (quest"),
+            .contains("waiting"),
         "{stopped}"
     );
     assert!(
@@ -549,6 +555,25 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
             .as_str()
             .unwrap()
             .contains(&format!("gameObject = {RESPAWNING_GAMEOBJECT}")),
+        "{resumed}"
+    );
+    assert!(
+        resumed["runner"][0]["chosen"]
+            .as_str()
+            .unwrap()
+            .contains("reason = (quest"),
+        "{resumed}"
+    );
+    assert!(
+        resumed["runner"][0]["foreground"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("gameObject = {RESPAWNING_GAMEOBJECT}")),
+        "{resumed}"
+    );
+    assert_eq!(
+        resumed["movement"].as_array().unwrap().len(),
+        1,
         "{resumed}"
     );
 }
