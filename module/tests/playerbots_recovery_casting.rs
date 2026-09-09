@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const HEAL: u32 = 5_090_100;
+const ROOT: u32 = 50_021;
+const COMPANION_CREATURE_ENTRY: u32 = 5_090_302;
 
 fn git(path: &std::path::Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
@@ -95,7 +97,13 @@ fn spline_finished(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>
         && spline(node, guid).is_none_or(|current| current["spline_id"] != leg["spline_id"])
 }
 
-fn snapshot(node: &Standalone, priest: &str, ally: &str, elapsed: Duration) -> serde_json::Value {
+fn snapshot(
+    node: &Standalone,
+    priest: &str,
+    ally: &str,
+    blocker: &str,
+    elapsed: Duration,
+) -> serde_json::Value {
     serde_json::json!({
         "elapsed_seconds": elapsed.as_secs_f64(),
         "runner": row(node, &format!(
@@ -106,6 +114,15 @@ fn snapshot(node: &Standalone, priest: &str, ally: &str, elapsed: Duration) -> s
         )),
         "ally": row(node, &format!(
             "SELECT guid, x, y, health FROM game_world_entity WHERE guid = {ally}"
+        )),
+        "blocker": row(node, &format!(
+            "SELECT guid, x, y, health FROM game_world_entity WHERE guid = {blocker}"
+        )),
+        "engagement": node.query_rows(&format!(
+            "SELECT attacker_guid, target_guid, ranged_spell_id FROM game_melee_attack WHERE attacker_guid = {blocker}"
+        )),
+        "root": node.query_rows(&format!(
+            "SELECT target_guid, caster_guid, spell_id, eff_kind, eff_p0 FROM game_aura WHERE target_guid = {blocker} AND spell_id = {ROOT}"
         )),
         "spline": node.query_rows(&format!(
             "SELECT spline_id, start_micros, dur_ms, sx, sy, dx, dy FROM game_creature_spline WHERE guid = {priest}"
@@ -141,10 +158,30 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     );
     node.assert_call("playerbots_fixture_companion_move", &[ally, "1400", "1200"]);
     node.assert_call("playerbots_fixture_companion_health", &[ally, "25"]);
+    let blocker = row(
+        &node,
+        &format!("SELECT guid FROM game_world_entity WHERE entry = {COMPANION_CREATURE_ENTRY}"),
+    )["guid"]
+        .clone();
+    node.assert_call(
+        "playerbots_fixture_companion_move",
+        &[&blocker, "1392", "1200"],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_control",
+        &[leader, &blocker, &ROOT.to_string()],
+    );
+    node.assert_call("playerbots_fixture_roles_enemy_engage", &[&blocker, ally]);
     node.assert_call("playerbots_fixture_runner_select_cohort", &[priest]);
 
     let start_position = position(&node, priest);
     let ally_position = position(&node, ally);
+    let blocker_position = position(&node, &blocker);
+    let ally_start_health = row(
+        &node,
+        &format!("SELECT health FROM game_world_entity WHERE guid = {ally}"),
+    )["health"]
+        .clone();
     let spell = row(
         &node,
         &format!("SELECT spell_id, range_yd, cast_time_ms FROM game_spell WHERE spell_id = {HEAL}"),
@@ -155,7 +192,7 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     let mut movement_failed = false;
     node.assert_call("playerbots_fixture_runner_pass_once", &[priest]);
     loop {
-        samples.push(snapshot(&node, priest, ally, started.elapsed()));
+        samples.push(snapshot(&node, priest, ally, &blocker, started.elapsed()));
         if started.elapsed() >= Duration::from_secs(12) {
             break;
         }
@@ -176,9 +213,12 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         "spell_id": HEAL,
         "priest_guid": priest,
         "ally_guid": ally,
+        "blocker_guid": blocker,
         "spell": &spell,
         "start_position": start_position,
         "ally_position": ally_position,
+        "blocker_position": blocker_position,
+        "ally_start_health": ally_start_health,
         "final_position": final_position,
         "completed_legs": completed_legs,
         "movement_failed": movement_failed,
@@ -200,12 +240,16 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     let initial_distance = ((ally_position.0 - start_position.0).powi(2)
         + (ally_position.1 - start_position.1).powi(2))
     .sqrt();
+    let blocker_distance = ((ally_position.0 - blocker_position.0).powi(2)
+        + (ally_position.1 - blocker_position.1).powi(2))
+    .sqrt();
     assert!(
         initial_distance > spell["range_yd"].parse::<f32>().unwrap(),
         "{evidence}"
     );
     assert!(completed_legs >= 2, "{evidence}");
     assert!(final_position.0 > start_position.0 + 20.0, "{evidence}");
+    assert!(blocker_distance >= 8.0, "{evidence}");
     for sample in samples {
         let runner = &sample["runner"];
         assert!(
@@ -274,6 +318,41 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
             sample["movement"].as_array().unwrap().iter().any(|action| {
                 action["kind"].as_str().unwrap().contains("move")
                     && action["outcome"].as_str().unwrap().contains("movement")
+            }),
+            "{sample}"
+        );
+        assert_eq!(
+            sample["ally"]["health"].as_str(),
+            Some(ally_start_health.as_str()),
+            "{sample}"
+        );
+        assert_eq!(
+            sample["blocker"]["x"]
+                .as_str()
+                .unwrap()
+                .parse::<f32>()
+                .unwrap(),
+            blocker_position.0,
+            "{sample}"
+        );
+        assert!(
+            sample["engagement"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|attack| {
+                    attack["attacker_guid"].as_str() == Some(blocker.as_str())
+                        && attack["target_guid"].as_str() == Some(ally.as_str())
+                        && attack["ranged_spell_id"].as_str() == Some("0")
+                }),
+            "{sample}"
+        );
+        assert!(
+            sample["root"].as_array().unwrap().iter().any(|aura| {
+                aura["target_guid"].as_str() == Some(blocker.as_str())
+                    && aura["caster_guid"].as_str() == Some(leader.as_str())
+                    && aura["spell_id"].as_str() == Some("50021")
+                    && aura["eff_p0"].as_str() == Some("2")
             }),
             "{sample}"
         );
