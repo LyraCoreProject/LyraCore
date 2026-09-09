@@ -400,12 +400,22 @@ fn playerbots_orders_authenticate_follow_and_do_not_restart_a_retained_cast() {
         "playerbots_fixture_companion_health",
         &[&fixture.mage, "25"],
     );
-    pass(node, &fixture.priest);
-    let pending = node.query_rows(&format!(
-        "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {}",
-        fixture.priest
-    ));
+    node.assert_call("playerbots_fixture_roles_priest_mana", &[&fixture.priest]);
+    let mut pending = Vec::new();
+    let cast_started = poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.priest);
+        pending = node.query_rows(&format!(
+            "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {} AND spell_id = 2050 AND target_guid = {}",
+            fixture.priest, fixture.mage
+        ));
+        pending.len() == 1
+    });
     evidence(&fixture, "follow-cast-started");
+    assert!(
+        cast_started,
+        "Lesser Heal did not start: {:?}",
+        runner(node, &fixture.priest)
+    );
     assert_eq!(pending.len(), 1);
     let cast_id = pending[0]["scheduled_id"].clone();
     let before = runner(node, &fixture.priest);
@@ -574,6 +584,7 @@ fn playerbots_stay_blocks_heal_positioning_but_allows_in_range_healing_and_survi
         "playerbots_fixture_companion_health",
         &[&fixture.priest, "1"],
     );
+    node.assert_call("playerbots_fixture_runner_survival", &[&fixture.priest]);
     pass(node, &fixture.priest);
     let survival = runner(node, &fixture.priest);
     evidence(&fixture, "stay-survival-interrupt");
@@ -814,11 +825,28 @@ fn playerbots_target_pulls_only_the_exact_eligible_creature_and_releases_control
         &fixture.warrior,
         true,
     );
-    let melee = node.query_rows(&format!(
-        "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
-        fixture.warrior
-    ));
+    let approach = runner(node, &fixture.warrior);
+    let leg = movement_leg(node, &fixture.warrior);
+    evidence(&fixture, "target-exact-approach");
+    assert!(approach["chosen"].contains(exact));
+    assert!(approach["chosen"].contains("move"));
+    let leg = leg.expect("exact Target did not start an approach");
+    finish_movement(node, &fixture.warrior, &leg);
+    let mut melee = Vec::new();
+    let pulled = poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.warrior);
+        melee = node.query_rows(&format!(
+            "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
+            fixture.warrior
+        ));
+        melee.len() == 1 && melee[0]["target_guid"] == *exact
+    });
     evidence(&fixture, "target-exact-pull");
+    assert!(
+        pulled,
+        "exact Target did not enter melee: {:?}",
+        runner(node, &fixture.warrior)
+    );
     assert_eq!(melee.len(), 1);
     assert_eq!(melee[0]["target_guid"], *exact);
     assert_ne!(melee[0]["target_guid"], *nearer);
@@ -1209,16 +1237,23 @@ fn playerbots_human_party_suspends_then_rechecks_the_retained_solo_quest() {
         "playerbots_fixture_companion_health",
         &[&fixture.warrior, "100"],
     );
-    pass(node, &fixture.warrior);
-    let solo_runner = runner(node, &fixture.warrior);
+    let mut solo_runner = runner(node, &fixture.warrior);
+    let quest_selected = poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.warrior);
+        solo_runner = runner(node, &fixture.warrior);
+        solo_runner["objective"]
+            .to_ascii_lowercase()
+            .contains("quest")
+    });
     let retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {}",
         fixture.warrior
     ));
     evidence(&fixture, "solo-quest-before-party");
-    assert!(solo_runner["objective"]
-        .to_ascii_lowercase()
-        .contains("quest"));
+    assert!(
+        quest_selected,
+        "solo Quest did not become active: {solo_runner:?}"
+    );
     assert_eq!(retained.len(), 1);
     assert_eq!(retained[0]["quest_entry"], "7");
 
