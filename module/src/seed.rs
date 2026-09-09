@@ -1317,6 +1317,8 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     );
     effect(15007, 0, 0xA0, -10, 0, 0, 0xFF, 1); // −10 to ALL stats (STAT_ALL), self; p0_kind 1 P_STAT_ID
 
+    reconcile_curated_starter_role_levels(ctx);
+
     // Talents — the starter Warrior talent metadata + passive talent spells (reserved 51xxx
     // ids, above the importer's vanilla range, never in a createinfo kit). Idempotent + shared with
     // `debug_seed_talents` (init does NOT re-run on an auto-migrate publish, so the live DB re-seeds via that).
@@ -1326,6 +1328,154 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     // dump lands wholesale. Idempotent + shared with `debug_repair_after_publish`, which is how an
     // already-migrated development database picks up reconciled rows (init does NOT re-run).
     seed_spell_groups(ctx);
+}
+
+/// Restore classic training levels on exact old curated headers that advertised level zero.
+/// Imported or tuned rows have a different shape and remain authoritative.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn reconcile_curated_starter_role_levels(ctx: &ReducerContext) -> u32 {
+    let spells = ctx.db.game_spell();
+    let mut repaired = 0;
+    for (spell_id, level) in [
+        (133, 1),
+        (139, 8),
+        (168, 1),
+        (355, 10),
+        (1243, 1),
+        (2050, 1),
+        (6673, 1),
+    ] {
+        let Some(mut spell) = spells.spell_id().find(spell_id) else {
+            continue;
+        };
+        let old_curated_shape = spell.gcd_ms == 1500
+            && spell.cooldown_ms == 0
+            && spell.mechanic == 0
+            && spell.aura_interrupt == 0
+            && spell.attributes == 0
+            && spell.spell_level == 0
+            && spell.max_level == 0
+            && spell.cast_flags == 0
+            && spell.stances == 0
+            && spell.family_name == 0
+            && spell.family_flags == 0
+            && match spell_id {
+                133 => {
+                    spell.name == "Fireball"
+                        && spell.power_type == 0
+                        && spell.cost == 0
+                        && spell.cast_time_ms == 0
+                        && spell.range_yd == 30
+                        && spell.duration_ms == 0
+                        && spell.school_mask == 4
+                        && spell.dispel_type == 0
+                        && spell.max_stacks == 0
+                        && !spell.is_negative
+                        && spell.proc_flags == 0
+                        && spell.proc_chance == 0
+                        && spell.proc_charges == 0
+                }
+                139 => {
+                    spell.name == "Renew"
+                        && spell.power_type == 0
+                        && spell.cost == 0
+                        && spell.cast_time_ms == 0
+                        && spell.cooldown_ms == 0
+                        && spell.range_yd == 40
+                        && spell.duration_ms == 15_000
+                        && spell.school_mask == 2
+                        && spell.dispel_type == 1
+                        && spell.max_stacks == 0
+                        && !spell.is_negative
+                        && spell.proc_flags == 0
+                        && spell.proc_chance == 0
+                        && spell.proc_charges == 0
+                }
+                168 => {
+                    spell.name == "Frost Armor"
+                        && spell.power_type == 0
+                        && spell.cost == 0
+                        && spell.cast_time_ms == 0
+                        && spell.range_yd == 0
+                        && spell.duration_ms == u32::MAX
+                        && spell.school_mask == 16
+                        && spell.dispel_type == 0
+                        && spell.max_stacks == 0
+                        && spell.proc_flags == 0x28
+                        && spell.proc_chance == 100
+                        && spell.proc_charges == 0
+                        && !spell.is_negative
+                }
+                355 => {
+                    spell.name == "Taunt"
+                        && spell.power_type == 1
+                        && spell.cost == 0
+                        && spell.cast_time_ms == 0
+                        && spell.cooldown_ms == 0
+                        && spell.range_yd == 30
+                        && spell.duration_ms == 0
+                        && spell.school_mask == 1
+                        && spell.dispel_type == 0
+                        && spell.max_stacks == 0
+                        && spell.is_negative
+                        && spell.proc_flags == 0
+                        && spell.proc_chance == 0
+                        && spell.proc_charges == 0
+                }
+                1243 => {
+                    spell.name == "Power Word: Fortitude"
+                        && spell.power_type == 0
+                        && spell.cost == 0
+                        && spell.cast_time_ms == 0
+                        && spell.range_yd == 30
+                        && spell.duration_ms == 1_800_000
+                        && spell.school_mask == 0
+                        && spell.dispel_type == 0
+                        && spell.max_stacks == 1
+                        && !spell.is_negative
+                        && spell.proc_flags == 0
+                        && spell.proc_chance == 0
+                        && spell.proc_charges == 0
+                }
+                2050 => {
+                    spell.name == "Lesser Heal"
+                        && spell.power_type == 0
+                        && spell.cost == 30
+                        && spell.cast_time_ms == 1500
+                        && spell.range_yd == 40
+                        && spell.duration_ms == 0
+                        && spell.school_mask == 2
+                        && spell.dispel_type == 0
+                        && spell.max_stacks == 0
+                        && !spell.is_negative
+                        && spell.proc_flags == 0
+                        && spell.proc_chance == 0
+                        && spell.proc_charges == 0
+                }
+                6673 => {
+                    spell.name == "Battle Shout"
+                        && spell.power_type == 1
+                        && spell.cost == 0
+                        && spell.cast_time_ms == 0
+                        && spell.range_yd == 0
+                        && spell.duration_ms == 30_000
+                        && spell.school_mask == 1
+                        && spell.dispel_type == 0
+                        && spell.max_stacks == 1
+                        && !spell.is_negative
+                        && spell.proc_flags == 0
+                        && spell.proc_chance == 0
+                        && spell.proc_charges == 0
+                }
+                _ => false,
+            };
+        if old_curated_shape {
+            spell.spell_level = level;
+            spells.spell_id().update(spell);
+            repaired += 1;
+        }
+    }
+    repaired
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -1345,7 +1495,7 @@ fn legacy_lesser_heal_header(spell: &Spell) -> bool {
         && spell.max_stacks == 0
         && spell.aura_interrupt == 0
         && spell.attributes == 0
-        && spell.spell_level == 0
+        && matches!(spell.spell_level, 0 | 1)
         && spell.max_level == 0
         && !spell.is_negative
         && spell.cast_flags == 0
@@ -1379,8 +1529,8 @@ fn legacy_lesser_heal_effect(effect: &SpellEffect) -> bool {
         && !effect.enters_combat
 }
 
-/// Repair only the exact former hand-authored Lesser Heal row. Imported or tuned spell data does
-/// not match the complete header and effect shapes and remains authoritative.
+/// Repair only the exact curated Lesser Heal row, before or after its level reconciliation.
+/// Imported or tuned spell data does not match both complete shapes and remains authoritative.
 #[cfg(feature = "debug_reducers")]
 pub(crate) fn repair_lesser_heal_target(ctx: &ReducerContext) -> u64 {
     let Some(spell) = ctx.db.game_spell().spell_id().find(2050) else {

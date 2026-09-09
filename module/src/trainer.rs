@@ -372,7 +372,7 @@ fn admit_profile_spell(
 #[cfg_attr(not(has_packages), allow(dead_code))]
 fn demo_profile_spell_admitted(class: u8, spell_id: u32) -> bool {
     match class {
-        1 => matches!(spell_id, 355 | 7386),
+        1 => matches!(spell_id, 355 | 6673 | 7386),
         2 => matches!(spell_id, 635 | 853 | 19740 | 20154 | 20271 | 26573),
         5 => matches!(spell_id, 139 | 2050),
         8 => spell_id == 133,

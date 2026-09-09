@@ -34,7 +34,7 @@
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
-use crate::{game_character, game_world_entity};
+use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
 /// Vanilla party size.
 pub const GROUP_MAX_MEMBERS: usize = 5;
@@ -482,6 +482,9 @@ pub struct PartyUnitFacts {
     pub health: u32,
     pub max_health: u32,
     pub dead: bool,
+    /// The unit's client selection. Selection identifies the designated target but does not start a
+    /// fight by itself.
+    pub target_guid: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -495,15 +498,49 @@ pub struct PartyFacts {
     pub group_id: u64,
     pub leader_guid: u64,
     pub members: Vec<PartyMemberFacts>,
+    /// Living hostile units with current evidence that this party is already fighting them.
+    pub enemies: Vec<PartyEnemyFacts>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartyEnemyFacts {
+    pub guid: u64,
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub health: u32,
+    pub max_health: u32,
+    pub attacking_party: bool,
+    pub party_attacking: bool,
+    pub party_casting: bool,
+    pub party_has_threat: bool,
+    pub current_target_guid: Option<u64>,
+    pub top_threat_guid: Option<u64>,
+    pub control: Option<crate::spell::UnitControl>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PartyFactsUnavailable {
     pub group_id: u64,
+    pub reason: PartyFactsUnavailableReason,
 }
 
-/// Read one Character's local durable party mirror and current member facts. Membership remains
-/// useful when a member has no live entity on this Shard, so those facts are nullable.
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartyFactsUnavailableReason {
+    MissingGroup,
+    FightLimit,
+}
+
+/// Read one Character's local durable party mirror, member facts, and enemies with current party
+/// melee, cast, threat, or control evidence. Membership remains useful when a member has no live
+/// entity on this Shard, so those facts are nullable.
+///
+/// Reads stop with `FightLimit` above five members, 24 incoming melee or threat-source rows for one
+/// member, one pending cast for one member, or 24 aggregate enemy GUIDs. Each retained enemy permits
+/// 16 threat sources, 64 control auras, and three effects on a pending spell. A missing parent Group
+/// stops with `MissingGroup`; neither failure returns facts selected from an arbitrary prefix.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub fn party_facts(
     ctx: &ReducerContext,
@@ -519,8 +556,22 @@ pub fn party_facts(
             .find(member.group_id)
             .ok_or(PartyFactsUnavailable {
                 group_id: member.group_id,
+                reason: PartyFactsUnavailableReason::MissingGroup,
             })?;
-    let members = members_of(ctx, member.group_id)
+    let members: Vec<_> = ctx
+        .db
+        .game_group_member()
+        .by_group()
+        .filter(&member.group_id)
+        .take(GROUP_MAX_MEMBERS + 1)
+        .collect();
+    if members.len() > GROUP_MAX_MEMBERS {
+        return Err(PartyFactsUnavailable {
+            group_id: member.group_id,
+            reason: PartyFactsUnavailableReason::FightLimit,
+        });
+    }
+    let members: Vec<_> = members
         .into_iter()
         .map(|member| {
             let unit = ctx
@@ -537,6 +588,7 @@ pub fn party_facts(
                     health: entity.health,
                     max_health: entity.max_health,
                     dead: entity.dead,
+                    target_guid: entity.target_guid,
                 });
             PartyMemberFacts {
                 character_guid: member.character_guid,
@@ -544,10 +596,145 @@ pub fn party_facts(
             }
         })
         .collect();
+    let party_guids: Vec<_> = members.iter().map(|member| member.character_guid).collect();
+    let anchor = ctx.db.game_world_entity().guid().find(character_guid);
+    let melee = ctx.db.game_melee_attack();
+    let pending = ctx.db.game_pending_cast();
+    let mut enemy_guids = std::collections::BTreeSet::new();
+    let mut pending_damage_targets = std::collections::BTreeSet::new();
+    let mut pending_control_targets = std::collections::BTreeMap::new();
+    const ENEMY_LIMIT: usize = 24;
+    const THREAT_SOURCE_LIMIT: usize = 16;
+    let unavailable = || PartyFactsUnavailable {
+        group_id: member.group_id,
+        reason: PartyFactsUnavailableReason::FightLimit,
+    };
+    for guid in &party_guids {
+        if let Some(attack) = melee.attacker_guid().find(*guid) {
+            enemy_guids.insert(attack.target_guid);
+        }
+        let attacks: Vec<_> = melee
+            .by_target()
+            .filter(guid)
+            .take(ENEMY_LIMIT + 1)
+            .collect();
+        if attacks.len() > ENEMY_LIMIT {
+            return Err(unavailable());
+        }
+        for attack in attacks {
+            enemy_guids.insert(attack.attacker_guid);
+        }
+        let casts: Vec<_> = pending.by_caster().filter(guid).take(2).collect();
+        if casts.len() > 1 {
+            return Err(unavailable());
+        }
+        for cast in casts {
+            enemy_guids.insert(cast.target_guid);
+            match crate::spell::spell_control(ctx, cast.spell_id).map_err(|_| unavailable())? {
+                Some(control) => {
+                    pending_control_targets
+                        .entry(cast.target_guid)
+                        .and_modify(|current| {
+                            if matches!(control, crate::spell::UnitControl::Incapacitated)
+                                || matches!(
+                                    (control, *current),
+                                    (
+                                        crate::spell::UnitControl::Feared,
+                                        crate::spell::UnitControl::Rooted
+                                    )
+                                )
+                            {
+                                *current = control;
+                            }
+                        })
+                        .or_insert(control);
+                }
+                None => {
+                    pending_damage_targets.insert(cast.target_guid);
+                }
+            }
+        }
+        let threat_rows: Vec<_> = ctx
+            .db
+            .game_threat()
+            .by_source()
+            .filter(guid)
+            .take(ENEMY_LIMIT + 1)
+            .collect();
+        if threat_rows.len() > ENEMY_LIMIT {
+            return Err(unavailable());
+        }
+        for row in threat_rows {
+            enemy_guids.insert(row.creature_guid);
+        }
+        if enemy_guids.len() > ENEMY_LIMIT {
+            return Err(unavailable());
+        }
+    }
+    let mut enemies = Vec::new();
+    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000).max(0) as u64;
+    for guid in enemy_guids {
+        let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
+            continue;
+        };
+        let Some(anchor) = anchor.as_ref() else {
+            continue;
+        };
+        if entity.is_player()
+            || entity.dead
+            || (entity.map_id, entity.instance_id) != (anchor.map_id, anchor.instance_id)
+            || !crate::combat::may_harm(ctx, anchor, &entity)
+        {
+            continue;
+        }
+        let current_target_guid = melee.attacker_guid().find(guid).map(|row| row.target_guid);
+        let attacking_party =
+            current_target_guid.is_some_and(|target| party_guids.contains(&target));
+        let party_attacking = party_guids.iter().any(|party_guid| {
+            melee
+                .attacker_guid()
+                .find(*party_guid)
+                .is_some_and(|row| row.target_guid == guid)
+        });
+        let party_casting = pending_damage_targets.contains(&guid);
+        let threat =
+            crate::threat::party_threat_facts(ctx, guid, &party_guids, THREAT_SOURCE_LIMIT)
+                .map_err(|_| unavailable())?;
+        let active_threat = threat.party_has_threat && entity.combat_until_ms > now_ms;
+        let pending_control = pending_control_targets.get(&guid).copied();
+        if !(attacking_party
+            || party_attacking
+            || party_casting
+            || active_threat
+            || pending_control.is_some())
+        {
+            continue;
+        }
+        let control = pending_control
+            .or(crate::spell::control_status(ctx, guid, 64).map_err(|_| unavailable())?);
+        enemies.push(PartyEnemyFacts {
+            guid,
+            map_id: entity.map_id,
+            instance_id: entity.instance_id,
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+            health: entity.health,
+            max_health: entity.max_health,
+            attacking_party,
+            party_attacking,
+            party_casting,
+            party_has_threat: active_threat,
+            current_target_guid,
+            top_threat_guid: threat.top_target_guid,
+            control,
+        });
+    }
     Ok(Some(PartyFacts {
         group_id: member.group_id,
         leader_guid: group.leader_guid,
         members,
+        enemies,
     }))
 }
 

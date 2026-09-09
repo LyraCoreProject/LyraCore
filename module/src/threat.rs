@@ -269,6 +269,57 @@ pub fn top_threat_target(ctx: &ReducerContext, creature_guid: u64) -> Option<u64
         .map(|(g, _)| g)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PartyThreatFacts {
+    pub top_target_guid: Option<u64>,
+    pub party_has_threat: bool,
+}
+
+/// Read a creature's valid threat sources for party decisions. The extra row turns an oversized
+/// table into an explicit unavailable result instead of choosing from an arbitrary prefix.
+pub(crate) fn party_threat_facts(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    party_guids: &[u64],
+    limit: usize,
+) -> Result<PartyThreatFacts, ()> {
+    let entities = ctx.db.game_world_entity();
+    let creature = entities.guid().find(creature_guid).ok_or(())?;
+    let rows: Vec<_> = ctx
+        .db
+        .game_threat()
+        .by_creature()
+        .filter(&creature_guid)
+        .take(limit.saturating_add(1))
+        .collect();
+    if rows.len() > limit {
+        return Err(());
+    }
+    let valid: Vec<_> = rows
+        .into_iter()
+        .filter(|row| {
+            entities.guid().find(row.source_guid).is_some_and(|source| {
+                !source.dead
+                    && (source.map_id, source.instance_id)
+                        == (creature.map_id, creature.instance_id)
+            })
+        })
+        .collect();
+    Ok(PartyThreatFacts {
+        top_target_guid: valid
+            .iter()
+            .max_by(|a, b| {
+                a.threat
+                    .cmp(&b.threat)
+                    .then(b.source_guid.cmp(&a.source_guid))
+            })
+            .map(|row| row.source_guid),
+        party_has_threat: valid
+            .iter()
+            .any(|row| party_guids.contains(&row.source_guid)),
+    })
+}
+
 /// Top `source_guid`'s threat on `creature_guid` to ONE ABOVE the current table maximum — the TAUNT
 /// effect. Makes the taunter the highest-threat source so the next retarget pass switches the creature
 /// to it, even if the taunter had done little damage (the threat-yank). On an empty table this seeds
