@@ -257,7 +257,7 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     assert!(
         initial_engagement.iter().any(|attack| {
             attack["attacker_guid"] == blocker
-                && attack["target_guid"] == ally
+                && attack["target_guid"] == ally.as_str()
                 && attack["ranged_spell_id"] == "0"
         }),
         "{evidence}"
