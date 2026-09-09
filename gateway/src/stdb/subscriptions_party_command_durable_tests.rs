@@ -195,16 +195,10 @@ fn stage_roles(cli: &PrivateCli, server: &str, database: &str, guid_base: u64) -
         .unwrap()["character_guid"]
         .parse()
         .unwrap();
-    let priest: u64 = bots
-        .iter()
-        .find(|row| row["class"] == "5")
-        .unwrap()["character_guid"]
+    let priest: u64 = bots.iter().find(|row| row["class"] == "5").unwrap()["character_guid"]
         .parse()
         .unwrap();
-    let mage: u64 = bots
-        .iter()
-        .find(|row| row["class"] == "8")
-        .unwrap()["character_guid"]
+    let mage: u64 = bots.iter().find(|row| row["class"] == "8").unwrap()["character_guid"]
         .parse()
         .unwrap();
     let leader = bots
@@ -404,9 +398,17 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "target_database": topology.target,
         "realm_database": topology.realm,
         "source_intents": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_intent"),
+        "source_issuers": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_issuer"),
+        "source_dispatch_lanes": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_dispatch_lane"),
         "source_results": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
+        "source_two_intents": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_party_command_intent"),
+        "source_two_issuers": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_party_command_issuer"),
+        "source_two_results": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
         "target_receipts": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_receipt"),
+        "target_issuers": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_issuer"),
         "target_orders": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM pkg_playerbots_companion_order"),
+        "source_receipts": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_receipt"),
+        "source_orders": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM pkg_playerbots_companion_order"),
         "realm_groups": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_group"),
         "realm_members": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_group_member"),
         "content": {"revision": "playerbots-starter-roles-v1", "imported_content": null},
@@ -504,7 +506,14 @@ impl CommandTopology {
 #[ignore = "requires SpacetimeDB 2.7.1, the full Package union, and the Wasm toolchain"]
 fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     let topology = CommandTopology::new("party-command-crash-recovery");
-    let shard_map = format!("{}:*={}", topology.target_party.map_id, topology.target);
+    let destination_map = topology.target_party.map_id + 1;
+    let shard_map = format!(
+        "{}:*={},{}:*={}",
+        topology.target_party.map_id,
+        topology.target,
+        destination_map,
+        topology.source()
+    );
     let _environment = TopologyEnv::install(&shard_map, &topology.realm);
     let (_runtime, source) = topology.coordinator(topology.source(), "party-command-source-one");
     let target = source.shard_handle(&topology.target).unwrap();
@@ -563,6 +572,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
         source_identity: target_intent.source_identity,
         intent_id: target_intent.id,
         issuer_guid: target_intent.issuer_guid,
+        issuer_sequence: target_intent.issuer_sequence,
         group_id: authority.group_id,
         leader_guid: authority.leader_guid,
         members: authority.members,
@@ -571,7 +581,9 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
         authority_member_guid: target_intent.authority_member_guid,
         exact_target_guid: target_intent.exact_target_guid,
         expires_micros: target_intent.expires_micros,
-        receipt_retain_until_micros: target_intent.expires_micros.saturating_add(30_000_000),
+        receipt_retain_until_micros: target_intent
+            .expires_micros
+            .saturating_add(lyracore_shared::group::COMMAND_RESULT_WINDOW_MICROS),
     };
     assert_eq!(
         target.apply_admitted_party_command(&admitted).unwrap(),
@@ -590,6 +602,123 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     assert_eq!(
         terminal_messages(&topology.cli, topology.node.server(), topology.source()),
         1
+    );
+    topology.cli.call(
+        topology.node.server(),
+        &topology.target,
+        "debug_bot_transfer",
+        &[
+            &topology.target_party.warrior.to_string(),
+            &destination_map.to_string(),
+            "0",
+            "1200",
+            "1200",
+            "50",
+            "0",
+            r#""party-command-receipt""#,
+        ],
+    );
+    let mut delayed_admitted = admitted.clone();
+    delayed_admitted.intent_id = target_applied.saturating_add(1_000_000);
+    let in_transit = target
+        .apply_admitted_party_command(&delayed_admitted)
+        .unwrap_err();
+    evidence(&topology, "old-holder-rejects-after-transfer-begins");
+    assert!(in_transit.to_string().contains("TransferInProgress"));
+    assert!(topology
+        .cli
+        .rows(
+            topology.node.server(),
+            &topology.target,
+            &format!(
+                "SELECT id FROM game_party_command_receipt WHERE intent_id = {}",
+                delayed_admitted.intent_id
+            ),
+        )
+        .is_empty());
+    crate::world::transfer::run_bot_transfer(
+        &target,
+        topology.target_party.warrior,
+        destination_map,
+        0,
+        "party-command-receipt",
+    )
+    .unwrap();
+    assert!(poll_until(POLL_TIMEOUT, || topology
+        .cli
+        .rows(
+            topology.node.server(),
+            topology.source(),
+            &format!(
+                "SELECT guid FROM game_character WHERE guid = {}",
+                topology.target_party.warrior
+            ),
+        )
+        .len()
+        == 1));
+    let moved_receipt = row(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &format!(
+            "SELECT outcome FROM game_party_command_receipt WHERE intent_id = {target_applied}"
+        ),
+    );
+    evidence(&topology, "target-receipt-transferred-before-retry");
+    assert!(moved_receipt["outcome"]
+        .to_ascii_lowercase()
+        .contains("applied"));
+    assert!(topology
+        .cli
+        .rows(
+            topology.node.server(),
+            &topology.target,
+            &format!(
+                "SELECT id FROM game_party_command_receipt WHERE intent_id = {target_applied}"
+            ),
+        )
+        .is_empty());
+    let delayed_old_holder = target
+        .apply_admitted_party_command(&delayed_admitted)
+        .unwrap_err();
+    evidence(&topology, "old-holder-rejects-after-transfer-finish");
+    assert!(delayed_old_holder
+        .to_string()
+        .contains("NotCharacterHolder"));
+    assert!(topology
+        .cli
+        .rows(
+            topology.node.server(),
+            &topology.target,
+            &format!(
+                "SELECT id FROM game_party_command_receipt WHERE intent_id = {}",
+                delayed_admitted.intent_id
+            ),
+        )
+        .is_empty());
+    assert_eq!(
+        party::run_party_command_intent(&source, &target_intent, 201).unwrap(),
+        CompanionCommandOutcome::Applied
+    );
+    let after_transfer_retry = row(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &format!(
+            "SELECT revision, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            topology.target_party.warrior
+        ),
+    );
+    assert_eq!(after_transfer_retry, after_target);
+    topology.cli.call(
+        topology.node.server(),
+        topology.source(),
+        "playerbots_fixture_orders_partition",
+        &[
+            &topology.source_one_party.leader.to_string(),
+            &destination_map.to_string(),
+            "0",
+        ],
     );
     for sequence in 0..9 {
         let operation = if sequence % 2 == 0 { "follow" } else { "stay" };
@@ -610,7 +739,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     let before_delayed_retry = row(
         &topology.cli,
         topology.node.server(),
-        &topology.target,
+        topology.source(),
         &format!(
             "SELECT revision, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
             topology.target_party.warrior
@@ -618,13 +747,13 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     );
     evidence(&topology, "target-receipt-after-history-rollover");
     assert_eq!(
-        party::run_party_command_intent(&source, &target_intent, 201).unwrap(),
+        source.apply_admitted_party_command(&admitted).unwrap(),
         CompanionCommandOutcome::Applied
     );
     let recovered = row(
         &topology.cli,
         topology.node.server(),
-        &topology.target,
+        topology.source(),
         &format!(
             "SELECT revision, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
             topology.target_party.warrior
@@ -644,12 +773,22 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
         &topology.cli,
         topology.node.server(),
         &topology.realm,
-        &topology.target,
+        topology.source(),
         &topology.target_party,
         topology.source_two_party.leader,
     );
     let (_runtime_two, source_two) =
         topology.coordinator(&topology.source_two, "party-command-source-two");
+    topology.cli.call(
+        topology.node.server(),
+        &topology.source_two,
+        "playerbots_fixture_orders_partition",
+        &[
+            &topology.source_two_party.leader.to_string(),
+            &destination_map.to_string(),
+            "0",
+        ],
+    );
     let same_numeric_id = queue(
         &topology.cli,
         topology.node.server(),
@@ -669,7 +808,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     );
     let receipts = topology.cli.rows(
         topology.node.server(),
-        &topology.target,
+        topology.source(),
         &format!("SELECT source_identity, intent_id FROM game_party_command_receipt WHERE intent_id = {claimed}"),
     );
     evidence(&topology, "same-intent-id-distinct-source-modules");
@@ -678,6 +817,365 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
         2,
         "distinct source identities collided: {receipts:?}"
     );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1, the full Package union, and the Wasm toolchain"]
+fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_source() {
+    let topology = CommandTopology::new("party-command-issuer-sequence-transfer");
+    let destination_map = topology.source_one_party.map_id + 2;
+    let shard_map = format!(
+        "{}:*={},{}:*={}",
+        topology.target_party.map_id, topology.target, destination_map, topology.source_two
+    );
+    let _environment = TopologyEnv::install(&shard_map, &topology.realm);
+    let (_runtime, source) = topology.coordinator(topology.source(), "party-command-old-source");
+    let target = source.shard_handle(&topology.target).unwrap();
+
+    let older_id = queue(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &topology.actor_one,
+        &format!("stay|{}", topology.target_party.warrior),
+    );
+    let older = cached_intent(&source, older_id);
+    assert_eq!(older.issuer_sequence, 1);
+
+    topology.cli.call(
+        topology.node.server(),
+        topology.source(),
+        "debug_bot_transfer",
+        &[
+            &topology.source_one_party.leader.to_string(),
+            &destination_map.to_string(),
+            "0",
+            "1200",
+            "1200",
+            "50",
+            "0",
+            r#""party-command-issuer""#,
+        ],
+    );
+    crate::world::transfer::run_bot_transfer(
+        &source,
+        topology.source_one_party.leader,
+        destination_map,
+        0,
+        "party-command-issuer",
+    )
+    .unwrap();
+    assert!(poll_until(POLL_TIMEOUT, || topology
+        .cli
+        .rows(
+            topology.node.server(),
+            &topology.source_two,
+            &format!(
+                "SELECT guid FROM game_character WHERE guid = {}",
+                topology.source_one_party.leader
+            ),
+        )
+        .len()
+        == 1));
+    assert!(topology
+        .cli
+        .rows(
+            topology.node.server(),
+            topology.source(),
+            &format!(
+                "SELECT character_guid FROM game_party_command_issuer WHERE character_guid = {}",
+                topology.source_one_party.leader
+            ),
+        )
+        .is_empty());
+    let moved_issuer = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.source_two,
+        &format!(
+            "SELECT last_sequence FROM game_party_command_issuer WHERE character_guid = {}",
+            topology.source_one_party.leader
+        ),
+    );
+    assert_eq!(moved_issuer["last_sequence"], "1");
+
+    topology.cli.call(
+        topology.node.server(),
+        &topology.source_two,
+        "playerbots_fixture_orders_partition",
+        &[
+            &topology.source_one_party.leader.to_string(),
+            &topology.target_party.map_id.to_string(),
+            "0",
+        ],
+    );
+    let moved_actor = source_actor(
+        &topology.cli,
+        topology.node.server(),
+        &topology.source_two,
+        topology.source_one_party.leader,
+        "PB009MOVEDLEADER",
+    );
+    let (_runtime_two, source_two) =
+        topology.coordinator(&topology.source_two, "party-command-new-source");
+    let newer_id = queue(
+        &topology.cli,
+        topology.node.server(),
+        &topology.source_two,
+        &moved_actor,
+        &format!("follow|{}", topology.target_party.warrior),
+    );
+    let newer = cached_intent(&source_two, newer_id);
+    assert_eq!(newer.issuer_guid, older.issuer_guid);
+    assert_eq!(newer.issuer_sequence, 2);
+    assert_ne!(newer.source_identity, older.source_identity);
+    assert_eq!(
+        party::run_party_command_intent(&source_two, &newer, 701).unwrap(),
+        CompanionCommandOutcome::Applied
+    );
+    let after_newer = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        &format!(
+            "SELECT revision, order, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            topology.target_party.warrior
+        ),
+    );
+
+    assert_eq!(
+        party::run_party_command_intent(&source, &older, 702).unwrap(),
+        CompanionCommandOutcome::Superseded
+    );
+    let after_older = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        &format!(
+            "SELECT revision, order, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            topology.target_party.warrior
+        ),
+    );
+    let older_receipt = target
+        .confirm_party_command_receipt(older.source_identity, older_id)
+        .unwrap();
+    evidence(
+        &topology,
+        "issuer-transfer-newer-command-fences-older-source",
+    );
+    assert_eq!(after_older, after_newer);
+    assert!(after_older["order"].to_ascii_lowercase().contains("follow"));
+    assert_eq!(older_receipt, Some(CompanionCommandOutcome::Superseded));
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1, the full Package union, and the Wasm toolchain"]
+fn companion_command_receipt_stays_with_a_same_database_transfer() {
+    let topology = CommandTopology::new("party-command-same-database-transfer");
+    let destination_map = topology.target_party.map_id + 1;
+    let shard_map = format!(
+        "{}:*={},{}:*={}",
+        topology.target_party.map_id, topology.target, destination_map, topology.target
+    );
+    let _environment = TopologyEnv::install(&shard_map, &topology.realm);
+    let (_runtime, source) =
+        topology.coordinator(topology.source(), "party-command-same-database-source");
+    let target = source.shard_handle(&topology.target).unwrap();
+    let intent_id = queue(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &topology.actor_one,
+        &format!("stay|{}", topology.target_party.warrior),
+    );
+    let intent = cached_intent(&source, intent_id);
+    assert_eq!(
+        party::run_party_command_intent(&source, &intent, 601).unwrap(),
+        CompanionCommandOutcome::Applied
+    );
+    topology.cli.call(
+        topology.node.server(),
+        &topology.target,
+        "debug_bot_transfer",
+        &[
+            &topology.target_party.warrior.to_string(),
+            &destination_map.to_string(),
+            "0",
+            "1200",
+            "1200",
+            "50",
+            "0",
+            r#""party-command-same-database""#,
+        ],
+    );
+    crate::world::transfer::run_bot_transfer(
+        &target,
+        topology.target_party.warrior,
+        destination_map,
+        0,
+        "party-command-same-database",
+    )
+    .unwrap();
+    let receipt = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        &format!("SELECT outcome FROM game_party_command_receipt WHERE intent_id = {intent_id}"),
+    );
+    evidence(&topology, "same-database-transfer-retains-receipt");
+    assert!(receipt["outcome"].to_ascii_lowercase().contains("applied"));
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1, the full Package union, and the Wasm toolchain"]
+fn companion_command_lost_receipt_after_guarantee_reports_unknown_without_reapply() {
+    let topology = CommandTopology::new("party-command-outcome-unknown");
+    let shard_map = format!("{}:*={}", topology.target_party.map_id, topology.target);
+    let _environment = TopologyEnv::install(&shard_map, &topology.realm);
+    let (_runtime, source) =
+        topology.coordinator(topology.source(), "party-command-unknown-source");
+    let target = source.shard_handle(&topology.target).unwrap();
+    let intent_id = queue(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &topology.actor_one,
+        &format!("stay|{}", topology.target_party.warrior),
+    );
+    let intent = cached_intent(&source, intent_id);
+    source.claim_party_command_intent(intent_id, 711).unwrap();
+    let authority = source
+        .realm_core()
+        .unwrap()
+        .group_roster(topology.source_one_party.leader)
+        .unwrap();
+    let admitted = party::AdmittedCompanionCommand {
+        source_identity: intent.source_identity,
+        intent_id,
+        issuer_guid: intent.issuer_guid,
+        issuer_sequence: intent.issuer_sequence,
+        group_id: authority.group_id,
+        leader_guid: authority.leader_guid,
+        members: authority.members,
+        kind: intent.kind,
+        bot_guid: intent.bot_guid,
+        authority_member_guid: intent.authority_member_guid,
+        exact_target_guid: intent.exact_target_guid,
+        expires_micros: intent.expires_micros,
+        receipt_retain_until_micros: intent
+            .expires_micros
+            .saturating_add(lyracore_shared::group::COMMAND_RESULT_WINDOW_MICROS),
+    };
+    assert_eq!(
+        target.apply_admitted_party_command(&admitted).unwrap(),
+        CompanionCommandOutcome::Applied
+    );
+    let applied_order = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        &format!(
+            "SELECT revision, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            topology.target_party.warrior
+        ),
+    );
+    topology.cli.call(
+        topology.node.server(),
+        &topology.target,
+        "playerbots_fixture_command_release_receipt",
+        &[&topology.target_party.warrior.to_string()],
+    );
+    topology.cli.call(
+        topology.node.server(),
+        topology.source(),
+        "playerbots_fixture_command_expire_after_receipt_window",
+        &[&intent_id.to_string()],
+    );
+    assert!(poll_until(POLL_TIMEOUT, || {
+        cached_intent(&source, intent_id).expires_micros < intent.expires_micros
+    }));
+    let expired = cached_intent(&source, intent_id);
+    assert_eq!(
+        party::finish_expired_party_command_intent(&source, &expired, 711).unwrap(),
+        CompanionCommandOutcome::OutcomeUnknown
+    );
+    let after_unknown = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        &format!(
+            "SELECT revision, history FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            topology.target_party.warrior
+        ),
+    );
+    let response = row(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        "SELECT payload FROM game_addon_message WHERE cmd = 'playerbots.order.result'",
+    );
+    evidence(&topology, "applied-receipt-lost-after-guarantee");
+    assert_eq!(after_unknown, applied_order);
+    assert!(response["payload"].contains("OutcomeUnknown"));
+    assert_eq!(
+        terminal_messages(&topology.cli, topology.node.server(), topology.source()),
+        1
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1, the full Package union, and the Wasm toolchain"]
+fn companion_command_realm_admission_rejects_a_changed_unrelated_member() {
+    let topology = CommandTopology::new("party-command-roster-certificate");
+    let shard_map = format!("{}:*={}", topology.target_party.map_id, topology.target);
+    let _environment = TopologyEnv::install(&shard_map, &topology.realm);
+    let (_runtime, source) = topology.coordinator(topology.source(), "party-command-roster-source");
+    let realm = source.realm_core().unwrap();
+    let intent_id = queue(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &topology.actor_one,
+        &format!("follow|{}", topology.target_party.warrior),
+    );
+    let intent = cached_intent(&source, intent_id);
+    let authority = realm
+        .group_roster(topology.source_one_party.leader)
+        .unwrap();
+    let args = [
+        topology.target_party.warrior.to_string(),
+        topology.target_party.priest.to_string(),
+        topology.target_party.mage.to_string(),
+        topology.source_one_party.leader.to_string(),
+        "3".to_string(),
+    ];
+    topology.cli.call(
+        topology.node.server(),
+        &topology.realm,
+        "playerbots_fixture_orders_party",
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+
+    let outcome = realm
+        .admit_party_command_authority(
+            authority.group_id,
+            intent.issuer_guid,
+            intent.bot_guid,
+            intent.authority_member_guid,
+            authority.members,
+        )
+        .unwrap();
+
+    evidence(&topology, "realm-roster-changed-before-admission");
+    assert_eq!(outcome, CompanionCommandOutcome::StalePartyMirror);
+    assert!(topology
+        .cli
+        .rows(
+            topology.node.server(),
+            &topology.target,
+            "SELECT * FROM pkg_playerbots_companion_order",
+        )
+        .is_empty());
 }
 
 #[test]
@@ -751,6 +1249,49 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
         messages_before
     );
 
+    let mut blocked = Vec::new();
+    for _ in 0..16 {
+        blocked.push(queue(
+            &topology.cli,
+            topology.node.server(),
+            topology.source(),
+            &topology.actor_one,
+            &payload,
+        ));
+    }
+    let lane_count = u64::from(lyracore_shared::group::COMMAND_DISPATCH_LANES);
+    let warrior_lane = topology.target_party.warrior % lane_count;
+    let later_bot = [topology.target_party.priest, topology.target_party.mage]
+        .into_iter()
+        .find(|guid| *guid % lane_count != warrior_lane)
+        .expect("role fixture needs a bot in another command dispatch lane");
+    let later_id = queue(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &topology.actor_one,
+        &format!("follow|{later_bot}"),
+    );
+    source.dispatch_party_command_intents();
+    let later = row(
+        &topology.cli,
+        topology.node.server(),
+        topology.source(),
+        &format!("SELECT pending, state FROM game_party_command_intent WHERE id = {later_id}"),
+    );
+    evidence(&topology, "capacity-fair-dispatch-beyond-one-window");
+    assert_eq!(later["pending"], "false");
+    assert!(later["state"].to_ascii_lowercase().contains("applied"));
+    assert!(blocked.iter().all(|id| {
+        row(
+            &topology.cli,
+            topology.node.server(),
+            topology.source(),
+            &format!("SELECT pending FROM game_party_command_intent WHERE id = {id}"),
+        )["pending"]
+            == "true"
+    }));
+
     topology.cli.call(
         topology.node.server(),
         &topology.target,
@@ -767,13 +1308,7 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
         messages_before + 1
     );
 
-    let expiry_id = queue(
-        &topology.cli,
-        topology.node.server(),
-        topology.source(),
-        &topology.actor_one,
-        &payload,
-    );
+    let expiry_id = blocked[0];
     let expiry = cached_intent(&source, expiry_id);
     assert_eq!(
         party::run_party_command_intent(&source, &expiry, 3_001).unwrap(),
@@ -785,9 +1320,14 @@ fn companion_command_capacity_waits_without_ack_then_recovers_or_expires() {
         "playerbots_fixture_command_expire",
         &[&expiry_id.to_string()],
     );
-    let expired = cached_intent_when(&source, expiry_id, |row| row.expires_micros == 0);
+    let expired = cached_intent_when(&source, expiry_id, |row| {
+        row.expires_micros < expiry.expires_micros
+    });
+    let competing_finish =
+        party::finish_expired_party_command_intent(&source, &expired, 3_002).unwrap_err();
+    assert!(competing_finish.to_string().contains("ClaimLost"));
     assert_eq!(
-        party::finish_expired_party_command_intent(&source, &expired, 3_002).unwrap(),
+        party::finish_expired_party_command_intent(&source, &expired, 3_001).unwrap(),
         CompanionCommandOutcome::Expired
     );
     let terminal = row(

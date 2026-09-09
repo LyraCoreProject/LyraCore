@@ -3369,59 +3369,49 @@ fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<
 impl Coordinator {
     pub fn spawn_party_command_relay(&self) {
         for shard in self.all_shards() {
-            shard.arm_party_command_relay();
             let polling_shard = shard.clone();
             if let Err(error) = std::thread::Builder::new()
-                .name("party-command-scan".into())
+                .name("party-command-dispatch".into())
                 .spawn(move || loop {
-                    std::thread::sleep(Duration::from_millis(500));
-                    polling_shard.scan_party_command_intents();
+                    polling_shard.dispatch_party_command_intents();
+                    std::thread::sleep(Duration::from_millis(100));
                 })
             {
-                log::error!("could not start party command scan: {error}");
+                log::error!("could not start party command dispatcher: {error}");
             }
-            let hook_shard = shard.clone();
-            shard
-                .0
-                .on_reconnect
-                .lock()
-                .unwrap()
-                .push(Arc::new(move || hook_shard.arm_party_command_relay()));
         }
     }
 
-    fn arm_party_command_relay(&self) {
-        let store = self.clone();
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_party_command_intent()
-            .on_insert(move |_ctx, row| {
-                spawn_party_command_attempt(store.clone(), party_command_intent(row));
-            });
-        self.scan_party_command_intents();
-    }
-
-    fn scan_party_command_intents(&self) {
-        const PENDING_LIMIT: usize = 256;
-        let pending: Vec<_> = self
-            .0
-            .coord()
-            .conn
-            .db
-            .game_party_command_intent()
-            .iter()
-            .take(PENDING_LIMIT + 1)
-            .map(|row| party_command_intent(&row))
-            .collect();
-        if pending.len() > PENDING_LIMIT {
-            log::warn!(
-                "party command scan reached its {PENDING_LIMIT}-row read limit; remaining intents retain their source expiry"
-            );
-        }
-        for intent in pending.into_iter().take(PENDING_LIMIT) {
-            spawn_party_command_attempt(self.clone(), intent);
+    fn dispatch_party_command_intents(&self) {
+        const DISPATCH_LANE_LIMIT: usize = lyracore_shared::group::COMMAND_DISPATCH_LANES as usize;
+        let pending = {
+            let live = self.0.coord();
+            let lanes: Vec<_> = live
+                .conn
+                .db
+                .game_party_command_dispatch_lane()
+                .iter()
+                .take(DISPATCH_LANE_LIMIT + 1)
+                .map(|lane| lane.head_intent_id)
+                .collect();
+            if lanes.len() > DISPATCH_LANE_LIMIT {
+                log::error!("party command dispatcher found more than {DISPATCH_LANE_LIMIT} lanes");
+                return;
+            }
+            lanes
+                .into_iter()
+                .filter_map(|head_intent_id| {
+                    live.conn
+                        .db
+                        .game_party_command_intent()
+                        .id()
+                        .find(&head_intent_id)
+                        .map(|row| party_command_intent(&row))
+                })
+                .collect::<Vec<_>>()
+        };
+        for intent in pending {
+            attempt_party_command(self, intent);
         }
     }
 
@@ -3647,6 +3637,7 @@ fn party_command_intent(row: &PartyCommandIntent) -> crate::world::party::PartyC
         id: row.id,
         source_identity: row.source_identity,
         issuer_guid: row.issuer_guid,
+        issuer_sequence: row.issuer_sequence,
         kind: row.command.kind,
         bot_guid: row.command.bot_guid,
         authority_member_guid: row.command.authority_member_guid,
@@ -3655,69 +3646,33 @@ fn party_command_intent(row: &PartyCommandIntent) -> crate::world::party::PartyC
     }
 }
 
-fn spawn_party_command_attempt(
-    store: Coordinator,
-    intent: crate::world::party::PartyCommandIntent,
-) {
-    let key = (intent.source_identity.to_string(), intent.id);
-    let intent_id = intent.id;
-    let in_flight = party_commands_in_flight();
-    if !in_flight.lock().unwrap().insert(key.clone()) {
+fn attempt_party_command(store: &Coordinator, intent: crate::world::party::PartyCommandIntent) {
+    let claim_token = next_party_command_claim_token();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as i64;
+    if now >= intent.expires_micros {
+        if let Err(error) =
+            crate::world::party::finish_expired_party_command_intent(store, &intent, claim_token)
+        {
+            log::debug!("party command intent {} expiry retry: {error}", intent.id);
+            let _ = store.defer_party_command_intent(intent.id, claim_token);
+        }
         return;
     }
-    let worker_key = key.clone();
-    let spawned = std::thread::Builder::new()
-        .name("party-command-intent".into())
-        .spawn(move || {
-            let claim_token = next_party_command_claim_token();
-            loop {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros() as i64;
-                if now >= intent.expires_micros {
-                    if let Err(error) = crate::world::party::finish_expired_party_command_intent(
-                        &store,
-                        &intent,
-                        claim_token,
-                    ) {
-                        log::debug!("party command intent {} expiry retry: {error}", intent.id);
-                        std::thread::sleep(Duration::from_millis(100));
-                        continue;
-                    }
-                    break;
-                }
-                match crate::world::party::run_party_command_intent(&store, &intent, claim_token) {
-                    Ok(crate::world::party::CompanionCommandOutcome::WaitingForCapacity) => {
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                    Ok(_) => break,
-                    Err(error) => {
-                        log::debug!("party command intent {} retry: {error}", intent.id);
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                }
+    match crate::world::party::run_party_command_intent(store, &intent, claim_token) {
+        Ok(crate::world::party::CompanionCommandOutcome::WaitingForCapacity) => {
+            if let Err(error) = store.defer_party_command_intent(intent.id, claim_token) {
+                log::debug!("party command intent {} defer: {error}", intent.id);
             }
-            party_commands_in_flight()
-                .lock()
-                .unwrap()
-                .remove(&worker_key);
-        });
-    if let Err(error) = spawned {
-        in_flight.lock().unwrap().remove(&key);
-        log::error!(
-            "could not start party command intent {}: {error}",
-            intent_id
-        );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::debug!("party command intent {} retry: {error}", intent.id);
+            let _ = store.defer_party_command_intent(intent.id, claim_token);
+        }
     }
-}
-
-fn party_commands_in_flight() -> &'static std::sync::Mutex<std::collections::HashSet<(String, u64)>>
-{
-    static IN_FLIGHT: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashSet<(String, u64)>>,
-    > = std::sync::OnceLock::new();
-    IN_FLIGHT.get_or_init(Default::default)
 }
 
 fn next_party_command_claim_token() -> u64 {
@@ -7377,13 +7332,16 @@ mod tests {
     fn the_10s_task_warns_on_a_fanout_collapse_b1() {
         let body = crate::test_scan::code_of(include_str!("../world/mod.rs"), "pub async fn run(");
         assert!(
-            body.contains("crate::stdb::subscriptions::fanout_health_step(fan, fanout, submitted_delta)"),
+            body.contains(
+                "crate::stdb::subscriptions::fanout_health_step(fan, fanout, submitted_delta)"
+            ),
             "the 10s task no longer runs the fan-out collapse check — peer movement can degrade by \
              40% and the log will say nothing but a MOTIONSTAT line nobody can calibrate. Body \
              was:\n{body}"
         );
         assert!(
-            body.contains("if let Some(low_windows) = fanout_warn {") && body.contains("log::warn!"),
+            body.contains("if let Some(low_windows) = fanout_warn {")
+                && body.contains("log::warn!"),
             "the fan-out verdict is computed but no longer WARNED — the whole point is that it says \
              something out loud. Body was:\n{body}"
         );

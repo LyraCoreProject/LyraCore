@@ -63,12 +63,21 @@ impl Coordinator {
         )
     }
 
+    pub fn defer_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "defer_party_command_intent",
+            defer_party_command_intent_then(intent_id, claim_token)
+        )
+    }
+
     pub fn admit_party_command_authority(
         &self,
         group_id: u64,
         leader_guid: u64,
         bot_guid: u64,
         authority_member_guid: u64,
+        expected_members: Vec<u64>,
     ) -> Result<CompanionCommandOutcome> {
         match call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -77,7 +86,8 @@ impl Coordinator {
                 group_id,
                 leader_guid,
                 bot_guid,
-                authority_member_guid
+                authority_member_guid,
+                expected_members
             )
         ) {
             Ok(()) => Ok(CompanionCommandOutcome::Applied),
@@ -96,6 +106,7 @@ impl Coordinator {
                 command.source_identity,
                 command.intent_id,
                 command.issuer_guid,
+                command.issuer_sequence,
                 command.group_id,
                 command.leader_guid,
                 command.members.clone(),
@@ -110,17 +121,8 @@ impl Coordinator {
         if let Err(error) = applied {
             return command_refusal(&error).ok_or(error);
         }
-        for _ in 0..100 {
-            if let Some(outcome) =
-                self.party_command_receipt(command.source_identity, command.intent_id)
-            {
-                return Ok(outcome);
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        Err(anyhow!(
-            "party command receipt did not enter the Coordinator cache"
-        ))
+        self.confirm_party_command_receipt(command.source_identity, command.intent_id)?
+            .ok_or_else(|| anyhow!("party command apply committed without a receipt"))
     }
 
     pub fn finish_party_command_intent(
@@ -140,20 +142,39 @@ impl Coordinator {
         )
     }
 
-    pub fn party_command_receipt(
+    pub fn confirm_party_command_receipt(
         &self,
         source_identity: Identity,
         intent_id: u64,
-    ) -> Option<CompanionCommandOutcome> {
-        let receipt_key = format!("{source_identity}:{intent_id}");
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_party_command_receipt()
-            .receipt_key()
-            .find(&receipt_key)
-            .map(|row| command_outcome(row.outcome))
+    ) -> Result<Option<CompanionCommandOutcome>> {
+        match call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "confirm_party_command_receipt",
+            confirm_party_command_receipt_then(source_identity, intent_id)
+        ) {
+            Ok(()) => Ok(None),
+            Err(error) => command_refusal(&error).map(Some).ok_or(error),
+        }
+    }
+
+    pub fn confirm_party_command_holder(
+        &self,
+        bot_guid: u64,
+    ) -> Result<crate::world::party::PartyCommandHolder> {
+        match call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "confirm_party_command_holder",
+            confirm_party_command_holder_then(bot_guid)
+        ) {
+            Ok(()) => Ok(crate::world::party::PartyCommandHolder::Present),
+            Err(error) => match reducer_refusal_reason(&error) {
+                Some("MissingBot") => Ok(crate::world::party::PartyCommandHolder::Missing),
+                Some("TransferInProgress") => {
+                    Ok(crate::world::party::PartyCommandHolder::InTransit)
+                }
+                _ => Err(error),
+            },
+        }
     }
 
     /// Claim and admit a Group Intent in one World Shard transaction.
@@ -3508,6 +3529,8 @@ fn command_refusal(error: &anyhow::Error) -> Option<CompanionCommandOutcome> {
         "TargetControlled" => CompanionCommandOutcome::TargetControlled,
         "Expired" => CompanionCommandOutcome::Expired,
         "WaitingForCapacity" => CompanionCommandOutcome::WaitingForCapacity,
+        "OutcomeUnknown" => CompanionCommandOutcome::OutcomeUnknown,
+        "Superseded" => CompanionCommandOutcome::Superseded,
         _ => return None,
     })
 }
@@ -3530,6 +3553,8 @@ fn command_outcome(row: super::bindings::CommandOutcome) -> CompanionCommandOutc
         Row::TargetControlled => CompanionCommandOutcome::TargetControlled,
         Row::Expired => CompanionCommandOutcome::Expired,
         Row::WaitingForCapacity => CompanionCommandOutcome::WaitingForCapacity,
+        Row::OutcomeUnknown => CompanionCommandOutcome::OutcomeUnknown,
+        Row::Superseded => CompanionCommandOutcome::Superseded,
     }
 }
 
@@ -3551,6 +3576,8 @@ fn command_outcome_binding(outcome: CompanionCommandOutcome) -> super::bindings:
         CompanionCommandOutcome::TargetControlled => Row::TargetControlled,
         CompanionCommandOutcome::Expired => Row::Expired,
         CompanionCommandOutcome::WaitingForCapacity => Row::WaitingForCapacity,
+        CompanionCommandOutcome::OutcomeUnknown => Row::OutcomeUnknown,
+        CompanionCommandOutcome::Superseded => Row::Superseded,
     }
 }
 
@@ -3621,7 +3648,7 @@ fn bid_outcome(hold: &AuctionBidHold) -> Result<crate::world::PlaceBidOutcome> {
         outcome => {
             return Err(anyhow!(
                 "auction bid Hold has non-terminal outcome {outcome}"
-            ))
+            ));
         }
     })
 }

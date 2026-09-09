@@ -910,6 +910,7 @@ impl ImportSink for CtxShard<'_> {
 impl FinishSink for CtxShard<'_> {
     fn detach_for_transfer(&mut self, guid: u64) {
         crate::group::detach_for_transfer(self.ctx, guid);
+        crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid);
     }
     fn cascade_delete_character(&mut self, guid: u64) {
         crate::world::cascade_delete_character(self.ctx, guid);
@@ -1487,14 +1488,10 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
         // row — the source's claim on the character.
         cascaded = out.cross_database;
         if out.cross_database {
-            // The group MIRROR (AC#4) — done HERE, before the cascade, rather than inside
-            // `sweep_delete_game_group_member`, so it depends on no sweep ordering. A shard hop is not
-            // a departure: `remove_member`'s leader-transfer/disband would tear the party down on the
-            // source the instant the FIRST member hops, and the second member would then arrive with no
-            // membership at all — the party would not survive the boundary for the one case AC#4 is
-            // about. Detaching raw leaves the `game_group` row (and any members still on this shard)
-            // intact, so every member that follows carries the SAME group_id and the destination's
-            // import re-forms one party.
+            // Source rows that crossed in the Escrow snapshot detach HERE, before the cascade, so
+            // their removal depends on no generated sweep ordering. The group mirror uses raw
+            // removal because a shard hop is not a party departure. Command Receipts leave the old
+            // Shard here because their transported copies now guard retry at the destination.
             sink.detach_for_transfer(out.character_guid);
             sink.cascade_delete_character(out.character_guid);
         }

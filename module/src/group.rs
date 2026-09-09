@@ -595,6 +595,13 @@ pub(crate) fn admit_party_command(
             _ => CommandOutcome::Suppressed,
         });
     }
+    if let Err(refusal) = crate::sessionless::group_action_gate(ctx, admitted.command.bot_guid) {
+        return Some(match refusal {
+            lyracore_shared::group::GroupRefusal::ActorUnavailable => CommandOutcome::MissingBot,
+            lyracore_shared::group::GroupRefusal::ActionSuppressed => CommandOutcome::Suppressed,
+            _ => CommandOutcome::Suppressed,
+        });
+    }
     let Some(member) = group_of(ctx, admitted.command.bot_guid) else {
         return Some(CommandOutcome::StalePartyMirror);
     };
@@ -1544,6 +1551,7 @@ pub fn admit_party_command_authority(
     leader_guid: u64,
     bot_guid: u64,
     authority_member_guid: u64,
+    mut expected_members: Vec<u64>,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let group = ctx
@@ -1556,6 +1564,24 @@ pub fn admit_party_command_authority(
         return Err(crate::bridge::CommandOutcome::NotLeader.tag().to_string());
     }
     let members = ctx.db.game_group_member();
+    let mut current_members: Vec<_> = members
+        .by_group()
+        .filter(&group_id)
+        .take(GROUP_MAX_MEMBERS + 1)
+        .map(|member| member.character_guid)
+        .collect();
+    if current_members.len() > GROUP_MAX_MEMBERS || expected_members.len() > GROUP_MAX_MEMBERS {
+        return Err(crate::bridge::CommandOutcome::StalePartyMirror
+            .tag()
+            .to_string());
+    }
+    current_members.sort_unstable();
+    expected_members.sort_unstable();
+    if current_members != expected_members {
+        return Err(crate::bridge::CommandOutcome::StalePartyMirror
+            .tag()
+            .to_string());
+    }
     for guid in [leader_guid, bot_guid, authority_member_guid]
         .into_iter()
         .filter(|guid| *guid != 0)

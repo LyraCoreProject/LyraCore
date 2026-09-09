@@ -42,10 +42,8 @@ use anyhow::Result;
 
 use super::{send, Outbound, SessionTx, WorldStore};
 use crate::codec;
-use lyracore_shared::group::{bot_op, realm_op, GroupRefusal};
+use lyracore_shared::group::{bot_op, realm_op, GroupRefusal, COMMAND_RESULT_WINDOW_MICROS};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-
-const COMMAND_RESULT_WINDOW_MICROS: i64 = 30_000_000;
 
 /// One party, as the database that holds it sees it. Read from realm-core it is the authority; read
 /// from a world shard it is that shard's mirror. Names and online flags are deliberately NOT in it —
@@ -123,6 +121,8 @@ pub enum CompanionCommandOutcome {
     TargetControlled,
     Expired,
     WaitingForCapacity,
+    OutcomeUnknown,
+    Superseded,
 }
 
 #[derive(Clone, Debug)]
@@ -130,6 +130,7 @@ pub struct PartyCommandIntent {
     pub id: u64,
     pub source_identity: spacetimedb_sdk::Identity,
     pub issuer_guid: u64,
+    pub issuer_sequence: u64,
     pub kind: u8,
     pub bot_guid: u64,
     pub authority_member_guid: u64,
@@ -142,6 +143,7 @@ pub struct AdmittedCompanionCommand {
     pub source_identity: spacetimedb_sdk::Identity,
     pub intent_id: u64,
     pub issuer_guid: u64,
+    pub issuer_sequence: u64,
     pub group_id: u64,
     pub leader_guid: u64,
     pub members: Vec<u64>,
@@ -153,14 +155,21 @@ pub struct AdmittedCompanionCommand {
     pub receipt_retain_until_micros: i64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartyCommandHolder {
+    Present,
+    Missing,
+    InTransit,
+}
+
 fn receipt_anywhere<St: WorldStore + ?Sized>(
     source: &St,
     source_identity: spacetimedb_sdk::Identity,
     intent_id: u64,
 ) -> Result<Option<CompanionCommandOutcome>> {
-    let mut found = source.party_command_receipt(source_identity, intent_id);
-    for shard in source.world_stores() {
-        if let Some(outcome) = shard.party_command_receipt(source_identity, intent_id) {
+    let mut found = source.confirm_party_command_receipt(source_identity, intent_id)?;
+    for shard in source.party_command_worlds()? {
+        if let Some(outcome) = shard.confirm_party_command_receipt(source_identity, intent_id)? {
             if found.is_some_and(|previous| previous != outcome) {
                 anyhow::bail!(
                     "party command receipt {source_identity}/{intent_id} has conflicting outcomes"
@@ -177,8 +186,22 @@ pub(crate) fn finish_expired_party_command_intent<St: WorldStore + ?Sized>(
     intent: &PartyCommandIntent,
     claim_token: u64,
 ) -> Result<CompanionCommandOutcome> {
-    let outcome = receipt_anywhere(source, intent.source_identity, intent.id)?
-        .unwrap_or(CompanionCommandOutcome::Expired);
+    let outcome =
+        receipt_anywhere(source, intent.source_identity, intent.id)?.unwrap_or_else(|| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as i64;
+            if now
+                >= intent
+                    .expires_micros
+                    .saturating_add(COMMAND_RESULT_WINDOW_MICROS)
+            {
+                CompanionCommandOutcome::OutcomeUnknown
+            } else {
+                CompanionCommandOutcome::Expired
+            }
+        });
     source.finish_party_command_intent(intent.id, claim_token, outcome)?;
     Ok(outcome)
 }
@@ -208,32 +231,45 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
         return Ok(outcome);
     }
 
-    let world_shards = source.world_stores();
+    let world_shards = source.party_command_worlds()?;
     let target: &dyn WorldStore;
     let owned_target;
     if world_shards.is_empty() {
-        if !source.entity_in_world(intent.bot_guid) {
+        match source.confirm_party_command_holder(intent.bot_guid)? {
+            PartyCommandHolder::Present => {}
+            PartyCommandHolder::InTransit => anyhow::bail!("party command bot is in Transfer"),
+            PartyCommandHolder::Missing => {
             let outcome = CompanionCommandOutcome::MissingBot;
             source.finish_party_command_intent(intent.id, claim_token, outcome)?;
             return Ok(outcome);
         }
+        }
         target = source;
     } else {
-        let mut holders = world_shards
-            .iter()
-            .filter(|shard| shard.entity_in_world(intent.bot_guid));
-        let Some(holder) = holders.next() else {
+        let mut holders = Vec::new();
+        let mut in_transit = false;
+        for shard in &world_shards {
+            match shard.confirm_party_command_holder(intent.bot_guid)? {
+                PartyCommandHolder::Present => holders.push(shard.clone()),
+                PartyCommandHolder::InTransit => in_transit = true,
+                PartyCommandHolder::Missing => {}
+            }
+        }
+        if in_transit {
+            anyhow::bail!("party command bot is in Transfer");
+        }
+        let Some(holder) = holders.pop() else {
             let outcome = CompanionCommandOutcome::MissingBot;
             source.finish_party_command_intent(intent.id, claim_token, outcome)?;
             return Ok(outcome);
         };
-        if holders.next().is_some() {
+        if !holders.is_empty() {
             anyhow::bail!(
                 "bot {} has more than one live World Shard holder",
                 intent.bot_guid
             );
         }
-        owned_target = holder.clone();
+        owned_target = holder;
         target = owned_target.as_ref();
     }
 
@@ -270,6 +306,7 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
             intent.issuer_guid,
             intent.bot_guid,
             intent.authority_member_guid,
+            authority.members.clone(),
         )?
     {
         source.finish_party_command_intent(intent.id, claim_token, outcome)?;
@@ -299,18 +336,20 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
                     .find_map(|shard| shard.entity_partition(intent.authority_member_guid))
             })
     });
-    if bot_partition.is_none()
-        || issuer_partition != bot_partition
+    if let Some(bot_partition) = bot_partition {
+        if issuer_partition != Some(bot_partition)
         || member_partition.is_some_and(|partition| partition != bot_partition)
     {
         let outcome = CompanionCommandOutcome::WrongPartition;
         source.finish_party_command_intent(intent.id, claim_token, outcome)?;
         return Ok(outcome);
     }
+    }
     let admitted = AdmittedCompanionCommand {
         source_identity: intent.source_identity,
         intent_id: intent.id,
         issuer_guid: intent.issuer_guid,
+        issuer_sequence: intent.issuer_sequence,
         group_id: authority.group_id,
         leader_guid: authority.leader_guid,
         members: authority.members,
@@ -918,7 +957,9 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
     let now = match realm.group_roster(self_guid) {
         Ok(r) => r,
         Err(e) => {
-            log::warn!("party: could not read the realm-core roster for {self_guid} ({e:#}) — the shard mirrors keep their previous roster until the next op or world entry");
+            log::warn!(
+                "party: could not read the realm-core roster for {self_guid} ({e:#}) — the shard mirrors keep their previous roster until the next op or world entry"
+            );
             return;
         }
     };
@@ -938,7 +979,9 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
             // shards keep a party that no longer exists and its members stay grouped locally.
             Ok(None) => GroupRoster::disbanded(group_id),
             Err(e) => {
-                log::warn!("party: could not read realm-core group {group_id} ({e:#}) — shard mirrors unchanged");
+                log::warn!(
+                    "party: could not read realm-core group {group_id} ({e:#}) — shard mirrors unchanged"
+                );
                 continue;
             }
         };

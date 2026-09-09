@@ -11,6 +11,7 @@
 use spacetimedb::{log, ReducerContext, SpacetimeType};
 
 use super::TransferOut;
+use crate::bridge::{game_party_command_receipt, PartyCommandReceipt};
 use crate::items::{game_item_instance, ItemInstance};
 
 #[path = "legacy_item_rows.rs"]
@@ -31,6 +32,8 @@ pub(crate) const HOT_TABLES: &[&str] = &[
     "game_player_skill",
     "game_player_spell",
     "game_character_talent",
+    "game_party_command_issuer",
+    "game_party_command_receipt",
     // Hot-state audit: a buff/debuff bar (and Stealth, which is presence-only — no timer
     // to stream in "behind" anything) is exactly the first-frame-visible state this mark describes.
     "game_aura",
@@ -401,6 +404,51 @@ pub(crate) fn import_rows(
                 return Err(format!(
                     "ITEM_GUID_CONFLICT: item {} for Character {character_guid}",
                     row.guid
+                ));
+            }
+        }
+    }
+    if let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_party_command_receipt")
+    {
+        let mut outcome = Ok(());
+        let rows = decode_rows::<PartyCommandReceipt>(&entry.rows, &mut outcome);
+        outcome?;
+        let current_count = ctx
+            .db
+            .game_party_command_receipt()
+            .by_bot()
+            .filter(&character_guid)
+            .take(crate::bridge::RECEIPT_CAPACITY + 1)
+            .count();
+        if rows.len() > crate::bridge::RECEIPT_CAPACITY
+            || current_count.saturating_add(rows.len()) > crate::bridge::RECEIPT_CAPACITY
+        {
+            return Err(format!(
+                "COMMAND_RECEIPT_CAPACITY: Character {character_guid} has {current_count} local and {} arriving receipts",
+                rows.len()
+            ));
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        for row in rows {
+            if row.bot_guid != character_guid {
+                return Err(format!(
+                    "COMMAND_RECEIPT_OWNER_MISMATCH: receipt {} belongs to Character {}",
+                    row.receipt_key, row.bot_guid
+                ));
+            }
+            if !keys.insert(row.receipt_key.clone())
+                || ctx
+                    .db
+                    .game_party_command_receipt()
+                    .receipt_key()
+                    .find(&row.receipt_key)
+                    .is_some()
+            {
+                return Err(format!(
+                    "COMMAND_RECEIPT_KEY_CONFLICT: receipt {} for Character {character_guid}",
+                    row.receipt_key
                 ));
             }
         }

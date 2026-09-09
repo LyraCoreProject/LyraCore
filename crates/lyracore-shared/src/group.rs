@@ -105,6 +105,14 @@ pub mod bot_op {
     pub const LEAVE: u8 = 1;
 }
 
+/// Durable companion-command queues are partitioned into this many fair lanes on every source
+/// Module. Gateway reads at most one head from each lane per dispatch turn.
+pub const COMMAND_DISPATCH_LANES: u8 = 8;
+
+/// A terminal target receipt and its source response remain recoverable for this long after the
+/// command's admission deadline.
+pub const COMMAND_RESULT_WINDOW_MICROS: i64 = 30_000_000;
+
 /// Why the Module refused a party Durable Request. The tag is the whole reducer error text, so
 /// neither tier matches on human prose. Most variants become a `PartyResult` the client renders;
 /// [`GroupRefusal::IntentAlreadyClaimed`] instead tells a losing Gateway callback to stop.

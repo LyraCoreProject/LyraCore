@@ -206,11 +206,23 @@ pub trait WorldStore:
         Vec::new()
     }
 
+    /// Every configured World Shard for command receipt and holder admission. Missing or unhealthy
+    /// members are an infrastructure error because absence cannot be certified on a partial set.
+    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
+        Ok(self.world_stores())
+    }
+
     /// Admit and claim one Group Intent against current World Shard state. Refusals include a
     /// consumed intent or suppressed action. Transport failures remain distinct.
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<party::PartyOutcome>;
 
     fn claim_party_command_intent(&self, _intent_id: u64, _claim_token: u64) -> Result<()> {
+        Err(anyhow!(
+            "this store does not host companion command intents"
+        ))
+    }
+
+    fn defer_party_command_intent(&self, _intent_id: u64, _claim_token: u64) -> Result<()> {
         Err(anyhow!(
             "this store does not host companion command intents"
         ))
@@ -222,6 +234,7 @@ pub trait WorldStore:
         _leader_guid: u64,
         _bot_guid: u64,
         _authority_member_guid: u64,
+        _expected_members: Vec<u64>,
     ) -> Result<party::CompanionCommandOutcome> {
         Err(anyhow!(
             "this store does not host realm-wide party authority"
@@ -248,12 +261,18 @@ pub trait WorldStore:
         ))
     }
 
-    fn party_command_receipt(
+    fn confirm_party_command_receipt(
         &self,
         _source_identity: spacetimedb_sdk::Identity,
         _intent_id: u64,
-    ) -> Option<party::CompanionCommandOutcome> {
-        None
+    ) -> Result<Option<party::CompanionCommandOutcome>> {
+        Ok(None)
+    }
+
+    fn confirm_party_command_holder(&self, _bot_guid: u64) -> Result<party::PartyCommandHolder> {
+        Err(anyhow!(
+            "this store does not host companion command targets"
+        ))
     }
 
     fn entity_partition(&self, _guid: u64) -> Option<(u32, u64)> {

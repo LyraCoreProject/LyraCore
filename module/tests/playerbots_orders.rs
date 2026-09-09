@@ -65,6 +65,8 @@ fn evidence(fixture: &OrdersFixture, case: &str) {
         "module_wasm_identity": blake3::hash(support::module_bytes()).to_hex().to_string(),
         "orders": node.query_rows("SELECT * FROM pkg_playerbots_companion_order"),
         "intents": node.query_rows("SELECT * FROM game_party_command_intent"),
+        "issuers": node.query_rows("SELECT * FROM game_party_command_issuer"),
+        "dispatch_lanes": node.query_rows("SELECT * FROM game_party_command_dispatch_lane"),
         "receipts": node.query_rows("SELECT * FROM game_party_command_receipt"),
         "runners": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
         "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
@@ -385,6 +387,72 @@ fn playerbots_orders_authenticate_follow_and_do_not_restart_a_retained_cast() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_newer_order_fences_a_delayed_older_apply() {
+    let fixture = fixture("playerbots-orders-causal-fence");
+    let node = &fixture.node;
+    let older = queue(&fixture, &format!("stay|{}", fixture.warrior));
+    let newer = queue(&fixture, &format!("follow|{}", fixture.warrior));
+    let older_token = (15_000 + older.parse::<u64>().unwrap()).to_string();
+    let newer_token = (16_000 + newer.parse::<u64>().unwrap()).to_string();
+    node.assert_call("claim_party_command_intent", &[&older, &older_token]);
+    node.assert_call("defer_party_command_intent", &[&older, &older_token]);
+    node.assert_call("playerbots_fixture_command_drive", &[&newer, &newer_token]);
+    let applied_newer = order(node, &fixture.warrior);
+    let sequences = node.query_rows(&format!(
+        "SELECT id, issuer_sequence FROM game_party_command_intent WHERE id = {older} OR id = {newer}"
+    ));
+    node.assert_call(
+        "playerbots_fixture_orders_party",
+        &[
+            &fixture.warrior,
+            &fixture.priest,
+            &fixture.mage,
+            &fixture.leader,
+            "2",
+        ],
+    );
+    pass(node, &fixture.warrior);
+    let cleared = order(node, &fixture.warrior);
+    node.assert_call(
+        "playerbots_fixture_orders_party",
+        &[
+            &fixture.warrior,
+            &fixture.priest,
+            &fixture.mage,
+            &fixture.leader,
+            "0",
+        ],
+    );
+    node.assert_call("playerbots_fixture_command_apply", &[&older, &older_token]);
+    node.assert_call("playerbots_fixture_command_finish", &[&older, &older_token]);
+    let after_delayed = order(node, &fixture.warrior);
+    let receipt = node.query_rows(&format!(
+        "SELECT outcome FROM game_party_command_receipt WHERE intent_id = {older}"
+    ));
+    evidence(&fixture, "older-order-superseded-after-newer-applied");
+    assert_eq!(sequences.len(), 2);
+    let older_sequence: u64 = sequences.iter().find(|row| row["id"] == older).unwrap()
+        ["issuer_sequence"]
+        .parse()
+        .unwrap();
+    let newer_sequence: u64 = sequences.iter().find(|row| row["id"] == newer).unwrap()
+        ["issuer_sequence"]
+        .parse()
+        .unwrap();
+    assert!(older_sequence < newer_sequence);
+    assert_eq!(cleared["active"], "false");
+    assert_eq!(cleared["revision"], applied_newer["revision"]);
+    assert_eq!(after_delayed, cleared);
+    assert!(after_delayed["order"]
+        .to_ascii_lowercase()
+        .contains("follow"));
+    assert!(receipt[0]["outcome"]
+        .to_ascii_lowercase()
+        .contains("superseded"));
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_stay_blocks_heal_positioning_but_allows_in_range_healing_and_survival() {
     let fixture = fixture("playerbots-orders-stay");
     let node = &fixture.node;
@@ -492,6 +560,104 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
     assert!(!runner(node, &fixture.mage)["chosen"]
         .to_ascii_lowercase()
         .contains("damagefight"));
+
+    let retained_revision = order(node, &fixture.warrior)["revision"].clone();
+    node.assert_call("playerbots_fixture_roles_select", &[&fixture.leader, "0"]);
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "assist-member-has-no-fight");
+    assert!(order(node, &fixture.warrior)["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("targetunavailable"));
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM game_melee_attack WHERE attacker_guid = {}",
+            fixture.warrior
+        ))
+        .is_empty());
+
+    node.assert_call(
+        "playerbots_fixture_roles_engage",
+        &[&fixture.leader, chosen],
+    );
+    pass(node, &fixture.warrior);
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
+            fixture.warrior
+        ))[0]["target_guid"],
+        *chosen
+    );
+
+    node.assert_call(
+        "playerbots_fixture_roles_control",
+        &[&fixture.leader, chosen, "50020"],
+    );
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "assist-target-controlled");
+    assert!(order(node, &fixture.warrior)["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("targetcontrolled"));
+    node.assert_call(
+        "playerbots_fixture_roles_clear_control",
+        &[&fixture.leader, chosen],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_engage",
+        &[&fixture.leader, chosen],
+    );
+    pass(node, &fixture.warrior);
+
+    node.assert_call("playerbots_fixture_orders_target_state", &[chosen, "1"]);
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "assist-target-remote");
+    assert!(order(node, &fixture.warrior)["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("wrongpartition"));
+    node.assert_call("playerbots_fixture_orders_target_state", &[chosen, "2"]);
+    node.assert_call(
+        "playerbots_fixture_roles_engage",
+        &[&fixture.leader, chosen],
+    );
+    pass(node, &fixture.warrior);
+
+    node.assert_call("playerbots_fixture_orders_target_state", &[chosen, "0"]);
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "assist-target-dead");
+    assert!(order(node, &fixture.warrior)["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("targetdead"));
+    node.assert_call("playerbots_fixture_orders_target_state", &[chosen, "2"]);
+    node.assert_call(
+        "playerbots_fixture_roles_engage",
+        &[&fixture.leader, chosen],
+    );
+    pass(node, &fixture.warrior);
+
+    node.assert_call("playerbots_fixture_roles_despawn", &[chosen]);
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "assist-target-missing");
+    assert!(order(node, &fixture.warrior)["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("targetunavailable"));
+    node.assert_call("playerbots_fixture_orders_restore_target", &[chosen]);
+    node.assert_call(
+        "playerbots_fixture_roles_engage",
+        &[&fixture.leader, chosen],
+    );
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "assist-target-recovered");
+    let recovered = order(node, &fixture.warrior);
+    assert!(recovered["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("applied"));
+    assert_eq!(recovered["revision"], retained_revision);
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
+            fixture.warrior
+        ))[0]["target_guid"],
+        *chosen
+    );
 }
 
 #[test]
@@ -622,12 +788,7 @@ fn playerbots_assist_invalidates_when_the_named_member_leaves() {
     );
     pass(node, &fixture.warrior);
     evidence(&fixture, "assisted-member-left");
-    assert!(node
-        .query_rows(&format!(
-            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
-            fixture.warrior
-        ))
-        .is_empty());
+    assert_eq!(order(node, &fixture.warrior)["active"], "false");
 }
 
 #[test]
@@ -661,6 +822,61 @@ fn playerbots_orders_stop_when_the_bot_is_reclaimed_by_an_account() {
         .query_rows(&format!(
             "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
             fixture.warrior
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_order_target_gate_rechecks_body_and_consent_after_authority() {
+    let fixture = fixture("playerbots-orders-final-target-gate");
+    let node = &fixture.node;
+
+    let suppressed = queue(&fixture, &format!("follow|{}", fixture.warrior));
+    let suppressed_token = 40_000 + suppressed.parse::<u64>().unwrap();
+    node.assert_call(
+        "playerbots_fixture_command_apply_after_gate_change",
+        &[&suppressed, &suppressed_token.to_string(), "2"],
+    );
+    node.assert_call(
+        "playerbots_fixture_command_finish",
+        &[&suppressed, &suppressed_token.to_string()],
+    );
+    let suppressed_receipt = node.query_rows(&format!(
+        "SELECT outcome FROM game_party_command_receipt WHERE intent_id = {suppressed}"
+    ));
+    evidence(&fixture, "consent-suppressed-after-authority");
+    assert!(suppressed_receipt[0]["outcome"]
+        .to_ascii_lowercase()
+        .contains("suppressed"));
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            fixture.warrior
+        ))
+        .is_empty());
+
+    let missing = queue(&fixture, &format!("follow|{}", fixture.mage));
+    let missing_token = 41_000 + missing.parse::<u64>().unwrap();
+    node.assert_call(
+        "playerbots_fixture_command_apply_after_gate_change",
+        &[&missing, &missing_token.to_string(), "1"],
+    );
+    node.assert_call(
+        "playerbots_fixture_command_finish",
+        &[&missing, &missing_token.to_string()],
+    );
+    let missing_receipt = node.query_rows(&format!(
+        "SELECT outcome FROM game_party_command_receipt WHERE intent_id = {missing}"
+    ));
+    evidence(&fixture, "body-removed-after-authority");
+    assert!(missing_receipt[0]["outcome"]
+        .to_ascii_lowercase()
+        .contains("missingbot"));
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            fixture.mage
         ))
         .is_empty());
 }
@@ -760,12 +976,7 @@ fn playerbots_order_clears_when_leadership_changes_and_preserves_the_role() {
     );
     pass(node, &fixture.warrior);
     evidence(&fixture, "leadership-lost");
-    assert!(node
-        .query_rows(&format!(
-            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
-            fixture.warrior
-        ))
-        .is_empty());
+    assert_eq!(order(node, &fixture.warrior)["active"], "false");
     assert_eq!(
         node.query_rows(&format!(
             "SELECT role FROM pkg_playerbots_bot WHERE character_guid = {}",
@@ -842,12 +1053,7 @@ fn playerbots_human_party_suspends_then_rechecks_the_retained_solo_quest() {
         fixture.warrior
     ));
     evidence(&fixture, "solo-quest-rechecked-after-party");
-    assert!(node
-        .query_rows(&format!(
-            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
-            fixture.warrior
-        ))
-        .is_empty());
+    assert_eq!(order(node, &fixture.warrior)["active"], "false");
     assert!(resumed_runner["objective"]
         .to_ascii_lowercase()
         .contains("quest"));
@@ -1089,6 +1295,31 @@ fn playerbots_command_receipts_survive_history_rollover_and_wait_for_capacity() 
         ))
         .is_empty());
 
+    let mut blocked = vec![waiting.clone()];
+    for _ in 0..16 {
+        blocked.push(queue(&fixture, &payload));
+    }
+    let lane_count = u64::from(lyracore_shared::group::COMMAND_DISPATCH_LANES);
+    let warrior_lane = fixture.warrior.parse::<u64>().unwrap() % lane_count;
+    let later_bot = [&fixture.priest, &fixture.mage]
+        .into_iter()
+        .find(|guid| guid.parse::<u64>().unwrap() % lane_count != warrior_lane)
+        .expect("role fixture needs a bot in another command dispatch lane");
+    let later = issue(&fixture, &format!("follow|{later_bot}"), later_bot, false);
+    let later_state = node.query_rows(&format!(
+        "SELECT pending, state FROM game_party_command_intent WHERE id = {later}"
+    ));
+    evidence(&fixture, "receipt-capacity-fair-dispatch");
+    assert_eq!(
+        node.query_rows("SELECT id FROM game_party_command_intent WHERE pending = true")
+            .len(),
+        blocked.len()
+    );
+    assert_eq!(later_state[0]["pending"], "false");
+    assert!(later_state[0]["state"]
+        .to_ascii_lowercase()
+        .contains("applied"));
+
     node.assert_call(
         "playerbots_fixture_command_release_receipt",
         &[&fixture.warrior],
@@ -1108,4 +1339,19 @@ fn playerbots_command_receipts_survive_history_rollover_and_wait_for_capacity() 
             "SELECT id FROM game_party_command_receipt WHERE intent_id = {waiting}"
         ))
         .is_empty());
+
+    let expired_head = &blocked[1];
+    node.assert_call("playerbots_fixture_command_expire", &[expired_head]);
+    let before_rotation =
+        node.query_rows("SELECT head_intent_id FROM game_party_command_dispatch_lane");
+    node.assert_call("defer_party_command_intent", &[expired_head, "999999"]);
+    let after_rotation =
+        node.query_rows("SELECT head_intent_id FROM game_party_command_dispatch_lane");
+    evidence(&fixture, "expired-unavailable-head-rotated");
+    assert!(before_rotation
+        .iter()
+        .any(|row| row["head_intent_id"] == *expired_head));
+    assert!(!after_rotation
+        .iter()
+        .any(|row| row["head_intent_id"] == *expired_head));
 }

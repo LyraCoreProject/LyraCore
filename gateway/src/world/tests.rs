@@ -648,6 +648,9 @@ struct InMemoryStore {
         std::sync::Mutex<Vec<(u64, u64, super::party::CompanionCommandOutcome)>>,
     admitted_party_commands: std::sync::Mutex<Vec<super::party::AdmittedCompanionCommand>>,
     party_command_apply_outcome: Option<super::party::CompanionCommandOutcome>,
+    party_command_receipt_error: std::sync::Mutex<Option<String>>,
+    party_command_authority_members: std::sync::Mutex<Option<Vec<u64>>>,
+    party_command_in_transit: std::sync::Mutex<Vec<u64>>,
     party_command_receipts: std::sync::Mutex<
         Vec<(
             spacetimedb_sdk::Identity,
@@ -2475,12 +2478,17 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
+    fn defer_party_command_intent(&self, _intent_id: u64, _claim_token: u64) -> Result<()> {
+        Ok(())
+    }
+
     fn admit_party_command_authority(
         &self,
         group_id: u64,
         leader_guid: u64,
         bot_guid: u64,
         authority_member_guid: u64,
+        mut expected_members: Vec<u64>,
     ) -> Result<super::party::CompanionCommandOutcome> {
         let roster = self.group_roster(leader_guid)?;
         let Some(roster) = roster else {
@@ -2488,6 +2496,17 @@ impl WorldStore for InMemoryStore {
         };
         if roster.group_id != group_id || roster.leader_guid != leader_guid {
             return Ok(super::party::CompanionCommandOutcome::NotLeader);
+        }
+        expected_members.sort_unstable();
+        let mut current_members = self
+            .party_command_authority_members
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| roster.members.clone());
+        current_members.sort_unstable();
+        if expected_members != current_members {
+            return Ok(super::party::CompanionCommandOutcome::StalePartyMirror);
         }
         if !roster.members.contains(&bot_guid)
             || (authority_member_guid != 0 && !roster.members.contains(&authority_member_guid))
@@ -2531,17 +2550,42 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    fn party_command_receipt(
+    fn confirm_party_command_receipt(
         &self,
         source_identity: spacetimedb_sdk::Identity,
         intent_id: u64,
-    ) -> Option<super::party::CompanionCommandOutcome> {
-        self.party_command_receipts
+    ) -> Result<Option<super::party::CompanionCommandOutcome>> {
+        if let Some(error) = self.party_command_receipt_error.lock().unwrap().as_ref() {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self
+            .party_command_receipts
             .lock()
             .unwrap()
             .iter()
             .find(|(source, id, _)| *source == source_identity && *id == intent_id)
-            .map(|(_, _, outcome)| *outcome)
+            .map(|(_, _, outcome)| *outcome))
+    }
+
+    fn confirm_party_command_holder(&self, guid: u64) -> Result<super::party::PartyCommandHolder> {
+        Ok(
+            if self
+                .party_command_in_transit
+                .lock()
+                .unwrap()
+                .contains(&guid)
+            {
+                super::party::PartyCommandHolder::InTransit
+            } else if self
+                .characters
+                .iter()
+                .any(|character| character.guid == guid)
+            {
+                super::party::PartyCommandHolder::Present
+            } else {
+                super::party::PartyCommandHolder::Missing
+            },
+        )
     }
 
     fn entity_partition(&self, guid: u64) -> Option<(u32, u64)> {
@@ -2560,6 +2604,13 @@ impl WorldStore for InMemoryStore {
             .iter()
             .map(|p| p.clone() as std::sync::Arc<dyn WorldStore>)
             .collect()
+    }
+
+    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.world_shard_set_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.world_stores())
     }
 
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<PartyOutcome> {
@@ -5607,7 +5658,10 @@ fn non_movement_opcode_flushes_pending_heartbeat_before_being_handled() {
             "baseline + exactly ONE flushed heartbeat — if coalescing weren't happening, all 3 \
              heartbeats would have forwarded individually (4 total), not 2"
         );
-        assert!((moves[1].1 - 30.0).abs() < 0.01, "the flushed heartbeat must carry the LATEST superseding position, not an earlier dropped one");
+        assert!(
+            (moves[1].1 - 30.0).abs() < 0.01,
+            "the flushed heartbeat must carry the LATEST superseding position, not an earlier dropped one"
+        );
     }
 
     drop(client);

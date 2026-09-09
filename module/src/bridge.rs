@@ -13,6 +13,7 @@
 //! `game_client_command!`. Parsing queues only a pending intent. Gateway certifies Realm-core party
 //! authority before the target World Shard applies gameplay.
 
+use lyracore_shared::group::COMMAND_RESULT_WINDOW_MICROS;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_character;
@@ -20,9 +21,8 @@ use crate::game_character;
 use crate::{game_group, game_group_member};
 
 const COMMAND_LIFETIME_MICROS: i64 = 30_000_000;
-const COMMAND_RESULT_WINDOW_MICROS: i64 = 30_000_000;
 const CLAIM_LEASE_MICROS: i64 = 2_000_000;
-const RECEIPT_CAPACITY: usize = 32;
+pub(crate) const RECEIPT_CAPACITY: usize = 32;
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandOutcome {
@@ -41,6 +41,8 @@ pub enum CommandOutcome {
     TargetControlled,
     Expired,
     WaitingForCapacity,
+    OutcomeUnknown,
+    Superseded,
 }
 
 impl CommandOutcome {
@@ -61,6 +63,8 @@ impl CommandOutcome {
             Self::TargetControlled => "TargetControlled",
             Self::Expired => "Expired",
             Self::WaitingForCapacity => "WaitingForCapacity",
+            Self::OutcomeUnknown => "OutcomeUnknown",
+            Self::Superseded => "Superseded",
         }
     }
 }
@@ -78,6 +82,7 @@ pub struct AdmittedClientCommand {
     pub source_identity: Identity,
     pub intent_id: u64,
     pub issuer_guid: u64,
+    pub issuer_sequence: u64,
     pub group_id: u64,
     pub leader_guid: u64,
     pub members: Vec<u64>,
@@ -110,6 +115,7 @@ pub struct PartyCommandIntent {
     pub id: u64,
     pub source_identity: Identity,
     pub issuer_guid: u64,
+    pub issuer_sequence: u64,
     pub command: ParsedClientCommand,
     pub created_micros: i64,
     pub expires_micros: i64,
@@ -118,7 +124,38 @@ pub struct PartyCommandIntent {
     pub claim_until_micros: i64,
     pub pending: bool,
     pub state: CommandIntentState,
+    pub dispatch_lane: u8,
+    pub dispatch_next: u64,
 }
+
+#[table(accessor = game_party_command_dispatch_lane)]
+/// One durable fair queue lane for authenticated companion commands. [entity]
+pub struct PartyCommandDispatchLane {
+    #[primary_key]
+    pub lane: u8,
+    pub head_intent_id: u64,
+    pub tail_intent_id: u64,
+}
+
+#[table(accessor = game_party_command_issuer)]
+/// The next causal Companion Order sequence minted for one authenticated issuer. [entity]
+pub struct PartyCommandIssuer {
+    #[primary_key]
+    pub character_guid: u64,
+    pub last_sequence: u64,
+}
+
+crate::character_owned!(delete, fn sweep_delete_game_party_command_issuer(ctx, character_guid) {
+    ctx.db
+        .game_party_command_issuer()
+        .character_guid()
+        .delete(character_guid);
+});
+
+crate::character_owned!(transfer, fn sweep_transfer_game_party_command_issuer(ctx, character_guid, io) {
+    table = game_party_command_issuer,
+    primary_key = character_guid,
+});
 
 #[table(
     accessor = game_party_command_receipt,
@@ -139,6 +176,32 @@ pub struct PartyCommandReceipt {
     pub outcome: CommandOutcome,
     pub retain_until_micros: i64,
 }
+
+// A settled Character deletion retains receipts until their deadline, so a lost acknowledgement
+// cannot turn into a second application. Cross-Shard transfer removes the source copies through
+// `detach_command_receipts_for_transfer` before the character cascade; this registered sweep stays
+// deliberately empty so its result cannot depend on the generated cascade order.
+crate::character_owned!(delete, fn sweep_delete_game_party_command_receipt(_ctx, _character_guid) {});
+
+/// Remove receipts already carried in the cross-Shard Escrow snapshot before source teardown.
+/// Same-database transfer never calls the source teardown boundary and therefore retains them.
+pub(crate) fn detach_command_receipts_for_transfer(ctx: &ReducerContext, character_guid: u64) {
+    let receipts = ctx.db.game_party_command_receipt();
+    for row in receipts
+        .by_bot()
+        .filter(&character_guid)
+        .take(RECEIPT_CAPACITY)
+        .collect::<Vec<_>>()
+    {
+        receipts.id().delete(row.id);
+    }
+}
+
+crate::character_owned!(transfer, fn sweep_transfer_game_party_command_receipt(ctx, character_guid, io) {
+    table = game_party_command_receipt,
+    by = by_bot,
+    remint = id,
+});
 
 pub(crate) fn party_command_receipt_key(source_identity: Identity, intent_id: u64) -> String {
     format!("{source_identity}:{intent_id}")
@@ -197,12 +260,31 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
             match crate::GAME_CLIENT_COMMAND.and_then(|handler| (handler.parse)(other, payload)) {
                 Some(Ok(command)) => {
                     let now = ctx.timestamp.to_micros_since_unix_epoch();
-                    ctx.db
+                    let issuers = ctx.db.game_party_command_issuer();
+                    let current_issuer = issuers.character_guid().find(character_guid);
+                    let issuer_sequence = current_issuer
+                        .as_ref()
+                        .map_or(1, |row| row.last_sequence.saturating_add(1));
+                    let issuer = PartyCommandIssuer {
+                        character_guid,
+                        last_sequence: issuer_sequence,
+                    };
+                    if current_issuer.is_some() {
+                        issuers.character_guid().update(issuer);
+                    } else {
+                        issuers.insert(issuer);
+                    }
+                    let dispatch_lane = (command.bot_guid
+                        % u64::from(lyracore_shared::group::COMMAND_DISPATCH_LANES))
+                        as u8;
+                    let inserted = ctx
+                        .db
                         .game_party_command_intent()
                         .insert(PartyCommandIntent {
                             id: 0,
                             source_identity: ctx.database_identity(),
                             issuer_guid: character_guid,
+                            issuer_sequence,
                             command,
                             created_micros: now,
                             expires_micros: now.saturating_add(COMMAND_LIFETIME_MICROS),
@@ -211,7 +293,10 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
                             claim_until_micros: 0,
                             pending: true,
                             state: CommandIntentState::Pending,
+                            dispatch_lane,
+                            dispatch_next: 0,
                         });
+                    enqueue_party_command_intent(ctx, &inserted);
                 }
                 Some(Err(outcome)) => send(
                     ctx,
@@ -227,6 +312,106 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
             }
         }
     }
+}
+
+fn enqueue_party_command_intent(ctx: &ReducerContext, intent: &PartyCommandIntent) {
+    let lanes = ctx.db.game_party_command_dispatch_lane();
+    let intents = ctx.db.game_party_command_intent();
+    match lanes.lane().find(intent.dispatch_lane) {
+        Some(mut lane) => {
+            let mut tail = intents
+                .id()
+                .find(lane.tail_intent_id)
+                .expect("party command dispatch tail must name an intent");
+            tail.dispatch_next = intent.id;
+            intents.id().update(tail);
+            lane.tail_intent_id = intent.id;
+            lanes.lane().update(lane);
+        }
+        None => {
+            lanes.insert(PartyCommandDispatchLane {
+                lane: intent.dispatch_lane,
+                head_intent_id: intent.id,
+                tail_intent_id: intent.id,
+            });
+        }
+    }
+}
+
+fn retire_party_command_intent(
+    ctx: &ReducerContext,
+    intent: &PartyCommandIntent,
+) -> Result<(), String> {
+    let lanes = ctx.db.game_party_command_dispatch_lane();
+    let mut lane = lanes
+        .lane()
+        .find(intent.dispatch_lane)
+        .ok_or_else(|| "MissingDispatchLane".to_string())?;
+    if lane.head_intent_id != intent.id {
+        return Err("IntentNotDispatchHead".to_string());
+    }
+    if intent.dispatch_next == 0 {
+        lanes.lane().delete(intent.dispatch_lane);
+    } else {
+        lane.head_intent_id = intent.dispatch_next;
+        lanes.lane().update(lane);
+    }
+    Ok(())
+}
+
+#[reducer]
+pub fn defer_party_command_intent(
+    ctx: &ReducerContext,
+    intent_id: u64,
+    claim_token: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let intents = ctx.db.game_party_command_intent();
+    let mut intent = intents
+        .id()
+        .find(intent_id)
+        .ok_or_else(|| "MissingIntent".to_string())?;
+    if !matches!(intent.state, CommandIntentState::Pending) {
+        return Err("Finished".to_string());
+    }
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let foreign_live_claim = intent.claim_token != 0
+        && intent.claim_token != claim_token
+        && intent.claim_until_micros > now;
+    if intent.claim_token != claim_token && now < intent.expires_micros {
+        return Err("ClaimLost".to_string());
+    }
+    let lanes = ctx.db.game_party_command_dispatch_lane();
+    let mut lane = lanes
+        .lane()
+        .find(intent.dispatch_lane)
+        .ok_or_else(|| "MissingDispatchLane".to_string())?;
+    if lane.head_intent_id != intent.id {
+        return Err("IntentNotDispatchHead".to_string());
+    }
+    // Expiry permits lane rotation without stealing the worker that may still be completing its
+    // target transaction. Its lease keeps a second worker from claiming a false Expired result.
+    if !foreign_live_claim {
+        intent.claim_token = 0;
+        intent.claim_until_micros = 0;
+    }
+    if intent.dispatch_next == 0 {
+        intents.id().update(intent);
+        return Ok(());
+    }
+    let next_head = intent.dispatch_next;
+    intent.dispatch_next = 0;
+    let mut tail = intents
+        .id()
+        .find(lane.tail_intent_id)
+        .ok_or_else(|| "MissingDispatchTail".to_string())?;
+    tail.dispatch_next = intent.id;
+    intents.id().update(tail);
+    lane.head_intent_id = next_head;
+    lane.tail_intent_id = intent.id;
+    lanes.lane().update(lane);
+    intents.id().update(intent);
+    Ok(())
 }
 
 #[reducer]
@@ -247,6 +432,15 @@ pub fn claim_party_command_intent(
     }
     if now >= intent.expires_micros {
         return Err("Expired".to_string());
+    }
+    if ctx
+        .db
+        .game_party_command_dispatch_lane()
+        .lane()
+        .find(intent.dispatch_lane)
+        .is_none_or(|lane| lane.head_intent_id != intent.id)
+    {
+        return Err("IntentNotDispatchHead".to_string());
     }
     if intent.claim_token != 0
         && intent.claim_token != claim_token
@@ -282,7 +476,9 @@ pub fn finish_party_command_intent(
             .ok_or_else(|| "Intent already finished with another outcome".to_string());
     }
     let now = ctx.timestamp.to_micros_since_unix_epoch();
-    if intent.claim_token != claim_token && now < intent.expires_micros {
+    if intent.claim_token != claim_token
+        && (now < intent.expires_micros || intent.claim_until_micros > now)
+    {
         return Err("ClaimLost".to_string());
     }
     intent.state = CommandIntentState::Finished(outcome);
@@ -291,6 +487,7 @@ pub fn finish_party_command_intent(
     intent.result_reap_micros = now.saturating_add(COMMAND_RESULT_WINDOW_MICROS);
     let issuer_guid = intent.issuer_guid;
     let response_id = intent.id;
+    retire_party_command_intent(ctx, &intent)?;
     table.id().update(intent);
     send(
         ctx,
@@ -308,6 +505,7 @@ pub fn apply_admitted_party_command(
     source_identity: Identity,
     intent_id: u64,
     issuer_guid: u64,
+    issuer_sequence: u64,
     group_id: u64,
     leader_guid: u64,
     members: Vec<u64>,
@@ -327,6 +525,12 @@ pub fn apply_admitted_party_command(
         .is_some()
     {
         return Ok(());
+    }
+    if crate::transfer::is_in_transit(ctx, bot_guid) {
+        return Err("TransferInProgress".to_string());
+    }
+    if ctx.db.game_character().guid().find(bot_guid).is_none() {
+        return Err("NotCharacterHolder".to_string());
     }
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     if now >= expires_micros {
@@ -354,6 +558,7 @@ pub fn apply_admitted_party_command(
         source_identity,
         intent_id,
         issuer_guid,
+        issuer_sequence,
         group_id,
         leader_guid,
         members,
@@ -383,6 +588,44 @@ pub fn apply_admitted_party_command(
     Ok(())
 }
 
+/// Acknowledge an exact Command Receipt read. `Ok` proves absence in this transaction; a known
+/// outcome tag proves presence. Gateway treats any other reducer failure as unavailable state.
+#[reducer]
+pub fn confirm_party_command_receipt(
+    ctx: &ReducerContext,
+    source_identity: Identity,
+    intent_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    match ctx
+        .db
+        .game_party_command_receipt()
+        .by_source_intent()
+        .filter((source_identity, intent_id))
+        .next()
+    {
+        Some(receipt) => Err(receipt.outcome.tag().to_string()),
+        None => Ok(()),
+    }
+}
+
+/// Acknowledge whether this World Shard owns the durable Character for `bot_guid`. Transfer is a
+/// nonterminal routing state. Live-body admission remains the target transaction's Group Gate.
+#[reducer]
+pub fn confirm_party_command_holder(ctx: &ReducerContext, bot_guid: u64) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if crate::transfer::is_in_transit(ctx, bot_guid) {
+        return Err("TransferInProgress".to_string());
+    }
+    ctx.db
+        .game_character()
+        .guid()
+        .find(bot_guid)
+        .is_some()
+        .then_some(())
+        .ok_or_else(|| CommandOutcome::MissingBot.tag().to_string())
+}
+
 #[cfg(feature = "debug_reducers")]
 fn fixture_command_intent(
     ctx: &ReducerContext,
@@ -405,6 +648,33 @@ pub fn playerbots_fixture_command_apply(
     claim_token: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    fixture_command_apply_after_authority(ctx, intent_id, claim_token, 0)
+}
+
+/// Change one target Gate after authority admission and before application in the same private
+/// transaction. Mode 1 removes the live body; mode 2 suppresses Sessionless Action Consent.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn playerbots_fixture_command_apply_after_gate_change(
+    ctx: &ReducerContext,
+    intent_id: u64,
+    claim_token: u64,
+    mode: u8,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if !matches!(mode, 1 | 2) {
+        return Err("unknown command Gate fixture mode".to_string());
+    }
+    fixture_command_apply_after_authority(ctx, intent_id, claim_token, mode)
+}
+
+#[cfg(feature = "debug_reducers")]
+fn fixture_command_apply_after_authority(
+    ctx: &ReducerContext,
+    intent_id: u64,
+    claim_token: u64,
+    gate_change: u8,
+) -> Result<(), String> {
     claim_party_command_intent(ctx, intent_id, claim_token)?;
     let intent = fixture_command_intent(ctx, intent_id)?;
     let member = crate::group::group_of(ctx, intent.issuer_guid)
@@ -432,12 +702,27 @@ pub fn playerbots_fixture_command_apply(
         intent.issuer_guid,
         intent.command.bot_guid,
         intent.command.authority_member_guid,
+        members.clone(),
     )?;
+    match gate_change {
+        0 => {}
+        1 => {
+            ctx.db
+                .game_world_entity()
+                .guid()
+                .delete(intent.command.bot_guid);
+        }
+        2 => {
+            crate::sessionless::set_sessionless_action_consent(ctx, intent.command.bot_guid, false)
+        }
+        _ => unreachable!("fixture mode checked by reducer"),
+    }
     let result = apply_admitted_party_command(
         ctx,
         intent.source_identity,
         intent.id,
         intent.issuer_guid,
+        intent.issuer_sequence,
         member.group_id,
         group.leader_guid,
         members,
@@ -531,8 +816,29 @@ pub fn playerbots_fixture_command_expire(
     if !matches!(intent.state, CommandIntentState::Pending) {
         return Err("fixture command is already terminal".to_string());
     }
-    intent.expires_micros = 0;
-    intent.claim_until_micros = 0;
+    intent.expires_micros = ctx.timestamp.to_micros_since_unix_epoch().saturating_sub(1);
+    table.id().update(intent);
+    Ok(())
+}
+
+/// Move one pending fixture intent beyond the target receipt-retention guarantee.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn playerbots_fixture_command_expire_after_receipt_window(
+    ctx: &ReducerContext,
+    intent_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let table = ctx.db.game_party_command_intent();
+    let mut intent = fixture_command_intent(ctx, intent_id)?;
+    if !matches!(intent.state, CommandIntentState::Pending) {
+        return Err("fixture command is already terminal".to_string());
+    }
+    intent.expires_micros = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .saturating_sub(COMMAND_RESULT_WINDOW_MICROS)
+        .saturating_sub(1);
     table.id().update(intent);
     Ok(())
 }

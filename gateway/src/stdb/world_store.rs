@@ -1082,6 +1082,17 @@ impl WorldStore for Coordinator {
             .collect()
     }
 
+    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
+        if !self.is_sharded() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .configured_world_shards()?
+            .into_iter()
+            .map(|coordinator| std::sync::Arc::new(coordinator) as std::sync::Arc<dyn WorldStore>)
+            .collect())
+    }
+
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<crate::world::party::PartyOutcome> {
         self.claim_bot_invite_intent(intent_id)
     }
@@ -1090,12 +1101,17 @@ impl WorldStore for Coordinator {
         Coordinator::claim_party_command_intent(self, intent_id, claim_token)
     }
 
+    fn defer_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
+        Coordinator::defer_party_command_intent(self, intent_id, claim_token)
+    }
+
     fn admit_party_command_authority(
         &self,
         group_id: u64,
         leader_guid: u64,
         bot_guid: u64,
         authority_member_guid: u64,
+        expected_members: Vec<u64>,
     ) -> Result<crate::world::party::CompanionCommandOutcome> {
         Coordinator::admit_party_command_authority(
             self,
@@ -1103,6 +1119,7 @@ impl WorldStore for Coordinator {
             leader_guid,
             bot_guid,
             authority_member_guid,
+            expected_members,
         )
     }
 
@@ -1122,12 +1139,19 @@ impl WorldStore for Coordinator {
         Coordinator::finish_party_command_intent(self, intent_id, claim_token, outcome)
     }
 
-    fn party_command_receipt(
+    fn confirm_party_command_receipt(
         &self,
         source_identity: spacetimedb_sdk::Identity,
         intent_id: u64,
-    ) -> Option<crate::world::party::CompanionCommandOutcome> {
-        Coordinator::party_command_receipt(self, source_identity, intent_id)
+    ) -> Result<Option<crate::world::party::CompanionCommandOutcome>> {
+        Coordinator::confirm_party_command_receipt(self, source_identity, intent_id)
+    }
+
+    fn confirm_party_command_holder(
+        &self,
+        bot_guid: u64,
+    ) -> Result<crate::world::party::PartyCommandHolder> {
+        Coordinator::confirm_party_command_holder(self, bot_guid)
     }
 
     fn entity_partition(&self, guid: u64) -> Option<(u32, u64)> {
@@ -1603,7 +1627,10 @@ mod routing_call_site_tests {
                  crate::realm_core::publish_shard_index(self, character_guid, map_id, instance_id) }",
             ),
         ] {
-            let got = code_of(method).split_whitespace().collect::<Vec<_>>().join(" ");
+            let got = code_of(method)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             let want = want.split_whitespace().collect::<Vec<_>>().join(" ");
             assert_eq!(
                 got.trim_end_matches('}').trim_end(),

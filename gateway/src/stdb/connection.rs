@@ -876,6 +876,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // doc comment).
         "SELECT * FROM game_bot_invite_intent",
         "SELECT * FROM game_party_command_intent WHERE pending = true",
+        "SELECT * FROM game_party_command_dispatch_lane",
         "SELECT * FROM game_party_command_receipt",
         // Bot-initiated Shard crossings, here for every reason the invite intent above is: a bot has
         // no session, so no other connection could see the row, and it rides the BASE list because a
