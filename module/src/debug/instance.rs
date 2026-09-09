@@ -98,8 +98,8 @@ pub fn debug_enter_instance(
 }
 
 /// Force-reap an instance NOW (the full slice-3 teardown: population → encounter sweep → tick row
-/// → bindings → row) without waiting out the 30min empty window — refuses if players are inside
-/// (the teardown's own belt re-checks). The headless reap-verification lever.
+/// → bindings → row) without waiting out the 30min empty window. It refuses the same live-player,
+/// pending-intent, and Escrow claims as the scheduled reaper. The headless reap-verification lever.
 #[reducer]
 pub fn debug_reap_instance(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -115,14 +115,9 @@ pub fn debug_reap_instance(ctx: &ReducerContext, instance_id: u64) -> Result<(),
     {
         return Err(format!("no such instance {instance_id}"));
     }
-    if ctx
-        .db
-        .game_world_entity()
-        .iter()
-        .any(|e| e.instance_id == instance_id && e.is_player())
-    {
+    if crate::instance::occupied_instances(ctx).contains(&instance_id) {
         return Err(format!(
-            "instance {instance_id} has live players — reap refused"
+            "instance {instance_id} is occupied or claimed — reap refused"
         ));
     }
     crate::instance::teardown_instance(ctx, instance_id);

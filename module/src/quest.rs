@@ -2293,8 +2293,39 @@ pub(crate) struct AreaTriggerRoute {
 }
 
 impl AreaTriggerRoute {
+    fn valid(self) -> bool {
+        let coordinates = [
+            self.source_x,
+            self.source_y,
+            self.source_z,
+            self.target_x,
+            self.target_y,
+            self.target_z,
+            self.target_o,
+        ];
+        let volume = self.volume;
+        coordinates.into_iter().all(f32::is_finite)
+            && [
+                volume.radius,
+                volume.length,
+                volume.width,
+                volume.height,
+                volume.yaw,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+            && (volume.radius > 0.0
+                || (volume.radius == 0.0
+                    && volume.length > 0.0
+                    && volume.width > 0.0
+                    && volume.height > 0.0))
+    }
+
     #[cfg_attr(not(has_packages), allow(dead_code))]
     pub(crate) fn contains(self, x: f32, y: f32, z: f32) -> bool {
+        if !self.valid() || ![x, y, z].into_iter().all(f32::is_finite) {
+            return false;
+        }
         let (dx, dy, dz) = (x - self.source_x, y - self.source_y, z - self.source_z);
         let volume = self.volume;
         if volume.radius > 0.0 {
@@ -2333,7 +2364,7 @@ pub(crate) fn area_trigger_route(
         .game_areatrigger_teleport()
         .trigger_id()
         .find(trigger_id)?;
-    Some(AreaTriggerRoute {
+    let route = AreaTriggerRoute {
         trigger_id,
         source_map: volume.map_id,
         source_x: volume.x,
@@ -2351,7 +2382,8 @@ pub(crate) fn area_trigger_route(
             height: volume.box_height,
             yaw: volume.box_yaw,
         },
-    })
+    };
+    route.valid().then_some(route)
 }
 
 /// Enter an imported portal for a session-less Character following a party member's certified
@@ -2911,5 +2943,42 @@ mod tests {
         assert!(route.contains(10.5, 24.0, 32.0));
         assert!(!route.contains(11.1, 24.0, 30.0));
         assert!(!route.contains(10.0, 20.0, 32.1));
+    }
+
+    #[test]
+    fn areatrigger_route_refuses_non_finite_coordinates_and_invalid_shapes() {
+        let mut route = AreaTriggerRoute {
+            trigger_id: 1,
+            source_map: 0,
+            source_x: 10.0,
+            source_y: 20.0,
+            source_z: 30.0,
+            target_map: 36,
+            target_x: 1.0,
+            target_y: 2.0,
+            target_z: 3.0,
+            target_o: 0.0,
+            volume: AreaTriggerVolume {
+                radius: 5.0,
+                length: 0.0,
+                width: 0.0,
+                height: 0.0,
+                yaw: 0.0,
+            },
+        };
+        assert!(route.valid());
+        route.volume.radius = f32::INFINITY;
+        assert!(!route.valid());
+        route.volume.radius = 0.0;
+        assert!(!route.valid());
+        route.volume.length = 8.0;
+        route.volume.width = 2.0;
+        route.volume.height = 4.0;
+        assert!(route.valid());
+        route.source_x = f32::NAN;
+        assert!(!route.valid());
+        route.source_x = 10.0;
+        route.target_z = f32::INFINITY;
+        assert!(!route.valid());
     }
 }

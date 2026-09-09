@@ -848,17 +848,20 @@ pub(crate) fn is_in_transit(ctx: &ReducerContext, character_guid: u64) -> bool {
     !login_allowed(has_out, has_in)
 }
 
+pub(crate) struct TransferClaimReadLimit;
+
 /// Every instance id an in-transit character has a claim on: the escrow's DESTINATION and the
 /// source instance `begin_transfer` parked on the durable row. Consumed by
 /// `instance::occupied_instances` (REFUSE verdict) so the instance reaper cannot tear
 /// down an instance — and with it the character's `game_instance_binding` manifest rows — while a
 /// transfer into or out of it is still in flight.
 ///
-/// Deliberate simplification: a full scan of `game_transfer_out`, not an index probe — the escrow
-/// table holds one row per IN-FLIGHT transfer (seconds of lifetime, reaped at 30s), so it is empty
-/// in the common case and tiny in the worst one, and the reaper it feeds runs once a minute.
-/// Upgrade path: none needed until transfer rates approach per-tick.
-pub(crate) fn in_transit_instances(ctx: &ReducerContext) -> Vec<u64> {
+/// Escrow remains a full scan because it holds only short-lived crossings. Pending bot intents use
+/// the admission bound plus one row; an unexpected overflow returns a typed read limit so the
+/// instance owner can retain every lease instead of accepting incomplete occupancy facts.
+pub(crate) fn in_transit_instances(
+    ctx: &ReducerContext,
+) -> Result<Vec<u64>, TransferClaimReadLimit> {
     let chars = ctx.db.game_character();
     let mut out = Vec::new();
     for row in ctx.db.game_transfer_out().iter() {
@@ -873,7 +876,24 @@ pub(crate) fn in_transit_instances(ctx: &ReducerContext) -> Vec<u64> {
             }
         }
     }
-    out
+    let pending: Vec<_> = ctx
+        .db
+        .game_bot_transfer_intent()
+        .iter()
+        .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT + 1)
+        .collect();
+    if pending.len() > lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT {
+        return Err(TransferClaimReadLimit);
+    }
+    for intent in pending {
+        if intent.source_instance != 0 {
+            out.push(intent.source_instance);
+        }
+        if intent.destination_instance != 0 {
+            out.push(intent.destination_instance);
+        }
+    }
+    Ok(out)
 }
 
 /// DEFER verdict — fold a post-`begin_transfer` `money` credit into the escrowed export

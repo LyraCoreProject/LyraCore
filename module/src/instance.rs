@@ -965,13 +965,11 @@ pub fn reap_instances(ctx: &ReducerContext, _schedule: InstanceReaperSchedule) {
 /// The set of instance ids with at least one live PLAYER entity — one pass classifies every
 /// instance at once (playerbots count: a parked bot holds its instance open, correctly).
 ///
-/// Plus every instance CLAIMED by an in-transit character (REFUSE verdict). Occupancy is
-/// counted from live entities, and `begin_transfer` deletes the live entity — so an instance whose
-/// only occupant is mid-transfer would read as empty and get torn down, deleting its
-/// `game_instance_binding` rows (a manifest table) out from under a transfer another shard is still
-/// driving. Both ends of the hop are held: the escrow's destination (where the character is going)
-/// and the durable row's `pending_instance_id` (where `begin_transfer` parked its source instance).
-fn occupied_instances(ctx: &ReducerContext) -> HashSet<u64> {
+/// Plus every instance claimed by a pending Transfer Intent or Escrow. A Transfer Intent removes
+/// the live body before the Gateway can begin Escrow, so both durable phases must hold the source
+/// lease and destination. An unexpected intent overflow keeps every instance rather than letting
+/// an incomplete bounded read reap one that is still claimed.
+pub(crate) fn occupied_instances(ctx: &ReducerContext) -> HashSet<u64> {
     let mut occupied: HashSet<u64> = ctx
         .db
         .game_world_entity()
@@ -979,7 +977,17 @@ fn occupied_instances(ctx: &ReducerContext) -> HashSet<u64> {
         .filter(|e| e.is_player() && e.instance_id != 0)
         .map(|e| e.instance_id)
         .collect();
-    occupied.extend(crate::transfer::in_transit_instances(ctx));
+    match crate::transfer::in_transit_instances(ctx) {
+        Ok(claimed) => occupied.extend(claimed),
+        Err(crate::transfer::TransferClaimReadLimit) => {
+            occupied.extend(
+                ctx.db
+                    .game_instance()
+                    .iter()
+                    .map(|instance| instance.instance_id),
+            );
+        }
+    }
     occupied
 }
 

@@ -266,6 +266,44 @@ fn playerbots_companion_enters_the_areatrigger_with_normalized_transfer_state() 
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_pending_transfer_intent_keeps_the_admitted_instance_lease() {
+    let fixture = fixture("playerbots-transfer-intent-holds-instance", 2);
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let refusal = fixture.node.call("debug_reap_instance", &["5098078"]);
+    let refusal_text = format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&refusal.stdout),
+        String::from_utf8_lossy(&refusal.stderr)
+    );
+    std::fs::write(
+        support::log_dir().join(format!(
+            "{}-intent-holds-instance-refusal.txt",
+            fixture.node.shard_name()
+        )),
+        &refusal_text,
+    )
+    .unwrap();
+    let evidence = capture(&fixture, "intent-holds-instance");
+
+    assert!(!refusal.status.success(), "{evidence}");
+    assert!(refusal_text.contains("occupied or claimed"), "{evidence}");
+    assert_eq!(
+        evidence["source_instance"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["intent"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert_eq!(evidence["bot"].as_array().unwrap().len(), 0, "{evidence}");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_missing_supported_route_records_a_finite_transfer_stop() {
     let fixture = fixture("playerbots-transfer-route-missing", 0);
     fixture
