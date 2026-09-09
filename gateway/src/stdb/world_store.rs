@@ -1176,38 +1176,6 @@ impl WorldStore for Coordinator {
             .map(|entity| (entity.map_id, entity.instance_id))
     }
 
-    fn claim_bot_transfer_intent(
-        &self,
-        intent_id: u64,
-        bot_guid: u64,
-        controller_generation: u64,
-        claim_token: u64,
-    ) -> Result<()> {
-        Coordinator::claim_bot_transfer_intent(
-            self,
-            intent_id,
-            bot_guid,
-            controller_generation,
-            claim_token,
-        )
-    }
-
-    fn complete_bot_transfer_intent(
-        &self,
-        intent_id: u64,
-        bot_guid: u64,
-        controller_generation: u64,
-        claim_token: u64,
-    ) -> Result<()> {
-        Coordinator::complete_bot_transfer_intent(
-            self,
-            intent_id,
-            bot_guid,
-            controller_generation,
-            claim_token,
-        )
-    }
-
     fn mark_bot_transfer_arrival_ready(
         &self,
         intent_id: u64,

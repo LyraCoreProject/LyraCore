@@ -279,28 +279,6 @@ pub trait WorldStore:
         None
     }
 
-    /// Lease one exact durable Transfer Intent to this Gateway worker.
-    fn claim_bot_transfer_intent(
-        &self,
-        _intent_id: u64,
-        _bot_guid: u64,
-        _controller_generation: u64,
-        _claim_token: u64,
-    ) -> Result<()> {
-        Err(anyhow!("this store does not host Transfer Intents"))
-    }
-
-    /// Delete the exact Transfer Intent after its arrival is ready.
-    fn complete_bot_transfer_intent(
-        &self,
-        _intent_id: u64,
-        _bot_guid: u64,
-        _controller_generation: u64,
-        _claim_token: u64,
-    ) -> Result<()> {
-        Err(anyhow!("this store does not host Transfer Intents"))
-    }
-
     /// Persist the exact claimed intent's destination-ready witness before release.
     fn mark_bot_transfer_arrival_ready(
         &self,

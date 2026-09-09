@@ -406,6 +406,7 @@ pub(super) fn run_transfer_injected_for_intent(
 ///
 /// A destination this shard already serves is not a refusal, it is a completed crossing: on a realm
 /// with one Shard the teleport WAS the whole move, and there is nothing left to do.
+#[cfg(test)]
 pub fn run_bot_transfer(
     holder: &dyn WorldStore,
     bot_guid: u64,
