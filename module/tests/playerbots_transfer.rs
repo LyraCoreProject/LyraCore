@@ -253,21 +253,30 @@ fn playerbots_companion_enters_the_areatrigger_with_normalized_transfer_state() 
         fixture.generation + 1,
         "{evidence}"
     );
-    assert_eq!(runner["foreground"], "null", "{evidence}");
-    assert_eq!(runner["chosen"], "null", "{evidence}");
-    assert_eq!(runner["candidate_order"], "[]", "{evidence}");
-    assert_eq!(runner["movement_progress"], "null", "{evidence}");
-    assert_eq!(runner["combat_progress"], "null", "{evidence}");
-    assert_eq!(runner["cast_progress"], "null", "{evidence}");
-    assert_eq!(runner["quest_progress"], "[]", "{evidence}");
-    assert_eq!(runner["progress_age_micros"], "null", "{evidence}");
-    assert_eq!(runner["last_target_health"], "null", "{evidence}");
-    assert_eq!(runner["defense_target"], "null", "{evidence}");
-    assert_eq!(runner["companion_heal_target_guid"], "null", "{evidence}");
-    assert_eq!(runner["companion_fight_target_guid"], "null", "{evidence}");
-    assert_eq!(runner["companion_buff_target_guid"], "null", "{evidence}");
-    assert_eq!(runner["deferred_destinations"], "[]", "{evidence}");
-    assert_eq!(runner["recovery"], "null", "{evidence}");
+    assert_eq!(runner["foreground"], "(none = ())", "{evidence}");
+    assert_eq!(runner["chosen"], "(none = ())", "{evidence}");
+    assert_eq!(runner["candidate_order"], "", "{evidence}");
+    assert_eq!(runner["movement_progress"], "(none = ())", "{evidence}");
+    assert_eq!(runner["combat_progress"], "(none = ())", "{evidence}");
+    assert_eq!(runner["cast_progress"], "(none = ())", "{evidence}");
+    assert_eq!(runner["quest_progress"], "", "{evidence}");
+    assert_eq!(runner["progress_age_micros"], "(none = ())", "{evidence}");
+    assert_eq!(runner["last_target_health"], "(none = ())", "{evidence}");
+    assert_eq!(runner["defense_target"], "(none = ())", "{evidence}");
+    assert_eq!(
+        runner["companion_heal_target_guid"], "(none = ())",
+        "{evidence}"
+    );
+    assert_eq!(
+        runner["companion_fight_target_guid"], "(none = ())",
+        "{evidence}"
+    );
+    assert_eq!(
+        runner["companion_buff_target_guid"], "(none = ())",
+        "{evidence}"
+    );
+    assert_eq!(runner["deferred_destinations"], "", "{evidence}");
+    assert_eq!(runner["recovery"], "(none = ())", "{evidence}");
     assert!(
         runner["transfer_checkpoint"]
             .as_str()
@@ -415,7 +424,7 @@ fn playerbots_transfer_advances_generation_and_rejects_the_source_cast_completio
     );
     assert!(
         entered["action"].as_array().unwrap().iter().any(|row| {
-            row["kind"] == "cast"
+            row["kind"] == "(cast = ())"
                 && row["cast_id"] == scheduled_id
                 && row["outcome"] == "(cancelled = ())"
         }),
@@ -447,7 +456,7 @@ fn playerbots_transfer_advances_generation_and_rejects_the_source_cast_completio
             .unwrap()
             .iter()
             .any(|row| {
-                row["kind"] == "cast"
+                row["kind"] == "(cast = ())"
                     && row["cast_id"] == scheduled_id
                     && row["outcome"] == "(cancelled = ())"
             }),
@@ -458,7 +467,7 @@ fn playerbots_transfer_advances_generation_and_rejects_the_source_cast_completio
         "the rejected source completion cannot apply its heal after Transfer: {after_deadline}"
     );
     assert_eq!(
-        after_deadline["runner"][0]["cast_progress"], "null",
+        after_deadline["runner"][0]["cast_progress"], "(none = ())",
         "{after_deadline}"
     );
 }
