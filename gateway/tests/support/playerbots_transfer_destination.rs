@@ -12,6 +12,11 @@ const DESTINATION_TARGET_GUID: u64 = (0xF130u64 << 48) | (6u64 << 24) | 10_002;
 const DESTINATION_REPLACEMENT_GUID: u64 = (0xF130u64 << 48) | (823u64 << 24) | 10_003;
 const REBUILT_CONTENT: &str = "playerbots-transfer-destination-q7-v1";
 const REPLACEMENT_CONTENT: &str = "playerbots-transfer-destination-q5261-v1";
+const ROLES_GROUP: u64 = 5_098_000;
+const PRIEST: u8 = 5;
+const MAGE: u8 = 8;
+const HEALER: u8 = 1;
+const DAMAGE: u8 = 2;
 
 type Row = BTreeMap<String, String>;
 type EvidenceRow = serde_json::Map<String, serde_json::Value>;
@@ -64,6 +69,18 @@ fn navigation_keys(evidence: &serde_json::Value) -> BTreeSet<u64> {
         .collect()
 }
 
+fn recorded_keys(evidence: &serde_json::Value, name: &str) -> BTreeSet<u64> {
+    evidence[name]
+        .as_array()
+        .unwrap_or_else(|| panic!("{name} is not an array: {evidence}"))
+        .iter()
+        .map(|key| {
+            key.as_u64()
+                .unwrap_or_else(|| panic!("{name} contains a non-u64 key: {evidence}"))
+        })
+        .collect()
+}
+
 fn exactly_one<'a>(rows: &'a [serde_json::Value], table: &str) -> &'a EvidenceRow {
     assert_eq!(rows.len(), 1, "expected one {table} row, got {rows:?}");
     rows[0]
@@ -83,6 +100,42 @@ fn retained(topology: &TransferTopology, guid: u64) -> Vec<Row> {
         &topology.destination_db,
         &format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
     )
+}
+
+fn role_member(topology: &TransferTopology, class: u8, role: u8) -> u64 {
+    let rows = topology.query(
+        &topology.source_db,
+        &format!(
+            "SELECT character_guid FROM pkg_playerbots_bot WHERE class = {class} AND role = {role}"
+        ),
+    );
+    number(
+        query_one(&rows, "private role party member"),
+        "character_guid",
+    )
+}
+
+fn set_companion_party_membership(
+    topology: &TransferTopology,
+    database: &str,
+    transferred: &TransferredBot,
+    mode: u8,
+) {
+    let priest = role_member(topology, PRIEST, HEALER);
+    let mage = role_member(topology, MAGE, DAMAGE);
+    let actor = format!(r#"{{"guid":{},"ownership":null}}"#, transferred.leader_guid);
+    topology.call(
+        database,
+        "playerbots_fixture_orders_party_as",
+        &[
+            &transferred.guid.to_string(),
+            &priest.to_string(),
+            &mage.to_string(),
+            &transferred.leader_guid.to_string(),
+            &mode.to_string(),
+            &actor,
+        ],
+    );
 }
 
 fn destination_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::Value {
@@ -112,6 +165,10 @@ fn destination_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::V
         "recovery_scan": topology.query(
             &topology.destination_db,
             &format!("SELECT * FROM pkg_playerbots_recovery_scan WHERE character_guid = {guid}"),
+        ),
+        "group_membership": topology.query(
+            &topology.destination_db,
+            &format!("SELECT * FROM game_group_member WHERE group_id = {ROLES_GROUP} AND character_guid = {guid}"),
         ),
         "catalog": topology.query(
             &topology.destination_db,
@@ -182,6 +239,10 @@ fn source_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::Value 
             &topology.source_db,
             &format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {guid}"),
         ),
+        "transfer_intent": topology.query(
+            &topology.source_db,
+            &format!("SELECT * FROM game_bot_transfer_intent WHERE bot_guid = {guid}"),
+        ),
         "navigation_revision": topology.query(
             &topology.source_db,
             "SELECT * FROM game_navigation_revision",
@@ -201,6 +262,10 @@ fn source_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::Value 
         "quest_log": topology.query(
             &topology.source_db,
             &format!("SELECT * FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 7"),
+        ),
+        "group_membership": topology.query(
+            &topology.source_db,
+            &format!("SELECT * FROM game_group_member WHERE group_id = {ROLES_GROUP} AND character_guid = {guid}"),
         ),
     })
 }
@@ -224,11 +289,13 @@ fn embedded_u64(value: &str, name: &str) -> u64 {
         .unwrap_or_else(|| panic!("invalid {name} in {value}"))
 }
 
-/// Stage the real quest on the source before the shared driver begins Transfer.
+/// Stage the real Quest and execute its selected Transfer operation before Gateway crossing.
 pub(crate) fn stage_retained_quest(
     topology: &TransferTopology,
-    character_guid: u64,
+    transferred: &TransferredBot,
 ) -> serde_json::Value {
+    let character_guid = transferred.guid;
+    set_companion_party_membership(topology, &topology.source_db, transferred, 1);
     let entities = topology.query(
         &topology.source_db,
         &format!("SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {character_guid}"),
@@ -249,15 +316,38 @@ pub(crate) fn stage_retained_quest(
         "playerbots_transfer_quest_source_stage",
         &[&character_guid.to_string()],
     );
-    let evidence = source_snapshot(topology, character_guid);
+    let staged = source_snapshot(topology, character_guid);
+    set_companion_party_membership(topology, &topology.source_db, transferred, 0);
+    let suspended = source_snapshot(topology, character_guid);
+    topology.call(
+        &topology.source_db,
+        "playerbots_transfer_quest_execute",
+        &[&character_guid.to_string()],
+    );
+    let operation = source_snapshot(topology, character_guid);
+    let evidence = serde_json::json!({
+        "expected_navigation": expected_navigation,
+        "staged": staged,
+        "suspended": suspended,
+        "operation": operation,
+    });
+    evidence
+}
 
-    let runner = exactly_one(evidence["runner"].as_array().unwrap(), "source Runner");
+/// Check the retained Quest and real source Transfer operation after the caller saves evidence.
+pub(crate) fn assert_retained_quest_stage(evidence: &serde_json::Value) {
+    let runner = exactly_one(
+        evidence["staged"]["runner"].as_array().unwrap(),
+        "source Runner",
+    );
     let retained = exactly_one(
-        evidence["retained_quest"].as_array().unwrap(),
+        evidence["staged"]["retained_quest"].as_array().unwrap(),
         "source retained Quest",
     );
     let navigation = exactly_one(
-        evidence["navigation_revision"].as_array().unwrap(),
+        evidence["staged"]["navigation_revision"]
+            .as_array()
+            .unwrap(),
         "source Navigation Inputs revision",
     );
     assert_eq!(field(retained, "quest_entry"), SOURCE_QUEST.to_string());
@@ -278,11 +368,11 @@ pub(crate) fn stage_retained_quest(
         "{evidence}"
     );
     assert!(
-        navigation_keys(&evidence) == expected_navigation,
+        navigation_keys(&evidence["staged"]) == recorded_keys(evidence, "expected_navigation"),
         "{evidence}"
     );
     let navigation_config = exactly_one(
-        evidence["navigation_config"].as_array().unwrap(),
+        evidence["staged"]["navigation_config"].as_array().unwrap(),
         "source Navigation Inputs config",
     );
     assert_eq!(
@@ -291,15 +381,138 @@ pub(crate) fn stage_retained_quest(
         "{evidence}"
     );
     assert_eq!(
-        evidence["source_target"].as_array().unwrap().len(),
+        evidence["staged"]["source_target"]
+            .as_array()
+            .unwrap()
+            .len(),
         1,
         "{evidence}"
     );
     assert!(
-        !evidence["actions"].as_array().unwrap().is_empty(),
+        !evidence["staged"]["actions"].as_array().unwrap().is_empty(),
         "{evidence}"
     );
-    evidence
+    assert!(
+        evidence["staged"]["group_membership"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the source Quest must be selected while the companion is outside the party: {evidence}"
+    );
+    let suspended_runner = exactly_one(
+        evidence["suspended"]["runner"].as_array().unwrap(),
+        "suspended source Runner",
+    );
+    assert_eq!(
+        evidence["suspended"]["group_membership"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{evidence}"
+    );
+    assert_eq!(
+        field(suspended_runner, "objective"),
+        field(runner, "objective"),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["suspended"]["retained_quest"], evidence["staged"]["retained_quest"],
+        "{evidence}"
+    );
+    let operation_runner = exactly_one(
+        evidence["operation"]["runner"].as_array().unwrap(),
+        "source Runner after Transfer operation",
+    );
+    assert!(
+        field(operation_runner, "transfer_checkpoint").contains("quest = 7")
+            && field(operation_runner, "transfer_checkpoint").contains("stalled_micros = 30000000"),
+        "{evidence}"
+    );
+    assert_eq!(
+        field(operation_runner, "objective"),
+        field(runner, "objective"),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["operation"]["retained_quest"], evidence["staged"]["retained_quest"],
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["operation"]["group_membership"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{evidence}"
+    );
+    for field_name in [
+        "foreground",
+        "chosen",
+        "movement_progress",
+        "combat_progress",
+        "cast_progress",
+        "progress_age_micros",
+        "last_target_health",
+        "defense_target",
+        "recovery",
+        "retry_candidate",
+        "companion_heal_target_guid",
+        "companion_fight_target_guid",
+        "companion_buff_target_guid",
+    ] {
+        assert_eq!(
+            field(operation_runner, field_name),
+            "(none = ())",
+            "Transfer normalization retained {field_name}: {evidence}"
+        );
+    }
+    for field_name in ["candidate_order", "quest_progress", "deferred_destinations"] {
+        assert_eq!(
+            field(operation_runner, field_name),
+            "",
+            "Transfer normalization retained {field_name}: {evidence}"
+        );
+    }
+    assert_eq!(field(operation_runner, "transitions"), "0", "{evidence}");
+    assert_eq!(
+        field(operation_runner, "route_expansions"),
+        "0",
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["operation"]["transfer_intent"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{evidence}"
+    );
+    let intent = exactly_one(
+        evidence["operation"]["transfer_intent"].as_array().unwrap(),
+        "source Transfer Intent",
+    );
+    let transfer_actions: Vec<_> = evidence["operation"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(serde_json::Value::as_object)
+        .filter(|action| field(action, "kind") == "(transfer = ())")
+        .collect();
+    assert_eq!(
+        transfer_actions.len(),
+        1,
+        "expected one source Transfer action: {evidence}"
+    );
+    let action = transfer_actions[0];
+    assert!(
+        field(operation_runner, "transfer_checkpoint")
+            .contains(&format!("intent_id = {}", field(intent, "id")))
+            && field(action, "kind") == "(transfer = ())"
+            && field(action, "outcome")
+                .contains(&format!("transferAccepted = {}", field(intent, "id"))),
+        "the real Transfer operation was not recorded exactly: {evidence}"
+    );
 }
 
 /// Stage static destination content before the shared driver begins Transfer.
@@ -322,44 +535,58 @@ pub(crate) fn stage_destination_catalogue(
         "playerbots_transfer_destination_catalogue_stage",
         &[&character_guid.to_string(), &mode.to_string()],
     );
-    let evidence = destination_snapshot(topology, character_guid);
+    let snapshot = destination_snapshot(topology, character_guid);
+    let source_navigation = topology.query(
+        &topology.source_db,
+        "SELECT revision FROM game_navigation_revision WHERE id = 0",
+    );
+    serde_json::json!({
+        "mode": mode,
+        "expected_navigation": expected_navigation,
+        "source_navigation": source_navigation,
+        "snapshot": snapshot,
+    })
+}
 
+/// Check destination content and Navigation Inputs after the caller saves evidence.
+pub(crate) fn assert_destination_catalogue(evidence: &serde_json::Value) {
+    let snapshot = &evidence["snapshot"];
     assert!(
-        evidence["runner"].as_array().unwrap().is_empty(),
+        snapshot["runner"].as_array().unwrap().is_empty(),
         "{evidence}"
     );
     assert!(
-        evidence["source_quest_log"].as_array().unwrap().is_empty()
-            && evidence["replacement_quest_log"]
+        snapshot["source_quest_log"].as_array().unwrap().is_empty()
+            && snapshot["replacement_quest_log"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
         "{evidence}"
     );
     assert!(
-        evidence["actions"].as_array().unwrap().is_empty(),
+        snapshot["actions"].as_array().unwrap().is_empty(),
         "{evidence}"
     );
     let navigation = exactly_one(
-        evidence["navigation_revision"].as_array().unwrap(),
+        snapshot["navigation_revision"].as_array().unwrap(),
         "destination Navigation Inputs revision",
     );
-    let source_navigation = topology.query(
-        &topology.source_db,
-        "SELECT revision FROM game_navigation_revision WHERE id = 0",
+    let source_navigation = exactly_one(
+        evidence["source_navigation"].as_array().unwrap(),
+        "source Navigation Inputs revision",
     );
-    let source_navigation = query_one(&source_navigation, "source Navigation Inputs revision");
     assert_ne!(
         field(navigation, "revision"),
-        source_navigation["revision"],
+        field(source_navigation, "revision"),
         "source and destination Navigation Inputs must have different actual revisions: {evidence}"
     );
     assert!(
-        expected_navigation.len() >= 2 && navigation_keys(&evidence) == expected_navigation,
+        recorded_keys(evidence, "expected_navigation").len() >= 2
+            && navigation_keys(snapshot) == recorded_keys(evidence, "expected_navigation"),
         "destination navigation rows do not cover its landing and target cells: {evidence}"
     );
     let navigation_config = exactly_one(
-        evidence["navigation_config"].as_array().unwrap(),
+        snapshot["navigation_config"].as_array().unwrap(),
         "destination Navigation Inputs config",
     );
     assert_eq!(
@@ -368,10 +595,10 @@ pub(crate) fn stage_destination_catalogue(
         "{evidence}"
     );
     let catalog = exactly_one(
-        evidence["catalog"].as_array().unwrap(),
+        snapshot["catalog"].as_array().unwrap(),
         "destination Quest catalog",
     );
-    let (selected, absent, content_revision) = if mode == 1 {
+    let (selected, absent, content_revision) = if evidence["mode"].as_u64() == Some(1) {
         (
             "source_catalog_quest",
             "replacement_catalog_quest",
@@ -386,15 +613,14 @@ pub(crate) fn stage_destination_catalogue(
     };
     assert_eq!(field(catalog, "content_revision"), content_revision);
     let quest = exactly_one(
-        evidence[selected].as_array().unwrap(),
+        snapshot[selected].as_array().unwrap(),
         "destination catalog Quest",
     );
     assert_eq!(field(quest, "content_revision"), content_revision);
     assert!(
-        evidence[absent].as_array().unwrap().is_empty(),
+        snapshot[absent].as_array().unwrap().is_empty(),
         "{evidence}"
     );
-    evidence
 }
 
 fn pass_until(
@@ -414,10 +640,9 @@ fn pass_until(
         if ready(observations.last().unwrap()) {
             return observations;
         }
-        assert!(
-            Instant::now() < deadline,
-            "destination runner did not reach the expected state: {observations:?}"
-        );
+        if Instant::now() >= deadline {
+            return observations;
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -456,13 +681,47 @@ fn assert_arrival_cleared(evidence: &serde_json::Value) {
     );
 }
 
+fn assert_authenticated_leave(evidence: &serde_json::Value) {
+    let attached_runner = exactly_one(
+        evidence["attached"]["runner"].as_array().unwrap(),
+        "attached destination Runner",
+    );
+    let left_runner = exactly_one(
+        evidence["left"]["runner"].as_array().unwrap(),
+        "destination Runner after Leave",
+    );
+    assert_eq!(
+        evidence["attached"]["group_membership"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{evidence}"
+    );
+    assert!(
+        evidence["left"]["group_membership"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{evidence}"
+    );
+    for field_name in ["objective", "objective_sequence", "transfer_checkpoint"] {
+        assert_eq!(
+            field(left_runner, field_name),
+            field(attached_runner, field_name),
+            "authenticated Leave changed retained {field_name}: {evidence}"
+        );
+    }
+}
+
 /// Prove case 9 after the shared driver releases the destination Character.
 pub(crate) fn case9_rebuilds_destination(
     topology: &TransferTopology,
     transferred: &TransferredBot,
 ) -> serde_json::Value {
-    let before = destination_snapshot(topology, transferred.guid);
-    assert_arrival_cleared(&before);
+    let attached = destination_snapshot(topology, transferred.guid);
+    set_companion_party_membership(topology, &topology.destination_db, transferred, 1);
+    let left = destination_snapshot(topology, transferred.guid);
     let attempts = pass_until(topology, transferred.guid, |snapshot| {
         let Some(runner) = snapshot["runner"].as_array().and_then(|rows| rows.first()) else {
             return false;
@@ -480,15 +739,28 @@ pub(crate) fn case9_rebuilds_destination(
             "generation": transferred.generation,
             "objective_identity": transferred.objective_identity,
         },
-        "before": before,
+        "attached": attached,
+        "left": left,
         "attempts": attempts,
         "after": after,
     });
+    evidence
+}
 
+/// Check compatible destination reconciliation after the caller saves evidence.
+pub(crate) fn assert_case9_rebuilds_destination(evidence: &serde_json::Value) {
+    let intent_id = evidence["transferred"]["intent_id"]
+        .as_u64()
+        .expect("transferred intent id is not a u64");
+    let objective_identity = evidence["transferred"]["objective_identity"]
+        .as_u64()
+        .expect("transferred objective identity is not a u64");
     let before_runner = exactly_one(
-        evidence["before"]["runner"].as_array().unwrap(),
+        evidence["attached"]["runner"].as_array().unwrap(),
         "arriving Runner",
     );
+    assert_arrival_cleared(&evidence["attached"]);
+    assert_authenticated_leave(evidence);
     let after_runner = exactly_one(
         evidence["after"]["runner"].as_array().unwrap(),
         "reconciled Runner",
@@ -498,8 +770,7 @@ pub(crate) fn case9_rebuilds_destination(
         "rebuilt retained Quest",
     );
     assert!(
-        field(before_runner, "transfer_checkpoint")
-            .contains(&format!("intent_id = {}", transferred.intent_id)),
+        field(before_runner, "transfer_checkpoint").contains(&format!("intent_id = {intent_id}")),
         "{evidence}"
     );
     assert!(
@@ -512,12 +783,12 @@ pub(crate) fn case9_rebuilds_destination(
     );
     assert_eq!(
         embedded_u64(field(before_runner, "objective"), "identity"),
-        transferred.objective_identity,
+        objective_identity,
         "{evidence}"
     );
     assert_eq!(
         embedded_u64(field(after_runner, "objective"), "identity"),
-        transferred.objective_identity,
+        objective_identity,
         "{evidence}"
     );
     assert_eq!(
@@ -587,31 +858,36 @@ pub(crate) fn case9_rebuilds_destination(
         "{evidence}"
     );
     assert!(
-        evidence["before"]["source_target_entity"]
+        evidence["attached"]["source_target_entity"]
             .as_array()
             .unwrap()
             .is_empty()
-            && evidence["before"]["source_target_spawn"]
+            && evidence["attached"]["source_target_spawn"]
                 .as_array()
                 .unwrap()
                 .is_empty()
-            && evidence["before"]["actions"].as_array().unwrap().is_empty()
-            && evidence["before"]["movement"]
+            && evidence["attached"]["actions"]
                 .as_array()
                 .unwrap()
                 .is_empty()
-            && evidence["before"]["attack"].as_array().unwrap().is_empty()
-            && evidence["before"]["pending_cast"]
+            && evidence["attached"]["movement"]
                 .as_array()
                 .unwrap()
                 .is_empty()
-            && evidence["before"]["recovery_scan"]
+            && evidence["attached"]["attack"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+            && evidence["attached"]["pending_cast"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+            && evidence["attached"]["recovery_scan"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
         "source-local rows survived Transfer: {evidence}"
     );
-    evidence
 }
 
 /// Prove case 10 after the shared driver releases the destination Character.
@@ -619,8 +895,9 @@ pub(crate) fn case10_records_incompatible_destination(
     topology: &TransferTopology,
     transferred: &TransferredBot,
 ) -> serde_json::Value {
-    let before = destination_snapshot(topology, transferred.guid);
-    assert_arrival_cleared(&before);
+    let attached = destination_snapshot(topology, transferred.guid);
+    set_companion_party_membership(topology, &topology.destination_db, transferred, 1);
+    let left = destination_snapshot(topology, transferred.guid);
     topology.call(
         &topology.destination_db,
         "playerbots_fixture_runner_pass_once",
@@ -647,16 +924,26 @@ pub(crate) fn case10_records_incompatible_destination(
             "generation": transferred.generation,
             "objective_identity": transferred.objective_identity,
         },
-        "before": before,
+        "attached": attached,
+        "left": left,
         "refused": refused,
         "replacement_attempts": replacement_attempts,
         "replacement": replacement,
     });
+    evidence
+}
 
+/// Check incompatible destination replacement after the caller saves evidence.
+pub(crate) fn assert_case10_records_incompatible_destination(evidence: &serde_json::Value) {
+    let objective_identity = evidence["transferred"]["objective_identity"]
+        .as_u64()
+        .expect("transferred objective identity is not a u64");
     let before_runner = exactly_one(
-        evidence["before"]["runner"].as_array().unwrap(),
+        evidence["attached"]["runner"].as_array().unwrap(),
         "arriving Runner",
     );
+    assert_arrival_cleared(&evidence["attached"]);
+    assert_authenticated_leave(evidence);
     let refused_runner = exactly_one(
         evidence["refused"]["runner"].as_array().unwrap(),
         "arrival-refused Runner",
@@ -687,7 +974,7 @@ pub(crate) fn case10_records_incompatible_destination(
     );
     assert_ne!(
         embedded_u64(field(refused_runner, "objective"), "identity"),
-        transferred.objective_identity,
+        objective_identity,
         "{evidence}"
     );
     assert_eq!(
@@ -715,29 +1002,34 @@ pub(crate) fn case10_records_incompatible_destination(
         "{evidence}"
     );
     assert!(
-        evidence["before"]["source_target_entity"]
+        evidence["attached"]["source_target_entity"]
             .as_array()
             .unwrap()
             .is_empty()
-            && evidence["before"]["source_target_spawn"]
+            && evidence["attached"]["source_target_spawn"]
                 .as_array()
                 .unwrap()
                 .is_empty()
-            && evidence["before"]["actions"].as_array().unwrap().is_empty()
-            && evidence["before"]["movement"]
+            && evidence["attached"]["actions"]
                 .as_array()
                 .unwrap()
                 .is_empty()
-            && evidence["before"]["attack"].as_array().unwrap().is_empty()
-            && evidence["before"]["pending_cast"]
+            && evidence["attached"]["movement"]
                 .as_array()
                 .unwrap()
                 .is_empty()
-            && evidence["before"]["recovery_scan"]
+            && evidence["attached"]["attack"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+            && evidence["attached"]["pending_cast"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+            && evidence["attached"]["recovery_scan"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
         "source-local rows survived Transfer: {evidence}"
     );
-    evidence
 }
