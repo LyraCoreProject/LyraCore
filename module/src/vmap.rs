@@ -751,7 +751,7 @@ use crate::game_config;
 /// The map's ACTIVE generation id, or `None` when it has none. The ONE `by_map_state` scan —
 /// `vmap_enabled`, `fetcher` and the indoor-presence lookup all ask through here rather than
 /// repeating the filter, so "which generation is live" has a single answer per map.
-fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
+pub(crate) fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
     ctx.db
         .game_vmap_generation()
         .by_map_state()
