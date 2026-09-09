@@ -19,6 +19,7 @@ use crate::realm_core::SessionKey;
 use crate::world::{SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
 use super::bindings::game_world_entity_table::GameWorldEntityTableAccess;
+use super::bindings::game_transfer_in_table::GameTransferInTableAccess;
 use super::bindings::GwMove;
 use super::connection::{CharacterPresenceSnapshot, Coordinator};
 use super::views::{AccountRow, RealmRow};
@@ -245,6 +246,16 @@ impl WorldStore for Coordinator {
         self.release_transfer(transfer_id)
     }
 
+    fn has_arrival_fence(&self, transfer_id: u64) -> bool {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_transfer_in()
+            .transfer_id()
+            .find(&transfer_id)
+            .is_some()
+    }
     fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
         self.ensure_instance(instance_id, map_id, party_id)
     }
@@ -1224,7 +1235,7 @@ impl WorldStore for Coordinator {
             .db
             .game_transfer_in()
             .transfer_id()
-            .find(transfer_id)
+            .find(&transfer_id)
             .is_some_and(|arrival| {
                 arrival.character_guid == intent.bot_guid
                     && arrival.bot_intent_source == intent.source_module_identity
