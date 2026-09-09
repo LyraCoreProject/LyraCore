@@ -45,6 +45,7 @@
 //! | `spirit_res` | `world::do_spirit_healer_res` | ghost actor res at the spirit healer (sickness applies) |
 //! | `accept_group_invite` | `group::accept_invite_for` | pending invite exists + inviter still leads + group not full; roster events fire |
 //! | `set_sessionless_action_consent` | `sessionless::set_sessionless_action_consent` | update Package consent and clear unclaimed Group Intents atomically |
+//! | `companion_target_facts` | `group::companion_target_facts` | exact hostile creature + partition/death/control gates; never selects a substitute |
 //! | `system_message` | `chat::emit_system_message` | recipient exists and is online on this Shard; text is trimmed, bounded, and non-empty |
 //!
 //! Adding a verb = add the row above + the `use ... as` below; if the underlying core is still

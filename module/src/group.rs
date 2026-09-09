@@ -588,8 +588,12 @@ pub(crate) fn admit_party_command(
 ) -> Option<crate::bridge::CommandOutcome> {
     use crate::bridge::CommandOutcome;
 
-    if crate::sessionless::action_gate(ctx, admitted.command.bot_guid).is_err() {
-        return Some(CommandOutcome::Suppressed);
+    if let Err(refusal) = crate::sessionless::action_gate(ctx, admitted.command.bot_guid) {
+        return Some(match refusal.kind {
+            crate::actor::ActionRefusalKind::MissingActor => CommandOutcome::MissingBot,
+            crate::actor::ActionRefusalKind::CannotAct => CommandOutcome::WrongAccount,
+            _ => CommandOutcome::Suppressed,
+        });
     }
     let Some(member) = group_of(ctx, admitted.command.bot_guid) else {
         return Some(CommandOutcome::StalePartyMirror);

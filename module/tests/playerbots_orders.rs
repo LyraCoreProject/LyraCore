@@ -450,6 +450,86 @@ fn playerbots_orders_reject_forged_ownership_and_clear_after_party_authority_cha
     );
     issue(
         &fixture,
+        &format!("assist|{}|{}", fixture.warrior, fixture.priest),
+        &fixture.warrior,
+        false,
+    );
+    node.assert_call(
+        "playerbots_fixture_orders_party",
+        &[
+            &fixture.warrior,
+            &fixture.priest,
+            &fixture.mage,
+            &fixture.leader,
+            "3",
+        ],
+    );
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "assisted-member-left");
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            fixture.warrior
+        ))
+        .is_empty());
+
+    node.assert_call(
+        "playerbots_fixture_orders_party",
+        &[
+            &fixture.warrior,
+            &fixture.priest,
+            &fixture.mage,
+            &fixture.leader,
+            "0",
+        ],
+    );
+    let bot_account = node.query_rows(&format!(
+        "SELECT account_id FROM game_character WHERE guid = {}",
+        fixture.warrior
+    ))[0]["account_id"]
+        .clone();
+    node.assert_call("claim_account", &[&bot_account, &fixture.warrior, "9010"]);
+    let bot_generation = node.query_rows(&format!(
+        "SELECT generation FROM game_account_claim WHERE account_id = {bot_account}"
+    ))[0]["generation"]
+        .clone();
+    let bot_ownership = format!(
+        r#"{{"account_id":{bot_account},"generation":{bot_generation},"request_nonce":9010}}"#
+    );
+    let reclaimed = queue(&fixture, &format!("follow|{}", fixture.warrior));
+    let reclaimed_token = (30_000 + reclaimed.parse::<u64>().unwrap()).to_string();
+    node.assert_call(
+        "playerbots_fixture_command_apply",
+        &[&reclaimed, &reclaimed_token],
+    );
+    node.assert_call(
+        "playerbots_fixture_command_finish",
+        &[&reclaimed, &reclaimed_token],
+    );
+    let reclaimed_receipt = node.query_rows(&format!(
+        "SELECT outcome FROM game_party_command_receipt WHERE intent_id = {reclaimed}"
+    ));
+    let reclaimed_intent = node.query_rows(&format!(
+        "SELECT state FROM game_party_command_intent WHERE id = {reclaimed}"
+    ));
+    evidence(&fixture, "bot-reclaimed-by-account");
+    assert_eq!(reclaimed_receipt.len(), 1);
+    assert!(reclaimed_receipt[0]["outcome"]
+        .to_ascii_lowercase()
+        .contains("wrongaccount"));
+    assert!(reclaimed_intent[0]["state"]
+        .to_ascii_lowercase()
+        .contains("wrongaccount"));
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            fixture.warrior
+        ))
+        .is_empty());
+    node.assert_call("release_account_claim", &[&bot_ownership]);
+
+    issue(
+        &fixture,
         &format!("follow|{}", fixture.warrior),
         &fixture.warrior,
         false,
