@@ -4,6 +4,7 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 use support::Standalone;
 
 struct TransferFixture {
@@ -116,7 +117,7 @@ fn capture(fixture: &TransferFixture, case: &str) -> serde_json::Value {
         "source_volume": node.query_rows("SELECT id, map_id, x, y, z, radius, box_length, box_width, box_height, box_yaw FROM game_area_trigger WHERE id = 78"),
         "landing": node.query_rows("SELECT trigger_id, target_map, x, y, z, o, name FROM game_areatrigger_teleport WHERE trigger_id = 78"),
         "intent": node.query_rows(&format!("SELECT id, bot_guid, destination_map, destination_instance, controller_generation FROM game_bot_transfer_intent WHERE bot_guid = {companion}")),
-        "action": node.query_rows(&format!("SELECT kind, target_guid, spell_id, quest_entry, outcome FROM pkg_playerbots_action WHERE character_guid = {companion}")),
+        "action": node.query_rows(&format!("SELECT kind, target_guid, spell_id, quest_entry, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {companion}")),
         "movement": node.query_rows(&format!("SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {companion}")),
         "pending_cast": node.query_rows(&format!("SELECT scheduled_id, spell_id, target_guid FROM game_pending_cast WHERE caster_guid = {companion}")),
         "attack": node.query_rows(&format!("SELECT attacker_guid, target_guid FROM game_melee_attack WHERE attacker_guid = {companion}")),
@@ -261,6 +262,78 @@ fn playerbots_companion_enters_the_areatrigger_with_normalized_transfer_state() 
                     .contains("transferAccepted")
         }),
         "{evidence}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_transfer_advances_generation_and_rejects_the_source_cast_completion() {
+    let fixture = fixture("playerbots-transfer-source-cast", 2);
+    fixture.node.assert_call(
+        "playerbots_fixture_cast",
+        &[&fixture.companion, &fixture.companion],
+    );
+    let started = capture(&fixture, "source-cast-started");
+    let pending = started["pending_cast"].as_array().unwrap();
+    assert_eq!(pending.len(), 1, "{started}");
+    let scheduled_id = pending[0]["scheduled_id"].clone();
+
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let entered = capture(&fixture, "source-cast-transfer-entered");
+    assert!(
+        entered["pending_cast"].as_array().unwrap().is_empty(),
+        "{entered}"
+    );
+    assert_eq!(
+        entered["runner"][0]["generation"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap(),
+        fixture.generation + 1,
+        "{entered}"
+    );
+    assert!(
+        entered["action"].as_array().unwrap().iter().any(|row| {
+            row["kind"] == "cast"
+                && row["cast_id"] == scheduled_id
+                && row["outcome"] == "(cancelled = ())"
+        }),
+        "{entered}"
+    );
+    assert!(
+        entered["action"].as_array().unwrap().iter().any(|row| {
+            row["kind"] == "transfer"
+                && row["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("transferAccepted")
+        }),
+        "{entered}"
+    );
+
+    std::thread::sleep(Duration::from_millis(5_200));
+    let after_deadline = capture(&fixture, "source-cast-after-deadline");
+    assert!(
+        after_deadline["pending_cast"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{after_deadline}"
+    );
+    assert!(
+        after_deadline["action"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| {
+                row["kind"] == "cast"
+                    && row["cast_id"] == scheduled_id
+                    && row["outcome"] == "(cancelled = ())"
+            }),
+        "{after_deadline}"
     );
 }
 
