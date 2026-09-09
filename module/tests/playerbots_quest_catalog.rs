@@ -792,29 +792,46 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     let (node, bots) = fixture("playerbots-quest-deferred-retry");
     let bot = bot_for_class(&bots, "1");
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
-    node.assert_call(
-        "playerbots_quest_fixture_move_creature_spawn",
-        &["6", "1230"],
-    );
-    node.assert_call("playerbots_quest_fixture_refresh", &[]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    select_cohort(&node, bot);
-    run_once(&node);
+    node.assert_call("playerbots_recovery_fixture_block_quest_target", &[bot]);
+    let active = support::poll_until(support::POLL_TIMEOUT, || {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        let ready = runner(&node, bot)["recovery"].contains("active = (some = (fight");
+        if !ready {
+            std::thread::sleep(std::time::Duration::from_millis(1_100));
+        }
+        ready
+    });
+    record(&node, "before-attempt-exhaustion");
     let initial = runner(&node, bot);
+    let path = support::log_dir().join(format!("{}-active-attempt.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&initial).unwrap()).unwrap();
+    assert!(active, "Quest did not begin a Fight attempt: {initial:?}");
     let retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
     ));
     assert!(initial["objective"].contains("quest"));
     assert!(initial["objective"].contains("travelling"), "{initial:?}");
 
-    node.assert_call("playerbots_fixture_runner_expire_objective", &[bot]);
-    run_once(&node);
+    node.assert_call("playerbots_recovery_fixture_exhaust_attempt", &[bot]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let deferred = runner(&node, bot);
     record(&node, "deferral-start");
-    assert!(deferred["objective"].contains("deferred"), "{deferred:?}");
-    assert!(!deferred["deferred_destinations"].is_empty());
+    let path = support::log_dir().join(format!("{}-deferred-runner.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&deferred).unwrap()).unwrap();
+    assert!(deferred["objective"].contains("travelling"), "{deferred:?}");
+    assert!(
+        !deferred["deferred_destinations"]
+            .trim_matches(['[', ']', ' '])
+            .is_empty(),
+        "{deferred:?}"
+    );
+    assert!(deferred["recovery"].contains("work = (fight"));
+    assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
     run_once(&node);
     let waiting = runner(&node, bot);
+    let path = support::log_dir().join(format!("{}-waiting-runner.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&waiting).unwrap()).unwrap();
     assert_eq!(waiting["objective"], deferred["objective"]);
     assert_eq!(
         waiting["deferred_destinations"],
@@ -822,15 +839,23 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     );
 
     let retried = support::poll_until(std::time::Duration::from_secs(45), || {
-        runner(&node, bot)["objective"].contains("travelling")
+        let state = runner(&node, bot);
+        state["deferred_destinations"]
+            .trim_matches(['[', ']', ' '])
+            .is_empty()
+            && state["chosen"].contains("attack")
     });
     let resumed = runner(&node, bot);
+    let resumed_attacks = node.query_rows(&format!(
+        "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {bot}"
+    ));
     record(&node, "deferred-retry");
     let path = support::log_dir().join(format!("{}-runner.json", node.shard_name()));
     std::fs::write(
         path,
         serde_json::to_vec_pretty(&serde_json::json!({
-            "initial": initial, "deferred": deferred, "waiting": waiting, "resumed": resumed
+            "initial": initial, "deferred": deferred, "waiting": waiting, "resumed": resumed,
+            "resumed_attacks": resumed_attacks
         }))
         .unwrap(),
     )
@@ -840,8 +865,19 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         "quest did not retry after its deferral expired: {resumed:?}"
     );
     assert_eq!(resumed["objective_sequence"], initial["objective_sequence"]);
-    assert!(resumed["deferred_destinations"].is_empty());
-    assert_eq!(resumed["retry_count"], "0");
+    assert!(resumed["deferred_destinations"]
+        .trim_matches(['[', ']', ' '])
+        .is_empty());
+    let target = (0xF130u64 << 48) | (6u64 << 24) | 1;
+    assert_eq!(resumed["last_outcome"], "(accepted = ())");
+    assert_eq!(resumed_attacks.len(), 1);
+    assert_eq!(resumed_attacks[0]["target_guid"], target.to_string());
+    let resumed_attempt = resumed["recovery"]
+        .split("work = ")
+        .find(|attempt| attempt.starts_with(&format!("(fight = {target})")))
+        .expect("the same quest fight must have a fresh Recovery Attempt");
+    assert!(resumed_attempt.contains("stalled_micros = 0"));
+    assert!(resumed_attempt.contains("deferred_until_micros = (none"));
     let resumed_retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
     ));
@@ -863,10 +899,9 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     ] {
         assert_eq!(resumed_retained[0][field], retained[0][field], "{field}");
     }
-    assert!(
-        resumed_retained[0]["safe_position"].contains("map_id = 0, instance_id = 0"),
-        "{:?}",
-        resumed_retained[0]
+    assert_eq!(
+        resumed_retained[0]["safe_position"],
+        retained[0]["safe_position"]
     );
 }
 

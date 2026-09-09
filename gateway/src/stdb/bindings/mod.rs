@@ -479,6 +479,7 @@ pub mod game_melee_schedule_table;
 pub mod game_motion_publish_schedule_table;
 pub mod game_movement_violation_table;
 pub mod game_nav_chunk_table;
+pub mod game_navigation_revision_table;
 pub mod game_npc_text_slot_table;
 pub mod game_npc_text_table;
 pub mod game_npc_vendor_table;
@@ -762,6 +763,7 @@ pub mod movement_operation_type;
 pub mod movement_switch_type;
 pub mod movement_violation_type;
 pub mod nav_chunk_type;
+pub mod navigation_revision_type;
 pub mod notify_encounter_instruction_type;
 pub mod npc_flags_projection_type;
 pub mod npc_text_slot_type;
@@ -1479,6 +1481,7 @@ pub use game_melee_schedule_table::*;
 pub use game_motion_publish_schedule_table::*;
 pub use game_movement_violation_table::*;
 pub use game_nav_chunk_table::*;
+pub use game_navigation_revision_table::*;
 pub use game_npc_text_slot_table::*;
 pub use game_npc_text_table::*;
 pub use game_npc_vendor_table::*;
@@ -1762,6 +1765,7 @@ pub use movement_operation_type::MovementOperation;
 pub use movement_switch_type::MovementSwitch;
 pub use movement_violation_type::MovementViolation;
 pub use nav_chunk_type::NavChunk;
+pub use navigation_revision_type::NavigationRevision;
 pub use notify_encounter_instruction_type::NotifyEncounterInstruction;
 pub use npc_flags_projection_type::NpcFlagsProjection;
 pub use npc_text_slot_type::NpcTextSlot;
@@ -7251,6 +7255,7 @@ pub struct DbUpdate {
     game_motion_publish_schedule: __sdk::TableUpdate<MotionPublishSchedule>,
     game_movement_violation: __sdk::TableUpdate<MovementViolation>,
     game_nav_chunk: __sdk::TableUpdate<NavChunk>,
+    game_navigation_revision: __sdk::TableUpdate<NavigationRevision>,
     game_npc_text: __sdk::TableUpdate<NpcText>,
     game_npc_text_slot: __sdk::TableUpdate<NpcTextSlot>,
     game_npc_vendor: __sdk::TableUpdate<NpcVendor>,
@@ -7878,6 +7883,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_nav_chunk" => db_update
                     .game_nav_chunk
                     .append(game_nav_chunk_table::parse_table_update(table_update)?),
+                "game_navigation_revision" => db_update.game_navigation_revision.append(
+                    game_navigation_revision_table::parse_table_update(table_update)?,
+                ),
                 "game_npc_text" => db_update
                     .game_npc_text
                     .append(game_npc_text_table::parse_table_update(table_update)?),
@@ -8916,6 +8924,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_nav_chunk = cache
             .apply_diff_to_table::<NavChunk>("game_nav_chunk", &self.game_nav_chunk)
             .with_updates_by_pk(|row| &row.key);
+        diff.game_navigation_revision = cache
+            .apply_diff_to_table::<NavigationRevision>(
+                "game_navigation_revision",
+                &self.game_navigation_revision,
+            )
+            .with_updates_by_pk(|row| &row.id);
         diff.game_npc_text = cache
             .apply_diff_to_table::<NpcText>("game_npc_text", &self.game_npc_text)
             .with_updates_by_pk(|row| &row.text_id);
@@ -9778,6 +9792,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_nav_chunk" => db_update
                     .game_nav_chunk
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_navigation_revision" => db_update
+                    .game_navigation_revision
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_npc_text" => db_update
                     .game_npc_text
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10538,6 +10555,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_nav_chunk" => db_update
                     .game_nav_chunk
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_navigation_revision" => db_update
+                    .game_navigation_revision
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_npc_text" => db_update
                     .game_npc_text
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -10989,6 +11009,7 @@ pub struct AppliedDiff<'r> {
     game_motion_publish_schedule: __sdk::TableAppliedDiff<'r, MotionPublishSchedule>,
     game_movement_violation: __sdk::TableAppliedDiff<'r, MovementViolation>,
     game_nav_chunk: __sdk::TableAppliedDiff<'r, NavChunk>,
+    game_navigation_revision: __sdk::TableAppliedDiff<'r, NavigationRevision>,
     game_npc_text: __sdk::TableAppliedDiff<'r, NpcText>,
     game_npc_text_slot: __sdk::TableAppliedDiff<'r, NpcTextSlot>,
     game_npc_vendor: __sdk::TableAppliedDiff<'r, NpcVendor>,
@@ -11837,6 +11858,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<NavChunk>(
             "game_nav_chunk",
             &self.game_nav_chunk,
+            event,
+        );
+        callbacks.invoke_table_row_callbacks::<NavigationRevision>(
+            "game_navigation_revision",
+            &self.game_navigation_revision,
             event,
         );
         callbacks.invoke_table_row_callbacks::<NpcText>(
@@ -13096,6 +13122,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         game_motion_publish_schedule_table::register_table(client_cache);
         game_movement_violation_table::register_table(client_cache);
         game_nav_chunk_table::register_table(client_cache);
+        game_navigation_revision_table::register_table(client_cache);
         game_npc_text_table::register_table(client_cache);
         game_npc_text_slot_table::register_table(client_cache);
         game_npc_vendor_table::register_table(client_cache);
@@ -13347,6 +13374,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "game_motion_publish_schedule",
         "game_movement_violation",
         "game_nav_chunk",
+        "game_navigation_revision",
         "game_npc_text",
         "game_npc_text_slot",
         "game_npc_vendor",

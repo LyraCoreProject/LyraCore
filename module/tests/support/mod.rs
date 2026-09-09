@@ -89,6 +89,12 @@ fn signing_keys() -> Arc<SigningKeys> {
     keys
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Storage {
+    Memory,
+    Disk,
+}
+
 pub struct Standalone {
     child: Child,
     signing_keys: Arc<SigningKeys>,
@@ -100,10 +106,20 @@ pub struct Standalone {
     spacetime: OsString,
     server: String,
     database: String,
+    storage: Storage,
 }
 
 impl Standalone {
     pub fn start(test_name: &str) -> Self {
+        Self::start_with_storage(test_name, Storage::Memory)
+    }
+
+    #[allow(dead_code)] // Used by durable process-restart scenarios.
+    pub fn start_persistent(test_name: &str) -> Self {
+        Self::start_with_storage(test_name, Storage::Disk)
+    }
+
+    fn start_with_storage(test_name: &str, storage: Storage) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("failed to reserve a local port");
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -138,6 +154,7 @@ impl Standalone {
             &data_dir,
             &log_path,
             &signing_keys.directory,
+            storage,
         );
         let mut standalone = Self {
             child,
@@ -150,6 +167,7 @@ impl Standalone {
             spacetime,
             server,
             database: name,
+            storage,
         };
         standalone.wait_for_server();
         drop(startup);
@@ -308,9 +326,9 @@ impl Standalone {
     /// Publish the module, restarting a fresh node when it dies mid-publish.
     ///
     /// `spacetimedb-standalone` 2.7.1 segfaults while launching this module roughly once in a dozen
-    /// publishes (SIGSEGV, no log line past `launching module`). The node is `--in-memory`, so a
-    /// restart before the first successful publish loses nothing. Once a publish succeeds, this
-    /// Standalone may hold state, so every later failure is reported without a restart.
+    /// publishes (SIGSEGV, no log line past `launching module`). Before the first successful publish
+    /// the fixture has staged no gameplay. Once a publish succeeds, every later failure is reported
+    /// without an automatic restart. Process-restart scenarios request that step explicitly.
     fn publish(&mut self, source: &[&str], extra: &[&str]) {
         let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = module_dir.parent().unwrap();
@@ -348,6 +366,21 @@ impl Standalone {
         );
     }
 
+    #[allow(dead_code)] // Used to prove a new process, rather than a Module republish.
+    pub fn process_id(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Replace the owned process with the same storage, address and signing keys. The published
+    /// Module and its rows must survive without republishing or reseeding.
+    #[allow(dead_code)] // Used by durable process-restart scenarios.
+    pub fn restart_persistent(&mut self) {
+        assert!(self.storage == Storage::Disk, "restart needs disk storage");
+        assert!(self.published, "restart needs a published Module");
+        self.child.kill().expect("failed to stop owned standalone");
+        self.restart();
+    }
+
     /// Start a replacement node on the same address, appending to the same log.
     fn restart(&mut self) {
         let _ = self.child.wait();
@@ -358,6 +391,7 @@ impl Standalone {
             &self.data_dir,
             &self.log_path,
             &self.signing_keys.directory,
+            self.storage,
         );
         self.wait_for_server();
     }
@@ -464,6 +498,7 @@ fn spawn_node(
     data_dir: &Path,
     log_path: &Path,
     signing_key_dir: &Path,
+    storage: Storage,
 ) -> Child {
     let log = OpenOptions::new()
         .create(true)
@@ -471,7 +506,8 @@ fn spawn_node(
         .open(log_path)
         .expect("failed to open the standalone log");
     let log_err = log.try_clone().expect("failed to share the standalone log");
-    Command::new(spacetime)
+    let mut command = Command::new(spacetime);
+    command
         .args(["--config-path", cli_config.to_str().unwrap()])
         .args([
             "start",
@@ -481,9 +517,12 @@ fn spawn_node(
             data_dir.to_str().unwrap(),
             "--jwt-key-dir",
             signing_key_dir.to_str().unwrap(),
-            "--in-memory",
             "--non-interactive",
-        ])
+        ]);
+    if storage == Storage::Memory {
+        command.arg("--in-memory");
+    }
+    command
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
         .spawn()

@@ -30,6 +30,57 @@ pub struct NavChunk {
     pub obs: Vec<u8>,
 }
 
+/// Terrain and navigation imports, plus effective coverage changes, advance this singleton in
+/// their transaction. An absent row means the installed inputs predate revision tracking.
+#[table(accessor = game_navigation_revision, public)]
+pub struct NavigationRevision {
+    #[primary_key]
+    pub id: u8,
+    pub revision: u64,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NavigationInputs {
+    pub imported_revision: Option<u64>,
+    pub navigation_enabled: bool,
+    pub collision_enabled: bool,
+    pub coverage_enabled: bool,
+    pub static_generation: Option<u64>,
+    pub coverage_generation: Option<u64>,
+}
+
+/// Identifies the inputs to movement on one map. It does not certify coverage at a position;
+/// the retained RouteStep carries that evidence. Dynamic obstacles still require bounded expiry.
+pub fn inputs(ctx: &ReducerContext, map_id: u32) -> NavigationInputs {
+    NavigationInputs {
+        imported_revision: ctx
+            .db
+            .game_navigation_revision()
+            .id()
+            .find(0)
+            .map(|r| r.revision),
+        navigation_enabled: nav_enabled(ctx),
+        collision_enabled: crate::vmap::rays_enabled(ctx),
+        coverage_enabled: nav_coverage_enabled(ctx),
+        static_generation: crate::vmap::active_generation_id(ctx, map_id),
+        coverage_generation: coverage_generation(ctx, map_id),
+    }
+}
+
+pub(crate) fn record_change(ctx: &ReducerContext) -> Result<(), String> {
+    let rows = ctx.db.game_navigation_revision();
+    if let Some(mut row) = rows.id().find(0) {
+        row.revision = row
+            .revision
+            .checked_add(1)
+            .ok_or("navigation revision exhausted")?;
+        rows.id().update(row);
+    } else {
+        rows.insert(NavigationRevision { id: 0, revision: 1 });
+    }
+    Ok(())
+}
+
 /// Is (x, y) standable? `None` = no nav chunk here (un-imported or fully clear) — callers keep
 /// their current behavior, exactly like `terrain::ground_z`'s off-slice contract. One PK find.
 pub fn walkable(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<bool> {
@@ -137,14 +188,16 @@ pub fn import_nav_chunks(ctx: &ReducerContext, packed: String) -> Result<(), Str
     if load_nav_batch(ctx, &packed)? == 0 {
         return Err("nav import payload was empty".to_string());
     }
-    Ok(())
+    record_change(ctx)
 }
 
 /// Append a nav batch WITHOUT the reset — a zone spans many `spacetime call` args.
 #[reducer]
 pub fn import_nav_chunks_append(ctx: &ReducerContext, packed: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    load_nav_batch(ctx, &packed)?;
+    if load_nav_batch(ctx, &packed)? > 0 {
+        record_change(ctx)?;
+    }
     Ok(())
 }
 

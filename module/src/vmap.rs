@@ -577,6 +577,7 @@ pub fn prepare_vmap_nav_coverage(
     let generation = generation(ctx, generation_id)?;
     require_coverage_preparable(generation.state)?;
     let coverage = ctx.db.game_vmap_nav_coverage();
+    let mut inserted = false;
     for cell in cells {
         let key = cell_key(generation.map_id, cell.cell_x, cell.cell_y);
         if coverage
@@ -619,6 +620,10 @@ pub fn prepare_vmap_nav_coverage(
             walk: derived.walk,
             obs: derived.obs,
         });
+        inserted = true;
+    }
+    if inserted && crate::nav::coverage_generation(ctx, generation.map_id) == Some(generation_id) {
+        crate::nav::record_change(ctx)?;
     }
     Ok(())
 }
@@ -751,7 +756,7 @@ use crate::game_config;
 /// The map's ACTIVE generation id, or `None` when it has none. The ONE `by_map_state` scan —
 /// `vmap_enabled`, `fetcher` and the indoor-presence lookup all ask through here rather than
 /// repeating the filter, so "which generation is live" has a single answer per map.
-fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
+pub(crate) fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
     ctx.db
         .game_vmap_generation()
         .by_map_state()
