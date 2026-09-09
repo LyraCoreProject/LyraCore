@@ -271,6 +271,30 @@ pub(super) fn run_transfer_injected_for_intent(
     abort_after: Option<&str>,
     bot_intent: Option<(&BotTransferIntent, u64)>,
 ) -> Result<()> {
+    let resumed = src
+        .escrowed_transfer(plan.character_guid)
+        .map(|escrow| {
+            if (escrow.transfer_id, escrow.character_guid)
+                != (plan.transfer_id, plan.character_guid)
+            {
+                return Err(anyhow!(
+                    "transfer {}: source escrow identity changed",
+                    plan.transfer_id
+                ));
+            }
+            Ok(TransferPlan {
+                transfer_id: escrow.transfer_id,
+                character_guid: escrow.character_guid,
+                dest_map_id: escrow.dest_map_id,
+                dest_instance_id: escrow.dest_instance_id,
+                dest_x: 0.0,
+                dest_y: 0.0,
+                dest_z: 0.0,
+                dest_o: 0.0,
+            })
+        })
+        .transpose()?;
+    let plan = resumed.as_ref().unwrap_or(plan);
     log::info!(
         "transfer {}: character {} {} -> {} (map {} instance {})",
         plan.transfer_id,

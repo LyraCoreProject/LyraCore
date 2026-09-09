@@ -1072,6 +1072,7 @@ fn a_resumed_transfer_reuses_the_escrowed_destination_not_the_character_row() {
             blob: fake_blob(XGUID, 36, 42, "gear+spells"),
         },
     );
+    lk(&src_db.instance_partitions).insert(42, (36, 0));
     let dst_db = FakeShardDb::empty();
     let src = xstore("world", src_db.clone(), calls.clone(), None);
     let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
@@ -1388,7 +1389,7 @@ fn a_human_arrival_cannot_settle_a_later_same_destination_crossing() {
     assert!(
         refusal
             .to_string()
-            .contains("destination fence does not match"),
+            .contains("pending Realm Transfer phase changed"),
         "{refusal:#}"
     );
     assert_eq!(*destination.realm_partition.lock().unwrap(), Some(later));
@@ -1742,22 +1743,35 @@ fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
         .expect("the bot's party exists")
         .group_id;
     lk(&src_db.instance_partitions).insert(7, (36, group_id));
+    let intent = bot_intent();
+    let plan = world.character_destination(BOT_GUID).unwrap();
+    let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::transfer::run_transfer_injected_for_intent(
+            world.as_ref(),
+            instances.as_ref(),
+            &plan,
+            Some("publish_shard_index"),
+            Some((&intent, 701)),
+        )
+    }));
+    assert!(
+        prepared.is_err(),
+        "the driver must stop after Realm settlement"
+    );
+    assert!(
+        !src_db.has(BOT_GUID) && dst_db.has(BOT_GUID) && !dst_db.live(BOT_GUID),
+        "the source is finished while the destination arrival remains fenced"
+    );
     instances
         .mirror_failures
         .store(1, std::sync::atomic::Ordering::SeqCst);
-
-    let intent = bot_intent();
-    let first = super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 701)
+    let first = super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 702)
         .expect_err("the destination mirror interruption must keep the arrival fenced");
     assert!(
         first
             .to_string()
             .contains("World Shard mirror connection interrupted"),
         "{first:#}"
-    );
-    assert!(
-        !src_db.has(BOT_GUID) && dst_db.has(BOT_GUID) && !dst_db.live(BOT_GUID),
-        "the source is finished while the destination arrival remains fenced"
     );
     {
         let first_calls = calls.lock().unwrap();
@@ -1775,7 +1789,7 @@ fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
         );
     }
 
-    super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 702)
+    super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 703)
         .expect("the next claimed worker repeats the mirror and completes the crossing");
 
     assert!(dst_db.live(BOT_GUID), "the bot arrived");
