@@ -841,12 +841,16 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         state["deferred_destinations"].is_empty() && state["chosen"].contains("attack")
     });
     let resumed = runner(&node, bot);
+    let resumed_attacks = node.query_rows(&format!(
+        "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {bot}"
+    ));
     record(&node, "deferred-retry");
     let path = support::log_dir().join(format!("{}-runner.json", node.shard_name()));
     std::fs::write(
         path,
         serde_json::to_vec_pretty(&serde_json::json!({
-            "initial": initial, "deferred": deferred, "waiting": waiting, "resumed": resumed
+            "initial": initial, "deferred": deferred, "waiting": waiting, "resumed": resumed,
+            "resumed_attacks": resumed_attacks
         }))
         .unwrap(),
     )
@@ -857,7 +861,16 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     );
     assert_eq!(resumed["objective_sequence"], initial["objective_sequence"]);
     assert!(resumed["deferred_destinations"].is_empty());
-    assert_eq!(resumed["retry_count"], "0");
+    let target = (0xF130u64 << 48) | (6u64 << 24) | 1;
+    assert_eq!(resumed["last_outcome"], "(accepted = ())");
+    assert_eq!(resumed_attacks.len(), 1);
+    assert_eq!(resumed_attacks[0]["target_guid"], target.to_string());
+    let resumed_attempt = resumed["recovery"]
+        .split("work = ")
+        .find(|attempt| attempt.starts_with(&format!("(fight = {target})")))
+        .expect("the same quest fight must have a fresh Recovery Attempt");
+    assert!(resumed_attempt.contains("stalled_micros = 0"));
+    assert!(resumed_attempt.contains("deferred_until_micros = (none"));
     let resumed_retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
     ));
@@ -879,10 +892,9 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     ] {
         assert_eq!(resumed_retained[0][field], retained[0][field], "{field}");
     }
-    assert!(
-        resumed_retained[0]["safe_position"].contains("map_id = 0, instance_id = 0"),
-        "{:?}",
-        resumed_retained[0]
+    assert_eq!(
+        resumed_retained[0]["safe_position"],
+        retained[0]["safe_position"]
     );
 }
 

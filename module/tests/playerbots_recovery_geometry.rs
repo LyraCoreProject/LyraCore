@@ -307,7 +307,7 @@ fn playerbots_recovery_classifies_a_verified_blocked_route_without_missing_cover
     assert!(runner["recovery"]
         .as_str()
         .unwrap()
-        .contains("status = blocked"));
+        .contains("status = (blocked = ())"));
     assert_eq!(deferred["coverage_manifest"]["complete"], "true");
     assert_eq!(deferred["quest"]["rewarded"], "false");
 }
