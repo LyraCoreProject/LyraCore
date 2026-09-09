@@ -346,6 +346,46 @@ fn enter_transferred_actor(
     shard
         .establish_session(account_id, &[7; 40], identity)
         .unwrap();
+    assert_eq!(realm.shard_name(), topology.realm);
+    let session_visible = poll_until(POLL_TIMEOUT, || {
+        realm
+            .account_by_username(&username)
+            .unwrap()
+            .is_some_and(|account| account.id == realm_account_id)
+            && realm.session_key(realm_account_id).unwrap().is_some()
+            && shard
+                .account_by_username(&username)
+                .unwrap()
+                .is_some_and(|account| account.id == account_id)
+            && shard.session_key(account_id).unwrap().is_some()
+    });
+    let realm_stored = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.realm,
+        &format!("SELECT id, username FROM game_account WHERE id = {realm_account_id}"),
+    );
+    let shard_stored = row(
+        &topology.cli,
+        topology.node.server(),
+        shard.shard_name(),
+        &format!("SELECT id, username FROM game_account WHERE id = {account_id}"),
+    );
+    assert_eq!(realm_stored["username"], username);
+    assert_eq!(shard_stored["username"], username);
+    assert!(
+        session_visible,
+        "session transaction was not visible in both Coordinator caches; Realm SQL: \
+         {realm_stored:?}; Shard SQL: {shard_stored:?}"
+    );
+    assert_eq!(
+        realm.account_by_username(&username).unwrap().unwrap().id,
+        realm_account_id
+    );
+    assert_eq!(
+        shard.account_by_username(&username).unwrap().unwrap().id,
+        account_id
+    );
     topology.cli.call(
         topology.node.server(),
         shard.shard_name(),

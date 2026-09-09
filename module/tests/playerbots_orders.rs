@@ -660,7 +660,7 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
     );
     let approach = runner(node, &fixture.warrior);
     evidence(&fixture, "assist-named-fight-approach");
-    assert!(approach["chosen"].contains("Move"));
+    assert!(approach["chosen"].contains("move"));
     assert!(approach["chosen"].contains(chosen.as_str()));
     finish_movement(node, &fixture.warrior);
     pass(node, &fixture.warrior);
