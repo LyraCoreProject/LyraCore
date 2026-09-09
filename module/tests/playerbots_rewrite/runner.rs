@@ -346,7 +346,7 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
     node.assert_sql("DELETE FROM game_melee_schedule");
     select(&node, bot, "cohort");
     let waiting = poll_until(POLL_TIMEOUT, || {
-        runner(&node, bot)["chosen"].contains("quest")
+        runner(&node, bot)["chosen"].contains("returnHome")
     });
     outcomes(&node);
     assert!(waiting);
