@@ -121,19 +121,7 @@ fn read_wmo(chain: &mut PatchChain, name: &str) -> Result<WmoStats> {
 /// M2 bounding (collision) mesh triangle count. Vanilla MMDX names end `.mdx`/`.mdl` but the
 /// archives store `.m2` — swap the extension.
 fn read_m2_bounding_tris(chain: &mut PatchChain, name: &str) -> Result<u32> {
-    let m2_name = name
-        .rsplit_once('.')
-        .map(|(stem, _)| format!("{stem}.m2"))
-        .unwrap_or_else(|| name.to_string());
-    let bytes = chain
-        .read_file(&m2_name)
-        .with_context(|| format!("reading M2 {m2_name}"))?;
-    let model = match wow_m2::parse_m2(&mut Cursor::new(&bytes))
-        .with_context(|| format!("parsing M2 {m2_name}"))?
-    {
-        wow_m2::M2Format::Legacy(m) | wow_m2::M2Format::Chunked(m) => m,
-    };
-    Ok(model.header.bounding_triangles.count / 3)
+    Ok(crate::nav::m2_tris(chain, name)?.len() as u32)
 }
 
 pub(crate) fn run(args: &crate::Args) -> Result<()> {

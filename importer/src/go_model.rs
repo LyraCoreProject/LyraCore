@@ -154,7 +154,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
             skipped_wmo += 1;
             continue;
         }
-        let local_tris = crate::nav::m2_tris(&mut geo_chain, model_name);
+        let local_tris = crate::nav::m2_tris(&mut geo_chain, model_name)?;
         if local_tris.is_empty() {
             eprintln!(
                 "go-models: WARN entry {} model {model_name} produced zero bounding tris, skipping",
