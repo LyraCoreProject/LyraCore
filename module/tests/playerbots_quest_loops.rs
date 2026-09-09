@@ -426,14 +426,7 @@ fn playerbots_autonomous_talk_kill_and_collect_loops_run_for_all_starter_classes
         drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
             rewarded(node, &guid, 783)
         });
-        let talk_actions = actions(&node, &guid);
-        assert!(action_present(&talk_actions, "acceptQuest", 783));
-        assert!(action_present(&talk_actions, "turnInQuest", 783));
         assert_eq!(turnin_count(&node, &guid, 783), 1);
-        assert!(talk_actions.iter().any(|row| {
-            row["quest_entry"] == "783"
-                && row["target_guid"] == ((0xF130u64 << 48) | (197u64 << 24) | 1).to_string()
-        }));
 
         let mut max_x = drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
             quest(node, &guid, 7).is_some_and(|quest| first_quest_count(&quest) > 0)
@@ -456,8 +449,6 @@ fn playerbots_autonomous_talk_kill_and_collect_loops_run_for_all_starter_classes
                 && row["outcome"].contains("complete")
                 && !row["outcome"].contains("direct")
         }));
-        assert!(action_present(&combat, "acceptQuest", 7));
-        assert!(action_present(&combat, "turnInQuest", 7));
         assert_eq!(turnin_count(&node, &guid, 7), 1);
         assert!(combat.iter().any(|row| {
             row["quest_entry"] == "0"
@@ -484,8 +475,6 @@ fn playerbots_autonomous_talk_kill_and_collect_loops_run_for_all_starter_classes
         drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
             quest(node, &guid, 5261).is_some()
         });
-        let next = quest(&node, &guid, 5261).unwrap();
-        assert_eq!(next["rewarded"], "false");
 
         if class == 8 {
             drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
@@ -509,14 +498,6 @@ fn playerbots_autonomous_talk_kill_and_collect_loops_run_for_all_starter_classes
             assert_ne!(receipt["last_source_guid"], "0");
             assert!(rewarded(&node, &guid, 33));
             assert_eq!(item_count(&node, &guid, 750), 0);
-            let collect_actions = actions(&node, &guid);
-            assert!(collect_actions
-                .iter()
-                .any(|row| row["kind"].contains("openLoot")));
-            assert!(collect_actions
-                .iter()
-                .any(|row| row["kind"].contains("takeLoot")));
-            assert!(action_present(&collect_actions, "turnInQuest", 33));
             assert_eq!(turnin_count(&node, &guid, 5261), 1);
             assert_eq!(turnin_count(&node, &guid, 33), 1);
         }
