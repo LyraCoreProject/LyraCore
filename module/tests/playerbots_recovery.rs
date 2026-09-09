@@ -1046,7 +1046,7 @@ fn playerbots_recovery_upgrades_a_retained_quest_and_owned_cast_without_resettin
     node.assert_call("playerbots_fixture_freeze", &[&guid]);
     fn capture(node: &Standalone, guid: &str) -> serde_json::Value {
         serde_json::json!({
-            "runner": row(&node, &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
+            "runner": row(node, &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
             "retained_quest": node.query_rows(&format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}")),
             "quest": node.query_rows(&format!("SELECT * FROM game_character_quest WHERE character_guid = {guid}")),
             "pending_cast": node.query_rows(&format!("SELECT * FROM game_pending_cast WHERE caster_guid = {guid}")),

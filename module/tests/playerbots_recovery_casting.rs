@@ -251,11 +251,13 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     node.assert_call("install_guid_range", &["1000000"]);
     node.assert_call("playerbots_spawn_role", &["3", "1200", "1200", "50", "1"]);
     node.assert_call("playerbots_fixture_prepare", &[]);
-    let bots: Vec<_> = node
+    let mut bots: Vec<_> = node
         .query_rows("SELECT character_guid FROM pkg_playerbots_bot")
         .into_iter()
         .map(|row| row["character_guid"].clone())
         .collect();
+    bots.sort_by_key(|guid| guid.parse::<u64>().unwrap());
+    assert_eq!(bots.len(), 3, "fixture must spawn three bots");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
     node.assert_call(
         "playerbots_fixture_companion_stage",

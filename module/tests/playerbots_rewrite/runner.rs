@@ -393,7 +393,9 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     node.assert_call("gw_abandon_quest", &[&support::actor(bot), "50909"]);
     select(&node, bot, "cohort");
     let deferred = poll_until(Duration::from_secs(38), || {
-        !runner(&node, bot)["deferred_destinations"].is_empty()
+        !runner(&node, bot)["deferred_destinations"]
+            .trim_matches(['[', ']', ' '])
+            .is_empty()
     });
     outcomes(&node);
     assert!(deferred);

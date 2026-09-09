@@ -821,7 +821,9 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     std::fs::write(path, serde_json::to_vec_pretty(&deferred).unwrap()).unwrap();
     assert!(deferred["objective"].contains("travelling"), "{deferred:?}");
     assert!(
-        !deferred["deferred_destinations"].is_empty(),
+        !deferred["deferred_destinations"]
+            .trim_matches(['[', ']', ' '])
+            .is_empty(),
         "{deferred:?}"
     );
     assert!(deferred["recovery"].contains("work = (fight"));
@@ -838,7 +840,10 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
 
     let retried = support::poll_until(std::time::Duration::from_secs(45), || {
         let state = runner(&node, bot);
-        state["deferred_destinations"].is_empty() && state["chosen"].contains("attack")
+        state["deferred_destinations"]
+            .trim_matches(['[', ']', ' '])
+            .is_empty()
+            && state["chosen"].contains("attack")
     });
     let resumed = runner(&node, bot);
     let resumed_attacks = node.query_rows(&format!(
@@ -860,7 +865,9 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
         "quest did not retry after its deferral expired: {resumed:?}"
     );
     assert_eq!(resumed["objective_sequence"], initial["objective_sequence"]);
-    assert!(resumed["deferred_destinations"].is_empty());
+    assert!(resumed["deferred_destinations"]
+        .trim_matches(['[', ']', ' '])
+        .is_empty());
     let target = (0xF130u64 << 48) | (6u64 << 24) | 1;
     assert_eq!(resumed["last_outcome"], "(accepted = ())");
     assert_eq!(resumed_attacks.len(), 1);
