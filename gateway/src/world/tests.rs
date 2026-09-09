@@ -1098,9 +1098,23 @@ impl WorldStore for InMemoryStore {
 
     /// `import_character_blob`: replay on the in-row PK, refuse to land on a LIVE character,
     /// otherwise materialise the row + its payload at the escrow's destination.
-    fn import_character_blob(&self, transfer_id: u64, blob: &[u8]) -> Result<()> {
+    fn import_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        bot_arrival: Option<&super::transfer::BotTransferIntent>,
+    ) -> Result<()> {
         let db = self.xstep("import_character_blob")?;
         let (guid, arriving) = parse_blob(blob);
+        if let Some(intent) = bot_arrival {
+            if intent.source_module_identity == spacetimedb_sdk::Identity::ZERO
+                || intent.id == 0
+                || intent.created_micros <= 0
+                || transfer_id != guid
+            {
+                return Err(anyhow!("bot Transfer arrival identity is invalid"));
+            }
+        }
         // NOTE: every `in_rows` guard below is scoped and dropped before `db.live()`, which locks
         // `in_rows` itself. `std::sync::Mutex` is not re-entrant, so holding one across that call
         // self-deadlocks — and a deadlock makes an ordering mutation HANG the suite instead of
@@ -1112,6 +1126,17 @@ impl WorldStore for InMemoryStore {
                     "transfer id already imported for another character"
                 ));
             }
+            if let Some(intent) = bot_arrival {
+                let expected = (
+                    intent.source_module_identity,
+                    intent.id,
+                    intent.controller_generation,
+                    intent.created_micros,
+                );
+                if lk(&db.bot_arrivals).get(&transfer_id) != Some(&expected) {
+                    return Err(anyhow!("destination arrival belongs to another crossing"));
+                }
+            }
             return Ok(());
         }
         if db.live(guid) {
@@ -1121,6 +1146,17 @@ impl WorldStore for InMemoryStore {
         // cross-database the blob is the only thing that reaches this side.
         lk(&db.characters).insert(guid, arriving);
         lk(&db.in_rows).insert(transfer_id, guid);
+        if let Some(intent) = bot_arrival {
+            lk(&db.bot_arrivals).insert(
+                transfer_id,
+                (
+                    intent.source_module_identity,
+                    intent.id,
+                    intent.controller_generation,
+                    intent.created_micros,
+                ),
+            );
+        }
         Ok(())
     }
 
@@ -1168,6 +1204,77 @@ impl WorldStore for InMemoryStore {
             ));
         }
         lk(&db.in_rows).remove(&transfer_id);
+        lk(&db.bot_arrivals).remove(&transfer_id);
+        Ok(())
+    }
+
+    fn has_arrival_fence(&self, transfer_id: u64) -> bool {
+        self.xdb
+            .as_ref()
+            .is_some_and(|db| lk(&db.in_rows).contains_key(&transfer_id))
+    }
+
+    fn sync_transfer_arrival(&self, character_guid: u64) -> Result<()> {
+        super::party::sync_transfer_arrival_mirror(self, character_guid)?;
+        self.xstep("sync_transfer_arrival")?;
+        Ok(())
+    }
+
+    fn mark_bot_transfer_arrival_ready(
+        &self,
+        _intent_id: u64,
+        _bot_guid: u64,
+        _controller_generation: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        self.xstep("mark_bot_transfer_arrival_ready")?;
+        Ok(())
+    }
+
+    fn bot_transfer_arrival_matches(
+        &self,
+        transfer_id: u64,
+        intent: &super::transfer::BotTransferIntent,
+    ) -> bool {
+        let Some(db) = self.xdb.as_ref() else {
+            return false;
+        };
+        lk(&db.in_rows).get(&transfer_id) == Some(&intent.bot_guid)
+            && lk(&db.bot_arrivals).get(&transfer_id)
+                == Some(&(
+                    intent.source_module_identity,
+                    intent.id,
+                    intent.controller_generation,
+                    intent.created_micros,
+                ))
+    }
+
+    fn release_bot_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        intent: &super::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        self.xstep("release_bot_transfer_arrival")?;
+        let Some(db) = self.xdb.as_ref() else {
+            return Ok(());
+        };
+        if transfer_id != intent.bot_guid
+            || intent.source_module_identity == spacetimedb_sdk::Identity::ZERO
+            || intent.id == 0
+            || intent.created_micros <= 0
+        {
+            return Err(anyhow!("bot Transfer arrival identity is invalid"));
+        }
+        let expected = (
+            intent.source_module_identity,
+            intent.id,
+            intent.controller_generation,
+            intent.created_micros,
+        );
+        if lk(&db.bot_arrivals).get(&transfer_id) == Some(&expected) {
+            lk(&db.in_rows).remove(&transfer_id);
+            lk(&db.bot_arrivals).remove(&transfer_id);
+        }
         Ok(())
     }
 
@@ -9837,6 +9944,10 @@ struct FakeShardDb {
     /// transfer_id → character guid (`game_transfer_in`): on the DESTINATION the arrival copy's
     /// fence, on the SOURCE the gateway's `confirm_import` attestation.
     in_rows: std::sync::Mutex<std::collections::HashMap<u64, u64>>,
+    /// Exact bot Transfer identity attached to a destination fence.
+    bot_arrivals: std::sync::Mutex<
+        std::collections::HashMap<u64, (spacetimedb_sdk::Identity, u64, u64, i64)>,
+    >,
     instances: std::sync::Mutex<std::collections::HashSet<u64>>,
     /// Every instance id this database actually SPAWNED a population for — one entry per
     /// spawn, so "the second party member re-created the dungeon" is visible as a duplicate.

@@ -631,6 +631,7 @@ parity_test!(parity_game_bot_invite_intent, "game_bot_invite_intent", lyracore_m
 // `world::transfer::run_bot_transfer` relay — the transfer twin of the row above.
 parity_test!(parity_game_bot_transfer_intent, "game_bot_transfer_intent", lyracore_module::BotTransferIntent, bindings::bot_transfer_intent_type::BotTransferIntent, {
     id, bot_guid, destination_map, destination_instance, reason, created_at,
+    controller_generation, claim_token, claim_until_micros, arrival_ready, source_module_identity,
 });
 parity_test!(parity_game_party_command_intent, "game_party_command_intent", lyracore_module::PartyCommandIntent, bindings::party_command_intent_type::PartyCommandIntent, {
     id, source_identity, issuer_guid, reply_identity, issuer_sequence, command, created_micros,
@@ -858,6 +859,10 @@ parity_test!(parity_game_trainer_spell, "game_trainer_spell", lyracore_module::T
 parity_test!(parity_game_transfer_out, "game_transfer_out", lyracore_module::TransferOut, bindings::transfer_out_type::TransferOut, {
     transfer_id, character_guid, dest_map_id, dest_instance_id, dest_x, dest_y, dest_z, dest_o,
     blob, created_micros, cross_database,
+});
+parity_test!(parity_game_transfer_in, "game_transfer_in", lyracore_module::TransferIn, bindings::transfer_in_type::TransferIn, {
+    transfer_id, character_guid, blob, created_micros, bot_intent_id,
+    bot_controller_generation, bot_intent_created_micros, bot_intent_source,
 });
 parity_test!(parity_game_spell_chain, "game_spell_chain", lyracore_module::SpellChain, bindings::spell_chain_type::SpellChain, {
     spell_id, prev_spell, first_spell, rank, req_spell,
@@ -1111,6 +1116,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_player_action",
     "game_trainer_spell",
     "game_transfer_out",
+    "game_transfer_in",
     "game_player_skill",
     "game_gameobject",
     "game_gameobject_template",

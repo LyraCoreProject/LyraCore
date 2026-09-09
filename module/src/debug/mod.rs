@@ -104,10 +104,10 @@ pub fn debug_teleport(
 /// The lever exists because the acceptance test for that crossing must NOT need a Package installed.
 /// It calls the same `transfer::emit_bot_transfer_intent` the Package calls, so what it exercises is
 /// the real contract — the placement and the intent row in one transaction, then the Gateway's
-/// `run_bot_transfer` relay — and never a second way to ask for a crossing.
+/// durable Transfer dispatcher, and never a second way to ask for a crossing.
 ///
-/// A character with a live Session will be dragged across the boundary mid-play. That is the point
-/// of a debug lever, and the reason this one is not a Gateway Verb.
+/// The shared writer applies the ordinary session-less ownership Gate, so a Character with a live
+/// Session is refused before placement or intent creation.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn debug_bot_transfer(
@@ -142,7 +142,9 @@ pub fn debug_bot_transfer(
             o,
         },
         &reason,
-    );
+        0,
+    )
+    .map_err(|refusal| format!("{:?}: {}", refusal.kind, refusal))?;
     log::info!(
         "debug_bot_transfer: character {character_guid} -> map {map_id} instance {instance_id} \
          ({reason})"

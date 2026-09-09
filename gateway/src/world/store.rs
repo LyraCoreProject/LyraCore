@@ -136,6 +136,12 @@ pub trait WorldStore:
         Ok(())
     }
 
+    /// Reconcile the arriving Character's authoritative party mirror before its destination fence
+    /// drops. A single-database store and a test store without realm-wide parties have no work.
+    fn sync_transfer_arrival(&self, _character_guid: u64) -> Result<()> {
+        Ok(())
+    }
+
     /// `set_character_shard` on the REALM-CORE handle — publish where a settled transfer put the
     /// character. Called by `transfer::run_transfer` immediately after
     /// `finish_transfer` commits, so it can only ever name a destination the escrow actually
@@ -271,6 +277,57 @@ pub trait WorldStore:
 
     fn entity_partition(&self, _guid: u64) -> Option<(u32, u64)> {
         None
+    }
+
+    /// Lease one exact durable Transfer Intent to this Gateway worker.
+    fn claim_bot_transfer_intent(
+        &self,
+        _intent_id: u64,
+        _bot_guid: u64,
+        _controller_generation: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host Transfer Intents"))
+    }
+
+    /// Delete the exact Transfer Intent after its arrival is ready.
+    fn complete_bot_transfer_intent(
+        &self,
+        _intent_id: u64,
+        _bot_guid: u64,
+        _controller_generation: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host Transfer Intents"))
+    }
+
+    /// Persist the exact claimed intent's destination-ready witness before release.
+    fn mark_bot_transfer_arrival_ready(
+        &self,
+        _intent_id: u64,
+        _bot_guid: u64,
+        _controller_generation: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host Transfer Intents"))
+    }
+
+    /// Whether the current destination fence belongs to this exact source intent.
+    fn bot_transfer_arrival_matches(
+        &self,
+        _transfer_id: u64,
+        _intent: &transfer::BotTransferIntent,
+    ) -> bool {
+        false
+    }
+
+    /// Release only the destination fence identified by this intent. A newer fence is untouched.
+    fn release_bot_transfer_arrival(
+        &self,
+        _transfer_id: u64,
+        _intent: &transfer::BotTransferIntent,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host bot Transfer arrivals"))
     }
 
     /// Acknowledged World Shard admission for one automatic group action. A later controller

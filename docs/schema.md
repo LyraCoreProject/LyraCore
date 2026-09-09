@@ -298,7 +298,10 @@ that a module file outside `region.rs`/`load.rs` may not touch — the build fai
 Both private. The two halves of a cross-database character move. While either row exists the
 character is **in transit**, and four chokepoints refuse to act on it. The escrow row on disk is the
 recovery authority; the transfer id is the character guid, so recovery needs nothing from gateway
-RAM.
+RAM. A session-less destination import also writes the source Module identity, Transfer Intent id,
+controller generation, and creation time onto its fence. Its release reducer leaves a blank or
+differently identified newer fence untouched when an old source intent retries after the Character
+has crossed onward.
 
 ### Auction listing state (`module/src/auction.rs`)
 

@@ -385,6 +385,10 @@ impl ShardLedger for FakeDb {
                 character_guid: *guid,
                 blob: blob.clone(),
                 created_micros: *created,
+                bot_intent_id: 0,
+                bot_controller_generation: 0,
+                bot_intent_created_micros: 0,
+                bot_intent_source: spacetimedb::Identity::ZERO,
             })
     }
     fn file_out_row(&mut self, row: TransferOut) {

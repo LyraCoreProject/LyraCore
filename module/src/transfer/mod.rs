@@ -130,9 +130,9 @@
 //!
 //! What is still parked: the LIVE two-database run. Every acceptance criterion needs a real
 //! 1.12.1 client, two published databases and an operator — What is proven
-//! headlessly is the state machine (the crash matrix in `tests.rs`, now walked for the six-step
-//! cross-database sequence too), the transport ratchet, and the whole six-step sequence executed
-//! across two `FakeDb`s in `harness.rs`.
+//! headlessly is the state machine (the crash matrix in `tests.rs`, including the cross-database
+//! sequence), the transport ratchet, and the Escrow sequence executed across two `FakeDb`s in
+//! `harness.rs`.
 //!
 //! # Why every step is written against a SINK
 //!
@@ -157,12 +157,14 @@ mod harness;
 mod tests;
 
 use spacetimedb::{
-    log, reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp,
+    log, reducer, table, Identity, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp,
 };
 
 use crate::auth::game_guid_range;
 use crate::helpers::require_operator;
-use crate::{game_character, game_world_entity};
+use crate::{game_character, game_creature_spline, game_world_entity};
+
+const BOT_TRANSFER_CLAIM_MICROS: i64 = 5_000_000;
 
 // ===========================================================================================
 //  Policy constants
@@ -244,6 +246,16 @@ pub struct TransferIn {
     /// apply can be replayed from the destination's own storage.
     pub blob: Vec<u8>,
     pub created_micros: i64,
+    /// Exact session-less crossing identity. Zero values describe a human crossing or a row from
+    /// before bot arrival identity was added.
+    #[default(0u64)]
+    pub bot_intent_id: u64,
+    #[default(0u64)]
+    pub bot_controller_generation: u64,
+    #[default(0i64)]
+    pub bot_intent_created_micros: i64,
+    #[default(Identity::ZERO)]
+    pub bot_intent_source: Identity,
 }
 
 /// Drives [`reap_transfers`]. Armed lazily by `begin_transfer` (see there). [server]
@@ -262,7 +274,21 @@ pub struct TransferReaperSchedule {
 // out of the export blob — the escrow is machinery, not character data.
 crate::character_owned!(delete, fn sweep_delete_game_transfer_out(ctx, character_guid) {
     let out = ctx.db.game_transfer_out();
-    let ids: Vec<u64> = out.by_character().filter(character_guid).map(|r| r.transfer_id).collect();
+    let rows: Vec<_> = out.by_character().filter(character_guid).collect();
+    let crossing = rows.iter().any(|row| row.cross_database);
+    if !crossing {
+        let intents = ctx.db.game_bot_transfer_intent();
+        let ids: Vec<_> = intents
+            .by_bot()
+            .filter(character_guid)
+            .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT + 1)
+            .map(|intent| intent.id)
+            .collect();
+        for id in ids {
+            intents.id().delete(id);
+        }
+    }
+    let ids: Vec<u64> = rows.into_iter().map(|r| r.transfer_id).collect();
     for id in ids {
         out.transfer_id().delete(id);
     }
@@ -282,15 +308,17 @@ crate::character_owned!(delete, fn sweep_delete_game_transfer_out(ctx, character
 ///
 /// The escrowed transfer needs no client, but it does need a driver, and every driver we had was a
 /// World Session: the client acks its loading screen (`MSG_MOVE_WORLDPORT_ACK`) and the Gateway
-/// drives the seven steps inside it. A bot has nobody to ack, so this row is its ack —
-/// `world::transfer::run_bot_transfer` picks it up on the Coordinator and drives the identical
-/// sequence against the Shard the Shard Map gives the destination.
+/// drives the nine steps inside it. A bot has nobody to ack, so this row is its ack:
+/// the bounded Coordinator dispatcher picks it up and drives the identical sequence against the
+/// Shard the Shard Map gives the destination.
 ///
 /// Private — no client ever needs to see this, only the Gateway's owner-token Coordinator
-/// connection (the `game_bot_invite_intent` pattern, and the same short life: the shared 1s event
-/// TTL in `gc.rs` reaps it, which is generous, because the Gateway's subscription fires on the
-/// insert rather than on a poll). [server]
-#[table(accessor = game_bot_transfer_intent)]
+/// connection. The row remains until the Gateway completes its exact claim, so reconnect and
+/// process restart can resume the crossing from durable state. [server]
+#[table(
+    accessor = game_bot_transfer_intent,
+    index(accessor = by_bot, btree(columns = [bot_guid]))
+)]
 pub struct BotTransferIntent {
     #[primary_key]
     #[auto_inc]
@@ -302,6 +330,25 @@ pub struct BotTransferIntent {
     /// Why the Package decided to move this bot, for the Gateway's log line. Never parsed.
     pub reason: String,
     pub created_at: Timestamp,
+    /// The Package runner generation normalized for this crossing. Zero is the legacy/debug
+    /// generation and is also the compatible value for rows written before this field existed.
+    #[default(0u64)]
+    pub controller_generation: u64,
+    /// The Gateway worker that currently owns this attempt. Zero means unclaimed.
+    #[default(0u64)]
+    pub claim_token: u64,
+    /// End of the claim lease in Module time. An expired claim may be replaced after restart.
+    #[default(0i64)]
+    pub claim_until_micros: i64,
+    /// The exact claimed crossing completed destination preparation. The Gateway writes this on
+    /// the source before it drops the destination's arrival fence, so a retry can finish the
+    /// source intent even after the Character has already crossed onward.
+    #[default(false)]
+    pub arrival_ready: bool,
+    /// Module identity of the World Shard that owns this durable intent. Intent ids are only
+    /// Shard-local, so this is part of the crossing identity on the destination fence.
+    #[default(Identity::ZERO)]
+    pub source_module_identity: Identity,
 }
 
 /// Send a session-less Character to `destination`, through the Gateway.
@@ -315,10 +362,9 @@ pub struct BotTransferIntent {
 ///    intent before it.
 /// 2. The intent row, which is what the Gateway observes.
 ///
-/// This is a pure write: every Gate lives in the relay and in the escrowed transfer itself (the
-/// `emit_bot_invite_intent` posture). A bot with no live entity teleports nowhere, so the character
-/// row keeps naming where it already is, and the relay refuses the intent rather than driving a
-/// crossing to nowhere.
+/// Admission uses the ordinary session-less ownership Gate and requires a live body before it
+/// cancels source work, places the Character, and records the intent. A Refusal therefore changes
+/// none of those rows.
 ///
 /// On a realm with one Shard the crossing is already complete when this returns: the character row
 /// names the new map, and the relay finds nothing to cross. The Package writes the same code for
@@ -336,7 +382,49 @@ pub(crate) fn emit_bot_transfer_intent(
     bot_guid: u64,
     destination: Destination,
     reason: &str,
-) {
+    controller_generation: u64,
+) -> Result<u64, crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
+    let intents = ctx.db.game_bot_transfer_intent();
+    let pending: Vec<_> = intents.by_bot().filter(bot_guid).take(2).collect();
+    if pending.len() > 1 {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::TransferPending,
+            "Character has conflicting Transfer Intents",
+        ));
+    }
+    if let Some(existing) = pending.first() {
+        if existing.destination_map == destination.map_id
+            && existing.destination_instance == destination.instance_id
+            && existing.controller_generation == controller_generation
+        {
+            return Ok(existing.id);
+        }
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::TransferPending,
+            "Character already has a pending Transfer Intent",
+        ));
+    }
+    if intents
+        .iter()
+        .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT)
+        .count()
+        == lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::TransferPending,
+            "World Shard has too many pending Transfer Intents",
+        ));
+    }
+    crate::sessionless::action_gate(ctx, bot_guid)?;
+    if ctx.db.game_world_entity().guid().find(bot_guid).is_none() {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::MissingActor,
+            "Character is not in world",
+        ));
+    }
+    let _ = crate::actor::stop_attack(ctx, bot_guid);
+    ctx.db.game_creature_spline().guid().delete(bot_guid);
     crate::world::teleport_player(
         ctx,
         bot_guid,
@@ -347,14 +435,120 @@ pub(crate) fn emit_bot_transfer_intent(
         destination.z,
         destination.o,
     );
-    ctx.db.game_bot_transfer_intent().insert(BotTransferIntent {
+    let intent = intents.insert(BotTransferIntent {
         id: 0,
         bot_guid,
         destination_map: destination.map_id,
         destination_instance: destination.instance_id,
         reason: reason.to_string(),
         created_at: ctx.timestamp,
+        controller_generation,
+        claim_token: 0,
+        claim_until_micros: 0,
+        arrival_ready: false,
+        source_module_identity: ctx.database_identity(),
     });
+    Ok(intent.id)
+}
+
+/// Claim one exact Transfer Intent. A live foreign lease normally spaces competing drivers; after
+/// expiry, overlapping retries remain safe because the Escrow sequence is idempotent and only the
+/// exact current claim can advance or complete this row.
+#[reducer]
+pub fn claim_bot_transfer_intent(
+    ctx: &ReducerContext,
+    intent_id: u64,
+    bot_guid: u64,
+    controller_generation: u64,
+    claim_token: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    if claim_token == 0 {
+        return Err("Transfer claim token 0 is invalid".to_string());
+    }
+    let intents = ctx.db.game_bot_transfer_intent();
+    let mut pending: Vec<_> = intents.by_bot().filter(bot_guid).take(2).collect();
+    if pending.len() != 1 || pending[0].id != intent_id {
+        return Err("Character does not have one exact Transfer Intent".to_string());
+    }
+    let mut intent = pending.pop().expect("one Transfer Intent checked above");
+    if (intent.bot_guid, intent.controller_generation) != (bot_guid, controller_generation) {
+        return Err("Transfer Intent identity changed".to_string());
+    }
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    if intent.source_module_identity == Identity::ZERO {
+        intent.source_module_identity = ctx.database_identity();
+    }
+    if intent.claim_token != 0
+        && intent.claim_token != claim_token
+        && intent.claim_until_micros > now
+    {
+        return Err("Transfer Intent is claimed".to_string());
+    }
+    intent.claim_token = claim_token;
+    intent.claim_until_micros = now.saturating_add(BOT_TRANSFER_CLAIM_MICROS);
+    intents.id().update(intent);
+    Ok(())
+}
+
+/// Record that destination party state is ready before its arrival fence drops.
+#[reducer]
+pub fn mark_bot_transfer_arrival_ready(
+    ctx: &ReducerContext,
+    intent_id: u64,
+    bot_guid: u64,
+    controller_generation: u64,
+    claim_token: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let intents = ctx.db.game_bot_transfer_intent();
+    let mut intent = intents
+        .id()
+        .find(intent_id)
+        .ok_or_else(|| "Transfer Intent is gone".to_string())?;
+    if (
+        intent.bot_guid,
+        intent.controller_generation,
+        intent.claim_token,
+    ) != (bot_guid, controller_generation, claim_token)
+        || claim_token == 0
+    {
+        return Err("Transfer Intent claim changed".to_string());
+    }
+    intent.arrival_ready = true;
+    intents.id().update(intent);
+    Ok(())
+}
+
+/// Complete only the Transfer Intent claimed by this worker and runner generation.
+#[reducer]
+pub fn complete_bot_transfer_intent(
+    ctx: &ReducerContext,
+    intent_id: u64,
+    bot_guid: u64,
+    controller_generation: u64,
+    claim_token: u64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    let intents = ctx.db.game_bot_transfer_intent();
+    let intent = intents
+        .id()
+        .find(intent_id)
+        .ok_or_else(|| "Transfer Intent is gone".to_string())?;
+    if (
+        intent.bot_guid,
+        intent.controller_generation,
+        intent.claim_token,
+    ) != (bot_guid, controller_generation, claim_token)
+        || claim_token == 0
+    {
+        return Err("Transfer Intent claim changed".to_string());
+    }
+    if !intent.arrival_ready {
+        return Err("Transfer Intent arrival is not ready".to_string());
+    }
+    intents.id().delete(intent_id);
+    Ok(())
 }
 
 // ===========================================================================================
@@ -1140,6 +1334,10 @@ pub fn import_character(ctx: &ReducerContext, transfer_id: u64) -> Result<(), St
         character_guid: out.character_guid,
         blob: out.blob.clone(),
         created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        bot_intent_id: 0,
+        bot_controller_generation: 0,
+        bot_intent_created_micros: 0,
+        bot_intent_source: Identity::ZERO,
     });
 
     log::info!(
@@ -1201,6 +1399,66 @@ pub fn import_character_blob(
     let character_guid = decode_blob(transfer_id, &blob)?.character_guid;
     crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
     apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob)
+}
+
+/// Commit a session-less arrival with its exact source intent identity already on the destination
+/// fence. An existing blank fence is never relabelled: it may belong to a newer human crossing that
+/// reused the Character-guid transfer id.
+#[reducer]
+#[allow(clippy::too_many_arguments)] // The exact crossing identity is the reducer wire contract.
+pub fn import_bot_character_blob(
+    ctx: &ReducerContext,
+    transfer_id: u64,
+    blob: Vec<u8>,
+    source_module_identity: Identity,
+    intent_id: u64,
+    controller_generation: u64,
+    intent_created_micros: i64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    require_transfer_actor(ctx, transfer_id, request_actor)?;
+    if source_module_identity == Identity::ZERO || intent_id == 0 || intent_created_micros <= 0 {
+        return Err("bot Transfer arrival identity is invalid".to_string());
+    }
+    let character_guid = decode_blob(transfer_id, &blob)?.character_guid;
+    if transfer_id != character_guid {
+        return Err(format!(
+            "transfer {transfer_id}: session-less arrival belongs to character {character_guid}"
+        ));
+    }
+    crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
+    let expected = (
+        source_module_identity,
+        intent_id,
+        controller_generation,
+        intent_created_micros,
+    );
+    if let Some(existing) = ctx.db.game_transfer_in().transfer_id().find(transfer_id) {
+        let current = (
+            existing.bot_intent_source,
+            existing.bot_intent_id,
+            existing.bot_controller_generation,
+            existing.bot_intent_created_micros,
+        );
+        if current != expected {
+            return Err(format!(
+                "transfer {transfer_id}: destination fence belongs to another crossing"
+            ));
+        }
+    }
+    apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob)?;
+    let arrivals = ctx.db.game_transfer_in();
+    let mut arrival = arrivals
+        .transfer_id()
+        .find(transfer_id)
+        .ok_or_else(|| format!("transfer {transfer_id}: imported without an arrival fence"))?;
+    arrival.bot_intent_source = source_module_identity;
+    arrival.bot_intent_id = intent_id;
+    arrival.bot_controller_generation = controller_generation;
+    arrival.bot_intent_created_micros = intent_created_micros;
+    arrivals.transfer_id().update(arrival);
+    Ok(())
 }
 
 /// The whole of [`import_character_blob`] bar the operator gate — every guard, in order, over an
@@ -1313,6 +1571,10 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
         character_guid: guid,
         blob,
         created_micros,
+        bot_intent_id: 0,
+        bot_controller_generation: 0,
+        bot_intent_created_micros: 0,
+        bot_intent_source: Identity::ZERO,
     });
     log::info!(
         "import_character_blob: {transfer_id} materialised character {guid} ({} rows across {} \
@@ -1378,6 +1640,10 @@ pub(crate) fn apply_confirm<S: ShardLedger>(sink: &mut S, transfer_id: u64) -> R
         character_guid,
         blob: out.blob,
         created_micros,
+        bot_intent_id: 0,
+        bot_controller_generation: 0,
+        bot_intent_created_micros: 0,
+        bot_intent_source: Identity::ZERO,
     });
     log::info!(
         "confirm_import: {transfer_id} — destination copy of character {character_guid} attested \
@@ -1406,6 +1672,51 @@ pub fn release_transfer(
 ) -> Result<(), String> {
     require_operator(ctx)?;
     require_transfer_actor(ctx, transfer_id, request_actor)?;
+    apply_release(&mut CtxShard { ctx }, transfer_id)
+}
+
+/// Release only this intent's destination fence. An absent fence or a differently identified
+/// newer fence proves this crossing already released and is left untouched.
+#[reducer]
+pub fn release_bot_transfer_arrival(
+    ctx: &ReducerContext,
+    transfer_id: u64,
+    bot_guid: u64,
+    source_module_identity: Identity,
+    intent_id: u64,
+    controller_generation: u64,
+    intent_created_micros: i64,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    if transfer_id != bot_guid
+        || source_module_identity == Identity::ZERO
+        || intent_id == 0
+        || intent_created_micros <= 0
+    {
+        return Err("bot Transfer arrival identity is invalid".to_string());
+    }
+    let Some(arrival) = ctx.db.game_transfer_in().transfer_id().find(transfer_id) else {
+        return Ok(());
+    };
+    if arrival.character_guid != bot_guid {
+        return Err(format!(
+            "transfer {transfer_id}: arrival belongs to character {}, not {bot_guid}",
+            arrival.character_guid
+        ));
+    }
+    if (
+        arrival.bot_intent_source,
+        arrival.bot_intent_id,
+        arrival.bot_controller_generation,
+        arrival.bot_intent_created_micros,
+    ) != (
+        source_module_identity,
+        intent_id,
+        controller_generation,
+        intent_created_micros,
+    ) {
+        return Ok(());
+    }
     apply_release(&mut CtxShard { ctx }, transfer_id)
 }
 
@@ -1506,7 +1817,7 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
         // as a required step of the drive, strictly AFTER `finish_transfer` returned Ok, so it can
         // never name a destination for a transfer that did not settle. That is the strongest form
         // available across two databases. It is NOT a guarantee: if the gateway dies (or the publish
-        // fails) between `finish_transfer` and step 5b, realm-core's copy keeps naming the old
+        // fails) between `finish_transfer` and step 6, realm-core's copy keeps naming the old
         // shard, and the recovery path does not re-drive `run_transfer`, so nothing republishes it.
         // The index is therefore still specified as a HINT the gateway CONFIRMS by probing rather
         // than trusts, and the login self-heal is still the terminal fallback — except that the

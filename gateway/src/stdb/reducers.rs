@@ -55,6 +55,81 @@ fn taxi_reply_matches(
 }
 
 impl Coordinator {
+    pub fn claim_bot_transfer_intent(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "claim_bot_transfer_intent",
+            claim_bot_transfer_intent_then(intent_id, bot_guid, controller_generation, claim_token)
+        )
+    }
+
+    pub fn complete_bot_transfer_intent(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "complete_bot_transfer_intent",
+            complete_bot_transfer_intent_then(
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token
+            )
+        )
+    }
+
+    pub fn mark_bot_transfer_arrival_ready(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "mark_bot_transfer_arrival_ready",
+            mark_bot_transfer_arrival_ready_then(
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token
+            )
+        )
+    }
+
+    pub fn release_bot_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        bot_guid: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        intent_created_micros: i64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "release_bot_transfer_arrival",
+            release_bot_transfer_arrival_then(
+                transfer_id,
+                bot_guid,
+                source_module_identity,
+                intent_id,
+                controller_generation,
+                intent_created_micros
+            )
+        )
+    }
+
     pub fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,

@@ -12,8 +12,10 @@
 //!                                                  3 import_character_blob  (rows land, fenced)
 //!   4 confirm_import  ◄── "it committed" ──────
 //!   5 finish_transfer ── source copy destroyed
-//!                                                  6 release_transfer       (arrival goes LIVE)
-//!   7 evict_instance_population (the world writer stops ticking the dungeon)
+//!   6 publish_shard_index ── realm routing ready
+//!                                                  7 sync_transfer_arrival (party mirror ready)
+//!                                                  8 release_transfer       (arrival goes LIVE)
+//!   9 evict_instance_population (the world writer stops ticking the dungeon)
 //! ```
 //!
 //! **Every step is idempotent**, which is what makes a killed gateway recoverable without any
@@ -27,14 +29,12 @@
 //! makes the id re-derivable by a gateway that restarted with no memory of what it was doing. That
 //! is the entire recovery mechanism: nothing about an in-flight transfer lives in gateway RAM.
 //!
-//! Deliberate simplification: the driver is SYNCHRONOUS. For a player it runs on the world
+//! Deliberate simplification: the Escrow drive is synchronous. For a player it runs on the world
 //! session's own thread, inside the client's loading screen (the WORLDPORT_ACK handler); ceiling: a
 //! slow or unreachable destination shard stalls that one session for the reducer timeout.
 //!
-//! A character with no session has no loading screen to hide in, so [`run_bot_transfer`] runs the
-//! same sequence from the coordinator's own subscription callback instead. Same ceiling, different
-//! victim: a slow destination holds that callback, and the intent rows are written one bot at a
-//! time. Upgrade path for both: a driver task with a work queue.
+//! A Character with no Session is driven by one bounded Gateway dispatcher per World Shard. A slow
+//! destination holds that dispatcher's worker while other Gateway and SDK threads continue.
 
 use anyhow::{anyhow, Result};
 
@@ -68,23 +68,38 @@ pub struct EscrowedTransfer {
     pub blob: Vec<u8>,
 }
 
+/// One durable session-less crossing read from a World Shard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BotTransferIntent {
+    pub id: u64,
+    pub bot_guid: u64,
+    pub destination_map: u32,
+    pub destination_instance: u64,
+    pub reason: String,
+    pub created_micros: i64,
+    pub controller_generation: u64,
+    pub arrival_ready: bool,
+    pub source_module_identity: spacetimedb_sdk::Identity,
+}
+
 /// The transfer id for a character. See the module doc: the guid IS the id.
 pub fn transfer_id_for(character_guid: u64) -> u64 {
     character_guid
 }
 
-/// The eight step boundaries `LYRACORE_TRANSFER_ABORT_AFTER` can name, in drive order. These are the
+/// The nine step boundaries `LYRACORE_TRANSFER_ABORT_AFTER` can name, in drive order. These are the
 /// `WorldStore` method names — the same vocabulary the headless crash-matrix test already speaks —
 /// so a step name is greppable straight to the call it follows. The list is also the drive's own
 /// sequence: `an_unset_transfer_abort_injection_changes_nothing` asserts the two are equal, so a
 /// step added to the drive without a crash point here is a hole in the gateway-kill recovery matrix.
-pub const ABORT_STEPS: [&str; 8] = [
+pub const ABORT_STEPS: [&str; 9] = [
     "begin_transfer",
     "ensure_instance",
     "import_character_blob",
     "confirm_import",
     "finish_transfer",
     "publish_shard_index",
+    "sync_transfer_arrival",
     "release_transfer",
     "evict_instance_population",
 ];
@@ -153,21 +168,22 @@ fn abort_point(abort_after: Option<&str>, step: &str, transfer_id: u64) {
 /// | 1 begin   | frozen, escrowed | nothing | re-run: begin replays, import proceeds |
 /// | 3 import  | frozen, escrowed | durable + fenced | re-run: import replays, confirm proceeds |
 /// | 4 confirm | frozen, attested | durable + fenced | re-run, or the SOURCE reaper rolls forward |
-/// | 5 finish  | gone | durable + fenced | re-run: `settle` releases the arrival copy — but realm-core's index is STALE and the re-run does not republish it (step 5b) |
-/// | 5b publish | gone | durable + fenced | same as 5, and the index IS correct |
-/// | 6 release | gone | LIVE | done; step 7 is cleanup |
+/// | 5 finish  | gone | durable + fenced | re-run: `settle` prepares and releases the arrival copy; the realm-core index is repaired on entry |
+/// | 6 publish | gone | durable + fenced | re-run prepares and releases the arrival copy with the index correct |
+/// | 7 mirror | gone | durable + fenced | re-run repeats the party mirror and then releases |
+/// | 8 release | gone | LIVE | done; step 9 is cleanup |
 ///
 /// No reachable point has zero durable copies, and no reachable point has the character LIVE on
 /// both databases: the source is frozen from step 1 (its escrow row fences it) and destroyed at 5,
-/// and the destination is fenced from 3 until 6.
+/// and the destination is fenced from 3 until 8.
 ///
 /// # Fault injection (the gateway-kill recovery requirement)
 ///
-/// The whole seven-step drive commits in ~17ms live, so "`kill -9` the gateway at step N" is not a
-/// thing a log-watcher can land. `LYRACORE_TRANSFER_ABORT_AFTER=<step>` makes each crash point
-/// deterministic instead: the named step runs, commits, and then the process aborts (see
+/// A log watcher cannot target the interval after a named database commit reliably.
+/// `LYRACORE_TRANSFER_ABORT_AFTER=<step>` makes each crash point deterministic: the named step runs,
+/// commits, and then the process aborts (see
 /// [`die_by_injection`]). The accepted names are [`ABORT_STEPS`]. Unset — the only configuration any
-/// real run has — costs one `env::var` per transfer and seven `Option<&str>` compares that all miss.
+/// real run has, costs one `env::var` per transfer and nine `Option<&str>` compares that all miss.
 pub fn run_transfer(src: &dyn WorldStore, dst: &dyn WorldStore, plan: &TransferPlan) -> Result<()> {
     // Deliberate simplification: ONE env read, threaded down as a plain `Option<&str>` rather than
     // re-read at each step — which also lets the tests drive every crash point without mutating
@@ -221,6 +237,16 @@ pub(super) fn run_transfer_injected(
     plan: &TransferPlan,
     abort_after: Option<&str>,
 ) -> Result<()> {
+    run_transfer_injected_for_intent(src, dst, plan, abort_after, None)
+}
+
+pub(super) fn run_transfer_injected_for_intent(
+    src: &dyn WorldStore,
+    dst: &dyn WorldStore,
+    plan: &TransferPlan,
+    abort_after: Option<&str>,
+    bot_intent: Option<(&BotTransferIntent, u64)>,
+) -> Result<()> {
     log::info!(
         "transfer {}: character {} {} -> {} (map {} instance {})",
         plan.transfer_id,
@@ -254,7 +280,11 @@ pub(super) fn run_transfer_injected(
     abort_point(abort_after, "ensure_instance", escrow.transfer_id);
 
     // 3. MATERIALISE at the destination. Idempotent on the transfer id (the in-row PK).
-    dst.import_character_blob(escrow.transfer_id, &escrow.blob)?;
+    dst.import_character_blob(
+        escrow.transfer_id,
+        &escrow.blob,
+        bot_intent.map(|(intent, _)| intent),
+    )?;
     abort_point(abort_after, "import_character_blob", escrow.transfer_id);
 
     // 4. ATTEST on the source — and ONLY here, only because step 3 returned Ok. This is the
@@ -268,7 +298,7 @@ pub(super) fn run_transfer_injected(
     src.finish_transfer(escrow.transfer_id)?;
     abort_point(abort_after, "finish_transfer", escrow.transfer_id);
 
-    // 5b. PUBLISH the character→shard index to REALM-CORE (the index was never written on transfer;
+    // 6. PUBLISH the character→shard index to REALM-CORE (the index was never written on transfer;
     // realm-core's own requirement is that the escrow's finish_transfer step update it
     // transactionally).
     //
@@ -282,7 +312,7 @@ pub(super) fn run_transfer_injected(
     //
     // `?`, not best-effort: an index that silently stops being written is exactly the rot this
     // ticket exists to remove. What a failure here costs, precisely — because `?` here is NOT free:
-    // steps 6 and 7 do not run, `run_transfer` returns Err, `MSG_MOVE_WORLDPORT_ACK` answers
+    // steps 7 through 9 do not run, `run_transfer` returns Err, `MSG_MOVE_WORLDPORT_ACK` answers
     // `SMSG_TRANSFER_ABORTED` and ends the session, and the character sits WHOLE BUT FENCED at the
     // destination until the next login, whose `settle_transfer` takes the holder-is-owner arm and
     // drops the fence. Nothing is lost or duplicated — but a player is kicked off a loading screen
@@ -293,8 +323,8 @@ pub(super) fn run_transfer_injected(
     // it is operator-gated.
     //
     // RESIDUAL WINDOW, stated honestly (adversarial review of this PR). If the gateway dies — or
-    // this call fails — between 5 and 5b, realm-core's index still names the OLD shard, and the
-    // recovery above does NOT repair it: it never re-enters `run_transfer`, so step 5b never runs
+    // this call fails between 5 and 6, realm-core's index still names the OLD shard, and the
+    // recovery above does NOT repair it: it never re-enters `run_transfer`, so step 6 never runs
     // again for that transfer. The fallback is `settle_home_shard`'s own holder lookup
     // (`realm_core::locate_home_shard`), which probes and heals a stale entry on the
     // character's NEXT WORLD ENTRY — not the next completed transfer, as it was before
@@ -308,11 +338,32 @@ pub(super) fn run_transfer_injected(
     )?;
     abort_point(abort_after, "publish_shard_index", escrow.transfer_id);
 
-    // 6. RELEASE: the arrival copy's fence drops and the character is live at the destination.
-    dst.release_transfer(escrow.transfer_id)?;
+    // 7. PARTY MIRROR: required before release so the first destination action reads the current
+    // realm-wide party. A failure leaves the arrival copy whole and fenced for the next retry.
+    dst.sync_transfer_arrival(escrow.character_guid)?;
+    abort_point(abort_after, "sync_transfer_arrival", escrow.transfer_id);
+
+    // A session-less driver has no client reconnect to rediscover a finished transfer. Record its
+    // exact source-side witness before release. The import above already bound the destination
+    // fence to this crossing; no later worker may adopt a blank or newer fence.
+    if let Some((intent, claim_token)) = bot_intent {
+        src.mark_bot_transfer_arrival_ready(
+            intent.id,
+            intent.bot_guid,
+            intent.controller_generation,
+            claim_token,
+        )?;
+    }
+
+    // 8. RELEASE: the arrival copy's fence drops and the character is live at the destination.
+    if let Some((intent, _)) = bot_intent {
+        dst.release_bot_transfer_arrival(escrow.transfer_id, intent)?;
+    } else {
+        dst.release_transfer(escrow.transfer_id)?;
+    }
     abort_point(abort_after, "release_transfer", escrow.transfer_id);
 
-    // 7. The world writer stops paying for the dungeon (the requirement that the instance's combat
+    // 9. The world writer stops paying for the dungeon (the requirement that the instance's combat
     //    load be demonstrably absent from the world writer while the run is live). Deliberately LAST and
     //    best-effort: the character is already whole on the destination, so a failure here is a
     //    performance wart (an idle population on the source until its 30-minute empty reap), never
@@ -337,7 +388,7 @@ pub(super) fn run_transfer_injected(
 ///
 /// A player's crossing is driven inside its own loading screen: the client acks
 /// (`MSG_MOVE_WORLDPORT_ACK`), `route_home` resolves the owning shard and `settle_transfer` runs the
-/// seven steps. A bot has no client to ack, so the module writes a `game_bot_transfer_intent` row
+/// nine steps. A bot has no client to ack, so the module writes a `game_bot_transfer_intent` row
 /// instead and the coordinator relay (`stdb::subscriptions`) calls this. The transfer itself is
 /// unchanged — the same `settle_transfer`, the same escrow, the same Package-registered transfer
 /// arms — because the only thing a bot was ever missing is the driver.
@@ -394,22 +445,129 @@ pub fn run_bot_transfer(
         holder.shard_name(),
         destination.shard_name()
     );
-    settle_transfer(holder, destination.as_ref(), bot_guid)?;
-    // The arrival repair a player gets from `world::party::on_world_entry` and a bot would
-    // otherwise never run: re-push realm-core's roster onto the destination, and clear a mirror row
-    // for a party this character has left. Every party op already fans its roster out to every
-    // connected shard, so this is a repair rather than the only push — but those pushes are
-    // best-effort, and a bot that lands on a shard whose mirror missed one runs its kill-XP split,
-    // quest credit, loot rules and `/p` chat against a party that shard has never heard of.
-    // Best-effort here too: the crossing has already committed.
-    if let Err(e) = crate::world::party::sync_arrival_mirror(destination.as_ref(), bot_guid) {
-        log::warn!(
-            "bot transfer: character {bot_guid} arrived on {} but its party mirror did not follow \
-             ({e:#}) — that shard's party reads for them stay stale until the next op",
-            destination.shard_name()
+    settle_transfer(holder, destination.as_ref(), bot_guid)
+}
+
+/// Claiming and completion live outside this function. This body only resumes the durable Escrow
+/// sequence, including the window where source finish committed and only destination witnesses
+/// remain.
+pub fn run_bot_transfer_intent(
+    holder: &dyn WorldStore,
+    intent: &BotTransferIntent,
+    claim_token: u64,
+) -> Result<()> {
+    if intent.arrival_ready {
+        if let Some(destination) =
+            holder.shard_for_location(intent.destination_map, intent.destination_instance)
+        {
+            destination.release_bot_transfer_arrival(transfer_id_for(intent.bot_guid), intent)?;
+        } else if holder.character_destination(intent.bot_guid).is_none() {
+            return Err(anyhow!(
+                "bot transfer: ready intent {} cannot resolve its destination map {} instance {}",
+                intent.id,
+                intent.destination_map,
+                intent.destination_instance
+            ));
+        }
+        return Ok(());
+    }
+    if let Some(plan) = holder.character_destination(intent.bot_guid) {
+        if (plan.dest_map_id, plan.dest_instance_id)
+            != (intent.destination_map, intent.destination_instance)
+        {
+            return Err(anyhow!(
+                "bot transfer: character {} on {} is bound for map {} instance {}, but intent {} \
+                 asks for map {} instance {} ({})",
+                intent.bot_guid,
+                holder.shard_name(),
+                plan.dest_map_id,
+                plan.dest_instance_id,
+                intent.id,
+                intent.destination_map,
+                intent.destination_instance,
+                intent.reason
+            ));
+        }
+        let Some(destination) =
+            holder.shard_for_location(intent.destination_map, intent.destination_instance)
+        else {
+            holder.sync_transfer_arrival(intent.bot_guid)?;
+            holder.mark_bot_transfer_arrival_ready(
+                intent.id,
+                intent.bot_guid,
+                intent.controller_generation,
+                claim_token,
+            )?;
+            return Ok(());
+        };
+        return run_transfer_injected_for_intent(
+            holder,
+            destination.as_ref(),
+            &plan,
+            None,
+            Some((intent, claim_token)),
         );
     }
-    Ok(())
+    let destination = holder
+        .shard_for_location(intent.destination_map, intent.destination_instance)
+        .ok_or_else(|| {
+            anyhow!(
+                "bot transfer: {} has no source character {} and no distinct destination for map \
+                 {} instance {}",
+                holder.shard_name(),
+                intent.bot_guid,
+                intent.destination_map,
+                intent.destination_instance
+            )
+        })?;
+    let settled = destination
+        .character_destination(intent.bot_guid)
+        .ok_or_else(|| {
+            anyhow!(
+                "bot transfer: neither {} nor {} holds character {}",
+                holder.shard_name(),
+                destination.shard_name(),
+                intent.bot_guid
+            )
+        })?;
+    if (settled.dest_map_id, settled.dest_instance_id)
+        != (intent.destination_map, intent.destination_instance)
+    {
+        return Err(anyhow!(
+            "bot transfer: destination {} holds character {} at map {} instance {}, but intent {} \
+             names map {} instance {}",
+            destination.shard_name(),
+            intent.bot_guid,
+            settled.dest_map_id,
+            settled.dest_instance_id,
+            intent.id,
+            intent.destination_map,
+            intent.destination_instance
+        ));
+    }
+    if !destination.bot_transfer_arrival_matches(transfer_id_for(intent.bot_guid), intent) {
+        return Err(anyhow!(
+            "bot transfer: destination {} does not hold the exact arrival fence for source {} \
+             intent {} generation {}",
+            destination.shard_name(),
+            intent.source_module_identity,
+            intent.id,
+            intent.controller_generation
+        ));
+    }
+    holder.publish_shard_index(
+        intent.bot_guid,
+        intent.destination_map,
+        intent.destination_instance,
+    )?;
+    destination.sync_transfer_arrival(intent.bot_guid)?;
+    holder.mark_bot_transfer_arrival_ready(
+        intent.id,
+        intent.bot_guid,
+        intent.controller_generation,
+        claim_token,
+    )?;
+    destination.release_bot_transfer_arrival(transfer_id_for(intent.bot_guid), intent)
 }
 
 /// Put `character_guid` on the shard that owns its location, if it is not there already, and clear
@@ -428,6 +586,9 @@ pub fn settle_transfer(
 ) -> Result<()> {
     let transfer_id = transfer_id_for(character_guid);
     if holder.shard_name() == owner.shard_name() {
+        if owner.has_arrival_fence(transfer_id) {
+            owner.sync_transfer_arrival(character_guid)?;
+        }
         return owner.release_transfer(transfer_id);
     }
     let escrow = holder.escrowed_transfer(character_guid);

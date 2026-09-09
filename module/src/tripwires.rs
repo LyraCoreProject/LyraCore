@@ -68,8 +68,12 @@ pub(crate) mod character_owned_tripwire {
             "realm-owned Auction value and protocol state",
         ),
         (
-            &["game_bot_invite_intent", "game_bot_transfer_intent"],
-            "short-lived intent consumed by the Gateway or event GC",
+            &["game_bot_invite_intent"],
+            "short-lived Group Intent consumed by the Gateway or event GC",
+        ),
+        (
+            &["game_bot_transfer_intent"],
+            "durable source-side Transfer Intent consumed by exact Gateway completion",
         ),
         (
             &["game_party_command_intent"],
@@ -1375,7 +1379,13 @@ mod gc_reap_tripwire {
     /// - `game_mail`: DURABLE state that merely carries a `created_at` for the client's expiry
     ///   countdown. Reaping it would destroy mail, and the design declines an expiry reaper,
     ///   because nothing should silently delete an attachment a player can still collect.
-    const EXEMPT_ACCESSORS: &[&str] = &["game_creature_move_event", "game_mail"];
+    const EXEMPT_ACCESSORS: &[&str] = &[
+        "game_creature_move_event",
+        "game_mail",
+        // Durable source-side work. The exact Gateway completion deletes it; a transfer source
+        // deletion retains it so process restart can finish the destination release.
+        "game_bot_transfer_intent",
+    ];
 
     /// `gc.rs` actually reaps `accessor` — via the shared `reap!(accessor)` macro invocation, or a
     /// direct `ctx.db.accessor()` call (the shape of the ad-hoc blocks: `game_group_invite`'s own

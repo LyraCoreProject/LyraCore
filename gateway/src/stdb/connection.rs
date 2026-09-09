@@ -954,6 +954,10 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // cannot brick the restart of a gateway whose module predates multi-database routing. Nothing READS
         // it unsharded (`settle_home_shard` short-circuits on `is_sharded()`).
         "SELECT * FROM game_transfer_out",
+        // The destination fence. A world-entry retry reads its exact presence before doing the
+        // required party synchronization, and the bot driver binds an exact intent identity to it
+        // before release. Like the source escrow, this is private owner-token state.
+        "SELECT * FROM game_transfer_in",
         // ── THE COORDINATOR-RELAY RULE ─────────────────────────────────────────────────────────
         // Every relay whose loss leaves the CLIENT stuck in a wrong state — as opposed to merely
         // late — is subscribed HERE, on the stable coordinator connection, and never on the
@@ -995,8 +999,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Bot-initiated Shard crossings, here for every reason the invite intent above is: a bot has
         // no session, so no other connection could see the row, and it rides the BASE list because a
         // single-database realm writes the same rows (the relay finds nothing to cross there and
-        // says so). Its relay is `world::transfer::run_bot_transfer`, which drives the SAME
-        // `settle_transfer` a player's `MSG_MOVE_WORLDPORT_ACK` does.
+        // says so). Its durable dispatcher drives the SAME Escrow sequence a player's
+        // `MSG_MOVE_WORLDPORT_ACK` does.
         "SELECT * FROM game_bot_transfer_intent",
         // Addon-bridge messages: the server→client UI stream — coordinator-ridden
         // from day one (the coordinator-relay rule). Any addon UI that streams live state rides

@@ -1070,6 +1070,10 @@ impl WorldStore for Coordinator {
             .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
     }
 
+    fn sync_transfer_arrival(&self, character_guid: u64) -> Result<()> {
+        crate::world::party::sync_transfer_arrival_mirror(self, character_guid)
+    }
+
     /// Every connected WORLD shard (realm-core excluded by `ShardMap::shards`, as always) — the
     /// mirror fan-out set. Empty when unsharded, so the push costs a single-database gateway nothing.
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
@@ -1159,6 +1163,91 @@ impl WorldStore for Coordinator {
             .guid()
             .find(&guid)
             .map(|entity| (entity.map_id, entity.instance_id))
+    }
+
+    fn claim_bot_transfer_intent(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        Coordinator::claim_bot_transfer_intent(
+            self,
+            intent_id,
+            bot_guid,
+            controller_generation,
+            claim_token,
+        )
+    }
+
+    fn complete_bot_transfer_intent(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        Coordinator::complete_bot_transfer_intent(
+            self,
+            intent_id,
+            bot_guid,
+            controller_generation,
+            claim_token,
+        )
+    }
+
+    fn mark_bot_transfer_arrival_ready(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        Coordinator::mark_bot_transfer_arrival_ready(
+            self,
+            intent_id,
+            bot_guid,
+            controller_generation,
+            claim_token,
+        )
+    }
+
+    fn bot_transfer_arrival_matches(
+        &self,
+        transfer_id: u64,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> bool {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_transfer_in()
+            .transfer_id()
+            .find(transfer_id)
+            .is_some_and(|arrival| {
+                arrival.character_guid == intent.bot_guid
+                    && arrival.bot_intent_source == intent.source_module_identity
+                    && arrival.bot_intent_id == intent.id
+                    && arrival.bot_controller_generation == intent.controller_generation
+                    && arrival.bot_intent_created_micros == intent.created_micros
+            })
+    }
+
+    fn release_bot_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        Coordinator::release_bot_transfer_arrival(
+            self,
+            transfer_id,
+            intent.bot_guid,
+            intent.source_module_identity,
+            intent.id,
+            intent.controller_generation,
+            intent.created_micros,
+        )
     }
 
     fn admit_sessionless_group_action(

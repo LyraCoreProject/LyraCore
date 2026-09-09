@@ -608,7 +608,7 @@ fn the_arrival_copy_is_fenced_until_the_source_copy_is_destroyed() {
         "frozen on the source, nothing arrived yet"
     );
     let escrow = src.escrowed_transfer(XGUID).unwrap();
-    dst.import_character_blob(escrow.transfer_id, &escrow.blob)
+    dst.import_character_blob(escrow.transfer_id, &escrow.blob, None)
         .unwrap();
     assert!(
         dst_db.has(XGUID) && !dst_db.live(XGUID),
@@ -789,6 +789,38 @@ fn a_character_already_on_its_home_shard_is_not_transferred_but_is_unfenced() {
         log.iter().filter(|(_, c)| c == "begin_transfer").count(),
         0,
         "a character already on its home shard must never be re-escrowed: {log:?}"
+    );
+    let prepared = log
+        .iter()
+        .position(|(_, call)| call == "sync_transfer_arrival")
+        .expect("a fenced arrival must prepare its party mirror");
+    let released = log
+        .iter()
+        .position(|(_, call)| call == "release_transfer")
+        .expect("the destination fence must drop");
+    assert!(prepared < released, "{log:?}");
+}
+
+#[test]
+fn a_normal_resident_does_not_need_transfer_arrival_repair() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        XGUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    let home = xstore("instances", db.clone(), calls.clone(), None);
+
+    super::transfer::settle_transfer(home.as_ref(), home.as_ref(), XGUID).unwrap();
+
+    assert!(db.live(XGUID));
+    let log = calls.lock().unwrap();
+    assert!(
+        log.iter().all(|(_, call)| call != "sync_transfer_arrival"),
+        "an ordinary login has no arrival fence to prepare: {log:?}"
     );
 }
 
@@ -1055,6 +1087,22 @@ fn a_resumed_transfer_reuses_the_escrowed_destination_not_the_character_row() {
 /// The bot's guid. Deliberately not [`XGUID`]: these tests share the party fixture's numbering,
 /// where 5 is the playerbot.
 const BOT_GUID: u64 = super::party_tests::BOT;
+const SOURCE_MODULE: spacetimedb_sdk::Identity =
+    spacetimedb_sdk::Identity::from_byte_array([7; 32]);
+
+fn bot_intent() -> super::transfer::BotTransferIntent {
+    super::transfer::BotTransferIntent {
+        id: 91,
+        bot_guid: BOT_GUID,
+        destination_map: 36,
+        destination_instance: 7,
+        reason: "party crossed the portal".into(),
+        created_micros: 4_000,
+        controller_generation: 4,
+        arrival_ready: false,
+        source_module_identity: SOURCE_MODULE,
+    }
+}
 
 /// A source shard holding a session-less character that has ALREADY been placed at
 /// `(dest_map, dest_instance)`, plus the shard the Shard Map serves that destination from. This is
@@ -1114,6 +1162,173 @@ fn an_intent_row_crosses_a_session_less_character_to_the_destination_shard() {
         src_db.settled() && dst_db.settled(),
         "no escrow may be left"
     );
+}
+
+#[test]
+fn a_durable_intent_resumes_from_destination_witnesses_after_source_finish() {
+    let (src, src_db, dst_db, calls) = bot_pair(36, 7);
+    let plan = src.character_destination(BOT_GUID).unwrap();
+    let intent = bot_intent();
+    let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::transfer::run_transfer_injected_for_intent(
+            src.as_ref(),
+            src.location_shard.as_ref().unwrap().2.as_ref(),
+            &plan,
+            Some("finish_transfer"),
+            Some((&intent, 701)),
+        )
+    }));
+    assert!(first.is_err());
+    assert!(!src_db.has(BOT_GUID) && dst_db.has(BOT_GUID) && !dst_db.live(BOT_GUID));
+
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("a restarted dispatcher resumes from the destination Character and arrival fence");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+    assert!(src_db.settled() && dst_db.settled());
+    let calls = calls.lock().unwrap();
+    let ready = calls
+        .iter()
+        .rposition(|(_, call)| call == "mark_bot_transfer_arrival_ready")
+        .expect("the exact source intent must record destination preparation");
+    let released = calls
+        .iter()
+        .rposition(|(_, call)| call == "release_bot_transfer_arrival")
+        .expect("the destination arrival fence must drop");
+    assert!(ready < released, "{calls:?}");
+}
+
+#[test]
+fn a_ready_intent_completes_after_the_bot_has_crossed_onward() {
+    let (src, src_db, dst_db, calls) = bot_pair(36, 7);
+    let intent = bot_intent();
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("the first crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    // The next crossing has already removed the Character from this intent's first destination.
+    lk(&dst_db.characters).remove(&BOT_GUID);
+    let ready = super::transfer::BotTransferIntent {
+        arrival_ready: true,
+        ..intent
+    };
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &ready, 701)
+        .expect("the exact ready witness makes Character location irrelevant to completion");
+
+    assert!(!src_db.has(BOT_GUID) && !dst_db.has(BOT_GUID));
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, call)| call == "begin_transfer")
+            .count(),
+        1,
+        "completing the old intent must not start a second crossing"
+    );
+}
+
+#[test]
+fn an_old_ready_intent_does_not_release_a_newer_arrival_fence() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    let intent = bot_intent();
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("the first crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    // A later crossing has brought the same Character back behind a new fence. Transfer ids reuse
+    // the Character guid, so only the destination's exact intent identity distinguishes this row.
+    lk(&dst_db.in_rows).insert(BOT_GUID, BOT_GUID);
+    let new_source = spacetimedb_sdk::Identity::from_byte_array([8; 32]);
+    lk(&dst_db.bot_arrivals).insert(BOT_GUID, (new_source, 92, 5, 5_000));
+    let old_ready = super::transfer::BotTransferIntent {
+        arrival_ready: true,
+        ..intent
+    };
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &old_ready, 701)
+        .expect("the old crossing is already released");
+
+    assert_eq!(lk(&dst_db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+    assert_eq!(
+        lk(&dst_db.bot_arrivals).get(&BOT_GUID),
+        Some(&(new_source, 92, 5, 5_000)),
+        "the stale ready intent must leave the newer exact arrival fenced"
+    );
+    assert!(!dst_db.live(BOT_GUID));
+}
+
+#[test]
+fn a_stale_worker_cannot_adopt_a_newer_arrival_fence() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    let old = bot_intent();
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &old, 701)
+        .expect("the old crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    let new_source = spacetimedb_sdk::Identity::from_byte_array([8; 32]);
+    let new_identity = (new_source, 92, 5, 5_000);
+    lk(&dst_db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&dst_db.bot_arrivals).insert(BOT_GUID, new_identity);
+
+    let refusal = super::transfer::run_bot_transfer_intent(src.as_ref(), &old, 702)
+        .expect_err("a stale worker must not prepare a fence created by another crossing");
+    assert!(
+        refusal.to_string().contains("exact arrival fence"),
+        "{refusal:#}"
+    );
+    assert_eq!(lk(&dst_db.bot_arrivals).get(&BOT_GUID), Some(&new_identity));
+    assert_eq!(lk(&dst_db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+    assert!(!dst_db.live(BOT_GUID));
+}
+
+#[test]
+fn equal_local_intent_ids_from_distinct_sources_do_not_match() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    let intent = bot_intent();
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("the first crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    let other_source = spacetimedb_sdk::Identity::from_byte_array([8; 32]);
+    let other_identity = (
+        other_source,
+        intent.id,
+        intent.controller_generation,
+        intent.created_micros,
+    );
+    lk(&dst_db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&dst_db.bot_arrivals).insert(BOT_GUID, other_identity);
+
+    let refusal = super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 702)
+        .expect_err("Shard-local intent ids need their source Module identity");
+    assert!(
+        refusal.to_string().contains("exact arrival fence"),
+        "{refusal:#}"
+    );
+    assert_eq!(
+        lk(&dst_db.bot_arrivals).get(&BOT_GUID),
+        Some(&other_identity)
+    );
+    assert!(!dst_db.live(BOT_GUID));
+}
+
+#[test]
+fn a_blank_migrated_arrival_fence_is_not_adopted() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    super::transfer::run_bot_transfer(src.as_ref(), BOT_GUID, 36, 7, "legacy crossing")
+        .expect("the legacy crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    lk(&dst_db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&dst_db.bot_arrivals).remove(&BOT_GUID);
+    let intent = bot_intent();
+    let refusal = super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect_err("a blank migrated fence has no bot crossing authority");
+    assert!(
+        refusal.to_string().contains("exact arrival fence"),
+        "{refusal:#}"
+    );
+    assert_eq!(lk(&dst_db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+    assert!(!dst_db.live(BOT_GUID));
 }
 
 /// **AC: the return crossing uses the same row.** The instance shard writes an intent naming the
@@ -1200,7 +1415,7 @@ fn a_destination_this_shard_already_serves_is_a_completed_crossing() {
 /// ARRIVES on can read its party, which is what its kill-XP split, quest credit and loot rules run
 /// against.
 #[test]
-fn the_bots_party_is_readable_on_the_shard_it_arrives_on() {
+fn the_bots_party_is_readable_before_the_arrival_fence_drops() {
     use super::party_tests::{character, GINGER};
     let calls: ShardCallLog = Default::default();
     let realm = std::sync::Arc::new(InMemoryStore {
@@ -1260,4 +1475,18 @@ fn the_bots_party_is_readable_on_the_shard_it_arrives_on() {
         roster.members.contains(&BOT_GUID) && roster.members.contains(&GINGER),
         "and that party must still be the leader's: {roster:?}"
     );
+    let calls = calls.lock().unwrap();
+    let mirror = calls
+        .iter()
+        .rposition(|(_, call)| call == "sync_group_mirror")
+        .expect("the authoritative roster must be written");
+    let prepared = calls
+        .iter()
+        .position(|(_, call)| call == "sync_transfer_arrival")
+        .expect("the Transfer arrival step must complete");
+    let released = calls
+        .iter()
+        .position(|(_, call)| call == "release_transfer")
+        .expect("the destination fence must drop");
+    assert!(mirror < prepared && prepared < released, "{calls:?}");
 }

@@ -188,8 +188,11 @@ Moving a Character's state from one shard to another. Uses Escrow.
 **Transfer Intent**:
 A row a Package writes to ask the Gateway to Transfer a Character that has no Session, naming the
 destination map and instance. The Package places the Character and records the intent in one
-transaction; the Gateway drives the same escrowed Transfer a World Session would. Reaped on the
-shared event TTL, so it is a request, never a record.
+transaction; the Gateway claims the durable row and drives the same escrowed Transfer a World
+Session would. The destination import binds the source Module identity, intent id and controller
+generation to its arrival fence. Before release, the source intent records that the exact arrival
+is ready. The Gateway deletes the exact claimed row only after that fence is released. A claim
+lease lets a replacement Gateway resume after process restart.
 _Avoid_: transfer request, move order
 
 **Group Intent**:

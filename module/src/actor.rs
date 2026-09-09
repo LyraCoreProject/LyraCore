@@ -229,6 +229,7 @@ pub enum ActionRefusalKind {
     Level,
     Prerequisite,
     ProfileLimit,
+    TransferPending,
 }
 
 impl ActionRefusal {

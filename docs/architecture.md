@@ -88,7 +88,7 @@ routing fact; module game logic never reads one, and an architecture test fails 
   `wow_world_messages::vanilla` on the world port, plus one hand-rolled UpdateMask encoder where
   gtker 0.3's builder walls the descriptor setters.
 - **Routing across databases.** Which database owns this position, which database holds this
-  character, and the seven-step transfer driver. See §6.
+  character, and the nine-boundary Transfer driver. See §6.
 - **The subscription plane** — the AOI tracker and every `on_insert` relay that turns a table delta
   into an SMSG. See §5.
 
@@ -404,12 +404,16 @@ Every relay hangs off a coordinator connection, in one of two shapes:
   dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
   before cross-shard transfer cascade deletes, then destination entry registers a fresh viewer.
 
-`game_bot_invite_intent` and `game_bot_transfer_intent` are registered once at gateway startup and
-re-armed through `on_reconnect`. Both carry a decision the Module cannot execute for a Character with
-no Session: the invite needs realm-core, and the Shard crossing needs the escrowed transfer driven
-from outside any one Shard. Before executing an invite, each callback asks the World Shard to
-atomically delete its intent row. Only the successful Gateway calls `realm_group_op`; callbacks in
-other Gateway processes and callbacks installed after a reconnect stop when the row is gone.
+`game_bot_invite_intent` carries a short-lived party decision and uses a connection callback.
+`game_bot_transfer_intent` is durable work. One bounded dispatcher per World Shard polls through the
+current connection, claims an exact row with a lease, resumes the Escrow sequence, and deletes that
+row only after the destination party mirror is ready and the arrival fence is released. Another
+Gateway process or a restarted process can take an expired claim and repeat the idempotent steps.
+The source row records destination readiness before release. The destination import writes the
+source Module identity, intent id, controller generation and creation time onto the fence in the
+same transaction as the Character. An old retry can therefore distinguish its released arrival
+from a newer crossing that reused the Character-guid transfer id, and it cannot adopt a blank or
+newer fence after its lease expires.
 
 Authenticated Companion Orders use a different relay because target application and the source
 reply can commit on different World Shards. `game_party_command_intent` remains pending in a fixed
@@ -485,7 +489,7 @@ A transfer fires when a session's destination resolves to a different database �
 leaving an instance, or a world port onto another continent's shard. (Mid-walk seam crossings,
 which used to drive this same machinery from the movement path, went with the region tier — #471.)
 When it fires, `run_transfer`
-(`gateway/src/world/transfer.rs`) drives seven steps:
+(`gateway/src/world/transfer.rs`) drives nine named boundaries:
 
 | # | Gateway | Module reducer (`module/src/`) |
 |---|---|---|
@@ -494,9 +498,10 @@ When it fires, `run_transfer`
 | 3 | `dst.import_character_blob(id, blob)` | `transfer/mod.rs` (`import_character_blob`) |
 | 4 | `src.confirm_import(id)` | `transfer/mod.rs` (`confirm_import`) |
 | 5 | `src.finish_transfer(id)` — **delete last** | `transfer/mod.rs` (`finish_transfer`) |
-| 5b | publish the character→shard index to realm-core | `realm_core.rs` |
-| 6 | `dst.release_transfer(id)` — the arrival fence drops | `transfer/mod.rs` (`release_transfer`) |
-| 7 | `src.evict_instance_population(...)` — best effort, never fails the hop | `instance.rs` (`evict_instance_population`) |
+| 6 | publish the character→shard index to realm-core | `realm_core.rs` |
+| 7 | synchronize the destination party mirror | `world/party.rs` |
+| 8 | `dst.release_transfer(id)`, the arrival fence drops | `transfer/mod.rs` (`release_transfer`) |
+| 9 | `src.evict_instance_population(...)`, best effort and never fails the hop | `instance.rs` (`evict_instance_population`) |
 
 **The escrow row on disk is the authority**, and the transfer id **is** the character guid
 (`transfer_id_for` in `gateway/src/world/transfer.rs`) so recovery needs nothing from gateway RAM.

@@ -1023,8 +1023,8 @@ pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
 
 /// The mirror half of [`on_world_entry`], without a client: put the party realm-core says
 /// `self_guid` is in onto the shard `store` names, and clear a mirror row of a party they have
-/// left. Answers the roster it pushed, so the caller can render a frame for a player — and so a
-/// session-less arrival (`transfer::run_bot_transfer`) can call the same code and render nothing.
+/// left. Answers the roster it pushed so the caller can render a frame for a player. Transfer
+/// settlement uses the strict sibling below before it drops an arrival fence.
 ///
 /// Unsharded → `Ok(None)` before any read: the shard's own tables already are the authority.
 pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
@@ -1068,6 +1068,34 @@ pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
     // before the player takes a single action here.
     store.sync_group_mirror(&roster)?;
     Ok(Some(roster))
+}
+
+/// Reconcile the same authoritative roster as [`sync_arrival_mirror`], but make every destination
+/// write part of Transfer settlement. The arrival fence stays up when realm-core or the mirror is
+/// unavailable, and a later Transfer retry repeats this operation before release.
+pub(crate) fn sync_transfer_arrival_mirror<St: WorldStore + ?Sized>(
+    store: &St,
+    character_guid: u64,
+) -> Result<()> {
+    let Some(realm) = store.party_cleanup_realm()? else {
+        return Ok(());
+    };
+    let roster = realm.group_roster(character_guid)?;
+    if let Some(stale) = store.group_roster(character_guid)? {
+        if roster
+            .as_ref()
+            .is_none_or(|row| row.group_id != stale.group_id)
+        {
+            let repair = realm
+                .group_roster_by_id(stale.group_id)?
+                .unwrap_or_else(|| GroupRoster::disbanded(stale.group_id));
+            store.sync_group_mirror(&repair)?;
+        }
+    }
+    if let Some(roster) = roster {
+        store.sync_group_mirror(&roster)?;
+    }
+    Ok(())
 }
 
 /// Build `SMSG_GROUP_LIST` for `self_guid` from an authoritative roster, filling each member's NAME
