@@ -2279,7 +2279,6 @@ pub struct AreatriggerTeleport {
 /// resolves and applies its destination.
 #[derive(Clone, Copy)]
 pub(crate) struct AreaTriggerRoute {
-    pub trigger_id: u32,
     pub source_map: u32,
     pub source_x: f32,
     pub source_y: f32,
@@ -2365,7 +2364,6 @@ pub(crate) fn area_trigger_route(
         .trigger_id()
         .find(trigger_id)?;
     let route = AreaTriggerRoute {
-        trigger_id,
         source_map: volume.map_id,
         source_x: volume.x,
         source_y: volume.y,
