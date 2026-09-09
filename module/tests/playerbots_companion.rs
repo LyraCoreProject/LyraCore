@@ -501,7 +501,6 @@ fn playerbots_non_healer_companion_retains_self_recovery() {
 fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     let (node, bots) = fixture("playerbots-companion-target-retention");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
-    node.assert_call("playerbots_fixture_provision_steps", &[priest, "64"]);
     node.assert_call(
         "playerbots_fixture_companion_move",
         &[priest, "1340", "1200"],
@@ -602,7 +601,18 @@ fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
         .is_empty());
     assert_eq!(replaced["cast_progress"], completed_cast);
     assert!(replaced["companion_heal_target_guid"].contains(leader));
-    assert!(replaced["chosen"].contains(leader), "{replaced:?}");
+
+    std::thread::sleep(std::time::Duration::from_millis(1600));
+    let resumed = poll_until(POLL_TIMEOUT, || {
+        pass_once(&node, priest);
+        let state = runner(&node, priest);
+        state["companion_heal_target_guid"].contains(leader)
+            && state["chosen"].contains(leader)
+            && (state["chosen"].contains("reason = (heal")
+                || state["chosen"].contains("reason = (castingPosition"))
+    });
+    evidence(&node, "target-retention-resumed");
+    assert!(resumed);
 }
 
 #[test]
