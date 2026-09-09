@@ -853,17 +853,13 @@ fn ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
     }));
     evidence(&fixture, "fortitude-range-repair");
     node.assert_call(
-        "playerbots_fixture_companion_wall",
+        "playerbots_fixture_roles_buff_wall",
         &[&fixture.priest, &fixture.leader],
-    );
-    node.assert_call(
-        "playerbots_fixture_roles_move",
-        &[&fixture.leader, "1210", "1200"],
     );
     assert!(poll_until(POLL_TIMEOUT, || {
         pass(node, &fixture.priest);
         let state = runner(node, &fixture.priest);
-        state["chosen"].contains("buffPosition")
+        state["chosen"].contains("castingPosition")
             && state["companion_buff_target_guid"].contains(&fixture.leader)
             && node
                 .query_rows(&format!(
