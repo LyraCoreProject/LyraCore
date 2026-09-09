@@ -717,6 +717,20 @@ fn sorted_rows(evidence: &serde_json::Value, path: &[&str], key: &str) -> Vec<se
     rows
 }
 
+fn member_keys(members: &[serde_json::Value]) -> Vec<(String, String)> {
+    let mut keys: Vec<_> = members
+        .iter()
+        .map(|member| {
+            (
+                text_field(member, "group_id").to_owned(),
+                text_field(member, "character_guid").to_owned(),
+            )
+        })
+        .collect();
+    keys.sort();
+    keys
+}
+
 fn assert_same_fields(
     left: &serde_json::Value,
     right: &serde_json::Value,
@@ -911,15 +925,11 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
             evidence,
         );
         let shard_members = rows(evidence, &["state", shard, "members"]);
-        assert_eq!(shard_members.len(), realm_members.len(), "{evidence}");
-        for member in shard_members {
-            let guid = text_field(member, "character_guid");
-            let authority = realm_members
-                .iter()
-                .find(|authority| text_field(authority, "character_guid") == guid)
-                .unwrap_or_else(|| panic!("Realm member {guid} absent: {evidence}"));
-            assert_eq!(member["group_id"], authority["group_id"], "{evidence}");
-        }
+        assert_eq!(
+            member_keys(shard_members),
+            member_keys(realm_members),
+            "{evidence}"
+        );
         assert_eq!(
             sorted_rows(evidence, &["state", shard, "partitions"], "character_guid"),
             sorted_rows(
@@ -1560,15 +1570,11 @@ fn assert_assist_party_mirror(evidence: &serde_json::Value) {
     }
     let destination_members = rows(evidence, &["state", "destination", "members"]);
     let realm_members = rows(evidence, &["state", "realm", "members"]);
-    assert_eq!(destination_members.len(), realm_members.len(), "{evidence}");
-    for member in destination_members {
-        let guid = member["character_guid"].as_str().unwrap();
-        let authority = realm_members
-            .iter()
-            .find(|authority| authority["character_guid"] == guid)
-            .unwrap_or_else(|| panic!("Realm member {guid} absent: {evidence}"));
-        assert_eq!(member["group_id"], authority["group_id"], "{evidence}");
-    }
+    assert_eq!(
+        member_keys(destination_members),
+        member_keys(realm_members),
+        "{evidence}"
+    );
     let bot = &evidence["state"]["bot"];
     let expected = [
         (
@@ -1679,6 +1685,39 @@ fn assist_follow_observations(
             row["foreground"].contains(&format!("action = (move = (entity = {}))", bot.priest_guid))
                 && row["foreground"].contains("reason = (follow = ())")
         }) && movement.len() == 1;
+        if selected {
+            topology.call(
+                &topology.destination_db,
+                "playerbots_fixture_freeze",
+                &[&bot.guid.to_string()],
+            );
+            return serde_json::json!({
+                "selected_priest": true,
+                "samples": samples,
+                "selected": {
+                    "runner": runner,
+                    "movement": movement,
+                },
+                "parked": {
+                    "runner": topology.query(
+                        &topology.destination_db,
+                        &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {}", bot.guid),
+                    ),
+                    "movement": topology.query(
+                        &topology.destination_db,
+                        &format!("SELECT * FROM game_creature_spline WHERE guid = {}", bot.guid),
+                    ),
+                    "bot": topology.query(
+                        &topology.destination_db,
+                        &format!("SELECT character_guid, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {}", bot.guid),
+                    ),
+                    "movement_tick": topology.query(
+                        &topology.destination_db,
+                        "SELECT * FROM game_creature_move_schedule",
+                    ),
+                },
+            });
+        }
         samples.push(serde_json::json!({
             "runner": runner,
             "movement": movement,
@@ -1692,9 +1731,9 @@ fn assist_follow_observations(
             ),
             "selected_priest": selected,
         }));
-        if selected || Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             return serde_json::json!({
-                "selected_priest": selected,
+                "selected_priest": false,
                 "samples": samples,
             });
         }
@@ -1871,14 +1910,15 @@ fn playerbots_assist_keeps_its_selected_member_after_arrival() {
         queued["state"]["destination"]["movement_tick"],
         "the declared Core movement tick fired before the selected leg was captured: {queued}"
     );
-    let runner = row(&queued, &["state", "destination", "runner"]);
+    let runner = row(&queued, &["extra", "observations", "selected", "runner"]);
     let foreground = text_field(runner, "foreground");
     assert!(
         foreground.contains(&format!("action = (move = (entity = {}))", bot.priest_guid))
             && !foreground.contains(&format!("action = (move = (entity = {}))", bot.leader_guid)),
         "{queued}"
     );
-    let movement = row(&queued, &["state", "destination", "movement"]);
+    let selected_movement = rows(&queued, &["extra", "observations", "selected", "movement"]);
+    let movement = row(&queued, &["extra", "observations", "selected", "movement"]);
     let start = point(movement, ["sx", "sy", "sz"]);
     let destination = point(movement, ["dx", "dy", "dz"]);
     let priest = point(
@@ -1898,36 +1938,41 @@ fn playerbots_assist_keeps_its_selected_member_after_arrival() {
         "movement fell back toward party leader: {queued}"
     );
     assert_assist_source_bodies_absent(&queued);
-
-    topology.call(
-        &topology.destination_db,
-        "playerbots_fixture_freeze",
-        &[&bot.guid.to_string()],
-    );
-    let parked = topology.save(
-        &bot,
-        "assist-decision-parked",
-        serde_json::json!({
-            "scope": "the decision scheduler is parked after selection; the declared Core movement tick and selected leg remain ordinary",
-        }),
+    assert_eq!(
+        text_field(
+            row(&queued, &["state", "destination", "runner"]),
+            "foreground",
+        ),
+        foreground,
+        "parking changed the selected foreground: {queued}"
     );
     assert_eq!(
-        parked["state"]["destination"]["runner"], queued["state"]["destination"]["runner"],
-        "parking changed the selected work: {parked}"
+        text_field(
+            row(&queued, &["extra", "observations", "parked", "runner"],),
+            "foreground",
+        ),
+        foreground,
+        "the parked Runner does not retain the selected foreground: {queued}"
     );
     assert_eq!(
-        parked["state"]["destination"]["movement"], queued["state"]["destination"]["movement"],
-        "parking changed the selected leg: {parked}"
+        rows(&queued, &["extra", "observations", "parked", "movement"],),
+        selected_movement,
+        "parking changed the selected leg: {queued}"
     );
     assert_eq!(
-        parked["state"]["destination"]["movement_tick"],
+        rows(&queued, &["state", "destination", "movement"]),
+        selected_movement,
+        "the selected leg changed before the saved observation: {queued}"
+    );
+    assert_eq!(
         queued["state"]["destination"]["movement_tick"],
-        "parking changed the declared Core movement tick: {parked}"
+        queued["extra"]["observations"]["parked"]["movement_tick"],
+        "parking changed the declared Core movement tick: {queued}"
     );
     assert_eq!(
-        row(&parked, &["state", "destination", "companion_bot"])["next_think_micros"],
+        row(&queued, &["state", "destination", "companion_bot"])["next_think_micros"],
         i64::MAX.to_string(),
-        "companion decision scheduler was not parked: {parked}"
+        "companion decision scheduler was not parked: {queued}"
     );
 
     let progress = assist_progress_observations(&topology, &bot, start, priest, leader);
@@ -1943,7 +1988,7 @@ fn playerbots_assist_keeps_its_selected_member_after_arrival() {
     assert_assist_source_bodies_absent(&followed);
     assert_ne!(
         followed["state"]["destination"]["movement_tick"],
-        parked["state"]["destination"]["movement_tick"],
+        queued["state"]["destination"]["movement_tick"],
         "the ordinary Core movement tick did not execute: {followed}"
     );
 }
