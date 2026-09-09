@@ -1835,8 +1835,10 @@ pub fn release_player_transfer_arrival(
     source_map_id: u32,
     source_instance_id: u64,
     source_locator_revision: u64,
+    request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
+    require_transfer_actor(ctx, transfer_id, request_actor)?;
     if transfer_id != character_guid || source_locator_revision == 0 {
         return Err("player Transfer arrival identity is invalid".to_string());
     }

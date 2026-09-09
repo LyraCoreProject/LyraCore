@@ -71,7 +71,8 @@ impl Coordinator {
                 character_guid,
                 source.map_id,
                 source.instance_id,
-                source.revision
+                source.revision,
+                self.session_actor(0)
             )
         )
     }

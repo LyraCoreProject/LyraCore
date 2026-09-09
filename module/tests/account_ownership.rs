@@ -160,19 +160,22 @@ fn a_new_generation_completes_partial_admission_and_fences_transfer_completion()
     );
     let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 1");
     let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
-    destination.assert_call("import_character_blob", &["1", &blob, &current]);
+    destination.assert_call(
+        "import_player_character_blob",
+        &["1", &blob, "0", "0", "1", &current],
+    );
     let arrival = destination.query_rows("SELECT * FROM game_transfer_in");
     for unrelated in [&other[..], r#"{"guid":0,"ownership":null}"#] {
         refused(
             &destination,
-            "import_character_blob",
-            &["1", &blob, unrelated],
+            "import_player_character_blob",
+            &["1", &blob, "0", "0", "1", unrelated],
             "STALE_WORLD_SESSION",
         );
         refused(
             &destination,
-            "release_transfer",
-            &["1", unrelated],
+            "release_player_transfer_arrival",
+            &["1", "1", "0", "0", "1", unrelated],
             "STALE_WORLD_SESSION",
         );
         for reducer in ["confirm_import", "finish_transfer"] {
@@ -187,14 +190,14 @@ fn a_new_generation_completes_partial_admission_and_fences_transfer_completion()
     }
     refused(
         &destination,
-        "import_character_blob",
-        &["1", &blob, &old],
+        "import_player_character_blob",
+        &["1", &blob, "0", "0", "1", &old],
         "STALE_WORLD_SESSION",
     );
     refused(
         &destination,
-        "release_transfer",
-        &["1", &old],
+        "release_player_transfer_arrival",
+        &["1", "1", "0", "0", "1", &old],
         "STALE_WORLD_SESSION",
     );
     for reducer in ["confirm_import", "finish_transfer"] {
@@ -210,7 +213,10 @@ fn a_new_generation_completes_partial_admission_and_fences_transfer_completion()
     );
     source.assert_call("confirm_import", &["1", &current]);
     source.assert_call("finish_transfer", &["1", &current]);
-    destination.assert_call("release_transfer", &["1", &current]);
+    destination.assert_call(
+        "release_player_transfer_arrival",
+        &["1", "1", "0", "0", "1", &current],
+    );
     source.assert_call("close_account_fence", &[&first]);
     destination.assert_call("close_account_fence", &[&first]);
     assert!(source

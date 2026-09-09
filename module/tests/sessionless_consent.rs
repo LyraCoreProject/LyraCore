@@ -653,7 +653,7 @@ fn suppressed_consent_travels_with_the_character_through_export_and_import() {
     );
     destination.assert_call(
         "release_player_transfer_arrival",
-        &["1", "1", "0", "0", "1"],
+        &["1", "1", "0", "0", "1", actor],
     );
     destination.assert_call("debug_spawn_player_entity", &["1"]);
     let rows = destination
