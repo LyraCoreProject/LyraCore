@@ -121,7 +121,7 @@ fn actions(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
 
 fn runner(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     node.query_rows(&format!(
-        "SELECT character_guid, objective_sequence, objective, chosen, failures, recovery, deferred_destinations, next_eligible_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        "SELECT character_guid, objective_sequence, objective, chosen, failures, recovery, deferred_destinations, retry_count, observed_micros, next_eligible_micros FROM pkg_playerbots_runner WHERE character_guid = {guid}"
     ))
 }
 
@@ -219,19 +219,30 @@ fn playerbots_recovery_full_bag_refuses_boundedly_then_resumes_after_inventory_s
         "quest": quest(&node, &guid, FULL_BAG_QUEST),
     });
     save(&node, "inventory-full-bounded", bounded.clone());
-    let before_take = bounded["before"]["actions"]
-        .as_array()
+    let before_retry = bounded["before"]["runner"][0]["retry_count"]
+        .as_str()
         .unwrap()
-        .iter()
-        .find(|action| action["kind"].as_str().unwrap().contains("takeLoot"))
+        .parse::<u8>()
         .unwrap();
-    let after_take = bounded["actions"]
-        .as_array()
+    let after_retry = bounded["runner"][0]["retry_count"]
+        .as_str()
         .unwrap()
-        .iter()
-        .find(|action| action["kind"].as_str().unwrap().contains("takeLoot"))
+        .parse::<u8>()
         .unwrap();
-    assert_eq!(before_take, after_take, "{bounded}");
+    assert_eq!(before_retry, 1, "{bounded}");
+    // The first deadline may pass while the caller captures evidence. Only that first pass may retry.
+    assert!((1..=2).contains(&after_retry), "{bounded}");
+    let next = bounded["runner"][0]["next_eligible_micros"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    let observed = bounded["runner"][0]["observed_micros"]
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    assert!(next > observed, "{bounded}");
     assert_eq!(bounded["before"]["quest"], bounded["quest"], "{bounded}");
 
     node.assert_call(
