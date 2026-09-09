@@ -277,7 +277,7 @@ fn playerbots_companion_enters_the_areatrigger_with_normalized_transfer_state() 
     );
     assert!(
         evidence["action"].as_array().unwrap().iter().any(|row| {
-            row["kind"] == "transfer"
+            row["kind"] == "(transfer = ())"
                 && row["outcome"]
                     .as_str()
                     .unwrap()
@@ -360,7 +360,7 @@ fn playerbots_companion_uses_the_audited_deadmines_exit_route() {
     );
     assert!(
         exited["action"].as_array().unwrap().iter().any(|row| {
-            row["kind"] == "transfer"
+            row["kind"] == "(transfer = ())"
                 && row["outcome"]
                     .as_str()
                     .unwrap()
@@ -423,7 +423,7 @@ fn playerbots_transfer_advances_generation_and_rejects_the_source_cast_completio
     );
     assert!(
         entered["action"].as_array().unwrap().iter().any(|row| {
-            row["kind"] == "transfer"
+            row["kind"] == "(transfer = ())"
                 && row["outcome"]
                     .as_str()
                     .unwrap()
@@ -537,7 +537,7 @@ fn playerbots_legacy_crossing_uses_the_runner_transfer_checkpoint() {
     );
     assert!(
         evidence["action"].as_array().unwrap().iter().any(|row| {
-            row["kind"] == "transfer"
+            row["kind"] == "(transfer = ())"
                 && row["outcome"]
                     .as_str()
                     .unwrap()
