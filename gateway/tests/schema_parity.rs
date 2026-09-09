@@ -454,6 +454,17 @@ parity_test!(parity_game_bot_invite_intent, "game_bot_invite_intent", lyracore_m
 parity_test!(parity_game_bot_transfer_intent, "game_bot_transfer_intent", lyracore_module::BotTransferIntent, bindings::bot_transfer_intent_type::BotTransferIntent, {
     id, bot_guid, destination_map, destination_instance, reason, created_at,
 });
+parity_test!(parity_game_party_command_intent, "game_party_command_intent", lyracore_module::PartyCommandIntent, bindings::party_command_intent_type::PartyCommandIntent, {
+    id, source_identity, issuer_guid, reply_identity, issuer_sequence, command, created_micros,
+    expires_micros, result_reap_micros, claim_token, claim_until_micros, pending, state,
+    dispatch_lane, dispatch_next,
+});
+parity_test!(parity_game_party_command_dispatch_lane, "game_party_command_dispatch_lane", lyracore_module::PartyCommandDispatchLane, bindings::party_command_dispatch_lane_type::PartyCommandDispatchLane, {
+    lane, head_intent_id, tail_intent_id,
+});
+parity_test!(parity_game_party_command_receipt, "game_party_command_receipt", lyracore_module::PartyCommandReceipt, bindings::party_command_receipt_type::PartyCommandReceipt, {
+    id, receipt_key, source_identity, intent_id, bot_guid, outcome, retain_until_micros,
+});
 // The private per-recipient whisper relay, now readable on TWO connections — the
 // per-player one under RLS (unchanged) and realm-core's coordinator, which self-filters on the
 // END-appended `recipient_guid`. Both decodes go through this binding, so a drifted column here is a
@@ -852,6 +863,9 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_levelup_event",
     "game_bot_invite_intent",
     "game_bot_transfer_intent",
+    "game_party_command_intent",
+    "game_party_command_dispatch_lane",
+    "game_party_command_receipt",
     "game_addon_message",
     "game_character_explored",
     "game_account",
