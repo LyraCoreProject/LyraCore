@@ -958,7 +958,7 @@ fn playerbots_recovery_upgrades_a_retained_quest_and_owned_cast_without_resettin
     node.assert_call("playerbots_spawn_role", &["1", "1200", "1200", "50", "0"]);
     let guid =
         row(&node, "SELECT character_guid FROM pkg_playerbots_bot")["character_guid"].clone();
-    node.assert_call("playerbots_select_controller", &[&guid, "{\"cohort\":[]}"]);
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     node.assert_call("debug_learn_spell", &[&guid, "355"]);
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
     node.assert_sql(&format!("UPDATE pkg_playerbots_provisioning SET next_repair_micros = 9223372036854775807 WHERE character_guid = {guid}"));
@@ -991,6 +991,7 @@ fn playerbots_recovery_upgrades_a_retained_quest_and_owned_cast_without_resettin
             "quest": node.query_rows(&format!("SELECT * FROM game_character_quest WHERE character_guid = {guid}")),
             "pending_cast": node.query_rows(&format!("SELECT * FROM game_pending_cast WHERE caster_guid = {guid}")),
             "provisioning": node.query_rows(&format!("SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}")),
+            "synthetic_recovery_spell": node.query_rows("SELECT spell_id, cast_time_ms FROM game_spell WHERE spell_id = 5090100"),
         })
     }
     let before = capture(&node, &guid);
@@ -1013,6 +1014,27 @@ fn playerbots_recovery_upgrades_a_retained_quest_and_owned_cast_without_resettin
     .unwrap();
     assert!(pending, "{before}");
     assert_eq!(before["pending_cast"].as_array().unwrap().len(), 1);
+    let retained = before["retained_quest"].as_array().unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0]["quest_entry"], "7");
+    assert_eq!(before["provisioning"].as_array().unwrap().len(), 1);
+    let quest = before["quest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|quest| quest["quest_entry"] == "7")
+        .expect("retained quest is in the Character quest log");
+    assert_eq!(quest["rewarded"], "false");
+    assert_eq!(
+        quest["counts"]
+            .as_str()
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .trim(),
+        "0"
+    );
     assert!(before["runner"]["foreground"]
         .as_str()
         .unwrap()
@@ -1033,7 +1055,13 @@ fn playerbots_recovery_upgrades_a_retained_quest_and_owned_cast_without_resettin
     for (field, value) in before["runner"].as_object().unwrap() {
         assert_eq!(&after["runner"][field], value, "runner field {field}");
     }
-    for field in ["retained_quest", "quest", "pending_cast", "provisioning"] {
+    for field in [
+        "retained_quest",
+        "quest",
+        "pending_cast",
+        "provisioning",
+        "synthetic_recovery_spell",
+    ] {
         assert_eq!(before[field], after[field], "{field}");
     }
     assert_eq!(after["runner"]["recovery"], "(none = ())");
