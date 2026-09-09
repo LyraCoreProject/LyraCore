@@ -307,20 +307,19 @@ fn playerbots_provisioning_arms_then_reconciles_and_repairs_without_cost() {
     for kit in
         node.query_rows("SELECT spell_id FROM pkg_playerbots_kit WHERE class = 1 AND role = 0")
     {
-        let expected = if kit["spell_id"] == "6673" { 0 } else { 1 };
         assert_eq!(
             node.query_rows(&format!(
                 "SELECT * FROM game_player_spell WHERE character_guid = {guid} AND spell_id = {}",
                 kit["spell_id"]
             ))
             .len(),
-            expected,
+            1,
             "profile spell {}",
             kit["spell_id"]
         );
     }
     assert!(history.contains("spell = 6673"));
-    assert!(history.contains("class"));
+    assert!(!history.contains("spell 6673 is not available"));
     assert!(history.contains("warrior-tank-free"));
     assert_eq!(completed["revision"], "2");
     assert!(history.contains("applied"));
