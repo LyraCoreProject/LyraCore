@@ -136,7 +136,7 @@ const PARTY_SHARE_RANGE_SQ: f32 = crate::group::GROUP_XP_RANGE_SQ;
 /// Vanilla quest-log cap (`push_quest_to_party`'s LOG_FULL gate — a share target already holding 20
 /// active quests can't accept a 21st). Matches the gateway's `player_quest_log` slot cap
 /// (`gateway/src/stdb/reads.rs`) — both sides model the same 20-slot vanilla quest log.
-const MAX_QUEST_LOG_SIZE: usize = 20;
+pub(crate) const MAX_QUEST_LOG_SIZE: usize = 20;
 
 /// Vanilla level cap (quest XP→money conversion gate, work-item 194(e)) — matches `xp::xp_to_next_level`'s
 /// own hardcoded cap check (`level >= 60` there too; not re-exported as a shared const, so this is a
@@ -377,6 +377,10 @@ pub struct GameObjectQuest {
     index(
         accessor = by_character_quest,
         btree(columns = [character_guid, quest_entry])
+    ),
+    index(
+        accessor = by_character_active,
+        btree(columns = [character_guid, rewarded, failed])
     )
 )]
 pub struct CharacterQuest {

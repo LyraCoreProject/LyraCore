@@ -1273,6 +1273,50 @@ fn playerbots_record_only_quest_decisions_do_not_change_core_gameplay() {
 }
 
 #[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_changed_quest_interaction_starts_a_fresh_retry() {
+    let (node, guid) = fixture("playerbots-quest-retry-identity", 1, 0, true);
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[&guid, "7"]);
+    node.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    node.assert_call(
+        "playerbots_fixture_runner_stage_quest_retry",
+        &[&guid, "7", &CREATURE_6.to_string()],
+    );
+    let prior = query_one(
+        &node,
+        &format!(
+            "SELECT retry_count, retry_candidate FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+
+    node.assert_call(
+        "playerbots_fixture_runner_refuse_quest_candidate",
+        &[&guid, "7", &u64::MAX.to_string()],
+    );
+    let refused = query_one(
+        &node,
+        &format!(
+            "SELECT retry_count, retry_candidate, next_eligible_micros, observed_micros, last_outcome, chosen, failures FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+        ),
+    );
+    record(&node, "changed-quest-retry");
+
+    assert_eq!(prior["retry_count"], "3");
+    assert!(prior["retry_candidate"].contains(&CREATURE_6.to_string()));
+    assert_eq!(refused["retry_count"], "1");
+    assert!(refused["retry_candidate"].contains(&u64::MAX.to_string()));
+    assert!(refused["chosen"].contains(&u64::MAX.to_string()));
+    assert!(refused["last_outcome"].contains("actionRefused"));
+    assert_eq!(
+        refused["next_eligible_micros"].parse::<i64>().unwrap()
+            - refused["observed_micros"].parse::<i64>().unwrap(),
+        1_000_000
+    );
+    assert_eq!(quest(&node, &guid, 7).unwrap()["rewarded"], "false");
+}
+
+#[test]
 #[ignore = "requires the merged PB-004 Wasm, SpacetimeDB, and the playerbots Package"]
 fn playerbots_populated_pb004_quest_objective_and_runner_upgrade_in_place() {
     let preceding = preceding_quest_loops();
