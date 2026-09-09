@@ -4,7 +4,7 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use support::Standalone;
 
 const TARGET: u64 = (0xF130u64 << 48) | (5_098_001u64 << 24) | 1;
@@ -269,15 +269,56 @@ fn assert_initial_orders(party: &Party, before: &serde_json::Value) {
         };
         assert_eq!(order["order"], expected, "{before}");
     }
-    let target = &before["bots"][&party.bots[3]];
+    let target_bot = &before["bots"][&party.bots[3]];
+    let foreground = target_bot["runner"]["foreground"].as_str().unwrap();
     assert!(
-        target["runner"]["foreground"]
-            .as_str()
-            .unwrap()
-            .contains("move"),
+        foreground.contains(&format!("action = (move = (castingPosition = {TARGET}))")),
         "{before}"
     );
-    assert_eq!(target["movement"].as_array().unwrap().len(), 1, "{before}");
+    assert!(
+        foreground.contains("reason = (fightPosition = ())"),
+        "{before}"
+    );
+    assert_eq!(
+        target_bot["movement"].as_array().unwrap().len(),
+        1,
+        "{before}"
+    );
+    let leg = &target_bot["movement"][0];
+    let body = &target_bot["entity"][0];
+    let target = &before["target_entity"][0];
+    let number = |row: &serde_json::Value, field: &str| -> f64 {
+        row[field].as_str().unwrap().parse().unwrap()
+    };
+    for (start, axis) in [("sx", "x"), ("sy", "y"), ("sz", "z")] {
+        assert!(
+            (number(leg, start) - number(body, axis)).abs() < 0.05,
+            "{before}"
+        );
+    }
+    let (x, y) = (number(body, "x"), number(body, "y"));
+    let (tx, ty) = (number(target, "x"), number(target, "y"));
+    let (dx, dy) = (number(leg, "dx"), number(leg, "dy"));
+    let old_distance = (tx - x).hypot(ty - y);
+    let new_distance = (tx - dx).hypot(ty - dy);
+    assert!(
+        old_distance > 90.0 && new_distance + 0.1 < old_distance,
+        "{before}"
+    );
+    let perpendicular = ((dx - x) * (ty - y) - (dy - y) * (tx - x)).abs() / old_distance;
+    assert!(
+        perpendicular < 0.1 && (number(leg, "dz") - number(body, "z")).abs() < 0.05,
+        "{before}"
+    );
+    assert_eq!(before["movement_tick"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        before["movement_tick"][0]["instance_id"],
+        u64::MAX.to_string()
+    );
+    assert!(before["movement_tick"][0]["scheduled_at"]
+        .as_str()
+        .unwrap()
+        .starts_with("(Time = "));
 }
 
 fn assert_remote_inputs(
@@ -341,6 +382,8 @@ fn assert_remote_inputs(
 }
 
 fn order_decisions(mode: u8) {
+    // The fixture schedules its movement tick sixty seconds after this lower time bound.
+    let started = Instant::now();
     let party = setup(mode);
     let target_started = support::poll_until(Duration::from_secs(10), || {
         party
@@ -414,6 +457,15 @@ fn order_decisions(mode: u8) {
         }
     }
     let after = snapshot(&party, "after-remote-decisions", mode);
+    assert!(
+        started.elapsed() < Duration::from_secs(55),
+        "decision proof exceeded its pre-tick window: {after}"
+    );
+    assert_eq!(before["movement_tick"], remote["movement_tick"], "{remote}");
+    assert_eq!(
+        before["movement_tick"], after["movement_tick"],
+        "the declared Core tick must still be pending: {after}"
+    );
     for (index, guid) in party.bots.iter().enumerate() {
         let old = &before["bots"][guid];
         let current = &after["bots"][guid];
