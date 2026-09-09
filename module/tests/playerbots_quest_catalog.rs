@@ -792,13 +792,8 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     let (node, bots) = fixture("playerbots-quest-deferred-retry");
     let bot = bot_for_class(&bots, "1");
     node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
-    node.assert_call(
-        "playerbots_quest_fixture_move_creature_spawn",
-        &["6", "1230"],
-    );
-    node.assert_call("playerbots_quest_fixture_refresh", &[]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
-    select_cohort(&node, bot);
+    node.assert_call("playerbots_recovery_fixture_block_quest_target", &[bot]);
     let active = support::poll_until(support::POLL_TIMEOUT, || {
         node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
         let ready = runner(&node, bot)["recovery"].contains("active = (some = (fight");
@@ -819,11 +814,16 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     assert!(initial["objective"].contains("travelling"), "{initial:?}");
 
     node.assert_call("playerbots_recovery_fixture_exhaust_attempt", &[bot]);
-    run_once(&node);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
     let deferred = runner(&node, bot);
     record(&node, "deferral-start");
+    let path = support::log_dir().join(format!("{}-deferred-runner.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&deferred).unwrap()).unwrap();
     assert!(deferred["objective"].contains("travelling"), "{deferred:?}");
-    assert!(!deferred["deferred_destinations"].is_empty());
+    assert!(
+        !deferred["deferred_destinations"].is_empty(),
+        "{deferred:?}"
+    );
     assert!(deferred["recovery"].contains("work = (fight"));
     assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
     run_once(&node);
