@@ -67,6 +67,7 @@ impl TransferTopology {
             topology.realm_db.as_str(),
         ] {
             topology.call(database, "claim_operator", &[]);
+            topology.call(database, "playerbots_transfer_gateway_identity_stage", &[]);
         }
         topology.call(&topology.source_db, "install_guid_range", &["1000000"]);
         topology.call(
@@ -182,6 +183,11 @@ impl TransferTopology {
     fn snapshot(&self, bot: &TransferredBot, phase: &str) -> serde_json::Value {
         serde_json::json!({
             "phase": phase,
+            "databases": {
+                "source": self.source_db,
+                "destination": self.destination_db,
+                "realm": self.realm_db,
+            },
             "bot": {
                 "guid": bot.guid,
                 "leader_guid": bot.leader_guid,
@@ -190,6 +196,7 @@ impl TransferTopology {
                 "objective_identity": bot.objective_identity,
             },
             "source": {
+                "module_identity": self.query(&self.source_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
                 "character": self.query(&self.source_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.guid)),
                 "live": self.query(&self.source_db, &format!("SELECT guid, map_id, instance_id FROM game_world_entity WHERE guid = {}", bot.guid)),
                 "escrow": self.query(&self.source_db, &format!("SELECT * FROM game_transfer_out WHERE character_guid = {}", bot.guid)),
@@ -202,6 +209,7 @@ impl TransferTopology {
                 "instance": self.query(&self.source_db, &format!("SELECT * FROM game_instance WHERE instance_id = {DESTINATION_INSTANCE}")),
             },
             "destination": {
+                "module_identity": self.query(&self.destination_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
                 "character": self.query(&self.destination_db, &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {}", bot.guid)),
                 "live": self.query(&self.destination_db, &format!("SELECT guid, map_id, instance_id FROM game_world_entity WHERE guid = {}", bot.guid)),
                 "arrival": self.query(&self.destination_db, &format!("SELECT * FROM game_transfer_in WHERE character_guid = {}", bot.guid)),
@@ -217,6 +225,7 @@ impl TransferTopology {
                 "instance": self.query(&self.destination_db, &format!("SELECT * FROM game_instance WHERE instance_id = {DESTINATION_INSTANCE}")),
             },
             "realm": {
+                "module_identity": self.query(&self.realm_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
                 "locator": self.query(&self.realm_db, &format!("SELECT * FROM game_character_shard WHERE character_guid = {}", bot.guid)),
                 "group": self.query(&self.realm_db, &format!("SELECT * FROM game_group WHERE group_id = {GROUP}")),
                 "roster": self.query(&self.realm_db, &format!("SELECT * FROM game_group_roster_revision WHERE group_id = {GROUP}")),
@@ -306,6 +315,7 @@ impl GatewayProcess {
     }
 
     fn wait_for_exit(&mut self, step: &str) -> serde_json::Value {
+        let pid = self.child.as_ref().unwrap().id();
         let deadline = Instant::now() + support::POLL_TIMEOUT;
         let status = loop {
             if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
@@ -318,14 +328,17 @@ impl GatewayProcess {
             );
             std::thread::sleep(Duration::from_millis(50));
         };
-        let _ = self.child.take();
         let log = self.log();
-        serde_json::json!({
+        let exit = serde_json::json!({
+            "pid": pid,
             "success": status.success(),
             "code": status.code(),
             "signal": status.signal(),
+            "raw_status": status.into_raw(),
             "log": log,
-        })
+        });
+        let _ = self.child.take();
+        exit
     }
 
     fn log(&self) -> String {
@@ -448,10 +461,18 @@ fn assert_same_fields(
 
 fn assert_abort(evidence: &serde_json::Value, step: &str) {
     let exit = &evidence["extra"]["gateway_exit"];
+    assert!(
+        exit["pid"].as_u64().is_some_and(|pid| pid > 0),
+        "{evidence}"
+    );
     assert_eq!(exit["success"], false, "{evidence}");
     assert_eq!(
         exit["signal"], 6,
         "Gateway did not exit by SIGABRT: {evidence}"
+    );
+    assert!(
+        exit["raw_status"].is_i64(),
+        "missing raw wait status: {evidence}"
     );
     let log = exit["log"].as_str().unwrap_or_default();
     assert!(
@@ -464,6 +485,33 @@ fn assert_abort(evidence: &serde_json::Value, step: &str) {
 fn assert_crossing_identity(evidence: &serde_json::Value, position: usize) {
     let intent = row(evidence, &["state", "source", "intent"]);
     let bot = &evidence["state"]["bot"];
+    let source_identity = row(evidence, &["state", "source", "module_identity"]);
+    let destination_identity = row(evidence, &["state", "destination", "module_identity"]);
+    let realm_identity = row(evidence, &["state", "realm", "module_identity"]);
+    assert_eq!(
+        intent["source_module_identity"], source_identity["identity"],
+        "{evidence}"
+    );
+    assert_ne!(
+        source_identity["identity"], destination_identity["identity"],
+        "{evidence}"
+    );
+    assert_ne!(
+        source_identity["identity"], realm_identity["identity"],
+        "{evidence}"
+    );
+    assert_ne!(
+        destination_identity["identity"], realm_identity["identity"],
+        "{evidence}"
+    );
+    for database in ["source", "destination", "realm"] {
+        assert!(
+            evidence["state"]["databases"][database]
+                .as_str()
+                .is_some_and(|name| !name.is_empty()),
+            "missing {database} database name: {evidence}"
+        );
+    }
     assert_u64_field(intent, "id", bot["intent_id"].as_u64().unwrap());
     assert_u64_field(intent, "bot_guid", bot["guid"].as_u64().unwrap());
     assert_u64_field(
@@ -504,6 +552,9 @@ fn assert_crossing_identity(evidence: &serde_json::Value, position: usize) {
 fn assert_locator(evidence: &serde_json::Value, position: usize) {
     let intent = row(evidence, &["state", "source", "intent"]);
     let locator = row(evidence, &["state", "realm", "locator"]);
+    let source_revision = text_field(intent, "source_locator_revision")
+        .parse::<u64>()
+        .unwrap();
     if position == 0 {
         assert_eq!(locator["transfer_pending"], "false", "{evidence}");
         assert_eq!(locator["map_id"], intent["source_map"], "{evidence}");
@@ -530,6 +581,7 @@ fn assert_locator(evidence: &serde_json::Value, position: usize) {
             locator["pending_destination_instance"], intent["destination_instance"],
             "{evidence}"
         );
+        assert_u64_field(locator, "revision", source_revision);
     } else {
         assert_eq!(locator["transfer_pending"], "false", "{evidence}");
         assert_eq!(locator["map_id"], DESTINATION_MAP.to_string(), "{evidence}");
@@ -538,6 +590,15 @@ fn assert_locator(evidence: &serde_json::Value, position: usize) {
             DESTINATION_INSTANCE.to_string(),
             "{evidence}"
         );
+        assert_u64_field(
+            locator,
+            "revision",
+            source_revision
+                .checked_add(1)
+                .expect("fixture revision exhausted"),
+        );
+        assert_eq!(locator["pending_destination_map"], "0", "{evidence}");
+        assert_eq!(locator["pending_destination_instance"], "0", "{evidence}");
     }
     if position > 0 {
         assert_eq!(
@@ -556,6 +617,9 @@ fn assert_locator(evidence: &serde_json::Value, position: usize) {
 }
 
 fn assert_party_mirror(evidence: &serde_json::Value) {
+    let bot = &evidence["state"]["bot"];
+    let bot_guid = bot["guid"].as_u64().unwrap();
+    let leader_guid = bot["leader_guid"].as_u64().unwrap();
     assert_same_fields(
         row(evidence, &["state", "destination", "group"]),
         row(evidence, &["state", "realm", "group"]),
@@ -597,6 +661,26 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
         ),
         "{evidence}"
     );
+    let realm_group = row(evidence, &["state", "realm", "group"]);
+    assert_u64_field(realm_group, "group_id", GROUP);
+    assert_u64_field(realm_group, "leader_guid", leader_guid);
+    let members = sorted_rows(evidence, &["state", "realm", "members"], "character_guid");
+    let mut member_guids: Vec<_> = members
+        .iter()
+        .map(|member| text_field(member, "character_guid").parse::<u64>().unwrap())
+        .collect();
+    member_guids.sort_unstable();
+    let mut expected_guids = vec![bot_guid, leader_guid];
+    expected_guids.sort_unstable();
+    assert_eq!(member_guids, expected_guids, "{evidence}");
+    for partition in rows(evidence, &["state", "realm", "partitions"]) {
+        let guid = text_field(partition, "character_guid")
+            .parse::<u64>()
+            .unwrap();
+        assert!(expected_guids.contains(&guid), "{evidence}");
+        assert_u64_field(partition, "map_id", u64::from(DESTINATION_MAP));
+        assert_u64_field(partition, "instance_id", DESTINATION_INSTANCE);
+    }
 }
 
 fn assert_gameplay_fences(evidence: &serde_json::Value, position: usize) {
@@ -612,7 +696,14 @@ fn assert_gameplay_fences(evidence: &serde_json::Value, position: usize) {
             );
         }
     }
-    if (2..10).contains(&position) {
+    if position >= 10 {
+        assert_eq!(
+            rows(evidence, &["state", "destination", "live"]).len(),
+            1,
+            "release did not materialize the destination body: {evidence}"
+        );
+    }
+    if position >= 2 {
         for table in ["runner", "actions", "movement", "pending_cast", "melee"] {
             assert!(
                 rows(evidence, &["state", "source", table]).is_empty(),
@@ -773,6 +864,7 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
         "playerbots_transfer_gateway_mirror_fault",
         &["true", &bot.guid.to_string(), &bot.leader_guid.to_string()],
     );
+    let faulted = topology.save(&bot, "mirror-fault-staged", serde_json::json!({}));
     let mut interrupted = topology.gateway(None, "mirror-interrupted");
     let attempted = support::poll_until(support::POLL_TIMEOUT, || {
         let log = interrupted.log();
@@ -786,6 +878,13 @@ fn playerbots_gateway_restart_repairs_the_party_mirror_before_arrival_release() 
     );
     interrupted.stop();
     assert!(attempted, "mirror failure was not observed: {failed}");
+    for table in ["group", "roster", "members", "partitions"] {
+        assert_eq!(
+            rows(&faulted, &["state", "destination", table]),
+            rows(&failed, &["state", "destination", table]),
+            "failed mirror changed destination {table}: {failed}"
+        );
+    }
     assert_crossing_identity(&failed, 7);
     assert_locator(&failed, 7);
     assert_gameplay_fences(&failed, 8);
