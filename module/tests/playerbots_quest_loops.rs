@@ -170,6 +170,14 @@ fn turnin_count(node: &Standalone, guid: &str, quest: u32) -> u16 {
     .map_or(0, |row| row["turnin_count"].parse().unwrap())
 }
 
+fn loot_receipt(node: &Standalone, guid: &str) -> Option<BTreeMap<String, String>> {
+    node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_loot_receipt_fixture WHERE character_guid = {guid}"
+    ))
+    .into_iter()
+    .next()
+}
+
 fn structured_number(value: &str, field: &str) -> String {
     let marker = format!("{field} = ");
     value
@@ -371,7 +379,9 @@ fn record(node: &Standalone, suffix: &str) {
         "admission": node.query_rows("SELECT * FROM pkg_playerbots_quest_admission"),
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "turnins": node.query_rows("SELECT * FROM pkg_playerbots_quest_turnin_fixture"),
+        "loot_receipts": node.query_rows("SELECT * FROM pkg_playerbots_quest_loot_receipt_fixture"),
         "quests": node.query_rows("SELECT * FROM game_character_quest"),
+        "quest_objectives": node.query_rows("SELECT * FROM game_quest_objective"),
         "entities": node.query_rows("SELECT * FROM game_world_entity WHERE entry = 6 OR entry = 69 OR entry = 299"),
         "items": node.query_rows("SELECT * FROM game_item_instance"),
         "loot": node.query_rows("SELECT * FROM game_corpse_loot"),
@@ -482,17 +492,22 @@ fn playerbots_autonomous_talk_kill_and_collect_loops_run_for_all_starter_classes
                 rewarded(node, &guid, 5261)
             });
             drive_until(&node, &guid, LOOP_TIMEOUT, |node| {
-                item_count(node, &guid, 750) == 8
+                turnin_count(node, &guid, 33) == 1
             });
-            assert_eq!(item_count(&node, &guid, 750), 8);
-            assert!(
-                node.query_rows(&format!(
-                    "SELECT * FROM game_corpse_loot_eligible WHERE eligible_guid = {guid}"
-                ))
-                .len()
-                    >= 1
+            record(&node, "mage-collect-reward");
+            let receipt = loot_receipt(&node, &guid).expect("Mage loot receipt is absent");
+            let objective = query_one(
+                &node,
+                "SELECT kind, target_entry, required_count FROM game_quest_objective WHERE quest_entry = 33 AND obj_index = 0",
             );
-            drive_until(&node, &guid, LOOP_TIMEOUT, |node| rewarded(node, &guid, 33));
+            assert_eq!(objective["kind"], "1");
+            assert_eq!(objective["target_entry"], "750");
+            assert_eq!(objective["required_count"], "8");
+            assert_eq!(receipt["item_entry"], "750");
+            assert_eq!(receipt["received_count"], "8");
+            assert_eq!(receipt["peak_carried_count"], "8");
+            assert_ne!(receipt["last_source_guid"], "0");
+            assert!(rewarded(&node, &guid, 33));
             assert_eq!(item_count(&node, &guid, 750), 0);
             let collect_actions = actions(&node, &guid);
             assert!(collect_actions
@@ -789,11 +804,6 @@ fn playerbots_survival_preempts_an_unavailable_quest_rotation() {
         &node,
         &format!("SELECT health, dead FROM game_world_entity WHERE guid = {guid}"),
     );
-    assert!(
-        after_hit["health"].parse::<u32>().unwrap() < before_hit["health"].parse::<u32>().unwrap(),
-        "incoming combat did not change authoritative health"
-    );
-    assert_eq!(after_hit["dead"], "false");
     let runner = query_one(
         &node,
         &format!(
@@ -815,6 +825,11 @@ fn playerbots_survival_preempts_an_unavailable_quest_rotation() {
         .unwrap(),
     )
     .unwrap();
+    assert!(
+        after_hit["health"].parse::<u32>().unwrap() < before_hit["health"].parse::<u32>().unwrap(),
+        "incoming combat did not change authoritative health"
+    );
+    assert_eq!(after_hit["dead"], "false");
     assert!(runner["chosen"].contains("survival"), "{runner:?}");
     assert!(runner["failures"].contains("questReadLimit"), "{runner:?}");
     assert_eq!(
