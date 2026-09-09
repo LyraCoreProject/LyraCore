@@ -194,6 +194,11 @@ pub trait WorldStore:
         Ok(self.realm_store())
     }
 
+    /// Realm-core for companion command authority. Configured outages fail closed.
+    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        Ok(self.realm_store())
+    }
+
     /// Every connected WORLD shard's handle (realm-core excluded — it owns no gameplay reads). The
     /// fan-out set for the roster mirror; empty on a single-database gateway, which is what makes the
     /// mirror push a no-op there.
@@ -204,6 +209,56 @@ pub trait WorldStore:
     /// Admit and claim one Group Intent against current World Shard state. Refusals include a
     /// consumed intent or suppressed action. Transport failures remain distinct.
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<party::PartyOutcome>;
+
+    fn claim_party_command_intent(&self, _intent_id: u64, _claim_token: u64) -> Result<()> {
+        Err(anyhow!(
+            "this store does not host companion command intents"
+        ))
+    }
+
+    fn admit_party_command_authority(
+        &self,
+        _group_id: u64,
+        _leader_guid: u64,
+        _bot_guid: u64,
+        _authority_member_guid: u64,
+    ) -> Result<party::CompanionCommandOutcome> {
+        Err(anyhow!(
+            "this store does not host realm-wide party authority"
+        ))
+    }
+
+    fn apply_admitted_party_command(
+        &self,
+        _command: &party::AdmittedCompanionCommand,
+    ) -> Result<party::CompanionCommandOutcome> {
+        Err(anyhow!(
+            "this store does not host companion command application"
+        ))
+    }
+
+    fn finish_party_command_intent(
+        &self,
+        _intent_id: u64,
+        _claim_token: u64,
+        _outcome: party::CompanionCommandOutcome,
+    ) -> Result<()> {
+        Err(anyhow!(
+            "this store does not host companion command intents"
+        ))
+    }
+
+    fn party_command_receipt(
+        &self,
+        _source_identity: spacetimedb_sdk::Identity,
+        _intent_id: u64,
+    ) -> Option<party::CompanionCommandOutcome> {
+        None
+    }
+
+    fn entity_partition(&self, _guid: u64) -> Option<(u32, u64)> {
+        None
+    }
 
     /// Acknowledged World Shard admission for one automatic group action. A later controller
     /// selection cannot undo admission or membership already committed on Realm-core.

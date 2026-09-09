@@ -238,6 +238,13 @@ macro_rules! game_hook {
     };
 }
 
+/// Installs the one Package-owned parser and admitted apply operation for addon client commands.
+/// Core authenticates the issuer and Gateway certifies realm-wide party authority before apply.
+#[macro_export]
+macro_rules! game_client_command {
+    ($parse:ident, $apply:ident) => {};
+}
+
 /// Installs one package as the sole authority for a map-scoped encounter binding. `build.rs`
 /// rejects duplicate bindings, and the generated registry keeps routing out of core code.
 #[macro_export]

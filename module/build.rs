@@ -26,11 +26,12 @@
 //! - `package_mods.rs` — one `#[path = ...] pub mod pkg_<name>;` per discovered package, so a
 //!   folder dropped into `packages/` compiles into the module wasm with ZERO core-file edits.
 //!   A package = `packages/<name>/src/mod.rs` (+ sibling submodule files).
-//! - `package_registries.rs` — from `game_tick_pass!`, `game_hook!`, and
-//!   `encounter_package!` markers:
+//! - `package_registries.rs` — from `game_tick_pass!`, `game_hook!`,
+//!   `game_client_command!`, and `encounter_package!` markers:
 //!   `GAME_TICK_PASSES` (periodic passes run by the core scheduler tick) and one
 //!   `GAME_HOOKS_<EVENT>` array per known notify-hook event, dispatched at the core chokepoints
-//!   (see `src/hooks.rs`), plus the map-scoped encounter authority registry.
+//!   (see `src/hooks.rs`), the optional Package client-command handler, and the map-scoped
+//!   encounter authority registry.
 //! - `hook_dispatch.rs` — from `HOOK_EVENTS` below: the `payload_for` alias mod
 //!   and one `fire_*` fn per event, included INSIDE `src/hooks.rs` so the paths every chokepoint
 //!   already uses (`hooks::fire_*`, `hooks::payload_for::*`) are unchanged. This is what keeps the
@@ -503,6 +504,9 @@ fn main() {
     registries
         .encounter_packages
         .sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    if registries.client_commands.len() > 1 {
+        panic!("build.rs: more than one installed package registered `game_client_command!`");
+    }
     for duplicate in registries.encounter_packages.windows(2) {
         if duplicate[0].0 == duplicate[1].0 {
             panic!(
@@ -560,6 +564,14 @@ fn main() {
         out.push_str(&format!("    \"{binding}\",\n"));
     }
     out.push_str("];\n");
+    match registries.client_commands.first() {
+        Some((parse, apply)) => out.push_str(&format!(
+            "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = Some(crate::bridge::ClientCommandHandler {{ parse: {parse}, apply: {apply} }});\n"
+        )),
+        None => out.push_str(
+            "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = None;\n",
+        ),
+    }
     // Every event name, as plain strings a NATIVE test binary can read without materializing the
     // fn-pointer arrays above — the same reason `CHARACTER_OWNED_TRANSFER_NAMES` exists. This is
     // what `script_binding.rs` asserts the Package Delta crate's mirror of the catalog against.
@@ -623,6 +635,7 @@ struct Registries {
     tick_passes: Vec<String>,
     hooks: Vec<(String, String)>, // (event, fully-qualified fn path)
     encounter_packages: Vec<(String, String)>, // (binding variant, fully-qualified fn path)
+    client_commands: Vec<(String, String)>, // (parser path, admitted apply path)
 }
 
 /// The table accessor a transport arm's fully-qualified fn path names: the same
@@ -1022,6 +1035,28 @@ fn try_match_hook(head: &str) -> Option<(String, String)> {
     Some((event, name))
 }
 
+fn try_match_client_command(head: &str) -> Option<(String, String)> {
+    let rest = head.strip_prefix('(')?.trim_start();
+    let parse_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+    if parse_end == 0 {
+        return None;
+    }
+    let parse = rest[..parse_end].to_string();
+    let rest = rest[parse_end..]
+        .trim_start()
+        .strip_prefix(',')?
+        .trim_start();
+    let apply_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+    if apply_end == 0 {
+        return None;
+    }
+    let apply = rest[..apply_end].to_string();
+    rest[apply_end..]
+        .trim_start()
+        .starts_with(')')
+        .then_some((parse, apply))
+}
+
 /// `encounter_package!` head: `(BINDING, fn NAME(...` — package files only.
 fn try_match_encounter_package(head: &str) -> Option<(String, String)> {
     let rest = head.strip_prefix('(')?.trim_start();
@@ -1053,7 +1088,7 @@ fn match_fn_name(rest: &str) -> Option<String> {
     }
 }
 
-/// Scan one file for all four marker kinds, registering each hit under `prefix` (the file's
+/// Scan one file for every marker kind, registering each hit under `prefix` (the file's
 /// collapsed crate path). The scan runs on the comment/string-stripped text, so quoted or
 /// commented-out marker syntax is inert; on real code, any occurrence of a marker's literal
 /// substring that doesn't parse panics — never skip silently. Every registered marker in a nested
@@ -1157,6 +1192,27 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
             ),
         },
     );
+
+    scan_marker(&content, file, "game_client_command!", |head, line| {
+        match try_match_client_command(head) {
+            Some((parse, apply)) => {
+                if !in_package {
+                    panic!(
+                        "build.rs: `game_client_command!` in {}:{line} is core code; command meaning belongs to a Package",
+                        file.display()
+                    );
+                }
+                check_facade_reexport(file, scan_root, in_package, &parse);
+                check_facade_reexport(file, scan_root, in_package, &apply);
+                reg.client_commands
+                    .push((format!("{prefix}::{parse}"), format!("{prefix}::{apply}")));
+            }
+            None => panic!(
+                "build.rs: malformed `game_client_command!` marker in {}:{line} — expected `game_client_command!(PARSE, APPLY)`",
+                file.display()
+            ),
+        }
+    });
 
     scan_marker(
         &content,
@@ -1788,6 +1844,21 @@ mod package_api_lint_tests {
         let string = "const NOTE: &str = \"#![cfg(feature = \\\"debug_reducers\\\")]\";\n";
         assert!(registry_file_enabled(comment, false));
         assert!(registry_file_enabled(string, false));
+    }
+
+    #[test]
+    fn client_command_marker_names_one_parser_and_apply_operation() {
+        assert_eq!(
+            try_match_client_command("(parse_order, apply_order);"),
+            Some(("parse_order".to_string(), "apply_order".to_string()))
+        );
+        assert_eq!(try_match_client_command("(parse_order);"), None);
+        assert_eq!(try_match_client_command("(, apply_order);"), None);
+        assert_eq!(try_match_client_command("(parse_order, );"), None);
+        assert_eq!(
+            try_match_client_command("(parse_order, apply_order, extra);"),
+            None
+        );
     }
 
     fn reported(source: &str) -> Vec<String> {

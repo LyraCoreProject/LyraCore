@@ -3367,6 +3367,65 @@ fn append_item_armor_and_sheet(db: &RemoteTables, self_guid: u64, out: &mut Vec<
     }
 }
 impl Coordinator {
+    pub fn spawn_party_command_relay(&self) {
+        for shard in self.all_shards() {
+            shard.arm_party_command_relay();
+            let polling_shard = shard.clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("party-command-scan".into())
+                .spawn(move || loop {
+                    std::thread::sleep(Duration::from_millis(500));
+                    polling_shard.scan_party_command_intents();
+                })
+            {
+                log::error!("could not start party command scan: {error}");
+            }
+            let hook_shard = shard.clone();
+            shard
+                .0
+                .on_reconnect
+                .lock()
+                .unwrap()
+                .push(Arc::new(move || hook_shard.arm_party_command_relay()));
+        }
+    }
+
+    fn arm_party_command_relay(&self) {
+        let store = self.clone();
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_party_command_intent()
+            .on_insert(move |_ctx, row| {
+                spawn_party_command_attempt(store.clone(), party_command_intent(row));
+            });
+        self.scan_party_command_intents();
+    }
+
+    fn scan_party_command_intents(&self) {
+        const PENDING_LIMIT: usize = 256;
+        let pending: Vec<_> = self
+            .0
+            .coord()
+            .conn
+            .db
+            .game_party_command_intent()
+            .by_pending()
+            .filter(true)
+            .take(PENDING_LIMIT + 1)
+            .map(party_command_intent)
+            .collect();
+        if pending.len() > PENDING_LIMIT {
+            log::warn!(
+                "party command scan reached its {PENDING_LIMIT}-row read limit; remaining intents retain their source expiry"
+            );
+        }
+        for intent in pending.into_iter().take(PENDING_LIMIT) {
+            spawn_party_command_attempt(self.clone(), intent);
+        }
+    }
+
     /// Prepare and register one live viewer. Row callbacks are already armed once per shard in
     /// `world_view::arm_shard`; this method registers no callback of its own.
     pub fn subscribe_player_events(
@@ -3582,6 +3641,93 @@ impl Coordinator {
             view: Some(view),
         })
     }
+}
+
+fn party_command_intent(row: &PartyCommandIntent) -> crate::world::party::PartyCommandIntent {
+    crate::world::party::PartyCommandIntent {
+        id: row.id,
+        source_identity: row.source_identity,
+        issuer_guid: row.issuer_guid,
+        kind: row.command.kind,
+        bot_guid: row.command.bot_guid,
+        authority_member_guid: row.command.authority_member_guid,
+        exact_target_guid: row.command.exact_target_guid,
+        expires_micros: row.expires_micros,
+    }
+}
+
+fn spawn_party_command_attempt(
+    store: Coordinator,
+    intent: crate::world::party::PartyCommandIntent,
+) {
+    let key = (intent.source_identity.to_string(), intent.id);
+    let in_flight = party_commands_in_flight();
+    if !in_flight.lock().unwrap().insert(key.clone()) {
+        return;
+    }
+    let worker_key = key.clone();
+    let spawned = std::thread::Builder::new()
+        .name("party-command-intent".into())
+        .spawn(move || {
+            let claim_token = next_party_command_claim_token();
+            loop {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as i64;
+                if now >= intent.expires_micros {
+                    if let Err(error) = crate::world::party::finish_expired_party_command_intent(
+                        &store,
+                        &intent,
+                        claim_token,
+                    ) {
+                        log::debug!("party command intent {} expiry retry: {error}", intent.id);
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    break;
+                }
+                match crate::world::party::run_party_command_intent(&store, &intent, claim_token) {
+                    Ok(crate::world::party::CompanionCommandOutcome::WaitingForCapacity) => {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Ok(_) => break,
+                    Err(error) => {
+                        log::debug!("party command intent {} retry: {error}", intent.id);
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            }
+            party_commands_in_flight()
+                .lock()
+                .unwrap()
+                .remove(&worker_key);
+        });
+    if let Err(error) = spawned {
+        in_flight.lock().unwrap().remove(&key);
+        log::error!(
+            "could not start party command intent {}: {error}",
+            intent.id
+        );
+    }
+}
+
+fn party_commands_in_flight() -> &'static std::sync::Mutex<std::collections::HashSet<(String, u64)>>
+{
+    static IN_FLIGHT: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashSet<(String, u64)>>,
+    > = std::sync::OnceLock::new();
+    IN_FLIGHT.get_or_init(Default::default)
+}
+
+fn next_party_command_claim_token() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    (time ^ NEXT.fetch_add(1, Ordering::Relaxed)).max(1)
 }
 
 impl Coordinator {
@@ -7247,3 +7393,7 @@ mod tests {
 #[cfg(test)]
 #[path = "subscriptions_character_gone_durable_tests.rs"]
 mod character_gone_durable_tests;
+
+#[cfg(test)]
+#[path = "subscriptions_party_command_durable_tests.rs"]
+mod party_command_durable_tests;

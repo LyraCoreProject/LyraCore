@@ -146,6 +146,9 @@ package_only! {
     pub(crate) use crate::quest::apply_turn_in_quest as turn_in_quest;
     pub(crate) use crate::quest::request_turn_in_quest as request_turn_in_quest;
 }
+
+#[cfg(all(has_packages, feature = "debug_reducers"))]
+pub(crate) use crate::bridge::playerbots_fixture_command_drive as fixture_command_drive;
 debug_only! { pub(crate) use crate::quest::grant_quest_unchecked as stage_quest; }
 
 // ---- loot / inventory / vendor ----
@@ -195,6 +198,8 @@ package_only! {
     pub(crate) use crate::group::accept_invite_for as accept_group_invite;
     pub(crate) use crate::sessionless::set_sessionless_action_consent as set_sessionless_action_consent;
     pub(crate) use crate::sessionless::action_gate as sessionless_action_gate;
+    pub(crate) use crate::group::companion_target_facts;
+    pub(crate) use crate::bridge::{AdmittedClientCommand, CommandOutcome, ParsedClientCommand};
 }
 
 /// A Refusal classified at the operation's Gate. Detail preserves existing client messages.

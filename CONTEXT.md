@@ -215,6 +215,16 @@ Tactical interruption does not replace the objective. A companion in a human-led
 leader identity while refreshing the destination from current party facts; that refresh does not
 replace a retained cast or its identity.
 
+**Companion Order**:
+An authenticated human leader's retained Follow, Stay, Assist, or Target instruction for one bot.
+Realm-core certifies party authority before the bot's World Shard applies it. The order directs the
+existing Bot Controller and does not form a second runner.
+
+**Command Receipt**:
+The target World Shard's durable result for one source Module Identity and intent id. It survives
+the complete command retry window so a Gateway retry can finish the source response without
+applying the Companion Order twice.
+
 **Foreground Action**:
 The single movement or cast retained by one Bot Controller generation.
 

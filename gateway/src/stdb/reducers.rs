@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::bindings::*;
 use super::connection::{call_reducer, recv_reducer_on, reducer_refusal_reason, Coordinator};
 use super::views::entity_view;
-use crate::world::party::PartyOutcome;
+use crate::world::party::{AdmittedCompanionCommand, CompanionCommandOutcome, PartyOutcome};
 use crate::world::{
     ContactOutcome, ItemActionResult, LootActionStatus, LootWindowRefusal, LootWindowRequestStatus,
 };
@@ -55,6 +55,107 @@ fn taxi_reply_matches(
 }
 
 impl Coordinator {
+    pub fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "claim_party_command_intent",
+            claim_party_command_intent_then(intent_id, claim_token)
+        )
+    }
+
+    pub fn admit_party_command_authority(
+        &self,
+        group_id: u64,
+        leader_guid: u64,
+        bot_guid: u64,
+        authority_member_guid: u64,
+    ) -> Result<CompanionCommandOutcome> {
+        match call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "admit_party_command_authority",
+            admit_party_command_authority_then(
+                group_id,
+                leader_guid,
+                bot_guid,
+                authority_member_guid
+            )
+        ) {
+            Ok(()) => Ok(CompanionCommandOutcome::Applied),
+            Err(error) => command_refusal(&error).ok_or(error),
+        }
+    }
+
+    pub fn apply_admitted_party_command(
+        &self,
+        command: &AdmittedCompanionCommand,
+    ) -> Result<CompanionCommandOutcome> {
+        let applied = call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "apply_admitted_party_command",
+            apply_admitted_party_command_then(
+                command.source_identity,
+                command.intent_id,
+                command.issuer_guid,
+                command.group_id,
+                command.leader_guid,
+                command.members.clone(),
+                command.kind,
+                command.bot_guid,
+                command.authority_member_guid,
+                command.exact_target_guid,
+                command.expires_micros,
+                command.receipt_retain_until_micros
+            )
+        );
+        if let Err(error) = applied {
+            return command_refusal(&error).ok_or(error);
+        }
+        for _ in 0..100 {
+            if let Some(outcome) =
+                self.party_command_receipt(command.source_identity, command.intent_id)
+            {
+                return Ok(outcome);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Err(anyhow!(
+            "party command receipt did not enter the Coordinator cache"
+        ))
+    }
+
+    pub fn finish_party_command_intent(
+        &self,
+        intent_id: u64,
+        claim_token: u64,
+        outcome: CompanionCommandOutcome,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "finish_party_command_intent",
+            finish_party_command_intent_then(
+                intent_id,
+                claim_token,
+                command_outcome_binding(outcome)
+            )
+        )
+    }
+
+    pub fn party_command_receipt(
+        &self,
+        source_identity: Identity,
+        intent_id: u64,
+    ) -> Option<CompanionCommandOutcome> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_party_command_receipt()
+            .by_source_intent()
+            .filter((source_identity, intent_id))
+            .next()
+            .map(|row| command_outcome(row.outcome))
+    }
+
     /// Claim and admit a Group Intent in one World Shard transaction.
     pub fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<PartyOutcome> {
         party_outcome(call_reducer!(
@@ -3387,6 +3488,70 @@ fn resolved_item_actor(operation: &str, actor_guid: u64) -> Option<u64> {
 /// transport, or SDK failure stays an error with an unknown outcome.
 fn group_refusal(error: &anyhow::Error) -> Option<GroupRefusal> {
     reducer_refusal_reason(error).and_then(GroupRefusal::parse_tag)
+}
+
+fn command_refusal(error: &anyhow::Error) -> Option<CompanionCommandOutcome> {
+    let tag = reducer_refusal_reason(error)?;
+    Some(match tag {
+        "Applied" => CompanionCommandOutcome::Applied,
+        "Unchanged" => CompanionCommandOutcome::Unchanged,
+        "Malformed" => CompanionCommandOutcome::Malformed,
+        "NotLeader" => CompanionCommandOutcome::NotLeader,
+        "NotMember" => CompanionCommandOutcome::NotMember,
+        "StalePartyMirror" => CompanionCommandOutcome::StalePartyMirror,
+        "WrongAccount" => CompanionCommandOutcome::WrongAccount,
+        "MissingBot" => CompanionCommandOutcome::MissingBot,
+        "WrongPartition" => CompanionCommandOutcome::WrongPartition,
+        "Suppressed" => CompanionCommandOutcome::Suppressed,
+        "TargetDead" => CompanionCommandOutcome::TargetDead,
+        "TargetUnavailable" => CompanionCommandOutcome::TargetUnavailable,
+        "TargetControlled" => CompanionCommandOutcome::TargetControlled,
+        "Expired" => CompanionCommandOutcome::Expired,
+        "WaitingForCapacity" => CompanionCommandOutcome::WaitingForCapacity,
+        _ => return None,
+    })
+}
+
+fn command_outcome(row: super::bindings::CommandOutcome) -> CompanionCommandOutcome {
+    use super::bindings::CommandOutcome as Row;
+    match row {
+        Row::Applied => CompanionCommandOutcome::Applied,
+        Row::Unchanged => CompanionCommandOutcome::Unchanged,
+        Row::Malformed => CompanionCommandOutcome::Malformed,
+        Row::NotLeader => CompanionCommandOutcome::NotLeader,
+        Row::NotMember => CompanionCommandOutcome::NotMember,
+        Row::StalePartyMirror => CompanionCommandOutcome::StalePartyMirror,
+        Row::WrongAccount => CompanionCommandOutcome::WrongAccount,
+        Row::MissingBot => CompanionCommandOutcome::MissingBot,
+        Row::WrongPartition => CompanionCommandOutcome::WrongPartition,
+        Row::Suppressed => CompanionCommandOutcome::Suppressed,
+        Row::TargetDead => CompanionCommandOutcome::TargetDead,
+        Row::TargetUnavailable => CompanionCommandOutcome::TargetUnavailable,
+        Row::TargetControlled => CompanionCommandOutcome::TargetControlled,
+        Row::Expired => CompanionCommandOutcome::Expired,
+        Row::WaitingForCapacity => CompanionCommandOutcome::WaitingForCapacity,
+    }
+}
+
+fn command_outcome_binding(outcome: CompanionCommandOutcome) -> super::bindings::CommandOutcome {
+    use super::bindings::CommandOutcome as Row;
+    match outcome {
+        CompanionCommandOutcome::Applied => Row::Applied,
+        CompanionCommandOutcome::Unchanged => Row::Unchanged,
+        CompanionCommandOutcome::Malformed => Row::Malformed,
+        CompanionCommandOutcome::NotLeader => Row::NotLeader,
+        CompanionCommandOutcome::NotMember => Row::NotMember,
+        CompanionCommandOutcome::StalePartyMirror => Row::StalePartyMirror,
+        CompanionCommandOutcome::WrongAccount => Row::WrongAccount,
+        CompanionCommandOutcome::MissingBot => Row::MissingBot,
+        CompanionCommandOutcome::WrongPartition => Row::WrongPartition,
+        CompanionCommandOutcome::Suppressed => Row::Suppressed,
+        CompanionCommandOutcome::TargetDead => Row::TargetDead,
+        CompanionCommandOutcome::TargetUnavailable => Row::TargetUnavailable,
+        CompanionCommandOutcome::TargetControlled => Row::TargetControlled,
+        CompanionCommandOutcome::Expired => Row::Expired,
+        CompanionCommandOutcome::WaitingForCapacity => Row::WaitingForCapacity,
+    }
 }
 
 /// A refused party reducer is an outcome the client renders; anything else ends the session.

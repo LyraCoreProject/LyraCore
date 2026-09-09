@@ -1061,6 +1061,14 @@ impl WorldStore for Coordinator {
             .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
     }
 
+    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if !self.is_sharded() {
+            return Ok(None);
+        }
+        self.realm_core()
+            .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
+    }
+
     /// Every connected WORLD shard (realm-core excluded by `ShardMap::shards`, as always) — the
     /// mirror fan-out set. Empty when unsharded, so the push costs a single-database gateway nothing.
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
@@ -1075,6 +1083,61 @@ impl WorldStore for Coordinator {
 
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<crate::world::party::PartyOutcome> {
         self.claim_bot_invite_intent(intent_id)
+    }
+
+    fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
+        Coordinator::claim_party_command_intent(self, intent_id, claim_token)
+    }
+
+    fn admit_party_command_authority(
+        &self,
+        group_id: u64,
+        leader_guid: u64,
+        bot_guid: u64,
+        authority_member_guid: u64,
+    ) -> Result<crate::world::party::CompanionCommandOutcome> {
+        Coordinator::admit_party_command_authority(
+            self,
+            group_id,
+            leader_guid,
+            bot_guid,
+            authority_member_guid,
+        )
+    }
+
+    fn apply_admitted_party_command(
+        &self,
+        command: &crate::world::party::AdmittedCompanionCommand,
+    ) -> Result<crate::world::party::CompanionCommandOutcome> {
+        Coordinator::apply_admitted_party_command(self, command)
+    }
+
+    fn finish_party_command_intent(
+        &self,
+        intent_id: u64,
+        claim_token: u64,
+        outcome: crate::world::party::CompanionCommandOutcome,
+    ) -> Result<()> {
+        Coordinator::finish_party_command_intent(self, intent_id, claim_token, outcome)
+    }
+
+    fn party_command_receipt(
+        &self,
+        source_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+    ) -> Option<crate::world::party::CompanionCommandOutcome> {
+        Coordinator::party_command_receipt(self, source_identity, intent_id)
+    }
+
+    fn entity_partition(&self, guid: u64) -> Option<(u32, u64)> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_world_entity()
+            .guid()
+            .find(guid)
+            .map(|entity| (entity.map_id, entity.instance_id))
     }
 
     fn admit_sessionless_group_action(

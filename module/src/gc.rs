@@ -11,6 +11,7 @@ use crate::{
     game_spell_impact_event, game_system_message_event, game_teleport_event, game_trade_event,
     game_trade_session, game_whisper_event, game_xp_event, EVENT_TTL_MICROS, INVITE_TTL_MICROS,
 };
+use crate::{game_party_command_intent, game_party_command_receipt};
 // `rest` isn't re-exported at crate scope (`mod rest;`, no `pub use rest::*;` in lib.rs) — every
 // other event table's accessor trait rides that glob, so this is the one accessor here needing its
 // own import.
@@ -155,6 +156,32 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
         for id in stale {
             t.id().delete(id);
         }
+    }
+
+    // Gateway reconciles an expired pending command against every target receipt before recording
+    // its result. Core therefore reaps only terminal source rows here. Both indexed drains are
+    // bounded so an outage cannot turn recovery into one unbounded transaction.
+    const COMMAND_REAP_LIMIT: usize = 64;
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let intents = ctx.db.game_party_command_intent();
+    for intent in intents
+        .by_result_reap()
+        .filter(..=now)
+        .take(COMMAND_REAP_LIMIT)
+        .collect::<Vec<_>>()
+    {
+        if matches!(intent.state, crate::bridge::CommandIntentState::Finished(_)) {
+            intents.id().delete(intent.id);
+        }
+    }
+    let receipts = ctx.db.game_party_command_receipt();
+    for receipt in receipts
+        .by_retention()
+        .filter(..=now)
+        .take(COMMAND_REAP_LIMIT)
+        .collect::<Vec<_>>()
+    {
+        receipts.id().delete(receipt.id);
     }
 
     // Player corpses: unreclaimed body → bones → despawn, on its own decay policy (own the bones,

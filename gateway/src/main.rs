@@ -118,6 +118,7 @@ async fn run() -> Result<()> {
     // player connection to ride, so it is picked up here — on the coordinator, independent of any
     // session — rather than from a per-player relay.
     coordinator.spawn_bot_invite_relay();
+    coordinator.spawn_party_command_relay();
 
     // Session-less Shard crossings, armed here for the same reason: a bot following its party
     // through a portal has no loading screen for the escrowed transfer to run inside.

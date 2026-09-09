@@ -416,3 +416,46 @@ fn a_malformed_addon_envelope_is_dropped_and_the_session_keeps_serving() {
         .unwrap()
         .expect("a dropped addon frame must leave the session ending cleanly");
 }
+
+#[test]
+fn an_authenticated_stc_order_uses_the_logged_in_actor_and_keeps_the_session_live() {
+    let store = std::sync::Arc::new(InMemoryStore {
+        login_entity: Some(warrior_entity()),
+        ..tester_store(42)
+    });
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store.clone(), 1);
+
+    for sequence in ["same", "changed"] {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&codec::addon::LANG_ADDON.to_le_bytes());
+        body.extend_from_slice(
+            format!("STC\tv1|playerbots.order|{sequence}|1/1|follow|77\0").as_bytes(),
+        );
+        c_enc
+            .write_encrypted_client_header(
+                &mut client,
+                4 + body.len() as u16,
+                codec::addon::CMSG_MESSAGECHAT_OPCODE,
+            )
+            .unwrap();
+        client.write_all(&body).unwrap();
+    }
+
+    CMSG_CHAR_ENUM {}
+        .write_encrypted_client(&mut client, &mut c_enc)
+        .unwrap();
+    assert!(matches!(
+        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap(),
+        ServerOpcodeMessage::SMSG_CHAR_ENUM(_)
+    ));
+    assert_eq!(
+        *store.client_commands.lock().unwrap(),
+        vec![
+            (42, 1, "playerbots.order".into(), "follow|77".into()),
+            (42, 1, "playerbots.order".into(), "follow|77".into()),
+        ]
+    );
+    drop(client);
+    server.join().unwrap();
+}

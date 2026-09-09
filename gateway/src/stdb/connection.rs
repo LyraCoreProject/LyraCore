@@ -875,6 +875,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // published, or `connect_blocking`'s subscription fails to apply (`coordinator_queries`'s own
         // doc comment).
         "SELECT * FROM game_bot_invite_intent",
+        "SELECT * FROM game_party_command_intent",
+        "SELECT * FROM game_party_command_receipt",
         // Bot-initiated Shard crossings, here for every reason the invite intent above is: a bot has
         // no session, so no other connection could see the row, and it rides the BASE list because a
         // single-database realm writes the same rows (the relay finds nothing to cross there and
