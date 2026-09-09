@@ -224,6 +224,13 @@ A proposed action identified by its action, target, spell, reason, and Bot Objec
 **Strategy**:
 A composition of typed triggers, defaults, and integer priorities used to select Candidates.
 
+**Recovery Attempt**:
+The bounded attempt to make useful progress on one destination, fight target, heal target, buff,
+quest interaction, or companion leader in the current partition. Positioning and casting retain
+their useful purpose. Only observed gameplay progress clears its elapsed failure time. A failed
+attempt changes approach and then defers that work for a bounded period. Four attempts fit in the
+retained memory, with at most three ordinary attempts so healing can still start.
+
 **Recovery Scan**:
 A bounded scan of healing rotations that retains its last completed result while reading the next
 batch. The scan can be pending or complete; its result distinguishes unread, missing, and a selected
