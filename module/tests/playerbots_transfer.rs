@@ -12,6 +12,7 @@ struct TransferFixture {
     companion: String,
     leader: String,
     generation: u64,
+    mode: u8,
 }
 
 fn row(node: &Standalone, sql: &str) -> BTreeMap<String, String> {
@@ -87,6 +88,7 @@ fn fixture(name: &str, mode: u8) -> TransferFixture {
         companion,
         leader,
         generation,
+        mode,
     }
 }
 
@@ -96,6 +98,19 @@ fn capture(fixture: &TransferFixture, case: &str) -> serde_json::Value {
     let leader = &fixture.leader;
     let core = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let collection = core.join("packages/playerbots");
+    let (trigger, source_volume, landing) = if fixture.mode == 3 {
+        (
+            119,
+            "client AreaTrigger 119 sphere centered at (-14.3628,-393.38,64.5605), radius 6",
+            "ClassicDB game_areatrigger_teleport 119 to map 0 at (-11208.7,1675.9,24.5733,4.71239)",
+        )
+    } else {
+        (
+            78,
+            "private AreaTrigger 78 sphere centered at (1208,1200,50), radius 2",
+            "ClassicDB game_areatrigger_teleport 78 to map 36 at (-14.5732,-385.475,62.4561,1.5708)",
+        )
+    };
     let evidence = serde_json::json!({
         "case": case,
         "tested_core": git(core, &["rev-parse", "HEAD"]),
@@ -104,9 +119,11 @@ fn capture(fixture: &TransferFixture, case: &str) -> serde_json::Value {
         "collection_dirty": !git(&collection, &["status", "--porcelain"]).is_empty(),
         "module_wasm_identity": blake3::hash(support::module_bytes()).to_hex().to_string(),
         "content": {
-            "source_volume": "private sphere centered at (1208,1200,50), radius 2",
-            "landing": "ClassicDB game_areatrigger_teleport 78, imported-source audit d2083bcd2670451279cbf93af138eadae04c6d183a4cd0ff0357047e4a565de6",
-            "supported_trigger": 78,
+            "fixture_mode": fixture.mode,
+            "source_volume": source_volume,
+            "landing": landing,
+            "supported_trigger": trigger,
+            "source_audit": "pb010-imported-portal-source-14cda70a; importer sha256 23ff3ec6e391deb6bdec584a5dc63553c356a3e5069792714446191ce6f7a28f",
         },
         "runner": node.query_rows(&format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {companion}")),
         "bot": node.query_rows(&format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {companion}")),
@@ -277,12 +294,34 @@ fn playerbots_companion_uses_the_audited_deadmines_exit_route() {
     let staged = capture(&fixture, "deadmines-exit-staged");
     assert_eq!(staged["bot"][0]["map_id"], "36", "{staged}");
     assert_eq!(staged["bot"][0]["instance_id"], "5098078", "{staged}");
+    assert_eq!(staged["content"]["fixture_mode"], 3, "{staged}");
+    assert_eq!(staged["content"]["supported_trigger"], 119, "{staged}");
     assert_eq!(staged["leader_partition"][0]["map_id"], "0", "{staged}");
     assert_eq!(staged["exit_source_volume"][0]["id"], "119", "{staged}");
+    assert_eq!(staged["exit_source_volume"][0]["map_id"], "36", "{staged}");
     assert_eq!(staged["exit_source_volume"][0]["x"], "-14.3628", "{staged}");
     assert_eq!(staged["exit_source_volume"][0]["y"], "-393.38", "{staged}");
     assert_eq!(staged["exit_source_volume"][0]["z"], "64.5605", "{staged}");
     assert_eq!(staged["exit_source_volume"][0]["radius"], "6", "{staged}");
+    assert_eq!(
+        staged["exit_source_volume"][0]["box_length"], "0",
+        "{staged}"
+    );
+    assert_eq!(
+        staged["exit_source_volume"][0]["box_width"], "0",
+        "{staged}"
+    );
+    assert_eq!(
+        staged["exit_source_volume"][0]["box_height"], "0",
+        "{staged}"
+    );
+    assert_eq!(staged["exit_source_volume"][0]["box_yaw"], "0", "{staged}");
+    assert_eq!(staged["source_instance"][0]["map_id"], "36", "{staged}");
+    assert_eq!(staged["companion_binding"][0]["map_id"], "36", "{staged}");
+    assert_eq!(
+        staged["companion_binding"][0]["instance_id"], "5098078",
+        "{staged}"
+    );
     assert_eq!(staged["exit_landing"][0]["target_map"], "0", "{staged}");
     assert_eq!(staged["exit_landing"][0]["x"], "-11208.7", "{staged}");
     assert_eq!(staged["exit_landing"][0]["y"], "1675.9", "{staged}");
