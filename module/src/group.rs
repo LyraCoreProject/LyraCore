@@ -1686,8 +1686,9 @@ pub fn sync_group_mirror(
         return Err("group mirror has no Realm roster revision".to_string());
     }
     if members.len() > GROUP_MAX_MEMBERS || partitions.len() > GROUP_MAX_MEMBERS * 2 {
-        return Err("group mirror exceeds the bounded current and departed party-member limit"
-            .to_string());
+        return Err(
+            "group mirror exceeds the bounded current and departed party-member limit".to_string(),
+        );
     }
     let mut partition_guids = std::collections::BTreeSet::new();
     for partition in &partitions {
