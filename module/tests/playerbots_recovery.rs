@@ -646,10 +646,8 @@ fn playerbots_recovery_holds_a_quest_when_its_remaining_targets_are_controlled()
     );
 }
 
-#[test]
-#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_recovery_stops_an_armed_quest_attack_when_the_target_read_is_incomplete() {
-    let mut node = Standalone::start("playerbots-recovery-read-limit");
+fn incomplete_quest_target_read(label: &str, stage: impl Fn(&Standalone, &str)) {
+    let mut node = Standalone::start(label);
     node.publish_module();
     record_inputs(&node);
     let guid = prepare(&node);
@@ -657,9 +655,18 @@ fn playerbots_recovery_stops_an_armed_quest_attack_when_the_target_read_is_incom
     let armed = node.query_rows(&format!(
         "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
     ));
-    assert_eq!(armed.len(), 1, "quest attack was not armed");
     let before = snapshot(&node, &guid, Duration::ZERO);
-    node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
+    let path = support::log_dir().join(format!("{}-armed-before-read.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "before": before, "armed": armed,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(armed.len(), 1, "quest attack was not armed");
+    stage(&node, &guid);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let after = snapshot(&node, &guid, Duration::ZERO);
     let attacks = node.query_rows(&format!(
@@ -693,6 +700,145 @@ fn playerbots_recovery_stops_an_armed_quest_attack_when_the_target_read_is_incom
         .contains("none"));
     assert_eq!(before["quest"], after["quest"]);
     assert_eq!(before["target"]["health"], after["target"]["health"]);
+    assert_eq!(
+        before["runner"]["objective_sequence"],
+        after["runner"]["objective_sequence"]
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_stops_an_armed_quest_attack_when_the_target_read_is_incomplete() {
+    incomplete_quest_target_read("playerbots-recovery-read-limit", |node, guid| {
+        node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[guid]);
+    });
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_stops_an_armed_quest_attack_when_target_control_is_unknown() {
+    incomplete_quest_target_read("playerbots-recovery-control-read-limit", |node, guid| {
+        node.assert_call("playerbots_fixture_roles_overflow", &[guid, "1"]);
+        node.assert_sql(&format!(
+            "UPDATE game_aura SET target_guid = {TARGET} WHERE spell_id >= 5098600 AND spell_id < 5098665"
+        ));
+    });
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_records_a_controlled_quest_while_survival_takes_priority() {
+    let mut node = Standalone::start("playerbots-recovery-controlled-survival");
+    node.publish_module();
+    record_inputs(&node);
+    let guid = prepare(&node);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    for offset in 0..10u64 {
+        node.assert_call(
+            "playerbots_fixture_roles_control",
+            &[&guid, &(TARGET + offset).to_string(), "50020"],
+        );
+    }
+    let before = snapshot(&node, &guid, Duration::ZERO);
+    node.assert_call("playerbots_fixture_runner_survival_hit", &[&guid, "0", "1"]);
+    let after = snapshot(&node, &guid, Duration::ZERO);
+    let attacks = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
+    let path = support::log_dir().join(format!("{}-controlled-survival.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "before": before, "after": after, "attacks": attacks,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        after["runner"]["chosen"]
+            .as_str()
+            .unwrap()
+            .contains("survival"),
+        "{after}"
+    );
+    assert!(
+        after["runner"]["failures"]
+            .as_str()
+            .unwrap()
+            .contains("questControlled"),
+        "{after}"
+    );
+    assert!(
+        !after["runner"]["last_outcome"]
+            .as_str()
+            .unwrap()
+            .contains("refused"),
+        "{after}"
+    );
+    assert!(attacks.is_empty());
+    assert_eq!(before["quest"], after["quest"]);
+    assert_eq!(
+        before["runner"]["objective_sequence"],
+        after["runner"]["objective_sequence"]
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_replaces_a_recovery_leg_when_the_quest_fight_changes() {
+    let mut node = Standalone::start("playerbots-recovery-replaced-fight");
+    node.publish_module();
+    record_inputs(&node);
+    let guid = prepare(&node);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    node.assert_call("playerbots_fixture_companion_due", &[&guid]);
+    let changed = poll_until(Duration::from_secs(15), || {
+        row(
+            &node,
+            &format!("SELECT foreground FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+        )["foreground"]
+            .contains("recoveryPosition")
+    });
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let before = snapshot(&node, &guid, Duration::ZERO);
+    let path = support::log_dir().join(format!("{}-before-fight-change.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&before).unwrap()).unwrap();
+    assert!(changed, "{before}");
+    node.assert_call(
+        "playerbots_fixture_roles_control",
+        &[&guid, &TARGET.to_string(), "50020"],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let after = snapshot(&node, &guid, Duration::ZERO);
+    let attacks = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
+    let path = support::log_dir().join(format!("{}-changed-fight.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "before": before, "after": after, "attacks": attacks,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !after["runner"]["foreground"]
+            .as_str()
+            .unwrap()
+            .contains("recoveryPosition"),
+        "{after}"
+    );
+    assert!(
+        after["runner"]["chosen"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("attack = {}", TARGET + 1)),
+        "{after}"
+    );
+    assert_eq!(attacks.len(), 1);
+    assert_eq!(attacks[0]["target_guid"], (TARGET + 1).to_string());
+    assert_eq!(before["quest"], after["quest"]);
     assert_eq!(
         before["runner"]["objective_sequence"],
         after["runner"]["objective_sequence"]

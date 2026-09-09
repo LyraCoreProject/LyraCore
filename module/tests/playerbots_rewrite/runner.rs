@@ -393,12 +393,14 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     node.assert_call("gw_abandon_quest", &[&support::actor(bot), "50909"]);
     select(&node, bot, "cohort");
     let deferred = poll_until(Duration::from_secs(38), || {
-        runner(&node, bot)["objective"].contains("deferred")
+        !runner(&node, bot)["deferred_destinations"].is_empty()
     });
     outcomes(&node);
     assert!(deferred);
     let deferred = runner(&node, bot);
-    assert_eq!(deferred["retry_count"], "3");
+    assert!((1..=3).contains(&deferred["retry_count"].parse::<u32>().unwrap()));
+    assert!(deferred["objective"].contains("travelling"));
+    assert!(deferred["objective"].contains("last_verified_progress_micros = (none"));
     assert!(deferred["failures"].contains("noMovement"));
     assert!(deferred["deferred_destinations"].contains("geometry_revision = (none"));
     assert!(deferred["recovery"].contains("work = (destination"));
@@ -413,7 +415,11 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     select(&node, bot, "cohort");
     std::thread::sleep(Duration::from_secs(2));
     assert_eq!(runner(&node, bot)["objective_sequence"], objective_id);
-    assert!(runner(&node, bot)["objective"].contains("deferred"));
+    assert_eq!(runner(&node, bot)["objective"], deferred["objective"]);
+    assert_eq!(
+        runner(&node, bot)["deferred_destinations"],
+        deferred["deferred_destinations"]
+    );
     assert!(runner(&node, bot)["foreground"].contains("none"));
     node.assert_call("playerbots_fixture_runner_survival", &[bot]);
     node.assert_call("playerbots_fixture_runner_damage", &[bot, "0", "1"]);

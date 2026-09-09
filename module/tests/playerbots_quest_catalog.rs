@@ -799,8 +799,19 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     node.assert_call("playerbots_quest_fixture_refresh", &[]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     select_cohort(&node, bot);
-    run_once(&node);
+    let active = support::poll_until(support::POLL_TIMEOUT, || {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+        let ready = runner(&node, bot)["recovery"].contains("active = (some = (fight");
+        if !ready {
+            std::thread::sleep(std::time::Duration::from_millis(1_100));
+        }
+        ready
+    });
+    record(&node, "before-attempt-exhaustion");
     let initial = runner(&node, bot);
+    let path = support::log_dir().join(format!("{}-active-attempt.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(&initial).unwrap()).unwrap();
+    assert!(active, "Quest did not begin a Fight attempt: {initial:?}");
     let retained = node.query_rows(&format!(
         "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
     ));
