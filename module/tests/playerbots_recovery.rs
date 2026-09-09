@@ -245,7 +245,7 @@ fn playerbots_recovery_failure_memory_survives_a_persistent_process_restart() {
     node.assert_call("playerbots_fixture_companion_due", &[&guid]);
     let start = Instant::now();
     let deferred = poll_until(Duration::from_secs(40), || {
-        let state = row(&node, &format!("SELECT deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"));
+        let state = row(&node, &format!("SELECT character_guid, deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"));
         !state["deferred_destinations"]
             .trim_matches(['[', ']', ' '])
             .is_empty()
@@ -457,7 +457,7 @@ fn playerbots_recovery_invalidates_failed_work_after_an_actual_navigation_import
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     node.assert_call("playerbots_fixture_companion_due", &[&guid]);
     let deferred = poll_until(Duration::from_secs(40), || {
-        !row(&node, &format!("SELECT deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"))["deferred_destinations"].trim_matches(['[', ']', ' ']).is_empty()
+        !row(&node, &format!("SELECT character_guid, deferred_destinations FROM pkg_playerbots_runner WHERE character_guid = {guid}"))["deferred_destinations"].trim_matches(['[', ']', ' ']).is_empty()
     });
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let before = snapshot(&node, &guid, Duration::ZERO);
@@ -544,6 +544,9 @@ fn playerbots_recovery_retains_a_partial_route_that_first_moves_away_from_the_le
         &node,
         &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {priest}"),
     );
+    let initial_actions = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_action WHERE character_guid = {priest}"
+    ));
     let start = row(
         &node,
         &format!("SELECT x, y FROM game_world_entity WHERE guid = {priest}"),
@@ -568,13 +571,16 @@ fn playerbots_recovery_retains_a_partial_route_that_first_moves_away_from_the_le
     );
     let path = support::log_dir().join(format!("{}-partial-route-away.json", node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({
-        "initial": initial, "start": start, "final": final_state, "position": position,
+        "initial": initial, "initial_actions": initial_actions, "start": start, "final": final_state, "position": position,
         "actions": node.query_rows(&format!("SELECT * FROM pkg_playerbots_action WHERE character_guid = {priest}")),
     })).unwrap()).unwrap();
     assert!(advanced, "{initial:?} {position:?}");
     assert!(
-        initial["last_outcome"].contains("routePartial"),
-        "{initial:?}"
+        initial_actions.iter().any(
+            |action| action["outcome"].contains("status = (partial = ())")
+                && action["outcome"].contains("expansions = 4096")
+        ),
+        "{initial_actions:?}"
     );
     assert_eq!(initial["route_expansions"], "4096");
     assert!(
@@ -632,6 +638,59 @@ fn playerbots_recovery_holds_a_quest_when_its_remaining_targets_are_controlled()
         .contains("questControlled"));
     assert!(attacks.is_empty());
     assert!(!auras.is_empty());
+    assert_eq!(before["quest"], after["quest"]);
+    assert_eq!(before["target"]["health"], after["target"]["health"]);
+    assert_eq!(
+        before["runner"]["objective_sequence"],
+        after["runner"]["objective_sequence"]
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_stops_an_armed_quest_attack_when_the_target_read_is_incomplete() {
+    let mut node = Standalone::start("playerbots-recovery-read-limit");
+    node.publish_module();
+    record_inputs(&node);
+    let guid = prepare(&node);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let armed = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
+    assert_eq!(armed.len(), 1, "quest attack was not armed");
+    let before = snapshot(&node, &guid, Duration::ZERO);
+    node.assert_call("playerbots_quest_loop_fixture_stage_search_limit", &[&guid]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let after = snapshot(&node, &guid, Duration::ZERO);
+    let attacks = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {guid}"
+    ));
+    let path =
+        support::log_dir().join(format!("{}-incomplete-target-read.json", node.shard_name()));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "before": before, "after": after, "armed": armed, "attacks": attacks,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        after["runner"]["chosen"].as_str().unwrap().contains("hold"),
+        "{after}"
+    );
+    assert!(
+        after["runner"]["failures"]
+            .as_str()
+            .unwrap()
+            .contains("questReadLimit"),
+        "{after}"
+    );
+    assert!(attacks.is_empty());
+    assert!(after["runner"]["foreground"]
+        .as_str()
+        .unwrap()
+        .contains("none"));
     assert_eq!(before["quest"], after["quest"]);
     assert_eq!(before["target"]["health"], after["target"]["health"]);
     assert_eq!(

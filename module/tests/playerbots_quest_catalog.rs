@@ -807,12 +807,14 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     assert!(initial["objective"].contains("quest"));
     assert!(initial["objective"].contains("travelling"), "{initial:?}");
 
-    node.assert_call("playerbots_fixture_runner_expire_objective", &[bot]);
+    node.assert_call("playerbots_recovery_fixture_exhaust_attempt", &[bot]);
     run_once(&node);
     let deferred = runner(&node, bot);
     record(&node, "deferral-start");
-    assert!(deferred["objective"].contains("deferred"), "{deferred:?}");
+    assert!(deferred["objective"].contains("travelling"), "{deferred:?}");
     assert!(!deferred["deferred_destinations"].is_empty());
+    assert!(deferred["recovery"].contains("work = (fight"));
+    assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
     run_once(&node);
     let waiting = runner(&node, bot);
     assert_eq!(waiting["objective"], deferred["objective"]);
@@ -822,7 +824,8 @@ fn playerbots_quest_retries_after_deferral_without_replacing_its_purpose() {
     );
 
     let retried = support::poll_until(std::time::Duration::from_secs(45), || {
-        runner(&node, bot)["objective"].contains("travelling")
+        let state = runner(&node, bot);
+        state["deferred_destinations"].is_empty() && state["chosen"].contains("attack")
     });
     let resumed = runner(&node, bot);
     record(&node, "deferred-retry");

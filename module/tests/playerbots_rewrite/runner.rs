@@ -401,6 +401,10 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     assert_eq!(deferred["retry_count"], "3");
     assert!(deferred["failures"].contains("noMovement"));
     assert!(deferred["deferred_destinations"].contains("geometry_revision = (none"));
+    assert!(deferred["recovery"].contains("work = (destination"));
+    assert!(deferred["recovery"].contains("imported_revision = (none"));
+    assert!(deferred["recovery"].contains("last_movement = (some"));
+    assert!(deferred["recovery"].contains("deferred_until_micros = (some"));
     assert!(deferred["foreground"].contains("none"));
     assert!(deferred["route_expansions"].parse::<u32>().unwrap() <= 4096);
     assert_eq!(position(&node, bot), 1200.0);
