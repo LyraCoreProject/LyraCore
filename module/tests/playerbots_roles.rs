@@ -11,6 +11,13 @@ const MAGE: &str = "8";
 const TANK: &str = "0";
 const HEALER: &str = "1";
 const DAMAGE: &str = "2";
+const PRECEDING_CORE: &str = "dae05c1b78cfd4b59f24968ec8be41f75ce896d1";
+const PRECEDING_CORE_TREE: &str = "432809ddefbc666d8dfe9ccde288eca0488bd8c7";
+const PRECEDING_COLLECTION: &str = "2028771d15c8efe87b50d2b6795315221953055d";
+const PRECEDING_COLLECTION_TREE: &str = "c27a460ab7cdcdd2072a90aa3275bc68e53b15c0";
+const PRECEDING_PLAYERBOTS_TREE: &str = "05aaf2452beb3c4e18073b29deb978482351fc91";
+const PRECEDING_PACKAGE_IDENTITY: &str =
+    "573c5856e3a261e073a7bd414e2183efa7f6dcec823a47d0c190d29b1aab3db4";
 
 struct RolesFixture {
     node: Standalone,
@@ -19,6 +26,123 @@ struct RolesFixture {
     mage: String,
     leader: String,
     enemies: Vec<String>,
+}
+
+fn git(path: &std::path::Path, args: &[&str]) -> String {
+    let result = std::process::Command::new("git")
+        .current_dir(path)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    String::from_utf8(result.stdout).unwrap().trim().to_string()
+}
+
+fn digest_files(path: &std::path::Path, digest: &mut blake3::Hasher) {
+    let mut children: Vec<_> = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    children.sort();
+    digest.update(&(children.len() as u64).to_le_bytes());
+    for child in children {
+        let name = child.file_name().unwrap().as_encoded_bytes();
+        digest.update(&(name.len() as u64).to_le_bytes());
+        digest.update(name);
+        digest.update(&[u8::from(child.is_dir())]);
+        if child.is_dir() {
+            digest_files(&child, digest);
+        } else {
+            let contents = std::fs::read(&child).unwrap();
+            digest.update(&(contents.len() as u64).to_le_bytes());
+            digest.update(&contents);
+        }
+    }
+}
+
+struct PrecedingRoles {
+    wasm: Vec<u8>,
+    manifest: serde_json::Value,
+}
+
+fn preceding_roles() -> PrecedingRoles {
+    let wasm_path = std::env::var_os("PLAYERBOTS_ROLES_PRECEDING_WASM")
+        .expect("PLAYERBOTS_ROLES_PRECEDING_WASM must name the merged PB-006 Wasm");
+    let manifest_path = std::env::var_os("PLAYERBOTS_ROLES_PRECEDING_MANIFEST")
+        .expect("PLAYERBOTS_ROLES_PRECEDING_MANIFEST must describe that Wasm build");
+    let core_path = std::env::var_os("PLAYERBOTS_ROLES_PRECEDING_CORE")
+        .expect("PLAYERBOTS_ROLES_PRECEDING_CORE must name the clean merged Core checkout");
+    let collection_path = std::env::var_os("PLAYERBOTS_ROLES_PRECEDING_COLLECTION").expect(
+        "PLAYERBOTS_ROLES_PRECEDING_COLLECTION must name the clean merged Package checkout",
+    );
+    let core_path = std::path::Path::new(&core_path);
+    let collection_path = std::path::Path::new(&collection_path);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+    let wasm = std::fs::read(&wasm_path).unwrap();
+
+    assert_eq!(manifest["core"], PRECEDING_CORE);
+    assert_eq!(manifest["collection"], PRECEDING_COLLECTION);
+    assert_eq!(manifest["core_tree"], PRECEDING_CORE_TREE);
+    assert_eq!(manifest["collection_tree"], PRECEDING_COLLECTION_TREE);
+    assert_eq!(manifest["playerbots_tree"], PRECEDING_PLAYERBOTS_TREE);
+    assert_eq!(manifest["core_dirty"], false);
+    assert_eq!(manifest["collection_dirty"], false);
+    assert_eq!(manifest["rust"], "1.93.0");
+    assert_eq!(manifest["spacetimedb"], "2.7.1");
+    assert_eq!(manifest["target"], "wasm32-unknown-unknown");
+    assert_eq!(manifest["profile"], "release");
+    assert_eq!(manifest["features"], serde_json::json!(["debug_reducers"]));
+    assert_eq!(
+        manifest["installed_packages"],
+        serde_json::json!(["dungeons", "example", "fire_nova", "playerbots"])
+    );
+    assert_eq!(
+        manifest["package_content_identity"],
+        PRECEDING_PACKAGE_IDENTITY
+    );
+    assert_eq!(manifest["wasm_bytes"].as_u64(), Some(wasm.len() as u64));
+
+    assert_eq!(git(core_path, &["rev-parse", "HEAD"]), PRECEDING_CORE);
+    assert_eq!(
+        git(core_path, &["rev-parse", "HEAD^{tree}"]),
+        PRECEDING_CORE_TREE
+    );
+    assert!(git(core_path, &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        git(collection_path, &["rev-parse", "HEAD"]),
+        PRECEDING_COLLECTION
+    );
+    assert_eq!(
+        git(collection_path, &["rev-parse", "HEAD^{tree}"]),
+        PRECEDING_COLLECTION_TREE
+    );
+    assert_eq!(
+        git(collection_path, &["rev-parse", "HEAD:playerbots"]),
+        PRECEDING_PLAYERBOTS_TREE
+    );
+    assert!(git(collection_path, &["status", "--porcelain"]).is_empty());
+    let mut package_digest = blake3::Hasher::new();
+    digest_files(&collection_path.join("playerbots"), &mut package_digest);
+    assert_eq!(
+        package_digest.finalize().to_hex().as_str(),
+        PRECEDING_PACKAGE_IDENTITY
+    );
+
+    let sha256 = std::process::Command::new("sha256sum")
+        .arg(&wasm_path)
+        .output()
+        .unwrap();
+    assert!(sha256.status.success());
+    let sha256 = String::from_utf8(sha256.stdout).unwrap();
+    assert_eq!(
+        sha256.split_whitespace().next().unwrap(),
+        manifest["wasm_sha256"].as_str().unwrap()
+    );
+    if let Some(expected) = manifest["wasm_blake3"].as_str() {
+        assert_eq!(blake3::hash(&wasm).to_hex().as_str(), expected);
+    }
+    PrecedingRoles { wasm, manifest }
 }
 
 fn runner(node: &Standalone, guid: &str) -> BTreeMap<String, String> {
@@ -56,17 +180,36 @@ fn cast_events(node: &Standalone, guid: &str, spell: u32) -> Vec<BTreeMap<String
 }
 
 fn node_evidence(node: &Standalone, case: &str) {
+    let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let package = core.join("packages/playerbots");
+    let mut package_digest = blake3::Hasher::new();
+    digest_files(&package, &mut package_digest);
     let path = support::log_dir().join(format!("{}-{case}.json", node.shard_name()));
     let record = serde_json::json!({
         "case": case,
         "spacetimedb": "2.7.1",
-        "supported_companion_level": 5,
+        "rust": "1.93.0",
+        "tested_core": git(core, &["rev-parse", "HEAD"]),
+        "tested_collection": git(&package, &["rev-parse", "HEAD"]),
+        "core_dirty": !git(core, &["status", "--porcelain"]).is_empty(),
+        "collection_dirty": !git(&package, &["status", "--porcelain"]).is_empty(),
+        "module_wasm_identity": blake3::hash(support::module_bytes()).to_hex().to_string(),
+        "package_content_identity": package_digest.finalize().to_hex().to_string(),
+        "validated_companion_levels": [5, 10],
         "seeded_content_identity": "playerbots-starter-roles-v1",
         "seeded_geometry_identity": "playerbots-synthetic-nav-v1",
         "content": {
             "revision": "playerbots-starter-roles-v1",
             "provenance": "curated core seeds and explicitly named private role fixture rows",
             "imported_content": null,
+            "training_level_reference": {
+                "source": "local classic-db-full.sql",
+                "sha256": "d2083bcd2670451279cbf93af138eadae04c6d183a4cd0ff0357047e4a565de6",
+                "use": "source-derived level facts only; not an imported World Shard",
+                "levels": {"133": 1, "139": 8, "168": 1, "355": 10, "585": 1, "1243": 1, "2050": 1, "6673": 1, "7386": 10},
+            },
         },
         "geometry": {
             "revision": "playerbots-synthetic-nav-v1",
@@ -77,7 +220,7 @@ fn node_evidence(node: &Standalone, case: &str) {
         "runners": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
         "entities": node.query_rows("SELECT guid, entry, level, x, y, z, health, max_health, power, max_power, dead, target_guid FROM game_world_entity"),
         "spells": node.query_rows("SELECT character_guid, spell_id FROM game_player_spell"),
-        "spell_headers": node.query_rows("SELECT spell_id, cost, spell_level, range_yd FROM game_spell WHERE spell_id = 133 OR spell_id = 139 OR spell_id = 168 OR spell_id = 355 OR spell_id = 585 OR spell_id = 1243 OR spell_id = 6673 OR spell_id = 7386"),
+        "spell_headers": node.query_rows("SELECT spell_id, cost, spell_level, range_yd FROM game_spell WHERE spell_id = 133 OR spell_id = 139 OR spell_id = 168 OR spell_id = 355 OR spell_id = 585 OR spell_id = 1243 OR spell_id = 2050 OR spell_id = 6673 OR spell_id = 7386"),
         "cooldowns": node.query_rows("SELECT * FROM game_spell_cooldown"),
         "provisioning": node.query_rows("SELECT * FROM pkg_playerbots_provisioning"),
         "auras": node.query_rows("SELECT id, target_guid, caster_guid, spell_id, eff_kind, eff_p0 FROM game_aura"),
@@ -95,7 +238,7 @@ fn evidence(fixture: &RolesFixture, case: &str) {
     node_evidence(&fixture.node, case);
 }
 
-fn fixture(name: &str) -> RolesFixture {
+fn fixture(name: &str, level: u32) -> RolesFixture {
     let mut node = Standalone::start(name);
     node.publish_module();
     node.assert_call("claim_operator", &[]);
@@ -127,6 +270,12 @@ fn fixture(name: &str) -> RolesFixture {
         &[&warrior, &priest, &mage, &leader],
     );
     node_evidence(&node, "staged");
+    if level != 5 {
+        for guid in [&warrior, &priest, &mage, &leader] {
+            node.assert_call("debug_set_level", &[guid, &level.to_string()]);
+        }
+        node_evidence(&node, &format!("level-{level}"));
+    }
     let mut enemies: Vec<_> = node
         .query_rows(
             "SELECT guid FROM game_world_entity WHERE entry >= 5098001 AND entry <= 5098003",
@@ -152,31 +301,58 @@ fn fixture(name: &str) -> RolesFixture {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn starter_roles_use_level_five_capabilities_and_never_pull_from_selection() {
-    let fixture = fixture("playerbots-roles-capabilities");
+fn level_five_roles_obey_classic_level_gates_and_never_pull_from_selection() {
+    let fixture = fixture("playerbots-roles-capabilities", 5);
     let node = &fixture.node;
     for guid in [&fixture.warrior, &fixture.priest, &fixture.mage] {
         assert_eq!(entity(node, guid)["level"], "5");
     }
     for (guid, spells) in [
-        (&fixture.warrior, &[78, 2457, 355][..]),
-        (&fixture.priest, &[585, 2050, 139][..]),
+        (&fixture.warrior, &[78, 2457][..]),
+        (&fixture.priest, &[585, 2050][..]),
         (&fixture.mage, &[133, 168][..]),
     ] {
         for spell in spells {
             assert!(known(node, guid, *spell), "{guid} does not know {spell}");
         }
     }
-    for spell in [7386, 6673] {
+    for spell in [355, 7386, 6673] {
         assert!(!known(node, &fixture.warrior, spell));
     }
-    assert!(!known(node, &fixture.priest, 1243));
+    for spell in [139, 1243] {
+        assert!(!known(node, &fixture.priest, spell));
+    }
+    assert_eq!(
+        node.query_rows("SELECT spell_level FROM game_spell WHERE spell_id = 355")[0]
+            ["spell_level"],
+        "10"
+    );
+    assert_eq!(
+        node.query_rows("SELECT spell_level FROM game_spell WHERE spell_id = 139")[0]
+            ["spell_level"],
+        "8"
+    );
+    let warrior_provisioning = node.query_rows(&format!(
+        "SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {}",
+        fixture.warrior
+    ));
+    let priest_provisioning = node.query_rows(&format!(
+        "SELECT history FROM pkg_playerbots_provisioning WHERE character_guid = {}",
+        fixture.priest
+    ));
+    assert!(warrior_provisioning[0]["history"].contains("spell 355 requires level 10"));
+    assert!(priest_provisioning[0]["history"].contains("spell 139 requires level 8"));
     assert!(node
         .query_rows("SELECT spell_id FROM game_spell WHERE spell_id = 7386")
         .is_empty());
     assert!(node
         .query_rows("SELECT spell_id FROM game_spell WHERE spell_id = 585")
         .is_empty());
+
+    // Model a populated PB-005 spellbook that learned the old level-zero Taunt header. The current
+    // header Gate must keep it out of the level-five rotation without deleting the owned spell.
+    node.assert_call("debug_learn_spell", &[&fixture.warrior, "355"]);
+    assert!(known(node, &fixture.warrior, 355));
 
     let target = &fixture.enemies[0];
     node.assert_call(
@@ -219,6 +395,7 @@ fn starter_roles_use_level_five_capabilities_and_never_pull_from_selection() {
     let tank = runner(node, &fixture.warrior);
     assert!(tank["chosen"].contains("tankFight"), "{tank:?}");
     assert!(tank["companion_fight_target_guid"].contains(target));
+    assert!(cast_events(node, &fixture.warrior, 355).is_empty());
     assert!(!node
         .query_rows(&format!(
             "SELECT * FROM game_melee_attack WHERE attacker_guid = {} AND target_guid = {target}",
@@ -253,10 +430,52 @@ fn starter_roles_use_level_five_capabilities_and_never_pull_from_selection() {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn selected_engaged_target_wins_and_control_holds_every_role() {
-    let fixture = fixture("playerbots-roles-target-control");
+    let fixture = fixture("playerbots-roles-target-control", 10);
     let node = &fixture.node;
+    for (guid, spells) in [
+        (&fixture.warrior, &[78, 2457, 355][..]),
+        (&fixture.priest, &[585, 2050, 139][..]),
+        (&fixture.mage, &[133, 168][..]),
+    ] {
+        for spell in spells {
+            assert!(known(node, guid, *spell), "{guid} does not know {spell}");
+        }
+    }
+    assert!(!known(node, &fixture.warrior, 7386));
     let first = &fixture.enemies[0];
     let selected = &fixture.enemies[1];
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.warrior, "{\"recordOnly\":[]}"],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_control",
+        &[&fixture.leader, first, "50020"],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_record_only_attack",
+        &[&fixture.warrior, first],
+    );
+    let recorded_attack = node.query_rows(&format!(
+        "SELECT * FROM game_melee_attack WHERE attacker_guid = {}",
+        fixture.warrior
+    ));
+    evidence(&fixture, "record-only-controlled-attack");
+    assert_eq!(recorded_attack.len(), 1);
+    assert_eq!(recorded_attack[0]["target_guid"], *first);
+    assert_eq!(recorded_attack[0]["last_swing_ms"], "4242");
+    assert_eq!(recorded_attack[0]["last_offhand_swing_ms"], "2121");
+    let recorded = runner(node, &fixture.warrior);
+    assert!(recorded["last_outcome"].contains("recorded"));
+    assert!(recorded["chosen"].contains("crowdControl"), "{recorded:?}");
+    node.assert_call(
+        "playerbots_fixture_roles_clear_control",
+        &[&fixture.leader, first],
+    );
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.warrior, "{\"cohort\":[]}"],
+    );
     node.assert_call("playerbots_fixture_roles_engage", &[&fixture.leader, first]);
     node.assert_call(
         "playerbots_fixture_roles_enemy_engage",
@@ -344,8 +563,42 @@ fn selected_engaged_target_wins_and_control_holds_every_role() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn tank_repairs_range_and_completes_a_real_taunt() {
+    let fixture = fixture("playerbots-roles-tank-range", 10);
+    let node = &fixture.node;
+    let target = &fixture.enemies[0];
+    node.assert_call("playerbots_fixture_roles_move", &[target, "1240", "1200"]);
+    node.assert_call(
+        "playerbots_fixture_roles_enemy_engage",
+        &[target, &fixture.leader],
+    );
+    node.assert_call(
+        "playerbots_fixture_roles_select",
+        &[&fixture.leader, target],
+    );
+    let started_x = entity(node, &fixture.warrior)["x"].parse::<f32>().unwrap();
+    assert_eq!(started_x, 1200.0);
+    assert!(poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.warrior);
+        entity(node, &fixture.warrior)["x"].parse::<f32>().unwrap() > started_x + 1.0
+    }));
+    let cast = poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.warrior);
+        cast_events(node, &fixture.warrior, 355)
+            .iter()
+            .any(|event| event["target_guid"] == *target)
+    });
+    evidence(&fixture, "tank-range-repair");
+    assert!(cast);
+    let tank = runner(node, &fixture.warrior);
+    assert!(tank["chosen"].contains("tankFight"), "{tank:?}");
+    assert!(entity(node, &fixture.warrior)["x"].parse::<f32>().unwrap() > started_x + 1.0);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
-    let fixture = fixture("playerbots-roles-repeated-pulls");
+    let fixture = fixture("playerbots-roles-repeated-pulls", 10);
     let node = &fixture.node;
 
     pass(node, &fixture.mage);
@@ -397,10 +650,7 @@ fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
         ))
         .is_empty());
 
-    node.assert_call(
-        "playerbots_fixture_roles_cancel_renew",
-        &[&fixture.leader],
-    );
+    node.assert_call("playerbots_fixture_roles_cancel_renew", &[&fixture.leader]);
     node.assert_call("playerbots_fixture_roles_priest_mana", &[&fixture.priest]);
     node.assert_call(
         "playerbots_fixture_companion_health",
@@ -533,7 +783,7 @@ fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn a_stronger_buff_family_member_prevents_a_weaker_maintenance_cast() {
-    let fixture = fixture("playerbots-roles-buff-family");
+    let fixture = fixture("playerbots-roles-buff-family", 10);
     let node = &fixture.node;
     node.assert_call(
         "playerbots_fixture_roles_prepare_fortitude",
@@ -567,4 +817,179 @@ fn a_stronger_buff_family_member_prevents_a_weaker_maintenance_cast() {
         ))
         .is_empty());
     evidence(&fixture, "buff-family");
+}
+
+fn sorted_catalog(node: &Standalone, table: &str) -> Vec<BTreeMap<String, String>> {
+    let mut rows = node.query_rows(&format!("SELECT * FROM {table}"));
+    rows.sort_by_key(|row| row["id"].parse::<u64>().unwrap());
+    rows
+}
+
+#[test]
+#[ignore = "requires the merged PB-006 Wasm, SpacetimeDB, and the playerbots Package"]
+fn populated_pb006_state_upgrades_roles_without_replacing_operator_catalogue() {
+    let preceding = preceding_roles();
+    assert_ne!(
+        blake3::hash(&preceding.wasm),
+        blake3::hash(support::module_bytes())
+    );
+
+    let mut defaults = Standalone::start("playerbots-roles-pb006-default-migration");
+    defaults.publish_module_bytes(&preceding.wasm);
+    defaults.assert_call("claim_operator", &[]);
+    defaults.assert_call("install_guid_range", &["1000000"]);
+    defaults.assert_call("playerbots_spawn_role", &["1", "1200", "1200", "50", TANK]);
+    let guid = defaults.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
+        ["character_guid"]
+        .clone();
+    defaults.assert_call("debug_learn_spell", &[&guid, "355"]);
+    defaults.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+    defaults.assert_sql(&format!(
+        "UPDATE pkg_playerbots_provisioning SET next_repair_micros = 9223372036854775807 WHERE character_guid = {guid}"
+    ));
+    defaults.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
+    defaults.assert_call("playerbots_select_controller", &[&guid, "{\"cohort\":[]}"]);
+    defaults.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    defaults.assert_call("playerbots_fixture_freeze", &[&guid]);
+    let preceding_runner = runner(&defaults, &guid);
+    let preceding_provisioning = defaults.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
+    ))[0]
+        .clone();
+    let preceding_rotations = sorted_catalog(&defaults, "pkg_playerbots_rotation");
+    let preceding_kit = sorted_catalog(&defaults, "pkg_playerbots_kit");
+    let preceding_levels = defaults.query_rows(
+        "SELECT spell_id, spell_level FROM game_spell WHERE spell_id = 139 OR spell_id = 355",
+    );
+    let preceding_known_taunt = known(&defaults, &guid, 355);
+
+    let mut customized = Standalone::start("playerbots-roles-pb006-custom-migration");
+    customized.publish_module_bytes(&preceding.wasm);
+    customized.assert_call("claim_operator", &[]);
+    customized.assert_call("playerbots_spawn", &["0", "1200", "1200", "50"]);
+    customized.assert_sql(
+        "UPDATE pkg_playerbots_rotation SET priority = 77 WHERE class = 8 AND role = 2 AND spell_id = 133",
+    );
+    customized.assert_sql("UPDATE game_spell SET range_yd = 20 WHERE spell_id = 355");
+    let customized_rotations = sorted_catalog(&customized, "pkg_playerbots_rotation");
+    let customized_kit = sorted_catalog(&customized, "pkg_playerbots_kit");
+
+    defaults.publish_module();
+    let migrated_runner = runner(&defaults, &guid);
+    defaults.assert_call("playerbots_spawn", &["0", "1200", "1200", "50"]);
+    defaults.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
+    let upgraded_runner = runner(&defaults, &guid);
+    let upgraded_provisioning = defaults.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_provisioning WHERE character_guid = {guid}"
+    ))[0]
+        .clone();
+    let upgraded_rotations = sorted_catalog(&defaults, "pkg_playerbots_rotation");
+    let upgraded_kit = sorted_catalog(&defaults, "pkg_playerbots_kit");
+    let upgraded_levels = defaults.query_rows(
+        "SELECT spell_id, spell_level FROM game_spell WHERE spell_id = 139 OR spell_id = 355",
+    );
+    defaults.assert_call("playerbots_spawn", &["0", "1200", "1200", "50"]);
+    let repeated_rotations = sorted_catalog(&defaults, "pkg_playerbots_rotation");
+    let repeated_kit = sorted_catalog(&defaults, "pkg_playerbots_kit");
+
+    customized.publish_module();
+    customized.assert_call("playerbots_spawn", &["0", "1200", "1200", "50"]);
+    let preserved_rotations = sorted_catalog(&customized, "pkg_playerbots_rotation");
+    let preserved_kit = sorted_catalog(&customized, "pkg_playerbots_kit");
+    let preserved_custom_header = customized
+        .query_rows("SELECT spell_level, range_yd FROM game_spell WHERE spell_id = 355")[0]
+        .clone();
+
+    node_evidence(&defaults, "pb006-default-migration-current");
+    node_evidence(&customized, "pb006-custom-migration-current");
+    let path = support::log_dir().join(format!(
+        "{}-pb006-populated-migration.json",
+        defaults.shard_name()
+    ));
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "preceding_build": preceding.manifest,
+            "preceding_runner": preceding_runner,
+            "migrated_runner_before_any_pass": migrated_runner,
+            "upgraded_runner": upgraded_runner,
+            "preceding_provisioning": preceding_provisioning,
+            "upgraded_provisioning": upgraded_provisioning,
+            "preceding_rotations": preceding_rotations,
+            "upgraded_rotations": upgraded_rotations,
+            "preceding_kit": preceding_kit,
+            "upgraded_kit": upgraded_kit,
+            "preceding_curated_spell_levels": preceding_levels,
+            "upgraded_curated_spell_levels": upgraded_levels,
+            "preceding_level_five_knows_taunt": preceding_known_taunt,
+            "upgraded_level_five_knows_taunt": known(&defaults, &guid, 355),
+            "customized_rotations": customized_rotations,
+            "preserved_rotations": preserved_rotations,
+            "customized_kit": customized_kit,
+            "preserved_kit": preserved_kit,
+            "preserved_non_curated_header": preserved_custom_header,
+            "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert!(preceding_runner["objective"].contains("some"));
+    assert!(preceding_runner["foreground"].contains("some"));
+    for field in ["objective_sequence", "objective", "foreground", "chosen"] {
+        assert_eq!(
+            migrated_runner[field], preceding_runner[field],
+            "runner field {field}"
+        );
+        assert_eq!(
+            upgraded_runner[field], preceding_runner[field],
+            "runner field {field}"
+        );
+    }
+    assert!(migrated_runner["companion_fight_target_guid"].contains("none"));
+    assert!(migrated_runner["companion_buff_target_guid"].contains("none"));
+    assert_eq!(preceding_provisioning["revision"], "1");
+    assert!(!preceding_provisioning["history"].is_empty());
+    assert_eq!(upgraded_provisioning["revision"], "2");
+    assert!(upgraded_provisioning["cause"].contains("periodic"));
+    assert!(upgraded_provisioning["history"].contains(preceding_provisioning["history"].as_str()));
+    assert!(preceding_levels.iter().all(|row| row["spell_level"] == "0"));
+    assert!(preceding_known_taunt);
+    assert!(known(&defaults, &guid, 355));
+    for (spell_id, spell_level) in [("139", "8"), ("355", "10")] {
+        assert!(upgraded_levels
+            .iter()
+            .any(|row| { row["spell_id"] == spell_id && row["spell_level"] == spell_level }));
+    }
+
+    assert_eq!(upgraded_rotations.len(), preceding_rotations.len() + 4);
+    assert_eq!(upgraded_kit.len(), preceding_kit.len() + 4);
+    assert!(preceding_rotations
+        .iter()
+        .all(|row| upgraded_rotations.contains(row)));
+    assert!(preceding_kit.iter().all(|row| upgraded_kit.contains(row)));
+    for (class, role, priority, spell, condition) in [
+        ("1", TANK, "20", "6673", "2"),
+        (PRIEST, HEALER, "10", "585", "0"),
+        (PRIEST, HEALER, "20", "1243", "4"),
+        (MAGE, DAMAGE, "20", "168", "2"),
+    ] {
+        assert!(upgraded_rotations.iter().any(|row| {
+            row["class"] == class
+                && row["role"] == role
+                && row["priority"] == priority
+                && row["spell_id"] == spell
+                && row["condition"] == condition
+                && row["threshold_pct"] == "0"
+        }));
+        assert!(upgraded_kit.iter().any(|row| {
+            row["class"] == class && row["role"] == role && row["spell_id"] == spell
+        }));
+    }
+    assert_eq!(repeated_rotations, upgraded_rotations);
+    assert_eq!(repeated_kit, upgraded_kit);
+    assert_eq!(preserved_rotations, customized_rotations);
+    assert_eq!(preserved_kit, customized_kit);
+    assert_eq!(preserved_custom_header["spell_level"], "0");
+    assert_eq!(preserved_custom_header["range_yd"], "20");
 }
