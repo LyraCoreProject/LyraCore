@@ -3413,7 +3413,7 @@ impl Coordinator {
             .game_party_command_intent()
             .iter()
             .take(PENDING_LIMIT + 1)
-            .map(party_command_intent)
+            .map(|row| party_command_intent(&row))
             .collect();
         if pending.len() > PENDING_LIMIT {
             log::warn!(
@@ -3660,6 +3660,7 @@ fn spawn_party_command_attempt(
     intent: crate::world::party::PartyCommandIntent,
 ) {
     let key = (intent.source_identity.to_string(), intent.id);
+    let intent_id = intent.id;
     let in_flight = party_commands_in_flight();
     if !in_flight.lock().unwrap().insert(key.clone()) {
         return;
@@ -3706,7 +3707,7 @@ fn spawn_party_command_attempt(
         in_flight.lock().unwrap().remove(&key);
         log::error!(
             "could not start party command intent {}: {error}",
-            intent.id
+            intent_id
         );
     }
 }
