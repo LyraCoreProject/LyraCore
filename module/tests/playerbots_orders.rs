@@ -79,6 +79,7 @@ fn evidence(fixture: &OrdersFixture, case: &str) {
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "pending_casts": node.query_rows("SELECT * FROM game_pending_cast"),
         "melee": node.query_rows("SELECT * FROM game_melee_attack"),
+        "splines": node.query_rows("SELECT * FROM game_creature_spline"),
         "auras": node.query_rows("SELECT id, caster_guid, target_guid, spell_id, eff_kind FROM game_aura"),
         "provisioning": node.query_rows("SELECT * FROM pkg_playerbots_provisioning"),
         "content": {
@@ -348,6 +349,32 @@ fn select_and_engage(node: &Standalone, member_guid: &str, target_guid: &str) {
         "playerbots_fixture_roles_engage",
         &[member_guid, target_guid],
     );
+}
+
+fn finish_movement(node: &Standalone, guid: &str) {
+    let leg = node
+        .query_rows(&format!(
+            "SELECT spline_id, dx, dy FROM game_creature_spline WHERE guid = {guid}"
+        ))
+        .into_iter()
+        .next()
+        .expect("expected a real movement leg");
+    let spline_id = leg["spline_id"].clone();
+    let destination_x: f32 = leg["dx"].parse().unwrap();
+    let destination_y: f32 = leg["dy"].parse().unwrap();
+    assert!(poll_until(POLL_TIMEOUT, || {
+        let position = entity(node, guid);
+        let arrived = (position["x"].parse::<f32>().unwrap() - destination_x).abs() < 0.01
+            && (position["y"].parse::<f32>().unwrap() - destination_y).abs() < 0.01;
+        let leg_finished = node
+            .query_rows(&format!(
+                "SELECT spline_id FROM game_creature_spline WHERE guid = {guid}"
+            ))
+            .into_iter()
+            .next()
+            .is_none_or(|current| current["spline_id"] != spline_id);
+        arrived && leg_finished
+    }));
 }
 
 #[test]
@@ -631,6 +658,12 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         &fixture.warrior,
         true,
     );
+    let approach = runner(node, &fixture.warrior);
+    evidence(&fixture, "assist-named-fight-approach");
+    assert!(approach["chosen"].contains("Move"));
+    assert!(approach["chosen"].contains(chosen.as_str()));
+    finish_movement(node, &fixture.warrior);
+    pass(node, &fixture.warrior);
     let melee = node.query_rows(&format!(
         "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
         fixture.warrior

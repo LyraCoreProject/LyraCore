@@ -311,6 +311,71 @@ fn source_actor(
     )
 }
 
+fn enter_transferred_actor(
+    topology: &CommandTopology,
+    runtime: &tokio::runtime::Runtime,
+    shard: &Coordinator,
+    character_guid: u64,
+) -> (String, Coordinator) {
+    let character = row(
+        &topology.cli,
+        topology.node.server(),
+        shard.shard_name(),
+        &format!("SELECT account_id FROM game_character WHERE guid = {character_guid}"),
+    );
+    let account_id: u64 = character["account_id"].parse().unwrap();
+    let account = row(
+        &topology.cli,
+        topology.node.server(),
+        shard.shard_name(),
+        &format!("SELECT username FROM game_account WHERE id = {account_id}"),
+    );
+    let username = account["username"].clone();
+    let realm = shard.realm_core().unwrap();
+    realm.provision_account(&username, &[], &[]).unwrap();
+    let mut realm_account = None;
+    assert!(poll_until(POLL_TIMEOUT, || {
+        realm_account = realm.account_by_username(&username).unwrap();
+        realm_account.is_some()
+    }));
+    let realm_account_id = realm_account.unwrap().id;
+    let identity = realm.bound_identity(realm_account_id).unwrap();
+    realm
+        .establish_session(realm_account_id, &[7; 40], identity)
+        .unwrap();
+    shard
+        .establish_session(account_id, &[7; 40], identity)
+        .unwrap();
+    topology.cli.call(
+        topology.node.server(),
+        shard.shard_name(),
+        "gw_heartbeat",
+        &[],
+    );
+    let token = shard.claim_session(account_id, character_guid).unwrap();
+    let bound = {
+        let _entered = runtime.enter();
+        shard.bind_session(token).unwrap()
+    };
+    bound.player_login(account_id, character_guid).unwrap();
+    assert!(poll_until(POLL_TIMEOUT, || topology
+        .cli
+        .rows(
+            topology.node.server(),
+            shard.shard_name(),
+            &format!("SELECT guid FROM game_world_entity WHERE guid = {character_guid}"),
+        )
+        .len()
+        == 1));
+    (
+        format!(
+            r#"{{"guid":{character_guid},"ownership":{{"some":{{"account_id":{},"generation":{},"request_nonce":{}}}}}}}"#,
+            token.account_id, token.generation, token.request_nonce
+        ),
+        bound,
+    )
+}
+
 fn queue(cli: &PrivateCli, server: &str, source: &str, actor: &str, payload: &str) -> u64 {
     let before = cli
         .rows(server, source, "SELECT id FROM game_party_command_intent")
@@ -971,25 +1036,14 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     );
     assert_eq!(moved_issuer["last_sequence"], "1");
 
-    topology.cli.call(
-        topology.node.server(),
-        &topology.source_two,
-        "playerbots_fixture_orders_partition",
-        &[
-            &topology.source_one_party.leader.to_string(),
-            &topology.target_party.map_id.to_string(),
-            "0",
-        ],
-    );
-    let moved_actor = source_actor(
-        &topology.cli,
-        topology.node.server(),
-        &topology.source_two,
-        topology.source_one_party.leader,
-        "PB009MOVEDLEADER",
-    );
-    let (_runtime_two, source_two) =
+    let (runtime_two, source_two) =
         topology.coordinator(&topology.source_two, "party-command-new-source");
+    let (moved_actor, _moved_session) = enter_transferred_actor(
+        &topology,
+        &runtime_two,
+        &source_two,
+        topology.source_one_party.leader,
+    );
     let newer_id = queue(
         &topology.cli,
         topology.node.server(),
