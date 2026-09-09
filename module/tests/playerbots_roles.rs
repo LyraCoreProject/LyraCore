@@ -333,7 +333,7 @@ fn fixture(name: &str, level: u32) -> RolesFixture {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn level_five_roles_obey_classic_level_gates_and_never_pull_from_selection() {
+fn playerbots_level_five_roles_obey_classic_level_gates_and_never_pull_from_selection() {
     let fixture = fixture("playerbots-roles-capabilities", 5);
     let node = &fixture.node;
     evidence(&fixture, "capability-spellbook");
@@ -462,7 +462,7 @@ fn level_five_roles_obey_classic_level_gates_and_never_pull_from_selection() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn selected_engaged_target_wins_and_control_holds_every_role() {
+fn playerbots_selected_engaged_target_wins_and_control_holds_every_role() {
     let fixture = fixture("playerbots-roles-target-control", 10);
     let node = &fixture.node;
     for (guid, spells) in [
@@ -596,7 +596,7 @@ fn selected_engaged_target_wins_and_control_holds_every_role() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn tank_repairs_range_and_completes_a_real_taunt() {
+fn playerbots_tank_repairs_range_and_completes_a_real_taunt() {
     let fixture = fixture("playerbots-roles-tank-range", 10);
     let node = &fixture.node;
     let target = &fixture.enemies[0];
@@ -649,7 +649,7 @@ fn tank_repairs_range_and_completes_a_real_taunt() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
+fn playerbots_buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
     let fixture = fixture("playerbots-roles-repeated-pulls", 10);
     let node = &fixture.node;
 
@@ -858,7 +858,7 @@ fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
+fn playerbots_ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
     let fixture = fixture("playerbots-roles-ally-buff", 10);
     let node = &fixture.node;
     node.assert_call(
@@ -951,7 +951,7 @@ fn ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn bounded_role_reads_record_typed_holds() {
+fn playerbots_bounded_role_reads_record_typed_holds() {
     let fixture = fixture("playerbots-roles-read-limits", 10);
     let node = &fixture.node;
     node.assert_call(
@@ -1011,7 +1011,7 @@ fn bounded_role_reads_record_typed_holds() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn buff_read_failure_preserves_a_valid_party_heal() {
+fn playerbots_buff_read_failure_preserves_a_valid_party_heal() {
     let fixture = fixture("playerbots-roles-buff-failure-heal", 10);
     let node = &fixture.node;
     node.assert_call(
@@ -1044,7 +1044,7 @@ fn buff_read_failure_preserves_a_valid_party_heal() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn rotation_read_failure_preserves_low_health_survival() {
+fn playerbots_rotation_read_failure_preserves_low_health_survival() {
     let fixture = fixture("playerbots-roles-rotation-failure-survival", 10);
     let node = &fixture.node;
     node.assert_call(
@@ -1069,7 +1069,7 @@ fn rotation_read_failure_preserves_low_health_survival() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn a_stronger_buff_family_member_prevents_a_weaker_maintenance_cast() {
+fn playerbots_a_stronger_buff_family_member_prevents_a_weaker_maintenance_cast() {
     let fixture = fixture("playerbots-roles-buff-family", 10);
     let node = &fixture.node;
     node.assert_call(
@@ -1114,7 +1114,7 @@ fn sorted_catalog(node: &Standalone, table: &str) -> Vec<BTreeMap<String, String
 
 #[test]
 #[ignore = "requires the merged PB-006 Wasm, SpacetimeDB, and the playerbots Package"]
-fn populated_pb006_state_upgrades_roles_without_replacing_operator_catalogue() {
+fn playerbots_populated_pb006_state_upgrades_roles_without_replacing_operator_catalogue() {
     let preceding = preceding_roles();
     assert_ne!(
         blake3::hash(&preceding.wasm),
