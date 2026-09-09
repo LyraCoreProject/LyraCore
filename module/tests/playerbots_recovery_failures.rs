@@ -390,6 +390,112 @@ fn playerbots_recovery_depleted_target_waits_for_actual_respawn_then_resumes() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disappears() {
+    let (node, guid) = fixture(
+        "playerbots-recovery-gameobject-disappears",
+        "playerbots_quest_loop_fixture_stage_simple_gameobject",
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let accepted = serde_json::json!({
+        "retained": node.query_rows(&format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}")),
+        "runner": node.query_rows(&format!("SELECT character_guid, objective_sequence, objective, foreground, chosen, recovery, history FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
+        "quest": quest(&node, &guid, RESPAWN_QUEST),
+        "gameobject": node.query_rows(&format!("SELECT guid, x, y, z, state FROM game_gameobject WHERE guid = {RESPAWNING_GAMEOBJECT}")),
+        "actions": actions(&node, &guid),
+    });
+    save(&node, "gameobject-quest-accepted", accepted.clone());
+    assert_eq!(accepted["quest"]["counts"], "[0]", "{accepted}");
+
+    node.assert_call(
+        "playerbots_recovery_fixture_position_simple_gameobject",
+        &[&guid],
+    );
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let retained = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+    ));
+    let moving = node.query_rows(&format!(
+        "SELECT character_guid, objective_sequence, objective, foreground, chosen, recovery, history FROM pkg_playerbots_runner WHERE character_guid = {guid}"
+    ));
+    let started = serde_json::json!({
+        "retained": retained,
+        "runner": moving,
+        "quest": quest(&node, &guid, RESPAWN_QUEST),
+        "gameobject": node.query_rows(&format!("SELECT guid, x, y, z, state FROM game_gameobject WHERE guid = {RESPAWNING_GAMEOBJECT}")),
+        "movement": node.query_rows(&format!("SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {guid}")),
+        "actions": actions(&node, &guid),
+    });
+    save(&node, "gameobject-approach-started", started.clone());
+    assert_eq!(
+        started["retained"].as_array().unwrap().len(),
+        1,
+        "{started}"
+    );
+    assert!(
+        started["runner"][0]["foreground"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("gameObject = {RESPAWNING_GAMEOBJECT}")),
+        "{started}"
+    );
+    assert!(
+        started["movement"][0]["dur_ms"]
+            .as_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            > 0,
+        "{started}"
+    );
+    assert_eq!(started["quest"], accepted["quest"], "{started}");
+
+    node.assert_call("playerbots_recovery_fixture_remove_simple_gameobject", &[]);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let stopped = serde_json::json!({
+        "retained": node.query_rows(&format!("SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}")),
+        "runner": node.query_rows(&format!("SELECT character_guid, objective_sequence, objective, foreground, chosen, failures, recovery, history FROM pkg_playerbots_runner WHERE character_guid = {guid}")),
+        "quest": quest(&node, &guid, RESPAWN_QUEST),
+        "gameobject": node.query_rows(&format!("SELECT guid, x, y, z, state FROM game_gameobject WHERE guid = {RESPAWNING_GAMEOBJECT}")),
+        "movement": node.query_rows(&format!("SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {guid}")),
+        "actions": actions(&node, &guid),
+    });
+    save(&node, "gameobject-approach-cancelled", stopped.clone());
+    assert!(
+        stopped["gameobject"].as_array().unwrap().is_empty(),
+        "{stopped}"
+    );
+    assert_eq!(stopped["retained"], started["retained"], "{stopped}");
+    assert_eq!(stopped["quest"], accepted["quest"], "{stopped}");
+    assert_eq!(
+        stopped["runner"][0]["objective_sequence"], started["runner"][0]["objective_sequence"],
+        "{stopped}"
+    );
+    assert!(
+        stopped["runner"][0]["objective"]
+            .as_str()
+            .unwrap()
+            .contains("quest"),
+        "{stopped}"
+    );
+    assert!(
+        !stopped["runner"][0]["foreground"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("gameObject = {RESPAWNING_GAMEOBJECT}")),
+        "{stopped}"
+    );
+    let history = stopped["runner"][0]["history"].as_str().unwrap();
+    assert!(
+        history.split("(at_micros =").any(|transition| {
+            transition.contains(&format!("gameObject = {RESPAWNING_GAMEOBJECT}"))
+                && transition.contains("outcome = (cancelled")
+        }),
+        "{stopped}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_recovery_unreachable_quest_ender_defers_and_preserves_the_quest() {
     let (node, guid) = fixture(
         "playerbots-recovery-unreachable-ender",
