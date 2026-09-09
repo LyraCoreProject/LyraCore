@@ -62,42 +62,24 @@ impl Coordinator {
     ) -> anyhow::Result<Option<crate::world::party::GroupRoster>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
-        let mut memberships = db
-            .game_group_member()
-            .iter()
-            .filter(|member| member.character_guid == character_guid)
-            .take(2);
-        let Some(group_id) = memberships.next().map(|member| member.group_id) else {
-            return Ok(None);
-        };
-        if memberships.next().is_some() {
-            anyhow::bail!("party command character has more than one membership");
-        }
-        let Some(group) = db
-            .game_group()
-            .iter()
-            .find(|group| group.group_id == group_id)
+        let Some((group_id, members)) = guard
+            .party_memberships
+            .read()
+            .unwrap()
+            .bounded_roster(character_guid, lyracore_shared::group::GROUP_MAX_MEMBERS)?
         else {
             return Ok(None);
         };
-        let mut rows: Vec<(u64, u64)> = db
-            .game_group_member()
-            .iter()
-            .filter(|member| member.group_id == group_id)
-            .take(lyracore_shared::group::GROUP_MAX_MEMBERS + 1)
-            .map(|member| (member.id, member.character_guid))
-            .collect();
-        if rows.len() > lyracore_shared::group::GROUP_MAX_MEMBERS {
-            anyhow::bail!("party command roster exceeds the member limit");
-        }
-        rows.sort_unstable();
+        let Some(group) = db.game_group().group_id().find(&group_id) else {
+            return Ok(None);
+        };
         Ok(Some(crate::world::party::GroupRoster {
             group_id,
             leader_guid: group.leader_guid,
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
-            members: rows.into_iter().map(|(_, guid)| guid).collect(),
+            members,
         }))
     }
 
