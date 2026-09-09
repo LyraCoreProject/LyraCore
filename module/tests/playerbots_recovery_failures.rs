@@ -304,6 +304,7 @@ fn playerbots_recovery_depleted_target_waits_for_actual_respawn_then_resumes() {
     let accepted = drive_until(&node, &guid, Duration::from_secs(15), |node| {
         quest(node, &guid, RESPAWN_QUEST).is_some()
     });
+    node.assert_call("playerbots_fixture_position", &[&guid, "1204"]);
     node.assert_call(
         "playerbots_recovery_fixture_arm_gameobject_respawn",
         &["10"],
@@ -315,10 +316,12 @@ fn playerbots_recovery_depleted_target_waits_for_actual_respawn_then_resumes() {
         "runner": runner(&node, &guid),
         "quest": quest(&node, &guid, RESPAWN_QUEST),
         "actions": actions(&node, &guid),
+        "character": node.query_rows(&format!("SELECT guid, x, y, z, map_id, instance_id FROM game_world_entity WHERE guid = {guid}")),
         "gameobject": node.query_rows(&format!("SELECT guid, state, respawn_at_micros FROM game_gameobject WHERE guid = {RESPAWNING_GAMEOBJECT}")),
     });
     save(&node, "respawn-wait", waiting.clone());
     assert!(accepted, "{waiting}");
+    assert_eq!(waiting["character"][0]["x"], "1204", "{waiting}");
     assert!(
         waiting["runner"][0]["failures"]
             .as_str()
@@ -334,7 +337,7 @@ fn playerbots_recovery_depleted_target_waits_for_actual_respawn_then_resumes() {
         "{waiting}"
     );
     assert_eq!(waiting["gameobject"][0]["state"], "1", "{waiting}");
-    assert_eq!(waiting["quest"]["counts"], "[0]", "{waiting}");
+    assert_eq!(waiting["quest"]["counts"], "0", "{waiting}");
 
     let respawned = poll_until(Duration::from_secs(20), || {
         node.query_rows(&format!(
@@ -368,7 +371,7 @@ fn playerbots_recovery_depleted_target_waits_for_actual_respawn_then_resumes() {
     });
     save(&node, "respawn-recovery", final_state.clone());
     assert!(completed, "{final_state}");
-    assert_eq!(final_state["quest"]["counts"], "[1]", "{final_state}");
+    assert_eq!(final_state["quest"]["counts"], "1", "{final_state}");
     assert!(
         final_state["actions"]
             .as_array()
