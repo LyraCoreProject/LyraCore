@@ -30,8 +30,8 @@ pub struct NavChunk {
     pub obs: Vec<u8>,
 }
 
-/// Successful terrain or navigation imports advance this singleton in the same transaction.
-/// An absent row means the installed grid predates import tracking or has never been imported.
+/// Terrain and navigation imports, plus effective coverage changes, advance this singleton in
+/// their transaction. An absent row means the installed inputs predate revision tracking.
 #[table(accessor = game_navigation_revision, public)]
 pub struct NavigationRevision {
     #[primary_key]
@@ -67,7 +67,7 @@ pub fn inputs(ctx: &ReducerContext, map_id: u32) -> NavigationInputs {
     }
 }
 
-pub(crate) fn record_import(ctx: &ReducerContext) -> Result<(), String> {
+pub(crate) fn record_change(ctx: &ReducerContext) -> Result<(), String> {
     let rows = ctx.db.game_navigation_revision();
     if let Some(mut row) = rows.id().find(0) {
         row.revision = row
@@ -188,7 +188,7 @@ pub fn import_nav_chunks(ctx: &ReducerContext, packed: String) -> Result<(), Str
     if load_nav_batch(ctx, &packed)? == 0 {
         return Err("nav import payload was empty".to_string());
     }
-    record_import(ctx)
+    record_change(ctx)
 }
 
 /// Append a nav batch WITHOUT the reset — a zone spans many `spacetime call` args.
@@ -196,7 +196,7 @@ pub fn import_nav_chunks(ctx: &ReducerContext, packed: String) -> Result<(), Str
 pub fn import_nav_chunks_append(ctx: &ReducerContext, packed: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     if load_nav_batch(ctx, &packed)? > 0 {
-        record_import(ctx)?;
+        record_change(ctx)?;
     }
     Ok(())
 }

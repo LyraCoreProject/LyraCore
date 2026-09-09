@@ -222,7 +222,7 @@ pub fn import_terrain_chunks(ctx: &ReducerContext, packed: String) -> Result<(),
     if load_terrain_batch(ctx, &packed)? == 0 {
         return Err("terrain import payload was empty".to_string());
     }
-    crate::nav::record_import(ctx)
+    crate::nav::record_change(ctx)
 }
 
 /// Append a terrain batch WITHOUT the reset — a zone's cells span several `spacetime call` args.
@@ -230,7 +230,7 @@ pub fn import_terrain_chunks(ctx: &ReducerContext, packed: String) -> Result<(),
 pub fn import_terrain_chunks_append(ctx: &ReducerContext, packed: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     if load_terrain_batch(ctx, &packed)? > 0 {
-        crate::nav::record_import(ctx)?;
+        crate::nav::record_change(ctx)?;
     }
     Ok(())
 }

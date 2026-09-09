@@ -577,6 +577,7 @@ pub fn prepare_vmap_nav_coverage(
     let generation = generation(ctx, generation_id)?;
     require_coverage_preparable(generation.state)?;
     let coverage = ctx.db.game_vmap_nav_coverage();
+    let mut inserted = false;
     for cell in cells {
         let key = cell_key(generation.map_id, cell.cell_x, cell.cell_y);
         if coverage
@@ -619,6 +620,10 @@ pub fn prepare_vmap_nav_coverage(
             walk: derived.walk,
             obs: derived.obs,
         });
+        inserted = true;
+    }
+    if inserted && crate::nav::coverage_generation(ctx, generation.map_id) == Some(generation_id) {
+        crate::nav::record_change(ctx)?;
     }
     Ok(())
 }

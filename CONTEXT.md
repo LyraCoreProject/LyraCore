@@ -233,9 +233,10 @@ retained memory, with at most three ordinary attempts so healing can still start
 
 **Navigation Inputs**:
 The enabled navigation and collision modes, active static and derived generations, and the durable
-revision advanced by each successful terrain or navigation import. An absent revision means no
-tracked import is available. These inputs identify retained movement and failure evidence; only
-the route observation can state whether its consulted cells had verified coverage.
+revision advanced by terrain and navigation imports or changes to effective derived coverage. An
+absent revision means those inputs predate revision tracking. These inputs identify retained
+movement and failure evidence; only the route observation can state whether its consulted cells
+had verified coverage.
 
 **Recovery Scan**:
 A bounded scan of healing rotations that retains its last completed result while reading the next

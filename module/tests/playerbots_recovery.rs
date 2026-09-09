@@ -538,6 +538,16 @@ fn playerbots_recovery_invalidates_failed_work_after_an_actual_navigation_import
     let path = support::log_dir().join(format!("{}-before-import.json", node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&before).unwrap()).unwrap();
     assert!(deferred, "{before}");
+    let failed_fight = before["runner"]["recovery"]
+        .as_str()
+        .unwrap()
+        .split("work = ")
+        .find(|attempt| attempt.starts_with(&format!("(fight = {TARGET})")))
+        .expect("the original quest fight must have a Recovery Attempt");
+    assert!(
+        failed_fight.contains("deferred_until_micros = (some"),
+        "{before}"
+    );
     assert!(before["runner"]["failures"]
         .as_str()
         .unwrap()
@@ -580,7 +590,19 @@ fn playerbots_recovery_invalidates_failed_work_after_an_actual_navigation_import
     assert!(after["runner"]["chosen"]
         .as_str()
         .unwrap()
-        .contains("attack"));
+        .contains(&format!("attack = {TARGET}")));
+    assert!(after["runner"]["recovery"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("active = (some = (fight = {TARGET}))")));
+    assert!(!after["runner"]["recovery"]
+        .as_str()
+        .unwrap()
+        .contains("deferred_until_micros = (some"));
+    assert!(after["runner"]["deferred_destinations"]
+        .as_str()
+        .unwrap()
+        .is_empty());
     assert_eq!(before["quest"], after["quest"]);
 }
 
