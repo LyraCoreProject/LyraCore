@@ -480,6 +480,7 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "source_issuers": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_issuer"),
         "source_dispatch_lanes": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_dispatch_lane"),
         "source_results": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
+        "source_accounts": topology.cli.rows(topology.node.server(), topology.source(), "SELECT id, username FROM game_account"),
         "source_characters": topology.cli.rows(topology.node.server(), topology.source(), "SELECT guid, name FROM game_character"),
         "source_guid_range": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_guid_range"),
         "source_two_intents": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_party_command_intent"),
@@ -488,8 +489,12 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "source_two_characters": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT guid, name FROM game_character"),
         "source_two_guid_range": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_guid_range"),
         "target_receipts": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_receipt"),
+        "target_intents": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_intent"),
+        "target_dispatch_lanes": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_dispatch_lane"),
+        "target_results": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
         "target_issuers": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_issuer"),
         "target_orders": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM pkg_playerbots_companion_order"),
+        "target_accounts": topology.cli.rows(topology.node.server(), &topology.target, "SELECT id, username FROM game_account"),
         "target_characters": topology.cli.rows(topology.node.server(), &topology.target, "SELECT guid, name FROM game_character"),
         "target_guid_range": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_guid_range"),
         "source_receipts": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_receipt"),
@@ -908,13 +913,9 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
 #[ignore = "requires SpacetimeDB 2.7.1, the full Package union, and the Wasm toolchain"]
 fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_source() {
     let topology = CommandTopology::new("party-command-issuer-sequence-transfer");
-    let destination_map = topology.source_one_party.map_id + 2;
-    let shard_map = format!(
-        "{}:*={},{}:*={}",
-        topology.target_party.map_id, topology.target, destination_map, topology.source_two
-    );
+    let shard_map = format!("{}:*={}", topology.target_party.map_id, topology.target);
     let _environment = TopologyEnv::install(&shard_map, &topology.realm);
-    let (_runtime, source) = topology.coordinator(topology.source(), "party-command-old-source");
+    let (runtime, source) = topology.coordinator(topology.source(), "party-command-old-source");
     let target = source.shard_handle(&topology.target).unwrap();
 
     let older_id = queue(
@@ -926,7 +927,17 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     );
     let older = cached_intent(&source, older_id);
     assert_eq!(older.issuer_sequence, 1);
+    target
+        .provision_account("PB009SOURCEONE", &[], &[])
+        .unwrap();
+    let target_account = row(
+        &topology.cli,
+        topology.node.server(),
+        &topology.target,
+        "SELECT id FROM game_account WHERE username = 'PB009SOURCEONE'",
+    );
     let actor: serde_json::Value = serde_json::from_str(&topology.actor_one).unwrap();
+    let source_account_id = actor["ownership"]["some"]["account_id"].to_string();
     let ownership = serde_json::to_string(&actor["ownership"]["some"]).unwrap();
     topology.cli.call(
         topology.node.server(),
@@ -953,7 +964,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     );
     let destination_name_collision = topology.cli.rows(
         topology.node.server(),
-        &topology.source_two,
+        &topology.target,
         &format!(
             "SELECT guid FROM game_character WHERE name = '{}'",
             source_character["name"]
@@ -968,14 +979,18 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     let destination_range = row(
         &topology.cli,
         topology.node.server(),
-        &topology.source_two,
+        &topology.target,
         "SELECT base, size FROM game_guid_range WHERE id = 0",
     );
     evidence(&topology, "issuer-command-queued-before-transfer");
     assert!(released_claim.is_empty());
+    assert_eq!(
+        target_account["id"], source_account_id,
+        "the private destination must preserve the transferred Account id"
+    );
     assert!(destination_name_collision.is_empty());
     assert_eq!(source_range["base"], "0");
-    assert_eq!(destination_range["base"], "2000000000");
+    assert_eq!(destination_range["base"], "1000000000");
     assert_eq!(source_range["size"], "1000000000");
     assert_eq!(destination_range["size"], "1000000000");
 
@@ -985,7 +1000,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
         "debug_bot_transfer",
         &[
             &topology.source_one_party.leader.to_string(),
-            &destination_map.to_string(),
+            &topology.target_party.map_id.to_string(),
             "0",
             "1200",
             "1200",
@@ -997,7 +1012,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     crate::world::transfer::run_bot_transfer(
         &source,
         topology.source_one_party.leader,
-        destination_map,
+        topology.target_party.map_id,
         0,
         "party-command-issuer",
     )
@@ -1006,7 +1021,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
         .cli
         .rows(
             topology.node.server(),
-            &topology.source_two,
+            &topology.target,
             &format!(
                 "SELECT guid FROM game_character WHERE guid = {}",
                 topology.source_one_party.leader
@@ -1028,7 +1043,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     let moved_issuer = row(
         &topology.cli,
         topology.node.server(),
-        &topology.source_two,
+        &topology.target,
         &format!(
             "SELECT last_sequence FROM game_party_command_issuer WHERE character_guid = {}",
             topology.source_one_party.leader
@@ -1036,27 +1051,25 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     );
     assert_eq!(moved_issuer["last_sequence"], "1");
 
-    let (runtime_two, source_two) =
-        topology.coordinator(&topology.source_two, "party-command-new-source");
     let (moved_actor, _moved_session) = enter_transferred_actor(
         &topology,
-        &runtime_two,
-        &source_two,
+        &runtime,
+        &target,
         topology.source_one_party.leader,
     );
     let newer_id = queue(
         &topology.cli,
         topology.node.server(),
-        &topology.source_two,
+        &topology.target,
         &moved_actor,
         &format!("follow|{}", topology.target_party.warrior),
     );
-    let newer = cached_intent(&source_two, newer_id);
+    let newer = cached_intent(&target, newer_id);
     assert_eq!(newer.issuer_guid, older.issuer_guid);
     assert_eq!(newer.issuer_sequence, 2);
     assert_ne!(newer.source_identity, older.source_identity);
     assert_eq!(
-        party::run_party_command_intent(&source_two, &newer, 701).unwrap(),
+        party::run_party_command_intent(&target, &newer, 701).unwrap(),
         CompanionCommandOutcome::Applied
     );
     let after_newer = row(
