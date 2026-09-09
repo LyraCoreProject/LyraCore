@@ -206,8 +206,8 @@ package_only! {
     pub(crate) use crate::bridge::CommandOutcome as CommandOutcome;
     pub(crate) use crate::bridge::ParsedClientCommand as ParsedClientCommand;
     pub(crate) use crate::bridge::RECEIPT_CAPACITY as COMMAND_RECEIPT_CAPACITY;
-    pub(crate) use crate::quest::area_trigger_route;
-    pub(crate) use crate::quest::enter_sessionless_areatrigger;
+    pub(crate) use crate::quest::area_trigger_route as area_trigger_route;
+    pub(crate) use crate::quest::enter_sessionless_areatrigger as enter_sessionless_areatrigger;
 }
 
 /// A Refusal classified at the operation's Gate. Detail preserves existing client messages.
