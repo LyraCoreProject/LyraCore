@@ -84,6 +84,17 @@ impl PrivateCli {
         assert_success(&output, &format!("query {database}: {query}"));
         parse_rows(&String::from_utf8(output.stdout).unwrap())
     }
+
+    fn json_rows(&self, server: &str, database: &str, query: &str) -> Vec<Vec<serde_json::Value>> {
+        let output = self
+            .command()
+            .args(["sql", "-s", server, "--format", "json", database, query])
+            .output()
+            .unwrap();
+        assert_success(&output, &format!("query {database}: {query}"));
+        parse_json_rows(&String::from_utf8(output.stdout).unwrap())
+            .unwrap_or_else(|error| panic!("query {database}: {query}: {error}"))
+    }
 }
 
 impl Drop for PrivateCli {
@@ -124,6 +135,47 @@ fn parse_rows(output: &str) -> Vec<BTreeMap<String, String>> {
                 .collect()
         })
         .collect()
+}
+
+fn parse_json_rows(output: &str) -> Result<Vec<Vec<serde_json::Value>>, String> {
+    let statements: serde_json::Value =
+        serde_json::from_str(output).map_err(|error| format!("malformed SQL JSON: {error}"))?;
+    let statements = statements
+        .as_array()
+        .ok_or("SQL JSON result is not an array")?;
+    if statements.len() != 1 {
+        return Err(format!(
+            "SQL JSON returned {} statements instead of one",
+            statements.len()
+        ));
+    }
+    statements[0]
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "SQL JSON statement has no row array".to_string())?
+        .iter()
+        .map(|row| {
+            row.as_array()
+                .cloned()
+                .ok_or_else(|| "SQL JSON row is not an array".to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn structured_sql_rows_preserve_delimiters_and_escaped_quotes() {
+    let rows = parse_json_rows(
+        r#"[{"schema":{},"rows":[["1|Superseded","said \"yes\""]],"total_duration_micros":1}]"#,
+    )
+    .unwrap();
+    assert_eq!(rows[0][0].as_str(), Some("1|Superseded"));
+    assert_eq!(rows[0][1].as_str(), Some("said \"yes\""));
+}
+
+#[test]
+fn structured_sql_rows_reject_malformed_output() {
+    assert!(parse_json_rows("not json").is_err());
+    assert!(parse_json_rows(r#"[{"rows":["not a row"]}]"#).is_err());
 }
 
 struct TopologyEnv {
@@ -544,20 +596,20 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "source_intents": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_intent"),
         "source_issuers": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_issuer"),
         "source_dispatch_lanes": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_party_command_dispatch_lane"),
-        "source_results": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
+        "source_results": topology.cli.json_rows(topology.node.server(), topology.source(), "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
         "source_accounts": topology.cli.rows(topology.node.server(), topology.source(), "SELECT id, username FROM game_account"),
         "source_account_claims": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_account_claim"),
         "source_characters": topology.cli.rows(topology.node.server(), topology.source(), "SELECT guid, name FROM game_character"),
         "source_guid_range": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM game_guid_range"),
         "source_two_intents": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_party_command_intent"),
         "source_two_issuers": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_party_command_issuer"),
-        "source_two_results": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
+        "source_two_results": topology.cli.json_rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
         "source_two_characters": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT guid, name FROM game_character"),
         "source_two_guid_range": topology.cli.rows(topology.node.server(), &topology.source_two, "SELECT * FROM game_guid_range"),
         "target_receipts": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_receipt"),
         "target_intents": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_intent"),
         "target_dispatch_lanes": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_dispatch_lane"),
-        "target_results": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
+        "target_results": topology.cli.json_rows(topology.node.server(), &topology.target, "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
         "target_issuers": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM game_party_command_issuer"),
         "target_orders": topology.cli.rows(topology.node.server(), &topology.target, "SELECT * FROM pkg_playerbots_companion_order"),
         "target_accounts": topology.cli.rows(topology.node.server(), &topology.target, "SELECT id, username FROM game_account"),
@@ -1182,13 +1234,17 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
         .unwrap();
     let older_reply = topology
         .cli
-        .rows(
+        .json_rows(
             topology.node.server(),
             topology.source(),
             "SELECT payload FROM game_addon_message WHERE cmd = 'playerbots.order.result'",
         )
         .into_iter()
-        .find(|row| row["payload"].starts_with(&format!("{older_id}|")))
+        .find(|row| {
+            row.first()
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|payload| payload.starts_with(&format!("{older_id}|")))
+        })
         .expect("old source result reply missing after issuer Transfer");
     evidence(
         &topology,
@@ -1197,7 +1253,9 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     assert_eq!(after_older, after_newer);
     assert!(after_older["order"].to_ascii_lowercase().contains("follow"));
     assert_eq!(older_receipt, Some(CompanionCommandOutcome::Superseded));
-    assert!(older_reply["payload"].contains("Superseded"));
+    assert!(older_reply[0]
+        .as_str()
+        .is_some_and(|payload| payload.contains("Superseded")));
 }
 
 #[test]
@@ -1340,15 +1398,19 @@ fn companion_command_lost_receipt_after_guarantee_reports_unknown_without_reappl
             topology.target_party.warrior
         ),
     );
-    let response = row(
-        &topology.cli,
+    let responses = topology.cli.json_rows(
         topology.node.server(),
         topology.source(),
         "SELECT payload FROM game_addon_message WHERE cmd = 'playerbots.order.result'",
     );
     evidence(&topology, "applied-receipt-lost-after-guarantee");
     assert_eq!(after_unknown, applied_order);
-    assert!(response["payload"].contains("OutcomeUnknown"));
+    assert_eq!(
+        responses,
+        vec![vec![serde_json::Value::String(format!(
+            "{intent_id}|OutcomeUnknown"
+        ))]]
+    );
     assert_eq!(
         terminal_messages(&topology.cli, topology.node.server(), topology.source()),
         1
