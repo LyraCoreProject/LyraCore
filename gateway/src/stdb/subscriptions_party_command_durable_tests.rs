@@ -189,16 +189,22 @@ fn stage_roles(cli: &PrivateCli, server: &str, database: &str, guid_base: u64) -
         database,
         "SELECT character_guid, class, role FROM pkg_playerbots_bot",
     );
-    let warrior = bots
+    let warrior: u64 = bots
         .iter()
         .find(|row| row["class"] == WARRIOR && row["role"] == TANK)
         .unwrap()["character_guid"]
         .parse()
         .unwrap();
-    let priest = bots.iter().find(|row| row["class"] == "5").unwrap()["character_guid"]
+    let priest: u64 = bots
+        .iter()
+        .find(|row| row["class"] == "5")
+        .unwrap()["character_guid"]
         .parse()
         .unwrap();
-    let mage = bots.iter().find(|row| row["class"] == "8").unwrap()["character_guid"]
+    let mage: u64 = bots
+        .iter()
+        .find(|row| row["class"] == "8")
+        .unwrap()["character_guid"]
         .parse()
         .unwrap();
     let leader = bots
