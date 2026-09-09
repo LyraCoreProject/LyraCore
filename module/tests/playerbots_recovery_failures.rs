@@ -407,7 +407,8 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
         "actions": actions(&node, &guid),
     });
     save(&node, "gameobject-quest-accepted", accepted.clone());
-    assert_eq!(accepted["quest"]["counts"], "[0]", "{accepted}");
+    assert_eq!(accepted["quest"]["counts"], "0", "{accepted}");
+    assert_eq!(accepted["quest"]["rewarded"], "false", "{accepted}");
 
     node.assert_call(
         "playerbots_recovery_fixture_position_simple_gameobject",
@@ -439,6 +440,13 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
             .as_str()
             .unwrap()
             .contains(&format!("gameObject = {RESPAWNING_GAMEOBJECT}")),
+        "{started}"
+    );
+    assert!(
+        started["runner"][0]["chosen"]
+            .as_str()
+            .unwrap()
+            .contains("reason = (quest"),
         "{started}"
     );
     assert!(
