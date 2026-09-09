@@ -712,6 +712,7 @@ impl CommandTopology {
 
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1, the full Package union, and the Wasm toolchain"]
+#[allow(clippy::too_many_lines)] // One durable step per crash, Transfer, and replay boundary.
 fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     let topology = CommandTopology::new("party-command-crash-recovery");
     let destination_map = topology.target_party.map_id + 1;
@@ -1029,6 +1030,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
 
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1, the full Package union, and the Wasm toolchain"]
+#[allow(clippy::too_many_lines)] // One durable step per issuer Transfer and causal-order boundary.
 fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_source() {
     let topology = CommandTopology::new("party-command-issuer-sequence-transfer");
     let shard_map = format!("{}:*={}", topology.target_party.map_id, topology.target);
