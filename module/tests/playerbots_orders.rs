@@ -235,6 +235,7 @@ fn playerbots_orders_authenticate_follow_and_do_not_restart_a_retained_cast() {
     assert!(accepted["order"].to_ascii_lowercase().contains("follow"));
     assert_eq!(accepted["issuer_guid"], fixture.leader);
     assert!(accepted["history"].contains(&first));
+    assert!(accepted["history"].contains(&format!("issuer_guid = {}", fixture.leader)));
 
     node.assert_call(
         "playerbots_fixture_companion_health",
