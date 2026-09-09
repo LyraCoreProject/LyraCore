@@ -129,11 +129,17 @@ pub struct PartyCommandReceipt {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
+    #[unique]
+    pub receipt_key: String,
     pub source_identity: Identity,
     pub intent_id: u64,
     pub bot_guid: u64,
     pub outcome: CommandOutcome,
     pub retain_until_micros: i64,
+}
+
+pub(crate) fn party_command_receipt_key(source_identity: Identity, intent_id: u64) -> String {
+    format!("{source_identity}:{intent_id}")
 }
 
 /// One server→client addon message: relayed by the gateway as an addon-language whisper, arriving
@@ -365,6 +371,7 @@ pub fn apply_admitted_party_command(
     });
     receipts.insert(PartyCommandReceipt {
         id: 0,
+        receipt_key: party_command_receipt_key(source_identity, intent_id),
         source_identity,
         intent_id,
         bot_guid,

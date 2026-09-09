@@ -3411,8 +3411,7 @@ impl Coordinator {
             .conn
             .db
             .game_party_command_intent()
-            .by_pending()
-            .filter(true)
+            .iter()
             .take(PENDING_LIMIT + 1)
             .map(party_command_intent)
             .collect();

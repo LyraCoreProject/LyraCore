@@ -145,14 +145,14 @@ impl Coordinator {
         source_identity: Identity,
         intent_id: u64,
     ) -> Option<CompanionCommandOutcome> {
+        let receipt_key = format!("{source_identity}:{intent_id}");
         self.0
             .coord()
             .conn
             .db
             .game_party_command_receipt()
-            .by_source_intent()
-            .filter((source_identity, intent_id))
-            .next()
+            .receipt_key()
+            .find(&receipt_key)
             .map(|row| command_outcome(row.outcome))
     }
 
