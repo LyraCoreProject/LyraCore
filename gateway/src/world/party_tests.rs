@@ -259,6 +259,7 @@ fn an_oversized_cached_roster_is_not_sent_for_command_authority() {
     );
     let store = InMemoryStore {
         entity_in_world: true,
+        characters: vec![character(GINGER, "Ginger"), character(BOT, "Bot")],
         entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (BOT, 0, 0)]),
         mirror: std::sync::Mutex::new(vec![party::GroupRoster {
             group_id: 7,
