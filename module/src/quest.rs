@@ -373,7 +373,11 @@ pub struct GameObjectQuest {
 #[table(
     accessor = game_character_quest,
     public,
-    index(accessor = by_character, btree(columns = [character_guid]))
+    index(accessor = by_character, btree(columns = [character_guid])),
+    index(
+        accessor = by_character_quest,
+        btree(columns = [character_guid, quest_entry])
+    )
 )]
 pub struct CharacterQuest {
     #[primary_key]
@@ -529,18 +533,18 @@ fn gameobject_has_quest_role(
         .any(|r| r.quest_entry == quest_entry && r.role == role)
 }
 
-/// The character's existing quest-log row for `quest_entry`, if any (a point scan over the character's
-/// rows — the log is small). `Some(rewarded == false)` = active; `Some(true)` = already done.
-fn character_quest_row(
+/// The Character's exact quest-log row for `quest_entry`, if any.
+/// `Some(rewarded == false)` means active; `Some(true)` means already completed.
+pub(crate) fn character_quest_row(
     ctx: &ReducerContext,
     character_guid: u64,
     quest_entry: u32,
 ) -> Option<CharacterQuest> {
     ctx.db
         .game_character_quest()
-        .by_character()
-        .filter(&character_guid)
-        .find(|q| q.quest_entry == quest_entry)
+        .by_character_quest()
+        .filter((character_guid, quest_entry))
+        .next()
 }
 
 pub(crate) fn quest_is_taken(ctx: &ReducerContext, character_guid: u64, quest_entry: u32) -> bool {

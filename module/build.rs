@@ -54,6 +54,9 @@
 //! a marker in a nested submodule file whose facade does not visibly re-export it panics at build
 //! time naming the missing `pub use` — instead of failing later as an opaque rustc error inside
 //! `$OUT_DIR`.
+//! A source file compiled only with `debug_reducers` must put the canonical inner attribute
+//! `#![cfg(feature = "debug_reducers")]` before every non-blank line. Registry discovery applies
+//! that same feature boundary, so an ordinary build never receives paths to functions rustc omitted.
 //!
 //! The same pass also lints each package file against the Package API surface
 //! (`PACKAGE_API_ROOTS`, documented at `docs/package-api.md`): a path that reaches the crate root
@@ -1058,6 +1061,12 @@ fn match_fn_name(rest: &str) -> Option<String> {
 fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg: &mut Registries) {
     let raw = fs::read_to_string(file)
         .unwrap_or_else(|e| panic!("build.rs: cannot read {}: {e}", file.display()));
+    if !registry_file_enabled(
+        &raw,
+        std::env::var_os("CARGO_FEATURE_DEBUG_REDUCERS").is_some(),
+    ) {
+        return;
+    }
     let content = strip_comments_and_strings(&raw);
 
     scan_marker(
@@ -1173,6 +1182,21 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
             ),
         },
     );
+}
+
+const DEBUG_REDUCERS_FILE_CFG: &str = "#![cfg(feature = \"debug_reducers\")]";
+
+/// Keep registry discovery on the same whole-file feature boundary as rustc.
+///
+/// The scanner deliberately supports one exact leading inner attribute instead of interpreting
+/// general Rust `cfg` expressions. A parent module may repeat the gate, but the file owns the
+/// registry contract so recursive discovery can decide without reconstructing the module tree.
+fn registry_file_enabled(source: &str, debug_reducers: bool) -> bool {
+    debug_reducers
+        || source
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .is_none_or(|line| line.trim() != DEBUG_REDUCERS_FILE_CFG)
 }
 
 /// Whether `root`, the first segment of a crate-root path, is on the Package API surface.
@@ -1742,6 +1766,29 @@ fn scan_marker(content: &str, _file: &Path, marker: &str, mut on_hit: impl FnMut
 #[cfg(test)]
 mod package_api_lint_tests {
     use super::*;
+
+    #[test]
+    fn debug_only_registry_file_follows_the_feature() {
+        let source =
+            "#![cfg(feature = \"debug_reducers\")]\ncrate::game_tick_pass!(fn pass(ctx) {});\n";
+        assert!(!registry_file_enabled(source, false));
+        assert!(registry_file_enabled(source, true));
+    }
+
+    #[test]
+    fn ordinary_registry_file_is_always_enabled() {
+        let source = "crate::game_tick_pass!(fn pass(ctx) {});\n";
+        assert!(registry_file_enabled(source, false));
+        assert!(registry_file_enabled(source, true));
+    }
+
+    #[test]
+    fn debug_cfg_lookalikes_do_not_disable_registry_discovery() {
+        let comment = "// #![cfg(feature = \"debug_reducers\")]\nfn ordinary() {}\n";
+        let string = "const NOTE: &str = \"#![cfg(feature = \\\"debug_reducers\\\")]\";\n";
+        assert!(registry_file_enabled(comment, false));
+        assert!(registry_file_enabled(string, false));
+    }
 
     fn reported(source: &str) -> Vec<String> {
         reported_at_depth(source, 0)

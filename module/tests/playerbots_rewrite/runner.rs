@@ -322,6 +322,7 @@ fn playerbots_runner_survival_cancels_cast_before_movement_and_keeps_the_objecti
     let after = runner(&node, bot);
     assert_eq!(after["objective_sequence"], objective_id);
     assert!(after["foreground"].contains("movement"));
+    assert!(!after["failures"].contains("destinationUnavailable"));
     assert!(after["history"].contains("cancelled"));
     assert!(node
         .query_rows("SELECT * FROM pkg_playerbots_action")
