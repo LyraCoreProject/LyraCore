@@ -106,6 +106,45 @@ pub struct GroupMember {
     pub owner_identity: Identity,
 }
 
+/// Realm-core-certified partition state for one mirrored party member. This local projection
+/// carries no position and names no Shard. The Realm membership row and locator revisions order
+/// delayed Gateway fanout without relying on clocks from different databases.
+/// [entity]
+#[table(
+    accessor = game_group_member_partition,
+    public,
+    index(accessor = by_group, btree(columns = [group_id]))
+)]
+pub struct GroupMemberPartition {
+    #[primary_key]
+    pub character_guid: u64,
+    pub group_id: u64,
+    /// The authoritative Realm-core `game_group_member.id`, never a World Shard mirror row id.
+    pub membership_revision: u64,
+    /// False is a retained removal fence. A later join must carry a newer membership revision.
+    pub member_active: bool,
+    pub map_id: u32,
+    pub instance_id: u64,
+    /// Realm-core `game_character_shard.revision`.
+    pub locator_revision: u64,
+    pub state: PartyPartitionState,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartyPartitionState {
+    Unknown,
+    Known,
+    PendingTransfer,
+}
+
+crate::character_owned!(delete, fn sweep_delete_game_group_member_partition(ctx, character_guid) {
+    ctx.db
+        .game_group_member_partition()
+        .character_guid()
+        .delete(character_guid);
+});
+crate::character_owned!(not_transported, fn sweep_transfer_game_group_member_partition());
+
 // Character-owned sweeps: a deleted character leaves its group through the same
 // leader-transfer/disband logic a voluntary leave uses — never a bare row delete, which would
 // orphan leadership or leave a 1-member group alive.
@@ -490,6 +529,14 @@ pub struct PartyUnitFacts {
 pub struct PartyMemberFacts {
     pub character_guid: u64,
     pub unit: Option<PartyUnitFacts>,
+    pub partition: Option<PartyPartitionFacts>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartyPartitionFacts {
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub locator_revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -715,6 +762,21 @@ pub fn party_facts(
             PartyMemberFacts {
                 character_guid: member.character_guid,
                 unit,
+                partition: ctx
+                    .db
+                    .game_group_member_partition()
+                    .character_guid()
+                    .find(member.character_guid)
+                    .filter(|partition| {
+                        partition.group_id == member.group_id
+                            && partition.member_active
+                            && partition.state == PartyPartitionState::Known
+                    })
+                    .map(|partition| PartyPartitionFacts {
+                        map_id: partition.map_id,
+                        instance_id: partition.instance_id,
+                        locator_revision: partition.locator_revision,
+                    }),
             }
         })
         .collect();
@@ -1470,27 +1532,90 @@ pub fn sync_group_mirror(
     master_looter_guid: u64,
     members: Vec<u64>,
     request_actor: crate::SessionActor,
+    partitions: Vec<GroupMemberPartition>,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor(ctx, request_actor)?;
     if group_id == 0 {
         return Err("group 0 is not a party".to_string());
     }
+    if members.len() > GROUP_MAX_MEMBERS || partitions.len() > GROUP_MAX_MEMBERS * 2 {
+        return Err(format!(
+            "group mirror exceeds the bounded current and departed party-member limit"
+        ));
+    }
+    let mut partition_guids = std::collections::BTreeSet::new();
+    for partition in &partitions {
+        if partition.group_id != group_id
+            || partition.membership_revision == 0
+            || (partition.locator_revision == 0 && partition.state != PartyPartitionState::Unknown)
+            || partition.member_active != members.contains(&partition.character_guid)
+            || (!partition.member_active && partition.state != PartyPartitionState::Unknown)
+            || !partition_guids.insert(partition.character_guid)
+        {
+            return Err("group mirror has an invalid member partition".to_string());
+        }
+    }
+    if members.iter().any(|guid| !partition_guids.contains(guid)) {
+        return Err("group mirror is missing a current member partition".to_string());
+    }
     let groups = ctx.db.game_group();
     let member_tbl = ctx.db.game_group_member();
+    let partition_tbl = ctx.db.game_group_member_partition();
+    let stale_partitions: Vec<_> = partition_tbl
+        .by_group()
+        .filter(&group_id)
+        .filter(|partition| partition.member_active && !members.contains(&partition.character_guid))
+        .collect();
+    for mut partition in stale_partitions {
+        partition.member_active = false;
+        partition.state = PartyPartitionState::Unknown;
+        partition_tbl.character_guid().update(partition);
+    }
+    for partition in partitions {
+        match partition_tbl
+            .character_guid()
+            .find(partition.character_guid)
+            .map(|current| partition_update(&current, &partition))
+        {
+            Some(PartitionUpdate::Keep) => {}
+            Some(PartitionUpdate::Conflict) => {
+                return Err(format!(
+                    "group mirror has conflicting partition facts for member {}",
+                    partition.character_guid
+                ));
+            }
+            Some(PartitionUpdate::Replace) => {
+                partition_tbl.character_guid().update(partition);
+            }
+            None => {
+                partition_tbl.insert(partition);
+            }
+        }
+    }
+    let effective_members: Vec<_> = members
+        .iter()
+        .copied()
+        .filter(|guid| {
+            partition_tbl
+                .character_guid()
+                .find(*guid)
+                .is_some_and(|row| row.member_active && row.group_id == group_id)
+        })
+        .collect();
     let current: Vec<(u64, u64)> = member_tbl
         .by_group()
         .filter(&group_id)
         .map(|m| (m.id, m.character_guid))
         .collect();
-    let (stale_row_ids, arriving) = mirror_plan(&current, &members);
+    let (stale_row_ids, arriving) = mirror_plan(&current, &effective_members);
     for id in stale_row_ids {
         if let Some((_, guid)) = current.iter().find(|(row_id, _)| *row_id == id) {
             crate::loot::tag::revoke_group_member(ctx, group_id, *guid);
         }
         member_tbl.id().delete(id);
     }
-    if members.is_empty() {
+    if effective_members.is_empty() {
         groups.group_id().delete(group_id);
         return Ok(());
     }
@@ -1503,18 +1628,30 @@ pub fn sync_group_mirror(
             member_tbl.id().delete(m.id);
         }
     }
+    let complete_roster = effective_members.len() == members.len();
+    let effective_leader = if effective_members.contains(&leader_guid) {
+        leader_guid
+    } else {
+        *effective_members
+            .first()
+            .ok_or_else(|| "group mirror has no effective leader".to_string())?
+    };
     match groups.group_id().find(group_id) {
         Some(mut g) => {
-            g.leader_guid = leader_guid;
-            g.loot_method = loot_method_setting;
-            g.loot_threshold = loot_threshold;
-            g.master_looter_guid = master_looter_guid;
+            if complete_roster {
+                g.leader_guid = effective_leader;
+                g.loot_method = loot_method_setting;
+                g.loot_threshold = loot_threshold;
+                g.master_looter_guid = master_looter_guid;
+            } else if !effective_members.contains(&g.leader_guid) {
+                g.leader_guid = effective_leader;
+            }
             groups.group_id().update(g);
         }
         None => {
             groups.insert(Group {
                 group_id,
-                leader_guid,
+                leader_guid: effective_leader,
                 loot_method: loot_method_setting,
                 loot_threshold,
                 // The round-robin cursor is per-SHARD kill state, not realm state: it advances on
@@ -1599,6 +1736,65 @@ pub fn admit_party_command_authority(
         }
     }
     Ok(())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PartitionUpdate {
+    Keep,
+    Replace,
+    Conflict,
+}
+
+fn partition_state_order(state: PartyPartitionState) -> u8 {
+    match state {
+        PartyPartitionState::Unknown => 0,
+        PartyPartitionState::Known => 1,
+        PartyPartitionState::PendingTransfer => 2,
+    }
+}
+
+fn partition_update(
+    current: &GroupMemberPartition,
+    incoming: &GroupMemberPartition,
+) -> PartitionUpdate {
+    match incoming
+        .membership_revision
+        .cmp(&current.membership_revision)
+    {
+        std::cmp::Ordering::Less => return PartitionUpdate::Keep,
+        std::cmp::Ordering::Greater => return PartitionUpdate::Replace,
+        std::cmp::Ordering::Equal => {}
+    }
+    if current.member_active != incoming.member_active {
+        return if current.member_active {
+            PartitionUpdate::Replace
+        } else {
+            PartitionUpdate::Keep
+        };
+    }
+    if !current.member_active {
+        return PartitionUpdate::Keep;
+    }
+    if current.group_id != incoming.group_id {
+        return PartitionUpdate::Conflict;
+    }
+    match incoming.locator_revision.cmp(&current.locator_revision) {
+        std::cmp::Ordering::Less => PartitionUpdate::Keep,
+        std::cmp::Ordering::Greater => PartitionUpdate::Replace,
+        std::cmp::Ordering::Equal => {
+            let incoming_order = partition_state_order(incoming.state);
+            let current_order = partition_state_order(current.state);
+            match incoming_order.cmp(&current_order) {
+                std::cmp::Ordering::Less => PartitionUpdate::Keep,
+                std::cmp::Ordering::Greater => PartitionUpdate::Replace,
+                std::cmp::Ordering::Equal
+                    if incoming.map_id == current.map_id
+                        && incoming.instance_id == current.instance_id =>
+                {
+                    PartitionUpdate::Keep
+                }
+                std::cmp::Ordering::Equal => PartitionUpdate::Conflict,
+            }
+        }
+    }
 }
 
 /// The row-level diff [`sync_group_mirror`] applies: which mirrored member ROWS of this group are no
@@ -1801,6 +1997,76 @@ mod tests {
         assert_eq!(mirror_plan(&current, &[]), (vec![10, 11], vec![]));
         // A shard with no mirror yet (a party crossing a boundary for the first time) inserts all.
         assert_eq!(mirror_plan(&[], &[100, 200]), (vec![], vec![100, 200]));
+    }
+
+    fn partition(
+        membership_revision: u64,
+        member_active: bool,
+        locator_revision: u64,
+        state: PartyPartitionState,
+        map_id: u32,
+    ) -> GroupMemberPartition {
+        GroupMemberPartition {
+            character_guid: 100,
+            group_id: 7,
+            membership_revision,
+            member_active,
+            map_id,
+            instance_id: 0,
+            locator_revision,
+            state,
+        }
+    }
+
+    #[test]
+    fn partition_updates_follow_realm_membership_and_locator_order() {
+        let known = partition(10, true, 4, PartyPartitionState::Known, 0);
+        let transient_unknown = partition(10, true, 4, PartyPartitionState::Unknown, 0);
+        assert_eq!(
+            partition_update(&known, &transient_unknown),
+            PartitionUpdate::Keep,
+            "a transient read miss at the same Realm locator cannot erase a confirmed partition"
+        );
+        assert_eq!(
+            partition_update(&transient_unknown, &known),
+            PartitionUpdate::Replace,
+            "the same settled Realm locator recovers after a transient read miss"
+        );
+
+        let pending = partition(10, true, 4, PartyPartitionState::PendingTransfer, 0);
+        assert_eq!(partition_update(&known, &pending), PartitionUpdate::Replace);
+        assert_eq!(partition_update(&pending, &known), PartitionUpdate::Keep);
+        let destination = partition(10, true, 5, PartyPartitionState::Known, 36);
+        assert_eq!(
+            partition_update(&pending, &destination),
+            PartitionUpdate::Replace,
+            "Realm-core's next locator revision settles the crossing before arrival release"
+        );
+
+        let removed = partition(10, false, 5, PartyPartitionState::Unknown, 36);
+        assert_eq!(
+            partition_update(&destination, &removed),
+            PartitionUpdate::Replace
+        );
+        assert_eq!(
+            partition_update(&removed, &destination),
+            PartitionUpdate::Keep
+        );
+        let rejoined = partition(11, true, 5, PartyPartitionState::Known, 36);
+        assert_eq!(
+            partition_update(&removed, &rejoined),
+            PartitionUpdate::Replace
+        );
+    }
+
+    #[test]
+    fn equal_revisions_cannot_disagree_about_a_known_partition() {
+        let current = partition(10, true, 4, PartyPartitionState::Known, 0);
+        let conflicting = partition(10, true, 4, PartyPartitionState::Known, 36);
+        assert_eq!(
+            partition_update(&current, &conflicting),
+            PartitionUpdate::Conflict
+        );
     }
 
     // event_recipient_identity's pinned test moved to helpers.rs with the function itself.

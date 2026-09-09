@@ -100,6 +100,21 @@ impl Coordinator {
             .map(|m| (m.id, m.character_guid))
             .collect();
         rows.sort_unstable();
+        let partitions = rows
+            .iter()
+            .map(|(membership_revision, character_guid)| {
+                crate::world::party::GroupMemberPartition {
+                    character_guid: *character_guid,
+                    group_id,
+                    membership_revision: *membership_revision,
+                    member_active: true,
+                    map_id: 0,
+                    instance_id: 0,
+                    locator_revision: 0,
+                    state: crate::world::party::PartyPartitionState::Unknown,
+                }
+            })
+            .collect();
         Some(crate::world::party::GroupRoster {
             group_id,
             leader_guid: group.leader_guid,
@@ -107,6 +122,7 @@ impl Coordinator {
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
             members: rows.into_iter().map(|(_, guid)| guid).collect(),
+            partitions,
         })
     }
 

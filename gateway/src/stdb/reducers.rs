@@ -3177,6 +3177,28 @@ impl Coordinator {
     /// Operator-gated, coordinator connection, same reasoning as above; called
     /// on each WORLD shard after a party op and at world entry.
     pub fn sync_group_mirror(&self, roster: &crate::world::party::GroupRoster) -> Result<()> {
+        let partitions = roster
+            .partitions
+            .iter()
+            .map(|partition| GroupMemberPartition {
+                character_guid: partition.character_guid,
+                group_id: partition.group_id,
+                membership_revision: partition.membership_revision,
+                member_active: partition.member_active,
+                map_id: partition.map_id,
+                instance_id: partition.instance_id,
+                locator_revision: partition.locator_revision,
+                state: match partition.state {
+                    crate::world::party::PartyPartitionState::Unknown => {
+                        PartyPartitionState::Unknown
+                    }
+                    crate::world::party::PartyPartitionState::Known => PartyPartitionState::Known,
+                    crate::world::party::PartyPartitionState::PendingTransfer => {
+                        PartyPartitionState::PendingTransfer
+                    }
+                },
+            })
+            .collect();
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "sync_group_mirror",
@@ -3187,7 +3209,8 @@ impl Coordinator {
                 roster.loot_threshold,
                 roster.master_looter_guid,
                 roster.members.clone(),
-                self.session_actor(0)
+                self.session_actor(0),
+                partitions
             )
         )
     }

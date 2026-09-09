@@ -1275,6 +1275,19 @@ impl WorldStore for Coordinator {
         Ok(self.group_roster_by_id(group_id))
     }
 
+    fn realm_character_partition(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
+        if !self.0.coord().is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for the Realm locator",
+                self.shard_name()
+            );
+        }
+        Ok(self.realm_character_partition(character_guid))
+    }
+
     fn party_cleanup_group_roster_by_id(
         &self,
         group_id: u64,

@@ -9886,6 +9886,7 @@ impl FakeParty {
                 .filter(|(g, _)| *g == group_id)
                 .map(|(_, guid)| *guid)
                 .collect(),
+            partitions: Vec::new(),
         })
     }
 

@@ -252,6 +252,12 @@ absent revision means those inputs predate revision tracking. These inputs ident
 movement and failure evidence; only the route observation can state whether its consulted cells
 had verified coverage.
 
+**Party Partition**:
+A Realm-core-ordered map and instance for one party member, confirmed by the Gateway against the
+World Shard that holds the Character. It carries no position or Shard name. Pending Transfer,
+transiently unknown location, and removed membership remain explicit states and cannot become a
+companion destination.
+
 **Recovery Scan**:
 A bounded scan of healing rotations that retains its last completed result while reading the next
 batch. The scan can be pending or complete; its result distinguishes unread, missing, and a selected

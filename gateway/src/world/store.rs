@@ -365,6 +365,14 @@ pub trait WorldStore:
         Ok(None)
     }
 
+    /// Realm-core's ordered locator for one Character. World Shards never supply this fact.
+    fn realm_character_partition(
+        &self,
+        _character_guid: u64,
+    ) -> Result<Option<party::RealmCharacterPartition>> {
+        Ok(None)
+    }
+
     /// Authoritative roster read used to repair mirrors after deleted Character cleanup. A
     /// configured but unhealthy Realm-core must return `Err`, never a false disband.
     fn party_cleanup_group_roster_by_id(

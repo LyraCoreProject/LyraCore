@@ -174,6 +174,24 @@ impl Coordinator {
             .map(|s| (s.map_id, s.instance_id))
     }
 
+    pub(crate) fn realm_character_partition(
+        &self,
+        guid: u64,
+    ) -> Option<crate::world::party::RealmCharacterPartition> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_character_shard()
+            .character_guid()
+            .find(&guid)
+            .map(|row| crate::world::party::RealmCharacterPartition {
+                map_id: row.map_id,
+                instance_id: row.instance_id,
+                revision: row.revision,
+            })
+    }
+
     /// The EFFECTIVE armor for `guid` for the character-sheet CREATE (`UNIT_FIELD_RESISTANCES[0]`),
     /// Presence check for the WORLDPORT_ACK gate: is the guid's live entity in the world?
     pub fn entity_in_world(&self, guid: u64) -> bool {

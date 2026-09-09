@@ -46,6 +46,10 @@ pub struct CharacterShard {
     /// When this entry was written — diagnostics only (nothing reads it to decide anything; the
     /// gateway confirms an entry by probing, never by trusting its age).
     pub updated_micros: i64,
+    /// Realm-core-owned order for settled partition changes. World Shard copies have their own
+    /// independent value and never certify a party member's remote partition.
+    #[default(1u64)]
+    pub revision: u64,
 }
 
 // A deleted character must not leave a directory entry behind: guids are reused (`create_character`
@@ -79,16 +83,27 @@ pub(crate) fn record_shard(
     instance_id: u64,
 ) {
     let idx = ctx.db.game_character_shard();
+    let current = idx.character_guid().find(character_guid);
+    let revision = next_shard_revision(current.as_ref(), map_id, instance_id);
     let row = CharacterShard {
         character_guid,
         map_id,
         instance_id,
         updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        revision,
     };
-    if idx.character_guid().find(character_guid).is_some() {
+    if current.is_some() {
         idx.character_guid().update(row);
     } else {
         idx.insert(row);
+    }
+}
+
+fn next_shard_revision(current: Option<&CharacterShard>, map_id: u32, instance_id: u64) -> u64 {
+    match current {
+        Some(row) if (row.map_id, row.instance_id) == (map_id, instance_id) => row.revision.max(1),
+        Some(row) => row.revision.max(1).saturating_add(1),
+        None => 1,
     }
 }
 
@@ -218,6 +233,20 @@ pub fn claim_guid_range(
 #[cfg(test)]
 mod guid_range_registry_tests {
     use super::*;
+
+    #[test]
+    fn realm_locator_revision_advances_only_when_the_partition_changes() {
+        let current = CharacterShard {
+            character_guid: 100,
+            map_id: 0,
+            instance_id: 0,
+            updated_micros: 20,
+            revision: 7,
+        };
+        assert_eq!(next_shard_revision(None, 0, 0), 1);
+        assert_eq!(next_shard_revision(Some(&current), 0, 0), 7);
+        assert_eq!(next_shard_revision(Some(&current), 36, 1), 8);
+    }
 
     #[test]
     fn a_shard_keeps_the_slot_it_is_already_minting_from_whatever_the_claim_order() {

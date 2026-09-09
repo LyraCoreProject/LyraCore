@@ -151,7 +151,9 @@ caller's action deadline to have passed. They return whether they removed the ca
 `nearest_entity`, `in_same_partition`, `require_operator`.
 
 `group::party_facts(ctx, character_guid)` reads the Character's local durable party mirror. It names
-the leader and every member, with nullable live position, health, and death facts, plus hostile
+the leader and every member, with nullable live position, health, and death facts. An absent local
+Unit may instead carry a Realm-core-certified map, instance, and locator revision. Pending Transfer,
+unknown location, and departed-member fences expose no partition. Enemy facts cover hostile
 creatures with current party melee, cast, threat, or control evidence. Hostile Characters are
 excluded because PvP party assistance is outside this contract. An absent membership returns
 `Ok(None)`.
