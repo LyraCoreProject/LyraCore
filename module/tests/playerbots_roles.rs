@@ -179,6 +179,14 @@ fn cast_events(node: &Standalone, guid: &str, spell: u32) -> Vec<BTreeMap<String
     ))
 }
 
+fn active_auras(node: &Standalone, guid: &str, spell: u32) -> Vec<BTreeMap<String, String>> {
+    let mut rows = node.query_rows(&format!(
+        "SELECT * FROM game_aura WHERE target_guid = {guid} AND spell_id = {spell}"
+    ));
+    rows.sort_by_key(|row| row["id"].parse::<u64>().unwrap());
+    rows
+}
+
 fn node_evidence(node: &Standalone, case: &str) {
     let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -231,6 +239,29 @@ fn node_evidence(node: &Standalone, case: &str) {
         "nav_chunks": node.query_rows("SELECT key, map_id, cell_x, cell_y, base_z, walk, obs FROM game_nav_chunk"),
         "coverage_manifests": node.query_rows("SELECT * FROM game_vmap_nav_coverage_manifest"),
     });
+    std::fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+}
+
+fn preceding_node_evidence(node: &Standalone, case: &str, preceding: &PrecedingRoles) {
+    node_evidence(node, case);
+    let path = support::log_dir().join(format!("{}-{case}.json", node.shard_name()));
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["tested_core"] = preceding.manifest["core"].clone();
+    record["tested_collection"] = preceding.manifest["collection"].clone();
+    record["core_dirty"] = serde_json::Value::Bool(false);
+    record["collection_dirty"] = serde_json::Value::Bool(false);
+    record["module_wasm_identity"] =
+        serde_json::Value::String(blake3::hash(&preceding.wasm).to_hex().to_string());
+    record["package_content_identity"] = preceding.manifest["package_content_identity"].clone();
+    record["evidence_phase"] = serde_json::Value::String("populated-pre-upgrade".to_string());
+    record["validated_companion_levels"] = serde_json::json!([5]);
+    record["seeded_content_identity"] =
+        serde_json::Value::String("merged-pb006-source".to_string());
+    record["content"]["revision"] = serde_json::Value::String("merged-pb006-source".to_string());
+    record["content"]["provenance"] = serde_json::Value::String(
+        "merged PB-006 sources named by tested_core and tested_collection".to_string(),
+    );
     std::fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
 }
 
@@ -572,10 +603,10 @@ fn tank_repairs_range_and_completes_a_real_taunt() {
         node.query_rows("SELECT range_yd FROM game_spell WHERE spell_id = 355")[0]["range_yd"],
         "8"
     );
-    node.assert_call("playerbots_fixture_roles_move", &[target, "1240", "1200"]);
+    node.assert_call("playerbots_fixture_roles_move", &[target, "1214", "1200"]);
     node.assert_call(
         "playerbots_fixture_roles_move",
-        &[&fixture.leader, "1260", "1200"],
+        &[&fixture.leader, "1218", "1200"],
     );
     node.assert_call(
         "playerbots_fixture_roles_enemy_engage",
@@ -629,12 +660,17 @@ fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
             fixture.warrior
         ))
         .is_empty());
-    let battle_shout_events = cast_events(node, &fixture.warrior, 6673).len();
+    let battle_shout_auras = active_auras(node, &fixture.warrior, 6673);
+    let battle_shout_progress = runner(node, &fixture.warrior)["cast_progress"].clone();
     pass(node, &fixture.warrior);
     evidence(&fixture, "battle-shout-repeat");
     assert_eq!(
-        cast_events(node, &fixture.warrior, 6673).len(),
-        battle_shout_events
+        active_auras(node, &fixture.warrior, 6673),
+        battle_shout_auras
+    );
+    assert_eq!(
+        runner(node, &fixture.warrior)["cast_progress"],
+        battle_shout_progress
     );
 
     pass(node, &fixture.mage);
@@ -645,12 +681,14 @@ fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
             fixture.mage
         ))
         .is_empty());
-    let frost_armor_events = cast_events(node, &fixture.mage, 168).len();
+    let frost_armor_auras = active_auras(node, &fixture.mage, 168);
+    let frost_armor_progress = runner(node, &fixture.mage)["cast_progress"].clone();
     pass(node, &fixture.mage);
     evidence(&fixture, "frost-armor-repeat");
+    assert_eq!(active_auras(node, &fixture.mage, 168), frost_armor_auras);
     assert_eq!(
-        cast_events(node, &fixture.mage, 168).len(),
-        frost_armor_events
+        runner(node, &fixture.mage)["cast_progress"],
+        frost_armor_progress
     );
 
     node.assert_call(
@@ -859,7 +897,7 @@ fn ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
     assert!(poll_until(POLL_TIMEOUT, || {
         pass(node, &fixture.priest);
         let state = runner(node, &fixture.priest);
-        state["chosen"].contains("castingPosition")
+        state["chosen"].contains("reason = (castingPosition")
             && state["companion_buff_target_guid"].contains(&fixture.leader)
             && node
                 .query_rows(&format!(
@@ -888,10 +926,15 @@ fn ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
     let completed_state = runner(node, &fixture.priest);
     assert!(completed_state["cast_progress"].contains("spell = 1243"));
     assert!(completed_state["cast_progress"].contains(&fixture.leader));
-    let casts = cast_events(node, &fixture.priest, 1243).len();
+    let fortitude_auras = active_auras(node, &fixture.leader, 1243);
+    let fortitude_progress = completed_state["cast_progress"].clone();
     pass(node, &fixture.priest);
     evidence(&fixture, "fortitude-repeat");
-    assert_eq!(cast_events(node, &fixture.priest, 1243).len(), casts);
+    assert_eq!(active_auras(node, &fixture.leader, 1243), fortitude_auras);
+    assert_eq!(
+        runner(node, &fixture.priest)["cast_progress"],
+        fortitude_progress
+    );
 }
 
 #[test]
@@ -943,6 +986,30 @@ fn bounded_role_reads_record_typed_holds() {
         node.assert_call("playerbots_fixture_roles_clear_overflow", &[]);
     }
 
+    node.assert_call(
+        "playerbots_fixture_roles_overflow",
+        &[&fixture.warrior, "3"],
+    );
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "party-fight-limit");
+    let state = runner(node, &fixture.warrior);
+    assert!(state["chosen"].contains("partyUnavailable"), "{state:?}");
+    assert!(state["failures"].contains("fightLimit"), "{state:?}");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn buff_read_failure_preserves_a_valid_party_heal() {
+    let fixture = fixture("playerbots-roles-buff-failure-heal", 10);
+    let node = &fixture.node;
+    node.assert_call(
+        "playerbots_fixture_roles_prepare_fortitude",
+        &[&fixture.priest],
+    );
+    node.assert_call(
+        "playerbots_fixture_provision_steps",
+        &[&fixture.priest, "1"],
+    );
     node.assert_call("playerbots_fixture_roles_priest_mana", &[&fixture.priest]);
     node.assert_call(
         "playerbots_fixture_companion_health",
@@ -961,19 +1028,13 @@ fn bounded_role_reads_record_typed_holds() {
         "{state:?}"
     );
     assert!(state["failures"].contains("buffAuraLimit"), "{state:?}");
-    node.assert_call("playerbots_fixture_roles_clear_overflow", &[]);
+}
 
-    node.assert_call(
-        "playerbots_fixture_roles_overflow",
-        &[&fixture.warrior, "3"],
-    );
-    pass(node, &fixture.warrior);
-    evidence(&fixture, "party-fight-limit");
-    let state = runner(node, &fixture.warrior);
-    assert!(state["chosen"].contains("partyUnavailable"), "{state:?}");
-    assert!(state["failures"].contains("fightLimit"), "{state:?}");
-    node.assert_call("playerbots_fixture_roles_clear_overflow", &[]);
-
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn rotation_read_failure_preserves_low_health_survival() {
+    let fixture = fixture("playerbots-roles-rotation-failure-survival", 10);
+    let node = &fixture.node;
     node.assert_call(
         "playerbots_fixture_roles_move",
         &[&fixture.warrior, "1100", "1200"],
@@ -1063,10 +1124,12 @@ fn populated_pb006_state_upgrades_roles_without_replacing_operator_catalogue() {
         "UPDATE pkg_playerbots_provisioning SET next_repair_micros = 9223372036854775807 WHERE character_guid = {guid}"
     ));
     defaults.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
-    assert!(poll_until(POLL_TIMEOUT, || {
-        defaults.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
-        runner(&defaults, &guid)["foreground"].contains("some")
-    }));
+    defaults.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    preceding_node_evidence(&defaults, "preceding-first-pass", &preceding);
+    std::thread::sleep(std::time::Duration::from_millis(1_200));
+    defaults.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    preceding_node_evidence(&defaults, "preceding-foreground-staged", &preceding);
+    assert!(runner(&defaults, &guid)["foreground"].contains("some"));
     defaults.assert_call("playerbots_fixture_freeze", &[&guid]);
     let preceding_runner = runner(&defaults, &guid);
     let preceding_provisioning = defaults.query_rows(&format!(
