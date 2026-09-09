@@ -3,7 +3,7 @@ mod module_wasm;
 #[allow(unused_imports)] // Some integration targets do not publish a Module.
 pub use module_wasm::module_bytes;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader};
@@ -103,6 +103,7 @@ pub struct Standalone {
     data_dir: PathBuf,
     log_path: PathBuf,
     published: bool,
+    published_databases: BTreeSet<String>,
     spacetime: OsString,
     server: String,
     database: String,
@@ -164,6 +165,7 @@ impl Standalone {
             data_dir,
             log_path,
             published: false,
+            published_databases: BTreeSet::new(),
             spacetime,
             server,
             database: name,
@@ -359,13 +361,14 @@ impl Standalone {
     ///
     /// `spacetimedb-standalone` 2.7.1 segfaults while launching this module roughly once in a dozen
     /// publishes (SIGSEGV, no log line past `launching module`). Before the first successful publish
-    /// a memory fixture has staged no gameplay. A disk fixture may also restart while publishing a
-    /// second named database because the first database survives that owned process replacement.
+    /// no fixture has staged gameplay in that database. A disk fixture may also restart while
+    /// publishing a new named database because previously published databases survive that owned
+    /// process replacement. Republishing any existing database remains fail-fast.
     fn publish(&mut self, database: &str, source: &[&str], extra: &[&str]) {
         let module_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = module_dir.parent().unwrap();
         let mut attempts = Vec::new();
-        let allowed_attempts = if self.published && self.storage == Storage::Memory {
+        let allowed_attempts = if self.published_databases.contains(database) {
             1
         } else {
             PUBLISH_ATTEMPTS
@@ -381,6 +384,7 @@ impl Standalone {
             let output = command.output().expect("failed to start spacetime publish");
             if output.status.success() {
                 self.published = true;
+                self.published_databases.insert(database.to_owned());
                 return;
             }
             attempts.push(describe(&output));
