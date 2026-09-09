@@ -279,8 +279,15 @@ fn playerbots_companion_uses_the_audited_deadmines_exit_route() {
     assert_eq!(staged["bot"][0]["instance_id"], "5098078", "{staged}");
     assert_eq!(staged["leader_partition"][0]["map_id"], "0", "{staged}");
     assert_eq!(staged["exit_source_volume"][0]["id"], "119", "{staged}");
+    assert_eq!(staged["exit_source_volume"][0]["x"], "-14.3628", "{staged}");
+    assert_eq!(staged["exit_source_volume"][0]["y"], "-393.38", "{staged}");
+    assert_eq!(staged["exit_source_volume"][0]["z"], "64.5605", "{staged}");
     assert_eq!(staged["exit_source_volume"][0]["radius"], "6", "{staged}");
     assert_eq!(staged["exit_landing"][0]["target_map"], "0", "{staged}");
+    assert_eq!(staged["exit_landing"][0]["x"], "-11208.7", "{staged}");
+    assert_eq!(staged["exit_landing"][0]["y"], "1675.9", "{staged}");
+    assert_eq!(staged["exit_landing"][0]["z"], "24.5733", "{staged}");
+    assert_eq!(staged["exit_landing"][0]["o"], "4.71239", "{staged}");
 
     fixture
         .node
