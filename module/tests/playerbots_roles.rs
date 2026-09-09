@@ -567,7 +567,16 @@ fn tank_repairs_range_and_completes_a_real_taunt() {
     let fixture = fixture("playerbots-roles-tank-range", 10);
     let node = &fixture.node;
     let target = &fixture.enemies[0];
+    node.assert_call("playerbots_fixture_roles_short_taunt", &[]);
+    assert_eq!(
+        node.query_rows("SELECT range_yd FROM game_spell WHERE spell_id = 355")[0]["range_yd"],
+        "8"
+    );
     node.assert_call("playerbots_fixture_roles_move", &[target, "1240", "1200"]);
+    node.assert_call(
+        "playerbots_fixture_roles_move",
+        &[&fixture.leader, "1260", "1200"],
+    );
     node.assert_call(
         "playerbots_fixture_roles_enemy_engage",
         &[target, &fixture.leader],
@@ -593,6 +602,16 @@ fn tank_repairs_range_and_completes_a_real_taunt() {
     let tank = runner(node, &fixture.warrior);
     assert!(tank["chosen"].contains("tankFight"), "{tank:?}");
     assert!(entity(node, &fixture.warrior)["x"].parse::<f32>().unwrap() > started_x + 1.0);
+    assert!(poll_until(POLL_TIMEOUT, || {
+        entity(node, target)["target_guid"] == fixture.warrior
+            && !node
+                .query_rows(&format!(
+                    "SELECT * FROM game_threat WHERE creature_guid = {target} AND source_guid = {}",
+                    fixture.warrior
+                ))
+                .is_empty()
+    }));
+    evidence(&fixture, "tank-taunt-threat");
 }
 
 #[test]
@@ -600,6 +619,23 @@ fn tank_repairs_range_and_completes_a_real_taunt() {
 fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
     let fixture = fixture("playerbots-roles-repeated-pulls", 10);
     let node = &fixture.node;
+
+    node.assert_call("debug_learn_spell", &[&fixture.warrior, "6673"]);
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "battle-shout-first-pass");
+    assert!(!node
+        .query_rows(&format!(
+            "SELECT spell_id FROM game_aura WHERE target_guid = {} AND spell_id = 6673",
+            fixture.warrior
+        ))
+        .is_empty());
+    let battle_shout_events = cast_events(node, &fixture.warrior, 6673).len();
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "battle-shout-repeat");
+    assert_eq!(
+        cast_events(node, &fixture.warrior, 6673).len(),
+        battle_shout_events
+    );
 
     pass(node, &fixture.mage);
     evidence(&fixture, "frost-armor-first-pass");
@@ -685,7 +721,7 @@ fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
         state["cast_progress"].contains(&format!("scheduled_id = {scheduled_id}"))
             && state["cast_progress"].contains("spell = 2050")
             && state["cast_progress"].contains(&format!("target = {}", fixture.leader))
-            && state["last_outcome"].contains("cast_finished = (resolved")
+            && state["last_outcome"].contains("castFinished = (resolved")
             && entity(node, &fixture.priest)["power"] == "70"
             && entity(node, &fixture.leader)["health"]
                 .parse::<u32>()
@@ -782,6 +818,123 @@ fn buffs_and_repeated_pulls_retain_roles_through_rest_los_and_death() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn ally_buff_retains_its_target_through_range_repair_and_does_not_repeat() {
+    let fixture = fixture("playerbots-roles-ally-buff", 10);
+    let node = &fixture.node;
+    node.assert_call(
+        "playerbots_fixture_roles_prepare_fortitude",
+        &[&fixture.priest],
+    );
+    node.assert_call(
+        "playerbots_fixture_provision_steps",
+        &[&fixture.priest, "1"],
+    );
+    assert!(known(node, &fixture.priest, 1243));
+    for target in [&fixture.warrior, &fixture.priest, &fixture.mage] {
+        node.assert_call(
+            "playerbots_fixture_roles_stronger_fortitude",
+            &[&fixture.leader, target],
+        );
+    }
+    node.assert_call(
+        "playerbots_fixture_roles_move",
+        &[&fixture.leader, "1240", "1200"],
+    );
+    assert_eq!(
+        node.query_rows("SELECT range_yd FROM game_spell WHERE spell_id = 1243")[0]["range_yd"],
+        "30"
+    );
+    let started_x = entity(node, &fixture.priest)["x"].parse::<f32>().unwrap();
+    assert!(poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.priest);
+        let state = runner(node, &fixture.priest);
+        state["chosen"].contains("buffPosition")
+            && state["companion_buff_target_guid"].contains(&fixture.leader)
+    }));
+    evidence(&fixture, "fortitude-range-repair");
+    let completed = poll_until(POLL_TIMEOUT, || {
+        pass(node, &fixture.priest);
+        !node
+            .query_rows(&format!(
+                "SELECT spell_id FROM game_aura WHERE target_guid = {} AND spell_id = 1243",
+                fixture.leader
+            ))
+            .is_empty()
+    });
+    evidence(&fixture, "fortitude-completed");
+    assert!(completed);
+    assert!(entity(node, &fixture.priest)["x"].parse::<f32>().unwrap() > started_x);
+    let completed_state = runner(node, &fixture.priest);
+    assert!(completed_state["cast_progress"].contains("spell = 1243"));
+    assert!(completed_state["cast_progress"].contains(&fixture.leader));
+    let casts = cast_events(node, &fixture.priest, 1243).len();
+    pass(node, &fixture.priest);
+    evidence(&fixture, "fortitude-repeat");
+    assert_eq!(cast_events(node, &fixture.priest, 1243).len(), casts);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn bounded_role_reads_record_typed_holds() {
+    let fixture = fixture("playerbots-roles-read-limits", 10);
+    let node = &fixture.node;
+    node.assert_call(
+        "playerbots_fixture_roles_prepare_fortitude",
+        &[&fixture.priest],
+    );
+    node.assert_call(
+        "playerbots_fixture_provision_steps",
+        &[&fixture.priest, "1"],
+    );
+
+    for (kind, staged_guid, actor, case, expected) in [
+        (
+            0,
+            &fixture.priest,
+            &fixture.priest,
+            "rotation-limit",
+            "rotationLimit",
+        ),
+        (
+            1,
+            &fixture.warrior,
+            &fixture.priest,
+            "buff-aura-limit",
+            "buffAuraLimit",
+        ),
+        (
+            2,
+            &fixture.warrior,
+            &fixture.priest,
+            "buff-family-unavailable",
+            "buffFamilyUnavailable",
+        ),
+    ] {
+        node.assert_call(
+            "playerbots_fixture_roles_overflow",
+            &[staged_guid, &kind.to_string()],
+        );
+        pass(node, actor);
+        evidence(&fixture, case);
+        let state = runner(node, actor);
+        assert!(state["chosen"].contains("roleUnavailable"), "{state:?}");
+        assert!(state["failures"].contains(expected), "{state:?}");
+        node.assert_call("playerbots_fixture_roles_clear_overflow", &[]);
+    }
+
+    node.assert_call(
+        "playerbots_fixture_roles_overflow",
+        &[&fixture.warrior, "3"],
+    );
+    pass(node, &fixture.warrior);
+    evidence(&fixture, "party-fight-limit");
+    let state = runner(node, &fixture.warrior);
+    assert!(state["chosen"].contains("partyUnavailable"), "{state:?}");
+    assert!(state["failures"].contains("fightLimit"), "{state:?}");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn a_stronger_buff_family_member_prevents_a_weaker_maintenance_cast() {
     let fixture = fixture("playerbots-roles-buff-family", 10);
     let node = &fixture.node;
@@ -842,14 +995,17 @@ fn populated_pb006_state_upgrades_roles_without_replacing_operator_catalogue() {
     let guid = defaults.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
         ["character_guid"]
         .clone();
+    defaults.assert_call("playerbots_select_controller", &[&guid, "{\"cohort\":[]}"]);
     defaults.assert_call("debug_learn_spell", &[&guid, "355"]);
     defaults.assert_call("playerbots_fixture_provision_steps", &[&guid, "1"]);
     defaults.assert_sql(&format!(
         "UPDATE pkg_playerbots_provisioning SET next_repair_micros = 9223372036854775807 WHERE character_guid = {guid}"
     ));
     defaults.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
-    defaults.assert_call("playerbots_select_controller", &[&guid, "{\"cohort\":[]}"]);
-    defaults.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    assert!(poll_until(POLL_TIMEOUT, || {
+        defaults.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        runner(&defaults, &guid)["foreground"].contains("some")
+    }));
     defaults.assert_call("playerbots_fixture_freeze", &[&guid]);
     let preceding_runner = runner(&defaults, &guid);
     let preceding_provisioning = defaults.query_rows(&format!(

@@ -38,7 +38,13 @@ pub fn has_aura(ctx: &ReducerContext, unit_guid: u64, spell_id: u32) -> bool {
 pub enum BuffStatus {
     Missing,
     Satisfied,
-    Unavailable,
+    Unavailable(BuffUnavailableReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuffUnavailableReason {
+    AuraLimit,
+    Family,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,7 +126,7 @@ pub fn buff_status(
     const FAMILY_LIMIT: usize = 64;
     let auras: Vec<_> = auras_on(ctx, target_guid).take(AURA_LIMIT + 1).collect();
     if auras.len() > AURA_LIMIT {
-        return BuffStatus::Unavailable;
+        return BuffStatus::Unavailable(BuffUnavailableReason::AuraLimit);
     }
     if auras.iter().any(|aura| aura.spell_id == spell_id) {
         return BuffStatus::Satisfied;
@@ -130,7 +136,9 @@ pub fn buff_status(
             BuffStatus::Missing
         }
         super::stacking::BuffGroupStatus::Satisfied => BuffStatus::Satisfied,
-        super::stacking::BuffGroupStatus::Unavailable => BuffStatus::Unavailable,
+        super::stacking::BuffGroupStatus::Unavailable => {
+            BuffStatus::Unavailable(BuffUnavailableReason::Family)
+        }
     }
 }
 

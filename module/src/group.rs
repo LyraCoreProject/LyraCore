@@ -527,14 +527,20 @@ pub struct PartyFactsUnavailable {
     pub reason: PartyFactsUnavailableReason,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartyFactsUnavailableReason {
     MissingGroup,
     FightLimit,
 }
 
-/// Read one Character's local durable party mirror and current member facts. Membership remains
-/// useful when a member has no live entity on this Shard, so those facts are nullable.
+/// Read one Character's local durable party mirror, member facts, and enemies with current party
+/// melee, cast, threat, or control evidence. Membership remains useful when a member has no live
+/// entity on this Shard, so those facts are nullable.
+///
+/// Reads stop with `FightLimit` above five members, 24 incoming melee or threat-source rows for one
+/// member, one pending cast for one member, or 24 aggregate enemy GUIDs. Each retained enemy permits
+/// 16 threat sources, 64 control auras, and three effects on a pending spell. A missing parent Group
+/// stops with `MissingGroup`; neither failure returns facts selected from an arbitrary prefix.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub fn party_facts(
     ctx: &ReducerContext,
@@ -552,7 +558,20 @@ pub fn party_facts(
                 group_id: member.group_id,
                 reason: PartyFactsUnavailableReason::MissingGroup,
             })?;
-    let members: Vec<_> = members_of(ctx, member.group_id)
+    let members: Vec<_> = ctx
+        .db
+        .game_group_member()
+        .by_group()
+        .filter(&member.group_id)
+        .take(GROUP_MAX_MEMBERS + 1)
+        .collect();
+    if members.len() > GROUP_MAX_MEMBERS {
+        return Err(PartyFactsUnavailable {
+            group_id: member.group_id,
+            reason: PartyFactsUnavailableReason::FightLimit,
+        });
+    }
+    let members: Vec<_> = members
         .into_iter()
         .map(|member| {
             let unit = ctx

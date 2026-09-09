@@ -145,9 +145,13 @@ caller's action deadline to have passed. They return whether they removed the ca
 `nearest_entity`, `in_same_partition`, `require_operator`.
 
 `group::party_facts(ctx, character_guid)` reads the Character's local durable party mirror. It names
-the leader and every member, with nullable live position, health, and death facts for each member.
-An absent membership returns `Ok(None)`. A membership whose Group row is missing returns the typed
-`PartyFactsUnavailable`, so a Package can hold party control instead of starting solo behavior.
+the leader and every member, with nullable live position, health, and death facts, plus hostile units
+with current party melee, cast, threat, or control evidence. An absent membership returns `Ok(None)`.
+A membership whose Group row is missing returns `MissingGroup`. `FightLimit` reports more than five
+members, 24 incoming melee or threat rows for one member, one pending cast for one member, or 24
+aggregate enemy GUIDs. For each retained enemy, the read permits 16 threat sources, 64 control auras,
+and three effects on a pending spell. Either failure returns `PartyFactsUnavailable`, so a Package can
+hold party control instead of acting from an arbitrary prefix.
 
 ### Package Config
 
