@@ -1931,6 +1931,8 @@ pub fn admit_party_command_authority(
         }
     }
     Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RosterUpdate {
     Keep,
