@@ -336,11 +336,12 @@ fn fixture(name: &str, level: u32) -> RolesFixture {
 fn level_five_roles_obey_classic_level_gates_and_never_pull_from_selection() {
     let fixture = fixture("playerbots-roles-capabilities", 5);
     let node = &fixture.node;
+    evidence(&fixture, "capability-spellbook");
     for guid in [&fixture.warrior, &fixture.priest, &fixture.mage] {
         assert_eq!(entity(node, guid)["level"], "5");
     }
     for (guid, spells) in [
-        (&fixture.warrior, &[78, 2457][..]),
+        (&fixture.warrior, &[78, 2457, 6673][..]),
         (&fixture.priest, &[585, 2050][..]),
         (&fixture.mage, &[133, 168][..]),
     ] {
@@ -348,7 +349,7 @@ fn level_five_roles_obey_classic_level_gates_and_never_pull_from_selection() {
             assert!(known(node, guid, *spell), "{guid} does not know {spell}");
         }
     }
-    for spell in [355, 7386, 6673] {
+    for spell in [355, 7386] {
         assert!(!known(node, &fixture.warrior, spell));
     }
     for spell in [139, 1243] {
