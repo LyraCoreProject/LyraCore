@@ -18,7 +18,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_character;
 #[cfg(feature = "debug_reducers")]
-use crate::{game_group, game_group_member};
+use crate::{game_group, game_group_member, game_world_entity};
 
 const COMMAND_LIFETIME_MICROS: i64 = 30_000_000;
 const CLAIM_LEASE_MICROS: i64 = 2_000_000;
