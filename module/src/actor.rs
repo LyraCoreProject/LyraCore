@@ -198,8 +198,10 @@ package_only! {
     pub(crate) use crate::group::accept_invite_for as accept_group_invite;
     pub(crate) use crate::sessionless::set_sessionless_action_consent as set_sessionless_action_consent;
     pub(crate) use crate::sessionless::action_gate as sessionless_action_gate;
-    pub(crate) use crate::group::companion_target_facts;
-    pub(crate) use crate::bridge::{AdmittedClientCommand, CommandOutcome, ParsedClientCommand};
+    pub(crate) use crate::group::companion_target_facts as companion_target_facts;
+    pub(crate) use crate::bridge::AdmittedClientCommand as AdmittedClientCommand;
+    pub(crate) use crate::bridge::CommandOutcome as CommandOutcome;
+    pub(crate) use crate::bridge::ParsedClientCommand as ParsedClientCommand;
 }
 
 /// A Refusal classified at the operation's Gate. Detail preserves existing client messages.
