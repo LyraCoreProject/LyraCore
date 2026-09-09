@@ -67,6 +67,9 @@ fn evidence(fixture: &OrdersFixture, case: &str) {
         "intents": node.query_rows("SELECT * FROM game_party_command_intent"),
         "receipts": node.query_rows("SELECT * FROM game_party_command_receipt"),
         "runners": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
+        "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
+        "quest_purposes": node.query_rows("SELECT * FROM pkg_playerbots_quest_objective"),
+        "character_quests": node.query_rows("SELECT * FROM game_character_quest"),
         "entities": node.query_rows("SELECT guid, entry, map_id, instance_id, x, y, z, health, max_health, dead, target_guid FROM game_world_entity"),
         "actions": node.query_rows("SELECT * FROM pkg_playerbots_action"),
         "pending_casts": node.query_rows("SELECT * FROM game_pending_cast"),
@@ -662,6 +665,101 @@ fn playerbots_order_clears_when_leadership_changes_and_preserves_the_role() {
             fixture.warrior
         ))
         .is_empty());
+    assert_eq!(
+        node.query_rows(&format!(
+            "SELECT role FROM pkg_playerbots_bot WHERE character_guid = {}",
+            fixture.warrior
+        ))[0]["role"],
+        TANK
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_human_party_suspends_then_rechecks_the_retained_solo_quest() {
+    let fixture = fixture("playerbots-orders-retained-solo-quest");
+    let node = &fixture.node;
+    node.assert_call("playerbots_fixture_companion_remove_group", &[]);
+    node.assert_sql(
+        "DELETE FROM game_import_meta WHERE family = 'weather_seed' AND source_sha = '' AND file_hash = '' AND row_count = 2",
+    );
+    node.assert_call("playerbots_quest_fixture_stage", &[&fixture.warrior]);
+    node.assert_call(
+        "playerbots_quest_fixture_admit_accept",
+        &[&fixture.warrior, "7"],
+    );
+    node.assert_call(
+        "playerbots_fixture_companion_health",
+        &[&fixture.warrior, "100"],
+    );
+    pass(node, &fixture.warrior);
+    let solo_runner = runner(node, &fixture.warrior);
+    let retained = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {}",
+        fixture.warrior
+    ));
+    evidence(&fixture, "solo-quest-before-party");
+    assert!(solo_runner["objective"]
+        .to_ascii_lowercase()
+        .contains("quest"));
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0]["quest_entry"], "7");
+
+    node.assert_call(
+        "playerbots_fixture_orders_party",
+        &[
+            &fixture.warrior,
+            &fixture.priest,
+            &fixture.mage,
+            &fixture.leader,
+            "0",
+        ],
+    );
+    issue(
+        &fixture,
+        &format!("follow|{}", fixture.warrior),
+        &fixture.warrior,
+        true,
+    );
+    let companion_runner = runner(node, &fixture.warrior);
+    let suspended = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {}",
+        fixture.warrior
+    ));
+    evidence(&fixture, "solo-quest-suspended-by-party");
+    assert!(companion_runner["objective"]
+        .to_ascii_lowercase()
+        .contains("companion"));
+    assert_eq!(suspended, retained);
+    assert!(!order(node, &fixture.warrior)["order"].is_empty());
+
+    node.assert_call("playerbots_fixture_companion_remove_group", &[]);
+    pass(node, &fixture.warrior);
+    let resumed_runner = runner(node, &fixture.warrior);
+    let rechecked = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {}",
+        fixture.warrior
+    ));
+    evidence(&fixture, "solo-quest-rechecked-after-party");
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}",
+            fixture.warrior
+        ))
+        .is_empty());
+    assert!(resumed_runner["objective"]
+        .to_ascii_lowercase()
+        .contains("quest"));
+    assert!(!resumed_runner["foreground"]
+        .to_ascii_lowercase()
+        .contains("follow"));
+    assert!(!resumed_runner["chosen"]
+        .to_ascii_lowercase()
+        .contains("follow"));
+    assert!(resumed_runner["companion_leader_guid"]
+        .to_ascii_lowercase()
+        .contains("none"));
+    assert_eq!(rechecked, retained);
     assert_eq!(
         node.query_rows(&format!(
             "SELECT role FROM pkg_playerbots_bot WHERE character_guid = {}",
