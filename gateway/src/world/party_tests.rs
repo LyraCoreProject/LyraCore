@@ -2011,7 +2011,7 @@ fn a_shard_local_only_group_realm_core_never_heard_of_is_wiped_by_the_next_push(
         .expect("simulate the bug's pre-fix shard-local-only write");
     assert_eq!(
         world.mirror.lock().unwrap().clone(),
-        vec![phantom],
+        vec![phantom.clone()],
         "precondition"
     );
     assert!(

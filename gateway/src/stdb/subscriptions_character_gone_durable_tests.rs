@@ -301,9 +301,7 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     assert!(poll_until(POLL_TIMEOUT, || {
         reconciliation_is_idle(&observer)
             && realm.group_roster(OTHER_SURVIVOR).is_none()
-            && realm
-                .group_roster_revision(group_id)
-                .is_ok_and(|revision| revision > survivor_revision)
+            && realm.group_roster_revision(group_id) > survivor_revision
             && world
                 .world_shards()
                 .into_iter()
