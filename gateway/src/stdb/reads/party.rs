@@ -108,11 +108,17 @@ impl Coordinator {
         };
         Ok(Some(crate::world::party::GroupRoster {
             group_id,
+            roster_revision: db
+                .game_group_roster_revision()
+                .group_id()
+                .find(&group_id)
+                .map_or(1, |row| row.revision),
             leader_guid: group.leader_guid,
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
             members,
+            partitions: Vec::new(),
         }))
     }
 
