@@ -139,6 +139,108 @@ fn snapshot(
     })
 }
 
+fn assert_casting_sample(
+    sample: &serde_json::Value,
+    ally: &str,
+    blocker: &str,
+    ally_start_health: &str,
+    blocker_x: f32,
+) {
+    let runner = &sample["runner"];
+    assert!(
+        runner["chosen"]
+            .as_str()
+            .unwrap()
+            .contains("castingPosition"),
+        "{sample}"
+    );
+    assert!(
+        runner["chosen"].as_str().unwrap().contains(ally),
+        "{sample}"
+    );
+    assert!(
+        runner["foreground"]
+            .as_str()
+            .unwrap()
+            .contains("castingPosition"),
+        "{sample}"
+    );
+    assert!(
+        runner["companion_heal_target_guid"]
+            .as_str()
+            .unwrap()
+            .contains(ally),
+        "{sample}"
+    );
+    assert!(
+        runner["recovery"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("heal = {ally}")),
+        "{sample}"
+    );
+    assert!(
+        runner["recovery"]
+            .as_str()
+            .unwrap()
+            .contains("stalled_micros = 0"),
+        "{sample}"
+    );
+    assert!(
+        !runner["chosen"]
+            .as_str()
+            .unwrap()
+            .contains("recoveryPosition"),
+        "{sample}"
+    );
+    assert!(
+        !runner["failures"].as_str().unwrap().contains("noMovement"),
+        "{sample}"
+    );
+    assert!(
+        runner["deferred_destinations"]
+            .as_str()
+            .unwrap()
+            .trim_matches(['[', ']', ' '])
+            .is_empty(),
+        "{sample}"
+    );
+    assert!(
+        sample["pending_cast"].as_array().unwrap().is_empty(),
+        "{sample}"
+    );
+    assert!(
+        sample["movement"].as_array().unwrap().iter().any(|action| {
+            action["kind"].as_str().unwrap().contains("move")
+                && action["outcome"].as_str().unwrap().contains("movement")
+        }),
+        "{sample}"
+    );
+    assert_eq!(
+        sample["ally"]["health"].as_str(),
+        Some(ally_start_health),
+        "{sample}"
+    );
+    assert_eq!(
+        sample["blocker"]["x"]
+            .as_str()
+            .unwrap()
+            .parse::<f32>()
+            .unwrap(),
+        blocker_x,
+        "{sample}"
+    );
+    assert!(
+        sample["root"].as_array().unwrap().iter().any(|aura| {
+            aura["target_guid"].as_str() == Some(blocker)
+                && aura["caster_guid"].as_str() == Some(ally)
+                && aura["spell_id"].as_str() == Some("50021")
+                && aura["eff_p0"].as_str() == Some("2")
+        }),
+        "{sample}"
+    );
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal() {
@@ -266,98 +368,12 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         "{evidence}"
     );
     for sample in samples {
-        let runner = &sample["runner"];
-        assert!(
-            runner["chosen"]
-                .as_str()
-                .unwrap()
-                .contains("castingPosition"),
-            "{sample}"
-        );
-        assert!(
-            runner["chosen"].as_str().unwrap().contains(ally),
-            "{sample}"
-        );
-        assert!(
-            runner["foreground"]
-                .as_str()
-                .unwrap()
-                .contains("castingPosition"),
-            "{sample}"
-        );
-        assert!(
-            runner["companion_heal_target_guid"]
-                .as_str()
-                .unwrap()
-                .contains(ally),
-            "{sample}"
-        );
-        assert!(
-            runner["recovery"]
-                .as_str()
-                .unwrap()
-                .contains(&format!("heal = {ally}")),
-            "{sample}"
-        );
-        assert!(
-            runner["recovery"]
-                .as_str()
-                .unwrap()
-                .contains("stalled_micros = 0"),
-            "{sample}"
-        );
-        assert!(
-            !runner["chosen"]
-                .as_str()
-                .unwrap()
-                .contains("recoveryPosition"),
-            "{sample}"
-        );
-        assert!(
-            !runner["failures"].as_str().unwrap().contains("noMovement"),
-            "{sample}"
-        );
-        assert!(
-            runner["deferred_destinations"]
-                .as_str()
-                .unwrap()
-                .trim_matches(['[', ']', ' '])
-                .is_empty(),
-            "{sample}"
-        );
-        assert!(
-            sample["pending_cast"].as_array().unwrap().is_empty(),
-            "{sample}"
-        );
-        assert!(
-            sample["movement"].as_array().unwrap().iter().any(|action| {
-                action["kind"].as_str().unwrap().contains("move")
-                    && action["outcome"].as_str().unwrap().contains("movement")
-            }),
-            "{sample}"
-        );
-        assert_eq!(
-            sample["ally"]["health"].as_str(),
-            Some(ally_start_health.as_str()),
-            "{sample}"
-        );
-        assert_eq!(
-            sample["blocker"]["x"]
-                .as_str()
-                .unwrap()
-                .parse::<f32>()
-                .unwrap(),
+        assert_casting_sample(
+            sample,
+            ally,
+            &blocker,
+            &ally_start_health,
             blocker_position.0,
-            "{sample}"
-        );
-        assert!(
-            sample["root"].as_array().unwrap().iter().any(|aura| {
-                aura["target_guid"].as_str() == Some(blocker.as_str())
-                    && aura["caster_guid"].as_str() == Some(ally.as_str())
-                    && aura["spell_id"].as_str() == Some("50021")
-                    && aura["eff_p0"].as_str() == Some("2")
-            }),
-            "{sample}"
         );
     }
     assert!(
