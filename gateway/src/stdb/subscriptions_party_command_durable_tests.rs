@@ -841,6 +841,14 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     );
     let older = cached_intent(&source, older_id);
     assert_eq!(older.issuer_sequence, 1);
+    let actor: serde_json::Value = serde_json::from_str(&topology.actor_one).unwrap();
+    let ownership = serde_json::to_string(&actor["ownership"]["some"]).unwrap();
+    topology.cli.call(
+        topology.node.server(),
+        topology.source(),
+        "release_account_claim",
+        &[&ownership],
+    );
 
     topology.cli.call(
         topology.node.server(),
