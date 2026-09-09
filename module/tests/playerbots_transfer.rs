@@ -117,6 +117,8 @@ fn capture(fixture: &TransferFixture, case: &str) -> serde_json::Value {
         "companion_binding": node.query_rows(&format!("SELECT character_guid, instance_id, map_id FROM game_instance_binding WHERE character_guid = {companion} AND map_id = 36")),
         "source_volume": node.query_rows("SELECT id, map_id, x, y, z, radius, box_length, box_width, box_height, box_yaw FROM game_area_trigger WHERE id = 78"),
         "landing": node.query_rows("SELECT trigger_id, target_map, x, y, z, o, name FROM game_areatrigger_teleport WHERE trigger_id = 78"),
+        "exit_source_volume": node.query_rows("SELECT id, map_id, x, y, z, radius, box_length, box_width, box_height, box_yaw FROM game_area_trigger WHERE id = 119"),
+        "exit_landing": node.query_rows("SELECT trigger_id, target_map, x, y, z, o, name FROM game_areatrigger_teleport WHERE trigger_id = 119"),
         "intent": node.query_rows(&format!("SELECT id, bot_guid, destination_map, destination_instance, controller_generation FROM game_bot_transfer_intent WHERE bot_guid = {companion}")),
         "action": node.query_rows(&format!("SELECT kind, target_guid, spell_id, quest_entry, cast_id, outcome FROM pkg_playerbots_action WHERE character_guid = {companion}")),
         "movement": node.query_rows(&format!("SELECT guid, sx, sy, dx, dy, start_micros, dur_ms FROM game_creature_spline WHERE guid = {companion}")),
@@ -265,6 +267,60 @@ fn playerbots_companion_enters_the_areatrigger_with_normalized_transfer_state() 
                     .contains("transferAccepted")
         }),
         "{evidence}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_companion_uses_the_audited_deadmines_exit_route() {
+    let fixture = fixture("playerbots-transfer-deadmines-exit", 3);
+    let staged = capture(&fixture, "deadmines-exit-staged");
+    assert_eq!(staged["bot"][0]["map_id"], "36", "{staged}");
+    assert_eq!(staged["bot"][0]["instance_id"], "5098078", "{staged}");
+    assert_eq!(staged["leader_partition"][0]["map_id"], "0", "{staged}");
+    assert_eq!(staged["exit_source_volume"][0]["id"], "119", "{staged}");
+    assert_eq!(staged["exit_source_volume"][0]["radius"], "6", "{staged}");
+    assert_eq!(staged["exit_landing"][0]["target_map"], "0", "{staged}");
+
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let exited = capture(&fixture, "deadmines-exit-entered");
+    assert_eq!(exited["intent"].as_array().unwrap().len(), 1, "{exited}");
+    assert_eq!(exited["intent"][0]["destination_map"], "0", "{exited}");
+    assert_eq!(exited["intent"][0]["destination_instance"], "0", "{exited}");
+    assert_eq!(exited["character"][0]["map_id"], "0", "{exited}");
+    assert_eq!(
+        exited["character"][0]["pending_instance_id"], "0",
+        "{exited}"
+    );
+    assert!(exited["bot"].as_array().unwrap().is_empty(), "{exited}");
+    assert_eq!(
+        exited["runner"][0]["generation"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap(),
+        fixture.generation + 1,
+        "{exited}"
+    );
+    let checkpoint = exited["runner"][0]["transfer_checkpoint"].as_str().unwrap();
+    assert!(
+        checkpoint.contains("source_map = 36")
+            && checkpoint.contains("source_instance = 5098078")
+            && checkpoint.contains("destination_map = 0")
+            && checkpoint.contains("destination_instance = 0"),
+        "{exited}"
+    );
+    assert!(
+        exited["action"].as_array().unwrap().iter().any(|row| {
+            row["kind"] == "transfer"
+                && row["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("transferAccepted")
+        }),
+        "{exited}"
     );
 }
 
