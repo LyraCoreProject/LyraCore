@@ -389,6 +389,9 @@ impl ShardLedger for FakeDb {
                 bot_controller_generation: 0,
                 bot_intent_created_micros: 0,
                 bot_intent_source: spacetimedb::Identity::ZERO,
+                source_map_id: 0,
+                source_instance_id: 0,
+                source_locator_revision: 0,
             })
     }
     fn file_out_row(&mut self, row: TransferOut) {

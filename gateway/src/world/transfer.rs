@@ -72,9 +72,20 @@ pub struct EscrowedTransfer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferArrival {
     pub character_guid: u64,
+    pub source_map: u32,
+    pub source_instance: u64,
+    pub source_locator_revision: u64,
     pub bot_source_identity: spacetimedb_sdk::Identity,
     pub bot_transfer_intent_id: u64,
     pub bot_controller_generation: u64,
+}
+
+/// Realm locator state captured before the source Character was frozen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RealmLocatorPredecessor {
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub revision: u64,
 }
 
 /// One durable session-less crossing read from a World Shard.
@@ -270,7 +281,7 @@ pub(super) fn run_transfer_injected_for_intent(
         plan.dest_instance_id
     );
 
-    let mut owned_bot_intent = bot_intent
+    let owned_bot_intent = bot_intent
         .map(|(intent, token)| bind_bot_locator(src, intent, token).map(|intent| (intent, token)))
         .transpose()?;
     let locator = src.begin_shard_index_transfer(
@@ -288,13 +299,6 @@ pub(super) fn run_transfer_injected_for_intent(
     // the same locator revision and loses to PendingTransfer on every World Shard.
     src.sync_transfer_pending(plan.character_guid)?;
     abort_point(abort_after, "sync_transfer_pending", plan.transfer_id);
-    if let Some((intent, claim_token)) = &mut owned_bot_intent {
-        if intent.source_locator_revision == 0 {
-            intent.source_locator_revision = locator.revision;
-        } else if intent.source_locator_revision != locator.revision {
-            return Err(anyhow!("bot Transfer Realm locator binding changed"));
-        }
-    }
     let bot_intent = owned_bot_intent
         .as_ref()
         .map(|(intent, token)| (intent, *token));
@@ -325,6 +329,11 @@ pub(super) fn run_transfer_injected_for_intent(
     dst.import_character_blob(
         escrow.transfer_id,
         &escrow.blob,
+        RealmLocatorPredecessor {
+            map_id: locator.map_id,
+            instance_id: locator.instance_id,
+            revision: locator.revision,
+        },
         bot_intent.map(|(intent, _)| intent),
     )?;
     abort_point(abort_after, "import_character_blob", escrow.transfer_id);
@@ -632,11 +641,9 @@ fn bind_bot_locator(
 /// any escrow left behind by an earlier crashed attempt. Called at every world entry.
 ///
 /// `holder` is the shard whose durable `game_character` row the character currently lives in;
-/// `owner` is the shard the shard map says owns its location. When they are the same shard this is
-/// the no-op path plus one cheap `release_transfer`, which clears the arrival fence in the ONE
-/// crash window that leaves it behind (killed between `finish_transfer` and `release_transfer` — the
-/// source copy is already gone, so there is no escrow row anywhere to re-drive from, and without
-/// this the character would be fenced out of its own login forever).
+/// `owner` is the shard the Shard Map says owns its location. When they are the same shard this
+/// settles the exact Realm predecessor stored on a human arrival, repairs its party mirror, then
+/// releases it. A session-less arrival remains owned by its Transfer Intent.
 pub fn settle_transfer(
     holder: &dyn WorldStore,
     owner: &dyn WorldStore,
@@ -673,8 +680,8 @@ pub fn settle_transfer(
         // the module's `plan_begin` reads the out-row OR the in-row as "this id is already
         // escrowed for this character" and answers `BeginPlan::Replay`, so `begin_transfer` below
         // would report success while freezing nothing, and the character could never leave this
-        // shard again. Clearing it first is safe by construction — `release_transfer` refuses
-        // outright while a local out-row exists, and we have just proved there is none.
+        // shard again. Clearing a human fence first is safe by construction: `release_transfer`
+        // refuses both a local out-row and a session-less fence owned by an intent.
         holder.release_transfer(transfer_id)?;
     }
     // Resume the escrow if one exists — its destination, not the character row's, is the

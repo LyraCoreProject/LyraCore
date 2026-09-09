@@ -109,8 +109,15 @@ pub trait WorldStore:
         ))
     }
 
-    /// `import_character_blob` — materialise the arrival copy from the carried blob.
-    fn import_character_blob(&self, _transfer_id: u64, _blob: &[u8]) -> Result<()> {
+    /// Materialise the arrival copy from the carried blob. A session-less crossing binds its exact
+    /// source intent identity to the destination fence in the same transaction as the import.
+    fn import_character_blob(
+        &self,
+        _transfer_id: u64,
+        _blob: &[u8],
+        _source: transfer::RealmLocatorPredecessor,
+        _bot_arrival: Option<&transfer::BotTransferIntent>,
+    ) -> Result<()> {
         Err(anyhow!(
             "this store does not implement cross-database transfers"
         ))
@@ -130,14 +137,13 @@ pub trait WorldStore:
         ))
     }
 
-    /// `release_transfer` — drop the arrival copy's fence. Replay-safe: `Ok` when there is nothing
-    /// filed under this id, which is why it can be called speculatively at world entry.
+    /// `release_transfer` — drop a human arrival copy's fence. Replay-safe when absent; a
+    /// session-less fence refuses because its exact Transfer Intent owns release.
     fn release_transfer(&self, _transfer_id: u64) -> Result<()> {
         Ok(())
     }
 
-    /// Whether this shard holds the destination fence for `transfer_id`. A normal resident has no
-    /// arrival to prepare, even though `release_transfer` remains safe to call speculatively.
+    /// Whether this shard holds the destination fence for `transfer_id`.
     fn has_arrival_fence(&self, _transfer_id: u64) -> bool {
         false
     }

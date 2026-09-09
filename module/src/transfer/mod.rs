@@ -256,6 +256,14 @@ pub struct TransferIn {
     pub bot_intent_created_micros: i64,
     #[default(Identity::ZERO)]
     pub bot_intent_source: Identity,
+    /// Realm-core predecessor captured before this arrival was imported. New Gateway-driven
+    /// crossings always set these fields; zero describes a row from before exact recovery.
+    #[default(0u32)]
+    pub source_map_id: u32,
+    #[default(0u64)]
+    pub source_instance_id: u64,
+    #[default(0u64)]
+    pub source_locator_revision: u64,
 }
 
 /// Drives [`reap_transfers`]. Armed lazily by `begin_transfer` (see there). [server]
@@ -1396,6 +1404,9 @@ pub fn import_character(ctx: &ReducerContext, transfer_id: u64) -> Result<(), St
         bot_controller_generation: 0,
         bot_intent_created_micros: 0,
         bot_intent_source: Identity::ZERO,
+        source_map_id: 0,
+        source_instance_id: 0,
+        source_locator_revision: 0,
     });
 
     log::info!(
@@ -1459,6 +1470,54 @@ pub fn import_character_blob(
     apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob)
 }
 
+/// Commit a human arrival with the Realm locator predecessor that began this crossing.
+/// Recovery may settle only that exact pending phase, even when the Character later returns to
+/// the same destination under a newer Realm revision.
+#[reducer]
+#[allow(clippy::too_many_arguments)] // The source predecessor and Actor are the reducer wire Gate.
+pub fn import_player_character_blob(
+    ctx: &ReducerContext,
+    transfer_id: u64,
+    blob: Vec<u8>,
+    source_map_id: u32,
+    source_instance_id: u64,
+    source_locator_revision: u64,
+    request_actor: crate::SessionActor,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    require_transfer_actor(ctx, transfer_id, request_actor)?;
+    if source_locator_revision == 0 {
+        return Err("player Transfer arrival has no Realm locator predecessor".to_string());
+    }
+    let character_guid = decode_blob(transfer_id, &blob)?.character_guid;
+    crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
+    let expected = (source_map_id, source_instance_id, source_locator_revision);
+    if let Some(existing) = ctx.db.game_transfer_in().transfer_id().find(transfer_id) {
+        if existing.bot_intent_id != 0
+            || (
+                existing.source_map_id,
+                existing.source_instance_id,
+                existing.source_locator_revision,
+            ) != expected
+        {
+            return Err(format!(
+                "transfer {transfer_id}: destination fence belongs to another crossing"
+            ));
+        }
+    }
+    apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob)?;
+    let arrivals = ctx.db.game_transfer_in();
+    let mut arrival = arrivals
+        .transfer_id()
+        .find(transfer_id)
+        .ok_or_else(|| format!("transfer {transfer_id}: imported without an arrival fence"))?;
+    arrival.source_map_id = source_map_id;
+    arrival.source_instance_id = source_instance_id;
+    arrival.source_locator_revision = source_locator_revision;
+    arrivals.transfer_id().update(arrival);
+    Ok(())
+}
+
 /// Commit a session-less arrival with its exact source intent identity already on the destination
 /// fence. An existing blank fence is never relabelled: it may belong to a newer human crossing that
 /// reused the Character-guid transfer id.
@@ -1472,11 +1531,18 @@ pub fn import_bot_character_blob(
     intent_id: u64,
     controller_generation: u64,
     intent_created_micros: i64,
+    source_map_id: u32,
+    source_instance_id: u64,
+    source_locator_revision: u64,
     request_actor: crate::SessionActor,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     require_transfer_actor(ctx, transfer_id, request_actor)?;
-    if source_module_identity == Identity::ZERO || intent_id == 0 || intent_created_micros <= 0 {
+    if source_module_identity == Identity::ZERO
+        || intent_id == 0
+        || intent_created_micros <= 0
+        || source_locator_revision == 0
+    {
         return Err("bot Transfer arrival identity is invalid".to_string());
     }
     let character_guid = decode_blob(transfer_id, &blob)?.character_guid;
@@ -1491,6 +1557,9 @@ pub fn import_bot_character_blob(
         intent_id,
         controller_generation,
         intent_created_micros,
+        source_map_id,
+        source_instance_id,
+        source_locator_revision,
     );
     if let Some(existing) = ctx.db.game_transfer_in().transfer_id().find(transfer_id) {
         let current = (
@@ -1498,6 +1567,9 @@ pub fn import_bot_character_blob(
             existing.bot_intent_id,
             existing.bot_controller_generation,
             existing.bot_intent_created_micros,
+            existing.source_map_id,
+            existing.source_instance_id,
+            existing.source_locator_revision,
         );
         if current != expected {
             return Err(format!(
@@ -1515,6 +1587,9 @@ pub fn import_bot_character_blob(
     arrival.bot_intent_id = intent_id;
     arrival.bot_controller_generation = controller_generation;
     arrival.bot_intent_created_micros = intent_created_micros;
+    arrival.source_map_id = source_map_id;
+    arrival.source_instance_id = source_instance_id;
+    arrival.source_locator_revision = source_locator_revision;
     arrivals.transfer_id().update(arrival);
     Ok(())
 }
@@ -1633,6 +1708,9 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
         bot_controller_generation: 0,
         bot_intent_created_micros: 0,
         bot_intent_source: Identity::ZERO,
+        source_map_id: 0,
+        source_instance_id: 0,
+        source_locator_revision: 0,
     });
     log::info!(
         "import_character_blob: {transfer_id} materialised character {guid} ({} rows across {} \
@@ -1702,6 +1780,9 @@ pub(crate) fn apply_confirm<S: ShardLedger>(sink: &mut S, transfer_id: u64) -> R
         bot_controller_generation: 0,
         bot_intent_created_micros: 0,
         bot_intent_source: Identity::ZERO,
+        source_map_id: 0,
+        source_instance_id: 0,
+        source_locator_revision: 0,
     });
     log::info!(
         "confirm_import: {transfer_id} — destination copy of character {character_guid} attested \
@@ -1719,9 +1800,8 @@ pub(crate) fn apply_confirm<S: ShardLedger>(sink: &mut S, transfer_id: u64) -> R
 /// the source copy), and only then this — so between them the character is durable on both sides
 /// but LIVE on neither, never the reverse.
 ///
-/// Refuses while a local out-row exists: that would mean this database is also a SOURCE for the
-/// same id, i.e. the same-database deployment, where `finish_transfer` is the correct call and
-/// dropping the in-row alone would strand the out-row and unfreeze nothing.
+/// Refuses while a local out-row exists, or while the destination fence belongs to a session-less
+/// Transfer Intent. The exact bot release reducer owns that second case.
 #[reducer]
 pub fn release_transfer(
     ctx: &ReducerContext,
@@ -1730,6 +1810,17 @@ pub fn release_transfer(
 ) -> Result<(), String> {
     require_operator(ctx)?;
     require_transfer_actor(ctx, transfer_id, request_actor)?;
+    if ctx
+        .db
+        .game_transfer_in()
+        .transfer_id()
+        .find(transfer_id)
+        .is_some_and(|arrival| arrival.bot_intent_id != 0)
+    {
+        return Err(format!(
+            "transfer {transfer_id}: session-less arrival is owned by its Transfer Intent"
+        ));
+    }
     apply_release(&mut CtxShard { ctx }, transfer_id)
 }
 
@@ -1744,12 +1835,16 @@ pub fn release_bot_transfer_arrival(
     intent_id: u64,
     controller_generation: u64,
     intent_created_micros: i64,
+    source_map_id: u32,
+    source_instance_id: u64,
+    source_locator_revision: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     if transfer_id != bot_guid
         || source_module_identity == Identity::ZERO
         || intent_id == 0
         || intent_created_micros <= 0
+        || source_locator_revision == 0
     {
         return Err("bot Transfer arrival identity is invalid".to_string());
     }
@@ -1767,11 +1862,17 @@ pub fn release_bot_transfer_arrival(
         arrival.bot_intent_id,
         arrival.bot_controller_generation,
         arrival.bot_intent_created_micros,
+        arrival.source_map_id,
+        arrival.source_instance_id,
+        arrival.source_locator_revision,
     ) != (
         source_module_identity,
         intent_id,
         controller_generation,
         intent_created_micros,
+        source_map_id,
+        source_instance_id,
+        source_locator_revision,
     ) {
         return Ok(());
     }

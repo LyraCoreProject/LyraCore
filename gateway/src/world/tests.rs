@@ -1104,6 +1104,7 @@ impl WorldStore for InMemoryStore {
         &self,
         transfer_id: u64,
         blob: &[u8],
+        source: super::transfer::RealmLocatorPredecessor,
         bot_arrival: Option<&super::transfer::BotTransferIntent>,
     ) -> Result<()> {
         let db = self.xstep("import_character_blob")?;
@@ -1112,6 +1113,7 @@ impl WorldStore for InMemoryStore {
             if intent.source_module_identity == spacetimedb_sdk::Identity::ZERO
                 || intent.id == 0
                 || intent.created_micros <= 0
+                || source.revision == 0
                 || transfer_id != guid
             {
                 return Err(anyhow!("bot Transfer arrival identity is invalid"));
@@ -1139,6 +1141,13 @@ impl WorldStore for InMemoryStore {
                     return Err(anyhow!("destination arrival belongs to another crossing"));
                 }
             }
+            if lk(&db.arrival_sources).get(&transfer_id)
+                != Some(&(source.map_id, source.instance_id, source.revision))
+            {
+                return Err(anyhow!(
+                    "destination arrival belongs to another Realm crossing"
+                ));
+            }
             return Ok(());
         }
         if db.live(guid) {
@@ -1148,6 +1157,10 @@ impl WorldStore for InMemoryStore {
         // cross-database the blob is the only thing that reaches this side.
         lk(&db.characters).insert(guid, arriving);
         lk(&db.in_rows).insert(transfer_id, guid);
+        lk(&db.arrival_sources).insert(
+            transfer_id,
+            (source.map_id, source.instance_id, source.revision),
+        );
         if let Some(intent) = bot_arrival {
             lk(&db.bot_arrivals).insert(
                 transfer_id,
@@ -1205,8 +1218,13 @@ impl WorldStore for InMemoryStore {
                 "transfer {transfer_id}: this database holds the SOURCE out-row"
             ));
         }
+        if lk(&db.bot_arrivals).contains_key(&transfer_id) {
+            return Err(anyhow!(
+                "transfer {transfer_id}: session-less arrival is owned by its Transfer Intent"
+            ));
+        }
         lk(&db.in_rows).remove(&transfer_id);
-        lk(&db.bot_arrivals).remove(&transfer_id);
+        lk(&db.arrival_sources).remove(&transfer_id);
         Ok(())
     }
 
@@ -1223,8 +1241,15 @@ impl WorldStore for InMemoryStore {
             .get(&transfer_id)
             .copied()
             .unwrap_or((spacetimedb_sdk::Identity::ZERO, 0, 0, 0));
+        let (source_map, source_instance, source_locator_revision) = lk(&db.arrival_sources)
+            .get(&transfer_id)
+            .copied()
+            .unwrap_or((0, 0, 0));
         Some(super::transfer::TransferArrival {
             character_guid,
+            source_map,
+            source_instance,
+            source_locator_revision,
             bot_source_identity: source,
             bot_transfer_intent_id: intent_id,
             bot_controller_generation: generation,
@@ -1281,6 +1306,23 @@ impl WorldStore for InMemoryStore {
                     plan.dest_instance_id,
                     source_revision.saturating_add(1),
                 )
+            && (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) == crossing
+        {
+            return Ok(current);
+        }
+        if current.transfer_pending
+            && current.revision == source_revision
+            && bot_intent.is_none_or(|(intent, _)| {
+                (current.map_id, current.instance_id) == (intent.source_map, intent.source_instance)
+            })
+            && (
+                current.pending_destination_map,
+                current.pending_destination_instance,
+            ) == (plan.dest_map_id, plan.dest_instance_id)
             && (
                 current.bot_source_identity,
                 current.bot_transfer_intent_id,
@@ -1403,6 +1445,12 @@ impl WorldStore for InMemoryStore {
             return Ok(());
         };
         if !current.transfer_pending
+            || (current.map_id, current.instance_id, current.revision)
+                != (
+                    arrival.source_map,
+                    arrival.source_instance,
+                    arrival.source_locator_revision,
+                )
             || (
                 current.pending_destination_map,
                 current.pending_destination_instance,
@@ -1422,7 +1470,7 @@ impl WorldStore for InMemoryStore {
         *phase = Some(super::party::RealmCharacterPartition {
             map_id: destination_map,
             instance_id: destination_instance,
-            revision: current.revision + 1,
+            revision: arrival.source_locator_revision + 1,
             transfer_pending: false,
             pending_destination_map: 0,
             pending_destination_instance: 0,
@@ -1470,6 +1518,12 @@ impl WorldStore for InMemoryStore {
                     intent.controller_generation,
                     intent.created_micros,
                 ))
+            && lk(&db.arrival_sources).get(&transfer_id)
+                == Some(&(
+                    intent.source_map,
+                    intent.source_instance,
+                    intent.source_locator_revision,
+                ))
     }
 
     fn release_bot_transfer_arrival(
@@ -1495,8 +1549,18 @@ impl WorldStore for InMemoryStore {
             intent.created_micros,
         );
         if lk(&db.bot_arrivals).get(&transfer_id) == Some(&expected) {
+            if lk(&db.arrival_sources).get(&transfer_id)
+                != Some(&(
+                    intent.source_map,
+                    intent.source_instance,
+                    intent.source_locator_revision,
+                ))
+            {
+                return Ok(());
+            }
             lk(&db.in_rows).remove(&transfer_id);
             lk(&db.bot_arrivals).remove(&transfer_id);
+            lk(&db.arrival_sources).remove(&transfer_id);
         }
         Ok(())
     }
@@ -10173,6 +10237,8 @@ struct FakeShardDb {
     bot_arrivals: std::sync::Mutex<
         std::collections::HashMap<u64, (spacetimedb_sdk::Identity, u64, u64, i64)>,
     >,
+    /// Realm locator predecessor attached to each destination fence.
+    arrival_sources: std::sync::Mutex<std::collections::HashMap<u64, (u32, u64, u64)>>,
     instances: std::sync::Mutex<std::collections::HashSet<u64>>,
     /// Every instance id this database actually SPAWNED a population for — one entry per
     /// spawn, so "the second party member re-created the dungeon" is visible as a duplicate.

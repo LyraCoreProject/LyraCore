@@ -647,7 +647,10 @@ fn suppressed_consent_travels_with_the_character_through_export_and_import() {
     );
     let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 1");
     let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
-    destination.assert_call("import_character_blob", &["1", &blob, actor]);
+    destination.assert_call(
+        "import_player_character_blob",
+        &["1", &blob, "0", "0", "1", actor],
+    );
     destination.assert_call("release_transfer", &["1", actor]);
     destination.assert_call("debug_spawn_player_entity", &["1"]);
     let rows = destination
@@ -665,6 +668,100 @@ fn suppressed_consent_travels_with_the_character_through_export_and_import() {
     assert!(source
         .query_rows("SELECT * FROM game_sessionless_action_consent WHERE character_guid = 1")
         .is_empty());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn generic_release_cannot_clear_a_bot_owned_arrival() {
+    let source = stage("sessionless-bot-release-source");
+    source.assert_call("install_guid_range", &["0"]);
+    let mut destination = Standalone::start("sessionless-bot-release-destination");
+    destination.publish_module();
+    destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
+    let actor = r#"{"guid":1,"ownership":null}"#;
+    source.assert_call(
+        "begin_transfer",
+        &["1", actor, "36", "7", "1200", "1200", "50", "0", "true"],
+    );
+    let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 1");
+    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
+    let source_identity = format!("0x{}", "01".repeat(32));
+    destination.assert_call(
+        "import_bot_character_blob",
+        &[
+            "1",
+            &blob,
+            &source_identity,
+            "91",
+            "4",
+            "4000",
+            "0",
+            "0",
+            "1",
+            actor,
+        ],
+    );
+    let before = destination.query_rows(
+        "SELECT transfer_id, character_guid, bot_intent_id, bot_controller_generation, \
+         source_map_id, source_instance_id, source_locator_revision FROM game_transfer_in \
+         WHERE transfer_id = 1",
+    );
+    let generic_release = call_capture(&destination, "release_transfer", &["1", actor]);
+    let after_generic = destination.query_rows(
+        "SELECT transfer_id, character_guid, bot_intent_id, bot_controller_generation, \
+         source_map_id, source_instance_id, source_locator_revision FROM game_transfer_in \
+         WHERE transfer_id = 1",
+    );
+    let exact_release = call_capture(
+        &destination,
+        "release_bot_transfer_arrival",
+        &["1", "1", &source_identity, "91", "4", "4000", "0", "0", "1"],
+    );
+    let after_exact =
+        destination.query_rows("SELECT transfer_id FROM game_transfer_in WHERE transfer_id = 1");
+    let evidence = serde_json::json!({
+        "before": before,
+        "generic_release": generic_release,
+        "after_generic": after_generic,
+        "exact_release": exact_release,
+        "after_exact": after_exact,
+    });
+    let path = support::log_dir().join(format!(
+        "{}-bot-owned-arrival-release.json",
+        destination.shard_name()
+    ));
+    std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    eprintln!("fixture evidence: {}", path.display());
+
+    assert_eq!(
+        evidence["before"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert!(
+        !evidence["generic_release"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["generic_release"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("owned by its Transfer Intent"),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["after_generic"], evidence["before"],
+        "the generic reducer must leave the exact fence unchanged: {evidence}"
+    );
+    assert!(
+        evidence["exact_release"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["after_exact"].as_array().unwrap().is_empty(),
+        "{evidence}"
+    );
 }
 
 #[test]

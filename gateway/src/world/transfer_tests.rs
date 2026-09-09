@@ -611,8 +611,17 @@ fn the_arrival_copy_is_fenced_until_the_source_copy_is_destroyed() {
         "frozen on the source, nothing arrived yet"
     );
     let escrow = src.escrowed_transfer(XGUID).unwrap();
-    dst.import_character_blob(escrow.transfer_id, &escrow.blob, None)
-        .unwrap();
+    dst.import_character_blob(
+        escrow.transfer_id,
+        &escrow.blob,
+        super::transfer::RealmLocatorPredecessor {
+            map_id: 0,
+            instance_id: 0,
+            revision: 1,
+        },
+        None,
+    )
+    .unwrap();
     assert!(
         dst_db.has(XGUID) && !dst_db.live(XGUID),
         "the arrival copy is durable but FENCED while the source copy still exists"
@@ -1302,7 +1311,7 @@ fn an_old_bound_worker_cannot_mark_a_newer_realm_locator_pending() {
     let refusal = super::transfer::run_bot_transfer_intent(&holder, &bot_intent(), 701)
         .expect_err("an old bound predecessor must lose before Realm is mutated");
     assert!(
-        refusal.to_string().contains("source locator"),
+        refusal.to_string().contains("locator changed"),
         "{refusal:#}"
     );
     assert_eq!(*holder.realm_partition.lock().unwrap(), Some(newer));
@@ -1314,6 +1323,65 @@ fn an_old_bound_worker_cannot_mark_a_newer_realm_locator_pending() {
             .any(|(_, call)| call == "sync_transfer_pending"),
         "no pending party fact may be published for the refused old crossing"
     );
+}
+
+#[test]
+fn a_human_arrival_cannot_settle_a_later_same_destination_crossing() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    lk(&db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&db.arrival_sources).insert(BOT_GUID, (0, 0, 1));
+    let later = super::party::RealmCharacterPartition {
+        map_id: 0,
+        instance_id: 0,
+        revision: 3,
+        transfer_pending: true,
+        pending_destination_map: 36,
+        pending_destination_instance: 7,
+        bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+        bot_transfer_intent_id: 0,
+        bot_controller_generation: 0,
+    };
+    let destination = InMemoryStore {
+        shard: "instances".into(),
+        calls,
+        xdb: Some(db.clone()),
+        realm_partition: std::sync::Mutex::new(Some(later)),
+        ..Default::default()
+    };
+
+    let refusal = super::transfer::settle_transfer(&destination, &destination, BOT_GUID)
+        .expect_err("an older arrival predecessor must not settle the later return crossing");
+    assert!(
+        refusal
+            .to_string()
+            .contains("destination fence does not match"),
+        "{refusal:#}"
+    );
+    assert_eq!(*destination.realm_partition.lock().unwrap(), Some(later));
+    assert_eq!(lk(&db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+
+    lk(&db.arrival_sources).insert(BOT_GUID, (0, 0, 3));
+    super::transfer::settle_transfer(&destination, &destination, BOT_GUID)
+        .expect("the arrival carrying the exact later predecessor settles and releases");
+    assert_eq!(
+        destination
+            .realm_partition
+            .lock()
+            .unwrap()
+            .unwrap()
+            .revision,
+        4
+    );
+    assert!(!lk(&db.in_rows).contains_key(&BOT_GUID));
+    assert!(db.live(BOT_GUID));
 }
 
 #[test]

@@ -230,8 +230,28 @@ impl WorldStore for Coordinator {
         self.begin_transfer(plan)
     }
 
-    fn import_character_blob(&self, transfer_id: u64, blob: &[u8]) -> Result<()> {
-        self.import_character_blob(transfer_id, blob)
+    fn import_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        source: crate::world::transfer::RealmLocatorPredecessor,
+        bot_arrival: Option<&crate::world::transfer::BotTransferIntent>,
+    ) -> Result<()> {
+        match bot_arrival {
+            Some(intent) => {
+                if (source.map_id, source.instance_id, source.revision)
+                    != (
+                        intent.source_map,
+                        intent.source_instance,
+                        intent.source_locator_revision,
+                    )
+                {
+                    anyhow::bail!("bot Transfer Realm locator binding changed before import");
+                }
+                self.import_bot_character_blob(transfer_id, blob, intent)
+            }
+            None => self.import_player_character_blob(transfer_id, blob, source),
+        }
     }
 
     fn confirm_import(&self, transfer_id: u64) -> Result<()> {
@@ -270,6 +290,9 @@ impl WorldStore for Coordinator {
             .find(&transfer_id)
             .map(|row| crate::world::transfer::TransferArrival {
                 character_guid: row.character_guid,
+                source_map: row.source_map_id,
+                source_instance: row.source_instance_id,
+                source_locator_revision: row.source_locator_revision,
                 bot_source_identity: row.bot_intent_source,
                 bot_transfer_intent_id: row.bot_intent_id,
                 bot_controller_generation: row.bot_controller_generation,
@@ -1306,6 +1329,9 @@ impl WorldStore for Coordinator {
             intent.id,
             intent.controller_generation,
             intent.created_micros,
+            intent.source_map,
+            intent.source_instance,
+            intent.source_locator_revision,
         )
     }
 

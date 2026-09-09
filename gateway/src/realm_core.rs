@@ -476,6 +476,9 @@ pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
     if arrival.character_guid != character_guid {
         anyhow::bail!("arrival fence names another Character");
     }
+    if arrival.source_locator_revision == 0 {
+        anyhow::bail!("arrival fence has no Realm locator predecessor");
+    }
     let phase = realm
         .realm_character_partition(character_guid)?
         .ok_or_else(|| anyhow!("Transfer destination has no Realm locator"))?;
@@ -485,7 +488,12 @@ pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
         arrival.bot_controller_generation,
     );
     if !phase.transfer_pending
-        && (phase.map_id, phase.instance_id) == (destination_map, destination_instance)
+        && (phase.map_id, phase.instance_id, phase.revision)
+            == (
+                destination_map,
+                destination_instance,
+                arrival.source_locator_revision.saturating_add(1),
+            )
         && (
             phase.bot_source_identity,
             phase.bot_transfer_intent_id,
@@ -495,6 +503,12 @@ pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
         return Ok(());
     }
     if !phase.transfer_pending
+        || (phase.map_id, phase.instance_id, phase.revision)
+            != (
+                arrival.source_map,
+                arrival.source_instance,
+                arrival.source_locator_revision,
+            )
         || (
             phase.pending_destination_map,
             phase.pending_destination_instance,
@@ -509,9 +523,9 @@ pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
     }
     realm.finish_pending_character_shard_transfer(
         character_guid,
-        phase.map_id,
-        phase.instance_id,
-        phase.revision,
+        arrival.source_map,
+        arrival.source_instance,
+        arrival.source_locator_revision,
         destination_map,
         destination_instance,
         arrival.bot_source_identity,
@@ -528,7 +542,7 @@ pub(crate) fn finish_pending_shard_index_transfer<D: RealmDb>(
                         == (
                             destination_map,
                             destination_instance,
-                            phase.revision.saturating_add(1),
+                            arrival.source_locator_revision.saturating_add(1),
                         )
                     && (
                         row.bot_source_identity,

@@ -115,6 +115,9 @@ impl Coordinator {
         intent_id: u64,
         controller_generation: u64,
         intent_created_micros: i64,
+        source_map: u32,
+        source_instance: u64,
+        source_locator_revision: u64,
     ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -125,7 +128,10 @@ impl Coordinator {
                 source_module_identity,
                 intent_id,
                 controller_generation,
-                intent_created_micros
+                intent_created_micros,
+                source_map,
+                source_instance,
+                source_locator_revision
             )
         )
     }
@@ -2889,6 +2895,54 @@ impl Coordinator {
             self.0.call_pipe().conn.reducers,
             "import_character_blob",
             import_character_blob_then(transfer_id, blob.to_vec(), self.session_actor(0))
+        )
+    }
+
+    /// `import_player_character_blob`, with the Realm locator predecessor written as part of the
+    /// destination import transaction.
+    pub fn import_player_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        source: crate::world::transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "import_player_character_blob",
+            import_player_character_blob_then(
+                transfer_id,
+                blob.to_vec(),
+                source.map_id,
+                source.instance_id,
+                source.revision,
+                self.session_actor(0)
+            )
+        )
+    }
+
+    /// `import_bot_character_blob`, with the exact source intent identity written as part of the
+    /// destination import transaction.
+    pub fn import_bot_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "import_bot_character_blob",
+            import_bot_character_blob_then(
+                transfer_id,
+                blob.to_vec(),
+                intent.source_module_identity,
+                intent.id,
+                intent.controller_generation,
+                intent.created_micros,
+                intent.source_map,
+                intent.source_instance,
+                intent.source_locator_revision,
+                self.session_actor(0)
+            )
         )
     }
 
