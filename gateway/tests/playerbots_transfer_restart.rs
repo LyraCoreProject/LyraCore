@@ -235,6 +235,8 @@ impl TransferTopology {
                 "partitions": self.query(&self.source_db, &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}")),
                 "leader_live": self.query(&self.source_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.leader_guid)),
                 "priest_live": self.query(&self.source_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.priest_guid)),
+                "leader_bot": self.query(&self.source_db, &format!("SELECT character_guid, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {}", bot.leader_guid)),
+                "priest_bot": self.query(&self.source_db, &format!("SELECT character_guid, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {}", bot.priest_guid)),
             },
             "destination": {
                 "module_identity": self.query(&self.destination_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
@@ -254,6 +256,9 @@ impl TransferTopology {
                 "order": self.query(&self.destination_db, &format!("SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = {}", bot.guid)),
                 "leader_live": self.query(&self.destination_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.leader_guid)),
                 "priest_live": self.query(&self.destination_db, &format!("SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {}", bot.priest_guid)),
+                "leader_bot": self.query(&self.destination_db, &format!("SELECT character_guid, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {}", bot.leader_guid)),
+                "priest_bot": self.query(&self.destination_db, &format!("SELECT character_guid, next_think_micros FROM pkg_playerbots_bot WHERE character_guid = {}", bot.priest_guid)),
+                "movement_tick": self.query(&self.destination_db, "SELECT * FROM game_creature_move_schedule"),
             },
             "realm": {
                 "module_identity": self.query(&self.realm_db, "SELECT * FROM pkg_playerbots_transfer_gateway_identity"),
@@ -559,12 +564,21 @@ fn stage_assist_destination(
         "SELECT character_guid, class, role FROM pkg_playerbots_bot",
     );
     destination.sort_by_key(|row| parse_u64(row, "character_guid"));
-    let mut source = topology.query(
-        &topology.source_db,
-        "SELECT character_guid, class, role FROM pkg_playerbots_bot",
-    );
-    source.sort_by_key(|row| parse_u64(row, "character_guid"));
-    let matching_role_identities = destination == source;
+    let matching_role_identities = destination.len() == 4
+        && [
+            (bot.guid, 1, 0),
+            (bot.leader_guid, 1, 0),
+            (bot.priest_guid, 5, 1),
+            (bot.mage_guid, 8, 2),
+        ]
+        .into_iter()
+        .all(|(guid, class, role)| {
+            destination.iter().any(|row| {
+                parse_u64(row, "character_guid") == guid
+                    && row["class"] == class.to_string()
+                    && row["role"] == role.to_string()
+            })
+        });
     topology.call(
         &topology.destination_db,
         "debug_delete_character",
@@ -601,7 +615,12 @@ fn stage_assist_destination(
         }
     }
     serde_json::json!({
-        "source_roles": source,
+        "expected_roles": [
+            {"guid": bot.guid, "class": 1, "role": 0, "kind": "companion"},
+            {"guid": bot.leader_guid, "class": 1, "role": 0, "kind": "human-leader"},
+            {"guid": bot.priest_guid, "class": 5, "role": 1, "kind": "selected-priest"},
+            {"guid": bot.mage_guid, "class": 8, "role": 2, "kind": "unused-mage"},
+        ],
         "destination_roles": destination,
         "matching_role_identities": matching_role_identities,
         "navigation_cells": cells
@@ -1341,6 +1360,24 @@ fn assert_assist_source_ready(evidence: &serde_json::Value) {
             && rows(evidence, &["state", "source", "priest_live"]).is_empty(),
         "source retained a remote party body: {evidence}"
     );
+    assert!(
+        rows(evidence, &["state", "source", "leader_bot"]).is_empty(),
+        "source leader is still a bot: {evidence}"
+    );
+    assert_eq!(
+        row(evidence, &["state", "source", "priest_bot"])["next_think_micros"],
+        i64::MAX.to_string(),
+        "source Priest could rebuild its removed body: {evidence}"
+    );
+    assert!(
+        rows(evidence, &["state", "destination", "leader_bot"]).is_empty(),
+        "destination leader is represented as a bot: {evidence}"
+    );
+    assert_eq!(
+        row(evidence, &["state", "destination", "priest_bot"])["next_think_micros"],
+        i64::MAX.to_string(),
+        "destination Priest is not parked: {evidence}"
+    );
     let destination_leader = row(evidence, &["state", "destination", "leader_live"]);
     let destination_priest = row(evidence, &["state", "destination", "priest_live"]);
     for (body, guid, position) in [
@@ -1374,19 +1411,14 @@ fn assist_follow_observations(
     topology: &TransferTopology,
     bot: &TransferredBot,
 ) -> serde_json::Value {
+    topology.call(
+        &topology.destination_db,
+        "playerbots_fixture_companion_due",
+        &[&bot.guid.to_string()],
+    );
     let deadline = Instant::now() + support::POLL_TIMEOUT;
     let mut samples = Vec::new();
     loop {
-        topology.call(
-            &topology.destination_db,
-            "playerbots_fixture_companion_due",
-            &[&bot.guid.to_string()],
-        );
-        topology.call(
-            &topology.destination_db,
-            "playerbots_fixture_runner_pass_once",
-            &[&bot.guid.to_string()],
-        );
         let runner = topology.query(
             &topology.destination_db,
             &format!(
@@ -1408,6 +1440,14 @@ fn assist_follow_observations(
         samples.push(serde_json::json!({
             "runner": runner,
             "movement": movement,
+            "body": topology.query(
+                &topology.destination_db,
+                &format!("SELECT guid, x, y, z FROM game_world_entity WHERE guid = {}", bot.guid),
+            ),
+            "movement_tick": topology.query(
+                &topology.destination_db,
+                "SELECT * FROM game_creature_move_schedule",
+            ),
             "selected_priest": selected,
         }));
         if selected || Instant::now() >= deadline {
@@ -1417,6 +1457,57 @@ fn assist_follow_observations(
             });
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn assist_progress_observations(
+    topology: &TransferTopology,
+    bot: &TransferredBot,
+    start: (f64, f64, f64),
+    priest: (f64, f64, f64),
+    leader: (f64, f64, f64),
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(75);
+    let mut samples = Vec::new();
+    loop {
+        let body = topology.query(
+            &topology.destination_db,
+            &format!(
+                "SELECT guid, x, y, z FROM game_world_entity WHERE guid = {}",
+                bot.guid
+            ),
+        );
+        let position = body
+            .first()
+            .map(|row| {
+                (
+                    row["x"].parse::<f64>().unwrap(),
+                    row["y"].parse::<f64>().unwrap(),
+                    row["z"].parse::<f64>().unwrap(),
+                )
+            })
+            .unwrap_or(start);
+        let progressed = distance(position, priest) + 0.1 < distance(start, priest)
+            && distance(position, leader) > distance(start, leader);
+        samples.push(serde_json::json!({
+            "body": body,
+            "movement": topology.query(
+                &topology.destination_db,
+                &format!("SELECT * FROM game_creature_spline WHERE guid = {}", bot.guid),
+            ),
+            "movement_tick": topology.query(
+                &topology.destination_db,
+                "SELECT * FROM game_creature_move_schedule",
+            ),
+            "progressed_toward_priest": progressed,
+        }));
+        if progressed || Instant::now() >= deadline {
+            return serde_json::json!({
+                "progressed_toward_priest": progressed,
+                "samples": samples,
+            });
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -1433,12 +1524,12 @@ fn distance(left: (f64, f64, f64), right: (f64, f64, f64)) -> f64 {
 #[ignore = "requires SpacetimeDB, Wasm, the playerbots Package, and the Gateway binary"]
 fn playerbots_assist_keeps_its_selected_member_after_arrival() {
     let (topology, mut bot) = TransferTopology::stage("playerbots-transfer-assist-arrival");
-    issue_assist_order(&topology, &bot);
     topology.call(
         &topology.source_db,
         "playerbots_transfer_fixture_entry_route_stage",
         &[&bot.guid.to_string(), &bot.leader_guid.to_string()],
     );
+    issue_assist_order(&topology, &bot);
     topology.call(
         &topology.source_db,
         "playerbots_transfer_assist_source_stage",
@@ -1521,42 +1612,61 @@ fn playerbots_assist_keeps_its_selected_member_after_arrival() {
         format!("(assist = (member_guid = {}))", bot.priest_guid),
         "{arrived}"
     );
-    assert_postrelease_body(&topology, &bot, "assist-arrived");
-
     let observations = assist_follow_observations(&topology, &bot);
-    let followed = topology.save(
+    let queued = topology.save(
         &bot,
-        "assist-followed-selected-priest",
+        "assist-selected-priest",
         serde_json::json!({ "observations": observations }),
     );
     assert_eq!(
-        followed["extra"]["observations"]["selected_priest"], true,
-        "{followed}"
+        queued["extra"]["observations"]["selected_priest"], true,
+        "{queued}"
     );
-    let runner = row(&followed, &["state", "destination", "runner"]);
+    assert_eq!(
+        ready["state"]["destination"]["movement_tick"],
+        queued["state"]["destination"]["movement_tick"],
+        "the declared Core movement tick fired before the selected leg was captured: {queued}"
+    );
+    let runner = row(&queued, &["state", "destination", "runner"]);
     let foreground = text_field(runner, "foreground");
     assert!(
         foreground.contains(&format!("action = (move = (entity = {}))", bot.priest_guid))
             && !foreground.contains(&format!("action = (move = (entity = {}))", bot.leader_guid)),
-        "{followed}"
+        "{queued}"
     );
-    let movement = row(&followed, &["state", "destination", "movement"]);
+    let movement = row(&queued, &["state", "destination", "movement"]);
     let start = point(movement, ["sx", "sy", "sz"]);
     let destination = point(movement, ["dx", "dy", "dz"]);
     let priest = point(
-        row(&followed, &["state", "destination", "priest_live"]),
+        row(&queued, &["state", "destination", "priest_live"]),
         ["x", "y", "z"],
     );
     let leader = point(
-        row(&followed, &["state", "destination", "leader_live"]),
+        row(&queued, &["state", "destination", "leader_live"]),
         ["x", "y", "z"],
     );
     assert!(
         distance(destination, priest) + 0.1 < distance(start, priest),
-        "movement did not approach selected Priest: {followed}"
+        "movement did not approach selected Priest: {queued}"
     );
     assert!(
         distance(destination, leader) > distance(start, leader),
-        "movement fell back toward party leader: {followed}"
+        "movement fell back toward party leader: {queued}"
+    );
+
+    let progress = assist_progress_observations(&topology, &bot, start, priest, leader);
+    let followed = topology.save(
+        &bot,
+        "assist-followed-selected-priest",
+        serde_json::json!({ "progress": progress }),
+    );
+    assert_eq!(
+        followed["extra"]["progress"]["progressed_toward_priest"], true,
+        "{followed}"
+    );
+    assert_ne!(
+        followed["state"]["destination"]["movement_tick"],
+        queued["state"]["destination"]["movement_tick"],
+        "the ordinary Core movement tick did not execute: {followed}"
     );
 }
