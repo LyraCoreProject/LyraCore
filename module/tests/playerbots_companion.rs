@@ -501,6 +501,7 @@ fn playerbots_non_healer_companion_retains_self_recovery() {
 fn playerbots_casting_position_retains_one_injured_ally_across_movement_legs() {
     let (node, bots) = fixture("playerbots-companion-target-retention");
     let (priest, leader, ally) = (&bots[0], &bots[1], &bots[2]);
+    node.assert_call("playerbots_fixture_provision_steps", &[priest, "64"]);
     node.assert_call(
         "playerbots_fixture_companion_move",
         &[priest, "1340", "1200"],
