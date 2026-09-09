@@ -205,6 +205,7 @@ fn changed_leadership_is_terminal_before_target_application() {
 #[test]
 fn configured_realm_core_unavailability_fails_closed() {
     let store = InMemoryStore {
+        characters: vec![character(BOT, "Bot")],
         entity_in_world: true,
         entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (BOT, 0, 0)]),
         party_command_realm_error: Some("Realm-core unavailable".into()),
@@ -352,6 +353,7 @@ fn an_unsharded_gateway_uses_the_owning_local_party_authority() {
         ..Default::default()
     };
     let store = InMemoryStore {
+        characters: vec![character(BOT, "Bot")],
         entity_in_world: true,
         entity_partitions: std::sync::Mutex::new(vec![(GINGER, 0, 0), (BOT, 0, 0)]),
         mirror: std::sync::Mutex::new(vec![roster]),
