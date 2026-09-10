@@ -2103,6 +2103,7 @@ fn playerbots_companion_enters_and_exits_deadmines_through_real_gateway_routes()
     let entry_generation = bot.generation;
     assert_eq!(entry_generation, initial_generation + 1);
     let entry_ready = topology.save(&bot, "instance-entry-source-ready", serde_json::json!({}));
+    let entry_objective_identity = bot.objective_identity;
     let (_, objective_deadline) = retained_objective(&entry_ready, "source");
     assert_follow_order(&entry_ready, "source", &follow.order);
     assert_source_transfer_receipt(&entry_ready, 0);
@@ -2139,6 +2140,10 @@ fn playerbots_companion_enters_and_exits_deadmines_through_real_gateway_routes()
     );
     topology.capture_transfer_from(&topology.destination_db, &mut bot);
     let exit_ready = topology.save(&bot, "instance-exit-source-ready", serde_json::json!({}));
+    assert_eq!(
+        bot.objective_identity, entry_objective_identity,
+        "exit Transfer changed the retained objective identity: {exit_ready}"
+    );
     assert_exit_source_ready(
         &exit_ready,
         &bot,
