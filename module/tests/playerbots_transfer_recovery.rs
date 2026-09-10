@@ -221,9 +221,10 @@ fn playerbots_arrival_settles_recovery_only_after_exact_follow_completion() {
 fn playerbots_arrival_does_not_settle_recovery_for_a_dead_nearby_member() {
     let fixture = fixture("playerbots-transfer-recovery-dead-member", "1202");
     let staged = stage_arrival(&fixture);
-    fixture
-        .node
-        .assert_call("playerbots_fixture_provision_dead", &[&fixture.leader]);
+    fixture.node.assert_call(
+        "playerbots_fixture_runner_damage",
+        &[&fixture.leader, &ENEMY.to_string(), "1000000"],
+    );
     fixture
         .node
         .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
