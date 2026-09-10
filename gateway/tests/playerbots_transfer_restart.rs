@@ -1111,14 +1111,20 @@ fn assert_durable_phase(evidence: &serde_json::Value, step: &str) {
         .unwrap();
     let source_character = rows(evidence, &["state", "source", "character"]);
     let destination_character = rows(evidence, &["state", "destination", "character"]);
-    assert!(
-        source_character.len() + destination_character.len() >= 1,
-        "no durable Character after {step}: {evidence}"
+    assert_eq!(
+        source_character.len(),
+        usize::from(position < 6),
+        "source Character phase differs after {step}: {evidence}"
     );
-    assert!(
-        rows(evidence, &["state", "source", "live"]).is_empty()
-            || rows(evidence, &["state", "destination", "live"]).is_empty(),
-        "two live bodies after {step}: {evidence}"
+    assert_eq!(
+        destination_character.len(),
+        usize::from(position >= 4),
+        "destination Character phase differs after {step}: {evidence}"
+    );
+    assert_eq!(
+        rows(evidence, &["state", "source", "live"]).len(),
+        usize::from(position < 2),
+        "source live-body phase differs after {step}: {evidence}"
     );
     assert_eq!(
         rows(evidence, &["state", "source", "intent"]).len(),
@@ -1129,48 +1135,29 @@ fn assert_durable_phase(evidence: &serde_json::Value, step: &str) {
     assert_locator(evidence, position);
     assert_gameplay_fences(evidence, position);
 
-    if position >= 2 {
-        assert_eq!(
-            rows(evidence, &["state", "source", "escrow"]).len(),
-            if position < 6 { 1 } else { 0 },
-            "source Escrow phase differs after {step}: {evidence}"
-        );
-    }
-    if position >= 3 {
-        assert_eq!(
-            rows(evidence, &["state", "destination", "instance"]).len(),
-            1,
-            "destination instance is absent after {step}: {evidence}"
-        );
-    }
-    if position >= 4 {
-        assert_eq!(
-            destination_character.len(),
-            1,
-            "destination Character is absent after {step}: {evidence}"
-        );
-        assert_eq!(
-            rows(evidence, &["state", "destination", "arrival"]).len(),
-            if position < 10 { 1 } else { 0 },
-            "destination arrival phase differs after {step}: {evidence}"
-        );
-    }
-    if position >= 6 {
-        assert!(
-            source_character.is_empty(),
-            "source Character remains after {step}: {evidence}"
-        );
-    }
+    assert_eq!(
+        rows(evidence, &["state", "source", "escrow"]).len(),
+        usize::from((2..6).contains(&position)),
+        "source Escrow phase differs after {step}: {evidence}"
+    );
+    assert_eq!(
+        rows(evidence, &["state", "destination", "instance"]).len(),
+        usize::from(position >= 3),
+        "destination instance phase differs after {step}: {evidence}"
+    );
+    assert_eq!(
+        rows(evidence, &["state", "destination", "arrival"]).len(),
+        usize::from((4..10).contains(&position)),
+        "destination arrival phase differs after {step}: {evidence}"
+    );
     if position >= 8 {
         assert_party_mirror(evidence);
     }
-    if position >= 9 {
-        assert_eq!(
-            row(evidence, &["state", "source", "intent"])["arrival_ready"],
-            "true",
-            "{evidence}"
-        );
-    }
+    assert_eq!(
+        row(evidence, &["state", "source", "intent"])["arrival_ready"],
+        if position >= 9 { "true" } else { "false" },
+        "arrival-ready phase differs after {step}: {evidence}"
+    );
 }
 
 fn assert_postrelease_body(topology: &TransferTopology, bot: &TransferredBot, step: &str) {
