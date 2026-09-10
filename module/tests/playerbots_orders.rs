@@ -73,6 +73,8 @@ fn evidence(fixture: &OrdersFixture, case: &str) {
         "receipts": node.query_rows("SELECT * FROM game_party_command_receipt"),
         "runners": node.query_rows("SELECT * FROM pkg_playerbots_runner"),
         "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
+        "account_claims": node.query_rows("SELECT * FROM game_account_claim"),
+        "characters": node.query_rows("SELECT guid, account_id, online FROM game_character"),
         "quest_purposes": node.query_rows("SELECT * FROM pkg_playerbots_quest_objective"),
         "character_quests": node.query_rows("SELECT * FROM game_character_quest"),
         "group_members": node.query_rows("SELECT * FROM game_group_member"),
@@ -862,8 +864,8 @@ fn playerbots_assist_honors_named_companions_current_target_order() {
     assert_target(second);
 
     select_and_engage(node, &fixture.leader, first);
-    let assert_refusal = |outcome: &str| {
-        evidence(&fixture, &format!("assist-companion-{outcome}"));
+    let assert_refusal = |phase: &str, outcome: &str| {
+        evidence(&fixture, &format!("assist-companion-{phase}"));
         assert!(order(node, &fixture.mage)["last_outcome"]
             .to_ascii_lowercase()
             .contains(outcome));
@@ -889,7 +891,7 @@ fn playerbots_assist_honors_named_companions_current_target_order() {
         &[&fixture.leader, second, "50020"],
     );
     pass(node, &fixture.mage);
-    assert_refusal("targetcontrolled");
+    assert_refusal("targetcontrolled", "targetcontrolled");
     node.assert_call(
         "playerbots_fixture_roles_clear_control",
         &[&fixture.leader, second],
@@ -897,7 +899,7 @@ fn playerbots_assist_honors_named_companions_current_target_order() {
     for (mode, outcome) in [("1", "wrongpartition"), ("0", "targetdead")] {
         node.assert_call("playerbots_fixture_orders_target_state", &[second, mode]);
         pass(node, &fixture.mage);
-        assert_refusal(outcome);
+        assert_refusal(outcome, outcome);
         node.assert_call("playerbots_fixture_orders_target_state", &[second, "2"]);
     }
     pass(node, &fixture.mage);
@@ -908,7 +910,34 @@ fn playerbots_assist_honors_named_companions_current_target_order() {
         &[&fixture.priest, "{\"recordOnly\":[]}"],
     );
     pass(node, &fixture.mage);
-    assert_refusal("targetunavailable");
+    assert_refusal("controller-suppressed", "targetunavailable");
+
+    node.assert_call("provision_account", &[r#""PB011ASSIST""#, "[]", "[]"]);
+    let account = node.query_rows("SELECT id FROM game_account WHERE username = 'PB011ASSIST'")[0]
+        ["id"]
+        .clone();
+    node.assert_call(
+        "playerbots_fixture_orders_account",
+        &[&fixture.priest, &account],
+    );
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.priest, "{\"cohort\":[]}"],
+    );
+    issue(
+        &fixture,
+        &format!("target|{}|{second}", fixture.priest),
+        &fixture.priest,
+        false,
+    );
+    pass(node, &fixture.mage);
+    evidence(&fixture, "assist-companion-before-account-claim");
+    assert_target(second);
+    node.assert_call("claim_account", &[&account, &fixture.priest, "9011"]);
+    pass(node, &fixture.mage);
+    assert_refusal("account-reclaimed", "targetunavailable");
+    assert_eq!(order(node, &fixture.priest)["active"], "true");
+    assert_eq!(entity(node, &fixture.priest)["target_guid"], "0");
 }
 
 #[test]
