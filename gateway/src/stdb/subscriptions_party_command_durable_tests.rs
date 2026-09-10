@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const TANK: &str = "0";
 const WARRIOR: &str = "1";
+const GROUP: u64 = 5_098_000;
 
 struct PrivateCli {
     config: PathBuf,
@@ -316,18 +317,141 @@ fn install_authority(
     realm: &str,
     target: &str,
     party: &RoleParty,
-    leader: u64,
+    leader_party: &RoleParty,
 ) {
+    let leader = leader_party.leader;
+    let retained = cli.rows(
+        server,
+        target,
+        &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}"),
+    );
+    let revision = [realm, target]
+        .into_iter()
+        .flat_map(|database| {
+            cli.rows(
+                server,
+                database,
+                &format!(
+                    "SELECT revision FROM game_group_roster_revision WHERE group_id = {GROUP}"
+                ),
+            )
+        })
+        .map(|row| row["revision"].parse::<u64>().unwrap())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .unwrap();
+    let mut next_membership = retained
+        .iter()
+        .map(|row| row["membership_revision"].parse::<u64>().unwrap())
+        .max()
+        .unwrap_or(0);
+    let mut partitions = Vec::new();
+    for (guid, map_id) in [
+        (party.warrior, party.map_id),
+        (party.priest, party.map_id),
+        (party.mage, party.map_id),
+        (leader, leader_party.map_id),
+    ] {
+        let previous = retained.iter().find(|row| {
+            row["character_guid"] == guid.to_string() && row["member_active"] == "true"
+        });
+        let membership = match previous {
+            Some(row) => row["membership_revision"].parse::<u64>().unwrap(),
+            None => {
+                next_membership = next_membership.checked_add(1).unwrap();
+                next_membership
+            }
+        };
+        partitions.push(serde_json::json!({
+            "character_guid": guid, "group_id": GROUP,
+            "membership_revision": membership, "member_active": true,
+            "map_id": map_id, "instance_id": 0, "locator_revision": 1,
+            "state": {"known": []},
+        }));
+    }
+    partitions.sort_by_key(|partition| partition["membership_revision"].as_u64().unwrap());
+    let members: Vec<_> = partitions
+        .iter()
+        .map(|partition| partition["character_guid"].clone())
+        .collect();
     let args = [
-        party.warrior.to_string(),
-        party.priest.to_string(),
-        party.mage.to_string(),
+        GROUP.to_string(),
         leader.to_string(),
         "0".to_string(),
+        "2".to_string(),
+        "0".to_string(),
+        serde_json::to_string(&members).unwrap(),
+        serde_json::json!({"guid": leader, "ownership": {"none": []}}).to_string(),
+        serde_json::to_string(&partitions).unwrap(),
+        revision.to_string(),
     ];
     let args: Vec<_> = args.iter().map(String::as_str).collect();
-    cli.call(server, realm, "playerbots_fixture_orders_party", &args);
-    cli.call(server, target, "playerbots_fixture_orders_party", &args);
+    for database in [realm, target] {
+        cli.call(server, database, "sync_group_mirror", &args);
+    }
+}
+
+fn publish_authority_locators(topology: &CommandTopology, coordinator: &Coordinator) {
+    let realm = coordinator.realm_core().unwrap();
+    let members = [
+        (
+            topology.target.as_str(),
+            topology.target_party.warrior,
+            topology.target_party.map_id,
+        ),
+        (
+            topology.target.as_str(),
+            topology.target_party.priest,
+            topology.target_party.map_id,
+        ),
+        (
+            topology.target.as_str(),
+            topology.target_party.mage,
+            topology.target_party.map_id,
+        ),
+        (
+            topology.source(),
+            topology.source_one_party.leader,
+            topology.source_one_party.map_id,
+        ),
+        (
+            topology.source_two.as_str(),
+            topology.source_two_party.leader,
+            topology.source_two_party.map_id,
+        ),
+    ];
+    let mut expected = Vec::new();
+    for (database, guid, declared_map) in members {
+        let body = row(
+            &topology.cli,
+            topology.node.server(),
+            database,
+            &format!("SELECT map_id, instance_id FROM game_world_entity WHERE guid = {guid}"),
+        );
+        let map_id = body["map_id"].parse::<u32>().unwrap();
+        let instance_id = body["instance_id"].parse::<u64>().unwrap();
+        realm
+            .set_character_shard(guid, map_id, instance_id)
+            .unwrap();
+        expected.push((guid, map_id, instance_id, declared_map));
+    }
+    let visible = poll_until(POLL_TIMEOUT, || {
+        expected.iter().all(|(guid, map_id, instance_id, _)| {
+            realm
+                .realm_character_partition(*guid)
+                .unwrap()
+                .is_some_and(|locator| {
+                    (locator.map_id, locator.instance_id) == (*map_id, *instance_id)
+                        && !locator.transfer_pending
+                })
+        })
+    });
+    evidence(topology, "realm-locators-before-transfer");
+    assert!(expected.iter().all(
+        |(_, map_id, instance_id, declared_map)| *map_id == *declared_map && *instance_id == 0
+    ));
+    assert!(visible);
 }
 
 fn source_actor(
@@ -625,7 +749,7 @@ fn evidence(topology: &CommandTopology, case: &str) {
         .parent()
         .unwrap();
     let package = core.join("packages/playerbots");
-    let record = serde_json::json!({
+    let mut record = serde_json::json!({
         "case": case,
         "spacetimedb": "2.7.1",
         "rust": "1.93.0",
@@ -666,6 +790,12 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "content": {"revision": "playerbots-starter-roles-v1", "imported_content": null},
         "geometry": {"revision": "playerbots-synthetic-nav-v1", "client_geometry": null},
     });
+    record["realm_character_shards"] = serde_json::to_value(topology.cli.rows(
+        topology.node.server(),
+        &topology.realm,
+        "SELECT * FROM game_character_shard",
+    ))
+    .unwrap();
     let path = crate::durable_test_support::log_dir()
         .join(format!("{}-{case}.json", topology.node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
@@ -706,7 +836,7 @@ impl CommandTopology {
             &realm,
             &target,
             &target_party,
-            source_one_party.leader,
+            &source_one_party,
         );
         let actor_one = source_actor(
             &cli,
@@ -770,6 +900,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     let _environment = TopologyEnv::install(&shard_map, &topology.realm);
     let (_runtime, source) = topology.coordinator(topology.source(), "party-command-source-one");
     let target = source.shard_handle(&topology.target).unwrap();
+    publish_authority_locators(&topology, &source);
 
     let claimed = queue(
         &topology.cli,
@@ -900,7 +1031,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
         &topology.realm,
         &topology.target,
         &topology.target_party,
-        topology.source_two_party.leader,
+        &topology.source_two_party,
     );
     let (_runtime_two, source_two) =
         topology.coordinator(&topology.source_two, "party-command-source-two");
@@ -1110,6 +1241,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     let _environment = TopologyEnv::install(&shard_map, &topology.realm);
     let (runtime, source) = topology.coordinator(topology.source(), "party-command-old-source");
     let target = source.shard_handle(&topology.target).unwrap();
+    publish_authority_locators(&topology, &source);
 
     let older_id = queue(
         &topology.cli,
@@ -1346,6 +1478,7 @@ fn companion_command_receipt_stays_with_a_same_database_transfer() {
     let (_runtime, source) =
         topology.coordinator(topology.source(), "party-command-same-database-source");
     let target = source.shard_handle(&topology.target).unwrap();
+    publish_authority_locators(&topology, &source);
     let intent_id = queue(
         &topology.cli,
         topology.node.server(),

@@ -640,6 +640,52 @@ fn playerbots_imported_destination_and_live_target_are_separate_facts() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_held_quest_refuses_retained_destinations_from_another_partition() {
+    let (node, bots) = fixture("playerbots-quest-retained-partition");
+    let bot = bot_for_class(&bots, "1");
+    node.assert_call("playerbots_quest_fixture_admit_accept", &[bot, "7"]);
+    node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select_cohort(&node, bot);
+    run_once(&node);
+    let retained = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
+    ));
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0]["quest_entry"], "7");
+    assert!(retained[0]["destination"].contains("instance_id = 0,"));
+    assert!(retained[0]["actual_ender"].contains("instance_id = 0,"));
+    let held = quest(&node, bot, 7);
+    let catalog = catalog_definition_snapshot(&node);
+    record(&node, "retained-before-partition-change");
+
+    node.assert_call("playerbots_quest_loop_fixture_set_partition", &[bot, "91"]);
+    run_once(&node);
+    record(&node, "retained-after-partition-change");
+    let admission = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_quest_admission WHERE character_guid = {bot}"
+    ));
+    assert_eq!(admission.len(), 1);
+    assert_eq!(admission[0]["considered_quest"], "7");
+    assert_eq!(admission[0]["selected_quest"], "(none = ())");
+    assert_eq!(
+        admission[0]["missing_capability"],
+        "(some = (missingActualEndDestination = ()))"
+    );
+    assert!(node
+        .query_rows(&format!(
+            "SELECT * FROM pkg_playerbots_quest_objective WHERE character_guid = {bot}"
+        ))
+        .is_empty());
+    assert_eq!(
+        quest(&node, bot, 7),
+        held,
+        "admission changed the held Quest"
+    );
+    assert_eq!(catalog_definition_snapshot(&node), catalog);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_quest_objective_survives_combat_and_refreshes_changed_evidence() {
     let (node, bots) = fixture("playerbots-quest-retention");
     let bot = bot_for_class(&bots, "1");
