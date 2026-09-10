@@ -144,7 +144,7 @@ fn sats_fields_preserve_nested_values_and_complete_names() {
     );
 }
 
-fn assert_stable_objective(before: &Value, after: &Value, context: &str) {
+fn assert_stable_companion_objective(before: &Value, after: &Value, context: &str) {
     let before = before
         .as_str()
         .unwrap_or_else(|| panic!("{context}: prior objective is not text"));
@@ -158,6 +158,12 @@ fn assert_stable_objective(before: &Value, after: &Value, context: &str) {
     assert_ne!(
         after, "(none = ())",
         "{context}: current objective is absent"
+    );
+    assert_eq!(sats_field(before, "kind"), "(companion = ())", "{context}");
+    assert_eq!(
+        sats_field(before, "deadline_micros"),
+        i64::MAX.to_string(),
+        "{context}: Companion objective acquired a finite deadline"
     );
     for field in [
         "identity",
@@ -1641,7 +1647,7 @@ fn assert_restart_retained(before: &Value, after: &Value, warrior: u64, leader: 
             "Module restart changed retained Runner {field}"
         );
     }
-    assert_stable_objective(
+    assert_stable_companion_objective(
         &before_runner["objective"],
         &after_runner["objective"],
         "Module restart",
@@ -1704,7 +1710,7 @@ fn assert_distinct_unchanged_command(
             "Unchanged intent B changed retained work field {field}"
         );
     }
-    assert_stable_objective(
+    assert_stable_companion_objective(
         &before_runner["objective"],
         &after_runner["objective"],
         "Unchanged intent B",
