@@ -724,8 +724,8 @@ mod runtime_tests {
         let endpoints = [(1398.908, 1190.3529), (1400.2607, 1189.8438)];
         // The declared cell bounds, checked by segment intersection instead of route sampling.
         let bounds = [
-            (1399.479_113_280_773_2, 1399.999_946_594_238_3),
-            (1190.104_121_267_795_6, 1190.624_954_581_260_7),
+            (1_399.479_113_280_773_2, 1_399.999_946_594_238_3),
+            (1_190.104_121_267_795_6, 1_190.624_954_581_260_7),
         ];
         for (from, to) in [(endpoints[0], endpoints[1]), (endpoints[1], endpoints[0])] {
             let (path, _, complete) = find_leg_ex(&mut fetch, from, to, 4096).unwrap();
