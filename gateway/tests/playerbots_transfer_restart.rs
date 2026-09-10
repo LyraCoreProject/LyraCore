@@ -1816,6 +1816,7 @@ fn playerbots_assist_keeps_its_selected_member_after_arrival() {
         &[&bot.guid.to_string(), &bot.leader_guid.to_string()],
     );
     issue_assist_order(&topology, &bot);
+    topology.save(&bot, "assist-order-admitted", serde_json::json!({}));
     topology.call(
         &topology.source_db,
         "playerbots_transfer_assist_source_stage",
