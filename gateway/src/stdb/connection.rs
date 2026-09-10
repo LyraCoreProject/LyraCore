@@ -1208,18 +1208,12 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // own transaction. Private, like game_account/game_session — the owner token reads it, no
         // client ever sees it. Multi-database deployments only (see this function's doc comment).
         queries.push("SELECT * FROM game_character_shard");
-        // Party state (the realm-core group slice). On REALM-CORE these three are the authoritative party
-        // tables the gateway drives and relays from; on a world shard they are that shard's mirror,
-        // which the gateway also reads (a session's own roster at world entry, before it has pushed
-        // anything). Subscribed on every connection in the set for the same reason accounts are:
-        // each handle reads its own database's copy, and the gateway decides which copy
-        // is authoritative.
-        //
-        // `game_group_event` is the relay. The owner-token coordinator reads every player's rows;
-        // shared dispatch selects the recipient by guid. The event and member tables live in the
-        // base list. The group row itself stays sharded-only.
+        // Realm-core owns party membership; each World Shard retains its mirror. World reads need
+        // the roster and member revisions when Transfer replaces local rows. Events and members
+        // already live in the base subscription.
         queries.push("SELECT * FROM game_group");
         queries.push("SELECT * FROM game_group_roster_revision");
+        queries.push("SELECT * FROM game_group_member_partition");
         // Loot rolls — a DIFFERENT reason than every table above: nothing here is a CLIENT
         // relay (`game_group_event` still carries every wire-visible roll transition, unchanged). The
         // gateway's own loot-roll relay (`world::loot::relay_tick`) needs these two PRIVATE tables to
@@ -1666,6 +1660,7 @@ mod coordinator_query_tests {
         // relay registers only on multi-database gateways, so there is no double delivery).
         "SELECT * FROM game_group",
         "SELECT * FROM game_group_roster_revision",
+        "SELECT * FROM game_group_member_partition",
         // The loot-roll pair: both PRIVATE, no per-player subscriber to duplicate — the restart hazard alone is why
         // they belong on this list (a module published before they exist refuses the subscription).
         "SELECT * FROM game_loot_roll",
