@@ -38,6 +38,29 @@ fn digest_files(path: &std::path::Path, digest: &mut blake3::Hasher) {
     }
 }
 
+fn sha256(path: &std::path::Path) -> String {
+    for (program, args) in [("sha256sum", vec![]), ("shasum", vec!["-a", "256"])] {
+        let output = std::process::Command::new(program)
+            .args(args)
+            .arg(path)
+            .output();
+        if let Ok(output) = output {
+            assert!(
+                output.status.success(),
+                "{program} failed for {}",
+                path.display()
+            );
+            return String::from_utf8(output.stdout)
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .to_string();
+        }
+    }
+    panic!("neither sha256sum nor shasum is installed");
+}
+
 struct PrecedingTransfer {
     wasm: Vec<u8>,
     manifest: serde_json::Value,
@@ -94,14 +117,8 @@ fn preceding_transfer() -> PrecedingTransfer {
 
     assert!(git(core_path, &["status", "--porcelain"]).is_empty());
     assert!(git(collection_path, &["status", "--porcelain"]).is_empty());
-    let sha256 = std::process::Command::new("sha256sum")
-        .arg(&wasm_path)
-        .output()
-        .unwrap();
-    assert!(sha256.status.success());
-    let sha256 = String::from_utf8(sha256.stdout).unwrap();
     assert_eq!(
-        sha256.split_whitespace().next().unwrap(),
+        sha256(std::path::Path::new(&wasm_path)),
         manifest["wasm_sha256"].as_str().unwrap()
     );
     if let Some(expected) = manifest["wasm_blake3"].as_str() {
