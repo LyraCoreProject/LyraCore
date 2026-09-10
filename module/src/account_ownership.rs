@@ -554,7 +554,12 @@ pub(crate) fn reap_account_fences(ctx: &ReducerContext) {
             &row.account_name,
             row.character_guid,
         ) {
-            spacetimedb::log::error!("expired Account Fence cleanup ownership changed");
+            spacetimedb::log::error!(
+                "expired Account Fence cleanup ownership changed: account_id={} character_guid={} generation={}",
+                row.account_id,
+                row.character_guid,
+                row.generation
+            );
             row.closed = true;
             ctx.db.game_account_fence().account_id().update(row);
             continue;
@@ -562,7 +567,12 @@ pub(crate) fn reap_account_fences(ctx: &ReducerContext) {
         if let Err(error) =
             remember_character_owner(ctx, row.account_id, &row.account_name, row.character_guid)
         {
-            spacetimedb::log::error!("expired Account Fence ownership conflict: {error}");
+            spacetimedb::log::error!(
+                "expired Account Fence ownership conflict: account_id={} character_guid={} generation={} reason={error}",
+                row.account_id,
+                row.character_guid,
+                row.generation
+            );
             row.closed = true;
             ctx.db.game_account_fence().account_id().update(row);
             continue;
@@ -570,7 +580,12 @@ pub(crate) fn reap_account_fences(ctx: &ReducerContext) {
         if let Err(error) =
             remove_retained_character(ctx, row.account_id, &row.account_name, row.character_guid)
         {
-            spacetimedb::log::error!("expired Account Fence cleanup conflict: {error}");
+            spacetimedb::log::error!(
+                "expired Account Fence cleanup conflict: account_id={} character_guid={} generation={} reason={error}",
+                row.account_id,
+                row.character_guid,
+                row.generation
+            );
             row.closed = true;
             ctx.db.game_account_fence().account_id().update(row);
             continue;

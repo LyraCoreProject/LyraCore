@@ -469,7 +469,7 @@ fn account_character_ownership_survives_account_switching() {
     refused(
         &world,
         "fence_account",
-        &[&wrong_account, "\"TEST\"", "1", &third_deadline],
+        &[wrong_account, "\"TEST\"", "1", &third_deadline],
         "Character does not belong to Account",
     );
     assert_eq!(
@@ -507,14 +507,39 @@ fn account_character_ownership_survives_account_switching() {
         "UPDATE game_character SET account_id = 1 WHERE guid = {second}"
     ));
 
+    let mut stable_durable_before =
+        world.query_rows("SELECT guid,account_id,owner_identity,name FROM game_character");
+    stable_durable_before.sort_by_key(|row| row["guid"].parse::<u64>().unwrap());
+    let mut persisted_live_before = world.query_rows(
+        "SELECT guid,x,y,z,orientation,health,power FROM game_world_entity WHERE account_id = 1",
+    );
+    persisted_live_before.sort_by_key(|row| row["guid"].parse::<u64>().unwrap());
     fence(&world, &third_token, &third_deadline);
     assert!(world
         .query_rows("SELECT * FROM game_world_entity WHERE account_id = 1")
         .is_empty());
-    assert_eq!(
-        world.query_rows("SELECT * FROM game_character"),
-        durable_before
-    );
+    let mut stable_durable_after =
+        world.query_rows("SELECT guid,account_id,owner_identity,name FROM game_character");
+    stable_durable_after.sort_by_key(|row| row["guid"].parse::<u64>().unwrap());
+    assert_eq!(stable_durable_after, stable_durable_before);
+    let mut persisted_durable = world.query_rows(&format!(
+        "SELECT guid,x,y,z,orientation,health,power,online,last_logout_micros FROM game_character WHERE guid = 1 OR guid = {second}"
+    ));
+    persisted_durable.sort_by_key(|row| row["guid"].parse::<u64>().unwrap());
+    assert_eq!(persisted_durable.len(), persisted_live_before.len());
+    for (durable, live) in persisted_durable.iter().zip(&persisted_live_before) {
+        for field in ["guid", "x", "y", "z", "orientation", "health", "power"] {
+            assert_eq!(durable[field], live[field], "persisted field {field}");
+        }
+        assert_eq!(durable["online"], "false");
+    }
+    let logout_micros = persisted_durable[0]["last_logout_micros"]
+        .parse::<u64>()
+        .unwrap();
+    assert!(logout_micros > 0);
+    assert!(persisted_durable
+        .iter()
+        .all(|row| row["last_logout_micros"] == logout_micros.to_string()));
     assert_eq!(
         world
             .query_rows("SELECT * FROM game_account_character_owner")
@@ -564,13 +589,16 @@ fn retained_account_ownership_overflow_refuses_without_cleanup() {
     let rows: Vec<_> = (2..=4_097)
         .map(|guid| format!("({guid},1,'TEST')"))
         .collect();
-    shard.assert_sql(&format!(
-        "INSERT INTO game_account_character_owner (character_guid,account_id,account_name) VALUES {}",
-        rows.join(",")
-    ));
+    for rows in rows.chunks(128) {
+        shard.assert_sql(&format!(
+            "INSERT INTO game_account_character_owner (character_guid,account_id,account_name) VALUES {}",
+            rows.join(",")
+        ));
+    }
     shard.assert_sql("UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = 1");
     let (second, second_deadline) = claim_for(&shard, "1", "702");
     let owners = shard.query_rows("SELECT * FROM game_account_character_owner");
+    assert_eq!(owners.len(), 4_097);
     let fence_before = shard.query_rows("SELECT * FROM game_account_fence");
     let live_before = shard.query_rows("SELECT * FROM game_world_entity WHERE guid = 1");
     refused(
