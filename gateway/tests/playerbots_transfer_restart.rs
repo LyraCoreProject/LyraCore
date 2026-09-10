@@ -1016,6 +1016,63 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
     }
 }
 
+fn assert_normalized_source_runner(evidence: &serde_json::Value) {
+    let runner = row(evidence, &["state", "source", "runner"]);
+    for (field, expected) in [
+        ("foreground", "(none = ())"),
+        ("chosen", "(none = ())"),
+        ("candidate_order", ""),
+        ("movement_progress", "(none = ())"),
+        ("combat_progress", "(none = ())"),
+        ("cast_progress", "(none = ())"),
+        ("quest_progress", ""),
+        ("last_target_health", "(none = ())"),
+        ("defense_target", "(none = ())"),
+        ("companion_heal_target_guid", "(none = ())"),
+        ("companion_fight_target_guid", "(none = ())"),
+        ("companion_buff_target_guid", "(none = ())"),
+        ("deferred_destinations", ""),
+        ("recovery", "(none = ())"),
+        ("retry_candidate", "(none = ())"),
+        ("transitions", "0"),
+        ("route_expansions", "0"),
+        ("route_budget", "0"),
+    ] {
+        assert_eq!(
+            runner[field], expected,
+            "{field} survived Escrow: {evidence}"
+        );
+    }
+    let intent = row(evidence, &["state", "source", "intent"]);
+    assert_eq!(
+        runner["generation"], intent["controller_generation"],
+        "{evidence}"
+    );
+    let checkpoint = text_field(runner, "transfer_checkpoint");
+    for field in [
+        format!("intent_id = {},", text_field(intent, "id")),
+        format!(
+            "controller_generation = {},",
+            text_field(intent, "controller_generation")
+        ),
+        format!("source_map = {},", text_field(intent, "source_map")),
+        format!(
+            "source_instance = {},",
+            text_field(intent, "source_instance")
+        ),
+        format!(
+            "destination_map = {},",
+            text_field(intent, "destination_map")
+        ),
+        format!(
+            "destination_instance = {},",
+            text_field(intent, "destination_instance")
+        ),
+    ] {
+        assert!(checkpoint.contains(&field), "{field} missing: {evidence}");
+    }
+}
+
 fn assert_gameplay_fences(evidence: &serde_json::Value, position: usize) {
     if position < 10 {
         assert!(
@@ -1030,10 +1087,18 @@ fn assert_gameplay_fences(evidence: &serde_json::Value, position: usize) {
         }
     }
     if position >= 2 {
-        for table in ["runner", "actions", "movement", "pending_cast", "melee"] {
+        for table in ["actions", "movement", "pending_cast", "melee"] {
             assert!(
                 rows(evidence, &["state", "source", table]).is_empty(),
                 "source-local work survived Escrow: {evidence}"
+            );
+        }
+        if position < 6 {
+            assert_normalized_source_runner(evidence);
+        } else {
+            assert!(
+                rows(evidence, &["state", "source", "runner"]).is_empty(),
+                "source Runner survived finish_transfer: {evidence}"
             );
         }
     }
