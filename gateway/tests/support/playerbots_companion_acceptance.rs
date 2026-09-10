@@ -563,6 +563,9 @@ impl CompanionTopology {
             "faults": self.query(database, "SELECT * FROM pkg_playerbots_companion_fault"),
             "combat_receipts": self.query(database, "SELECT * FROM pkg_playerbots_companion_combat_receipt"),
             "cast_receipts": self.query(database, "SELECT * FROM pkg_playerbots_companion_cast_receipt"),
+            "impact_receipts": self.query(database, "SELECT * FROM pkg_playerbots_companion_impact_receipt"),
+            "impact_status": self.query(database, "SELECT * FROM pkg_playerbots_companion_impact_status"),
+            "acceptance": self.query(database, "SELECT * FROM pkg_playerbots_companion_acceptance"),
         })
     }
 

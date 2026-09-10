@@ -471,6 +471,12 @@ fn target_receipts(topology: &CompanionTopology, target: u64) -> Value {
                 "SELECT * FROM pkg_playerbots_companion_cast_receipt WHERE target_guid = {target}"
             ),
         ),
+        "impacts": topology.query(
+            &database,
+            &format!(
+                "SELECT * FROM pkg_playerbots_companion_impact_receipt WHERE target_guid = {target}"
+            ),
+        ),
     })
 }
 
@@ -522,35 +528,74 @@ fn observed_casts(
         .collect()
 }
 
-fn assert_cast_impact_evidence(evidence: &Value, phase: &str) {
+fn observed_impacts(
+    topology: &CompanionTopology,
+    caster: u64,
+    target: u64,
+    spell: u32,
+) -> Vec<BTreeMap<String, String>> {
+    topology.query(
+        &topology.current_world(caster),
+        &format!(
+            "SELECT * FROM pkg_playerbots_companion_impact_receipt WHERE caster_guid = {caster} \
+             AND target_guid = {target} AND spell_id = {spell}"
+        ),
+    )
+}
+
+fn assert_impact_evidence(topology: &CompanionTopology, evidence: &Value, phase: &str) {
+    let plans = evidence["source"]["acceptance"].as_array().unwrap();
+    assert_eq!(plans.len(), 1, "{phase}: source acceptance plan changed");
+    let begun_micros = parse_value_u64(&plans[0], "begun_micros");
+    assert!(begun_micros > 0, "{phase}: acceptance has not begun");
     for shard in ["source", "destination"] {
+        let status = evidence[shard]["impact_status"].as_array().unwrap();
+        assert_eq!(status.len(), 1, "{phase} on {shard}: impact status changed");
+        assert_eq!(parse_value_u64(&status[0], "id"), 0);
+        assert_eq!(
+            parse_value_u64(&status[0], "failure"),
+            0,
+            "{phase} on {shard}: projectile evidence failed: {}",
+            status[0]
+        );
+        let receipts = evidence[shard]["impact_receipts"].as_array().unwrap();
+        assert!(
+            receipts.len() <= 256,
+            "{phase} on {shard}: impact receipt overflow"
+        );
         let mut impact_ids = BTreeSet::new();
-        for row in evidence[shard]["cast_receipts"].as_array().unwrap() {
-            assert_eq!(
-                parse_value_u64(row, "impact_failure"),
-                0,
-                "{phase} on {shard}: projectile evidence could not identify one cast: {row}"
+        for row in receipts {
+            let impact = parse_value_u64(row, "source_event_id");
+            assert!(
+                impact > 0 && impact_ids.insert(impact),
+                "{phase} on {shard}: impact {impact} is absent or counted twice"
             );
-            let impact = parse_value_u64(row, "impact_event_id");
-            if impact != 0 {
-                assert!(
-                    impact_ids.insert(impact),
-                    "{phase} on {shard}: impact {impact} was counted twice"
-                );
-                assert!(parse_value_u64(row, "source_event_id") > 0);
-                assert!(
-                    parse_value_u64(row, "impact_micros")
-                        >= parse_value_u64(row, "resolved_micros"),
-                    "{phase} on {shard}: projectile impact preceded its cast resolution: {row}"
-                );
-            }
+            assert!(
+                topology
+                    .party
+                    .bots()
+                    .contains(&parse_value_u64(row, "caster_guid")),
+                "{phase} on {shard}: impact came from an undeclared caster: {row}"
+            );
+            let target = parse_value_u64(row, "target_guid");
+            assert!(
+                topology.party.enemies.contains(&target)
+                    || [topology.party.leader, topology.party.mage_one].contains(&target),
+                "{phase} on {shard}: impact reached an undeclared target: {row}"
+            );
+            let impact_micros = parse_value_u64(row, "impact_micros");
+            assert!(
+                impact_micros >= begun_micros
+                    && parse_value_u64(row, "observed_micros") >= impact_micros,
+                "{phase} on {shard}: impact timing is outside the observed run: {row}"
+            );
         }
     }
 }
 
 fn pull_boundary(topology: &CompanionTopology, phase: &str, prior_target: Option<u64>) -> Value {
     let evidence = topology.save(phase, json!({"prior_target": prior_target}));
-    assert_cast_impact_evidence(&evidence, phase);
+    assert_impact_evidence(topology, &evidence, phase);
     let database = topology.current_world(topology.party.warrior);
     for guid in topology.party.bots() {
         let roles = topology.query(
@@ -914,27 +959,27 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         "SELECT attacker_guid, target_guid, tank_is_top_threat FROM \
          pkg_playerbots_companion_combat_receipt",
     );
-    let cast_receipts = second_boundary["source"]["cast_receipts"]
+    let impact_receipts = second_boundary["source"]["impact_receipts"]
         .as_array()
         .unwrap();
     for mage in [topology.party.mage_one, topology.party.mage_two] {
         assert!(
-            cast_receipts.iter().any(|row| {
+            impact_receipts.iter().any(|row| {
                 parse_value_u64(row, "caster_guid") == mage
                     && [first, second].contains(&parse_value_u64(row, "target_guid"))
                     && parse_value_u64(row, "spell_id") == 133
-                    && parse_value_u64(row, "impact_event_id") > 0
+                    && parse_value_u64(row, "source_event_id") > 0
                     && parse_value_u64(row, "damage") > 0
             }),
             "Mage {mage} dealt no recorded damage in the repeated pulls"
         );
     }
     assert!(
-        cast_receipts.iter().any(|row| {
+        impact_receipts.iter().any(|row| {
             parse_value_u64(row, "caster_guid") == topology.party.mage_one
                 && parse_value_u64(row, "target_guid") == second
                 && parse_value_u64(row, "spell_id") == 133
-                && parse_value_u64(row, "impact_event_id") > 0
+                && parse_value_u64(row, "source_event_id") > 0
                 && parse_value_u64(row, "damage") > 0
         }),
         "Assist Mage never acted on the named Priest's target"
@@ -1046,6 +1091,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     assert!(owned_combat_handles(&topology, third).is_empty());
     assert_eq!(target_receipts(&topology, third)["physical"], json!([]));
     assert_eq!(target_receipts(&topology, third)["casts"], json!([]));
+    assert_eq!(target_receipts(&topology, third)["impacts"], json!([]));
     let priest_third = command(
         &mut wire,
         &format!("target|{}|{third}", topology.party.priest),
@@ -1068,14 +1114,14 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         third_commands.push(command(&mut wire, &format!("target|{guid}|{third}")));
     }
     wait_enemy_dead(&topology, third);
-    wait_until("third pull cast observations did not settle", || {
-        observed_casts(&topology, topology.party.mage_one, third, 133, 0)
+    wait_until("third pull impact observations did not settle", || {
+        observed_impacts(&topology, topology.party.mage_one, third, 133)
             .iter()
             .any(|row| parse_u64(row, "damage") > 0)
     });
     let third_boundary = pull_boundary(&topology, "fixed-third-pull", Some(third));
     assert!(
-        third_boundary["source"]["cast_receipts"]
+        third_boundary["source"]["impact_receipts"]
             .as_array()
             .unwrap()
             .iter()
@@ -1083,7 +1129,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
                 row["caster_guid"].as_str() == Some(topology.party.mage_one.to_string().as_str())
                     && row["target_guid"].as_str() == Some(third.to_string().as_str())
                     && parse_value_u64(row, "spell_id") == 133
-                    && parse_value_u64(row, "impact_event_id") > 0
+                    && parse_value_u64(row, "source_event_id") > 0
                     && parse_value_u64(row, "damage") > 0
             }),
         "Assist Mage never acted after the Priest changed target"
