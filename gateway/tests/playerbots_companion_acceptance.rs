@@ -12,6 +12,43 @@ use companion::{one, parse_u64, wait_until, CompanionTopology, WireControl};
 use lyracore_shared::constants::player_flags::GHOST;
 use serde_json::{json, Value};
 
+fn assert_login_owner(topology: &CompanionTopology) {
+    let guid = topology.party.leader;
+    let characters = topology.query(
+        &topology.source,
+        &format!("SELECT account_id, owner_identity FROM game_character WHERE guid = {guid}"),
+    );
+    let character = one(&characters, "authenticated Character");
+    let bodies = topology.query(
+        &topology.source,
+        &format!("SELECT owner_identity FROM game_world_entity WHERE guid = {guid}"),
+    );
+    let body = one(&bodies, "authenticated Character body");
+    let accounts = topology.query(
+        &topology.source,
+        &format!(
+            "SELECT identity FROM game_account WHERE id = {}",
+            character["account_id"]
+        ),
+    );
+    let account = one(&accounts, "authenticated Account");
+    let evidence = json!({"character": character, "body": body, "account": account});
+    std::fs::write(
+        topology.evidence_dir.join("login-ownership.json"),
+        serde_json::to_vec_pretty(&evidence).unwrap(),
+    )
+    .expect("failed to save authenticated ownership evidence");
+    assert_eq!(
+        body["owner_identity"],
+        sats_field(&account["identity"], "some"),
+        "the live body must use the authenticated Account identity: {evidence}"
+    );
+    assert_eq!(
+        character["owner_identity"], body["owner_identity"],
+        "addon replies must address the authenticated Character owner: {evidence}"
+    );
+}
+
 fn position(topology: &CompanionTopology, database: &str, guid: u64) -> (f32, f32, f32) {
     let rows = topology.query(
         database,
@@ -489,6 +526,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     );
     let mut gateway = topology.gateway(false, "fixed-route");
     let mut wire = topology.wire("fixed-route");
+    assert_login_owner(&topology);
     topology.begin();
 
     assert_no_unrequested_pull(&topology, "before-follow");
@@ -1020,6 +1058,7 @@ fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
     let before = topology.save("composition-before", json!({}));
     let mut gateway = topology.gateway(true, "command-abort");
     let mut wire = topology.wire("command-abort");
+    assert_login_owner(&topology);
     topology.begin();
     let sent_a = wire.addon(&format!("follow|{}", topology.party.warrior), true);
     let abort = gateway.wait_for_abort();
