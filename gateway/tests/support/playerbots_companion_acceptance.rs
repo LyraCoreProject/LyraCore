@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use wow_srp::normalized_string::NormalizedString;
@@ -649,6 +649,7 @@ impl WireControl {
     fn spawn(topology: &CompanionTopology, label: &str) -> Self {
         let directory = topology.evidence_dir.join(format!("wire-{label}"));
         fs::create_dir_all(&directory).unwrap();
+        let (account_id, previous_claim) = wait_for_account_claim(topology, &directory);
         let log = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -694,10 +695,18 @@ impl WireControl {
             .unwrap()
             .write_all(format!("{PASSWORD}\n").as_bytes())
             .unwrap();
-        wait_file(
-            &control.directory.join("ready.json"),
-            "Headless Client did not become ready",
-        );
+        wait_until("Headless Client did not become ready", || {
+            if control.directory.join("ready.json").is_file() {
+                return true;
+            }
+            let status = control.child.as_mut().unwrap().try_wait().unwrap();
+            assert!(
+                status.is_none(),
+                "Headless Client exited before ready: {status:?}; log: {}",
+                control.directory.join("wire.log").display()
+            );
+            false
+        });
         let ready = read_json(&control.directory.join("ready.json"));
         assert_eq!(
             ready["character_guid"],
@@ -714,6 +723,7 @@ impl WireControl {
                 .is_none(),
             "Headless Client exited at startup"
         );
+        assert_replacement_claim(topology, &control.directory, &account_id, previous_claim);
         control
     }
 
@@ -812,6 +822,102 @@ impl WireControl {
         }
         evidence
     }
+}
+
+fn unix_micros() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_micros()
+        .try_into()
+        .unwrap()
+}
+
+fn wait_for_account_claim(
+    topology: &CompanionTopology,
+    directory: &Path,
+) -> (String, Option<BTreeMap<String, String>>) {
+    let accounts = topology.query(
+        &topology.realm,
+        &format!("SELECT id FROM game_account WHERE username = '{ACCOUNT}'"),
+    );
+    let account_id = one(&accounts, "companion Account")["id"].clone();
+    let sql = format!("SELECT * FROM game_account_claim WHERE account_id = {account_id}");
+    let mut previous: Option<BTreeMap<String, String>> = None;
+    let mut observations = Vec::new();
+    let available = support::poll_until(Duration::from_secs(90), || {
+        let rows = topology.query(&topology.realm, &sql);
+        let now = unix_micros();
+        observations.push(json!({"observed_micros": now, "claims": rows}));
+        fs::write(
+            directory.join("account-before-login.json"),
+            serde_json::to_vec_pretty(&observations).unwrap(),
+        )
+        .unwrap();
+        assert!(rows.len() <= 1, "duplicate Account Claim: {rows:?}");
+        let Some(claim) = rows.first() else {
+            assert!(previous.is_none(), "retained Account Claim disappeared");
+            return true;
+        };
+        assert_eq!(parse_u64(claim, "character_guid"), topology.party.leader);
+        if let Some(prior) = &previous {
+            for field in [
+                "account_id",
+                "generation",
+                "request_nonce",
+                "character_guid",
+                "expires_micros",
+            ] {
+                assert_eq!(
+                    claim[field], prior[field],
+                    "dead Gateway claim changed: {field}"
+                );
+            }
+        } else {
+            previous = Some(claim.clone());
+        }
+        assert!(matches!(claim["closed"].as_str(), "true" | "false"));
+        claim["closed"] == "true"
+            || claim["expires_micros"]
+                .parse::<i64>()
+                .unwrap()
+                .saturating_add(250_000)
+                <= now
+    });
+    assert!(
+        available,
+        "prior Account Claim did not close or expire: {observations:?}"
+    );
+    (account_id, previous)
+}
+
+fn assert_replacement_claim(
+    topology: &CompanionTopology,
+    directory: &Path,
+    account_id: &str,
+    previous: Option<BTreeMap<String, String>>,
+) {
+    let rows = topology.query(
+        &topology.realm,
+        &format!("SELECT * FROM game_account_claim WHERE account_id = {account_id}"),
+    );
+    let now = unix_micros();
+    fs::write(
+        directory.join("account-after-login.json"),
+        serde_json::to_vec_pretty(&json!({"observed_micros": now, "claims": rows})).unwrap(),
+    )
+    .unwrap();
+    let claim = one(&rows, "new companion Account Claim");
+    assert_eq!(claim["account_id"], account_id);
+    assert_eq!(parse_u64(claim, "character_guid"), topology.party.leader);
+    assert_eq!(claim["closed"], "false");
+    assert!(claim["expires_micros"].parse::<i64>().unwrap() > now);
+    assert_ne!(claim["request_nonce"].parse::<u128>().unwrap(), 0);
+    let expected_generation = previous.as_ref().map_or(1, |prior| {
+        assert_ne!(claim["request_nonce"], prior["request_nonce"]);
+        parse_u64(prior, "generation").checked_add(1).unwrap()
+    });
+    assert_eq!(parse_u64(claim, "generation"), expected_generation);
 }
 
 impl Drop for WireControl {
