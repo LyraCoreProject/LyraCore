@@ -85,6 +85,7 @@ impl CompanionTopology {
         node.publish_named_module_bytes(&realm, wasm);
         let evidence_dir = support::log_dir().join(format!("{source}-companion-acceptance"));
         fs::create_dir_all(&evidence_dir).expect("failed to create companion evidence directory");
+        let [logon_port, world_port] = reserve_ports();
         let mut topology = Self {
             node,
             source,
@@ -100,8 +101,8 @@ impl CompanionTopology {
                 leader_name: String::new(),
             },
             evidence_dir,
-            logon_port: reserve_port(),
-            world_port: reserve_port(),
+            logon_port,
+            world_port,
         };
         topology.stage_inputs();
         topology
@@ -1194,12 +1195,12 @@ fn flat_route_nav() -> String {
         .join(";")
 }
 
-fn reserve_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+fn reserve_ports() -> [u16; 2] {
+    let listeners = [
+        TcpListener::bind("127.0.0.1:0").unwrap(),
+        TcpListener::bind("127.0.0.1:0").unwrap(),
+    ];
+    listeners.map(|listener| listener.local_addr().unwrap().port())
 }
 
 fn wait_port(port: u16, name: &str) {
