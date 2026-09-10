@@ -962,6 +962,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // predates the multi-Shard query split, so it stays in the base subscription for older
         // Modules.
         "SELECT * FROM game_transfer_in",
+        // The source instance lease owns the admitted map and party during Transfer. This table
+        // predates the Shard split, so the base Coordinator can read that lease.
+        "SELECT * FROM game_instance",
         // ── THE COORDINATOR-RELAY RULE ─────────────────────────────────────────────────────────
         // Every relay whose loss leaves the CLIENT stuck in a wrong state — as opposed to merely
         // late — is subscribed HERE, on the stable coordinator connection, and never on the

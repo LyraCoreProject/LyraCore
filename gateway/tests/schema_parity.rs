@@ -910,6 +910,9 @@ parity_test!(parity_game_transfer_in, "game_transfer_in", lyracore_module::Trans
     bot_controller_generation, bot_intent_created_micros, bot_intent_source,
     source_map_id, source_instance_id, source_locator_revision,
 });
+parity_test!(parity_game_instance, "game_instance", lyracore_module::GameInstance, bindings::game_instance_type::GameInstance, {
+    instance_id, map_id, party_id, created_at, last_empty_at_micros, reset_requested,
+});
 parity_test!(parity_game_spell_chain, "game_spell_chain", lyracore_module::SpellChain, bindings::spell_chain_type::SpellChain, {
     spell_id, prev_spell, first_spell, rank, req_spell,
 });
@@ -1165,6 +1168,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_trainer_spell",
     "game_transfer_out",
     "game_transfer_in",
+    "game_instance",
     "game_player_skill",
     "game_gameobject",
     "game_gameobject_template",
