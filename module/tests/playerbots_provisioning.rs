@@ -733,7 +733,7 @@ fn playerbots_provisioning_stops_cleanly_and_preserves_owned_items_and_gear() {
 fn playerbots_provisioning_arms_levelup_but_control_modes_block_gameplay() {
     let (node, guid) = fixture("playerbots-provisioning-control", "1", "0");
     let initial = gameplay(&node, &guid);
-    for controller in ["legacy", "recordOnly", "frozen"] {
+    for controller in ["recordOnly", "frozen"] {
         select(&node, &guid, controller);
         node.assert_call("playerbots_fixture_provision_steps", &[&guid, "4"]);
         assert_eq!(gameplay(&node, &guid), initial, "{controller}");

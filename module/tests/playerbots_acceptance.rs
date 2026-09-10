@@ -355,7 +355,7 @@ fn assert_staged(node: &Standalone, guid: &str, case: JourneyCase, staged: &serd
         staged["bot"]["controller"]
             .as_str()
             .unwrap()
-            .contains("legacy"),
+            .contains("frozen"),
         "{staged}"
     );
     assert_eq!(staged["bot"]["next_think_micros"], i64::MAX.to_string());

@@ -812,7 +812,7 @@ fn playerbots_runner_relinquishes_current_account_ownership_without_cancelling_h
     node.assert_call("gw_cast_spell", &[&actor, "5090100", bot]);
     let human_cast =
         node.query_rows("SELECT scheduled_id FROM game_pending_cast")[0]["scheduled_id"].clone();
-    for mode in ["cohort", "legacy", "frozen"] {
+    for mode in ["cohort", "frozen"] {
         select(&node, bot, mode);
         node.assert_call("playerbots_fixture_runner_due", &[]);
         node.assert_call("playerbots_fixture_runner_pass", &[]);

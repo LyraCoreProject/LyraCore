@@ -137,8 +137,8 @@ fn assert_restored(before: &Value, after: &Value, leader: &str) {
 fn playerbots_legacy_arrival_restores_its_exact_companion_recovery() {
     let fixture = fixture("playerbots-transfer-recovery-legacy", "1240");
     fixture.node.assert_call(
-        "playerbots_select_controller",
-        &[&fixture.companion, "{\"legacy\":[]}"],
+        "playerbots_controller_transition_fixture_stage_legacy",
+        &[&fixture.companion, "false"],
     );
     let staged = stage_arrival(&fixture);
     fixture

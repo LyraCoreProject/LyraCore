@@ -685,8 +685,8 @@ fn playerbots_pending_transfer_intent_keeps_the_admitted_instance_lease() {
 fn playerbots_legacy_crossing_uses_the_runner_transfer_checkpoint() {
     let fixture = fixture("playerbots-transfer-legacy-checkpoint", 2);
     fixture.node.assert_call(
-        "playerbots_select_controller",
-        &[&fixture.companion, "{\"legacy\":[]}"],
+        "playerbots_controller_transition_fixture_stage_legacy",
+        &[&fixture.companion, "false"],
     );
     fixture
         .node
