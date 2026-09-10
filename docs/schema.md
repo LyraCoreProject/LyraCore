@@ -260,16 +260,27 @@ Character-side authority projection exists.
 account row, so a transferred character gets an index-entry row with empty salt and verifier. It can
 never satisfy an SRP proof; it exists only to carry the identity binding.
 
-### `game_account_claim` / `game_account_fence` (`module/src/account_ownership.rs`)
+### `game_account_claim` / `game_account_fence` / `game_account_character_owner` (`module/src/account_ownership.rs`)
 
-Both tables are private and keyed by the Realm-core Account id. The Account Claim stores its
-Character guid, generation, request nonce, expiration and closed state. The Account Fence also
-stores the Account name, since a World Shard's local Account id can differ from Realm-core's id.
-Closed rows remain so an old request cannot lower a generation or reopen a completed claim.
+All three tables are private. The Account Claim and Account Fence are keyed by the Realm-core Account
+id. The Account Claim stores its Character guid, generation, request nonce, expiration and closed
+state. The Account Fence also stores the Account name, since a World Shard's local Account id can
+differ from Realm-core's id. Closed rows remain so an old request cannot lower a generation or
+reopen a completed claim.
+The Account Character Owner table is keyed by Character guid and stores the exact Realm Account id
+and name. It permits a documented shadow Account to carry a transferred Character without making
+the shard-local Account id authoritative. Conflicting real Account names still refuse admission.
+These rows remain across logout, Transfer and Character deletion. Character guids are globally
+unique and never reused, so retained rows are ownership tombstones rather than live Character state.
 
-These are new tables. Existing rows and columns have no migration defaults or backfill. The first
-admission fences and removes any prior live Character of that Account on each World Shard before
-entering. Gateway and Module request arguments change together to carry a `SessionActor`; queued
+The Account Character Owner is an additive table, so it needs no column default. The first admission
+fences and removes any prior live Character of that Account on each World Shard before entering. An
+upgraded Shard can backfill the exact Character named by its current Account Fence; older
+multi-Character ownership cannot be reconstructed from shard-local Account ids. A shadow Character
+with neither retained ownership nor an exact prior fence continues to refuse admission. There is no
+automatic repair command. Repair requires independently established Realm ownership and a separate
+review of the Operator data migration; it must never infer ownership from a numeric shadow Account
+id. Gateway and Module request arguments carry a `SessionActor`; queued
 `GwMove` entries carry the same value. Operator requests for Characters without a World Session
 supply no token, and cannot act as a Character with an active Account Claim or Account Fence.
 

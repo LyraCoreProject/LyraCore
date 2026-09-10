@@ -32,6 +32,50 @@ fn utc_micros() -> i64 {
         .unwrap_or(i64::MAX)
 }
 
+fn shadow_account(account: &Account) -> bool {
+    account.username == format!("#{}", account.id)
+        && account.salt.is_empty()
+        && account.verifier.is_empty()
+}
+
+fn owner_matches(
+    owner: &AccountCharacterOwner,
+    realm_account_id: u64,
+    realm_account_name: &str,
+    character_guid: u64,
+) -> bool {
+    owner.account_id == realm_account_id
+        && owner.account_name == realm_account_name
+        && owner.character_guid == character_guid
+}
+
+fn account_owns_character(
+    local_account: &Account,
+    owner: Option<&AccountCharacterOwner>,
+    prior_fence: Option<&AccountFence>,
+    realm_account_id: u64,
+    realm_account_name: &str,
+    character_guid: u64,
+) -> bool {
+    if owner.is_some_and(|owner| {
+        !owner_matches(owner, realm_account_id, realm_account_name, character_guid)
+    }) {
+        return false;
+    }
+    if local_account.username == realm_account_name {
+        return true;
+    }
+    shadow_account(local_account)
+        && match owner {
+            Some(_) => true,
+            None => prior_fence.is_some_and(|fence| {
+                fence.account_id == realm_account_id
+                    && fence.account_name == realm_account_name
+                    && fence.character_guid == character_guid
+            }),
+        }
+}
+
 impl SessionOwnership {
     fn lose(&self) {
         self.closed.store(true, Ordering::Release);
@@ -107,37 +151,65 @@ impl Coordinator {
             .find(&account_id)
             .ok_or_else(|| anyhow!("no Account {account_id} on {}", self.shard_name()))?
             .username;
+        let realm = self.realm_core()?;
+        let realm_account = realm
+            .account_by_username(&name)?
+            .ok_or_else(|| anyhow!("no Account {name} on Realm-core"))?;
+        let realm_account_id = realm_account.id;
+        if shards.iter().any(|shard| {
+            shard
+                .0
+                .coord()
+                .conn
+                .db
+                .game_account_character_owner()
+                .character_guid()
+                .find(&character_guid)
+                .is_some_and(|owner| {
+                    !owner_matches(&owner, realm_account_id, &name, character_guid)
+                })
+        }) {
+            return Err(anyhow!("Character ownership changed"));
+        }
         let owns_character = shards.iter().any(|shard| {
             shard
                 .character_row(character_guid)
                 .is_some_and(|character| {
-                    shard
-                        .0
-                        .coord()
-                        .conn
-                        .db
-                        .game_account()
+                    let guard = shard.0.coord();
+                    let db = &guard.conn.db;
+                    db.game_account()
                         .id()
                         .find(&character.account_id)
-                        .is_some_and(|account| account.username == name)
+                        .is_some_and(|account| {
+                            let owner = db
+                                .game_account_character_owner()
+                                .character_guid()
+                                .find(&character_guid);
+                            let prior_fence =
+                                db.game_account_fence().account_id().find(&realm_account_id);
+                            account_owns_character(
+                                &account,
+                                owner.as_ref(),
+                                prior_fence.as_ref(),
+                                realm_account_id,
+                                &name,
+                                character_guid,
+                            )
+                        })
                 })
         });
         if !owns_character {
             return Err(anyhow!("Character does not belong to Account"));
         }
-        let realm = self.realm_core()?;
-        let realm_account = realm
-            .account_by_username(&name)?
-            .ok_or_else(|| anyhow!("no Account {name} on Realm-core"))?;
         let mut bytes = [0u8; 16];
         getrandom::fill(&mut bytes).map_err(|error| anyhow!("Account request nonce: {error}"))?;
         let nonce = u128::from_le_bytes(bytes).max(1);
         call_reducer!(
             realm.0.call_pipe().conn.reducers,
             "claim_account",
-            claim_account_then(realm_account.id, character_guid, nonce)
+            claim_account_then(realm_account_id, character_guid, nonce)
         )?;
-        let receipt = realm.claim_receipt(None, realm_account.id, nonce)?;
+        let receipt = realm.claim_receipt(None, realm_account_id, nonce)?;
         let token = Token {
             account_id: receipt.account_id,
             generation: receipt.generation,
@@ -280,6 +352,106 @@ mod tests {
     use crate::accept::BlockingTaskCapacity;
     use crate::config::GatewayConfig;
     use crate::durable_test_support::Standalone;
+
+    fn account(id: u64, username: &str, salt: &[u8], verifier: &[u8]) -> Account {
+        Account {
+            id,
+            username: username.into(),
+            salt: salt.into(),
+            verifier: verifier.into(),
+            identity: None,
+            banned: false,
+            alpha_test_tools: false,
+        }
+    }
+
+    #[test]
+    fn transferred_character_ownership_requires_exact_realm_provenance() {
+        let real = account(17, "TEST", &[1], &[2]);
+        assert!(account_owns_character(&real, None, None, 4, "TEST", 99));
+
+        let shadow = account(17, "#17", &[], &[]);
+        assert!(!account_owns_character(&shadow, None, None, 4, "TEST", 99));
+        let owner = AccountCharacterOwner {
+            character_guid: 99,
+            account_id: 4,
+            account_name: "TEST".into(),
+        };
+        assert!(account_owns_character(
+            &shadow,
+            Some(&owner),
+            None,
+            4,
+            "TEST",
+            99
+        ));
+        for (account_id, account_name, character_guid) in
+            [(5, "TEST", 99), (4, "OTHER", 99), (4, "TEST", 100)]
+        {
+            assert!(!account_owns_character(
+                &shadow,
+                Some(&owner),
+                None,
+                account_id,
+                account_name,
+                character_guid,
+            ));
+        }
+        assert!(!account_owns_character(
+            &account(17, "OTHER", &[1], &[2]),
+            Some(&owner),
+            None,
+            4,
+            "TEST",
+            99,
+        ));
+        assert!(!account_owns_character(
+            &account(17, "#17", &[1], &[]),
+            Some(&owner),
+            None,
+            4,
+            "TEST",
+            99,
+        ));
+
+        let prior_fence = AccountFence {
+            account_id: 4,
+            account_name: "TEST".into(),
+            generation: 7,
+            request_nonce: 8,
+            character_guid: 99,
+            expires_micros: 0,
+            closed: true,
+        };
+        assert!(account_owns_character(
+            &shadow,
+            None,
+            Some(&prior_fence),
+            4,
+            "TEST",
+            99,
+        ));
+        let conflicting_owner = AccountCharacterOwner {
+            account_id: 5,
+            ..owner.clone()
+        };
+        assert!(!account_owns_character(
+            &shadow,
+            Some(&conflicting_owner),
+            Some(&prior_fence),
+            4,
+            "TEST",
+            99,
+        ));
+        assert!(!account_owns_character(
+            &real,
+            Some(&conflicting_owner),
+            None,
+            4,
+            "TEST",
+            99,
+        ));
+    }
 
     fn fenced_destination(
         runtime: &tokio::runtime::Runtime,

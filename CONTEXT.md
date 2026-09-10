@@ -153,6 +153,11 @@ competing login. Each replacement advances the retained generation.
 A World Shard's retained Account Claim generation. Admission installs it on every configured World
 Shard. The Module checks it in the transaction that acts on the Character.
 
+**Account Character Owner**:
+A World Shard's retained Realm Account ownership for one Character. It lets a transferred Character
+use a local shadow Account without treating that shard-local Account id as authority. The row
+survives Transfer, logout and Character deletion because Character guids are never reused.
+
 **World Session Token**:
 The Realm-core Account id, claim generation and request nonce carried by a bound Store and each
 queued Durable Request. It preserves ownership across Transfer without changing bound identity.

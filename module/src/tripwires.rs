@@ -54,8 +54,12 @@ pub(crate) mod character_owned_tripwire {
     /// Each reason states the row's actual owner or lifetime.
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
-            &["game_account_claim", "game_account_fence"],
-            "Account-owned generations retained across Character deletion and Transfer",
+            &[
+                "game_account_claim",
+                "game_account_fence",
+                "game_account_character_owner",
+            ],
+            "Realm Account ownership retained across Character deletion and Transfer",
         ),
         (
             &[
