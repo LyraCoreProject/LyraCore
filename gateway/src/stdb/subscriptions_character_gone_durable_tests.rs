@@ -296,6 +296,12 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
                 .load(Ordering::Acquire)
                 > source_revision
     }));
+    assert!(poll_until(POLL_TIMEOUT, || world
+        .world_shards()
+        .into_iter()
+        .all(|(_, shard)| shard
+            .group_roster(1)
+            .is_some_and(|mirror| mirror.members == roster.members))));
     assert!(poll_until(POLL_TIMEOUT, || reconciliation_is_running(
         &observer
     )));

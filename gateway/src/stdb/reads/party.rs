@@ -126,8 +126,8 @@ impl Coordinator {
     /// needs for a party the acting character has just LEFT (their own membership row is gone, but
     /// the remaining members' rows still have to reach every shard).
     ///
-    /// Members come back in join order (member-row id), which is the order leadership succession
-    /// uses (`group::leader_after_removal`) and therefore the order the party frame should render.
+    /// Realm membership revisions retain join order when Transfer replaces a World mirror row.
+    /// Realm-core and unmirrored local parties use their own member-row ids.
     pub fn group_roster_by_id(&self, group_id: u64) -> Option<crate::world::party::GroupRoster> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
@@ -136,7 +136,15 @@ impl Coordinator {
             .game_group_member()
             .iter()
             .filter(|m| m.group_id == group_id)
-            .map(|m| (m.id, m.character_guid))
+            .map(|m| {
+                let membership_revision = db
+                    .game_group_member_partition()
+                    .character_guid()
+                    .find(&m.character_guid)
+                    .filter(|partition| partition.group_id == group_id && partition.member_active)
+                    .map_or(m.id, |partition| partition.membership_revision);
+                (membership_revision, m.character_guid)
+            })
             .collect();
         rows.sort_unstable();
         let partitions = rows
