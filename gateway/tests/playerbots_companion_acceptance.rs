@@ -159,7 +159,7 @@ fn wait_order(topology: &CompanionTopology, guid: u64, expected: &str) {
             .query(
                 &database,
                 &format!(
-                    "SELECT `order`, active FROM pkg_playerbots_companion_order WHERE \
+                    "SELECT * FROM pkg_playerbots_companion_order WHERE \
                      character_guid = {guid}"
                 ),
             )
@@ -175,7 +175,7 @@ fn wait_stay_order(topology: &CompanionTopology, guid: u64) -> (f32, f32, f32) {
         let rows = topology.query(
             &database,
             &format!(
-                "SELECT `order`, active FROM pkg_playerbots_companion_order WHERE character_guid = \
+                "SELECT * FROM pkg_playerbots_companion_order WHERE character_guid = \
                  {guid}"
             ),
         );

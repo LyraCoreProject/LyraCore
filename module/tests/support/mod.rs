@@ -598,7 +598,7 @@ fn parse_text_rows(output: &str) -> Vec<BTreeMap<String, String>> {
 
     lines
         .map(|line| {
-            let values: Vec<&str> = line.split('|').map(str::trim).collect();
+            let values = text_row_cells(line);
             assert_eq!(
                 values.len(),
                 headers.len(),
@@ -611,6 +611,32 @@ fn parse_text_rows(output: &str) -> Vec<BTreeMap<String, String>> {
                 .collect()
         })
         .collect()
+}
+
+fn text_row_cells(line: &str) -> Vec<&str> {
+    let mut cells = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, character) in line.char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
+        } else if character == '"' {
+            quoted = true;
+        } else if character == '|' {
+            cells.push(line[start..index].trim());
+            start = index + 1;
+        }
+    }
+    assert!(!quoted, "unterminated quoted SQL cell: {line}");
+    cells.push(line[start..].trim());
+    cells
 }
 
 /// `spacetime sql --format text` prints a string column inside double quotes. Callers compare
@@ -634,6 +660,36 @@ pub fn actor(guid: &str) -> String {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn text_rows_preserve_the_addon_reply_separator() {
+        let rows = parse_text_rows(
+            "id | cmd | payload\n---+-----+--------\n1 | \"playerbots.order.result\" | \"1|Applied\"\n",
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 3);
+        assert_eq!(rows[0]["id"], "1");
+        assert_eq!(rows[0]["cmd"], "playerbots.order.result");
+        assert_eq!(rows[0]["payload"], "1|Applied");
+    }
+
+    #[test]
+    fn text_rows_preserve_quoted_separators_inside_structured_values() {
+        let rows = parse_text_rows(
+            r#"id | payload | state
+---+---------+-------
+1 | "before \"|\" \\ after" | (some = (message = "A|B"))
+"#,
+        );
+        assert_eq!(rows[0]["payload"], r#"before \"|\" \\ after"#);
+        assert_eq!(rows[0]["state"], r#"(some = (message = "A|B"))"#);
+    }
+
+    #[test]
+    #[should_panic(expected = "unterminated quoted SQL cell")]
+    fn text_rows_refuse_an_unterminated_quoted_cell() {
+        parse_text_rows("id | payload\n---+--------\n1 | \"1|Applied\n");
+    }
 
     #[test]
     fn an_immediate_success_finishes_on_the_first_probe() {
