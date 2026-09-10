@@ -594,8 +594,10 @@ pub(super) fn run_bot_transfer_intent_injected(
         };
         destination.release_bot_transfer_arrival(transfer_id, intent)?;
         abort_point(abort_after, "release_transfer", transfer_id);
-        evict_finished_instance(holder, transfer_id, intent.destination_instance);
-        abort_point(abort_after, "evict_instance_population", transfer_id);
+        if routed.is_some() {
+            evict_finished_instance(holder, transfer_id, intent.destination_instance);
+            abort_point(abort_after, "evict_instance_population", transfer_id);
+        }
         return Ok(());
     }
     if let Some(plan) = holder.character_destination(intent.bot_guid) {

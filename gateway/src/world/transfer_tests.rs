@@ -1574,6 +1574,7 @@ fn a_ready_local_intent_releases_its_exact_arrival_fence() {
 
     assert!(!lk(&db.in_rows).contains_key(&BOT_GUID));
     assert!(db.live(BOT_GUID));
+    assert!(lk(&db.evicted).is_empty());
 }
 
 #[test]
