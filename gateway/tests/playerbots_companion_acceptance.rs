@@ -654,6 +654,9 @@ fn pull_boundary(topology: &CompanionTopology, phase: &str, prior_target: Option
 )]
 fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     let topology = CompanionTopology::stage("playerbots-companion-fixed-route");
+    let mut gateway = topology.gateway(false, "fixed-route");
+    let mut wire = topology.wire("fixed-route");
+    assert_login_owner(&topology);
     let fixed_before = topology.save(
         "fixed-before",
         json!({
@@ -671,9 +674,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         1,
         "Lesser Heal does not have one declared Core healing effect"
     );
-    let mut gateway = topology.gateway(false, "fixed-route");
-    let mut wire = topology.wire("fixed-route");
-    assert_login_owner(&topology);
+    assert_provisioned_supplies(&topology, &fixed_before);
     topology.begin();
 
     assert_no_unrequested_pull(&topology, "before-follow");
@@ -1213,10 +1214,11 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
 )]
 fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
     let mut topology = CompanionTopology::stage("playerbots-companion-restart-transfer");
-    let before = topology.save("composition-before", json!({}));
     let mut gateway = topology.gateway(true, "command-abort");
     let mut wire = topology.wire("command-abort");
     assert_login_owner(&topology);
+    let before = topology.save("composition-before", json!({}));
+    assert_provisioned_supplies(&topology, &before);
     topology.begin();
     let sent_a = wire.addon(&format!("follow|{}", topology.party.warrior), true);
     let abort = gateway.wait_for_abort();
@@ -1845,16 +1847,57 @@ fn assert_distinct_unchanged_command(
     assert_eq!(receipts[0]["outcome"], "(unchanged = ())");
 }
 
+fn assert_provisioned_supplies(topology: &CompanionTopology, before: &Value) {
+    let items = before["source"]["items"].as_array().unwrap();
+    for guid in topology.party.bots() {
+        let owner = guid.to_string();
+        for (entry, expected_count) in [("1251", 5), ("6948", 1)] {
+            let count: u64 = items
+                .iter()
+                .filter(|item| {
+                    item["owner_guid"].as_str() == Some(owner.as_str())
+                        && item["entry"].as_str() == Some(entry)
+                })
+                .map(|item| parse_value_u64(item, "stack_count"))
+                .sum();
+            assert_eq!(
+                count, expected_count,
+                "bot {guid} lacks the declared supply count for {entry} before the route"
+            );
+        }
+    }
+}
+
 fn assert_inventory_retained(
     topology: &CompanionTopology,
     before: &Value,
     after: &Value,
     death_guid: Option<u64>,
 ) {
+    // Periodic maintenance advances its cursor and history during the route.
+    let profiles = |snapshot: &Value| {
+        let mut rows: Vec<_> = snapshot["source"]["provisioning"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                [
+                    "character_guid",
+                    "profile",
+                    "revision",
+                    "free_grants",
+                    "armed_level",
+                ]
+                .map(|field| row[field].clone())
+            })
+            .collect();
+        rows.sort_by_key(|row| row[0].as_str().unwrap().to_owned());
+        rows
+    };
     assert_eq!(
-        canonical_rows(before, "source", "provisioning"),
-        canonical_rows(after, "source", "provisioning"),
-        "provisioning receipt changed across restart and Transfer"
+        profiles(before),
+        profiles(after),
+        "provisioning profile changed across restart and Transfer"
     );
     let before_items = before["source"]["items"].as_array().unwrap();
     let items = after["source"]["items"].as_array().unwrap();
@@ -1900,18 +1943,6 @@ fn assert_inventory_retained(
         equipped_owners, expected_owners,
         "one or more companions lost all equipped items"
     );
-    for guid in topology.party.bots() {
-        let owner = guid.to_string();
-        for entry in ["1251", "6948"] {
-            assert!(
-                before_items.iter().any(|item| {
-                    item["owner_guid"].as_str() == Some(owner.as_str())
-                        && item["entry"].as_str() == Some(entry)
-                }),
-                "bot {guid} lacked provisioned supply {entry} before the route"
-            );
-        }
-    }
     let before_templates = before["source"]["item_templates"].as_array().unwrap();
     let after_templates = after["source"]["item_templates"].as_array().unwrap();
     let canonical_templates = |rows: &[Value]| {

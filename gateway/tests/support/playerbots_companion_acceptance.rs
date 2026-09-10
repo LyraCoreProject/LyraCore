@@ -210,6 +210,9 @@ impl CompanionTopology {
                 &[&self.party.warrior.to_string()],
             );
         }
+        for database in [&self.source, &self.destination] {
+            self.call(database, "playerbots_fixture_provision_catalog", &[]);
+        }
         for guid in self.party.bots() {
             self.call(
                 &self.source,
@@ -298,6 +301,23 @@ impl CompanionTopology {
 
     pub fn apply_fault_when_due(&self, fault: u8) -> Vec<Value> {
         let database = self.current_world(self.party.warrior);
+        let plans = self.query(
+            &database,
+            "SELECT begun_micros FROM pkg_playerbots_companion_acceptance",
+        );
+        let faults = self.query(
+            &database,
+            &format!(
+                "SELECT due_offset_micros FROM pkg_playerbots_companion_fault WHERE id = {fault}"
+            ),
+        );
+        let due = parse_u64(one(&plans, "begun companion plan"), "begun_micros")
+            .checked_add(parse_u64(
+                one(&faults, "declared fault"),
+                "due_offset_micros",
+            ))
+            .expect("declared fault deadline exhausted");
+        let not_due = format!("companion acceptance fault is not due until {due}");
         let mut attempts = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(90);
         loop {
@@ -311,9 +331,20 @@ impl CompanionTopology {
                 "stdout": String::from_utf8_lossy(&output.stdout),
                 "stderr": String::from_utf8_lossy(&output.stderr),
             }));
+            fs::write(
+                self.evidence_dir
+                    .join(format!("fault-{fault}-attempts.json")),
+                serde_json::to_vec_pretty(&attempts).unwrap(),
+            )
+            .expect("failed to retain fault attempts");
             if output.status.success() {
                 return attempts;
             }
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(&not_due),
+                "fault {fault} failed: {}",
+                attempts.last().unwrap()
+            );
             assert!(Instant::now() < deadline, "fault {fault} never became due");
             std::thread::sleep(Duration::from_millis(250));
         }
