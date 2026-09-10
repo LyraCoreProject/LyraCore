@@ -367,7 +367,7 @@ fn install_authority(
             "character_guid": guid, "group_id": GROUP,
             "membership_revision": membership, "member_active": true,
             "map_id": map_id, "instance_id": 0, "locator_revision": 1,
-            "state": {"Known": []},
+            "state": {"known": []},
         }));
     }
     partitions.sort_by_key(|partition| partition["membership_revision"].as_u64().unwrap());
