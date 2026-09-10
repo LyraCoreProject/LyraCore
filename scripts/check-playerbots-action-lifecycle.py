@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 LIFECYCLES = {"success", "waiting", "refusal", "cancellation", "expiry"}
@@ -67,13 +67,163 @@ def load_json(path: Path) -> object:
         raise ValueError(f"cannot read {path}: {error}") from error
 
 
+def rust_code(source: str, *, keep_literals: bool = False) -> str:
+    """Blank Rust comments and literals with the boundary used by module/build.rs."""
+    output = list(source)
+    index = 0
+
+    def blank(start: int, end: int) -> None:
+        for position in range(start, end):
+            if output[position] != "\n":
+                output[position] = " "
+
+    while index < len(source):
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            end = len(source) if end < 0 else end
+            blank(index, end)
+            index = end
+        elif source.startswith("/*", index):
+            depth = 0
+            end = index
+            while end < len(source):
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                    if depth == 0:
+                        break
+                else:
+                    end += 1
+            blank(index, end)
+            index = end
+        else:
+            previous_is_identifier = index > 0 and (
+                source[index - 1].isalnum() or source[index - 1] == "_"
+            )
+            raw = (
+                None
+                if previous_is_identifier
+                else re.match(r'(?:br|cr|r)(?P<hashes>#+)?"', source[index:])
+            )
+            if raw is not None:
+                delimiter = '"' + (raw["hashes"] or "")
+                end = source.find(delimiter, index + raw.end())
+                end = len(source) if end < 0 else end + len(delimiter)
+                if not keep_literals:
+                    blank(index, end)
+                index = end
+                continue
+            quoted = source[index] == '"' or (
+                not previous_is_identifier and source.startswith('b"', index)
+            )
+            if quoted:
+                end = index + (2 if source.startswith('b"', index) else 1)
+                while end < len(source):
+                    if source[end] == "\\":
+                        end += 2
+                    elif source[end] == '"':
+                        end += 1
+                        break
+                    else:
+                        end += 1
+                if not keep_literals:
+                    blank(index, min(end, len(source)))
+                index = min(end, len(source))
+                continue
+            character = re.match(
+                r"(?:b)?'(?:\\(?:u\{[0-9A-Fa-f_]+\}|x[0-9A-Fa-f]{2}|.)|[^\\'\n])'",
+                source[index:],
+            )
+            if character is not None and (not previous_is_identifier or source[index] == "'"):
+                end = index + character.end()
+                if not keep_literals:
+                    blank(index, end)
+                index = end
+            else:
+                index += 1
+    return "".join(output)
+
+
+def top_level(source: str, position: int) -> bool:
+    depth = 0
+    for character in source[:position]:
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+    return depth == 0
+
+
+def has_test_function(source: str, function_name: str) -> bool:
+    stripped = rust_code(source)
+    functions = re.finditer(
+        rf"(?P<attributes>(?:#\s*\[[^]]*\]\s*)+)"
+        rf"(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?fn\s+{re.escape(function_name)}\s*\(",
+        stripped,
+    )
+    return any(
+        top_level(stripped, match.start())
+        and re.search(r"#\s*\[\s*test\s*\]", match["attributes"])
+        for match in functions
+    )
+
+
+def declares_external_module(root_source: str, relative_source: PurePosixPath, module: str) -> bool:
+    stripped = rust_code(root_source)
+    comments_removed = rust_code(root_source, keep_literals=True)
+    declaration = re.compile(
+        rf"#\s*\[\s*path\s*=\s+\]\s*mod\s+{re.escape(module)}\s*;"
+    )
+    for match in declaration.finditer(stripped):
+        declaration_source = comments_removed[match.start() : match.end()]
+        path = re.search(r'path\s*=\s*"([^"\\]*)"', declaration_source)
+        if (
+            top_level(stripped, match.start())
+            and path is not None
+            and PurePosixPath(path.group(1)) == relative_source
+        ):
+            return True
+    return False
+
+
 def source_case_exists(core_root: Path, case: dict[str, str]) -> bool:
-    path = core_root / case["source"]
-    if not path.is_file():
+    identifier = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+    if any(not isinstance(case.get(field), str) for field in ("target", "name", "source")):
         return False
-    function_name = case["name"].rsplit("::", 1)[-1]
-    pattern = rf"\bfn\s+{re.escape(function_name)}\s*\("
-    return re.search(pattern, path.read_text()) is not None
+    target = case["target"]
+    names = case["name"].split("::")
+    source = PurePosixPath(case["source"])
+    if (
+        not identifier.fullmatch(target)
+        or not names
+        or any(not identifier.fullmatch(name) for name in names)
+        or source.is_absolute()
+        or ".." in source.parts
+        or len(source.parts) < 3
+        or source.parts[0] not in {"module", "gateway"}
+        or source.parts[1] != "tests"
+        or source.suffix != ".rs"
+    ):
+        return False
+    tests_root = PurePosixPath(source.parts[0], "tests")
+    target_source = tests_root / f"{target}.rs"
+    path = core_root.joinpath(*source.parts)
+    root_path = core_root.joinpath(*target_source.parts)
+    if not path.is_file() or not root_path.is_file():
+        return False
+    if source == target_source:
+        if len(names) != 1:
+            return False
+    else:
+        if len(names) != 2:
+            return False
+        relative_source = source.relative_to(tests_root)
+        if not declares_external_module(root_path.read_text(), relative_source, names[0]):
+            return False
+    return has_test_function(path.read_text(), names[-1])
 
 
 def main() -> int:
