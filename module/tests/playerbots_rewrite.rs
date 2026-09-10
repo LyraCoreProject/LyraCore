@@ -292,6 +292,296 @@ fn playerbots_an_accepted_attack_without_a_hit_does_not_clear_quest_stall() {
     record_observations(&node);
 }
 
+fn playerbot_role_guid(
+    bots: &[std::collections::BTreeMap<String, String>],
+    class: &str,
+    role: &str,
+    nth: usize,
+) -> String {
+    bots.iter()
+        .filter(|row| row["class"] == class && row["role"] == role)
+        .nth(nth)
+        .unwrap()["character_guid"]
+        .clone()
+}
+
+fn playerbot_body(
+    node: &Standalone,
+    guid: &str,
+) -> Vec<std::collections::BTreeMap<String, String>> {
+    node.query_rows(&format!(
+        "SELECT guid, x, y, z, orientation, map_id, instance_id, grid_x, grid_y \
+         FROM game_world_entity WHERE guid = {guid}"
+    ))
+}
+
+fn playerbot_spline(
+    node: &Standalone,
+    guid: &str,
+) -> Vec<std::collections::BTreeMap<String, String>> {
+    node.query_rows(&format!(
+        "SELECT * FROM game_creature_spline WHERE guid = {guid}"
+    ))
+}
+
+fn playerbot_melee(
+    node: &Standalone,
+    guid: &str,
+) -> Vec<std::collections::BTreeMap<String, String>> {
+    node.query_rows(&format!(
+        "SELECT attacker_guid, target_guid, last_swing_ms FROM game_melee_attack \
+         WHERE attacker_guid = {guid}"
+    ))
+}
+
+fn playerbot_actions(
+    node: &Standalone,
+    guid: &str,
+) -> Vec<std::collections::BTreeMap<String, String>> {
+    node.query_rows(&format!(
+        "SELECT target_guid, outcome FROM pkg_playerbots_action WHERE character_guid = {guid}"
+    ))
+}
+
+fn assert_attack_action(
+    rows: &[std::collections::BTreeMap<String, String>],
+    target: &str,
+    outcome: &str,
+) {
+    assert!(
+        rows.iter()
+            .any(|row| row["target_guid"] == target && row["outcome"].contains(outcome)),
+        "expected {outcome} for target {target}: {rows:?}"
+    );
+}
+
+fn playerbot_combat_events(
+    node: &Standalone,
+    attacker: &str,
+    target: &str,
+) -> Vec<std::collections::BTreeMap<String, String>> {
+    node.query_rows(&format!(
+        "SELECT id, attacker_guid, target_guid, damage FROM game_combat_event \
+         WHERE attacker_guid = {attacker} AND target_guid = {target}"
+    ))
+}
+
+fn combat_event_boundary(node: &Standalone, attacker: &str, target: &str) -> u64 {
+    playerbot_combat_events(node, attacker, target)
+        .iter()
+        .filter_map(|row| row["id"].parse::<u64>().ok())
+        .max()
+        .unwrap_or(0)
+}
+
+fn positive_combat_event_after(
+    rows: &[std::collections::BTreeMap<String, String>],
+    boundary: u64,
+) -> bool {
+    rows.iter().any(|row| {
+        row["id"].parse::<u64>().unwrap_or(0) > boundary
+            && row["damage"].parse::<u32>().unwrap_or(0) > 0
+    })
+}
+
+fn write_playerbot_evidence(node: &Standalone, suffix: &str, record: &serde_json::Value) {
+    let path = support::log_dir().join(format!("{}-{suffix}.json", node.shard_name()));
+    std::fs::write(path, serde_json::to_vec_pretty(record).unwrap()).unwrap();
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_an_admitted_sessionless_attack_faces_its_exact_target_before_swinging() {
+    let mut node = Standalone::start("playerbots-sessionless-attack-facing");
+    node.publish_module();
+    record_inputs(&node);
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    node.assert_call("playerbots_spawn", &["4", "1200", "1200", "50"]);
+
+    let mut bots = node.query_rows("SELECT character_guid, class, role FROM pkg_playerbots_bot");
+    bots.sort_by_key(|row| row["character_guid"].parse::<u64>().unwrap());
+    let warrior = playerbot_role_guid(&bots, "1", "0", 0);
+    let priest = playerbot_role_guid(&bots, "5", "1", 0);
+    let mage = playerbot_role_guid(&bots, "8", "2", 0);
+    let leader = playerbot_role_guid(&bots, "1", "0", 1);
+    node.assert_call(
+        "playerbots_fixture_roles_stage",
+        &[&warrior, &priest, &mage, &leader],
+    );
+    let target = node.query_rows("SELECT guid FROM game_world_entity WHERE entry = 5098001")[0]
+        ["guid"]
+        .clone();
+
+    let refusal_body_before = playerbot_body(&node, &warrior);
+    let refusal_spline_before = playerbot_spline(&node, &warrior);
+    node.assert_call("playerbots_fixture_attack", &[&warrior, "999999999"]);
+    let refusal_body_after = playerbot_body(&node, &warrior);
+    let refusal_spline_after = playerbot_spline(&node, &warrior);
+
+    node.assert_call("playerbots_fixture_position", &[&warrior, "1180"]);
+    node.assert_call("playerbots_fixture_roles_engage", &[&leader, &target]);
+    let approached = poll_until(POLL_TIMEOUT, || {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&warrior]);
+        !playerbot_spline(&node, &warrior).is_empty()
+    });
+    let remote_orientation_before = playerbot_body(&node, &warrior)[0]["orientation"].clone();
+    let remote_spline_before = playerbot_spline(&node, &warrior);
+    node.assert_call("playerbots_fixture_attack", &[&warrior, &target]);
+    let remote_accepted = playerbot_actions(&node, &warrior);
+    let remote_orientation_after = playerbot_body(&node, &warrior)[0]["orientation"].clone();
+    let remote_spline_after = playerbot_spline(&node, &warrior);
+
+    let approach_finished = poll_until(POLL_TIMEOUT, || {
+        playerbot_spline(&node, &warrior).is_empty()
+    });
+    node.assert_call("playerbots_fixture_position", &[&warrior, "1211"]);
+    let before_turn = playerbot_body(&node, &warrior);
+    let first_event_boundary = combat_event_boundary(&node, &warrior, &target);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&warrior]);
+    let accepted = playerbot_actions(&node, &warrior);
+    let after_turn = playerbot_body(&node, &warrior);
+    let mut landed = Vec::new();
+    let swung = poll_until(POLL_TIMEOUT, || {
+        landed = playerbot_combat_events(&node, &warrior, &target);
+        positive_combat_event_after(&landed, first_event_boundary)
+    });
+    let melee = playerbot_melee(&node, &warrior);
+
+    node.assert_call("playerbots_fixture_position", &[&target, "1214"]);
+    let before_refacing = playerbot_body(&node, &warrior);
+    let melee_before_refacing = melee.clone();
+    let second_event_boundary = combat_event_boundary(&node, &warrior, &target);
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&warrior]);
+    let accepted_after_refacing = playerbot_actions(&node, &warrior);
+    let after_refacing = playerbot_body(&node, &warrior);
+    let melee_immediate_after_refacing = playerbot_melee(&node, &warrior);
+    let mut landed_after_refacing = Vec::new();
+    let swung_after_refacing = poll_until(POLL_TIMEOUT, || {
+        landed_after_refacing = playerbot_combat_events(&node, &warrior, &target);
+        positive_combat_event_after(&landed_after_refacing, second_event_boundary)
+    });
+    let melee_after_refacing = playerbot_melee(&node, &warrior);
+
+    let record = serde_json::json!({
+        "refusal": {
+            "body_before": refusal_body_before,
+            "body_after": refusal_body_after,
+            "spline_before": refusal_spline_before,
+            "spline_after": refusal_spline_after,
+        },
+        "remote": {
+            "approached": approached,
+            "orientation_before": remote_orientation_before,
+            "orientation_after": remote_orientation_after,
+            "accepted": remote_accepted,
+            "spline_before": remote_spline_before,
+            "spline_after": remote_spline_after,
+            "approach_finished": approach_finished,
+        },
+        "in_range": {
+            "event_boundary": first_event_boundary,
+            "body_before": before_turn,
+            "body_after": after_turn,
+            "accepted": accepted,
+            "melee": melee,
+            "landed": landed,
+            "swung": swung,
+        },
+        "refacing": {
+            "event_boundary": second_event_boundary,
+            "body_before": before_refacing,
+            "body_after": after_refacing,
+            "accepted": accepted_after_refacing,
+            "melee_before": melee_before_refacing,
+            "melee_immediate_after": melee_immediate_after_refacing,
+            "melee_after": melee_after_refacing,
+            "landed": landed_after_refacing,
+            "swung": swung_after_refacing,
+        },
+    });
+    write_playerbot_evidence(&node, "sessionless-attack-facing", &record);
+
+    assert_eq!(refusal_body_after, refusal_body_before);
+    assert_eq!(refusal_spline_after, refusal_spline_before);
+    assert!(approached, "Cohort did not commit its remote approach");
+    assert_attack_action(&remote_accepted, &target, "attackAccepted");
+    assert_eq!(remote_orientation_after, remote_orientation_before);
+    assert_eq!(remote_spline_after, remote_spline_before);
+    assert!(approach_finished, "remote approach did not complete");
+    assert_eq!(before_turn[0]["x"].parse::<f32>().unwrap(), 1211.0);
+    assert_attack_action(&accepted, &target, "alreadyArmed");
+    let orientation = after_turn[0]["orientation"].parse::<f32>().unwrap();
+    assert!(
+        (orientation.abs() - std::f32::consts::PI).abs() < 0.01,
+        "sessionless Warrior did not face the exact target: {after_turn:?}"
+    );
+    assert!(
+        swung,
+        "the faced Warrior never landed an exact-target swing"
+    );
+    assert!(landed.iter().any(|row| {
+        row["attacker_guid"] == warrior
+            && row["target_guid"] == target
+            && row["id"].parse::<u64>().unwrap_or(0) > first_event_boundary
+            && row["damage"].parse::<u32>().unwrap_or(0) > 0
+    }));
+    assert!(melee.iter().any(|row| {
+        row["attacker_guid"] == warrior
+            && row["target_guid"] == target
+            && row["last_swing_ms"] != "0"
+    }));
+    assert_attack_action(&accepted_after_refacing, &target, "alreadyArmed");
+    assert_eq!(
+        before_refacing[0]["orientation"],
+        after_turn[0]["orientation"]
+    );
+    assert!(
+        after_refacing[0]["orientation"]
+            .parse::<f32>()
+            .unwrap()
+            .abs()
+            < 0.01,
+        "sessionless Warrior did not re-face the moved target: {after_refacing:?}"
+    );
+    assert!(
+        melee_before_refacing.len() == 1
+            && melee_immediate_after_refacing.len() == 1
+            && melee_after_refacing.len() == 1
+            && melee_before_refacing[0]["target_guid"] == target
+            && melee_immediate_after_refacing[0]["target_guid"] == target
+            && melee_after_refacing[0]["target_guid"] == target
+            && melee_before_refacing[0]["last_swing_ms"]
+                .parse::<u32>()
+                .unwrap()
+                > 0
+            && melee_immediate_after_refacing[0]["last_swing_ms"]
+                .parse::<u32>()
+                .unwrap()
+                >= melee_before_refacing[0]["last_swing_ms"]
+                    .parse::<u32>()
+                    .unwrap()
+            && melee_after_refacing[0]["last_swing_ms"]
+                .parse::<u32>()
+                .unwrap()
+                >= melee_immediate_after_refacing[0]["last_swing_ms"]
+                    .parse::<u32>()
+                    .unwrap(),
+        "AlreadyArmed reset the existing swing clock: before={melee_before_refacing:?} \
+         immediate={melee_immediate_after_refacing:?} after={melee_after_refacing:?}"
+    );
+    assert!(
+        swung_after_refacing,
+        "the re-faced Warrior never landed a second exact-target swing"
+    );
+    assert!(landed_after_refacing.iter().any(|row| {
+        row["attacker_guid"] == warrior
+            && row["target_guid"] == target
+            && row["id"].parse::<u64>().unwrap_or(0) > second_event_boundary
+            && row["damage"].parse::<u32>().unwrap_or(0) > 0
+    }));
+}
+
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_route_evidence_distinguishes_arrival_from_a_planned_leg() {
