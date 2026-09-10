@@ -283,6 +283,9 @@ review of the Operator data migration; it must never infer ownership from a nume
 id. Gateway and Module request arguments carry a `SessionActor`; queued
 `GwMove` entries carry the same value. Operator requests for Characters without a World Session
 supply no token, and cannot act as a Character with an active Account Claim or Account Fence.
+Each retained-owner or real-Account cleanup reads at most 4,097 rows and refuses when an Account
+already has more than 4,096. It never truncates cleanup. Raising the ceiling or compacting retained
+rows requires a separately reviewed Operator data migration.
 
 Stop serving World Sessions on every Gateway before publishing. Install the matching Module on
 Realm-core and every configured World Shard and Instance Pool, then restart only matching Gateways.

@@ -6,6 +6,7 @@ use crate::{game_account, game_character, game_gateway_session, game_world_entit
 
 const CLAIM_MICROS: i64 = 60_000_000;
 const REAP_LIMIT: usize = 64;
+const ACCOUNT_CHARACTER_OWNER_LIMIT: usize = 4_096;
 const STALE: &str = "STALE_WORLD_SESSION";
 
 #[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
@@ -401,7 +402,11 @@ fn remove_owned_characters(
         .game_account_character_owner()
         .by_account()
         .filter(account_id)
+        .take(ACCOUNT_CHARACTER_OWNER_LIMIT + 1)
         .collect();
+    if owners.len() > ACCOUNT_CHARACTER_OWNER_LIMIT {
+        return Err("Account Character Owner limit exceeded".into());
+    }
     if !owners.iter().all(|owner| {
         ownership_matches(owner, account_id, account_name, owner.character_guid)
             && retained_owner_can_remove_character(ctx, owner)
@@ -431,7 +436,11 @@ fn remove_real_account_characters(
             .by_account()
             .filter(account.id)
             .map(|character| character.guid)
+            .take(ACCOUNT_CHARACTER_OWNER_LIMIT + 1)
             .collect();
+        if guids.len() > ACCOUNT_CHARACTER_OWNER_LIMIT {
+            return Err("Account Character Owner limit exceeded".into());
+        }
         let owners = ctx.db.game_account_character_owner();
         if guids.iter().any(|guid| {
             owners.character_guid().find(*guid).is_some_and(|owner| {
@@ -546,18 +555,24 @@ pub(crate) fn reap_account_fences(ctx: &ReducerContext) {
             row.character_guid,
         ) {
             spacetimedb::log::error!("expired Account Fence cleanup ownership changed");
+            row.closed = true;
+            ctx.db.game_account_fence().account_id().update(row);
             continue;
         }
         if let Err(error) =
             remember_character_owner(ctx, row.account_id, &row.account_name, row.character_guid)
         {
             spacetimedb::log::error!("expired Account Fence ownership conflict: {error}");
+            row.closed = true;
+            ctx.db.game_account_fence().account_id().update(row);
             continue;
         }
         if let Err(error) =
             remove_retained_character(ctx, row.account_id, &row.account_name, row.character_guid)
         {
             spacetimedb::log::error!("expired Account Fence cleanup conflict: {error}");
+            row.closed = true;
+            ctx.db.game_account_fence().account_id().update(row);
             continue;
         }
         row.closed = true;

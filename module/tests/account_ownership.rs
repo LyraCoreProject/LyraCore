@@ -551,12 +551,62 @@ fn account_character_ownership_survives_account_switching() {
 
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn retained_account_ownership_overflow_refuses_without_cleanup() {
+    let mut shard = Standalone::start("account-owner-overflow");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    let first = token(1, 701);
+    let deadline = claim(&shard, "701");
+    fence(&shard, &first, &deadline);
+    shard.assert_sql("UPDATE game_account_fence SET expires_micros = 9223372036854775807");
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let rows: Vec<_> = (2..=4_097)
+        .map(|guid| format!("({guid},1,'TEST')"))
+        .collect();
+    shard.assert_sql(&format!(
+        "INSERT INTO game_account_character_owner (character_guid,account_id,account_name) VALUES {}",
+        rows.join(",")
+    ));
+    shard.assert_sql("UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = 1");
+    let (second, second_deadline) = claim_for(&shard, "1", "702");
+    let owners = shard.query_rows("SELECT * FROM game_account_character_owner");
+    let fence_before = shard.query_rows("SELECT * FROM game_account_fence");
+    let live_before = shard.query_rows("SELECT * FROM game_world_entity WHERE guid = 1");
+    refused(
+        &shard,
+        "fence_account",
+        &[&second, "\"TEST\"", "1", &second_deadline],
+        "Account Character Owner limit exceeded",
+    );
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_account_character_owner"),
+        owners
+    );
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_account_fence"),
+        fence_before
+    );
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_world_entity WHERE guid = 1"),
+        live_before
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn expired_fences_make_progress_in_bounded_batches() {
     let mut shard = Standalone::start("account-fence-batches");
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_call("provision_account", &["\"OTHER\"", "[]", "[]"]);
+    let other_account =
+        shard.query_rows("SELECT id FROM game_account WHERE username = 'OTHER'")[0]["id"].clone();
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET account_id = {other_account} WHERE guid = 1"
+    ));
     let mut rows: Vec<_> = (1..=65)
         .map(|id| format!("({id},'TEST',1,1,{id},0,false)"))
         .collect();
@@ -587,8 +637,16 @@ fn expired_fences_make_progress_in_bounded_batches() {
             .len(),
         65
     );
+    assert_eq!(
+        shard
+            .query_rows("SELECT guid FROM game_world_entity WHERE guid = 1")
+            .len(),
+        1
+    );
     assert!(shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE guid = 1")
+        .query_rows(
+            "SELECT character_guid FROM game_account_character_owner WHERE character_guid = 1"
+        )
         .is_empty());
     assert_eq!(
         shard.query_rows("SELECT account_id FROM game_account_fence WHERE closed = false")[0]
