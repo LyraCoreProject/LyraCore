@@ -225,7 +225,8 @@ fn snapshot(node: &Standalone) -> Value {
         "quest_cast_spellbook": sorted(node.query_rows("SELECT character_guid, spell_id FROM game_player_spell WHERE spell_id = 585"), "character_guid"),
         "actions": sorted(node.query_rows("SELECT character_guid, kind, target_guid, spell_id, quest_entry, outcome, started_micros, observed_micros FROM pkg_playerbots_action"), "character_guid"),
         "movement": sorted(node.query_rows("SELECT guid, sx, sy, sz, dx, dy, dz, start_micros, dur_ms, run FROM game_creature_spline"), "guid"),
-        "characters": sorted(node.query_rows("SELECT guid, map_id, instance_id, x, y, z, dead, player_flags FROM game_world_entity WHERE guid >= 1000000 AND guid < 2000000"), "guid"),
+        "characters": sorted(node.query_rows("SELECT guid, map_id, instance_id, x, y, z, health, dead, player_flags FROM game_world_entity WHERE guid >= 1000000 AND guid < 2000000"), "guid"),
+        "quest_loot_source": node.query_rows(&format!("SELECT guid, entry, map_id, instance_id, x, y, z, health, dead FROM game_world_entity WHERE guid = {}", QUEST_ROOTS[2].target)),
         "casts": sorted(node.query_rows("SELECT caster_guid, scheduled_id, spell_id, target_guid FROM game_pending_cast"), "caster_guid"),
         "attacks": sorted(node.query_rows("SELECT attacker_guid, target_guid FROM game_melee_attack"), "attacker_guid"),
         "quests": sorted(node.query_rows("SELECT character_guid, quest_entry, counts, rewarded, failed FROM game_character_quest"), "character_guid"),
@@ -321,6 +322,38 @@ fn assert_real_quest_root(evidence: &Value, root: QuestRoot, guid: &str) {
             .contains(&format!("guid = {}", root.target)),
         "{evidence}"
     );
+    if root.fixture_kind == 2 {
+        let retained_target = retained["target"].as_str().unwrap();
+        assert!(
+            retained_target.contains("executor = (creatureLoot = ())")
+                && retained_target.contains("entry = 69,")
+                && retained_target.contains(&format!("guid = {}", root.target)),
+            "{evidence}"
+        );
+        let source = evidence["quest_loot_source"].as_array().unwrap();
+        assert_eq!(source.len(), 1, "{evidence}");
+        assert_eq!(source[0]["entry"], "69", "{evidence}");
+        assert_eq!(source[0]["health"], "0", "{evidence}");
+        assert_eq!(source[0]["dead"], "true", "{evidence}");
+        let corpse_guid = root.target.to_string();
+        let loot: Vec<_> = evidence["loot"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["corpse_guid"].as_str() == Some(corpse_guid.as_str()))
+            .collect();
+        assert_eq!(loot.len(), 1, "{evidence}");
+        assert_eq!(loot[0]["item_entry"], "750", "{evidence}");
+        assert_eq!(loot[0]["count"], "8", "{evidence}");
+        let character = evidence["characters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["guid"].as_str() == Some(guid))
+            .unwrap();
+        assert_eq!(character["dead"], "false", "{evidence}");
+        assert_ne!(character["health"], "0", "{evidence}");
+    }
     if let Some(spell) = root.cast_spell {
         let rotations = evidence["quest_cast_rotation"].as_array().unwrap();
         assert_eq!(rotations.len(), 1, "{evidence}");
