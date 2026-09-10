@@ -320,6 +320,7 @@ fn assert_no_unrequested_pull(topology: &CompanionTopology, phase: &str) {
         for (table, owner) in [
             ("pkg_playerbots_companion_combat_receipt", "attacker_guid"),
             ("pkg_playerbots_companion_cast_receipt", "caster_guid"),
+            ("pkg_playerbots_companion_impact_receipt", "caster_guid"),
         ] {
             for row in topology.query(
                 &database,
