@@ -270,8 +270,8 @@ pub const NAV_RES: f32 = CELL_SIZE / WALK_DIM as f32;
 /// Global walk-grid coordinate: `cell_index * 64 + sub_index` (counts DOWN from
 /// +MAP_COORD_MAX like everything else). u32 range 0..65536.
 fn grid_coord(coord: f32) -> Option<u32> {
-    let c = (MAP_COORD_MAX - coord) / NAV_RES;
-    if !(0.0..(1024 * WALK_DIM) as f32).contains(&c) {
+    let c = (f64::from(MAP_COORD_MAX) - f64::from(coord)) / f64::from(NAV_RES);
+    if !(0.0..(1024 * WALK_DIM) as f64).contains(&c) {
         return None;
     }
     Some(c as u32)
@@ -289,29 +289,48 @@ fn grid_walkable(
     cache.walkable(grid_to_world(gx), grid_to_world(gy))
 }
 
-/// Straight segment fully walkable? (the A* fast path + the string-pulling test.) Samples
-/// inside the START's own nav cell are exempt: a chaser hugging an obstacle stands in the
-/// blob's conservative margin (movement isn't walkability-gated), and counting its own cell
-/// as blocked failed EVERY sightline — string-pulling collapsed to per-cell micro-steps and
-/// the mob visibly stuttered each tick (live find, 2026-07-10).
+/// Check every crossed cell before accepting a direct route or removing a waypoint.
+/// The start cell is exempt so a mover can escape a conservative obstruction margin.
 fn line_walkable(
     cache: &mut Cache<impl FnMut(u16, u16) -> Option<NavCellData>>,
     from: (f32, f32),
     to: (f32, f32),
 ) -> bool {
-    let start_cell = (grid_coord(from.0), grid_coord(from.1));
-    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-    let steps = ((dx * dx + dy * dy).sqrt() / (NAV_RES * 0.5))
-        .ceil()
-        .max(1.0) as u32;
-    (0..=steps).all(|i| {
-        let t = i as f32 / steps as f32;
-        let (x, y) = (from.0 + dx * t, from.1 + dy * t);
-        if (grid_coord(x), grid_coord(y)) == start_cell {
-            return true;
+    let (Some(mut x), Some(mut y), Some(tx), Some(ty)) = (
+        grid_coord(from.0),
+        grid_coord(from.1),
+        grid_coord(to.0),
+        grid_coord(to.1),
+    ) else {
+        return false;
+    };
+    // Keep the world segment precise when measuring its grid-boundary intersections.
+    let gx = (f64::from(MAP_COORD_MAX) - f64::from(from.0)) / f64::from(NAV_RES);
+    let gy = (f64::from(MAP_COORD_MAX) - f64::from(from.1)) / f64::from(NAV_RES);
+    let dx = (f64::from(from.0) - f64::from(to.0)) / f64::from(NAV_RES);
+    let dy = (f64::from(from.1) - f64::from(to.1)) / f64::from(NAV_RES);
+    let crossing = |cell: u32, target: u32, origin: f64, delta: f64| match cell.cmp(&target) {
+        std::cmp::Ordering::Less => (cell + 1, (f64::from(cell + 1) - origin) / delta),
+        std::cmp::Ordering::Greater => (cell - 1, (f64::from(cell) - origin) / delta),
+        std::cmp::Ordering::Equal => (cell, f64::INFINITY),
+    };
+    while (x, y) != (tx, ty) {
+        let (nx, cross_x) = crossing(x, tx, gx, dx);
+        let (ny, cross_y) = crossing(y, ty, gy, dy);
+        if cross_x == cross_y && (!grid_walkable(cache, nx, y) || !grid_walkable(cache, x, ny)) {
+            return false;
         }
-        cache.walkable(x, y)
-    })
+        if cross_x <= cross_y {
+            x = nx;
+        }
+        if cross_y <= cross_x {
+            y = ny;
+        }
+        if !grid_walkable(cache, x, y) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Short-leg grid A* with string-pulling. Returns world waypoints from AFTER `from` up to and
@@ -562,7 +581,10 @@ fn search_leg(
         && (stop_dist == 0.0 || (anchor.0 - to.0).hypot(anchor.1 - to.1) > stop_dist)
         && line_walkable(&mut cache, anchor, to)
     {
-        path.pop();
+        let previous = path.iter().rev().nth(1).copied().unwrap_or(from);
+        if line_walkable(&mut cache, previous, to) {
+            path.pop();
+        }
         path.push(to);
     }
     LegSearch {
@@ -713,10 +735,9 @@ mod runtime_tests {
             for point in path {
                 let mut entry = 0.0_f64;
                 let mut exit = 1.0_f64;
-                for ((start, end), (low, high)) in
-                    [(previous.0, point.0), (previous.1, point.1)]
-                        .into_iter()
-                        .zip(bounds)
+                for ((start, end), (low, high)) in [(previous.0, point.0), (previous.1, point.1)]
+                    .into_iter()
+                    .zip(bounds)
                 {
                     let start = f64::from(start);
                     let delta = f64::from(end) - start;
