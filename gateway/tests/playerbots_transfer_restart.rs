@@ -1300,15 +1300,23 @@ fn assert_normalized_source_runner(evidence: &serde_json::Value) {
 
 fn assert_source_transfer_receipt(evidence: &serde_json::Value, position: usize) {
     let actions = rows(evidence, &["state", "source", "actions"]);
-    assert_eq!(
-        actions.len(),
-        usize::from(position < 6),
-        "source Transfer receipt phase differs: {evidence}"
-    );
     if position >= 6 {
+        assert!(
+            actions.is_empty(),
+            "source actions survived deletion: {evidence}"
+        );
         return;
     }
-    let action = &actions[0];
+    let transfers: Vec<_> = actions
+        .iter()
+        .filter(|action| action["kind"] == "(transfer = ())")
+        .collect();
+    assert_eq!(
+        transfers.len(),
+        1,
+        "source Transfer receipt phase differs: {evidence}"
+    );
+    let action = transfers[0];
     let intent = row(evidence, &["state", "source", "intent"]);
     let bot = &evidence["state"]["bot"];
     assert_u64_field(action, "character_guid", bot["guid"].as_u64().unwrap());
