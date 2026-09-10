@@ -177,9 +177,15 @@ impl Coordinator {
     pub(crate) fn realm_character_partition(
         &self,
         guid: u64,
-    ) -> Option<crate::world::party::RealmCharacterPartition> {
-        self.0
-            .coord()
+    ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
+        let live = self.0.coord();
+        if !live.is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for the Realm locator",
+                self.shard_name()
+            );
+        }
+        Ok(live
             .conn
             .db
             .game_character_shard()
@@ -195,7 +201,7 @@ impl Coordinator {
                 bot_source_identity: row.bot_source_identity,
                 bot_transfer_intent_id: row.bot_transfer_intent_id,
                 bot_controller_generation: row.bot_controller_generation,
-            })
+            }))
     }
 
     /// The EFFECTIVE armor for `guid` for the character-sheet CREATE (`UNIT_FIELD_RESISTANCES[0]`),

@@ -602,6 +602,8 @@ pub(crate) struct CoordinatorInner {
     call_pipe_next: std::sync::atomic::AtomicUsize,
     /// Edge-triggered diagnosis for a persistent Module/Gateway dispatch-lane mismatch.
     pub(crate) party_command_lane_overflow: AtomicBool,
+    /// Edge-triggered diagnosis for a populated Transfer Intent set beyond the current writer Gate.
+    pub(crate) bot_transfer_pending_overflow: AtomicBool,
     /// The per-shard movement batch — the hot path pushes one `GwMove` per inbound
     /// heartbeat and the 40ms flush task sends the whole tick as ONE `gw_movement_batch`
     /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
@@ -956,7 +958,9 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_transfer_out",
         // The destination fence. A world-entry retry reads its exact presence before doing the
         // required party synchronization, and the bot driver binds an exact intent identity to it
-        // before release. Like the source escrow, this is private owner-token state.
+        // before release. Like the source escrow, this is private owner-token state. The table
+        // predates the multi-Shard query split, so it stays in the base subscription for older
+        // Modules.
         "SELECT * FROM game_transfer_in",
         // ── THE COORDINATOR-RELAY RULE ─────────────────────────────────────────────────────────
         // Every relay whose loss leaves the CLIENT stuck in a wrong state — as opposed to merely
@@ -2421,6 +2425,7 @@ impl Coordinator {
             call_pipes,
             call_pipe_next: std::sync::atomic::AtomicUsize::new(0),
             party_command_lane_overflow: AtomicBool::new(false),
+            bot_transfer_pending_overflow: AtomicBool::new(false),
             motion_batch: MovementBatch::new(),
             on_reconnect: Mutex::new(Vec::new()),
         });

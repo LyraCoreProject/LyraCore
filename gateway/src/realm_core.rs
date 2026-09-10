@@ -2499,9 +2499,9 @@ mod tests {
     /// `CtxShard`: a `contains` scan is defeated by leaving the old text in a dead branch, equality
     /// is not. If a change here is deliberate, re-bless it with the same care.
     ///
-    /// Two forwards adapt their inherent return shape: `realm_character_partition` adds the
-    /// fallible trait wrapper, and `has_escrow` narrows `Option<TransferOut>` to a bool. Both are
-    /// spelled out below. Neither adaptation chooses a database or changes the returned fact.
+    /// `has_escrow` adapts its inherent return shape by narrowing `Option<TransferOut>` to a bool.
+    /// The other methods forward their inherent result without choosing a database or changing the
+    /// returned fact.
     #[test]
     fn the_coordinator_forwards_are_views_not_logic() {
         let src = include_str!("stdb/world_store.rs");
@@ -2544,7 +2544,7 @@ mod tests {
             self.set_character_shard(guid, map_id, instance_id) } \
             fn realm_character_partition( &self, guid: u64, ) \
             -> Result<Option<crate::world::party::RealmCharacterPartition>> { \
-            Ok(self.realm_character_partition(guid)) } \
+            self.realm_character_partition(guid) } \
             fn begin_character_shard_transfer( &self, source_map: u32, source_instance: u64, \
             source_revision: u64, destination_map: u32, destination_instance: u64, \
             source_module_identity: spacetimedb_sdk::Identity, intent_id: u64, \

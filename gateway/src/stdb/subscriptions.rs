@@ -3805,11 +3805,24 @@ impl Coordinator {
                 .collect::<Vec<_>>()
         };
         if pending.len() > BOT_TRANSFER_PENDING_LIMIT {
-            log::error!(
-                "bot Transfer dispatcher found more than {BOT_TRANSFER_PENDING_LIMIT} pending \
-                 rows; this populated state predates the bounded writer Gate"
-            );
+            if !self
+                .0
+                .bot_transfer_pending_overflow
+                .swap(true, Ordering::AcqRel)
+            {
+                log::error!(
+                    "bot Transfer dispatcher found more than {BOT_TRANSFER_PENDING_LIMIT} pending \
+                     rows; this populated state predates the bounded writer Gate"
+                );
+            }
             return after_id;
+        }
+        if self
+            .0
+            .bot_transfer_pending_overflow
+            .swap(false, Ordering::AcqRel)
+        {
+            log::info!("bot Transfer dispatcher pending count recovered on this Shard");
         }
         pending.sort_by_key(|intent| intent.id);
         rotate_transfer_work(&mut pending, after_id, |intent| intent.id);

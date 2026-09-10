@@ -1410,13 +1410,7 @@ impl WorldStore for Coordinator {
         &self,
         character_guid: u64,
     ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
-        if !self.0.coord().is_healthy() {
-            anyhow::bail!(
-                "{} has no healthy Coordinator subscription for the Realm locator",
-                self.shard_name()
-            );
-        }
-        Ok(self.realm_character_partition(character_guid))
+        self.realm_character_partition(character_guid)
     }
 
     fn party_holder_observation(
@@ -1609,9 +1603,8 @@ impl WorldStore for Coordinator {
 ///
 /// This block is the ONE layer `realm_core.rs`'s fake substitutes for wholesale, so it is pinned by
 /// exact-shape equality in `realm_core::tests::the_coordinator_forwards_are_views_not_logic`. Keep
-/// it a block of forwards; any logic that grows here is untested by construction. Two methods adapt
-/// their inherent return type: `realm_character_partition` adds `Result`, while `has_escrow`
-/// narrows `Option<TransferOut>` to a bool. See that test's doc for why these remain safe.
+/// it a block of forwards; any logic that grows here is untested by construction. `has_escrow`
+/// narrows `Option<TransferOut>` to a bool. See that test's doc for why this remains safe.
 impl crate::realm_core::RealmDb for Coordinator {
     fn shard_name(&self) -> &str {
         self.shard_name()
@@ -1672,7 +1665,7 @@ impl crate::realm_core::RealmDb for Coordinator {
         &self,
         guid: u64,
     ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
-        Ok(self.realm_character_partition(guid))
+        self.realm_character_partition(guid)
     }
     fn begin_character_shard_transfer(
         &self,
