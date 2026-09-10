@@ -258,7 +258,9 @@ on other lines or in files the lint cannot locate, so the build always refuses i
 ## Action observations
 
 `actor::request_attack` returns `AttackStart::Armed` or `AlreadyArmed`. The latter keeps the current
-melee swing timer. Both mean an engagement was accepted; neither proves a hit. The existing
+melee swing timer. After either result, an in-range Character turns toward the exact admitted target
+when Core's facing Gate would block its swing, unless an active movement leg still owns its position
+and facing. Both results mean an engagement was accepted; neither proves a hit. The existing
 `actor::attack` and client operations retain their re-arm behavior.
 
 `actor::request_accept_quest` and `request_turn_in_quest` complete synchronously. They return
