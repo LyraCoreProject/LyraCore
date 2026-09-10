@@ -2105,9 +2105,18 @@ fn assert_exit_completed(
         evidence["extra"]["progressed_toward_leader"], true,
         "the ordinary Core tick did not execute the Follow leg: {evidence}"
     );
-    assert_ne!(
-        evidence["state"]["source"]["movement_tick"], queued["state"]["source"]["movement_tick"],
-        "the ordinary Core movement schedule did not advance: {evidence}"
+    let moves: Vec<_> = rows(queued, &["state", "source", "actions"])
+        .iter()
+        .filter(|action| action["kind"] == "(move = ())")
+        .collect();
+    assert_eq!(moves.len(), 1, "missing exact Follow observation: {queued}");
+    let started =
+        embedded_u64(foreground, "started_micros").expect("retained Follow has no start timestamp");
+    assert_u64_field(moves[0], "started_micros", started);
+    assert_u64_field(moves[0], "observed_micros", started);
+    assert!(
+        rows(evidence, &["state", "source", "actions"]).contains(moves[0]),
+        "another movement replaced the Follow leg before body progress: {evidence}"
     );
     assert_follow_order(evidence, "source", &follow.order);
     assert_retained_objective(
