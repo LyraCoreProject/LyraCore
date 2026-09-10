@@ -1639,17 +1639,6 @@ fn assert_old_world_frozen(evidence: &Value, old: &str, current: &str) {
     }
 }
 
-fn canonical_rows(value: &Value, world: &str, table: &str) -> Vec<String> {
-    let mut rows: Vec<_> = value[world][table]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(Value::to_string)
-        .collect();
-    rows.sort();
-    rows
-}
-
 fn value_row_by_guid<'a>(
     value: &'a Value,
     world: &str,
