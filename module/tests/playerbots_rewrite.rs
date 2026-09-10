@@ -991,3 +991,64 @@ fn playerbots_a_dead_attacker_is_refused_before_engagement() {
     assert!(String::from_utf8_lossy(&ranged.stderr).contains("dead attackers cannot attack"));
     record_observations(&node);
 }
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_return_home_progress_survives_an_optional_grind_read_limit() {
+    let mut node = Standalone::start("playerbots-return-home-read-limit");
+    node.publish_module();
+    record_inputs(&node);
+    node.assert_call("claim_operator", &[]);
+    node.assert_call("install_guid_range", &["1000000"]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+    node.assert_call("playerbots_load_stage", &["100", "1"]);
+
+    let mut bots = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot");
+    bots.sort_by_key(|row| row["character_guid"].parse::<u64>().unwrap());
+    assert_eq!(bots.len(), 100);
+    let bot = &bots[0]["character_guid"];
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[bot]);
+    node.assert_call("playerbots_fixture_provision_steps", &[bot, "64"]);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    node.assert_call("playerbots_fixture_runner_pass_once", &[bot]);
+
+    let runner = node.query_rows(&format!(
+        "SELECT * FROM pkg_playerbots_runner WHERE character_guid = {bot}"
+    ));
+    let movement = node.query_rows(&format!(
+        "SELECT * FROM game_creature_spline WHERE guid = {bot}"
+    ));
+    write_playerbot_evidence(
+        &node,
+        "return-home-read-limit",
+        &serde_json::json!({
+            "bot": bot,
+            "runner": runner.clone(),
+            "movement": movement.clone(),
+            "roster_count": bots.len(),
+        }),
+    );
+
+    assert_eq!(runner.len(), 1, "runner state missing for {bot}");
+    let state = &runner[0];
+    assert!(
+        state["objective"].contains("kind = (returnHome = ())")
+            && state["objective"].contains("stage = (travelling = ())"),
+        "{state:?}"
+    );
+    assert!(
+        state["chosen"].contains("action = (move = (home = ()))")
+            && state["chosen"].contains("reason = (returnHome = ())"),
+        "{state:?}"
+    );
+    assert!(!state["failures"].contains("grindReadLimit"), "{state:?}");
+    assert_eq!(
+        movement.len(),
+        1,
+        "ReturnHome did not start movement: {state:?}"
+    );
+    assert!(
+        movement[0]["dur_ms"].parse::<u64>().unwrap() > 0,
+        "ReturnHome movement was not active: {movement:?}"
+    );
+}
