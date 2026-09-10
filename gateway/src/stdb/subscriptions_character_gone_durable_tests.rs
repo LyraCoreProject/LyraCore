@@ -118,6 +118,8 @@ fn reconciliation_is_running(coordinator: &Coordinator) -> bool {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+// One private topology stays alive across setup, Transfer, and deletion to prove one durable scenario.
+#[allow(clippy::too_many_lines)]
 fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     const INSTANCES: &str = "party-cleanup-instances";
     const OTHER: &str = "party-cleanup-other";
