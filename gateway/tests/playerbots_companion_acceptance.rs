@@ -6,7 +6,7 @@ mod companion;
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use companion::{one, parse_u64, wait_until, CompanionTopology, WireControl};
 use lyracore_shared::constants::player_flags::GHOST;
@@ -370,16 +370,50 @@ fn wait_for_party_live(topology: &CompanionTopology, database: &str) {
 }
 
 fn wait_enemy_dead(topology: &CompanionTopology, enemy: u64) {
-    wait_until("declared pull did not finish through Core combat", || {
+    let started = Instant::now();
+    let path = topology
+        .evidence_dir
+        .join(format!("pull-{enemy}-observations.json"));
+    let mut observations = Vec::new();
+    let completed = support::poll_until(Duration::from_secs(60), || {
         let database = topology.current_world(topology.party.warrior);
-        topology
-            .query(
-                &database,
-                &format!("SELECT health FROM game_world_entity WHERE guid = {enemy}"),
-            )
+        let rows = topology.query(
+            &database,
+            &format!(
+                "SELECT guid, map_id, instance_id, x, y, z, health, max_health, dead, target_guid \
+                 FROM game_world_entity WHERE guid = {enemy}"
+            ),
+        );
+        let dead = rows
             .first()
-            .is_some_and(|row| row["health"] == "0")
+            .is_some_and(|row| row["health"] == "0" && row["dead"] == "true");
+        observations.push(json!({
+            "elapsed_micros": started.elapsed().as_micros() as u64,
+            "database": database,
+            "enemy": rows,
+        }));
+        std::fs::write(&path, serde_json::to_vec_pretty(&observations).unwrap())
+            .expect("failed to save pull progress");
+        dead
     });
+    if !completed {
+        let database = topology.current_world(topology.party.warrior);
+        topology.save(
+            &format!("fixed-pull-{enemy}-timeout"),
+            json!({
+                "enemy_guid": enemy,
+                "observations": observations,
+                "threat": topology.query(
+                    &database,
+                    &format!("SELECT * FROM game_threat WHERE creature_guid = {enemy}"),
+                ),
+            }),
+        );
+    }
+    assert!(
+        completed,
+        "declared pull did not finish through Core combat"
+    );
 }
 
 fn owned_combat_handles(topology: &CompanionTopology, target: u64) -> Vec<Value> {
