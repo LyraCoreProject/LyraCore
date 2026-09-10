@@ -40,7 +40,7 @@ fn assert_login_owner(topology: &CompanionTopology) {
     .expect("failed to save authenticated ownership evidence");
     assert_eq!(
         body["owner_identity"],
-        sats_field(&account["identity"], "some"),
+        sats_field(sats_field(&account["identity"], "some"), "__identity__"),
         "the live body must use the authenticated Account identity: {evidence}"
     );
     assert_eq!(
