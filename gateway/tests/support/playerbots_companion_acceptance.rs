@@ -243,27 +243,7 @@ impl CompanionTopology {
                 &[&self.party.warrior.to_string()],
             );
         }
-        for database in [&self.source, &self.destination] {
-            self.call(database, "playerbots_fixture_provision_catalog", &[]);
-        }
-        // Taunt is the supported threat-recovery tool and requires level 10.
-        self.call(
-            &self.source,
-            "debug_set_level",
-            &[&self.party.warrior.to_string(), &TANK_LEVEL.to_string()],
-        );
-        self.call(
-            &self.source,
-            "playerbots_fixture_roles_prepare_fortitude",
-            &[&self.party.priest.to_string()],
-        );
-        for guid in self.party.bots() {
-            self.call(
-                &self.source,
-                "playerbots_fixture_provision_steps",
-                &[&guid.to_string(), "64"],
-            );
-        }
+        self.provision_companions();
         let account = one(
             &self.query(
                 &self.source,
@@ -340,6 +320,35 @@ impl CompanionTopology {
         }
     }
 
+    fn provision_companions(&self) {
+        for database in [&self.source, &self.destination] {
+            self.call(database, "playerbots_fixture_provision_catalog", &[]);
+        }
+        // Taunt is the supported threat-recovery tool and requires level 10.
+        self.call(
+            &self.source,
+            "debug_set_level",
+            &[&self.party.warrior.to_string(), &TANK_LEVEL.to_string()],
+        );
+        self.call(
+            &self.source,
+            "playerbots_fixture_roles_prepare_taunt",
+            &[&self.party.warrior.to_string()],
+        );
+        self.call(
+            &self.source,
+            "playerbots_fixture_roles_prepare_fortitude",
+            &[&self.party.priest.to_string()],
+        );
+        for guid in self.party.bots() {
+            self.call(
+                &self.source,
+                "playerbots_fixture_provision_steps",
+                &[&guid.to_string(), "64"],
+            );
+        }
+    }
+
     fn assert_tank_toolkit(&self, staged: &Value) {
         let warrior = self.party.warrior.to_string();
         for family in ["characters", "bodies"] {
@@ -358,6 +367,13 @@ impl CompanionTopology {
             .find(|row| row["spell_id"] == "355")
             .expect("Taunt header missing");
         assert_eq!(taunt["spell_level"], TANK_LEVEL.to_string());
+        let profile = staged["source"]["provisioning"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["character_guid"].as_str() == Some(warrior.as_str()))
+            .expect("Warrior provisioning profile missing");
+        assert_eq!(profile["armed_level"], TANK_LEVEL.to_string());
         assert_eq!(
             staged["source"]["spellbook"]
                 .as_array()
@@ -659,6 +675,8 @@ impl CompanionTopology {
             "rotations": self.query(database, "SELECT * FROM pkg_playerbots_rotation"),
             "spellbook": self.query(database, &format!("SELECT character_guid, spell_id FROM game_player_spell WHERE {quest_predicate}")),
             "spell_headers": self.query(database, "SELECT spell_id, spell_level, cost, range_yd FROM game_spell WHERE spell_id = 355 OR spell_id = 7386 OR spell_id = 6673 OR spell_id = 2050 OR spell_id = 1243 OR spell_id = 133"),
+            "trainers": self.query(database, "SELECT entry, name, trainer_type, trainer_class FROM game_creature_template WHERE trainer_class = 1 OR trainer_class = 5"),
+            "trainer_offerings": self.query(database, "SELECT * FROM game_trainer_spell WHERE spell_id = 355 OR spell_id = 1243"),
             "threat": self.query(database, "SELECT * FROM game_threat"),
             "orders": self.query(database, "SELECT * FROM pkg_playerbots_companion_order"),
             "runners": self.query(database, "SELECT * FROM pkg_playerbots_runner"),
