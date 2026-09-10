@@ -8,10 +8,20 @@ use crate::{TransferTopology, TransferredBot};
 const SOURCE_QUEST: u32 = 7;
 const REPLACEMENT_QUEST: u32 = 5_261;
 const SOURCE_TARGET_GUID: u64 = (0xF130u64 << 48) | (6u64 << 24) | 1;
+const DESTINATION_GIVER_GUID: u64 = (0xF130u64 << 48) | (197u64 << 24) | 10_001;
 const DESTINATION_TARGET_GUID: u64 = (0xF130u64 << 48) | (6u64 << 24) | 10_002;
 const DESTINATION_REPLACEMENT_GUID: u64 = (0xF130u64 << 48) | (823u64 << 24) | 10_003;
+const DESTINATION_REPLACEMENT_END_GUID: u64 = (0xF130u64 << 48) | (196u64 << 24) | 10_004;
 const DESTINATION_MAP: u32 = 36;
 const DESTINATION_INSTANCE: u64 = 5_098_078;
+const BOOTSTRAP_QUESTS: [u64; 12] = [783, 7, 5_261, 33, 18, 3_903, 3_904, 3_905, 40, 35, 37, 45];
+const BOOTSTRAP_OBJECTIVES: [u64; 12] = [
+    200_448, 1_792, 1_346_816, 8_448, 4_608, 999_168, 999_424, 999_680, 10_240, 8_960, 9_472,
+    11_520,
+];
+const BOOTSTRAP_SEEDS: [u64; 3] = [1, 5, 8];
+const DESTINATION_RELATIONS: [u64; 2] = [5_100_100, 5_100_101];
+const DESTINATION_OBJECTIVE: u64 = 5_100_120;
 const REBUILT_CONTENT: &str = "playerbots-transfer-destination-q7-v1";
 const REPLACEMENT_CONTENT: &str = "playerbots-transfer-destination-q5261-v1";
 const ROLES_GROUP: u64 = 5_098_000;
@@ -87,6 +97,26 @@ fn recorded_keys(evidence: &serde_json::Value, name: &str) -> BTreeSet<u64> {
         .map(|key| {
             key.as_u64()
                 .unwrap_or_else(|| panic!("{name} contains a non-u64 key: {evidence}"))
+        })
+        .collect()
+}
+
+fn capture_exact_rows(
+    topology: &TransferTopology,
+    table: &str,
+    key: &str,
+    values: &[u64],
+) -> Vec<serde_json::Value> {
+    values
+        .iter()
+        .map(|value| {
+            serde_json::json!({
+                "key": value,
+                "rows": topology.query(
+                    &topology.destination_db,
+                    &format!("SELECT * FROM {table} WHERE {key} = {value}"),
+                ),
+            })
         })
         .collect()
 }
@@ -752,9 +782,10 @@ pub(crate) fn assert_retained_quest_stage(evidence: &serde_json::Value) {
 /// Stage static destination content before the shared driver begins Transfer.
 pub(crate) fn stage_destination_catalogue(
     topology: &TransferTopology,
-    character_guid: u64,
+    transferred: &TransferredBot,
     mode: u8,
 ) -> serde_json::Value {
+    let character_guid = transferred.guid;
     let expected_navigation = stage_navigation(
         topology,
         &topology.destination_db,
@@ -763,6 +794,114 @@ pub(crate) fn stage_destination_catalogue(
             (36, -12.5732, -385.475, 62.4561),
             (36, 3.4268, -382.475, 62.4561),
         ],
+    );
+    let (quest_entry, creature_entries, creature_guids) = if mode == 1 {
+        (
+            7,
+            [197, 6],
+            [DESTINATION_GIVER_GUID, DESTINATION_TARGET_GUID],
+        )
+    } else {
+        (
+            5_261,
+            [823, 196],
+            [
+                DESTINATION_REPLACEMENT_GUID,
+                DESTINATION_REPLACEMENT_END_GUID,
+            ],
+        )
+    };
+    let preflight = serde_json::json!({
+        "mode": mode,
+        "expected_navigation": expected_navigation,
+        "snapshot": destination_snapshot(topology, character_guid),
+        "bootstrap_catalog_header_count": topology.query(
+            &topology.destination_db,
+            "SELECT COUNT(*) AS count FROM pkg_playerbots_quest_catalog",
+        ),
+        "bootstrap_catalog_quest_count": topology.query(
+            &topology.destination_db,
+            "SELECT COUNT(*) AS count FROM pkg_playerbots_catalog_quest",
+        ),
+        "bootstrap_catalog_objective_count": topology.query(
+            &topology.destination_db,
+            "SELECT COUNT(*) AS count FROM pkg_playerbots_catalog_objective",
+        ),
+        "bootstrap_catalog_seed_count": topology.query(
+            &topology.destination_db,
+            "SELECT COUNT(*) AS count FROM pkg_playerbots_catalog_seed",
+        ),
+        "bootstrap_catalog_quests": capture_exact_rows(
+            topology,
+            "pkg_playerbots_catalog_quest",
+            "quest_entry",
+            &BOOTSTRAP_QUESTS,
+        ),
+        "bootstrap_catalog_objectives": capture_exact_rows(
+            topology,
+            "pkg_playerbots_catalog_objective",
+            "id",
+            &BOOTSTRAP_OBJECTIVES,
+        ),
+        "bootstrap_catalog_seeds": capture_exact_rows(
+            topology,
+            "pkg_playerbots_catalog_seed",
+            "class",
+            &BOOTSTRAP_SEEDS,
+        ),
+        "fixture_quest_template": topology.query(
+            &topology.destination_db,
+            &format!("SELECT * FROM game_quest_template WHERE entry = {quest_entry}"),
+        ),
+        "fixture_core_objectives": topology.query(
+            &topology.destination_db,
+            &format!("SELECT * FROM game_quest_objective WHERE quest_entry = {quest_entry}"),
+        ),
+        "fixture_catalog_objectives": topology.query(
+            &topology.destination_db,
+            &format!("SELECT * FROM pkg_playerbots_catalog_objective WHERE quest_entry = {quest_entry}"),
+        ),
+        "fixture_creature_templates": capture_exact_rows(
+            topology,
+            "game_creature_template",
+            "entry",
+            &creature_entries,
+        ),
+        "fixture_creature_spawns": capture_exact_rows(
+            topology,
+            "game_creature_spawn",
+            "guid",
+            &creature_guids,
+        ),
+        "fixture_creature_entities": capture_exact_rows(
+            topology,
+            "game_world_entity",
+            "guid",
+            &creature_guids,
+        ),
+        "fixture_relations": capture_exact_rows(
+            topology,
+            "game_creature_quest",
+            "id",
+            &DESTINATION_RELATIONS,
+        ),
+        "fixture_core_objective": capture_exact_rows(
+            topology,
+            "game_quest_objective",
+            "id",
+            &[DESTINATION_OBJECTIVE],
+        ),
+        "fixture_catalog_objective": capture_exact_rows(
+            topology,
+            "pkg_playerbots_catalog_objective",
+            "id",
+            &[DESTINATION_OBJECTIVE],
+        ),
+    });
+    topology.save(
+        transferred,
+        "quest-destination-catalogue-preflight",
+        serde_json::json!({ "destination_catalogue_preflight": preflight }),
     );
     topology.call(
         &topology.destination_db,

@@ -1533,7 +1533,7 @@ fn run_quest_destination_case(name: &str, mode: u8) {
     );
 
     let catalogue =
-        playerbots_transfer_destination::stage_destination_catalogue(&topology, bot.guid, mode);
+        playerbots_transfer_destination::stage_destination_catalogue(&topology, &bot, mode);
     let catalogue_evidence = topology.save(
         &bot,
         "quest-destination-catalogue",
