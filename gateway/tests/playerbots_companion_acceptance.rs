@@ -889,14 +889,42 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     );
     let cast_receipts = topology.query(
         &topology.source,
-        "SELECT caster_guid, target_guid, spell_id, damage FROM \
-         pkg_playerbots_companion_cast_receipt",
+        "SELECT * FROM pkg_playerbots_companion_cast_receipt",
     );
+    std::fs::write(
+        topology
+            .evidence_dir
+            .join("repeated-pull-cast-impacts.json"),
+        serde_json::to_vec_pretty(&cast_receipts).unwrap(),
+    )
+    .expect("retain repeated-pull cast and impact evidence");
+    let mut impact_ids = BTreeSet::new();
+    for row in &cast_receipts {
+        assert_eq!(
+            parse_u64(row, "impact_failure"),
+            0,
+            "projectile evidence could not be associated with one cast: {row:?}"
+        );
+        let impact = parse_u64(row, "impact_event_id");
+        if impact != 0 {
+            assert!(
+                impact_ids.insert(impact),
+                "impact {impact} was counted twice"
+            );
+            assert!(parse_u64(row, "source_event_id") > 0);
+            assert!(
+                parse_u64(row, "impact_micros") >= parse_u64(row, "resolved_micros"),
+                "projectile impact preceded its cast resolution: {row:?}"
+            );
+        }
+    }
     for mage in [topology.party.mage_one, topology.party.mage_two] {
         assert!(
             cast_receipts.iter().any(|row| {
                 parse_u64(row, "caster_guid") == mage
                     && [first, second].contains(&parse_u64(row, "target_guid"))
+                    && parse_u64(row, "spell_id") == 133
+                    && parse_u64(row, "impact_event_id") > 0
                     && parse_u64(row, "damage") > 0
             }),
             "Mage {mage} dealt no recorded damage in the repeated pulls"
@@ -906,6 +934,8 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         cast_receipts.iter().any(|row| {
             parse_u64(row, "caster_guid") == topology.party.mage_one
                 && parse_u64(row, "target_guid") == second
+                && parse_u64(row, "spell_id") == 133
+                && parse_u64(row, "impact_event_id") > 0
                 && parse_u64(row, "damage") > 0
         }),
         "Assist Mage never acted on the named Priest's target"
