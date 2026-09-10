@@ -8,7 +8,7 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use companion::{one, parse_u64, wait_until, CompanionTopology, WireControl};
+use companion::{one, parse_u64, CompanionTopology, WireControl};
 use lyracore_shared::constants::player_flags::GHOST;
 use serde_json::{json, Value};
 
@@ -193,7 +193,7 @@ fn command(wire: &mut WireControl, payload: &str) -> Value {
 }
 
 fn wait_order(topology: &CompanionTopology, guid: u64, expected: &str) {
-    wait_until("companion order did not settle", || {
+    topology.wait_until("companion order did not settle", || {
         let database = topology.current_world(guid);
         topology
             .query(
@@ -210,7 +210,7 @@ fn wait_order(topology: &CompanionTopology, guid: u64, expected: &str) {
 
 fn wait_stay_order(topology: &CompanionTopology, guid: u64) -> (f32, f32, f32) {
     let mut settled = None;
-    wait_until("Stay order did not settle", || {
+    topology.wait_until("Stay order did not settle", || {
         let database = topology.current_world(guid);
         let rows = topology.query(
             &database,
@@ -243,7 +243,7 @@ fn wait_stay_order(topology: &CompanionTopology, guid: u64) -> (f32, f32, f32) {
     assert_eq!(sats_field(&order, "map_id"), body["map_id"]);
     assert_eq!(sats_field(&order, "instance_id"), body["instance_id"]);
     let mut settled_position = None;
-    wait_until(
+    topology.wait_until(
         "Stay Character did not settle at its committed anchor",
         || {
             let database = topology.current_world(guid);
@@ -337,7 +337,7 @@ fn assert_no_unrequested_pull(topology: &CompanionTopology, phase: &str) {
 }
 
 fn wait_for_party_progress(topology: &CompanionTopology, before: &BTreeMap<u64, (f32, f32, f32)>) {
-    wait_until("all four companions did not make Follow progress", || {
+    topology.wait_until("all four companions did not make Follow progress", || {
         topology.party.bots().into_iter().all(|guid| {
             let now = position(topology, &topology.current_world(guid), guid);
             distance(now, before[&guid]) > 0.1
@@ -346,7 +346,7 @@ fn wait_for_party_progress(topology: &CompanionTopology, before: &BTreeMap<u64, 
 }
 
 fn wait_for_party_live(topology: &CompanionTopology, database: &str) {
-    wait_until("party did not rebuild its live destination state", || {
+    topology.wait_until("party did not rebuild its live destination state", || {
         topology.party.all().into_iter().all(|guid| {
             topology
                 .query(
@@ -707,7 +707,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     );
     assert_no_unrequested_pull(&topology, "stay-held");
     let resume = command(&mut wire, &format!("follow|{}", topology.party.mage_two));
-    wait_until("Stay Mage did not resume Follow", || {
+    topology.wait_until("Stay Mage did not resume Follow", || {
         distance(
             position(&topology, &topology.source, topology.party.mage_two),
             held_after,
@@ -742,7 +742,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     .clone();
     let wound_applied_micros = parse_u64(&wound, "applied_micros");
     assert_ne!(wound_applied_micros, 0, "wound fault was not applied");
-    wait_until("Priest did not heal the declared wounds", || {
+    topology.wait_until("Priest did not heal the declared wounds", || {
         let leader = topology.query(
             &topology.source,
             &format!(
@@ -893,7 +893,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         topology.party.mage_one,
         &format!("(assist = (member_guid = {}))", topology.party.priest),
     );
-    wait_until("Assist Mage did not take the named Priest's target", || {
+    topology.wait_until("Assist Mage did not take the named Priest's target", || {
         topology
             .query(
                 &topology.source,
@@ -909,7 +909,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     for guid in [topology.party.warrior, topology.party.mage_two] {
         command(&mut wire, &format!("target|{guid}|{second}"));
     }
-    wait_until(
+    topology.wait_until(
         "second pull produced no owned combat handle before control",
         || !owned_combat_handles(&topology, second).is_empty(),
     );
@@ -918,7 +918,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         json!({"handles": owned_combat_handles(&topology, second)}),
     );
     let control_attempts = topology.apply_fault_when_due(1);
-    wait_until(
+    topology.wait_until(
         "ordinary decisions did not cancel work against the controlled target",
         || {
             exact_control_auras(&topology, second).len() == 1
@@ -1033,7 +1033,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
             "party pulled while the dead Mage was regrouping"
         );
     }
-    wait_until("dead Mage never became a released ghost", || {
+    topology.wait_until("dead Mage never became a released ghost", || {
         topology
             .query(
                 &topology.source,
@@ -1051,7 +1051,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         parse_value_f32(ghost_fault, "ghost_y"),
         parse_value_f32(ghost_fault, "ghost_z"),
     );
-    wait_until(
+    topology.wait_until(
         "resurrected Mage did not make physical Follow progress",
         || {
             let fault = topology.query(
@@ -1098,7 +1098,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         &mut wire,
         &format!("target|{}|{third}", topology.party.priest),
     );
-    wait_until("Assist Mage retained the Priest's obsolete target", || {
+    topology.wait_until("Assist Mage retained the Priest's obsolete target", || {
         topology
             .query(
                 &topology.source,
@@ -1116,7 +1116,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         third_commands.push(command(&mut wire, &format!("target|{guid}|{third}")));
     }
     wait_enemy_dead(&topology, third);
-    wait_until("third pull impact observations did not settle", || {
+    topology.wait_until("third pull impact observations did not settle", || {
         observed_impacts(&topology, topology.party.mage_one, third, 133)
             .iter()
             .any(|row| parse_u64(row, "damage") > 0)
@@ -1245,7 +1245,7 @@ fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
     );
     assert_eq!(applied_receipt[0]["outcome"], "(applied = ())");
     let mut gateway = topology.gateway(false, "command-recovery");
-    wait_until("intent A did not finalize after Gateway restart", || {
+    topology.wait_until("intent A did not finalize after Gateway restart", || {
         topology
             .query(
                 &topology.source,
@@ -1320,7 +1320,7 @@ fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
         dungeon_leader,
         (dungeon_leader.0 + 18.0, dungeon_leader.1, dungeon_leader.2),
     );
-    wait_until(
+    topology.wait_until(
         "no retained Follow foreground existed before Module restart",
         || {
             topology
@@ -1378,7 +1378,7 @@ fn playerbots_acceptance_restart_transfer_and_lost_ack_apply_once() {
         leader_before_resume.2,
     );
     let resumed_leader_move = wire.move_to(leader_before_resume, leader_resume_destination);
-    wait_until(
+    topology.wait_until(
         "Warrior did not physically resume Follow after Module restart",
         || {
             let warrior = position(&topology, &topology.destination, topology.party.warrior);
@@ -2003,29 +2003,14 @@ fn assert_inventory_retained(
             );
         }
     }
-    let before_reward: Vec<_> = before["source"]["quests"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| row["quest_entry"].as_str() == Some("50910"))
-        .collect();
-    let after_reward: Vec<_> = after["source"]["quests"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| row["quest_entry"].as_str() == Some("50910"))
-        .collect();
-    assert_eq!(
-        before_reward, after_reward,
-        "reward receipt reapplied or changed"
-    );
+    assert_quest_unchanged(before, after, topology.party.warrior, 50_910);
 }
 
 fn assert_quest_unchanged(before: &Value, after: &Value, guid: u64, quest_entry: u32) {
     let expected_guid = guid.to_string();
     let expected_quest = quest_entry.to_string();
     let exact = |value: &Value| {
-        value["source"]["quests"]
+        let mut rows = value["source"]["quests"]
             .as_array()
             .unwrap()
             .iter()
@@ -2034,11 +2019,19 @@ fn assert_quest_unchanged(before: &Value, after: &Value, guid: u64, quest_entry:
                     && row["quest_entry"].as_str() == Some(expected_quest.as_str())
             })
             .cloned()
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows.len(),
+            1,
+            "expected one retained Quest {quest_entry} for Character {guid}"
+        );
+        // Transfer mints a new local row id while retaining the Character's Quest progress.
+        rows[0].as_object_mut().unwrap().remove("id");
+        rows
     };
     assert_eq!(
         exact(before),
         exact(after),
-        "retained Quest changed across restart and Transfer"
+        "Quest {quest_entry} changed across restart and Transfer for Character {guid}"
     );
 }

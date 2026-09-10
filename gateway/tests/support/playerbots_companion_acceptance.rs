@@ -383,7 +383,7 @@ impl CompanionTopology {
     }
 
     pub fn wait_for_map(&self, map: u32) {
-        wait_until("party did not settle on the expected map", || {
+        self.wait_until("party did not settle on the expected map", || {
             self.party.all().into_iter().all(|guid| {
                 self.query(
                     &self.realm,
@@ -396,6 +396,14 @@ impl CompanionTopology {
                     == 1
             })
         });
+    }
+
+    pub fn wait_until(&self, description: &str, ready: impl FnMut() -> bool) {
+        if !poll_until(ready) {
+            eprintln!("companion wait failed: {description}");
+            self.save("failed-wait", json!({"condition": description}));
+            panic!("{description}");
+        }
     }
 
     pub fn restart_module_process(&mut self) -> (u32, u32) {
@@ -1029,12 +1037,19 @@ pub fn parse_u64(row: &BTreeMap<String, String>, field: &str) -> u64 {
         .unwrap_or_else(|_| panic!("invalid {field} in {row:?}"))
 }
 
-pub fn wait_until(description: &str, mut ready: impl FnMut() -> bool) {
+fn wait_until(description: &str, ready: impl FnMut() -> bool) {
+    assert!(poll_until(ready), "{description}");
+}
+
+fn poll_until(mut ready: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + POLL;
     while !ready() {
-        assert!(Instant::now() < deadline, "{description}");
+        if Instant::now() >= deadline {
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
+    true
 }
 
 fn account_material() -> (String, String) {
