@@ -973,9 +973,9 @@ fn playerbots_refused_target_does_not_cancel_a_useful_friendly_cast() {
         let state = runner(node, &fixture.priest);
         let progress = &state["cast_progress"];
         progress != "(none = ())"
-            && sats_number::<u64>(progress, "scheduled_id") == scheduled_id.parse().unwrap()
+            && sats_number::<u64>(progress, "scheduled_id") == scheduled_id.parse::<u64>().unwrap()
             && sats_number::<u32>(progress, "spell") == 2050
-            && sats_number::<u64>(progress, "target") == fixture.mage.parse().unwrap()
+            && sats_number::<u64>(progress, "target") == fixture.mage.parse::<u64>().unwrap()
     });
     let retained = order(node, &fixture.priest);
     let state = runner(node, &fixture.priest);
