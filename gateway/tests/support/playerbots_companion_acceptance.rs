@@ -26,6 +26,13 @@ pub const EXIT_LANDING: (f32, f32, f32) = (-11_208.7, 1_675.9, 24.5733);
 const ACCOUNT: &str = "PB011ROUTE";
 const PASSWORD: &str = "PASSWORD";
 const POLL: Duration = Duration::from_secs(60);
+// Permanent auras use Timestamp(i64::MAX). SpacetimeDB 2.7.1's text SQL formatter cannot render
+// that value as RFC 3339, so evidence names every other Aura column explicitly.
+const AURA_EVIDENCE_COLUMNS: &str = "id, target_guid, caster_guid, spell_id, slot, level, flags, \
+    applied_at, effect_id, eff_kind, amount, eff_p0, eff_p0_kind, eff_p1, period_ms, \
+    amount_remaining, stacks, next_tick_micros, channel_target, enters_combat, proc_flags, \
+    proc_chance, proc_ppm, proc_ex, proc_school_mask, proc_family_name, proc_family_flags, \
+    proc_charges, proc_icd_ms, proc_ready_micros";
 
 #[derive(Clone, Debug)]
 pub struct Party {
@@ -483,7 +490,12 @@ impl CompanionTopology {
             "actions": self.query(database, "SELECT * FROM pkg_playerbots_action"),
             "splines": self.query(database, &format!("SELECT * FROM game_creature_spline WHERE {guid_predicate}")),
             "casts": self.query(database, &format!("SELECT * FROM game_pending_cast WHERE {caster_predicate}")),
-            "auras": self.query(database, &format!("SELECT * FROM game_aura WHERE {target_predicate}")),
+            "auras": self.query(
+                database,
+                &format!(
+                    "SELECT {AURA_EVIDENCE_COLUMNS} FROM game_aura WHERE {target_predicate}"
+                ),
+            ),
             "melee": self.query(database, &format!("SELECT * FROM game_melee_attack WHERE {attacker_predicate}")),
             "items": items,
             "item_templates": item_templates,
