@@ -691,6 +691,53 @@ mod runtime_tests {
     }
 
     #[test]
+    fn find_leg_does_not_cut_a_blocked_cell_corner() {
+        let mut cell = NavCellData {
+            base_z: 50.0,
+            walk: vec![0xff; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        };
+        walk_set(&mut cell.walk, 0, 18, false);
+        let mut fetch = |x, y| ((x, y) == (470, 476)).then(|| cell.clone());
+        let endpoints = [(1398.908, 1190.3529), (1400.2607, 1189.8438)];
+        // The declared cell bounds, checked by segment intersection instead of route sampling.
+        let bounds = [
+            (1399.479_113_280_773_2, 1399.999_946_594_238_3),
+            (1190.104_121_267_795_6, 1190.624_954_581_260_7),
+        ];
+        for (from, to) in [(endpoints[0], endpoints[1]), (endpoints[1], endpoints[0])] {
+            let (path, _, complete) = find_leg_ex(&mut fetch, from, to, 4096).unwrap();
+            assert!(complete);
+            assert_eq!(path.last(), Some(&to));
+            let mut previous = from;
+            for point in path {
+                let mut entry = 0.0_f64;
+                let mut exit = 1.0_f64;
+                for ((start, end), (low, high)) in
+                    [(previous.0, point.0), (previous.1, point.1)]
+                        .into_iter()
+                        .zip(bounds)
+                {
+                    let start = f64::from(start);
+                    let delta = f64::from(end) - start;
+                    if delta == 0.0 {
+                        if start <= low || start >= high {
+                            exit = -1.0;
+                        }
+                    } else {
+                        let a = (low - start) / delta;
+                        let b = (high - start) / delta;
+                        entry = entry.max(a.min(b));
+                        exit = exit.min(a.max(b));
+                    }
+                }
+                assert!(entry >= exit, "blocked segment {previous:?} -> {point:?}");
+                previous = point;
+            }
+        }
+    }
+
+    #[test]
     fn open_field_fast_path_takes_zero_expansions() {
         // Both points in the clear half of the cell — direct line, no A*.
         let from = at(40, 10);
