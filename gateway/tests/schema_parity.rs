@@ -245,6 +245,41 @@ impl BindingFieldShape for bindings::parsed_client_command_type::ParsedClientCom
     }
 }
 
+impl Sentinel for bindings::party_partition_state_type::PartyPartitionState {
+    fn sentinel() -> Self {
+        Self::Unknown
+    }
+}
+
+impl BindingFieldShape for bindings::party_partition_state_type::PartyPartitionState {
+    fn binding_field_shape(&self, _ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+        use bindings::party_partition_state_type::PartyPartitionState;
+
+        match self {
+            PartyPartitionState::Unknown
+            | PartyPartitionState::Known
+            | PartyPartitionState::PendingTransfer => {}
+        }
+        let variants = [
+            ("Unknown", PartyPartitionState::Unknown),
+            ("Known", PartyPartitionState::Known),
+            ("PendingTransfer", PartyPartitionState::PendingTransfer),
+        ];
+        for (tag, (name, value)) in variants.iter().enumerate() {
+            assert_eq!(
+                spacetimedb_lib::bsatn::to_vec(value).expect("party partition state serializes"),
+                [tag as u8],
+                "PartyPartitionState::{name} no longer has its published BSATN tag"
+            );
+        }
+        AlgebraicType::Sum(
+            variants
+                .map(|(name, _)| (name, AlgebraicType::Product(ProductType::unit())))
+                .into(),
+        )
+    }
+}
+
 impl Sentinel for bindings::command_outcome_type::CommandOutcome {
     fn sentinel() -> Self {
         Self::Applied
@@ -600,6 +635,10 @@ parity_test!(parity_game_group_roster_revision, "game_group_roster_revision", ly
 });
 parity_test!(parity_game_group_member, "game_group_member", lyracore_module::GroupMember, bindings::group_member_type::GroupMember, {
     id, group_id, character_guid, owner_identity,
+});
+parity_test!(parity_game_group_member_partition, "game_group_member_partition", lyracore_module::GroupMemberPartition, bindings::group_member_partition_type::GroupMemberPartition, {
+    character_guid, group_id, membership_revision, member_active, map_id, instance_id,
+    locator_revision, state,
 });
 parity_test!(parity_game_creature_quest_tap, "game_creature_quest_tap", lyracore_module::CreatureQuestTap, bindings::creature_quest_tap_type::CreatureQuestTap, {
     creature_guid, character_guid,
@@ -1069,6 +1108,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_group",
     "game_group_roster_revision",
     "game_group_member",
+    "game_group_member_partition",
     "game_creature_quest_tap",
     "game_creature_quest_tap_member",
     "game_creature_loot_tag_group",
