@@ -142,6 +142,34 @@ impl CompanionTopology {
             "the companion route must exercise distinct local Account ids"
         );
         self.call(&self.source, "install_guid_range", &["1000000"]);
+        // Synthetic level-5 Priest inputs preserve the fixture's 120 health and zero attributes.
+        // The 100 mana must survive ordinary aura recalculation and destination materialization.
+        for database in [&self.source, &self.destination] {
+            for (table, key, columns, values) in [
+                (
+                    "game_class_level_stats",
+                    "class_level = 1285",
+                    "class_level, class, level, base_health, base_mana",
+                    "1285, 5, 5, 120, 100",
+                ),
+                (
+                    "game_level_stats",
+                    "race_class_level = 66821",
+                    "race_class_level, race, class, level, strength, agility, stamina, intellect, spirit",
+                    "66821, 1, 5, 5, 0, 0, 0, 0, 0",
+                ),
+            ] {
+                assert!(
+                    self.query(database, &format!("SELECT * FROM {table} WHERE {key}"))
+                        .is_empty(),
+                    "companion stat fixture refuses an existing {table} row"
+                );
+                self.node.assert_sql_database(
+                    database,
+                    &format!("INSERT INTO {table} ({columns}) VALUES ({values})"),
+                );
+            }
+        }
         for (count, class, role) in [("2", "1", "0"), ("1", "5", "1"), ("2", "8", "2")] {
             self.call(
                 &self.source,
@@ -225,11 +253,6 @@ impl CompanionTopology {
                 &[&guid.to_string(), "64"],
             );
         }
-        self.call(
-            &self.source,
-            "playerbots_fixture_roles_priest_mana",
-            &[&self.party.priest.to_string()],
-        );
         let account = one(
             &self.query(
                 &self.source,
@@ -580,6 +603,8 @@ impl CompanionTopology {
             )
         };
         json!({
+            "priest_class_stats": self.query(database, "SELECT * FROM game_class_level_stats WHERE class_level = 1285"),
+            "priest_level_stats": self.query(database, "SELECT * FROM game_level_stats WHERE race_class_level = 66821"),
             "characters": self.query(database, &format!("SELECT * FROM game_character WHERE {guid_predicate}")),
             "bodies": self.query(database, &format!("SELECT * FROM game_world_entity WHERE {guid_predicate}")),
             "enemies": self.query(database, &format!("SELECT * FROM game_world_entity WHERE {enemy_predicate}")),

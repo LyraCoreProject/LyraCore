@@ -320,7 +320,12 @@ impl Standalone {
 
     #[allow(dead_code)] // Used by integration targets that inspect committed table state.
     pub fn assert_sql(&self, query: &str) {
-        self.assert_ok(&self.sql(query));
+        self.assert_sql_database(&self.database, query);
+    }
+
+    #[allow(dead_code)] // Used by multi-database Gateway fixtures that stage static inputs.
+    pub fn assert_sql_database(&self, database: &str, query: &str) {
+        self.assert_ok(&self.sql_database(database, query));
     }
 
     #[allow(dead_code)] // Used by integration targets that inspect committed table state.
@@ -458,10 +463,6 @@ impl Standalone {
             );
             thread::sleep(POLL_INTERVAL);
         }
-    }
-
-    fn sql(&self, query: &str) -> Output {
-        self.sql_database(&self.database, query)
     }
 
     fn sql_database(&self, database: &str, query: &str) -> Output {
