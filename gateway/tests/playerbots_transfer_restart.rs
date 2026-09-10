@@ -1746,14 +1746,16 @@ fn assist_follow_observations(
     topology: &TransferTopology,
     bot: &TransferredBot,
 ) -> serde_json::Value {
-    topology.call(
-        &topology.destination_db,
-        "playerbots_fixture_companion_due",
-        &[&bot.guid.to_string()],
-    );
     let deadline = Instant::now() + support::POLL_TIMEOUT;
     let mut samples = Vec::new();
     loop {
+        // The declared Core tick also drives Package decisions. Run and park one real Runner
+        // pass while that tick is delayed, then let Core move the captured leg independently.
+        topology.call(
+            &topology.destination_db,
+            "playerbots_fixture_runner_pass_once",
+            &[&bot.guid.to_string()],
+        );
         let runner = topology.query(
             &topology.destination_db,
             &format!(
@@ -1773,13 +1775,10 @@ fn assist_follow_observations(
                 && row["foreground"].contains("reason = (follow = ())")
         }) && movement.len() == 1;
         if selected {
-            topology.call(
-                &topology.destination_db,
-                "playerbots_fixture_freeze",
-                &[&bot.guid.to_string()],
-            );
             return serde_json::json!({
                 "selected_priest": true,
+                "decision_driver": "controlled_runner_pass",
+                "passes": samples.len() + 1,
                 "samples": samples,
                 "selected": {
                     "runner": runner,
@@ -1821,6 +1820,8 @@ fn assist_follow_observations(
         if Instant::now() >= deadline {
             return serde_json::json!({
                 "selected_priest": false,
+                "decision_driver": "controlled_runner_pass",
+                "passes": samples.len(),
                 "samples": samples,
             });
         }
