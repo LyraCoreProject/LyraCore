@@ -94,6 +94,7 @@ fn stage_arrival(fixture: &Fixture) -> Value {
         &[&fixture.companion, &fixture.leader],
     );
     let staged = snapshot(fixture);
+    save(fixture, "staged", &staged);
     let checkpoint = staged["runner"][0]["transfer_checkpoint"].as_str().unwrap();
     assert!(checkpoint.contains("stalled_micros = 30000000"), "{staged}");
     assert!(checkpoint.contains("approach = 2"), "{staged}");
