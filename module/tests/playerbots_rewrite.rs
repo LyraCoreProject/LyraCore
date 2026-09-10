@@ -227,6 +227,10 @@ fn playerbots_explicit_cancellation_removes_the_cast_and_retains_its_outcome() {
 fn playerbots_an_accepted_attack_without_a_hit_does_not_clear_quest_stall() {
     let (node, bots) = fixture_role("playerbots-blocked-quest", "1", "0");
     let bot = &bots[0];
+    node.assert_call(
+        "playerbots_controller_transition_fixture_stage_legacy",
+        &[bot, "false"],
+    );
     node.assert_call("debug_set_nav_enabled", &["true"]);
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
     poll_until(POLL_TIMEOUT, || {
@@ -873,6 +877,10 @@ fn playerbots_acceptance_reports_range_and_capacity_before_granting_a_quest() {
 fn playerbots_initial_credit_observation_preserves_an_existing_stall() {
     let (node, bots) = fixture_role("playerbots-credit-baseline", "1", "0");
     let bot = &bots[0];
+    node.assert_call(
+        "playerbots_controller_transition_fixture_stage_legacy",
+        &[bot, "false"],
+    );
     node.assert_call("debug_set_nav_enabled", &["true"]);
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
     let stall = || {

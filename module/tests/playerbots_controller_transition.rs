@@ -73,6 +73,7 @@ fn current_fixture(name: &str, count: &str) -> (Standalone, Vec<String>) {
     node.assert_call("claim_operator", &[]);
     node.assert_call("install_guid_range", &["1000000"]);
     node.assert_call("playerbots_spawn", &[count, "1200", "1200", "50"]);
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
     let mut bots = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot");
     bots.sort_by_key(|row| row["character_guid"].parse::<u64>().unwrap());
     (
@@ -88,7 +89,6 @@ fn current_fixture(name: &str, count: &str) -> (Standalone, Vec<String>) {
 fn playerbots_new_bots_use_cohort_and_legacy_selection_refuses_before_state_change() {
     let (node, guids) = current_fixture("playerbots-controller-new-default", "1");
     let guid = &guids[0];
-    node.assert_call("playerbots_fixture_runner_select_cohort", &[guid]);
     let before = json!({
         "bot": bot(&node, guid),
         "runner": runner(&node, guid),
@@ -183,6 +183,7 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
         &[retained, "{\"legacy\":[]}"],
     );
     node.assert_sql("UPDATE pkg_playerbots_bot SET next_think_micros = 9223372036854775807");
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
     let preceding_state = json!({
         "bots": node.query_rows("SELECT * FROM pkg_playerbots_bot"),
         "runner": runner(&node, retained),
@@ -218,6 +219,7 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
     );
     let first_batch = node.query_rows("SELECT character_guid, controller FROM pkg_playerbots_bot");
     node.restart_persistent();
+    let scheduler_after_restart = node.query_rows("SELECT * FROM game_creature_move_schedule");
     node.assert_call(
         "playerbots_migrate_legacy_controllers",
         &[&batch(&guids[MAX_BATCH..])],
@@ -253,6 +255,7 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
         "unsorted": {"success": unsorted.status.success(), "output": output(&unsorted)},
         "after_unsorted": after_unsorted,
         "first_batch": first_batch,
+        "scheduler_after_restart": scheduler_after_restart,
         "after_restart_and_resume": after_resume,
         "after_idempotent_replay": replayed,
     });
@@ -286,6 +289,13 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
             .filter(|row| row["controller"].as_str().unwrap().contains("cohort"))
             .count(),
         MAX_BATCH,
+        "{evidence}"
+    );
+    assert!(
+        evidence["scheduler_after_restart"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
         "{evidence}"
     );
     assert!(
@@ -349,6 +359,7 @@ fn playerbots_cutover_leaves_pending_intent_checkpoint_and_escrow_under_legacy_o
         "playerbots_transfer_fixture_stage",
         &[&companion, &leader, "2"],
     );
+    node.assert_sql("DELETE FROM game_creature_move_schedule");
     node.assert_call(
         "playerbots_controller_transition_fixture_stage_legacy",
         &[&companion, "false"],
