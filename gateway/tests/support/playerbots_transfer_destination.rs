@@ -355,11 +355,7 @@ pub(crate) fn stage_retained_quest(
     let blocked_x = number::<f32>(blocked_entity, "x");
     let blocked_y = number::<f32>(blocked_entity, "y");
     let blocked_z = number::<f32>(blocked_entity, "z");
-    expected_navigation.extend(blocked_navigation_keys(
-        blocked_map,
-        blocked_x,
-        blocked_y,
-    ));
+    expected_navigation.extend(blocked_navigation_keys(blocked_map, blocked_x, blocked_y));
     let source_targets = topology.query(
         &topology.source_db,
         &format!("SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {SOURCE_TARGET_GUID}"),
@@ -409,7 +405,7 @@ pub(crate) fn stage_retained_quest(
     assert_eq!(
         field(observed_navigation, "revision"),
         imported_navigation["revision"].as_str(),
-        "source Recovery staging changed Navigation Inputs without an import"
+        "source Recovery staging advanced the retained import revision"
     );
     topology.call(
         &topology.source_db,
@@ -796,9 +792,7 @@ fn source_quest_fight_active(snapshot: &serde_json::Value) -> bool {
         .and_then(|rows| rows.first())
         .and_then(|runner| runner["recovery"].as_str())
         .is_some_and(|recovery| {
-            recovery.contains(&format!(
-                "active = (some = (fight = {SOURCE_TARGET_GUID}))"
-            ))
+            recovery.contains(&format!("active = (some = (fight = {SOURCE_TARGET_GUID}))"))
         })
 }
 

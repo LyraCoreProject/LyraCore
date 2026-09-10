@@ -1500,6 +1500,16 @@ fn run_quest_destination_case(name: &str, mode: u8) {
         "{arrival}"
     );
 
+    assert_same_fields(
+        row(
+            &source_evidence,
+            &["extra", "quest_source", "operation", "runner"],
+        ),
+        row(&arrival, &["state", "destination", "runner"]),
+        &["objective", "observed_micros", "progress_age_micros"],
+        &arrival,
+    );
+
     let result = if mode == 1 {
         playerbots_transfer_destination::case9_rebuilds_destination(&topology, &bot)
     } else {
