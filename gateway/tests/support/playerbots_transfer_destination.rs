@@ -41,7 +41,7 @@ fn number<T: std::str::FromStr>(row: &Row, field: &str) -> T {
         .unwrap_or_else(|_| panic!("invalid {field} in {row:?}"))
 }
 
-fn stage_navigation(
+pub(crate) fn stage_navigation(
     topology: &TransferTopology,
     database: &str,
     points: &[(u32, f32, f32, f32)],
