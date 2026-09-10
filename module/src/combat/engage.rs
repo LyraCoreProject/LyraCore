@@ -19,6 +19,7 @@ use crate::{game_faction_template, game_world_entity, WorldEntity};
 // defined in `swing.rs` (mirrors `spell::tables`'s identical cross-file `scheduled(..)` pattern).
 use super::*;
 use crate::actor::{ActionRefusal, ActionRefusalKind};
+use crate::creatures::tick::game_creature_spline;
 
 // --- Engagement queries over `game_melee_attack` (the single source of truth for who fights whom).
 // `attacker_guid` is the PK; an engagement "touches" a unit when it is on EITHER side. These three
