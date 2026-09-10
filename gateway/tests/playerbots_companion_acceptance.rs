@@ -376,7 +376,9 @@ fn wait_enemy_dead(topology: &CompanionTopology, enemy: u64) {
         .evidence_dir
         .join(format!("pull-{enemy}-observations.json"));
     let mut observations = Vec::new();
-    let completed = support::poll_until(Duration::from_secs(60), || {
+    // Two Mages dealing 20 damage every two seconds need about 50 seconds for 1,000 health.
+    // The budget also includes physical approach and the delay before both can cast.
+    let completed = support::poll_until(Duration::from_secs(90), || {
         let database = topology.current_world(topology.party.warrior);
         let rows = topology.query(
             &database,
