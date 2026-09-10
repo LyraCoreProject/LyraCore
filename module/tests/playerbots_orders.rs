@@ -849,8 +849,8 @@ fn playerbots_assist_honors_named_companions_current_target_order() {
             .to_ascii_lowercase()
             .contains("applied"));
     };
-    assert_target(first);
     evidence(&fixture, "assist-companion-target-before-attack");
+    assert_target(first);
     issue(
         &fixture,
         &format!("target|{}|{second}", fixture.priest),
@@ -858,11 +858,12 @@ fn playerbots_assist_honors_named_companions_current_target_order() {
         false,
     );
     pass(node, &fixture.mage);
-    assert_target(second);
     evidence(&fixture, "assist-companion-target-replaced");
+    assert_target(second);
 
     select_and_engage(node, &fixture.leader, first);
     let assert_refusal = |outcome: &str| {
+        evidence(&fixture, &format!("assist-companion-{outcome}"));
         assert!(order(node, &fixture.mage)["last_outcome"]
             .to_ascii_lowercase()
             .contains(outcome));
@@ -900,6 +901,7 @@ fn playerbots_assist_honors_named_companions_current_target_order() {
         node.assert_call("playerbots_fixture_orders_target_state", &[second, "2"]);
     }
     pass(node, &fixture.mage);
+    evidence(&fixture, "assist-companion-target-recovered");
     assert_target(second);
     node.assert_call(
         "playerbots_select_controller",
@@ -907,7 +909,6 @@ fn playerbots_assist_honors_named_companions_current_target_order() {
     );
     pass(node, &fixture.mage);
     assert_refusal("targetunavailable");
-    evidence(&fixture, "assist-companion-target-authority-ended");
 }
 
 #[test]
