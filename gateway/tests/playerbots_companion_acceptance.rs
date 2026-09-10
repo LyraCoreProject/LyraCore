@@ -1089,6 +1089,13 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         0
     );
     assert_mage_recovery_identity(&topology, &before_death, &resurrected);
+    topology.wait_until("resurrected Mage did not finish regrouping", || {
+        let leader = position(&topology, &topology.source, topology.party.leader);
+        let mage = position(&topology, &topology.source, topology.party.mage_two);
+        distance(mage, leader) <= 3.05
+    });
+    let regrouped = topology.save("fixed-regrouped", json!({}));
+    assert_mage_recovery_identity(&topology, &before_death, &regrouped);
     let third = topology.party.enemies[2];
     assert!(owned_combat_handles(&topology, third).is_empty());
     assert_eq!(target_receipts(&topology, third)["physical"], json!([]));
