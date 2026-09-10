@@ -267,9 +267,12 @@
       "lifecycle": "expiry",
       "case": {
         "target": "playerbots_action_lifecycle",
-        "name": "playerbots_quest_transfer_root_expires_before_areatrigger_admission",
+        "name": "playerbots_transfer_approach_replaces_quest_with_unbounded_companion_purpose",
         "source": "module/tests/playerbots_action_lifecycle.rs"
-      }
+      },
+      "applicability": "unreachable",
+      "reason": "Ordinary cross-shard selection replaces a solo Quest with a Companion purpose before it selects Move.AreaTrigger. Companion purposes own no deadline, and movement completion is not Expiry.",
+      "contract": "areatrigger-transfer-approach-owns-no-deadline"
     },
     {
       "action": "Cast",
@@ -678,9 +681,12 @@
       "lifecycle": "expiry",
       "case": {
         "target": "playerbots_action_lifecycle",
-        "name": "playerbots_quest_transfer_root_expires_before_areatrigger_admission",
+        "name": "playerbots_transfer_approach_replaces_quest_with_unbounded_companion_purpose",
         "source": "module/tests/playerbots_action_lifecycle.rs"
-      }
+      },
+      "applicability": "unreachable",
+      "reason": "Ordinary cross-shard selection replaces a solo Quest with a Companion purpose before Transfer selection. That purpose has no deadline, while an admitted Transfer remains fenced until settlement.",
+      "contract": "transfer-approach-owns-no-deadline"
     }
   ],
   "guards": [

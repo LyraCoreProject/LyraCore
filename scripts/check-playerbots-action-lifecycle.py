@@ -11,8 +11,10 @@ from pathlib import Path, PurePosixPath
 
 LIFECYCLES = {"success", "waiting", "refusal", "cancellation", "expiry"}
 UNREACHABLE_CONTRACTS = {
+    ("Move.AreaTrigger", "expiry"): "areatrigger-transfer-approach-owns-no-deadline",
     ("Resurrect", "refusal"): "resurrection-valid-states-cannot-refuse",
     ("Resurrect", "expiry"): "resurrection-owns-no-deadline",
+    ("Transfer", "expiry"): "transfer-approach-owns-no-deadline",
 }
 
 

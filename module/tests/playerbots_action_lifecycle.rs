@@ -323,18 +323,61 @@ fn assert_real_quest_root(evidence: &Value, root: QuestRoot, guid: &str) {
     );
 }
 
-fn assert_stopped_owned_movement(evidence: &Value, guid: &str) {
-    let movement = evidence["movement"]
+fn assert_transfer_root(evidence: &Value, guid: &str, action: &str) {
+    let runner = evidence["runner"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["guid"] == guid)
-        .unwrap_or_else(|| panic!("stopped movement missing: {evidence}"));
-    assert_eq!(movement["run"], "false", "{evidence}");
-    assert_eq!(movement["dur_ms"], "0", "{evidence}");
-    assert_eq!(movement["sx"], movement["dx"], "{evidence}");
-    assert_eq!(movement["sy"], movement["dy"], "{evidence}");
-    assert_eq!(movement["sz"], movement["dz"], "{evidence}");
+        .find(|row| row["character_guid"] == guid)
+        .unwrap_or_else(|| panic!("Transfer runner missing: {evidence}"));
+    let objective = runner["objective"].as_str().unwrap();
+    assert!(objective.contains("kind = (companion = ())"), "{evidence}");
+    let identity = runner["objective_sequence"].as_str().unwrap();
+    assert!(
+        objective.contains(&format!("identity = {identity}")),
+        "{evidence}"
+    );
+    let recovery = runner["recovery"].as_str().unwrap();
+    assert!(recovery.contains("work = (areaTrigger = 78)"), "{evidence}");
+    assert!(recovery.contains("reason = (transfer = ())"), "{evidence}");
+    assert!(
+        recovery.contains(&format!("objective = {identity}")),
+        "{evidence}"
+    );
+    assert!(
+        runner["chosen"].as_str().unwrap().contains(action),
+        "{evidence}"
+    );
+}
+
+fn assert_no_owned_movement(evidence: &Value, guid: &str) {
+    assert!(
+        evidence["movement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["guid"] != guid),
+        "{evidence}"
+    );
+}
+
+fn run_root_cases(roots: &[QuestRoot], mut run: impl FnMut(QuestRoot)) {
+    let failures: Vec<_> = roots
+        .iter()
+        .filter_map(|root| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(*root)))
+                .err()
+                .map(|panic| {
+                    let detail = panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("panic without a message");
+                    format!("{}: {detail}", root.label)
+                })
+        })
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 fn structured_number(value: &str, field: &str) -> String {
@@ -351,9 +394,9 @@ fn structured_number(value: &str, field: &str) -> String {
 fn home_pending(lifecycle: &str) -> (Standalone, String, Value) {
     let (node, bots) = fixture(&format!("playerbots-action-home-{lifecycle}"), 1);
     let guid = bots[0].clone();
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "32"]);
     node.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
-    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let pending = snapshot(&node);
     save(&node, "home-pending", &pending);
@@ -401,12 +444,20 @@ fn playerbots_return_home_cancels_its_real_owned_movement() {
             .contains("home"),
         "{cancelled}"
     );
-    assert_stopped_owned_movement(&cancelled, &guid);
+    assert_no_owned_movement(&cancelled, &guid);
     assert_eq!(cancelled["actions"], pending["actions"], "{cancelled}");
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let after_retry = snapshot(&node);
+    save(&node, "home-after-cancellation", &after_retry);
     assert_eq!(
-        cancelled["characters"], pending["characters"],
-        "{cancelled}"
+        after_retry["actions"], cancelled["actions"],
+        "{after_retry}"
     );
+    assert_eq!(
+        after_retry["characters"], cancelled["characters"],
+        "{after_retry}"
+    );
+    assert_no_owned_movement(&after_retry, &guid);
 }
 
 #[test]
@@ -431,9 +482,17 @@ fn playerbots_return_home_expires_its_real_owned_movement() {
         runner["history"].as_str().unwrap().contains("home"),
         "{expired}"
     );
-    assert_stopped_owned_movement(&expired, &guid);
+    assert_no_owned_movement(&expired, &guid);
     assert_eq!(expired["actions"], pending["actions"], "{expired}");
-    assert_eq!(expired["characters"], pending["characters"], "{expired}");
+    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let after_retry = snapshot(&node);
+    save(&node, "home-after-expiry", &after_retry);
+    assert_eq!(after_retry["actions"], expired["actions"], "{after_retry}");
+    assert_eq!(
+        after_retry["characters"], expired["characters"],
+        "{after_retry}"
+    );
+    assert_no_owned_movement(&after_retry, &guid);
 }
 
 #[test]
@@ -441,11 +500,11 @@ fn playerbots_return_home_expires_its_real_owned_movement() {
 fn playerbots_home_move_records_a_verified_blocked_route() {
     let (node, bots) = fixture("playerbots-action-home-blocked-route", 1);
     let guid = &bots[0];
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[guid, "32"]);
     node.assert_call("playerbots_fixture_blocked_quest", &[guid]);
     node.assert_call("playerbots_fixture_runner_stage", &[guid, "false"]);
     node.assert_call("gw_abandon_quest", &[&support::actor(guid), "50909"]);
-    node.assert_call("playerbots_fixture_runner_select_cohort", &[guid]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
     let first = snapshot(&node);
     save(&node, "home-blocked-first", &first);
@@ -512,7 +571,7 @@ fn playerbots_home_move_records_a_verified_blocked_route() {
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_quest_roots_cancel_their_real_movement_prerequisites() {
-    for root in QUEST_ROOTS {
+    run_root_cases(&QUEST_ROOTS, |root| {
         let (node, guid) = quest_fixture(root, "cancellation", false);
         let pending = snapshot(&node);
         save(&node, &format!("{}-pending", root.label), &pending);
@@ -543,7 +602,7 @@ fn playerbots_quest_roots_cancel_their_real_movement_prerequisites() {
                 .contains(&root.target.to_string()),
             "{cancelled}"
         );
-        assert_stopped_owned_movement(&cancelled, &guid);
+        assert_no_owned_movement(&cancelled, &guid);
         assert_eq!(cancelled["actions"], pending["actions"], "{cancelled}");
         assert_eq!(cancelled["quests"], pending["quests"], "{cancelled}");
         assert_eq!(cancelled["loot"], pending["loot"], "{cancelled}");
@@ -559,13 +618,27 @@ fn playerbots_quest_roots_cancel_their_real_movement_prerequisites() {
             cancelled["transfers"].as_array().unwrap().is_empty(),
             "{cancelled}"
         );
-    }
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let after_retry = snapshot(&node);
+        save(
+            &node,
+            &format!("{}-after-cancellation", root.label),
+            &after_retry,
+        );
+        assert_eq!(
+            after_retry["actions"], cancelled["actions"],
+            "{after_retry}"
+        );
+        assert_eq!(after_retry["quests"], cancelled["quests"], "{after_retry}");
+        assert_eq!(after_retry["loot"], cancelled["loot"], "{after_retry}");
+        assert_no_owned_movement(&after_retry, &guid);
+    });
 }
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_quest_roots_expire_their_real_movement_prerequisites() {
-    for root in QUEST_ROOTS {
+    run_root_cases(&QUEST_ROOTS, |root| {
         let (node, guid) = quest_fixture(root, "expiry", false);
         let pending = snapshot(&node);
         save(&node, &format!("{}-pending", root.label), &pending);
@@ -601,7 +674,7 @@ fn playerbots_quest_roots_expire_their_real_movement_prerequisites() {
                 .contains(&root.target.to_string()),
             "{expired}"
         );
-        assert_stopped_owned_movement(&expired, &guid);
+        assert_no_owned_movement(&expired, &guid);
         assert_eq!(expired["actions"], pending["actions"], "{expired}");
         assert_eq!(expired["quests"], pending["quests"], "{expired}");
         assert_eq!(expired["loot"], pending["loot"], "{expired}");
@@ -621,6 +694,7 @@ fn playerbots_quest_roots_expire_their_real_movement_prerequisites() {
         assert_eq!(after_retry["actions"], expired["actions"], "{after_retry}");
         assert_eq!(after_retry["quests"], expired["quests"], "{after_retry}");
         assert_eq!(after_retry["loot"], expired["loot"], "{after_retry}");
+        assert_no_owned_movement(&after_retry, &guid);
         assert!(
             after_retry["casts"].as_array().unwrap().is_empty(),
             "{after_retry}"
@@ -633,13 +707,13 @@ fn playerbots_quest_roots_expire_their_real_movement_prerequisites() {
             after_retry["transfers"].as_array().unwrap().is_empty(),
             "{after_retry}"
         );
-    }
+    });
 }
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_quest_move_targets_record_verified_blocked_routes() {
-    for root in [QUEST_ROOTS[3], QUEST_ROOTS[5], QUEST_ROOTS[6]] {
+    run_root_cases(&[QUEST_ROOTS[3], QUEST_ROOTS[5], QUEST_ROOTS[6]], |root| {
         let (node, guid) = quest_fixture(root, "blocked-route", true);
         let pending = snapshot(&node);
         save(&node, &format!("{}-blocked-first", root.label), &pending);
@@ -712,12 +786,16 @@ fn playerbots_quest_move_targets_record_verified_blocked_routes() {
             samples.iter().all(|sample| {
                 sample["characters"][0]["x"] == start_position["x"]
                     && sample["characters"][0]["y"] == start_position["y"]
-                    && sample["quests"] == pending["quests"]
                     && sample["loot"] == pending["loot"]
+                    && sample["quests"].as_array().unwrap().iter().any(|quest| {
+                        quest["character_guid"] == guid
+                            && quest["quest_entry"] == root.quest.to_string()
+                            && pending["quests"].as_array().unwrap().contains(quest)
+                    })
             }),
             "{evidence}"
         );
-    }
+    });
 }
 
 #[test]
@@ -1006,11 +1084,12 @@ fn playerbots_transfer_root_cancels_its_real_areatrigger_approach() {
         .iter()
         .find(|row| row["character_guid"] == fixture.companion)
         .unwrap();
+    assert_transfer_root(&pending, &fixture.companion, "areaTrigger = 78");
     assert_eq!(
         runner["candidate_order"]
             .as_str()
             .unwrap()
-            .matches("transfer = (")
+            .matches("areaTrigger = 78")
             .count(),
         1,
         "{pending}"
@@ -1033,7 +1112,10 @@ fn playerbots_transfer_root_cancels_its_real_areatrigger_approach() {
         pending["transfers"].as_array().unwrap().is_empty(),
         "{pending}"
     );
-    assert_objective_identity(&solo_quest["runner"][0], runner);
+    assert_ne!(
+        solo_quest["runner"][0]["objective_sequence"], runner["objective_sequence"],
+        "the party must replace the earlier solo Quest purpose: {pending}"
+    );
 
     fixture.node.assert_call(
         "playerbots_select_controller",
@@ -1059,43 +1141,57 @@ fn playerbots_transfer_root_cancels_its_real_areatrigger_approach() {
         after["last_outcome"].as_str().unwrap().contains("frozen"),
         "{cancelled}"
     );
-    assert_stopped_owned_movement(&cancelled, &fixture.companion);
+    assert_no_owned_movement(&cancelled, &fixture.companion);
     assert_eq!(cancelled["actions"], pending["actions"], "{cancelled}");
     assert!(
         cancelled["transfers"].as_array().unwrap().is_empty(),
         "{cancelled}"
     );
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let after_retry = snapshot(&fixture.node);
+    save(&fixture.node, "transfer-after-cancellation", &after_retry);
+    assert_eq!(
+        after_retry["actions"], cancelled["actions"],
+        "{after_retry}"
+    );
+    assert_eq!(
+        after_retry["transfers"], cancelled["transfers"],
+        "{after_retry}"
+    );
+    assert_no_owned_movement(&after_retry, &fixture.companion);
 }
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_quest_transfer_root_expires_before_areatrigger_admission() {
+fn playerbots_transfer_approach_replaces_quest_with_unbounded_companion_purpose() {
     let (fixture, solo_quest) = quest_transfer_fixture("playerbots-action-transfer-expiry", 1);
     fixture
         .node
         .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
     let pending = snapshot(&fixture.node);
-    save(&fixture.node, "quest-transfer-approach-pending", &pending);
-    let before = pending["runner"]
+    save(&fixture.node, "transfer-approach-unbounded", &pending);
+    let runner = pending["runner"]
         .as_array()
         .unwrap()
         .iter()
         .find(|row| row["character_guid"] == fixture.companion)
         .unwrap();
-    assert_objective_identity(&solo_quest["runner"][0], before);
-    assert!(
-        before["objective"].as_str().unwrap().contains("quest"),
-        "{pending}"
+    assert_transfer_root(&pending, &fixture.companion, "areaTrigger = 78");
+    assert_ne!(
+        solo_quest["runner"][0]["objective_sequence"], runner["objective_sequence"],
+        "the party must replace the earlier solo Quest purpose: {pending}"
     );
     assert!(
-        before["chosen"]
+        runner["objective"]
             .as_str()
             .unwrap()
-            .contains("areaTrigger = 78"),
+            .contains("deadline_micros = 9223372036854775807"),
         "{pending}"
     );
     assert!(
-        before["foreground"]
+        runner["foreground"]
             .as_str()
             .unwrap()
             .contains("areaTrigger = 78"),
@@ -1104,44 +1200,6 @@ fn playerbots_quest_transfer_root_expires_before_areatrigger_admission() {
     assert!(
         pending["transfers"].as_array().unwrap().is_empty(),
         "{pending}"
-    );
-
-    fixture.node.assert_call(
-        "playerbots_fixture_runner_expire_objective",
-        &[&fixture.companion],
-    );
-    fixture
-        .node
-        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
-    let expired = snapshot(&fixture.node);
-    save(&fixture.node, "quest-transfer-approach-expired", &expired);
-    let after = expired["runner"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["character_guid"] == fixture.companion)
-        .unwrap();
-    assert_objective_identity(before, after);
-    assert!(
-        after["failures"].as_str().unwrap().contains("deadline"),
-        "{expired}"
-    );
-    assert!(
-        after["objective"].as_str().unwrap().contains("deferred"),
-        "{expired}"
-    );
-    assert!(
-        after["history"]
-            .as_str()
-            .unwrap()
-            .contains("areaTrigger = 78"),
-        "{expired}"
-    );
-    assert_stopped_owned_movement(&expired, &fixture.companion);
-    assert_eq!(expired["actions"], pending["actions"], "{expired}");
-    assert!(
-        expired["transfers"].as_array().unwrap().is_empty(),
-        "{expired}"
     );
 }
 
@@ -1164,7 +1222,11 @@ fn playerbots_transfer_records_core_refusal_before_intent() {
         .iter()
         .find(|row| row["character_guid"] == fixture.companion)
         .unwrap();
-    assert_objective_identity(&solo_quest["runner"][0], runner);
+    assert_transfer_root(&refused, &fixture.companion, "transfer = (");
+    assert_ne!(
+        solo_quest["runner"][0]["objective_sequence"], runner["objective_sequence"],
+        "the party must replace the earlier solo Quest purpose: {refused}"
+    );
     assert!(
         runner["chosen"].as_str().unwrap().contains("transfer = ("),
         "{refused}"
@@ -1214,11 +1276,14 @@ fn playerbots_areatrigger_move_records_a_verified_blocked_route() {
         .iter()
         .find(|row| row["character_guid"] == fixture.companion)
         .unwrap();
-    assert!(
+    assert_transfer_root(&pending, &fixture.companion, "areaTrigger = 78");
+    assert_eq!(
         runner["candidate_order"]
             .as_str()
             .unwrap()
-            .contains("transfer = ("),
+            .matches("areaTrigger = 78")
+            .count(),
+        1,
         "{pending}"
     );
     assert!(
@@ -1432,12 +1497,30 @@ fn playerbots_expired_quest_does_not_preempt_resurrection_or_defense() {
             .contains("deadline"),
         "{evidence}"
     );
+    let defense_target = QUEST_ROOTS[5].target.to_string();
     assert!(
-        evidence["defense"]["after"]["attacks"]
+        defense_runner["chosen"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("entity = {defense_target}"))
+            && defense_runner["foreground"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("entity = {defense_target}"))
+            && defense_runner["recovery"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("fight = {defense_target}")),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["defense"]["after"]["movement"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["attacker_guid"] == defense),
+            .filter(|row| row["guid"] == defense)
+            .count(),
+        1,
         "{evidence}"
     );
 }
