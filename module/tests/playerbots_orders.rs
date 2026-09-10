@@ -362,6 +362,24 @@ fn movement_leg(node: &Standalone, guid: &str) -> Option<BTreeMap<String, String
     .next()
 }
 
+fn sats_number<T: std::str::FromStr>(value: &str, field: &str) -> T
+where
+    T::Err: std::fmt::Debug,
+{
+    let key = format!("{field} = ");
+    assert_eq!(value.matches(&key).count(), 1, "{value}");
+    value
+        .split_once(&key)
+        .unwrap()
+        .1
+        .split([',', ')'])
+        .next()
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
 fn finish_movement(node: &Standalone, guid: &str, leg: &BTreeMap<String, String>) {
     let spline_id = leg["spline_id"].clone();
     let destination_x: f32 = leg["dx"].parse().unwrap();
@@ -820,6 +838,168 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
         .contains("targetunavailable"));
     assert_eq!(missing_member["revision"], retained_revision);
     assert_eq!(missing_member["active"], "true");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_refused_assist_does_not_cancel_following_a_moving_member() {
+    let fixture = fixture("playerbots-orders-refused-assist-follow");
+    let node = &fixture.node;
+    let target = &fixture.enemies[1];
+    select_and_engage(node, &fixture.leader, target);
+    issue(
+        &fixture,
+        &format!("assist|{}|{}", fixture.warrior, fixture.leader),
+        &fixture.warrior,
+        true,
+    );
+    let accepted = order(node, &fixture.warrior);
+    node.assert_call("playerbots_fixture_orders_target_state", &[target, "0"]);
+    pass(node, &fixture.warrior);
+    let start = entity(node, &fixture.warrior);
+    let dead_boundary = runner(node, &fixture.warrior);
+    let baseline_progress = dead_boundary["movement_progress"].clone();
+    let boundary_micros: u64 = dead_boundary["observed_micros"].parse().unwrap();
+    let retained = order(node, &fixture.warrior);
+    evidence(&fixture, "refused-assist-dead-boundary");
+    assert_eq!(retained["active"], "true", "{retained:?}");
+    assert_eq!(retained["order"], accepted["order"], "{retained:?}");
+    assert_eq!(retained["revision"], accepted["revision"], "{retained:?}");
+    assert!(
+        retained["order"].contains(&format!("member_guid = {}", fixture.leader)),
+        "{retained:?}"
+    );
+    assert!(retained["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("targetdead"));
+
+    for step in 0..32 {
+        let leader_x = if step % 2 == 0 { 1300.0 } else { 1150.0 };
+        node.assert_call(
+            "playerbots_fixture_roles_move",
+            &[&fixture.leader, &leader_x.to_string(), "1200"],
+        );
+        pass(node, &fixture.warrior);
+        std::thread::sleep(std::time::Duration::from_millis(1_050));
+    }
+    node.assert_call(
+        "playerbots_fixture_roles_move",
+        &[&fixture.leader, "1300", "1200"],
+    );
+    let mut arrived = false;
+    for _ in 0..24 {
+        pass(node, &fixture.warrior);
+        std::thread::sleep(std::time::Duration::from_millis(1_050));
+        let followed = entity(node, &fixture.warrior);
+        let leader = entity(node, &fixture.leader);
+        let dx = followed["x"].parse::<f32>().unwrap() - leader["x"].parse::<f32>().unwrap();
+        let dy = followed["y"].parse::<f32>().unwrap() - leader["y"].parse::<f32>().unwrap();
+        if (dx * dx + dy * dy).sqrt() <= 3.05 {
+            arrived = true;
+            break;
+        }
+    }
+
+    let followed = entity(node, &fixture.warrior);
+    let leader = entity(node, &fixture.leader);
+    let state = runner(node, &fixture.warrior);
+    let retained = order(node, &fixture.warrior);
+    evidence(&fixture, "refused-assist-follows-moving-member");
+    assert!(retained["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("targetdead"));
+    assert_eq!(retained["active"], "true", "{retained:?}");
+    assert_eq!(retained["order"], accepted["order"], "{retained:?}");
+    assert_eq!(retained["revision"], accepted["revision"], "{retained:?}");
+    assert_ne!(state["movement_progress"], baseline_progress, "{state:?}");
+    assert!(
+        sats_number::<u64>(&state["movement_progress"], "observed_micros") > boundary_micros,
+        "{state:?}"
+    );
+    assert!(!state["failures"].contains("noMovement"), "{state:?}");
+    assert!(
+        state["deferred_destinations"]
+            .trim_matches(['[', ']', ' '])
+            .is_empty(),
+        "{state:?}"
+    );
+    let start_x: f32 = start["x"].parse().unwrap();
+    let followed_x: f32 = followed["x"].parse().unwrap();
+    assert!(followed_x - start_x > 15.0, "{start:?} {followed:?}");
+    let dx = followed_x - leader["x"].parse::<f32>().unwrap();
+    let dy = followed["y"].parse::<f32>().unwrap() - leader["y"].parse::<f32>().unwrap();
+    assert!(arrived, "{followed:?} {leader:?} {state:?}");
+    assert!((dx * dx + dy * dy).sqrt() <= 3.05);
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_refused_target_does_not_cancel_a_useful_friendly_cast() {
+    let fixture = fixture("playerbots-orders-refused-target-heal");
+    let node = &fixture.node;
+    let target = &fixture.enemies[1];
+    issue(
+        &fixture,
+        &format!("target|{}|{target}", fixture.priest),
+        &fixture.priest,
+        true,
+    );
+    let accepted = order(node, &fixture.priest);
+    node.assert_call("playerbots_fixture_orders_target_state", &[target, "0"]);
+    node.assert_call(
+        "playerbots_fixture_companion_health",
+        &[&fixture.mage, "25"],
+    );
+    node.assert_call("playerbots_fixture_roles_priest_mana", &[&fixture.priest]);
+    let before = entity(node, &fixture.mage)["health"]
+        .parse::<u32>()
+        .unwrap();
+    let mut scheduled_id = None;
+    let completed = poll_until(std::time::Duration::from_secs(8), || {
+        pass(node, &fixture.priest);
+        if scheduled_id.is_none() {
+            scheduled_id = node
+                .query_rows(&format!(
+                "SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {} AND spell_id = 2050 AND target_guid = {}",
+                fixture.priest, fixture.mage
+            ))
+                .into_iter()
+                .next()
+                .map(|row| row["scheduled_id"].clone());
+        }
+        let Some(scheduled_id) = scheduled_id.as_ref() else {
+            return false;
+        };
+        let state = runner(node, &fixture.priest);
+        let progress = &state["cast_progress"];
+        progress != "(none = ())"
+            && sats_number::<u64>(progress, "scheduled_id") == scheduled_id.parse().unwrap()
+            && sats_number::<u32>(progress, "spell") == 2050
+            && sats_number::<u64>(progress, "target") == fixture.mage.parse().unwrap()
+    });
+    let retained = order(node, &fixture.priest);
+    let state = runner(node, &fixture.priest);
+    let after = entity(node, &fixture.mage)["health"]
+        .parse::<u32>()
+        .unwrap();
+    evidence(&fixture, "refused-target-friendly-cast");
+    assert_eq!(retained["active"], "true", "{retained:?}");
+    assert!(
+        accepted["order"].to_ascii_lowercase().contains("target"),
+        "{accepted:?}"
+    );
+    assert!(
+        accepted["order"].contains(&format!("target_guid = {target}")),
+        "{accepted:?}"
+    );
+    assert_eq!(retained["order"], accepted["order"], "{retained:?}");
+    assert_eq!(retained["revision"], accepted["revision"], "{retained:?}");
+    assert!(retained["last_outcome"]
+        .to_ascii_lowercase()
+        .contains("targetdead"));
+    let scheduled_id = scheduled_id.expect("Lesser Heal never started");
+    assert!(completed, "{scheduled_id} {state:?}");
+    assert!(after > before, "{before} {after} {state:?}");
 }
 
 #[test]
