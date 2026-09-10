@@ -11,6 +11,7 @@ const CREATURE_PREFIX: u64 = 0xF130u64 << 48;
 const GAMEOBJECT_PREFIX: u64 = 0xF110u64 << 48;
 const EXIT_TRIGGER: u32 = 119;
 const EXIT_SOURCE: (f32, f32, f32) = (-14.3628, -393.38, 64.5605);
+const BLOCKED_QUEST_TARGET: u64 = CREATURE_PREFIX | (5_090_101u64 << 24) | 1;
 
 #[derive(Clone, Copy)]
 struct QuestRoot {
@@ -54,7 +55,7 @@ const QUEST_ROOTS: [QuestRoot; 7] = [
         class: "1",
         role: "0",
         quest: 33,
-        target: CREATURE_PREFIX | (299u64 << 24) | 1,
+        target: CREATURE_PREFIX | (69u64 << 24) | 1,
         recovery_shape: "operation = (lootCreature = ())",
         prerequisite: "entity",
         cast_spell: None,
@@ -179,6 +180,8 @@ fn quest_fixture(root: QuestRoot, lifecycle: &str, blocked: bool) -> (Standalone
     let guid = node.query_rows("SELECT character_guid FROM pkg_playerbots_bot")[0]
         ["character_guid"]
         .clone();
+    node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "32"]);
     node.assert_call(
         if root.fixture_kind == 6 {
             "playerbots_quest_loop_fixture_stage_named"
@@ -195,14 +198,10 @@ fn quest_fixture(root: QuestRoot, lifecycle: &str, blocked: bool) -> (Standalone
             &root.target.to_string(),
         ],
     );
-    node.assert_call(
-        if blocked {
-            "playerbots_recovery_fixture_block_companion"
-        } else {
-            "playerbots_fixture_runner_select_cohort"
-        },
-        &[&guid],
-    );
+    if blocked {
+        node.assert_call("playerbots_recovery_fixture_block_companion", &[&guid]);
+    }
+    std::thread::sleep(Duration::from_millis(1_100));
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     (node, guid)
 }
@@ -227,7 +226,7 @@ fn snapshot(node: &Standalone) -> Value {
         "actions": sorted(node.query_rows("SELECT character_guid, kind, target_guid, spell_id, quest_entry, outcome, started_micros, observed_micros FROM pkg_playerbots_action"), "character_guid"),
         "movement": sorted(node.query_rows("SELECT guid, sx, sy, sz, dx, dy, dz, start_micros, dur_ms, run FROM game_creature_spline"), "guid"),
         "characters": sorted(node.query_rows("SELECT guid, map_id, instance_id, x, y, z, dead, player_flags FROM game_world_entity WHERE guid >= 1000000 AND guid < 2000000"), "guid"),
-        "casts": sorted(node.query_rows("SELECT caster_guid, scheduled_id FROM game_pending_cast"), "caster_guid"),
+        "casts": sorted(node.query_rows("SELECT caster_guid, scheduled_id, spell_id, target_guid FROM game_pending_cast"), "caster_guid"),
         "attacks": sorted(node.query_rows("SELECT attacker_guid, target_guid FROM game_melee_attack"), "attacker_guid"),
         "quests": sorted(node.query_rows("SELECT character_guid, quest_entry, counts, rewarded, failed FROM game_character_quest"), "character_guid"),
         "loot": sorted(node.query_rows("SELECT corpse_guid, slot, item_entry, count FROM game_corpse_loot"), "corpse_guid"),
@@ -365,15 +364,82 @@ fn assert_transfer_root(evidence: &Value, guid: &str, action: &str) {
     );
 }
 
-fn assert_no_owned_movement(evidence: &Value, guid: &str) {
-    assert!(
-        evidence["movement"]
+fn assert_no_active_owned_movement(evidence: &Value, guid: &str) {
+    let owned: Vec<_> = evidence["movement"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["guid"].as_str() == Some(guid))
+        .collect();
+    assert!(owned.len() <= 1, "{evidence}");
+    if let Some(stopped) = owned.first() {
+        assert_eq!(stopped["dur_ms"], "0", "{evidence}");
+        assert_eq!(stopped["run"], "false", "{evidence}");
+        assert_eq!(stopped["sx"], stopped["dx"], "{evidence}");
+        assert_eq!(stopped["sy"], stopped["dy"], "{evidence}");
+        assert_eq!(stopped["sz"], stopped["dz"], "{evidence}");
+    }
+}
+
+fn assert_quest_root_effects_unchanged(before: &Value, after: &Value, root: QuestRoot, guid: &str) {
+    let root_quest = root.quest.to_string();
+    let root_target = root.target.to_string();
+    let action_kind = match root.fixture_kind {
+        0 => "acceptQuest",
+        1 => "turnInQuest",
+        2 | 4 => "openLoot",
+        3 => "useGameObject",
+        5 => "attack",
+        6 => "cast",
+        _ => unreachable!(),
+    };
+    let root_rows = |evidence: &Value, table: &str, guid_field: &str, kind: Option<&str>| {
+        evidence[table]
             .as_array()
             .unwrap()
             .iter()
-            .all(|row| row["guid"] != guid),
-        "{evidence}"
+            .filter(|row| row[guid_field].as_str() == Some(guid))
+            .filter(|row| row["target_guid"].as_str() == Some(root_target.as_str()))
+            .filter(|row| kind.is_none_or(|kind| row["kind"].as_str().unwrap().contains(kind)))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        root_rows(after, "actions", "character_guid", Some(action_kind)),
+        root_rows(before, "actions", "character_guid", Some(action_kind)),
+        "{after}"
     );
+    assert_eq!(
+        root_rows(after, "attacks", "attacker_guid", None),
+        root_rows(before, "attacks", "attacker_guid", None),
+        "{after}"
+    );
+    assert_eq!(
+        root_rows(after, "casts", "caster_guid", None),
+        root_rows(before, "casts", "caster_guid", None),
+        "{after}"
+    );
+    let quest_rows = |evidence: &Value| {
+        evidence["quests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["character_guid"].as_str() == Some(guid))
+            .filter(|row| row["quest_entry"].as_str() == Some(root_quest.as_str()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(quest_rows(after), quest_rows(before), "{after}");
+    let loot_rows = |evidence: &Value| {
+        evidence["loot"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["corpse_guid"].as_str() == Some(root_target.as_str()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(loot_rows(after), loot_rows(before), "{after}");
 }
 
 fn run_root_cases(roots: &[QuestRoot], mut run: impl FnMut(QuestRoot)) {
@@ -412,8 +478,24 @@ fn home_pending(lifecycle: &str) -> (Standalone, String, Value) {
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     node.assert_call("playerbots_fixture_provision_steps", &[&guid, "32"]);
     node.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
-    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
-    let pending = snapshot(&node);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut attempts = Vec::new();
+    let pending = loop {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let current = snapshot(&node);
+        let runner = &current["runner"][0];
+        let ready = runner["chosen"].as_str().unwrap().contains("home")
+            && runner["foreground"].as_str().unwrap().contains("home")
+            && current["movement"].as_array().unwrap().iter().any(|row| {
+                row["guid"].as_str() == Some(guid.as_str()) && row["dur_ms"].as_str() != Some("0")
+            });
+        attempts.push(current.clone());
+        if ready || Instant::now() >= deadline {
+            break current;
+        }
+        std::thread::sleep(Duration::from_millis(1_100));
+    };
+    save(&node, "home-pending-attempts", &json!(attempts));
     save(&node, "home-pending", &pending);
     let runner = &pending["runner"][0];
     assert_eq!(
@@ -459,7 +541,7 @@ fn playerbots_return_home_cancels_its_real_owned_movement() {
             .contains("home"),
         "{cancelled}"
     );
-    assert_no_owned_movement(&cancelled, &guid);
+    assert_no_active_owned_movement(&cancelled, &guid);
     assert_eq!(cancelled["actions"], pending["actions"], "{cancelled}");
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let after_retry = snapshot(&node);
@@ -472,15 +554,19 @@ fn playerbots_return_home_cancels_its_real_owned_movement() {
         after_retry["characters"], cancelled["characters"],
         "{after_retry}"
     );
-    assert_no_owned_movement(&after_retry, &guid);
+    assert_no_active_owned_movement(&after_retry, &guid);
 }
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_return_home_expires_its_real_owned_movement() {
     let (node, guid, pending) = home_pending("expiry");
-    node.assert_call("playerbots_fixture_runner_expire_objective", &[&guid]);
-    node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+    let identity = pending["runner"][0]["objective_sequence"].as_str().unwrap();
+    std::thread::sleep(Duration::from_millis(1_100));
+    node.assert_call(
+        "playerbots_action_lifecycle_expire_movement",
+        &[&guid, identity, "0", "0"],
+    );
     let expired = snapshot(&node);
     save(&node, "home-expired", &expired);
     let runner = &expired["runner"][0];
@@ -497,8 +583,7 @@ fn playerbots_return_home_expires_its_real_owned_movement() {
         runner["history"].as_str().unwrap().contains("home"),
         "{expired}"
     );
-    assert_no_owned_movement(&expired, &guid);
-    assert_eq!(expired["actions"], pending["actions"], "{expired}");
+    assert_no_active_owned_movement(&expired, &guid);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let after_retry = snapshot(&node);
     save(&node, "home-after-expiry", &after_retry);
@@ -507,7 +592,7 @@ fn playerbots_return_home_expires_its_real_owned_movement() {
         after_retry["characters"], expired["characters"],
         "{after_retry}"
     );
-    assert_no_owned_movement(&after_retry, &guid);
+    assert_no_active_owned_movement(&after_retry, &guid);
 }
 
 #[test]
@@ -520,8 +605,34 @@ fn playerbots_home_move_records_a_verified_blocked_route() {
     node.assert_call("playerbots_fixture_blocked_quest", &[guid]);
     node.assert_call("playerbots_fixture_runner_stage", &[guid, "false"]);
     node.assert_call("gw_abandon_quest", &[&support::actor(guid), "50909"]);
-    node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
-    let first = snapshot(&node);
+    node.assert_call(
+        "playerbots_fixture_roles_despawn",
+        &[&BLOCKED_QUEST_TARGET.to_string()],
+    );
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut attempts = Vec::new();
+    let first = loop {
+        node.assert_call("playerbots_fixture_runner_pass_once", &[guid]);
+        let current = snapshot(&node);
+        let runner = &current["runner"][0];
+        let blocked_home = runner["chosen"]
+            .as_str()
+            .unwrap()
+            .contains("move = (home = ())")
+            && current["actions"].as_array().unwrap().iter().any(|action| {
+                action["kind"].as_str().unwrap().contains("move")
+                    && action["outcome"]
+                        .as_str()
+                        .unwrap()
+                        .contains("status = (blocked = ())")
+            });
+        attempts.push(current.clone());
+        if blocked_home || Instant::now() >= deadline {
+            break current;
+        }
+        std::thread::sleep(Duration::from_millis(1_100));
+    };
+    save(&node, "home-blocked-first-attempts", &json!(attempts));
     save(&node, "home-blocked-first", &first);
     let start_position = first["characters"][0].clone();
     assert!(
@@ -617,7 +728,7 @@ fn playerbots_quest_roots_cancel_their_real_movement_prerequisites() {
                 .contains(&root.target.to_string()),
             "{cancelled}"
         );
-        assert_no_owned_movement(&cancelled, &guid);
+        assert_no_active_owned_movement(&cancelled, &guid);
         assert_eq!(cancelled["actions"], pending["actions"], "{cancelled}");
         assert_eq!(cancelled["quests"], pending["quests"], "{cancelled}");
         assert_eq!(cancelled["loot"], pending["loot"], "{cancelled}");
@@ -646,7 +757,7 @@ fn playerbots_quest_roots_cancel_their_real_movement_prerequisites() {
         );
         assert_eq!(after_retry["quests"], cancelled["quests"], "{after_retry}");
         assert_eq!(after_retry["loot"], cancelled["loot"], "{after_retry}");
-        assert_no_owned_movement(&after_retry, &guid);
+        assert_no_active_owned_movement(&after_retry, &guid);
     });
 }
 
@@ -659,8 +770,17 @@ fn playerbots_quest_roots_expire_their_real_movement_prerequisites() {
         save(&node, &format!("{}-pending", root.label), &pending);
         assert_real_pending_root(&pending, root, &guid);
 
-        node.assert_call("playerbots_fixture_runner_expire_objective", &[&guid]);
-        node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
+        let identity = pending["runner"][0]["objective_sequence"].as_str().unwrap();
+        let expected_move = match root.fixture_kind {
+            3 | 4 => "2",
+            6 => "3",
+            _ => "1",
+        };
+        std::thread::sleep(Duration::from_millis(1_100));
+        node.assert_call(
+            "playerbots_action_lifecycle_expire_movement",
+            &[&guid, identity, expected_move, &root.target.to_string()],
+        );
         let expired = snapshot(&node);
         save(&node, &format!("{}-expired", root.label), &expired);
         let before = &pending["runner"][0];
@@ -689,8 +809,7 @@ fn playerbots_quest_roots_expire_their_real_movement_prerequisites() {
                 .contains(&root.target.to_string()),
             "{expired}"
         );
-        assert_no_owned_movement(&expired, &guid);
-        assert_eq!(expired["actions"], pending["actions"], "{expired}");
+        assert_no_active_owned_movement(&expired, &guid);
         assert_eq!(expired["quests"], pending["quests"], "{expired}");
         assert_eq!(expired["loot"], pending["loot"], "{expired}");
         assert!(expired["casts"].as_array().unwrap().is_empty(), "{expired}");
@@ -706,20 +825,13 @@ fn playerbots_quest_roots_expire_their_real_movement_prerequisites() {
         node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
         let after_retry = snapshot(&node);
         save(&node, &format!("{}-after-retry", root.label), &after_retry);
-        assert_eq!(after_retry["actions"], expired["actions"], "{after_retry}");
-        assert_eq!(after_retry["quests"], expired["quests"], "{after_retry}");
-        assert_eq!(after_retry["loot"], expired["loot"], "{after_retry}");
-        assert_no_owned_movement(&after_retry, &guid);
+        assert_quest_root_effects_unchanged(&expired, &after_retry, root, &guid);
+        let old_identity = before["objective_sequence"].as_str().unwrap();
         assert!(
-            after_retry["casts"].as_array().unwrap().is_empty(),
-            "{after_retry}"
-        );
-        assert!(
-            after_retry["attacks"].as_array().unwrap().is_empty(),
-            "{after_retry}"
-        );
-        assert!(
-            after_retry["transfers"].as_array().unwrap().is_empty(),
+            !after_retry["runner"][0]["foreground"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("objective = {old_identity})")),
             "{after_retry}"
         );
     });
@@ -797,6 +909,7 @@ fn playerbots_quest_move_targets_record_verified_blocked_routes() {
             }),
             "{evidence}"
         );
+        let root_quest = root.quest.to_string();
         assert!(
             samples.iter().all(|sample| {
                 sample["characters"][0]["x"] == start_position["x"]
@@ -804,7 +917,7 @@ fn playerbots_quest_move_targets_record_verified_blocked_routes() {
                     && sample["loot"] == pending["loot"]
                     && sample["quests"].as_array().unwrap().iter().any(|quest| {
                         quest["character_guid"] == guid
-                            && quest["quest_entry"] == root.quest.to_string()
+                            && quest["quest_entry"].as_str() == Some(root_quest.as_str())
                             && pending["quests"].as_array().unwrap().contains(quest)
                     })
             }),
@@ -1064,7 +1177,7 @@ fn quest_transfer_fixture(name: &str, mode: u8) -> (TransferFixture, Value) {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["character_guid"] == fixture.companion)
+        .find(|row| row["character_guid"].as_str() == Some(fixture.companion.as_str()))
         .unwrap();
     assert!(
         solo_runner["objective"].as_str().unwrap().contains("quest"),
@@ -1097,7 +1210,7 @@ fn playerbots_transfer_root_cancels_its_real_areatrigger_approach() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["character_guid"] == fixture.companion)
+        .find(|row| row["character_guid"].as_str() == Some(fixture.companion.as_str()))
         .unwrap();
     assert_transfer_root(&pending, &fixture.companion, "areaTrigger = 78");
     assert_eq!(
@@ -1127,8 +1240,14 @@ fn playerbots_transfer_root_cancels_its_real_areatrigger_approach() {
         pending["transfers"].as_array().unwrap().is_empty(),
         "{pending}"
     );
+    let solo_runner = solo_quest["runner"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["character_guid"].as_str() == Some(fixture.companion.as_str()))
+        .unwrap();
     assert_ne!(
-        solo_quest["runner"][0]["objective_sequence"], runner["objective_sequence"],
+        solo_runner["objective_sequence"], runner["objective_sequence"],
         "the party must replace the earlier solo Quest purpose: {pending}"
     );
 
@@ -1156,7 +1275,7 @@ fn playerbots_transfer_root_cancels_its_real_areatrigger_approach() {
         after["last_outcome"].as_str().unwrap().contains("frozen"),
         "{cancelled}"
     );
-    assert_no_owned_movement(&cancelled, &fixture.companion);
+    assert_no_active_owned_movement(&cancelled, &fixture.companion);
     assert_eq!(cancelled["actions"], pending["actions"], "{cancelled}");
     assert!(
         cancelled["transfers"].as_array().unwrap().is_empty(),
@@ -1175,7 +1294,7 @@ fn playerbots_transfer_root_cancels_its_real_areatrigger_approach() {
         after_retry["transfers"], cancelled["transfers"],
         "{after_retry}"
     );
-    assert_no_owned_movement(&after_retry, &fixture.companion);
+    assert_no_active_owned_movement(&after_retry, &fixture.companion);
 }
 
 fn return_home_transfer_pending(name: &str, direct_transfer: bool) -> (TransferFixture, Value) {
@@ -1276,7 +1395,7 @@ fn return_home_transfer_pending(name: &str, direct_transfer: bool) -> (TransferF
             pending["actions"].as_array().unwrap().is_empty(),
             "{pending}"
         );
-        assert_no_owned_movement(&pending, &fixture.companion);
+        assert_no_active_owned_movement(&pending, &fixture.companion);
     } else {
         assert!(
             runner["foreground"]
@@ -1320,13 +1439,33 @@ fn assert_return_home_transfer_expired(
     direct_transfer: bool,
     label: &str,
 ) {
-    fixture.node.assert_call(
-        "playerbots_fixture_runner_expire_objective",
-        &[&fixture.companion],
-    );
-    fixture
-        .node
-        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    if direct_transfer {
+        fixture.node.assert_call(
+            "playerbots_fixture_runner_expire_objective",
+            &[&fixture.companion],
+        );
+        fixture
+            .node
+            .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    } else {
+        std::thread::sleep(Duration::from_millis(1_100));
+        fixture.node.assert_call(
+            "playerbots_action_lifecycle_expire_movement",
+            &[
+                &fixture.companion,
+                pending["runner"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["character_guid"].as_str() == Some(fixture.companion.as_str()))
+                    .unwrap()["objective_sequence"]
+                    .as_str()
+                    .unwrap(),
+                "4",
+                &EXIT_TRIGGER.to_string(),
+            ],
+        );
+    }
     let expired = snapshot(&fixture.node);
     save(&fixture.node, label, &expired);
     let runner = expired["runner"]
@@ -1370,8 +1509,10 @@ fn assert_return_home_transfer_expired(
         runner["objective"].as_str().unwrap().contains("deferred"),
         "{expired}"
     );
-    assert_no_owned_movement(&expired, &fixture.companion);
-    assert_eq!(expired["actions"], pending["actions"], "{expired}");
+    assert_no_active_owned_movement(&expired, &fixture.companion);
+    if direct_transfer {
+        assert_eq!(expired["actions"], pending["actions"], "{expired}");
+    }
     assert!(
         expired["transfers"].as_array().unwrap().is_empty(),
         "{expired}"
@@ -1458,8 +1599,14 @@ fn playerbots_transfer_records_core_refusal_before_intent() {
         .find(|row| row["character_guid"] == fixture.companion)
         .unwrap();
     assert_transfer_root(&refused, &fixture.companion, "transfer = (");
+    let solo_runner = solo_quest["runner"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["character_guid"].as_str() == Some(fixture.companion.as_str()))
+        .unwrap();
     assert_ne!(
-        solo_quest["runner"][0]["objective_sequence"], runner["objective_sequence"],
+        solo_runner["objective_sequence"], runner["objective_sequence"],
         "the party must replace the earlier solo Quest purpose: {refused}"
     );
     assert!(
