@@ -10,6 +10,8 @@ const REPLACEMENT_QUEST: u32 = 5_261;
 const SOURCE_TARGET_GUID: u64 = (0xF130u64 << 48) | (6u64 << 24) | 1;
 const DESTINATION_TARGET_GUID: u64 = (0xF130u64 << 48) | (6u64 << 24) | 10_002;
 const DESTINATION_REPLACEMENT_GUID: u64 = (0xF130u64 << 48) | (823u64 << 24) | 10_003;
+const DESTINATION_MAP: u32 = 36;
+const DESTINATION_INSTANCE: u64 = 5_098_078;
 const REBUILT_CONTENT: &str = "playerbots-transfer-destination-q7-v1";
 const REPLACEMENT_CONTENT: &str = "playerbots-transfer-destination-q5261-v1";
 const ROLES_GROUP: u64 = 5_098_000;
@@ -213,13 +215,17 @@ fn destination_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::V
     })
 }
 
-fn source_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::Value {
+fn source_snapshot(topology: &TransferTopology, guid: u64, source_map: u32) -> serde_json::Value {
     let entity = topology.query(
         &topology.source_db,
-        &format!("SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {guid}"),
+        &format!("SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {guid}"),
     );
-    let map_id = number::<u32>(query_one(&entity, "source Character entity"), "map_id");
     serde_json::json!({
+        "source_map": source_map,
+        "character": topology.query(
+            &topology.source_db,
+            &format!("SELECT guid, map_id, pending_instance_id FROM game_character WHERE guid = {guid}"),
+        ),
         "entity": entity,
         "runner": topology.query(
             &topology.source_db,
@@ -249,7 +255,7 @@ fn source_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::Value 
         ),
         "navigation_chunks": topology.query(
             &topology.source_db,
-            &format!("SELECT key, map_id, cell_x, cell_y, base_z, walk, obs FROM game_nav_chunk WHERE map_id = {map_id}"),
+            &format!("SELECT key, map_id, cell_x, cell_y, base_z, walk, obs FROM game_nav_chunk WHERE map_id = {source_map}"),
         ),
         "source_target": topology.query(
             &topology.source_db,
@@ -318,6 +324,106 @@ fn assert_progress_age(runner: &EvidenceRow, evidence: &serde_json::Value) {
     );
 }
 
+fn assert_source_transfer_lifecycle(
+    evidence: &serde_json::Value,
+    runner: &EvidenceRow,
+    intent: &EvidenceRow,
+) {
+    let source_map = evidence["staged"]["source_map"]
+        .as_u64()
+        .expect("source map is not a u64");
+    let character_guid = field(runner, "character_guid");
+    for phase in ["staged", "suspended", "routed"] {
+        assert_eq!(
+            evidence[phase]["source_map"].as_u64(),
+            Some(source_map),
+            "source map scope changed before the Transfer operation: {evidence}"
+        );
+        let body = exactly_one(
+            evidence[phase]["entity"].as_array().unwrap(),
+            "source Character entity before Transfer",
+        );
+        let character = exactly_one(
+            evidence[phase]["character"].as_array().unwrap(),
+            "source Character before Transfer",
+        );
+        assert_eq!(field(body, "map_id"), source_map.to_string(), "{evidence}");
+        assert_eq!(field(character, "guid"), character_guid, "{evidence}");
+        assert_eq!(
+            field(character, "map_id"),
+            source_map.to_string(),
+            "{evidence}"
+        );
+        assert_eq!(field(character, "pending_instance_id"), "0", "{evidence}");
+    }
+
+    assert!(
+        evidence["operation"]["entity"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the real Transfer operation retained its source Character entity: {evidence}"
+    );
+    assert_eq!(
+        evidence["operation"]["source_map"].as_u64(),
+        Some(source_map),
+        "source map scope changed after the Transfer operation: {evidence}"
+    );
+    assert_eq!(
+        navigation_keys(&evidence["operation"]),
+        recorded_keys(evidence, "expected_navigation"),
+        "the Transfer operation changed the source Navigation Inputs: {evidence}"
+    );
+    assert_eq!(
+        evidence["operation"]["navigation_revision"], evidence["staged"]["navigation_revision"],
+        "the Transfer operation changed the source Navigation Inputs revision: {evidence}"
+    );
+    let operation_character = exactly_one(
+        evidence["operation"]["character"].as_array().unwrap(),
+        "source Character after Transfer operation",
+    );
+    let routed_body = exactly_one(
+        evidence["routed"]["entity"].as_array().unwrap(),
+        "source Character entity before Transfer operation",
+    );
+    assert_eq!(
+        field(operation_character, "guid"),
+        character_guid,
+        "{evidence}"
+    );
+    assert_eq!(
+        field(operation_character, "map_id"),
+        DESTINATION_MAP.to_string(),
+        "{evidence}"
+    );
+    assert_eq!(
+        field(operation_character, "pending_instance_id"),
+        DESTINATION_INSTANCE.to_string(),
+        "{evidence}"
+    );
+    assert_eq!(field(intent, "bot_guid"), character_guid, "{evidence}");
+    assert_eq!(
+        field(intent, "source_map"),
+        source_map.to_string(),
+        "{evidence}"
+    );
+    assert_eq!(
+        field(intent, "source_instance"),
+        field(routed_body, "instance_id"),
+        "{evidence}"
+    );
+    assert_eq!(
+        field(intent, "destination_map"),
+        DESTINATION_MAP.to_string(),
+        "{evidence}"
+    );
+    assert_eq!(
+        field(intent, "destination_instance"),
+        DESTINATION_INSTANCE.to_string(),
+        "{evidence}"
+    );
+}
+
 /// Stage the real Quest and execute its selected Transfer operation before Gateway crossing.
 pub(crate) fn stage_retained_quest(
     topology: &TransferTopology,
@@ -368,7 +474,13 @@ pub(crate) fn stage_retained_quest(
     let target_x = number::<f32>(source_target, "x");
     let target_y = number::<f32>(source_target, "y");
     let target_z = number::<f32>(source_target, "z");
-    let attempts = source_pass_until(topology, character_guid, source_quest_fight_active);
+    let source_map = number::<u32>(entity, "map_id");
+    let attempts = source_pass_until(
+        topology,
+        character_guid,
+        source_map,
+        source_quest_fight_active,
+    );
     let active = attempts.last().is_some_and(source_quest_fight_active);
     topology.save(
         transferred,
@@ -415,9 +527,9 @@ pub(crate) fn stage_retained_quest(
         "playerbots_recovery_fixture_exhaust_attempt",
         &[&character_guid.to_string()],
     );
-    let staged = source_snapshot(topology, character_guid);
+    let staged = source_snapshot(topology, character_guid, source_map);
     set_companion_party_membership(topology, &topology.source_db, transferred, 0);
-    let suspended = source_snapshot(topology, character_guid);
+    let suspended = source_snapshot(topology, character_guid, source_map);
     topology.call(
         &topology.source_db,
         "playerbots_transfer_fixture_stage",
@@ -427,13 +539,13 @@ pub(crate) fn stage_retained_quest(
             "2",
         ],
     );
-    let routed = source_snapshot(topology, character_guid);
+    let routed = source_snapshot(topology, character_guid, source_map);
     topology.call(
         &topology.source_db,
         "playerbots_transfer_quest_execute",
         &[&character_guid.to_string()],
     );
-    let operation = source_snapshot(topology, character_guid);
+    let operation = source_snapshot(topology, character_guid, source_map);
     let evidence = serde_json::json!({
         "expected_navigation": expected_navigation,
         "blocked_source_entity": blocked_entities,
@@ -613,6 +725,7 @@ pub(crate) fn assert_retained_quest_stage(evidence: &serde_json::Value) {
         evidence["operation"]["transfer_intent"].as_array().unwrap(),
         "source Transfer Intent",
     );
+    assert_source_transfer_lifecycle(evidence, runner, intent);
     let transfer_actions: Vec<_> = evidence["operation"]["actions"]
         .as_array()
         .unwrap()
@@ -771,6 +884,7 @@ fn pass_until(
 fn source_pass_until(
     topology: &TransferTopology,
     guid: u64,
+    source_map: u32,
     ready: impl Fn(&serde_json::Value) -> bool,
 ) -> Vec<serde_json::Value> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -781,7 +895,7 @@ fn source_pass_until(
             "playerbots_fixture_runner_pass_once",
             &[&guid.to_string()],
         );
-        observations.push(source_snapshot(topology, guid));
+        observations.push(source_snapshot(topology, guid, source_map));
         if ready(observations.last().unwrap()) || Instant::now() >= deadline {
             return observations;
         }
