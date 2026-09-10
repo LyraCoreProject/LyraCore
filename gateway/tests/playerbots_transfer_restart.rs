@@ -1073,7 +1073,37 @@ fn assert_normalized_source_runner(evidence: &serde_json::Value) {
     }
 }
 
+fn assert_source_transfer_receipt(evidence: &serde_json::Value, position: usize) {
+    let actions = rows(evidence, &["state", "source", "actions"]);
+    assert_eq!(
+        actions.len(),
+        usize::from(position < 6),
+        "source Transfer receipt phase differs: {evidence}"
+    );
+    if position >= 6 {
+        return;
+    }
+    let action = &actions[0];
+    let intent = row(evidence, &["state", "source", "intent"]);
+    let bot = &evidence["state"]["bot"];
+    assert_u64_field(action, "character_guid", bot["guid"].as_u64().unwrap());
+    assert_eq!(action["kind"], "(transfer = ())", "{evidence}");
+    assert_eq!(
+        action["outcome"],
+        format!("(transferAccepted = {})", text_field(intent, "id")),
+        "{evidence}"
+    );
+    assert_u64_field(action, "target_guid", DESTINATION_INSTANCE);
+    assert_u64_field(action, "quest_entry", u64::from(DESTINATION_MAP));
+    assert_u64_field(action, "spell_id", 78);
+    assert_eq!(
+        action["started_micros"], action["observed_micros"],
+        "{evidence}"
+    );
+}
+
 fn assert_gameplay_fences(evidence: &serde_json::Value, position: usize) {
+    assert_source_transfer_receipt(evidence, position);
     if position < 10 {
         assert!(
             rows(evidence, &["state", "destination", "live"]).is_empty(),
@@ -1087,7 +1117,7 @@ fn assert_gameplay_fences(evidence: &serde_json::Value, position: usize) {
         }
     }
     if position >= 2 {
-        for table in ["actions", "movement", "pending_cast", "melee"] {
+        for table in ["movement", "pending_cast", "melee"] {
             assert!(
                 rows(evidence, &["state", "source", table]).is_empty(),
                 "source-local work survived Escrow: {evidence}"
@@ -1123,8 +1153,8 @@ fn assert_durable_phase(evidence: &serde_json::Value, step: &str) {
     );
     assert_eq!(
         rows(evidence, &["state", "source", "live"]).len(),
-        usize::from(position < 2),
-        "source live-body phase differs after {step}: {evidence}"
+        0,
+        "source live body returned after {step}: {evidence}"
     );
     assert_eq!(
         rows(evidence, &["state", "source", "intent"]).len(),
