@@ -643,6 +643,7 @@ struct InMemoryStore {
     /// When set, deleted Character cleanup cannot reach Realm-core.
     party_cleanup_realm_error: Option<String>,
     party_command_realm_error: Option<String>,
+    transfer_realm_error: Option<String>,
     party_command_claims: std::sync::Mutex<Vec<(u64, u64)>>,
     party_command_finishes:
         std::sync::Mutex<Vec<(u64, u64, super::party::CompanionCommandOutcome)>>,
@@ -679,6 +680,8 @@ struct InMemoryStore {
     /// production that write goes to a third database (`realm_core()`); here it is just a map, so a
     /// test can assert the drive published the destination it settled on.
     realm_index: std::sync::Mutex<Vec<(u64, u32, u64)>>,
+    /// Realm-core's ordered transfer phase for cross-Shard caller tests.
+    realm_partition: std::sync::Mutex<Option<super::party::RealmCharacterPartition>>,
     /// When set, `publish_shard_index` fails with this message — an unreachable realm-core.
     publish_error: Option<String>,
     /// When set, every `movement_update` fails with this message. The case that matters is
@@ -1098,9 +1101,25 @@ impl WorldStore for InMemoryStore {
 
     /// `import_character_blob`: replay on the in-row PK, refuse to land on a LIVE character,
     /// otherwise materialise the row + its payload at the escrow's destination.
-    fn import_character_blob(&self, transfer_id: u64, blob: &[u8]) -> Result<()> {
+    fn import_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        source: super::transfer::RealmLocatorPredecessor,
+        bot_arrival: Option<&super::transfer::BotTransferIntent>,
+    ) -> Result<()> {
         let db = self.xstep("import_character_blob")?;
         let (guid, arriving) = parse_blob(blob);
+        if let Some(intent) = bot_arrival {
+            if intent.source_module_identity == spacetimedb_sdk::Identity::ZERO
+                || intent.id == 0
+                || intent.created_micros <= 0
+                || source.revision == 0
+                || transfer_id != guid
+            {
+                return Err(anyhow!("bot Transfer arrival identity is invalid"));
+            }
+        }
         // NOTE: every `in_rows` guard below is scoped and dropped before `db.live()`, which locks
         // `in_rows` itself. `std::sync::Mutex` is not re-entrant, so holding one across that call
         // self-deadlocks — and a deadlock makes an ordering mutation HANG the suite instead of
@@ -1112,6 +1131,24 @@ impl WorldStore for InMemoryStore {
                     "transfer id already imported for another character"
                 ));
             }
+            if let Some(intent) = bot_arrival {
+                let expected = (
+                    intent.source_module_identity,
+                    intent.id,
+                    intent.controller_generation,
+                    intent.created_micros,
+                );
+                if lk(&db.bot_arrivals).get(&transfer_id) != Some(&expected) {
+                    return Err(anyhow!("destination arrival belongs to another crossing"));
+                }
+            }
+            if lk(&db.arrival_sources).get(&transfer_id)
+                != Some(&(source.map_id, source.instance_id, source.revision))
+            {
+                return Err(anyhow!(
+                    "destination arrival belongs to another Realm crossing"
+                ));
+            }
             return Ok(());
         }
         if db.live(guid) {
@@ -1121,6 +1158,21 @@ impl WorldStore for InMemoryStore {
         // cross-database the blob is the only thing that reaches this side.
         lk(&db.characters).insert(guid, arriving);
         lk(&db.in_rows).insert(transfer_id, guid);
+        lk(&db.arrival_sources).insert(
+            transfer_id,
+            (source.map_id, source.instance_id, source.revision),
+        );
+        if let Some(intent) = bot_arrival {
+            lk(&db.bot_arrivals).insert(
+                transfer_id,
+                (
+                    intent.source_module_identity,
+                    intent.id,
+                    intent.controller_generation,
+                    intent.created_micros,
+                ),
+            );
+        }
         Ok(())
     }
 
@@ -1167,7 +1219,396 @@ impl WorldStore for InMemoryStore {
                 "transfer {transfer_id}: this database holds the SOURCE out-row"
             ));
         }
+        if lk(&db.bot_arrivals).contains_key(&transfer_id) {
+            return Err(anyhow!(
+                "transfer {transfer_id}: session-less arrival is owned by its Transfer Intent"
+            ));
+        }
         lk(&db.in_rows).remove(&transfer_id);
+        lk(&db.arrival_sources).remove(&transfer_id);
+        Ok(())
+    }
+
+    fn release_player_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        character_guid: u64,
+        source: super::transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        let Some(db) = self.xdb.as_ref() else {
+            return Ok(());
+        };
+        self.xstep("release_transfer")?;
+        if transfer_id != character_guid || source.revision == 0 {
+            return Err(anyhow!("player Transfer arrival identity is invalid"));
+        }
+        if lk(&db.in_rows).get(&transfer_id) != Some(&character_guid) {
+            return Ok(());
+        }
+        if lk(&db.bot_arrivals).contains_key(&transfer_id)
+            || lk(&db.arrival_sources).get(&transfer_id)
+                != Some(&(source.map_id, source.instance_id, source.revision))
+        {
+            return Ok(());
+        }
+        lk(&db.in_rows).remove(&transfer_id);
+        lk(&db.arrival_sources).remove(&transfer_id);
+        Ok(())
+    }
+
+    fn transfer_arrival(&self, transfer_id: u64) -> Option<super::transfer::TransferArrival> {
+        let db = self.xdb.as_ref()?;
+        let character_guid = *lk(&db.in_rows).get(&transfer_id)?;
+        let (source, intent_id, generation, _) = lk(&db.bot_arrivals)
+            .get(&transfer_id)
+            .copied()
+            .unwrap_or((spacetimedb_sdk::Identity::ZERO, 0, 0, 0));
+        let (source_map, source_instance, source_locator_revision) = lk(&db.arrival_sources)
+            .get(&transfer_id)
+            .copied()
+            .unwrap_or((0, 0, 0));
+        Some(super::transfer::TransferArrival {
+            character_guid,
+            source_map,
+            source_instance,
+            source_locator_revision,
+            bot_source_identity: source,
+            bot_transfer_intent_id: intent_id,
+            bot_controller_generation: generation,
+        })
+    }
+
+    fn realm_character_partition(
+        &self,
+        _character_guid: u64,
+    ) -> Result<Option<super::party::RealmCharacterPartition>> {
+        Ok(*self.realm_partition.lock().unwrap())
+    }
+
+    fn begin_shard_index_transfer(
+        &self,
+        plan: &super::transfer::TransferPlan,
+        bot_intent: Option<(&super::transfer::BotTransferIntent, u64)>,
+    ) -> Result<super::party::RealmCharacterPartition> {
+        let mut phase = self.realm_partition.lock().unwrap();
+        let Some(current) = *phase else {
+            return Ok(super::party::RealmCharacterPartition {
+                map_id: 0,
+                instance_id: 0,
+                revision: bot_intent.map_or(1, |(intent, _)| intent.source_locator_revision.max(1)),
+                transfer_pending: true,
+                pending_destination_map: plan.dest_map_id,
+                pending_destination_instance: plan.dest_instance_id,
+                bot_source_identity: bot_intent
+                    .map_or(spacetimedb_sdk::Identity::ZERO, |(intent, _)| {
+                        intent.source_module_identity
+                    }),
+                bot_transfer_intent_id: bot_intent.map_or(0, |(intent, _)| intent.id),
+                bot_controller_generation: bot_intent
+                    .map_or(0, |(intent, _)| intent.controller_generation),
+            });
+        };
+        let (source_revision, crossing) = bot_intent.map_or(
+            (current.revision, (spacetimedb_sdk::Identity::ZERO, 0, 0)),
+            |(intent, _)| {
+                (
+                    intent.source_locator_revision,
+                    (
+                        intent.source_module_identity,
+                        intent.id,
+                        intent.controller_generation,
+                    ),
+                )
+            },
+        );
+        if !current.transfer_pending
+            && (current.map_id, current.instance_id, current.revision)
+                == (
+                    plan.dest_map_id,
+                    plan.dest_instance_id,
+                    source_revision.saturating_add(1),
+                )
+            && (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) == crossing
+        {
+            return Ok(current);
+        }
+        if current.transfer_pending
+            && current.revision == source_revision
+            && bot_intent.is_none_or(|(intent, _)| {
+                (current.map_id, current.instance_id) == (intent.source_map, intent.source_instance)
+            })
+            && (
+                current.pending_destination_map,
+                current.pending_destination_instance,
+            ) == (plan.dest_map_id, plan.dest_instance_id)
+            && (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) == crossing
+        {
+            return Ok(current);
+        }
+        if current.transfer_pending || current.revision != source_revision {
+            return Err(anyhow!("Transfer Realm locator changed"));
+        }
+        let pending = super::party::RealmCharacterPartition {
+            transfer_pending: true,
+            pending_destination_map: plan.dest_map_id,
+            pending_destination_instance: plan.dest_instance_id,
+            bot_source_identity: crossing.0,
+            bot_transfer_intent_id: crossing.1,
+            bot_controller_generation: crossing.2,
+            ..current
+        };
+        *phase = Some(pending);
+        Ok(pending)
+    }
+
+    fn finish_player_shard_index_transfer(
+        &self,
+        plan: &super::transfer::TransferPlan,
+        _source_map: u32,
+        _source_instance: u64,
+        source_revision: u64,
+    ) -> Result<()> {
+        let mut phase = self.realm_partition.lock().unwrap();
+        let Some(current) = *phase else {
+            drop(phase);
+            return self.publish_shard_index(
+                plan.character_guid,
+                plan.dest_map_id,
+                plan.dest_instance_id,
+            );
+        };
+        if !current.transfer_pending || current.revision != source_revision {
+            return Err(anyhow!("Transfer Realm locator phase changed"));
+        }
+        *phase = Some(super::party::RealmCharacterPartition {
+            map_id: plan.dest_map_id,
+            instance_id: plan.dest_instance_id,
+            revision: source_revision + 1,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            ..current
+        });
+        Ok(())
+    }
+
+    fn bind_bot_transfer_locator(
+        &self,
+        _intent: &super::transfer::BotTransferIntent,
+        source_revision: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        self.rec("bind_bot_transfer_locator");
+        let Some(current) = *self.realm_partition.lock().unwrap() else {
+            return Ok(());
+        };
+        if current.transfer_pending || current.revision != source_revision {
+            return Err(anyhow!("Transfer Intent Realm locator changed"));
+        }
+        Ok(())
+    }
+
+    fn publish_bot_shard_index(&self, intent: &super::transfer::BotTransferIntent) -> Result<()> {
+        self.rec("publish_bot_shard_index");
+        let mut phase = self.realm_partition.lock().unwrap();
+        let Some(current) = *phase else {
+            drop(phase);
+            return self.publish_shard_index(
+                intent.bot_guid,
+                intent.destination_map,
+                intent.destination_instance,
+            );
+        };
+        let settled_revision = intent
+            .source_locator_revision
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("Transfer Realm locator revision exhausted"))?;
+        let crossing = (
+            intent.source_module_identity,
+            intent.id,
+            intent.controller_generation,
+        );
+        if !current.transfer_pending
+            && (current.map_id, current.instance_id, current.revision)
+                == (
+                    intent.destination_map,
+                    intent.destination_instance,
+                    settled_revision,
+                )
+            && (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) == crossing
+        {
+            return Ok(());
+        }
+        if !current.transfer_pending
+            || current.revision != intent.source_locator_revision
+            || (
+                current.pending_destination_map,
+                current.pending_destination_instance,
+            ) != (intent.destination_map, intent.destination_instance)
+            || (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) != crossing
+        {
+            return Err(anyhow!("Transfer Realm locator phase changed"));
+        }
+        *phase = Some(super::party::RealmCharacterPartition {
+            map_id: intent.destination_map,
+            instance_id: intent.destination_instance,
+            revision: settled_revision,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            ..current
+        });
+        Ok(())
+    }
+
+    fn finish_pending_shard_index_transfer(
+        &self,
+        character_guid: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        arrival: &super::transfer::TransferArrival,
+    ) -> Result<()> {
+        if arrival.character_guid != character_guid {
+            return Err(anyhow!("arrival fence names another Character"));
+        }
+        let mut phase = self.realm_partition.lock().unwrap();
+        let Some(current) = *phase else {
+            return Ok(());
+        };
+        if !current.transfer_pending
+            || (current.map_id, current.instance_id, current.revision)
+                != (
+                    arrival.source_map,
+                    arrival.source_instance,
+                    arrival.source_locator_revision,
+                )
+            || (
+                current.pending_destination_map,
+                current.pending_destination_instance,
+            ) != (destination_map, destination_instance)
+            || (
+                current.bot_source_identity,
+                current.bot_transfer_intent_id,
+                current.bot_controller_generation,
+            ) != (
+                arrival.bot_source_identity,
+                arrival.bot_transfer_intent_id,
+                arrival.bot_controller_generation,
+            )
+        {
+            return Err(anyhow!("pending Realm Transfer phase changed"));
+        }
+        *phase = Some(super::party::RealmCharacterPartition {
+            map_id: destination_map,
+            instance_id: destination_instance,
+            revision: arrival.source_locator_revision + 1,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            ..current
+        });
+        Ok(())
+    }
+
+    fn sync_transfer_arrival(&self, character_guid: u64) -> Result<()> {
+        super::party::sync_transfer_arrival_mirror(self, character_guid)?;
+        self.xstep("sync_transfer_arrival")?;
+        Ok(())
+    }
+
+    fn sync_transfer_pending(&self, character_guid: u64) -> Result<()> {
+        super::party::sync_transfer_arrival_mirror(self, character_guid)?;
+        self.xstep("sync_transfer_pending")?;
+        Ok(())
+    }
+
+    fn mark_bot_transfer_arrival_ready(
+        &self,
+        _intent_id: u64,
+        _bot_guid: u64,
+        _controller_generation: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        self.xstep("mark_bot_transfer_arrival_ready")?;
+        Ok(())
+    }
+
+    fn bot_transfer_arrival_matches(
+        &self,
+        transfer_id: u64,
+        intent: &super::transfer::BotTransferIntent,
+    ) -> bool {
+        let Some(db) = self.xdb.as_ref() else {
+            return false;
+        };
+        lk(&db.in_rows).get(&transfer_id) == Some(&intent.bot_guid)
+            && lk(&db.bot_arrivals).get(&transfer_id)
+                == Some(&(
+                    intent.source_module_identity,
+                    intent.id,
+                    intent.controller_generation,
+                    intent.created_micros,
+                ))
+            && lk(&db.arrival_sources).get(&transfer_id)
+                == Some(&(
+                    intent.source_map,
+                    intent.source_instance,
+                    intent.source_locator_revision,
+                ))
+    }
+
+    fn release_bot_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        intent: &super::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        self.xstep("release_bot_transfer_arrival")?;
+        let Some(db) = self.xdb.as_ref() else {
+            return Ok(());
+        };
+        if transfer_id != intent.bot_guid
+            || intent.source_module_identity == spacetimedb_sdk::Identity::ZERO
+            || intent.id == 0
+            || intent.created_micros <= 0
+        {
+            return Err(anyhow!("bot Transfer arrival identity is invalid"));
+        }
+        let expected = (
+            intent.source_module_identity,
+            intent.id,
+            intent.controller_generation,
+            intent.created_micros,
+        );
+        if lk(&db.bot_arrivals).get(&transfer_id) == Some(&expected) {
+            if lk(&db.arrival_sources).get(&transfer_id)
+                != Some(&(
+                    intent.source_map,
+                    intent.source_instance,
+                    intent.source_locator_revision,
+                ))
+            {
+                return Ok(());
+            }
+            lk(&db.in_rows).remove(&transfer_id);
+            lk(&db.bot_arrivals).remove(&transfer_id);
+            lk(&db.arrival_sources).remove(&transfer_id);
+        }
         Ok(())
     }
 
@@ -1194,11 +1635,34 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    fn ensure_instance(&self, instance_id: u64, _map_id: u32, _party_id: u64) -> Result<()> {
+    fn instance_partition(&self, instance_id: u64) -> Option<(u32, u64)> {
+        self.xdb
+            .as_ref()
+            .and_then(|db| lk(&db.instance_partitions).get(&instance_id).copied())
+    }
+
+    fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
         let db = self.xstep("ensure_instance")?;
         if instance_id == 0 {
             return Err(anyhow!("instance 0 is the open world"));
         }
+        let existing = lk(&db.instance_partitions).get(&instance_id).copied();
+        match existing {
+            Some((existing_map, _)) if existing_map != map_id => {
+                return Err(anyhow!(
+                    "instance {instance_id} belongs to map {existing_map}, not map {map_id}"
+                ));
+            }
+            Some((_, existing_party))
+                if existing_party != party_id && !(existing_party == 0 && party_id != 0) =>
+            {
+                return Err(anyhow!(
+                    "instance {instance_id} belongs to party {existing_party}, not party {party_id}"
+                ));
+            }
+            _ => {}
+        }
+        lk(&db.instance_partitions).insert(instance_id, (map_id, party_id));
         // The module's own shape: a mirror of an instance that is ALREADY here joins it (early
         // return) instead of spawning a second population. `HashSet::insert` reports that for free,
         // and the count is what the second-party-member test asserts against.
@@ -2465,6 +2929,13 @@ impl WorldStore for InMemoryStore {
 
     fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
         if let Some(error) = &self.party_command_realm_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.realm_store())
+    }
+
+    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.transfer_realm_error {
             return Err(anyhow!(error.clone()));
         }
         Ok(self.realm_store())
@@ -9769,6 +10240,7 @@ impl FakeParty {
             *self.groups.iter().find(|(g, ..)| *g == group_id)?;
         Some(super::party::GroupRoster {
             group_id: gid,
+            roster_revision: 1,
             leader_guid: leader,
             loot_method: method,
             loot_threshold: threshold,
@@ -9779,6 +10251,7 @@ impl FakeParty {
                 .filter(|(g, _)| *g == group_id)
                 .map(|(_, guid)| *guid)
                 .collect(),
+            partitions: Vec::new(),
         })
     }
 
@@ -9837,7 +10310,14 @@ struct FakeShardDb {
     /// transfer_id → character guid (`game_transfer_in`): on the DESTINATION the arrival copy's
     /// fence, on the SOURCE the gateway's `confirm_import` attestation.
     in_rows: std::sync::Mutex<std::collections::HashMap<u64, u64>>,
+    /// Exact bot Transfer identity attached to a destination fence.
+    bot_arrivals: std::sync::Mutex<
+        std::collections::HashMap<u64, (spacetimedb_sdk::Identity, u64, u64, i64)>,
+    >,
+    /// Realm locator predecessor attached to each destination fence.
+    arrival_sources: std::sync::Mutex<std::collections::HashMap<u64, (u32, u64, u64)>>,
     instances: std::sync::Mutex<std::collections::HashSet<u64>>,
+    instance_partitions: std::sync::Mutex<std::collections::HashMap<u64, (u32, u64)>>,
     /// Every instance id this database actually SPAWNED a population for — one entry per
     /// spawn, so "the second party member re-created the dungeon" is visible as a duplicate.
     populated: std::sync::Mutex<Vec<u64>>,
@@ -9847,6 +10327,10 @@ struct FakeShardDb {
 impl FakeShardDb {
     fn with_character(guid: u64, c: FakeChar) -> std::sync::Arc<Self> {
         let db = Self::default();
+        if c.instance_id != 0 {
+            lk(&db.instances).insert(c.instance_id);
+            lk(&db.instance_partitions).insert(c.instance_id, (c.map_id, 0));
+        }
         lk(&db.characters).insert(guid, c);
         std::sync::Arc::new(db)
     }

@@ -188,8 +188,11 @@ Moving a Character's state from one shard to another. Uses Escrow.
 **Transfer Intent**:
 A row a Package writes to ask the Gateway to Transfer a Character that has no Session, naming the
 destination map and instance. The Package places the Character and records the intent in one
-transaction; the Gateway drives the same escrowed Transfer a World Session would. Reaped on the
-shared event TTL, so it is a request, never a record.
+transaction; the Gateway claims the durable row and drives the same escrowed Transfer a World
+Session would. The destination import binds the source Module identity, intent id and controller
+generation to its arrival fence. Before release, the source intent records that the exact arrival
+is ready. The Gateway deletes the exact claimed row only after that fence is released. A claim
+lease lets a replacement Gateway resume after process restart.
 _Avoid_: transfer request, move order
 
 **Group Intent**:
@@ -248,6 +251,16 @@ revision advanced by terrain and navigation imports or changes to effective deri
 absent revision means those inputs predate revision tracking. These inputs identify retained
 movement and failure evidence; only the route observation can state whether its consulted cells
 had verified coverage.
+
+**Party Partition**:
+A Realm-core-ordered map and instance for one party member, confirmed by the Gateway against the
+World Shard that holds the Character. It carries no position or Shard name. Pending Transfer,
+transiently unknown location, and removed membership remain explicit states and cannot become a
+companion destination.
+
+**Roster Revision**:
+Realm-core's monotonic order for one complete party member list, leader, and loot rules. A World
+Shard keeps the last accepted value after disband. Older snapshots cannot change its party mirror.
 
 **Recovery Scan**:
 A bounded scan of healing rotations that retains its last completed result while reading the next

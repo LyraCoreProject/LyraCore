@@ -118,12 +118,19 @@ fn reconciliation_is_running(coordinator: &Coordinator) -> bool {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+// One private topology stays alive across setup, Transfer, and deletion to prove one durable scenario.
+#[allow(clippy::too_many_lines)]
 fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     const INSTANCES: &str = "party-cleanup-instances";
     const OTHER: &str = "party-cleanup-other";
     const REALM: &str = "party-cleanup-realm";
     const INSTANCES_SURVIVOR: u64 = 2;
     const OTHER_SURVIVOR: u64 = 1_000_000_001;
+    const PARTY_PARTITIONS: [(u64, u32, u64); 3] = [
+        (1, 0, 0),
+        (INSTANCES_SURVIVOR, 36, 0),
+        (OTHER_SURVIVOR, 1, 0),
+    ];
 
     let mut standalone = Standalone::start("party-cleanup-world");
     standalone.publish_module();
@@ -160,6 +167,27 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
         );
         standalone.assert_output_success(&output, &format!("create {name}"));
     }
+    for (database, guid, map) in [
+        (INSTANCES, INSTANCES_SURVIVOR, 36),
+        (OTHER, OTHER_SURVIVOR, 1),
+    ] {
+        let guid = guid.to_string();
+        let map = map.to_string();
+        let output = cli.call(
+            standalone.server(),
+            database,
+            "debug_spawn_player_entity",
+            &[guid.as_str()],
+        );
+        standalone.assert_output_success(&output, &format!("materialize {guid} on {database}"));
+        let output = cli.call(
+            standalone.server(),
+            database,
+            "debug_teleport",
+            &[guid.as_str(), map.as_str(), "0", "0", "0", "0"],
+        );
+        standalone.assert_output_success(&output, &format!("place {guid} on map {map}"));
+    }
     standalone.assert_call("debug_spawn_player_entity", &["1"]);
 
     let _topology = TopologyEnv::install(&format!("36:*={INSTANCES}, 1:*={OTHER}"), REALM);
@@ -175,6 +203,7 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let world = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
     let instances = world.shard_handle(INSTANCES).unwrap();
+    let other = world.shard_handle(OTHER).unwrap();
     let realm = world.realm_core().unwrap();
     let observer = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
     let observer_instances = observer.shard_handle(INSTANCES).unwrap();
@@ -182,6 +211,23 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     assert!(poll_until(POLL_TIMEOUT, || reconciliation_is_idle(
         &observer
     )));
+    assert!(poll_until(POLL_TIMEOUT, || world.character_location(1)
+        == Some((0, 0))
+        && instances.character_location(INSTANCES_SURVIVOR)
+            == Some((36, 0))
+        && other.character_location(OTHER_SURVIVOR) == Some((1, 0))));
+
+    for (guid, map, instance) in PARTY_PARTITIONS {
+        realm.set_character_shard(guid, map, instance).unwrap();
+    }
+    assert!(poll_until(POLL_TIMEOUT, || PARTY_PARTITIONS
+        .into_iter()
+        .all(|(guid, map, instance)| realm
+            .realm_character_partition(guid)
+            .unwrap()
+            .is_some_and(
+                |row| (row.map_id, row.instance_id) == (map, instance)
+            ))));
 
     use lyracore_shared::group::realm_op;
     assert_eq!(
@@ -214,6 +260,8 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
             |roster| roster.members == [1, INSTANCES_SURVIVOR, OTHER_SURVIVOR]
         )));
     let roster = realm.group_roster(1).unwrap();
+    let group_id = roster.group_id;
+    let initial_roster_revision = roster.roster_revision;
     for (_, shard) in world.world_shards() {
         shard.sync_group_mirror(&roster).unwrap();
     }
@@ -234,10 +282,15 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
         standalone.server(),
         standalone.shard_name(),
         "debug_bot_transfer",
-        &["1", "36", "1", "-11208", "1672", "24", "0", "party-test"],
+        &["1", "36", "0", "-11208", "1672", "24", "0", "party-test"],
     );
     standalone.assert_output_success(&output, "transfer Character");
-    crate::world::transfer::run_bot_transfer(&world, 1, 36, 1, "party-test").unwrap();
+    assert!(
+        poll_until(POLL_TIMEOUT, || world.character_location(1)
+            == Some((36, 0))),
+        "source Coordinator did not observe the staged Transfer destination"
+    );
+    crate::world::transfer::run_bot_transfer(&world, 1, 36, 0, "party-test").unwrap();
     assert!(poll_until(POLL_TIMEOUT, || {
         world.character_by_guid(1).unwrap().is_none()
             && instances.character_by_guid(1).unwrap().is_some()
@@ -248,6 +301,20 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
                 .load(Ordering::Acquire)
                 > source_revision
     }));
+    assert!(
+        poll_until(POLL_TIMEOUT, || world.world_shards().into_iter().all(
+            |(_, shard)| shard
+                .group_roster(1)
+                .is_some_and(|mirror| mirror.members == roster.members)
+        )),
+        "expected party order {:?}, observed {:?}",
+        roster.members,
+        world
+            .world_shards()
+            .into_iter()
+            .map(|(name, shard)| (name, shard.group_roster(1)))
+            .collect::<Vec<_>>()
+    );
     assert!(poll_until(POLL_TIMEOUT, || reconciliation_is_running(
         &observer
     )));
@@ -283,7 +350,26 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     }));
     let survivors = realm.group_roster(INSTANCES_SURVIVOR).unwrap();
     assert_eq!(survivors.members, [INSTANCES_SURVIVOR, OTHER_SURVIVOR]);
+    assert!(survivors.roster_revision > initial_roster_revision);
     assert!(world.world_shards().into_iter().all(|(_, shard)| shard
         .group_roster(INSTANCES_SURVIVOR)
         .is_some_and(|roster| roster == survivors)));
+
+    let survivor_revision = survivors.roster_revision;
+    let output = cli.call(
+        standalone.server(),
+        INSTANCES,
+        "debug_delete_character",
+        &[&INSTANCES_SURVIVOR.to_string()],
+    );
+    standalone.assert_output_success(&output, "delete surviving party member");
+    assert!(poll_until(POLL_TIMEOUT, || {
+        reconciliation_is_idle(&observer)
+            && realm.group_roster(OTHER_SURVIVOR).is_none()
+            && realm.group_roster_revision(group_id) > survivor_revision
+            && world
+                .world_shards()
+                .into_iter()
+                .all(|(_, shard)| shard.group_roster(OTHER_SURVIVOR).is_none())
+    }));
 }

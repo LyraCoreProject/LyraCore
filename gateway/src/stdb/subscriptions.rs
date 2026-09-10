@@ -16,7 +16,7 @@
 
 use crate::codec::{self, CreateKind};
 use crate::world::{Outbound, SessionTx};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use spacetimedb_sdk::Table;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -3773,27 +3773,79 @@ impl Coordinator {
             });
     }
 
-    /// Wire up the session-less Shard crossing relay, the transfer twin of
-    /// [`spawn_bot_invite_relay`]: one registration per connected WORLD SHARD, called ONCE at
-    /// gateway startup (`main.rs`), with its own reconnect hook so a module republish re-binds the
-    /// callback to the fresh `LiveConn`.
-    ///
-    /// A bot's party walks through a portal and the module writes a `game_bot_transfer_intent` row.
-    /// There is no session to notice it — that is the whole reason the row exists — so this
-    /// connection is the only one that ever could.
+    /// Start one bounded Transfer Intent dispatcher per configured World Shard. Each pass reads the
+    /// current connection, so a reconnect needs no second thread or connection-scoped callback.
     pub fn spawn_bot_transfer_relay(&self) {
         for shard in self.all_shards() {
-            shard.arm_bot_transfer_relay();
-            let hook_shard = shard.clone();
-            shard
-                .0
-                .on_reconnect
-                .lock()
-                .unwrap()
-                .push(std::sync::Arc::new(move || {
-                    hook_shard.arm_bot_transfer_relay();
-                }));
+            if let Err(error) = std::thread::Builder::new()
+                .name("bot-transfer-dispatch".into())
+                .spawn(move || {
+                    let mut after_id = 0;
+                    loop {
+                        after_id = shard.dispatch_bot_transfer_intents(after_id);
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                })
+            {
+                log::error!("could not start bot Transfer dispatcher: {error}");
+            }
         }
+    }
+
+    fn dispatch_bot_transfer_intents(&self, after_id: u64) -> u64 {
+        use lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT;
+        const BOT_TRANSFER_WORK_LIMIT: usize = 4;
+        let mut pending = {
+            let live = self.0.coord();
+            live.conn
+                .db
+                .game_bot_transfer_intent()
+                .iter()
+                .take(BOT_TRANSFER_PENDING_LIMIT + 1)
+                .collect::<Vec<_>>()
+        };
+        if pending.len() > BOT_TRANSFER_PENDING_LIMIT {
+            if !self
+                .0
+                .bot_transfer_pending_overflow
+                .swap(true, Ordering::AcqRel)
+            {
+                log::error!(
+                    "bot Transfer dispatcher found more than {BOT_TRANSFER_PENDING_LIMIT} pending \
+                     rows; this populated state predates the bounded writer Gate"
+                );
+            }
+            return after_id;
+        }
+        if self
+            .0
+            .bot_transfer_pending_overflow
+            .swap(false, Ordering::AcqRel)
+        {
+            log::info!("bot Transfer dispatcher pending count recovered on this Shard");
+        }
+        pending.sort_by_key(|intent| intent.id);
+        rotate_transfer_work(&mut pending, after_id, |intent| intent.id);
+        let mut next_after = after_id;
+        for row in pending.into_iter().take(BOT_TRANSFER_WORK_LIMIT) {
+            next_after = row.id;
+            let intent = crate::world::transfer::BotTransferIntent {
+                id: row.id,
+                bot_guid: row.bot_guid,
+                destination_map: row.destination_map,
+                destination_instance: row.destination_instance,
+                reason: row.reason,
+                created_micros: row.created_at.to_micros_since_unix_epoch(),
+                controller_generation: row.controller_generation,
+                arrival_ready: row.arrival_ready,
+                source_module_identity: row.source_module_identity,
+                source_map: row.source_map,
+                source_instance: row.source_instance,
+                source_locator_revision: row.source_locator_revision,
+            };
+            attempt_bot_transfer(self, &intent);
+        }
+        next_after
     }
 
     /// Reconcile party membership when a World Shard deletes a Character.
@@ -3915,46 +3967,92 @@ impl Coordinator {
             store.request_deleted_character_party_reconciliation();
         });
     }
+}
 
-    /// One shard's half of [`spawn_bot_transfer_relay`], for the same reason
-    /// [`arm_bot_invite_relay`](Self::arm_bot_invite_relay) is split out: the initial call and the
-    /// watchdog's post-reconnect re-arm must run the IDENTICAL registration, and this re-reads
-    /// `self.0.coord()` fresh so the re-arm binds to the NEW connection rather than the dead one.
-    ///
-    /// A refused intent is a `warn!`, not the invite relay's `debug!`: a serendipity invite that
-    /// does not happen is a party that did not form, but a crossing that does not happen is a bot
-    /// left behind on the wrong Shard while its party fights without it.
-    fn arm_bot_transfer_relay(&self) {
-        let store = self.clone();
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_bot_transfer_intent()
-            .on_insert(move |_ctx, row| {
-                if let Err(e) = crate::world::transfer::run_bot_transfer(
-                    &store,
-                    row.bot_guid,
-                    row.destination_map,
-                    row.destination_instance,
-                    &row.reason,
-                ) {
-                    log::warn!(
-                        "playerbots: transfer intent {} (character {} -> map {} instance {}) did \
-                         not execute: {e:#}",
-                        row.id,
-                        row.bot_guid,
-                        row.destination_map,
-                        row.destination_instance
-                    );
-                }
-            });
+fn rotate_transfer_work<T>(rows: &mut [T], after_id: u64, id: impl Fn(&T) -> u64) {
+    let split = rows.partition_point(|row| id(row) <= after_id);
+    rows.rotate_left(split);
+}
+
+fn attempt_bot_transfer(store: &Coordinator, intent: &crate::world::transfer::BotTransferIntent) {
+    let claim_token = match next_bot_transfer_claim_token() {
+        Ok(token) => token,
+        Err(error) => {
+            log::warn!(
+                "bot Transfer Intent {} could not mint a claim: {error:#}",
+                intent.id
+            );
+            return;
+        }
+    };
+    if let Err(error) = store.claim_bot_transfer_intent(
+        intent.id,
+        intent.bot_guid,
+        intent.controller_generation,
+        claim_token,
+    ) {
+        log::debug!("bot Transfer Intent {} claim: {error}", intent.id);
+        return;
+    }
+    if intent.source_module_identity == spacetimedb_sdk::Identity::ZERO {
+        log::debug!(
+            "bot Transfer Intent {} normalized its source Module identity; a later bounded pass \
+             will claim the populated row",
+            intent.id
+        );
+        return;
+    }
+    if let Err(error) = crate::world::transfer::run_bot_transfer_intent(store, intent, claim_token)
+    {
+        log::warn!(
+            "bot Transfer Intent {} (Character {} -> map {} instance {}) did not settle: \
+             {error:#}",
+            intent.id,
+            intent.bot_guid,
+            intent.destination_map,
+            intent.destination_instance
+        );
+        return;
+    }
+    if let Err(error) = store.complete_bot_transfer_intent(
+        intent.id,
+        intent.bot_guid,
+        intent.controller_generation,
+        claim_token,
+    ) {
+        log::warn!(
+            "bot Transfer Intent {} settled but its exact completion did not commit: {error:#}",
+            intent.id
+        );
+    }
+}
+
+fn next_bot_transfer_claim_token() -> Result<u64> {
+    loop {
+        let mut bytes = [0u8; 8];
+        getrandom::fill(&mut bytes)
+            .map_err(|error| anyhow!("OS randomness unavailable: {error}"))?;
+        let token = u64::from_le_bytes(bytes);
+        if token != 0 {
+            return Ok(token);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_work_continues_after_the_prior_pass_then_wraps() {
+        let mut ids = [1, 2, 3, 4, 5, 6];
+        rotate_transfer_work(&mut ids, 4, |id| *id);
+        assert_eq!(ids, [5, 6, 1, 2, 3, 4]);
+
+        let mut wrapped = [1, 2, 3, 4, 5, 6];
+        rotate_transfer_work(&mut wrapped, 6, |id| *id);
+        assert_eq!(wrapped, [1, 2, 3, 4, 5, 6]);
+    }
 
     fn swing_event() -> CombatEvent {
         CombatEvent {

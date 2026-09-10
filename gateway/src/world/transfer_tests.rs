@@ -191,6 +191,8 @@ fn a_character_moves_whole_between_two_databases_with_its_rows() {
                 // one no-op reducer call on a fresh transfer and is the same cheap release the
                 // already-home path makes.
                 ("world".to_string(), "release_transfer".to_string()),
+                // Realm-core's pending phase is mirrored before the source can disappear.
+                ("world".to_string(), "sync_transfer_pending".to_string()),
                 ("world".to_string(), "begin_transfer".to_string()),
                 ("instances".to_string(), "ensure_instance".to_string()),
                 ("instances".to_string(), "import_character_blob".to_string()),
@@ -199,6 +201,7 @@ fn a_character_moves_whole_between_two_databases_with_its_rows() {
                 // realm-core learns where the character settled HERE — after the escrow's own
                 // transaction committed, before the arrival copy goes live.
                 ("world".to_string(), "publish_shard_index".to_string()),
+                ("instances".to_string(), "sync_transfer_arrival".to_string()),
                 ("instances".to_string(), "release_transfer".to_string()),
                 ("world".to_string(), "evict_instance_population".to_string()),
             ],
@@ -608,8 +611,17 @@ fn the_arrival_copy_is_fenced_until_the_source_copy_is_destroyed() {
         "frozen on the source, nothing arrived yet"
     );
     let escrow = src.escrowed_transfer(XGUID).unwrap();
-    dst.import_character_blob(escrow.transfer_id, &escrow.blob)
-        .unwrap();
+    dst.import_character_blob(
+        escrow.transfer_id,
+        &escrow.blob,
+        super::transfer::RealmLocatorPredecessor {
+            map_id: 0,
+            instance_id: 0,
+            revision: 1,
+        },
+        None,
+    )
+    .unwrap();
     assert!(
         dst_db.has(XGUID) && !dst_db.live(XGUID),
         "the arrival copy is durable but FENCED while the source copy still exists"
@@ -789,6 +801,38 @@ fn a_character_already_on_its_home_shard_is_not_transferred_but_is_unfenced() {
         log.iter().filter(|(_, c)| c == "begin_transfer").count(),
         0,
         "a character already on its home shard must never be re-escrowed: {log:?}"
+    );
+    let prepared = log
+        .iter()
+        .position(|(_, call)| call == "sync_transfer_arrival")
+        .expect("a fenced arrival must prepare its party mirror");
+    let released = log
+        .iter()
+        .position(|(_, call)| call == "release_transfer")
+        .expect("the destination fence must drop");
+    assert!(prepared < released, "{log:?}");
+}
+
+#[test]
+fn a_normal_resident_does_not_need_transfer_arrival_repair() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        XGUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    let home = xstore("instances", db.clone(), calls.clone(), None);
+
+    super::transfer::settle_transfer(home.as_ref(), home.as_ref(), XGUID).unwrap();
+
+    assert!(db.live(XGUID));
+    let log = calls.lock().unwrap();
+    assert!(
+        log.iter().all(|(_, call)| call != "sync_transfer_arrival"),
+        "an ordinary login has no arrival fence to prepare: {log:?}"
     );
 }
 
@@ -1028,6 +1072,7 @@ fn a_resumed_transfer_reuses_the_escrowed_destination_not_the_character_row() {
             blob: fake_blob(XGUID, 36, 42, "gear+spells"),
         },
     );
+    lk(&src_db.instance_partitions).insert(42, (36, 0));
     let dst_db = FakeShardDb::empty();
     let src = xstore("world", src_db.clone(), calls.clone(), None);
     let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
@@ -1055,6 +1100,25 @@ fn a_resumed_transfer_reuses_the_escrowed_destination_not_the_character_row() {
 /// The bot's guid. Deliberately not [`XGUID`]: these tests share the party fixture's numbering,
 /// where 5 is the playerbot.
 const BOT_GUID: u64 = super::party_tests::BOT;
+const SOURCE_MODULE: spacetimedb_sdk::Identity =
+    spacetimedb_sdk::Identity::from_byte_array([7; 32]);
+
+fn bot_intent() -> super::transfer::BotTransferIntent {
+    super::transfer::BotTransferIntent {
+        id: 91,
+        bot_guid: BOT_GUID,
+        destination_map: 36,
+        destination_instance: 7,
+        reason: "party crossed the portal".into(),
+        created_micros: 4_000,
+        controller_generation: 4,
+        arrival_ready: false,
+        source_module_identity: SOURCE_MODULE,
+        source_map: 0,
+        source_instance: 0,
+        source_locator_revision: 3,
+    }
+}
 
 /// A source shard holding a session-less character that has ALREADY been placed at
 /// `(dest_map, dest_instance)`, plus the shard the Shard Map serves that destination from. This is
@@ -1081,11 +1145,23 @@ fn bot_pair(
     );
     let dst_db = FakeShardDb::empty();
     let dst = xstore("instances", dst_db.clone(), calls.clone(), None);
+    let source_partition = if dest_map == 0 { (36, 7) } else { (0, 0) };
     let src = std::sync::Arc::new(InMemoryStore {
         shard: "world".into(),
         calls: calls.clone(),
         xdb: Some(src_db.clone()),
         location_shard: Some((dest_map, dest_instance, dst)),
+        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+            map_id: source_partition.0,
+            instance_id: source_partition.1,
+            revision: 3,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+            bot_transfer_intent_id: 0,
+            bot_controller_generation: 0,
+        })),
         ..Default::default()
     });
     (src, src_db, dst_db, calls)
@@ -1114,6 +1190,574 @@ fn an_intent_row_crosses_a_session_less_character_to_the_destination_shard() {
         src_db.settled() && dst_db.settled(),
         "no escrow may be left"
     );
+}
+
+#[test]
+fn a_durable_intent_resumes_from_destination_witnesses_after_source_finish() {
+    let (src, src_db, dst_db, calls) = bot_pair(36, 7);
+    let plan = src.character_destination(BOT_GUID).unwrap();
+    let intent = bot_intent();
+    let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::transfer::run_transfer_injected_for_intent(
+            src.as_ref(),
+            src.location_shard.as_ref().unwrap().2.as_ref(),
+            &plan,
+            Some("finish_transfer"),
+            Some((&intent, 701)),
+        )
+    }));
+    assert!(first.is_err());
+    assert!(!src_db.has(BOT_GUID) && dst_db.has(BOT_GUID) && !dst_db.live(BOT_GUID));
+
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("a restarted dispatcher resumes from the destination Character and arrival fence");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+    assert!(src_db.settled() && dst_db.settled());
+    let calls = calls.lock().unwrap();
+    let ready = calls
+        .iter()
+        .rposition(|(_, call)| call == "mark_bot_transfer_arrival_ready")
+        .expect("the exact source intent must record destination preparation");
+    let released = calls
+        .iter()
+        .rposition(|(_, call)| call == "release_bot_transfer_arrival")
+        .expect("the destination arrival fence must drop");
+    assert!(ready < released, "{calls:?}");
+}
+
+#[test]
+fn a_bot_abort_at_every_transfer_step_recovers_from_durable_witnesses() {
+    for (index, step) in super::transfer::BOT_ABORT_STEPS.iter().enumerate() {
+        let (src, src_db, dst_db, calls) = bot_pair(36, 7);
+        let mut intent = bot_intent();
+        intent.source_locator_revision = 0;
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::transfer::run_bot_transfer_intent_injected(
+                src.as_ref(),
+                &intent,
+                701,
+                Some(*step),
+            )
+        }));
+        let panic = first.expect_err("the injected bot Transfer abort must unwind the test driver");
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(
+            message,
+            Some("LYRACORE_TRANSFER_ABORT_AFTER: injected abort"),
+            "bot Transfer stopped for another reason after {step}"
+        );
+        let committed_call = match *step {
+            "publish_shard_index" => "publish_bot_shard_index",
+            "release_transfer" => "release_bot_transfer_arrival",
+            other => other,
+        };
+        assert_eq!(
+            calls.lock().unwrap().last().map(|(_, call)| call.as_str()),
+            Some(committed_call),
+            "the abort must follow the named committed call for {step}"
+        );
+        assert!(
+            src_db.has(BOT_GUID) || dst_db.has(BOT_GUID),
+            "bot has no durable copy after {step}"
+        );
+        assert!(
+            !(src_db.live(BOT_GUID) && dst_db.live(BOT_GUID)),
+            "bot is live on both Shards after {step}"
+        );
+
+        let mut resumed = intent.clone();
+        // A real restarted worker receives these two fields from its retained source intent. This
+        // lower-rung Fake supplies the same durable resume input explicitly; the process caller
+        // must query the row instead.
+        resumed.source_locator_revision = 3;
+        resumed.arrival_ready = index
+            >= super::transfer::BOT_ABORT_STEPS
+                .iter()
+                .position(|name| *name == "mark_bot_transfer_arrival_ready")
+                .unwrap();
+        super::transfer::run_bot_transfer_intent_injected(src.as_ref(), &resumed, 702, None)
+            .unwrap_or_else(|error| panic!("bot Transfer recovery after {step} failed: {error:#}"));
+        assert!(
+            !src_db.has(BOT_GUID),
+            "source still holds the bot after {step}"
+        );
+        assert!(
+            dst_db.live(BOT_GUID),
+            "destination did not release after {step}"
+        );
+        assert!(
+            src_db.settled() && dst_db.settled(),
+            "escrow remains after {step}"
+        );
+    }
+}
+
+#[test]
+fn the_source_instance_lease_survives_a_leave_and_rejoin_during_escrow() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    lk(&src_db.instance_partitions).insert(7, (36, 77));
+    lk(&src.mirror).push(super::party::GroupRoster {
+        group_id: 88,
+        roster_revision: 3,
+        leader_guid: BOT_GUID,
+        loot_method: 0,
+        loot_threshold: 2,
+        master_looter_guid: 0,
+        members: vec![BOT_GUID],
+        partitions: Vec::new(),
+    });
+    let intent = bot_intent();
+
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("the admitted instance identity drives the crossing");
+
+    assert_eq!(
+        lk(&dst_db.instance_partitions).get(&7),
+        Some(&(36, 77)),
+        "the current group cannot redirect an instance admitted under the earlier party lease"
+    );
+}
+
+#[test]
+fn a_same_shard_intent_resumes_after_the_realm_locator_settled() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    let holder = InMemoryStore {
+        shard: "instances".into(),
+        calls: calls.clone(),
+        xdb: Some(db),
+        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+            map_id: 0,
+            instance_id: 0,
+            revision: 3,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+            bot_transfer_intent_id: 0,
+            bot_controller_generation: 0,
+        })),
+        ..Default::default()
+    };
+    let intent = bot_intent();
+
+    super::transfer::run_bot_transfer_intent(&holder, &intent, 701)
+        .expect("the same-Shard crossing settles");
+    super::transfer::run_bot_transfer_intent(&holder, &intent, 702)
+        .expect("a retry resumes readiness from the exact settled Realm crossing");
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(_, call)| call == "publish_bot_shard_index")
+            .count(),
+        1,
+        "the settled retry must not begin or publish the crossing again: {calls:?}"
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(_, call)| call == "mark_bot_transfer_arrival_ready")
+            .count(),
+        2,
+        "the retry must reach the still-needed durable readiness step: {calls:?}"
+    );
+}
+
+#[test]
+fn an_old_bound_worker_cannot_mark_a_newer_realm_locator_pending() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    let newer = super::party::RealmCharacterPartition {
+        map_id: 0,
+        instance_id: 0,
+        revision: 5,
+        transfer_pending: false,
+        pending_destination_map: 0,
+        pending_destination_instance: 0,
+        bot_source_identity: SOURCE_MODULE,
+        bot_transfer_intent_id: 93,
+        bot_controller_generation: 6,
+    };
+    let holder = InMemoryStore {
+        shard: "world".into(),
+        calls: calls.clone(),
+        xdb: Some(db),
+        realm_partition: std::sync::Mutex::new(Some(newer)),
+        ..Default::default()
+    };
+
+    let refusal = super::transfer::run_bot_transfer_intent(&holder, &bot_intent(), 701)
+        .expect_err("an old bound predecessor must lose before Realm is mutated");
+    assert!(
+        refusal.to_string().contains("locator changed"),
+        "{refusal:#}"
+    );
+    assert_eq!(*holder.realm_partition.lock().unwrap(), Some(newer));
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, call)| call == "sync_transfer_pending"),
+        "no pending party fact may be published for the refused old crossing"
+    );
+}
+
+#[test]
+fn a_human_arrival_cannot_settle_a_later_same_destination_crossing() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    lk(&db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&db.arrival_sources).insert(BOT_GUID, (0, 0, 1));
+    let later = super::party::RealmCharacterPartition {
+        map_id: 0,
+        instance_id: 0,
+        revision: 3,
+        transfer_pending: true,
+        pending_destination_map: 36,
+        pending_destination_instance: 7,
+        bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+        bot_transfer_intent_id: 0,
+        bot_controller_generation: 0,
+    };
+    let destination = InMemoryStore {
+        shard: "instances".into(),
+        calls,
+        xdb: Some(db.clone()),
+        realm_partition: std::sync::Mutex::new(Some(later)),
+        ..Default::default()
+    };
+
+    let refusal = super::transfer::settle_transfer(&destination, &destination, BOT_GUID)
+        .expect_err("an older arrival predecessor must not settle the later return crossing");
+    assert!(
+        refusal
+            .to_string()
+            .contains("pending Realm Transfer phase changed"),
+        "{refusal:#}"
+    );
+    assert_eq!(*destination.realm_partition.lock().unwrap(), Some(later));
+    assert_eq!(lk(&db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+
+    lk(&db.arrival_sources).insert(BOT_GUID, (0, 0, 3));
+    super::transfer::settle_transfer(&destination, &destination, BOT_GUID)
+        .expect("the arrival carrying the exact later predecessor settles and releases");
+    assert_eq!(
+        destination
+            .realm_partition
+            .lock()
+            .unwrap()
+            .unwrap()
+            .revision,
+        4
+    );
+    assert!(!lk(&db.in_rows).contains_key(&BOT_GUID));
+    assert!(db.live(BOT_GUID));
+}
+
+#[test]
+fn an_old_human_worker_cannot_release_a_newer_arrival_fence() {
+    let calls: ShardCallLog = Default::default();
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    lk(&db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&db.arrival_sources).insert(BOT_GUID, (0, 0, 3));
+    let destination = InMemoryStore {
+        shard: "instances".into(),
+        calls,
+        xdb: Some(db.clone()),
+        ..Default::default()
+    };
+
+    destination
+        .release_player_transfer_arrival(
+            BOT_GUID,
+            BOT_GUID,
+            super::transfer::RealmLocatorPredecessor {
+                map_id: 0,
+                instance_id: 0,
+                revision: 1,
+            },
+        )
+        .expect("a stale exact release is an idempotent no-op");
+    assert_eq!(lk(&db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+    assert_eq!(lk(&db.arrival_sources).get(&BOT_GUID), Some(&(0, 0, 3)));
+    assert!(!db.live(BOT_GUID));
+
+    destination
+        .release_player_transfer_arrival(
+            BOT_GUID,
+            BOT_GUID,
+            super::transfer::RealmLocatorPredecessor {
+                map_id: 0,
+                instance_id: 0,
+                revision: 3,
+            },
+        )
+        .expect("the worker carrying the current predecessor releases the arrival");
+    assert!(!lk(&db.in_rows).contains_key(&BOT_GUID));
+    assert!(db.live(BOT_GUID));
+}
+
+#[test]
+fn a_ready_local_intent_releases_its_exact_arrival_fence() {
+    let intent = super::transfer::BotTransferIntent {
+        arrival_ready: true,
+        ..bot_intent()
+    };
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 36,
+            instance_id: 7,
+            payload: "gear+spells".into(),
+        },
+    );
+    lk(&db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&db.arrival_sources).insert(
+        BOT_GUID,
+        (
+            intent.source_map,
+            intent.source_instance,
+            intent.source_locator_revision,
+        ),
+    );
+    lk(&db.bot_arrivals).insert(
+        BOT_GUID,
+        (
+            SOURCE_MODULE,
+            intent.id,
+            intent.controller_generation,
+            intent.created_micros,
+        ),
+    );
+    let holder = InMemoryStore {
+        shard: "instances".into(),
+        xdb: Some(db.clone()),
+        ..Default::default()
+    };
+
+    super::transfer::run_bot_transfer_intent(&holder, &intent, 701)
+        .expect("the current holder serves and releases the exact arrival");
+
+    assert!(!lk(&db.in_rows).contains_key(&BOT_GUID));
+    assert!(db.live(BOT_GUID));
+    assert!(lk(&db.evicted).is_empty());
+}
+
+#[test]
+fn a_ready_intent_keeps_retrying_when_the_local_character_is_elsewhere() {
+    let db = FakeShardDb::with_character(
+        BOT_GUID,
+        FakeChar {
+            map_id: 0,
+            instance_id: 0,
+            payload: "gear+spells".into(),
+        },
+    );
+    let holder = InMemoryStore {
+        shard: "world".into(),
+        xdb: Some(db.clone()),
+        ..Default::default()
+    };
+    let ready = super::transfer::BotTransferIntent {
+        arrival_ready: true,
+        ..bot_intent()
+    };
+
+    let error = super::transfer::run_bot_transfer_intent(&holder, &ready, 701)
+        .expect_err("an unrelated local Character cannot prove the destination released");
+
+    assert!(error.to_string().contains("cannot resolve its destination"));
+    assert!(holder.calls.lock().unwrap().is_empty());
+    assert_eq!(db.get(BOT_GUID).unwrap().map_id, 0);
+}
+
+#[test]
+fn an_unbound_intent_waits_for_configured_realm_core() {
+    let (src, src_db, dst_db, calls) = bot_pair(36, 7);
+    let mut holder = std::sync::Arc::try_unwrap(src).ok().unwrap();
+    holder.transfer_realm_error = Some("configured Realm-core is unavailable".into());
+    let intent = super::transfer::BotTransferIntent {
+        source_locator_revision: 0,
+        ..bot_intent()
+    };
+
+    let error = super::transfer::run_bot_transfer_intent(&holder, &intent, 701)
+        .expect_err("the World Shard's local locator cannot replace Realm-core authority");
+
+    assert!(error
+        .to_string()
+        .contains("configured Realm-core is unavailable"));
+    assert!(calls.lock().unwrap().is_empty());
+    assert!(src_db.has(BOT_GUID));
+    assert!(!dst_db.has(BOT_GUID));
+}
+
+#[test]
+fn a_ready_intent_completes_after_the_bot_has_crossed_onward() {
+    let (src, src_db, dst_db, calls) = bot_pair(36, 7);
+    let intent = bot_intent();
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("the first crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    // The next crossing has already removed the Character from this intent's first destination.
+    lk(&dst_db.characters).remove(&BOT_GUID);
+    let ready = super::transfer::BotTransferIntent {
+        arrival_ready: true,
+        ..intent
+    };
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &ready, 701)
+        .expect("the exact ready witness makes Character location irrelevant to completion");
+
+    assert!(!src_db.has(BOT_GUID) && !dst_db.has(BOT_GUID));
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, call)| call == "begin_transfer")
+            .count(),
+        1,
+        "completing the old intent must not start a second crossing"
+    );
+}
+
+#[test]
+fn an_old_ready_intent_does_not_release_a_newer_arrival_fence() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    let intent = bot_intent();
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("the first crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    // A later crossing has brought the same Character back behind a new fence. Transfer ids reuse
+    // the Character guid, so only the destination's exact intent identity distinguishes this row.
+    lk(&dst_db.in_rows).insert(BOT_GUID, BOT_GUID);
+    let new_source = spacetimedb_sdk::Identity::from_byte_array([8; 32]);
+    lk(&dst_db.bot_arrivals).insert(BOT_GUID, (new_source, 92, 5, 5_000));
+    let old_ready = super::transfer::BotTransferIntent {
+        arrival_ready: true,
+        ..intent
+    };
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &old_ready, 701)
+        .expect("the old crossing is already released");
+
+    assert_eq!(lk(&dst_db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+    assert_eq!(
+        lk(&dst_db.bot_arrivals).get(&BOT_GUID),
+        Some(&(new_source, 92, 5, 5_000)),
+        "the stale ready intent must leave the newer exact arrival fenced"
+    );
+    assert!(!dst_db.live(BOT_GUID));
+}
+
+#[test]
+fn a_stale_worker_cannot_adopt_a_newer_arrival_fence() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    let old = bot_intent();
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &old, 701)
+        .expect("the old crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    let new_source = spacetimedb_sdk::Identity::from_byte_array([8; 32]);
+    let new_identity = (new_source, 92, 5, 5_000);
+    lk(&dst_db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&dst_db.bot_arrivals).insert(BOT_GUID, new_identity);
+
+    let refusal = super::transfer::run_bot_transfer_intent(src.as_ref(), &old, 702)
+        .expect_err("a stale worker must not prepare a fence created by another crossing");
+    assert!(
+        refusal.to_string().contains("exact arrival fence"),
+        "{refusal:#}"
+    );
+    assert_eq!(lk(&dst_db.bot_arrivals).get(&BOT_GUID), Some(&new_identity));
+    assert_eq!(lk(&dst_db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+    assert!(!dst_db.live(BOT_GUID));
+}
+
+#[test]
+fn equal_local_intent_ids_from_distinct_sources_do_not_match() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    let intent = bot_intent();
+    super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect("the first crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    let other_source = spacetimedb_sdk::Identity::from_byte_array([8; 32]);
+    let other_identity = (
+        other_source,
+        intent.id,
+        intent.controller_generation,
+        intent.created_micros,
+    );
+    lk(&dst_db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&dst_db.bot_arrivals).insert(BOT_GUID, other_identity);
+
+    let refusal = super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 702)
+        .expect_err("Shard-local intent ids need their source Module identity");
+    assert!(
+        refusal.to_string().contains("exact arrival fence"),
+        "{refusal:#}"
+    );
+    assert_eq!(
+        lk(&dst_db.bot_arrivals).get(&BOT_GUID),
+        Some(&other_identity)
+    );
+    assert!(!dst_db.live(BOT_GUID));
+}
+
+#[test]
+fn a_blank_migrated_arrival_fence_is_not_adopted() {
+    let (src, src_db, dst_db, _calls) = bot_pair(36, 7);
+    super::transfer::run_bot_transfer(src.as_ref(), BOT_GUID, 36, 7, "legacy crossing")
+        .expect("the legacy crossing settles");
+    assert!(!src_db.has(BOT_GUID) && dst_db.live(BOT_GUID));
+
+    lk(&dst_db.in_rows).insert(BOT_GUID, BOT_GUID);
+    lk(&dst_db.bot_arrivals).remove(&BOT_GUID);
+    let intent = bot_intent();
+    let refusal = super::transfer::run_bot_transfer_intent(src.as_ref(), &intent, 701)
+        .expect_err("a blank migrated fence has no bot crossing authority");
+    assert!(
+        refusal.to_string().contains("exact arrival fence"),
+        "{refusal:#}"
+    );
+    assert_eq!(lk(&dst_db.in_rows).get(&BOT_GUID), Some(&BOT_GUID));
+    assert!(!dst_db.live(BOT_GUID));
 }
 
 /// **AC: the return crossing uses the same row.** The instance shard writes an intent naming the
@@ -1193,14 +1837,14 @@ fn a_destination_this_shard_already_serves_is_a_completed_crossing() {
     assert!(calls.lock().unwrap().is_empty(), "and no step may run");
 }
 
-/// **AC: group membership survives the crossing, through the realm group authority.**
+/// **AC: group membership survives a mirror failure during the crossing.**
 ///
 /// The bot is invited on the open-world shard and answers for itself (it has no client), then
 /// crosses. Realm-core owns the membership the whole time; what this pins is that the shard the bot
 /// ARRIVES on can read its party, which is what its kill-XP split, quest credit and loot rules run
 /// against.
 #[test]
-fn the_bots_party_is_readable_on_the_shard_it_arrives_on() {
+fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
     use super::party_tests::{character, GINGER};
     let calls: ShardCallLog = Default::default();
     let realm = std::sync::Arc::new(InMemoryStore {
@@ -1231,6 +1875,17 @@ fn the_bots_party_is_readable_on_the_shard_it_arrives_on() {
         xdb: Some(src_db.clone()),
         realm: Some(realm.clone()),
         location_shard: Some((36, 7, instances.clone())),
+        realm_partition: std::sync::Mutex::new(Some(super::party::RealmCharacterPartition {
+            map_id: 0,
+            instance_id: 0,
+            revision: 3,
+            transfer_pending: false,
+            pending_destination_map: 0,
+            pending_destination_instance: 0,
+            bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+            bot_transfer_intent_id: 0,
+            bot_controller_generation: 0,
+        })),
         characters: vec![character(GINGER, "Ginger"), character(BOT_GUID, "Botty")],
         // The production shape of a playerbot: a live entity that never logged in.
         live_guids: vec![GINGER, BOT_GUID],
@@ -1247,11 +1902,73 @@ fn the_bots_party_is_readable_on_the_shard_it_arrives_on() {
         super::party::Op::Invite(BOT_GUID),
     )
     .expect("the bot joins the leader's party");
+    let group_id = world
+        .group_roster(BOT_GUID)
+        .expect("the Realm roster read succeeds")
+        .expect("the bot's party exists")
+        .group_id;
+    lk(&src_db.instance_partitions).insert(7, (36, group_id));
+    let intent = bot_intent();
+    let plan = world.character_destination(BOT_GUID).unwrap();
+    let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::transfer::run_transfer_injected_for_intent(
+            world.as_ref(),
+            instances.as_ref(),
+            &plan,
+            Some("publish_shard_index"),
+            Some((&intent, 701)),
+        )
+    }));
+    let panic = prepared.expect_err("the driver must stop after Realm settlement");
+    let message = panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+    assert_eq!(
+        message,
+        Some("LYRACORE_TRANSFER_ABORT_AFTER: injected abort"),
+        "the driver stopped for another reason before the mirror failure"
+    );
+    assert!(
+        !src_db.has(BOT_GUID) && dst_db.has(BOT_GUID) && !dst_db.live(BOT_GUID),
+        "the source is finished while the destination arrival remains fenced"
+    );
+    instances
+        .mirror_failures
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let first = super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 702)
+        .expect_err("the destination mirror interruption must keep the arrival fenced");
+    assert!(
+        first
+            .to_string()
+            .contains("World Shard mirror connection interrupted"),
+        "{first:#}"
+    );
+    {
+        let first_calls = calls.lock().unwrap();
+        assert!(
+            first_calls
+                .iter()
+                .any(|(_, call)| call == "sync_group_mirror"),
+            "the required mirror write must be attempted: {first_calls:?}"
+        );
+        assert!(
+            !first_calls.iter().any(|(_, call)| {
+                call == "mark_bot_transfer_arrival_ready" || call == "release_bot_transfer_arrival"
+            }),
+            "a failed mirror cannot mark or release the arrival: {first_calls:?}"
+        );
+    }
 
-    super::transfer::run_bot_transfer(world.as_ref(), BOT_GUID, 36, 7, "grouped follow")
-        .expect("the crossing runs");
+    super::transfer::run_bot_transfer_intent(world.as_ref(), &intent, 703)
+        .expect("the next claimed worker repeats the mirror and completes the crossing");
 
     assert!(dst_db.live(BOT_GUID), "the bot arrived");
+    assert_eq!(
+        lk(&dst_db.instance_partitions).get(&7),
+        Some(&(36, group_id)),
+        "the destination mirrors the source instance's durable party ownership"
+    );
     let roster = instances
         .group_roster(BOT_GUID)
         .expect("the mirror is readable")
@@ -1259,5 +1976,26 @@ fn the_bots_party_is_readable_on_the_shard_it_arrives_on() {
     assert!(
         roster.members.contains(&BOT_GUID) && roster.members.contains(&GINGER),
         "and that party must still be the leader's: {roster:?}"
+    );
+    let calls = calls.lock().unwrap();
+    let mirror = calls
+        .iter()
+        .rposition(|(_, call)| call == "sync_group_mirror")
+        .expect("the authoritative roster must be written");
+    let prepared = calls
+        .iter()
+        .rposition(|(_, call)| call == "sync_transfer_arrival")
+        .expect("the Transfer arrival step must complete");
+    let ready = calls
+        .iter()
+        .rposition(|(_, call)| call == "mark_bot_transfer_arrival_ready")
+        .expect("the source intent must record destination preparation");
+    let released = calls
+        .iter()
+        .rposition(|(_, call)| call == "release_bot_transfer_arrival")
+        .expect("the destination fence must drop");
+    assert!(
+        mirror < prepared && prepared < ready && ready < released,
+        "{calls:?}"
     );
 }

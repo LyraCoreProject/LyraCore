@@ -68,8 +68,12 @@ pub(crate) mod character_owned_tripwire {
             "realm-owned Auction value and protocol state",
         ),
         (
-            &["game_bot_invite_intent", "game_bot_transfer_intent"],
-            "short-lived intent consumed by the Gateway or event GC",
+            &["game_bot_invite_intent"],
+            "short-lived Group Intent consumed by the Gateway or event GC",
+        ),
+        (
+            &["game_bot_transfer_intent"],
+            "durable source-side Transfer Intent consumed by exact Gateway completion",
         ),
         (
             &["game_party_command_intent"],
@@ -851,7 +855,7 @@ mod partition_discipline_tripwire {
         // `debug.rs` (budget 9, down from 12) into a directory; the 9 raw scans
         // landed in two of the seven files — same total, just split along the new file boundary.
         ("module/src/debug/mod.rs", 9, "`debug_reducers`-gated test harness; compiled out of production builds entirely (2 of these are #456's `debug_backfill_cell_ids`, a deliberately whole-shard migration sweep — each shard runs it once after the publish that adds the `cell` column)"),
-        ("module/src/debug/instance.rs", 4, "`debug_reducers`-gated test harness; compiled out of production builds entirely; +2 for #526's `debug_assert_floor_snap`, which scans game_creature_spawn/game_world_entity by `entry` for a guid high-water mark (template-keyed, not a spatial query) before minting a scratch spawn guid"),
+        ("module/src/debug/instance.rs", 3, "`debug_reducers`-gated test harness; compiled out of production builds entirely; +2 for #526's `debug_assert_floor_snap`, which scans game_creature_spawn/game_world_entity by `entry` for a guid high-water mark (template-keyed, not a spatial query) before minting a scratch spawn guid"),
         // Importers — realm-wide by definition: they wipe and rebuild every partition at once.
         ("module/src/creatures/spawn.rs", 4, "`import_creature_spawns` drops every creature entity + spawn row before reloading the world; +1 for `debug_normalize_spawn_timers`, a one-shot operator migration that must visit this database's whole spawn table by definition; +1 for `debug_retire_region_creatures` (#194), which manages the partitioning itself — it scans spawn HOMES to hand a region's population to its owning shard"),
         ("module/src/go_collider.rs", 1, "Operator reconciliation rebuilds derived colliders for every hosted partition"),
@@ -1375,7 +1379,13 @@ mod gc_reap_tripwire {
     /// - `game_mail`: DURABLE state that merely carries a `created_at` for the client's expiry
     ///   countdown. Reaping it would destroy mail, and the design declines an expiry reaper,
     ///   because nothing should silently delete an attachment a player can still collect.
-    const EXEMPT_ACCESSORS: &[&str] = &["game_creature_move_event", "game_mail"];
+    const EXEMPT_ACCESSORS: &[&str] = &[
+        "game_creature_move_event",
+        "game_mail",
+        // Durable source-side work. The exact Gateway completion deletes it; a transfer source
+        // deletion retains it so process restart can finish the destination release.
+        "game_bot_transfer_intent",
+    ];
 
     /// `gc.rs` actually reaps `accessor` — via the shared `reap!(accessor)` macro invocation, or a
     /// direct `ctx.db.accessor()` call (the shape of the ad-hoc blocks: `game_group_invite`'s own

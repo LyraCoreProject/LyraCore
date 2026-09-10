@@ -451,7 +451,7 @@ pub use threat::*;
 pub use trade::*;
 pub use trainer::*;
 // Re-exported for the gateway schema-parity test.
-pub use transfer::{BotTransferIntent, TransferOut};
+pub use transfer::{BotTransferIntent, TransferIn, TransferOut};
 pub use weather::*;
 pub use world::*;
 pub use xp::*;

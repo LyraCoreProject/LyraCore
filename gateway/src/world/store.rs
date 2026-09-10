@@ -109,8 +109,15 @@ pub trait WorldStore:
         ))
     }
 
-    /// `import_character_blob` — materialise the arrival copy from the carried blob.
-    fn import_character_blob(&self, _transfer_id: u64, _blob: &[u8]) -> Result<()> {
+    /// Materialise the arrival copy from the carried blob. A session-less crossing binds its exact
+    /// source intent identity to the destination fence in the same transaction as the import.
+    fn import_character_blob(
+        &self,
+        _transfer_id: u64,
+        _blob: &[u8],
+        _source: transfer::RealmLocatorPredecessor,
+        _bot_arrival: Option<&transfer::BotTransferIntent>,
+    ) -> Result<()> {
         Err(anyhow!(
             "this store does not implement cross-database transfers"
         ))
@@ -130,9 +137,35 @@ pub trait WorldStore:
         ))
     }
 
-    /// `release_transfer` — drop the arrival copy's fence. Replay-safe: `Ok` when there is nothing
-    /// filed under this id, which is why it can be called speculatively at world entry.
+    /// `release_transfer` — drop a migrated blank arrival fence. New human and session-less
+    /// arrivals refuse because their exact crossing-specific reducer owns release.
     fn release_transfer(&self, _transfer_id: u64) -> Result<()> {
+        Ok(())
+    }
+
+    /// Release one exact human arrival fence.
+    fn release_player_transfer_arrival(
+        &self,
+        _transfer_id: u64,
+        _character_guid: u64,
+        _source: transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host player Transfer arrivals"))
+    }
+
+    /// Exact destination fence identity used by the Realm locator recovery compare-and-set.
+    fn transfer_arrival(&self, _transfer_id: u64) -> Option<transfer::TransferArrival> {
+        None
+    }
+
+    /// Reconcile the arriving Character's authoritative party mirror before its destination fence
+    /// drops. A single-database store and a test store without realm-wide parties have no work.
+    fn sync_transfer_arrival(&self, _character_guid: u64) -> Result<()> {
+        Ok(())
+    }
+
+    /// Publish Realm's pending partition before the source is frozen.
+    fn sync_transfer_pending(&self, _character_guid: u64) -> Result<()> {
         Ok(())
     }
 
@@ -151,6 +184,79 @@ pub trait WorldStore:
         _instance_id: u64,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Record Realm-core's pending phase before the source is frozen and return its predecessor
+    /// locator revision. Single-database stores have no remote phase.
+    fn begin_shard_index_transfer(
+        &self,
+        _plan: &transfer::TransferPlan,
+        bot_intent: Option<(&transfer::BotTransferIntent, u64)>,
+    ) -> Result<party::RealmCharacterPartition> {
+        Ok(party::RealmCharacterPartition {
+            map_id: 0,
+            instance_id: 0,
+            revision: bot_intent.map_or(1, |(intent, _)| intent.source_locator_revision.max(1)),
+            transfer_pending: true,
+            pending_destination_map: _plan.dest_map_id,
+            pending_destination_instance: _plan.dest_instance_id,
+            bot_source_identity: bot_intent
+                .map_or(spacetimedb_sdk::Identity::ZERO, |(intent, _)| {
+                    intent.source_module_identity
+                }),
+            bot_transfer_intent_id: bot_intent.map_or(0, |(intent, _)| intent.id),
+            bot_controller_generation: bot_intent
+                .map_or(0, |(intent, _)| intent.controller_generation),
+        })
+    }
+
+    /// Settle a player crossing against the predecessor returned by
+    /// [`begin_shard_index_transfer`](Self::begin_shard_index_transfer).
+    fn finish_player_shard_index_transfer(
+        &self,
+        plan: &transfer::TransferPlan,
+        _source_map: u32,
+        _source_instance: u64,
+        _source_revision: u64,
+    ) -> Result<()> {
+        self.publish_shard_index(plan.character_guid, plan.dest_map_id, plan.dest_instance_id)
+    }
+
+    /// Resume a Realm pending phase from the destination Character after source finish.
+    fn finish_pending_shard_index_transfer(
+        &self,
+        _character_guid: u64,
+        _destination_map: u32,
+        _destination_instance: u64,
+        _arrival: &transfer::TransferArrival,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Bind this claimed intent to the Realm locator it is about to move from.
+    fn bind_bot_transfer_locator(
+        &self,
+        _intent: &transfer::BotTransferIntent,
+        _source_revision: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not bind bot Transfer locators"))
+    }
+
+    /// Compare-and-set Realm-core's locator for one exact session-less crossing.
+    fn publish_bot_shard_index(&self, intent: &transfer::BotTransferIntent) -> Result<()> {
+        self.publish_shard_index(
+            intent.bot_guid,
+            intent.destination_map,
+            intent.destination_instance,
+        )
+    }
+
+    /// The source-side lease for a named instance: its map and owning party. Portal admission
+    /// creates this before a cross-Shard Transfer, so it remains the authority if party membership
+    /// changes while the Character is in Escrow.
+    fn instance_partition(&self, _instance_id: u64) -> Option<(u32, u64)> {
+        None
     }
 
     /// `ensure_instance` — mirror an instance id onto this shard, spawning its population once.
@@ -196,6 +302,12 @@ pub trait WorldStore:
 
     /// Realm-core for companion command authority. Configured outages fail closed.
     fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        Ok(self.realm_store())
+    }
+
+    /// Realm-core for Transfer locator authority. Only an unsharded Realm uses the local Store;
+    /// an unavailable configured Realm-core is an infrastructure failure.
+    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
         Ok(self.realm_store())
     }
 
@@ -273,6 +385,35 @@ pub trait WorldStore:
         None
     }
 
+    /// Persist the exact claimed intent's destination-ready witness before release.
+    fn mark_bot_transfer_arrival_ready(
+        &self,
+        _intent_id: u64,
+        _bot_guid: u64,
+        _controller_generation: u64,
+        _claim_token: u64,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host Transfer Intents"))
+    }
+
+    /// Whether the current destination fence belongs to this exact source intent.
+    fn bot_transfer_arrival_matches(
+        &self,
+        _transfer_id: u64,
+        _intent: &transfer::BotTransferIntent,
+    ) -> bool {
+        false
+    }
+
+    /// Release only the destination fence identified by this intent. A newer fence is untouched.
+    fn release_bot_transfer_arrival(
+        &self,
+        _transfer_id: u64,
+        _intent: &transfer::BotTransferIntent,
+    ) -> Result<()> {
+        Err(anyhow!("this store does not host bot Transfer arrivals"))
+    }
+
     /// Acknowledged World Shard admission for one automatic group action. A later controller
     /// selection cannot undo admission or membership already committed on Realm-core.
     fn admit_sessionless_group_action(&self, character_guid: u64) -> Result<party::PartyOutcome>;
@@ -328,6 +469,35 @@ pub trait WorldStore:
     /// party the acting character has just left.
     fn group_roster_by_id(&self, _group_id: u64) -> Result<Option<party::GroupRoster>> {
         Ok(None)
+    }
+
+    /// Realm-core's durable order for a complete party roster, including a disbanded party.
+    fn group_roster_revision(&self, _group_id: u64) -> Result<u64> {
+        Ok(1)
+    }
+
+    /// Realm-core's ordered locator for one Character. World Shards never supply this fact.
+    fn realm_character_partition(
+        &self,
+        _character_guid: u64,
+    ) -> Result<Option<party::RealmCharacterPartition>> {
+        Ok(None)
+    }
+
+    /// One healthy, internally consistent cache observation used to certify a party partition.
+    fn party_holder_observation(
+        &self,
+        character_guid: u64,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Result<party::PartyHolderObservation> {
+        Ok(party::PartyHolderObservation {
+            serves_locator: self.shard_for_location(map_id, instance_id).is_none(),
+            has_escrow: self.escrowed_transfer(character_guid).is_some(),
+            character_partition: self
+                .character_destination(character_guid)
+                .map(|character| (character.dest_map_id, character.dest_instance_id)),
+        })
     }
 
     /// Authoritative roster read used to repair mirrors after deleted Character cleanup. A

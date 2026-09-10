@@ -151,10 +151,15 @@ caller's action deadline to have passed. They return whether they removed the ca
 `nearest_entity`, `in_same_partition`, `require_operator`.
 
 `group::party_facts(ctx, character_guid)` reads the Character's local durable party mirror. It names
-the leader and every member, with nullable live position, health, and death facts, plus hostile
+the leader and every member, with nullable live position, health, and death facts. An absent local
+Unit may instead carry a Realm-core-certified map, instance, and locator revision. Pending Transfer,
+unknown location, and departed-member fences expose no partition. Enemy facts cover hostile
 creatures with current party melee, cast, threat, or control evidence. Hostile Characters are
 excluded because PvP party assistance is outside this contract. An absent membership returns
 `Ok(None)`.
+A Realm-owned roster revision orders the complete member list, leader, and loot rules. World Shards
+retain its disband state, so delayed Gateway fanout cannot remove a newer member, restore older
+party rules, or recreate a disbanded party.
 A membership whose Group row is missing returns `MissingGroup`. `FightLimit` reports more than five
 members, 24 incoming melee or threat rows for one member, one pending cast for one member, or 24
 aggregate enemy GUIDs. For each retained enemy, the read permits 16 threat sources, 64 control auras,
@@ -280,5 +285,12 @@ geometry. A Package must measure actual position on later observations to establ
 or arrival; the proposed endpoint cannot establish either.
 
 `actor::sessionless_action_gate(ctx, character_guid)` checks current Account Claim and Fence ownership, Character availability, and World Session status before Package gameplay. It permits a missing live entity so Legacy can restore a body. Group admission also requires a live entity and current controller consent.
+
+`actor::area_trigger_route(ctx, trigger_id)` reads one exact imported AreaTrigger source volume and
+target map. It exposes the source center and containment rule for Candidate movement while keeping
+the landing coordinates private. `actor::enter_sessionless_areatrigger` rechecks the current body,
+volume, exact existing dungeon instance lease, and a Realm-certified party member in the expected
+partition before it applies the imported landing and writes one Transfer Intent. A Refusal leaves
+the Character, instance binding, and intent unchanged.
 
 `nav::LEG_MAX_EXPANSIONS` is the expansion cap used by `nav::route_step`. A Package can reserve that work before selecting movement.

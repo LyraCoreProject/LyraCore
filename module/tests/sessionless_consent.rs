@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::Standalone;
+use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 fn stage(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
@@ -24,6 +24,455 @@ fn assert_refusal(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
         "{reducer} unexpectedly committed: {text}"
     );
     assert!(text.contains(tag), "{reducer}: expected {tag}, got {text}");
+}
+
+fn call_capture(shard: &Standalone, reducer: &str, args: &[&str]) -> serde_json::Value {
+    let output = shard.call(reducer, args);
+    serde_json::json!({
+        "success": output.status.success(),
+        "output": format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    })
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn durable_transfer_intent_survives_event_reaping_and_fences_actions() {
+    let shard = stage("sessionless-durable-transfer-intent");
+    shard.assert_call(
+        "debug_bot_transfer",
+        &["1", "1", "0", "1200", "1200", "50", "0", "fixture"],
+    );
+    let teleport_before = shard.query_rows(
+        "SELECT id, mover_guid, map_id, created_micros FROM game_teleport_event WHERE mover_guid = 1",
+    );
+    let event_reaped = poll_until(POLL_TIMEOUT, || {
+        shard
+            .query_rows("SELECT id FROM game_teleport_event WHERE mover_guid = 1")
+            .is_empty()
+    });
+    let teleport_after =
+        shard.query_rows("SELECT id FROM game_teleport_event WHERE mover_guid = 1");
+    let pending = shard.query_rows(
+        "SELECT id, bot_guid, destination_map, destination_instance, controller_generation, \
+         claim_token, claim_until_micros, arrival_ready, source_module_identity FROM \
+         game_bot_transfer_intent WHERE bot_guid = 1",
+    );
+    let fenced = call_capture(&shard, "debug_admit_sessionless_action", &["1"]);
+    let actor = r#"{"guid":1,"ownership":null}"#;
+    shard.assert_call(
+        "begin_transfer",
+        &["1", actor, "1", "0", "1200", "1200", "50", "0", "true"],
+    );
+    let escrow = shard.query_rows(
+        "SELECT transfer_id, character_guid, dest_map_id, dest_instance_id FROM \
+         game_transfer_out WHERE transfer_id = 1",
+    );
+    let fenced_during_escrow = call_capture(&shard, "debug_admit_sessionless_action", &["1"]);
+    let evidence = serde_json::json!({
+        "teleport_before_reaping": teleport_before,
+        "event_reaped": event_reaped,
+        "teleport_after_reaping": teleport_after,
+        "durable_intent_after_reaping": pending,
+        "fenced_action_before_escrow": fenced,
+        "source_escrow": escrow,
+        "fenced_action_during_escrow": fenced_during_escrow,
+    });
+    let path = support::log_dir().join(format!(
+        "{}-durable-transfer-intent.json",
+        shard.shard_name()
+    ));
+    std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    eprintln!("fixture evidence: {}", path.display());
+
+    assert!(
+        !evidence["teleport_before_reaping"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{evidence}"
+    );
+    assert!(evidence["event_reaped"].as_bool().unwrap(), "{evidence}");
+    assert!(
+        evidence["teleport_after_reaping"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["durable_intent_after_reaping"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{evidence}"
+    );
+    assert!(
+        !evidence["fenced_action_before_escrow"]["success"]
+            .as_bool()
+            .unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["fenced_action_before_escrow"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("TransferPending"),
+        "{evidence}"
+    );
+    assert_eq!(evidence["source_escrow"].as_array().unwrap().len(), 1);
+    assert!(
+        !evidence["fenced_action_during_escrow"]["success"]
+            .as_bool()
+            .unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["fenced_action_during_escrow"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("TransferPending"),
+        "{evidence}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn transfer_intent_completion_requires_its_exact_claim_and_ready_arrival() {
+    let shard = stage("sessionless-exact-transfer-claim");
+    shard.assert_call(
+        "debug_bot_transfer",
+        &["1", "1", "0", "1200", "1200", "50", "0", "fixture"],
+    );
+    let pending = shard.query_rows(
+        "SELECT id, bot_guid, destination_map, destination_instance, controller_generation, \
+         claim_token, claim_until_micros, arrival_ready, source_module_identity FROM \
+         game_bot_transfer_intent WHERE bot_guid = 1",
+    );
+    let initial_path = support::log_dir().join(format!(
+        "{}-exact-transfer-claim-pending.json",
+        shard.shard_name()
+    ));
+    std::fs::write(&initial_path, serde_json::to_vec_pretty(&pending).unwrap()).unwrap();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    let intent_id = pending[0]["id"].clone();
+    let wrong_generation = call_capture(
+        &shard,
+        "claim_bot_transfer_intent",
+        &[&intent_id, "1", "1", "701"],
+    );
+    let exact_claim = call_capture(
+        &shard,
+        "claim_bot_transfer_intent",
+        &[&intent_id, "1", "0", "701"],
+    );
+    let foreign_claim = call_capture(
+        &shard,
+        "claim_bot_transfer_intent",
+        &[&intent_id, "1", "0", "702"],
+    );
+    let wrong_completion = call_capture(
+        &shard,
+        "complete_bot_transfer_intent",
+        &[&intent_id, "1", "0", "702"],
+    );
+    let premature_completion = call_capture(
+        &shard,
+        "complete_bot_transfer_intent",
+        &[&intent_id, "1", "0", "701"],
+    );
+    let arrival_ready = call_capture(
+        &shard,
+        "mark_bot_transfer_arrival_ready",
+        &[&intent_id, "1", "0", "701"],
+    );
+    let claimed = shard.query_rows(&format!(
+        "SELECT id, bot_guid, controller_generation, claim_token, claim_until_micros, \
+         arrival_ready FROM \
+         game_bot_transfer_intent WHERE id = {intent_id}"
+    ));
+    let evidence = serde_json::json!({
+        "pending": pending,
+        "wrong_generation": wrong_generation,
+        "exact_claim_call": exact_claim,
+        "foreign_claim": foreign_claim,
+        "wrong_completion": wrong_completion,
+        "premature_completion": premature_completion,
+        "arrival_ready_call": arrival_ready,
+        "claimed_row": claimed,
+    });
+    let path = support::log_dir().join(format!(
+        "{}-durable-transfer-intent.json",
+        shard.shard_name()
+    ));
+    std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    eprintln!("fixture evidence: {}", path.display());
+
+    assert!(
+        !evidence["premature_completion"]["success"]
+            .as_bool()
+            .unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        !evidence["wrong_generation"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["wrong_generation"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("identity changed"),
+        "{evidence}"
+    );
+    assert!(
+        evidence["exact_claim_call"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        !evidence["foreign_claim"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["foreign_claim"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("is claimed"),
+        "{evidence}"
+    );
+    assert!(
+        !evidence["wrong_completion"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["premature_completion"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("arrival is not ready"),
+        "{evidence}"
+    );
+    assert!(
+        evidence["arrival_ready_call"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["wrong_completion"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("claim changed"),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["claimed_row"][0]["claim_token"], "701",
+        "{evidence}"
+    );
+    assert!(
+        evidence["claimed_row"][0]["claim_until_micros"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()
+            .unwrap()
+            > 0,
+        "{evidence}"
+    );
+    assert_eq!(evidence["claimed_row"][0]["arrival_ready"], "true");
+    let exact_completion = call_capture(
+        &shard,
+        "complete_bot_transfer_intent",
+        &[&intent_id, "1", "0", "701"],
+    );
+    let remaining = shard.query_rows(&format!(
+        "SELECT id FROM game_bot_transfer_intent WHERE id = {intent_id}"
+    ));
+    let admitted = call_capture(&shard, "debug_admit_sessionless_action", &["1"]);
+    let completed = serde_json::json!({
+        "exact_completion": exact_completion,
+        "remaining": remaining,
+        "admitted_after_completion": admitted,
+    });
+    let completed_path = support::log_dir().join(format!(
+        "{}-durable-transfer-intent-completed.json",
+        shard.shard_name()
+    ));
+    std::fs::write(
+        &completed_path,
+        serde_json::to_vec_pretty(&completed).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        completed["exact_completion"]["success"].as_bool().unwrap(),
+        "{completed}"
+    );
+    assert!(
+        completed["remaining"].as_array().unwrap().is_empty(),
+        "{completed}"
+    );
+    assert!(
+        completed["admitted_after_completion"]["success"]
+            .as_bool()
+            .unwrap(),
+        "{completed}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn pending_recovery_cannot_settle_a_later_return_crossing() {
+    let shard = stage("sessionless-realm-transfer-cas");
+    let actor = r#"{"guid":1,"ownership":null}"#;
+    let zero_identity = format!("0x{}", "00".repeat(32));
+    shard.assert_call("set_character_shard", &["1", "0", "0", actor]);
+    shard.assert_call(
+        "begin_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "1",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    shard.assert_call(
+        "finish_pending_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "1",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    shard.assert_call(
+        "begin_character_shard_transfer",
+        &[
+            "1",
+            "36",
+            "7",
+            "2",
+            "0",
+            "0",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    shard.assert_call(
+        "finish_pending_character_shard_transfer",
+        &[
+            "1",
+            "36",
+            "7",
+            "2",
+            "0",
+            "0",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    shard.assert_call(
+        "begin_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "3",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+
+    let before = shard.query_rows(
+        "SELECT character_guid, map_id, instance_id, revision, transfer_pending, \
+         pending_destination_map, pending_destination_instance FROM game_character_shard \
+         WHERE character_guid = 1",
+    );
+    let stale = call_capture(
+        &shard,
+        "finish_pending_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "1",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    let after_stale = shard.query_rows(
+        "SELECT character_guid, map_id, instance_id, revision, transfer_pending, \
+         pending_destination_map, pending_destination_instance FROM game_character_shard \
+         WHERE character_guid = 1",
+    );
+    shard.assert_call(
+        "finish_pending_character_shard_transfer",
+        &[
+            "1",
+            "0",
+            "0",
+            "3",
+            "36",
+            "7",
+            &zero_identity,
+            "0",
+            "0",
+            actor,
+        ],
+    );
+    let settled = shard.query_rows(
+        "SELECT character_guid, map_id, instance_id, revision, transfer_pending FROM \
+         game_character_shard WHERE character_guid = 1",
+    );
+    let evidence = serde_json::json!({
+        "new_return_phase": before,
+        "stale_recovery": stale,
+        "after_stale_recovery": after_stale,
+        "exact_recovery_settled": settled,
+    });
+    let path = support::log_dir().join(format!(
+        "{}-pending-transfer-recovery-cas.json",
+        shard.shard_name()
+    ));
+    std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    eprintln!("fixture evidence: {}", path.display());
+
+    assert!(
+        !evidence["stale_recovery"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["new_return_phase"],
+        evidence["after_stale_recovery"]
+    );
+    assert_eq!(evidence["exact_recovery_settled"][0]["revision"], "4");
+    assert_eq!(
+        evidence["exact_recovery_settled"][0]["transfer_pending"],
+        "false"
+    );
 }
 
 #[test]
@@ -198,8 +647,14 @@ fn suppressed_consent_travels_with_the_character_through_export_and_import() {
     );
     let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 1");
     let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
-    destination.assert_call("import_character_blob", &["1", &blob, actor]);
-    destination.assert_call("release_transfer", &["1", actor]);
+    destination.assert_call(
+        "import_player_character_blob",
+        &["1", &blob, "0", "0", "1", actor],
+    );
+    destination.assert_call(
+        "release_player_transfer_arrival",
+        &["1", "1", "0", "0", "1", actor],
+    );
     destination.assert_call("debug_spawn_player_entity", &["1"]);
     let rows = destination
         .query_rows("SELECT * FROM game_sessionless_action_consent WHERE character_guid = 1");
@@ -216,6 +671,100 @@ fn suppressed_consent_travels_with_the_character_through_export_and_import() {
     assert!(source
         .query_rows("SELECT * FROM game_sessionless_action_consent WHERE character_guid = 1")
         .is_empty());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn generic_release_cannot_clear_a_bot_owned_arrival() {
+    let source = stage("sessionless-bot-release-source");
+    source.assert_call("install_guid_range", &["0"]);
+    let mut destination = Standalone::start("sessionless-bot-release-destination");
+    destination.publish_module();
+    destination.assert_call("claim_operator", &[]);
+    destination.assert_call("install_guid_range", &["1000000000"]);
+    let actor = r#"{"guid":1,"ownership":null}"#;
+    source.assert_call(
+        "begin_transfer",
+        &["1", actor, "36", "7", "1200", "1200", "50", "0", "true"],
+    );
+    let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 1");
+    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
+    let source_identity = format!("0x{}", "01".repeat(32));
+    destination.assert_call(
+        "import_bot_character_blob",
+        &[
+            "1",
+            &blob,
+            &source_identity,
+            "91",
+            "4",
+            "4000",
+            "0",
+            "0",
+            "1",
+            actor,
+        ],
+    );
+    let before = destination.query_rows(
+        "SELECT transfer_id, character_guid, bot_intent_id, bot_controller_generation, \
+         source_map_id, source_instance_id, source_locator_revision FROM game_transfer_in \
+         WHERE transfer_id = 1",
+    );
+    let generic_release = call_capture(&destination, "release_transfer", &["1", actor]);
+    let after_generic = destination.query_rows(
+        "SELECT transfer_id, character_guid, bot_intent_id, bot_controller_generation, \
+         source_map_id, source_instance_id, source_locator_revision FROM game_transfer_in \
+         WHERE transfer_id = 1",
+    );
+    let exact_release = call_capture(
+        &destination,
+        "release_bot_transfer_arrival",
+        &["1", "1", &source_identity, "91", "4", "4000", "0", "0", "1"],
+    );
+    let after_exact =
+        destination.query_rows("SELECT transfer_id FROM game_transfer_in WHERE transfer_id = 1");
+    let evidence = serde_json::json!({
+        "before": before,
+        "generic_release": generic_release,
+        "after_generic": after_generic,
+        "exact_release": exact_release,
+        "after_exact": after_exact,
+    });
+    let path = support::log_dir().join(format!(
+        "{}-bot-owned-arrival-release.json",
+        destination.shard_name()
+    ));
+    std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    eprintln!("fixture evidence: {}", path.display());
+
+    assert_eq!(
+        evidence["before"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert!(
+        !evidence["generic_release"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["generic_release"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("requires its exact release reducer"),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["after_generic"], evidence["before"],
+        "the generic reducer must leave the exact fence unchanged: {evidence}"
+    );
+    assert!(
+        evidence["exact_release"]["success"].as_bool().unwrap(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["after_exact"].as_array().unwrap().is_empty(),
+        "{evidence}"
+    );
 }
 
 #[test]

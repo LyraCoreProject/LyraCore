@@ -30,6 +30,7 @@ pub mod spatial;
 pub mod terrain;
 pub mod trade;
 pub mod trainer;
+pub mod transfer;
 pub mod values_mask;
 pub mod vmap;
 pub mod whisper;

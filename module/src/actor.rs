@@ -39,6 +39,8 @@
 //! | `reconcile_starter_role_spell_levels` | `seed::reconcile_curated_starter_role_levels` | repairs only exact old curated level-zero headers; preserves imported or tuned rows |
 //! | `use_gameobject` | `gameobject::apply_use_gameobject` | GO resolved by guid + range/use gates |
 //! | `request_use_gameobject` | `gameobject::request_use_gameobject` | typed target, partition, range, and use Refusal |
+//! | `area_trigger_route` | `quest::area_trigger_route` | exact imported source volume and target map; landing remains private |
+//! | `enter_sessionless_areatrigger` | `quest::enter_sessionless_areatrigger` | imported source volume + expected certified party partition + session-less action Gates |
 //! | `import_revision` | `game_import_meta` read | current importer source and file identities for one family |
 //! | `repop` | `world::do_repop` | dead actor releases to the graveyard ghost |
 //! | `respond_resurrect` | `spell::do_resurrect_response` | consume the actor's pending rez offer; accept revives IN PLACE at the offer's % |
@@ -204,6 +206,8 @@ package_only! {
     pub(crate) use crate::bridge::CommandOutcome as CommandOutcome;
     pub(crate) use crate::bridge::ParsedClientCommand as ParsedClientCommand;
     pub(crate) use crate::bridge::RECEIPT_CAPACITY as COMMAND_RECEIPT_CAPACITY;
+    pub(crate) use crate::quest::area_trigger_route as area_trigger_route;
+    pub(crate) use crate::quest::enter_sessionless_areatrigger as enter_sessionless_areatrigger;
 }
 
 /// A Refusal classified at the operation's Gate. Detail preserves existing client messages.
@@ -229,6 +233,7 @@ pub enum ActionRefusalKind {
     Level,
     Prerequisite,
     ProfileLimit,
+    TransferPending,
 }
 
 impl ActionRefusal {

@@ -52,24 +52,169 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct GroupRoster {
     pub group_id: u64,
+    /// Realm-core's order for this complete roster. World Shards retain the value after disband.
+    pub roster_revision: u64,
     pub leader_guid: u64,
     pub loot_method: u8,
     pub loot_threshold: u8,
     pub master_looter_guid: u64,
     /// Member guids in join order (member-row id), which is the order leadership succeeds in.
     pub members: Vec<u64>,
+    /// One ordered partition projection per member. Realm-core supplies both revisions; the
+    /// Gateway confirms the location against the World Shard that currently holds the Character.
+    pub partitions: Vec<GroupMemberPartition>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupMemberPartition {
+    pub character_guid: u64,
+    pub group_id: u64,
+    pub membership_revision: u64,
+    pub member_active: bool,
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub locator_revision: u64,
+    pub state: PartyPartitionState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartyPartitionState {
+    Unknown,
+    Known,
+    PendingTransfer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RealmCharacterPartition {
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub revision: u64,
+    pub transfer_pending: bool,
+    pub pending_destination_map: u32,
+    pub pending_destination_instance: u64,
+    pub bot_source_identity: spacetimedb_sdk::Identity,
+    pub bot_transfer_intent_id: u64,
+    pub bot_controller_generation: u64,
+}
+
+const PARTY_LOCATION_SHARD_LIMIT: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PartyHolderObservation {
+    pub(crate) serves_locator: bool,
+    pub(crate) has_escrow: bool,
+    pub(crate) character_partition: Option<(u32, u64)>,
+}
+
+fn classify_party_partition(
+    locator: RealmCharacterPartition,
+    observations: &[PartyHolderObservation],
+) -> Result<PartyPartitionState> {
+    let mut state = None;
+    for observation in observations.iter().filter(|row| row.serves_locator) {
+        let observed = if observation.has_escrow {
+            Some(PartyPartitionState::PendingTransfer)
+        } else if observation.character_partition == Some((locator.map_id, locator.instance_id)) {
+            Some(PartyPartitionState::Known)
+        } else {
+            None
+        };
+        if let Some(observed) = observed {
+            if state.replace(observed).is_some() {
+                anyhow::bail!(
+                    "more than one World Shard holds the Character at Realm locator revision {}",
+                    locator.revision
+                );
+            }
+        }
+    }
+    Ok(state.unwrap_or(PartyPartitionState::Unknown))
+}
+
+fn certify_roster_partitions<St: WorldStore + ?Sized>(
+    store: &St,
+    realm: &dyn WorldStore,
+    mut roster: GroupRoster,
+) -> Result<GroupRoster> {
+    let shards = store.world_stores();
+    if shards.len() > PARTY_LOCATION_SHARD_LIMIT {
+        anyhow::bail!(
+            "party partition certification exceeds the {PARTY_LOCATION_SHARD_LIMIT}-Shard limit"
+        );
+    }
+    for projection in &mut roster.partitions {
+        let Some(locator) = realm.realm_character_partition(projection.character_guid)? else {
+            projection.map_id = 0;
+            projection.instance_id = 0;
+            projection.locator_revision = 0;
+            projection.state = PartyPartitionState::Unknown;
+            continue;
+        };
+        if locator.transfer_pending {
+            projection.map_id = locator.map_id;
+            projection.instance_id = locator.instance_id;
+            projection.locator_revision = locator.revision;
+            projection.state = PartyPartitionState::PendingTransfer;
+            continue;
+        }
+        let observations: Vec<_> = shards
+            .iter()
+            .map(|shard| {
+                shard.party_holder_observation(
+                    projection.character_guid,
+                    locator.map_id,
+                    locator.instance_id,
+                )
+            })
+            .collect::<Result<_>>()?;
+        if realm.realm_character_partition(projection.character_guid)? != Some(locator) {
+            anyhow::bail!(
+                "party member {} changed Realm locator during certification",
+                projection.character_guid
+            );
+        }
+        projection.map_id = locator.map_id;
+        projection.instance_id = locator.instance_id;
+        projection.locator_revision = locator.revision;
+        projection.state = classify_party_partition(locator, &observations)?;
+    }
+    Ok(roster)
+}
+
+fn append_departed_partitions(roster: &mut GroupRoster, previous: Option<&GroupRoster>) {
+    let Some(previous) = previous.filter(|row| row.group_id == roster.group_id) else {
+        return;
+    };
+    for mut departed in previous
+        .partitions
+        .iter()
+        .copied()
+        .filter(|row| !roster.members.contains(&row.character_guid))
+    {
+        departed.member_active = false;
+        departed.state = PartyPartitionState::Unknown;
+        roster.partitions.push(departed);
+    }
 }
 
 impl GroupRoster {
     /// The empty roster for a group that no longer exists — what [`sync_mirrors`] pushes to make a
     /// shard forget a disbanded party. `members` empty is the disband signal `sync_group_mirror`
-    /// reads, so the other fields are irrelevant and left at zero.
-    pub fn disbanded(group_id: u64) -> Self {
+    /// reads. The roster revision remains authoritative; the other fields are left at zero.
+    pub fn disbanded(group_id: u64, roster_revision: u64) -> Self {
         Self {
             group_id,
+            roster_revision,
             ..Default::default()
         }
     }
+}
+
+fn roster_or_disbanded(realm: &dyn WorldStore, group_id: u64) -> Result<GroupRoster> {
+    Ok(match realm.group_roster_by_id(group_id)? {
+        Some(roster) => roster,
+        None => GroupRoster::disbanded(group_id, realm.group_roster_revision(group_id)?),
+    })
 }
 
 /// One party op, in the client's own vocabulary. The `u8`/`u64` argument packing into
@@ -592,7 +737,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     // The group this character was in BEFORE the op — the only way to reach the party they may have
     // just left (their membership row is gone by the time we look again, but the members still in it
     // need their mirrors updated too).
-    let before = realm.group_roster(self_guid)?.map(|r| r.group_id);
+    let before = realm.group_roster(self_guid)?;
     // Found in adversarial review: LEAVE/UNINVITE are the only two ops that can shrink a group
     // below 2 members and reach `remove_member`'s disband branch on realm-core — and that branch
     // force-resolves live loot rolls, which the periodic loot-roll relay may not have promoted yet. A
@@ -701,7 +846,7 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
     if let Some(refusal) = invite_gate(store, target_guid)? {
         return Ok(refusal.into());
     }
-    let before = realm.group_roster(inviter_guid)?.map(|r| r.group_id);
+    let before = realm.group_roster(inviter_guid)?;
     if let PartyOutcome::Refused(refusal) =
         realm.realm_group_op(realm_op::INVITE, inviter_guid, target_guid, 0, 0)?
     {
@@ -739,14 +884,14 @@ pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Res
         realm.realm_group_op(realm_op::LEAVE, character_guid, 0, 0, 0)
     })?;
     if leave.outcome == PartyOutcome::Ran {
-        sync_mirrors(store, realm, leaver_guid, leave.previous_group_id);
+        sync_mirrors(store, realm, leaver_guid, leave.previous_roster);
     }
     Ok(leave.outcome)
 }
 
 struct ServerLeave {
     outcome: PartyOutcome,
-    previous_group_id: Option<u64>,
+    previous_roster: Option<GroupRoster>,
 }
 
 fn run_server_leave<St: WorldStore + ?Sized>(
@@ -756,7 +901,7 @@ fn run_server_leave<St: WorldStore + ?Sized>(
     attempts: usize,
     leave_party: impl Fn(&dyn WorldStore, u64) -> Result<PartyOutcome>,
 ) -> Result<ServerLeave> {
-    let before = realm.group_roster(leaver_guid)?.map(|r| r.group_id);
+    let before = realm.group_roster(leaver_guid)?;
     crate::world::loot::flush_pending_promotions(store, realm);
     let mut last_error = None;
     for _ in 0..attempts {
@@ -764,7 +909,7 @@ fn run_server_leave<St: WorldStore + ?Sized>(
             Ok(PartyOutcome::Ran) => {
                 return Ok(ServerLeave {
                     outcome: PartyOutcome::Ran,
-                    previous_group_id: before,
+                    previous_roster: before,
                 });
             }
             Ok(PartyOutcome::Refused(GroupRefusal::NotInGroup))
@@ -772,13 +917,13 @@ fn run_server_leave<St: WorldStore + ?Sized>(
             {
                 return Ok(ServerLeave {
                     outcome: PartyOutcome::Ran,
-                    previous_group_id: before,
+                    previous_roster: before,
                 });
             }
             Ok(PartyOutcome::Refused(refusal)) => {
                 return Ok(ServerLeave {
                     outcome: PartyOutcome::Refused(refusal),
-                    previous_group_id: before,
+                    previous_roster: before,
                 });
             }
             Err(error) => last_error = Some(error),
@@ -788,7 +933,7 @@ fn run_server_leave<St: WorldStore + ?Sized>(
     let Some(error) = last_error else {
         return Ok(ServerLeave {
             outcome: PartyOutcome::Refused(GroupRefusal::NotInGroup),
-            previous_group_id: before,
+            previous_roster: before,
         });
     };
     if before.is_some() {
@@ -796,7 +941,7 @@ fn run_server_leave<St: WorldStore + ?Sized>(
             Ok(None) => {
                 return Ok(ServerLeave {
                     outcome: PartyOutcome::Ran,
-                    previous_group_id: before,
+                    previous_roster: before,
                 });
             }
             Ok(Some(_)) => {}
@@ -840,8 +985,13 @@ pub(crate) fn cleanup_deleted_character<St: WorldStore>(
     )?;
     match leave.outcome {
         PartyOutcome::Ran => {
-            if let Some(group_id) = leave.previous_group_id {
-                sync_group_mirrors_required(store, realm.as_ref(), group_id)?;
+            if let Some(previous) = leave.previous_roster {
+                sync_group_mirrors_required(
+                    store,
+                    realm.as_ref(),
+                    previous.group_id,
+                    Some(&previous),
+                )?;
             }
             Ok(DeletedCharacterPartyCleanup::Removed)
         }
@@ -887,7 +1037,7 @@ pub(crate) fn reconcile_deleted_character_parties<St: WorldStore>(store: &St) ->
         }
     }
     for group_id in group_ids {
-        if let Err(error) = sync_group_mirrors_required(store, realm.as_ref(), group_id) {
+        if let Err(error) = sync_group_mirrors_required(store, realm.as_ref(), group_id, None) {
             failures += 1;
             log::warn!("party: could not reconcile group {group_id} mirrors ({error:#}); retrying");
             last_error = Some(error);
@@ -907,10 +1057,14 @@ fn sync_group_mirrors_required<St: WorldStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     group_id: u64,
+    previous: Option<&GroupRoster>,
 ) -> Result<()> {
-    let roster = realm
-        .party_cleanup_group_roster_by_id(group_id)?
-        .unwrap_or_else(|| GroupRoster::disbanded(group_id));
+    let roster = match realm.party_cleanup_group_roster_by_id(group_id)? {
+        Some(roster) => roster,
+        None => GroupRoster::disbanded(group_id, realm.group_roster_revision(group_id)?),
+    };
+    let mut roster = certify_roster_partitions(store, realm, roster)?;
+    append_departed_partitions(&mut roster, previous);
     let mut failures = 0usize;
     let mut last_error = None;
     for shard in store.world_stores() {
@@ -954,7 +1108,7 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
     self_guid: u64,
-    before: Option<u64>,
+    before: Option<GroupRoster>,
 ) {
     let now = match realm.group_roster(self_guid) {
         Ok(r) => r,
@@ -969,17 +1123,16 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
     if let Some(r) = &now {
         touched.push(r.group_id);
     }
-    if let Some(b) = before {
-        if !touched.contains(&b) {
-            touched.push(b);
+    if let Some(before) = &before {
+        if !touched.contains(&before.group_id) {
+            touched.push(before.group_id);
         }
     }
     for group_id in touched {
-        let roster = match realm.group_roster_by_id(group_id) {
-            Ok(Some(r)) => r,
+        let roster = match roster_or_disbanded(realm, group_id) {
+            Ok(r) => r,
             // Gone from the authority = disbanded. Push the tombstone rather than skipping, or the
             // shards keep a party that no longer exists and its members stay grouped locally.
-            Ok(None) => GroupRoster::disbanded(group_id),
             Err(e) => {
                 log::warn!(
                     "party: could not read realm-core group {group_id} ({e:#}) — shard mirrors unchanged"
@@ -987,6 +1140,16 @@ pub(crate) fn sync_mirrors<St: WorldStore + ?Sized>(
                 continue;
             }
         };
+        let mut roster = match certify_roster_partitions(store, realm, roster) {
+            Ok(roster) => roster,
+            Err(e) => {
+                log::warn!(
+                    "party: could not certify group {group_id} member partitions ({e:#}); shard mirrors unchanged"
+                );
+                continue;
+            }
+        };
+        append_departed_partitions(&mut roster, before.as_ref());
         for shard in store.world_stores() {
             if let Err(e) = shard.sync_group_mirror(&roster) {
                 log::warn!(
@@ -1023,8 +1186,8 @@ pub(crate) fn on_world_entry<St: WorldStore + ?Sized>(
 
 /// The mirror half of [`on_world_entry`], without a client: put the party realm-core says
 /// `self_guid` is in onto the shard `store` names, and clear a mirror row of a party they have
-/// left. Answers the roster it pushed, so the caller can render a frame for a player — and so a
-/// session-less arrival (`transfer::run_bot_transfer`) can call the same code and render nothing.
+/// left. Answers the roster it pushed so the caller can render a frame for a player. Transfer
+/// settlement uses the strict sibling below before it drops an arrival fence.
 ///
 /// Unsharded → `Ok(None)` before any read: the shard's own tables already are the authority.
 pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
@@ -1034,7 +1197,10 @@ pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
     let Some(realm) = store.realm_store() else {
         return Ok(None);
     };
-    let roster = realm.group_roster(self_guid)?;
+    let roster = realm
+        .group_roster(self_guid)?
+        .map(|roster| certify_roster_partitions(store, realm.as_ref(), roster))
+        .transpose()?;
     // A mirror on THIS shard that still has the arriving character in a party realm-core no longer
     // has them in is the ONE staleness "re-syncs on the next op or world entry" does not cover by
     // itself: with no roster to push there was nothing to overwrite it with, and the ops of the party
@@ -1045,9 +1211,8 @@ pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
     // applies to the group an actor was in BEFORE an op.
     if let Some(stale) = store.group_roster(self_guid)? {
         if roster.as_ref().is_none_or(|r| r.group_id != stale.group_id) {
-            let repair = realm
-                .group_roster_by_id(stale.group_id)?
-                .unwrap_or_else(|| GroupRoster::disbanded(stale.group_id));
+            let repair = roster_or_disbanded(realm.as_ref(), stale.group_id)?;
+            let repair = certify_roster_partitions(store, realm.as_ref(), repair)?;
             // Best-effort, like every other mirror write: this is a cache repair, and failing the
             // world entry over it would be strictly worse than arriving with a stale roster.
             if let Err(e) = store.sync_group_mirror(&repair) {
@@ -1068,6 +1233,43 @@ pub(crate) fn sync_arrival_mirror<St: WorldStore + ?Sized>(
     // before the player takes a single action here.
     store.sync_group_mirror(&roster)?;
     Ok(Some(roster))
+}
+
+/// Reconcile the same authoritative roster as [`sync_arrival_mirror`], but make every destination
+/// write part of Transfer settlement. The arrival fence stays up when realm-core or the mirror is
+/// unavailable, and a later Transfer retry repeats this operation before release.
+pub(crate) fn sync_transfer_arrival_mirror<St: WorldStore + ?Sized>(
+    store: &St,
+    character_guid: u64,
+) -> Result<()> {
+    let Some(realm) = store.party_cleanup_realm()? else {
+        return Ok(());
+    };
+    let roster = realm
+        .group_roster(character_guid)?
+        .map(|roster| certify_roster_partitions(store, realm.as_ref(), roster))
+        .transpose()?;
+    if let Some(stale) = store.group_roster(character_guid)? {
+        if roster
+            .as_ref()
+            .is_none_or(|row| row.group_id != stale.group_id)
+        {
+            let repair = roster_or_disbanded(realm.as_ref(), stale.group_id)?;
+            let repair = certify_roster_partitions(store, realm.as_ref(), repair)?;
+            store.sync_group_mirror(&repair)?;
+        }
+    }
+    if let Some(roster) = roster {
+        let shards = store.world_stores();
+        if shards.is_empty() {
+            store.sync_group_mirror(&roster)?;
+        } else {
+            for shard in shards {
+                shard.sync_group_mirror(&roster)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Build `SMSG_GROUP_LIST` for `self_guid` from an authoritative roster, filling each member's NAME
@@ -1109,4 +1311,90 @@ pub(crate) fn render_list<St: WorldStore + ?Sized>(
         roster.master_looter_guid,
         &members,
     )))
+}
+
+#[cfg(test)]
+mod partition_tests {
+    use super::*;
+
+    const LOCATOR: RealmCharacterPartition = RealmCharacterPartition {
+        map_id: 0,
+        instance_id: 0,
+        revision: 7,
+        transfer_pending: false,
+        pending_destination_map: 0,
+        pending_destination_instance: 0,
+        bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+        bot_transfer_intent_id: 0,
+        bot_controller_generation: 0,
+    };
+
+    #[test]
+    fn only_the_shard_serving_the_captured_locator_can_report_a_pending_transfer() {
+        let state = classify_party_partition(
+            LOCATOR,
+            &[
+                PartyHolderObservation {
+                    serves_locator: false,
+                    has_escrow: true,
+                    character_partition: Some((36, 1)),
+                },
+                PartyHolderObservation {
+                    serves_locator: true,
+                    has_escrow: false,
+                    character_partition: Some((0, 0)),
+                },
+            ],
+        )
+        .expect("one settled holder");
+
+        assert_eq!(state, PartyPartitionState::Known);
+    }
+
+    #[test]
+    fn the_serving_shards_escrow_suppresses_its_stale_character_location() {
+        let state = classify_party_partition(
+            LOCATOR,
+            &[PartyHolderObservation {
+                serves_locator: true,
+                has_escrow: true,
+                character_partition: Some((36, 1)),
+            }],
+        )
+        .expect("one pending holder");
+
+        assert_eq!(state, PartyPartitionState::PendingTransfer);
+    }
+
+    #[test]
+    fn a_departed_member_keeps_the_realms_membership_revision_as_a_removal_fence() {
+        let departed = GroupMemberPartition {
+            character_guid: 100,
+            group_id: 7,
+            membership_revision: 42,
+            member_active: true,
+            map_id: 0,
+            instance_id: 0,
+            locator_revision: 3,
+            state: PartyPartitionState::Known,
+        };
+        let previous = GroupRoster {
+            group_id: 7,
+            members: vec![100],
+            partitions: vec![departed],
+            ..Default::default()
+        };
+        let mut current = GroupRoster::disbanded(7, 2);
+
+        append_departed_partitions(&mut current, Some(&previous));
+
+        assert_eq!(
+            current.partitions,
+            vec![GroupMemberPartition {
+                member_active: false,
+                state: PartyPartitionState::Unknown,
+                ..departed
+            }]
+        );
+    }
 }

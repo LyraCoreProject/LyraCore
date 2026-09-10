@@ -4,6 +4,7 @@ use lyracore_shared::group::GroupRefusal;
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
 use crate::game_world_entity;
+use crate::transfer::game_bot_transfer_intent;
 
 /// Absent consent preserves legacy behavior. A Package updates this row when selecting its controller.
 /// [entity]
@@ -59,6 +60,19 @@ pub(crate) fn action_gate(
         },
     )
     .map_err(|detail| ActionRefusal::new(ActionRefusalKind::CannotAct, detail))?;
+    if ctx
+        .db
+        .game_bot_transfer_intent()
+        .by_bot()
+        .filter(character_guid)
+        .next()
+        .is_some()
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::TransferPending,
+            "Character has a pending Transfer Intent",
+        ));
+    }
     let character = crate::helpers::character_by_guid(ctx, character_guid).ok_or_else(|| {
         ActionRefusal::new(ActionRefusalKind::MissingActor, "Character unavailable")
     })?;
@@ -66,6 +80,46 @@ pub(crate) fn action_gate(
         return Err(ActionRefusal::new(
             ActionRefusalKind::CannotAct,
             "Character has a World Session",
+        ));
+    }
+    Ok(())
+}
+
+/// Check the authority that may create or replay a session-less Transfer. A matching pending
+/// Transfer Intent is allowed through here so its exact destination and controller generation can
+/// answer the replay; [`action_gate`] remains the stricter Gate for every new action.
+pub(crate) fn transfer_authority_gate(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
+    crate::account_ownership::require_actor(
+        ctx,
+        crate::SessionActor {
+            guid: character_guid,
+            ownership: None,
+        },
+    )
+    .map_err(|detail| ActionRefusal::new(ActionRefusalKind::CannotAct, detail))?;
+    let character = crate::helpers::character_by_guid(ctx, character_guid).ok_or_else(|| {
+        ActionRefusal::new(ActionRefusalKind::MissingActor, "Character unavailable")
+    })?;
+    if character.online {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "Character has a World Session",
+        ));
+    }
+    if ctx
+        .db
+        .game_sessionless_action_consent()
+        .character_guid()
+        .find(character_guid)
+        .is_some_and(|consent| !consent.allowed)
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "session-less Transfer is disabled for this Character",
         ));
     }
     Ok(())
@@ -137,4 +191,14 @@ pub fn debug_emit_sessionless_group_intent(
         crate::group::emit_bot_invite_intent(ctx, character_guid, target_guid);
     }
     Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_admit_sessionless_action(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    action_gate(ctx, character_guid).map_err(|refusal| format!("{:?}: {}", refusal.kind, refusal))
 }

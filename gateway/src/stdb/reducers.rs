@@ -55,6 +55,111 @@ fn taxi_reply_matches(
 }
 
 impl Coordinator {
+    /// `release_player_transfer_arrival`, with the exact Realm locator predecessor carried by the
+    /// destination fence.
+    pub fn release_player_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        character_guid: u64,
+        source: crate::world::transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "release_player_transfer_arrival",
+            release_player_transfer_arrival_then(
+                transfer_id,
+                character_guid,
+                source.map_id,
+                source.instance_id,
+                source.revision,
+                self.session_actor(0)
+            )
+        )
+    }
+
+    pub fn claim_bot_transfer_intent(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "claim_bot_transfer_intent",
+            claim_bot_transfer_intent_then(intent_id, bot_guid, controller_generation, claim_token)
+        )
+    }
+
+    pub fn complete_bot_transfer_intent(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "complete_bot_transfer_intent",
+            complete_bot_transfer_intent_then(
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token
+            )
+        )
+    }
+
+    pub fn mark_bot_transfer_arrival_ready(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "mark_bot_transfer_arrival_ready",
+            mark_bot_transfer_arrival_ready_then(
+                intent_id,
+                bot_guid,
+                controller_generation,
+                claim_token
+            )
+        )
+    }
+
+    // The arguments mirror the World reducer's exact Transfer Gate.
+    #[allow(clippy::too_many_arguments)]
+    pub fn release_bot_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        bot_guid: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        intent_created_micros: i64,
+        source_map: u32,
+        source_instance: u64,
+        source_locator_revision: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "release_bot_transfer_arrival",
+            release_bot_transfer_arrival_then(
+                transfer_id,
+                bot_guid,
+                source_module_identity,
+                intent_id,
+                controller_generation,
+                intent_created_micros,
+                source_map,
+                source_instance,
+                source_locator_revision
+            )
+        )
+    }
+
     pub fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
@@ -1147,6 +1252,140 @@ impl Coordinator {
                 map_id,
                 instance_id,
                 self.session_actor(character_guid)
+            )
+        )
+    }
+
+    // The arguments mirror the Realm reducer's exact Transfer Gate.
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_character_shard_transfer(
+        &self,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        character_guid: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "begin_character_shard_transfer",
+            begin_character_shard_transfer_then(
+                character_guid,
+                source_map,
+                source_instance,
+                source_revision,
+                destination_map,
+                destination_instance,
+                source_module_identity,
+                intent_id,
+                controller_generation,
+                self.session_actor(character_guid)
+            )
+        )
+    }
+
+    pub fn finish_character_shard_transfer(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "finish_character_shard_transfer",
+            finish_character_shard_transfer_then(
+                intent.bot_guid,
+                intent.source_map,
+                intent.source_instance,
+                intent.source_locator_revision,
+                intent.destination_map,
+                intent.destination_instance,
+                intent.source_module_identity,
+                intent.id,
+                intent.controller_generation,
+                self.session_actor(intent.bot_guid)
+            )
+        )
+    }
+
+    pub fn finish_player_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "finish_character_shard_transfer",
+            finish_character_shard_transfer_then(
+                character_guid,
+                source_map,
+                source_instance,
+                source_revision,
+                destination_map,
+                destination_instance,
+                spacetimedb_sdk::Identity::ZERO,
+                0,
+                0,
+                self.session_actor(character_guid)
+            )
+        )
+    }
+
+    // The arguments mirror the Realm reducer's exact Transfer Gate.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_pending_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        transfer_intent_id: u64,
+        controller_generation: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "finish_pending_character_shard_transfer",
+            finish_pending_character_shard_transfer_then(
+                character_guid,
+                source_map,
+                source_instance,
+                source_revision,
+                destination_map,
+                destination_instance,
+                source_module_identity,
+                transfer_intent_id,
+                controller_generation,
+                self.session_actor(character_guid)
+            )
+        )
+    }
+
+    pub fn bind_bot_transfer_locator(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+        source_revision: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "bind_bot_transfer_locator",
+            bind_bot_transfer_locator_then(
+                intent.id,
+                intent.bot_guid,
+                intent.controller_generation,
+                claim_token,
+                intent.source_map,
+                intent.source_instance,
+                source_revision
             )
         )
     }
@@ -2677,13 +2916,51 @@ impl Coordinator {
         )
     }
 
-    /// `import_character_blob` — materialise the arrival copy at the destination from the blob the
-    /// gateway carried. Idempotent on `transfer_id`.
-    pub fn import_character_blob(&self, transfer_id: u64, blob: &[u8]) -> Result<()> {
+    /// `import_player_character_blob`, with the Realm locator predecessor written as part of the
+    /// destination import transaction.
+    pub fn import_player_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        source: crate::world::transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
         call_reducer!(
             self.0.call_pipe().conn.reducers,
-            "import_character_blob",
-            import_character_blob_then(transfer_id, blob.to_vec(), self.session_actor(0))
+            "import_player_character_blob",
+            import_player_character_blob_then(
+                transfer_id,
+                blob.to_vec(),
+                source.map_id,
+                source.instance_id,
+                source.revision,
+                self.session_actor(0)
+            )
+        )
+    }
+
+    /// `import_bot_character_blob`, with the exact source intent identity written as part of the
+    /// destination import transaction.
+    pub fn import_bot_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "import_bot_character_blob",
+            import_bot_character_blob_then(
+                transfer_id,
+                blob.to_vec(),
+                intent.source_module_identity,
+                intent.id,
+                intent.controller_generation,
+                intent.created_micros,
+                intent.source_map,
+                intent.source_instance,
+                intent.source_locator_revision,
+                self.session_actor(0)
+            )
         )
     }
 
@@ -3102,6 +3379,28 @@ impl Coordinator {
     /// Operator-gated, coordinator connection, same reasoning as above; called
     /// on each WORLD shard after a party op and at world entry.
     pub fn sync_group_mirror(&self, roster: &crate::world::party::GroupRoster) -> Result<()> {
+        let partitions = roster
+            .partitions
+            .iter()
+            .map(|partition| GroupMemberPartition {
+                character_guid: partition.character_guid,
+                group_id: partition.group_id,
+                membership_revision: partition.membership_revision,
+                member_active: partition.member_active,
+                map_id: partition.map_id,
+                instance_id: partition.instance_id,
+                locator_revision: partition.locator_revision,
+                state: match partition.state {
+                    crate::world::party::PartyPartitionState::Unknown => {
+                        PartyPartitionState::Unknown
+                    }
+                    crate::world::party::PartyPartitionState::Known => PartyPartitionState::Known,
+                    crate::world::party::PartyPartitionState::PendingTransfer => {
+                        PartyPartitionState::PendingTransfer
+                    }
+                },
+            })
+            .collect();
         call_reducer!(
             self.0.call_pipe().conn.reducers,
             "sync_group_mirror",
@@ -3112,7 +3411,9 @@ impl Coordinator {
                 roster.loot_threshold,
                 roster.master_looter_guid,
                 roster.members.clone(),
-                self.session_actor(0)
+                self.session_actor(0),
+                partitions,
+                roster.roster_revision
             )
         )
     }

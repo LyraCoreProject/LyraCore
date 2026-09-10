@@ -60,11 +60,9 @@
 //! spawn-row-less entities). Per-instance GO copies get `0xF110 | bit46 | seq`
 //! ([`GO_COPY_BAND`]) — below `gameobject::POOL_TAG` (bit 47), above every static/debug low.
 //!
-//! Both tables are deliberately **NOT `public` and NOT gateway-subscribed** (checked against
-//! `gateway/src/stdb/connection.rs`'s subscription list): the gateway's relay gates key off
-//! `game_world_entity.instance_id` (slice 1) and the viewer's own entity row — no client or relay
-//! ever reads the instance/binding rows themselves, so no binding files exist for them (the
-//! `game_encounter_state` precedent). [server]
+//! Both tables are private. The Coordinator subscribes to `game_instance` with the Owner Token
+//! so Transfer can read the source lease's admitted map and party. `game_instance_binding`
+//! remains unsubscribed. [server]
 
 use std::collections::{HashMap, HashSet};
 
@@ -73,7 +71,7 @@ use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timest
 use crate::{
     game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
     game_creature_template, game_encounter_spawn, game_gameobject, game_gameobject_template,
-    game_group, game_world_entity,
+    game_group, game_group_member, game_world_entity,
 };
 
 // ===========================================================================================
@@ -244,7 +242,7 @@ const GO_COPY_TYPES: [u8; 4] = [
 ];
 
 // ===========================================================================================
-//  Tables [server] — neither is public/gateway-subscribed (see the module doc)
+//  Private instance tables [server]
 // ===========================================================================================
 
 /// One live dungeon instance. `instance_id` auto_inc from 1 (0 = open world, reserved by
@@ -549,6 +547,49 @@ pub(crate) fn resolve_or_create_instance(
     }
 }
 
+/// Admit a session-less party member into one exact instance already selected by a remote party
+/// member. Unlike [`resolve_or_create_instance`], this never creates an alternative: every Gate is
+/// checked before the admitted binding is written, because Package callers record a Refusal instead
+/// of aborting their outer reducer transaction.
+pub(crate) fn admit_existing_party_instance(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    target_map: u32,
+    expected_instance: u64,
+) -> Result<u64, String> {
+    let group = crate::group::group_of(ctx, character_guid)
+        .ok_or("Character has no party for the expected instance")?;
+    let member_count = ctx
+        .db
+        .game_group_member()
+        .by_group()
+        .filter(&group.group_id)
+        .take(crate::group::GROUP_MAX_MEMBERS + 1)
+        .count();
+    if !party_size_allows_entry(member_count) {
+        return Err(format!(
+            "party of {member_count} exceeds the {}-player dungeon cap",
+            crate::group::GROUP_MAX_MEMBERS
+        ));
+    }
+    let instance = ctx
+        .db
+        .game_instance()
+        .instance_id()
+        .find(expected_instance)
+        .filter(|instance| instance.map_id == target_map && !instance.reset_requested)
+        .ok_or("expected party instance is unavailable")?;
+    if instance.party_id != 0 && instance.party_id != group.group_id {
+        return Err("expected instance belongs to another party".to_string());
+    }
+
+    if instance.party_id == 0 {
+        adopt_instance_for_party(ctx, expected_instance, group.group_id);
+    }
+    bind_character(ctx, character_guid, expected_instance, target_map);
+    Ok(expected_instance)
+}
+
 /// Re-stamp an UNOWNED (`party_id == 0`, i.e. solo-created) instance as `party_id`'s, so the rest
 /// of that party resolves into it through `by_party` instead of creating a second one. No-op when
 /// the caller has no party, when the instance is already owned, or when the row is gone.
@@ -780,7 +821,8 @@ pub(crate) fn create_instance_with_id(
 
 /// **Destination side.** Mirror instance `instance_id` of `map_id` onto THIS database, spawning its
 /// population if it isn't here yet. Idempotent: the second party member through the portal finds
-/// the instance already live and joins it.
+/// the instance already live and joins it. A previously solo lease may adopt the admitted party;
+/// a different nonzero party is refused instead of sharing the same instance id.
 ///
 /// The id is supplied, not allocated, because it was allocated on the SOURCE shard — the
 /// areatrigger hook runs where the player was standing, and the module deliberately knows nothing
@@ -802,7 +844,7 @@ pub fn ensure_instance(
     if instance_id == 0 {
         return Err("instance 0 is the open world — it is never mirrored".to_string());
     }
-    if let Some(existing) = ctx.db.game_instance().instance_id().find(instance_id) {
+    if let Some(mut existing) = ctx.db.game_instance().instance_id().find(instance_id) {
         if existing.map_id != map_id {
             return Err(format!(
                 "instance {instance_id} already exists here on map {} — refusing to mirror it as \
@@ -811,7 +853,18 @@ pub fn ensure_instance(
                 existing.map_id
             ));
         }
-        return Ok(());
+        if existing.party_id == party_id {
+            return Ok(());
+        }
+        if existing.party_id == 0 && party_id != 0 {
+            existing.party_id = party_id;
+            ctx.db.game_instance().instance_id().update(existing);
+            return Ok(());
+        }
+        return Err(format!(
+            "instance {instance_id} belongs to party {}, not party {party_id}",
+            existing.party_id
+        ));
     }
     let id = create_instance_with_id(ctx, instance_id, map_id, party_id)?;
     log::info!("ensure_instance: mirrored instance {id} (map {map_id}, party {party_id})");
@@ -910,13 +963,11 @@ pub fn reap_instances(ctx: &ReducerContext, _schedule: InstanceReaperSchedule) {
 /// The set of instance ids with at least one live PLAYER entity — one pass classifies every
 /// instance at once (playerbots count: a parked bot holds its instance open, correctly).
 ///
-/// Plus every instance CLAIMED by an in-transit character (REFUSE verdict). Occupancy is
-/// counted from live entities, and `begin_transfer` deletes the live entity — so an instance whose
-/// only occupant is mid-transfer would read as empty and get torn down, deleting its
-/// `game_instance_binding` rows (a manifest table) out from under a transfer another shard is still
-/// driving. Both ends of the hop are held: the escrow's destination (where the character is going)
-/// and the durable row's `pending_instance_id` (where `begin_transfer` parked its source instance).
-fn occupied_instances(ctx: &ReducerContext) -> HashSet<u64> {
+/// Plus every instance claimed by a pending Transfer Intent or Escrow. A Transfer Intent removes
+/// the live body before the Gateway can begin Escrow, so both durable phases must hold the source
+/// lease and destination. An unexpected intent overflow keeps every instance rather than letting
+/// an incomplete bounded read reap one that is still claimed.
+pub(crate) fn occupied_instances(ctx: &ReducerContext) -> HashSet<u64> {
     let mut occupied: HashSet<u64> = ctx
         .db
         .game_world_entity()
@@ -924,7 +975,17 @@ fn occupied_instances(ctx: &ReducerContext) -> HashSet<u64> {
         .filter(|e| e.is_player() && e.instance_id != 0)
         .map(|e| e.instance_id)
         .collect();
-    occupied.extend(crate::transfer::in_transit_instances(ctx));
+    match crate::transfer::in_transit_instances(ctx) {
+        Ok(claimed) => occupied.extend(claimed),
+        Err(crate::transfer::TransferClaimReadLimit) => {
+            occupied.extend(
+                ctx.db
+                    .game_instance()
+                    .iter()
+                    .map(|instance| instance.instance_id),
+            );
+        }
+    }
     occupied
 }
 

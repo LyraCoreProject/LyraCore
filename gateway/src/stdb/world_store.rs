@@ -18,6 +18,8 @@ use crate::codec;
 use crate::realm_core::SessionKey;
 use crate::world::{SessionTx, WorldSession, WorldStore, MOVE_SUBMITTED};
 
+use super::bindings::game_instance_table::GameInstanceTableAccess;
+use super::bindings::game_transfer_in_table::GameTransferInTableAccess;
 use super::bindings::game_world_entity_table::GameWorldEntityTableAccess;
 use super::bindings::GwMove;
 use super::connection::{CharacterPresenceSnapshot, Coordinator};
@@ -229,8 +231,28 @@ impl WorldStore for Coordinator {
         self.begin_transfer(plan)
     }
 
-    fn import_character_blob(&self, transfer_id: u64, blob: &[u8]) -> Result<()> {
-        self.import_character_blob(transfer_id, blob)
+    fn import_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        source: crate::world::transfer::RealmLocatorPredecessor,
+        bot_arrival: Option<&crate::world::transfer::BotTransferIntent>,
+    ) -> Result<()> {
+        match bot_arrival {
+            Some(intent) => {
+                if (source.map_id, source.instance_id, source.revision)
+                    != (
+                        intent.source_map,
+                        intent.source_instance,
+                        intent.source_locator_revision,
+                    )
+                {
+                    anyhow::bail!("bot Transfer Realm locator binding changed before import");
+                }
+                self.import_bot_character_blob(transfer_id, blob, intent)
+            }
+            None => self.import_player_character_blob(transfer_id, blob, source),
+        }
     }
 
     fn confirm_import(&self, transfer_id: u64) -> Result<()> {
@@ -243,6 +265,48 @@ impl WorldStore for Coordinator {
 
     fn release_transfer(&self, transfer_id: u64) -> Result<()> {
         self.release_transfer(transfer_id)
+    }
+
+    fn release_player_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        character_guid: u64,
+        source: crate::world::transfer::RealmLocatorPredecessor,
+    ) -> Result<()> {
+        Coordinator::release_player_transfer_arrival(self, transfer_id, character_guid, source)
+    }
+
+    fn transfer_arrival(
+        &self,
+        transfer_id: u64,
+    ) -> Option<crate::world::transfer::TransferArrival> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_transfer_in()
+            .transfer_id()
+            .find(&transfer_id)
+            .map(|row| crate::world::transfer::TransferArrival {
+                character_guid: row.character_guid,
+                source_map: row.source_map_id,
+                source_instance: row.source_instance_id,
+                source_locator_revision: row.source_locator_revision,
+                bot_source_identity: row.bot_intent_source,
+                bot_transfer_intent_id: row.bot_intent_id,
+                bot_controller_generation: row.bot_controller_generation,
+            })
+    }
+
+    fn instance_partition(&self, instance_id: u64) -> Option<(u32, u64)> {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_instance()
+            .instance_id()
+            .find(&instance_id)
+            .map(|row| (row.map_id, row.party_id))
     }
 
     fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()> {
@@ -282,6 +346,62 @@ impl WorldStore for Coordinator {
         instance_id: u64,
     ) -> Result<()> {
         crate::realm_core::publish_shard_index(self, character_guid, map_id, instance_id)
+    }
+
+    fn begin_shard_index_transfer(
+        &self,
+        plan: &crate::world::transfer::TransferPlan,
+        bot_intent: Option<(&crate::world::transfer::BotTransferIntent, u64)>,
+    ) -> Result<crate::world::party::RealmCharacterPartition> {
+        crate::realm_core::begin_shard_index_transfer(self, plan, bot_intent)
+    }
+
+    fn finish_player_shard_index_transfer(
+        &self,
+        plan: &crate::world::transfer::TransferPlan,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+    ) -> Result<()> {
+        crate::realm_core::finish_player_shard_index_transfer(
+            self,
+            plan,
+            source_map,
+            source_instance,
+            source_revision,
+        )
+    }
+
+    fn finish_pending_shard_index_transfer(
+        &self,
+        character_guid: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        arrival: &crate::world::transfer::TransferArrival,
+    ) -> Result<()> {
+        crate::realm_core::finish_pending_shard_index_transfer(
+            self,
+            character_guid,
+            destination_map,
+            destination_instance,
+            arrival,
+        )
+    }
+
+    fn bind_bot_transfer_locator(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+        source_revision: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        self.bind_bot_transfer_locator(intent, source_revision, claim_token)
+    }
+
+    fn publish_bot_shard_index(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        crate::realm_core::publish_bot_shard_index(self, intent)
     }
 
     /// The character-select list, UNIONED across every connected shard.
@@ -1070,6 +1190,22 @@ impl WorldStore for Coordinator {
             .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
     }
 
+    fn sync_transfer_arrival(&self, character_guid: u64) -> Result<()> {
+        crate::world::party::sync_transfer_arrival_mirror(self, character_guid)
+    }
+
+    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if !self.is_sharded() {
+            return Ok(None);
+        }
+        self.realm_core()
+            .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
+    }
+
+    fn sync_transfer_pending(&self, character_guid: u64) -> Result<()> {
+        crate::world::party::sync_transfer_arrival_mirror(self, character_guid)
+    }
+
     /// Every connected WORLD shard (realm-core excluded by `ShardMap::shards`, as always) — the
     /// mirror fan-out set. Empty when unsharded, so the push costs a single-database gateway nothing.
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
@@ -1161,6 +1297,65 @@ impl WorldStore for Coordinator {
             .map(|entity| (entity.map_id, entity.instance_id))
     }
 
+    fn mark_bot_transfer_arrival_ready(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()> {
+        Coordinator::mark_bot_transfer_arrival_ready(
+            self,
+            intent_id,
+            bot_guid,
+            controller_generation,
+            claim_token,
+        )
+    }
+
+    fn bot_transfer_arrival_matches(
+        &self,
+        transfer_id: u64,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> bool {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_transfer_in()
+            .transfer_id()
+            .find(&transfer_id)
+            .is_some_and(|arrival| {
+                arrival.character_guid == intent.bot_guid
+                    && arrival.bot_intent_source == intent.source_module_identity
+                    && arrival.bot_intent_id == intent.id
+                    && arrival.bot_controller_generation == intent.controller_generation
+                    && arrival.bot_intent_created_micros == intent.created_micros
+                    && arrival.source_map_id == intent.source_map
+                    && arrival.source_instance_id == intent.source_instance
+                    && arrival.source_locator_revision == intent.source_locator_revision
+            })
+    }
+
+    fn release_bot_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        Coordinator::release_bot_transfer_arrival(
+            self,
+            transfer_id,
+            intent.bot_guid,
+            intent.source_module_identity,
+            intent.id,
+            intent.controller_generation,
+            intent.created_micros,
+            intent.source_map,
+            intent.source_instance,
+            intent.source_locator_revision,
+        )
+    }
+
     fn admit_sessionless_group_action(
         &self,
         character_guid: u64,
@@ -1205,6 +1400,27 @@ impl WorldStore for Coordinator {
         group_id: u64,
     ) -> Result<Option<crate::world::party::GroupRoster>> {
         Ok(self.group_roster_by_id(group_id))
+    }
+
+    fn group_roster_revision(&self, group_id: u64) -> Result<u64> {
+        Ok(self.group_roster_revision(group_id))
+    }
+
+    fn realm_character_partition(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
+        self.realm_character_partition(character_guid)
+    }
+
+    fn party_holder_observation(
+        &self,
+        character_guid: u64,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Result<crate::world::party::PartyHolderObservation> {
+        let serves_locator = self.shard_for_location(map_id, instance_id).is_none();
+        self.stable_party_holder_observation(character_guid, serves_locator)
     }
 
     fn party_cleanup_group_roster_by_id(
@@ -1387,9 +1603,8 @@ impl WorldStore for Coordinator {
 ///
 /// This block is the ONE layer `realm_core.rs`'s fake substitutes for wholesale, so it is pinned by
 /// exact-shape equality in `realm_core::tests::the_coordinator_forwards_are_views_not_logic`. Keep
-/// it a block of forwards; any logic that grows here is untested by construction. `has_escrow` is
-/// the one method that narrows its inherent counterpart (`escrow_row`'s `Option<TransferOut>`) to a
-/// bool rather than forwarding it bare — see that test's doc for why this one is still safe.
+/// it a block of forwards; any logic that grows here is untested by construction. `has_escrow`
+/// narrows `Option<TransferOut>` to a bool. See that test's doc for why this remains safe.
 impl crate::realm_core::RealmDb for Coordinator {
     fn shard_name(&self) -> &str {
         self.shard_name()
@@ -1445,6 +1660,84 @@ impl crate::realm_core::RealmDb for Coordinator {
     }
     fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()> {
         self.set_character_shard(guid, map_id, instance_id)
+    }
+    fn realm_character_partition(
+        &self,
+        guid: u64,
+    ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
+        self.realm_character_partition(guid)
+    }
+    fn begin_character_shard_transfer(
+        &self,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+        controller_generation: u64,
+        character_guid: u64,
+    ) -> Result<()> {
+        self.begin_character_shard_transfer(
+            source_map,
+            source_instance,
+            source_revision,
+            destination_map,
+            destination_instance,
+            source_module_identity,
+            intent_id,
+            controller_generation,
+            character_guid,
+        )
+    }
+    fn finish_character_shard_transfer(
+        &self,
+        intent: &crate::world::transfer::BotTransferIntent,
+    ) -> Result<()> {
+        self.finish_character_shard_transfer(intent)
+    }
+    fn finish_player_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+    ) -> Result<()> {
+        self.finish_player_character_shard_transfer(
+            character_guid,
+            source_map,
+            source_instance,
+            source_revision,
+            destination_map,
+            destination_instance,
+        )
+    }
+    fn finish_pending_character_shard_transfer(
+        &self,
+        character_guid: u64,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        source_module_identity: spacetimedb_sdk::Identity,
+        transfer_intent_id: u64,
+        controller_generation: u64,
+    ) -> Result<()> {
+        self.finish_pending_character_shard_transfer(
+            character_guid,
+            source_map,
+            source_instance,
+            source_revision,
+            destination_map,
+            destination_instance,
+            source_module_identity,
+            transfer_intent_id,
+            controller_generation,
+        )
     }
     fn has_escrow(&self, guid: u64) -> bool {
         self.escrow_row(guid).is_some()

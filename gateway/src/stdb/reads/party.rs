@@ -8,6 +8,39 @@ use super::super::bindings::*;
 use super::super::connection::Coordinator;
 
 impl Coordinator {
+    pub(crate) fn stable_party_holder_observation(
+        &self,
+        character_guid: u64,
+        serves_locator: bool,
+    ) -> Result<crate::world::party::PartyHolderObservation> {
+        let guard = self.0.coord();
+        if !guard.is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for party partition certification",
+                self.shard_name()
+            );
+        }
+        let has_escrow = guard
+            .conn
+            .db
+            .game_transfer_out()
+            .transfer_id()
+            .find(&crate::world::transfer::transfer_id_for(character_guid))
+            .is_some_and(|row| row.character_guid == character_guid);
+        let character_partition = guard
+            .conn
+            .db
+            .game_character()
+            .guid()
+            .find(&character_guid)
+            .map(|character| (character.map_id, character.pending_instance_id));
+        Ok(crate::world::party::PartyHolderObservation {
+            serves_locator,
+            has_escrow,
+            character_partition,
+        })
+    }
+
     /// Every party in this Realm-core or World Shard cache.
     pub fn party_group_ids(&self) -> Vec<u64> {
         self.0
@@ -75,11 +108,17 @@ impl Coordinator {
         };
         Ok(Some(crate::world::party::GroupRoster {
             group_id,
+            roster_revision: db
+                .game_group_roster_revision()
+                .group_id()
+                .find(&group_id)
+                .map_or(1, |row| row.revision),
             leader_guid: group.leader_guid,
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
             members,
+            partitions: Vec::new(),
         }))
     }
 
@@ -87,8 +126,8 @@ impl Coordinator {
     /// needs for a party the acting character has just LEFT (their own membership row is gone, but
     /// the remaining members' rows still have to reach every shard).
     ///
-    /// Members come back in join order (member-row id), which is the order leadership succession
-    /// uses (`group::leader_after_removal`) and therefore the order the party frame should render.
+    /// Realm membership revisions retain join order when Transfer replaces a World mirror row.
+    /// Realm-core and unmirrored local parties use their own member-row ids.
     pub fn group_roster_by_id(&self, group_id: u64) -> Option<crate::world::party::GroupRoster> {
         let guard = self.0.coord();
         let db = &guard.conn.db;
@@ -97,17 +136,58 @@ impl Coordinator {
             .game_group_member()
             .iter()
             .filter(|m| m.group_id == group_id)
-            .map(|m| (m.id, m.character_guid))
+            .map(|m| {
+                let membership_revision = db
+                    .game_group_member_partition()
+                    .character_guid()
+                    .find(&m.character_guid)
+                    .filter(|partition| partition.group_id == group_id && partition.member_active)
+                    .map_or(m.id, |partition| partition.membership_revision);
+                (membership_revision, m.character_guid)
+            })
             .collect();
         rows.sort_unstable();
+        let partitions = rows
+            .iter()
+            .map(|(membership_revision, character_guid)| {
+                crate::world::party::GroupMemberPartition {
+                    character_guid: *character_guid,
+                    group_id,
+                    membership_revision: *membership_revision,
+                    member_active: true,
+                    map_id: 0,
+                    instance_id: 0,
+                    locator_revision: 0,
+                    state: crate::world::party::PartyPartitionState::Unknown,
+                }
+            })
+            .collect();
         Some(crate::world::party::GroupRoster {
             group_id,
+            roster_revision: db
+                .game_group_roster_revision()
+                .group_id()
+                .find(&group_id)
+                .map_or(1, |row| row.revision),
             leader_guid: group.leader_guid,
             loot_method: group.loot_method,
             loot_threshold: group.loot_threshold,
             master_looter_guid: group.master_looter_guid,
             members: rows.into_iter().map(|(_, guid)| guid).collect(),
+            partitions,
         })
+    }
+
+    /// Realm-core's roster order survives disband in `game_group_roster_revision`.
+    pub fn group_roster_revision(&self, group_id: u64) -> u64 {
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_group_roster_revision()
+            .group_id()
+            .find(&group_id)
+            .map_or(1, |row| row.revision)
     }
 
     /// Every UNRESOLVED `game_loot_roll` row on THIS handle's database, joined with its votes.

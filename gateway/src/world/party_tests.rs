@@ -1972,7 +1972,12 @@ fn a_bots_party_survives_the_next_sync_group_mirror_push_that_touches_it() {
 
     // The next push that touches this exact group id — nobody's `self_guid`, `before` names the group
     // directly, matching how `on_world_entry`/`sync_mirrors` reach a group that isn't the actor's own.
-    party::sync_mirrors(world.as_ref(), realm.as_ref(), 0, Some(group_id));
+    party::sync_mirrors(
+        world.as_ref(),
+        realm.as_ref(),
+        0,
+        realm.group_roster_by_id(group_id).unwrap(),
+    );
 
     assert_eq!(
         world.mirror.lock().unwrap().clone(),
@@ -2006,7 +2011,7 @@ fn a_shard_local_only_group_realm_core_never_heard_of_is_wiped_by_the_next_push(
         .expect("simulate the bug's pre-fix shard-local-only write");
     assert_eq!(
         world.mirror.lock().unwrap().clone(),
-        vec![phantom],
+        vec![phantom.clone()],
         "precondition"
     );
     assert!(
@@ -2017,7 +2022,7 @@ fn a_shard_local_only_group_realm_core_never_heard_of_is_wiped_by_the_next_push(
         "precondition: realm-core has never heard of this group — the whole bug"
     );
 
-    party::sync_mirrors(world.as_ref(), realm.as_ref(), 0, Some(phantom_group_id));
+    party::sync_mirrors(world.as_ref(), realm.as_ref(), 0, Some(phantom));
 
     assert!(
         world.mirror.lock().unwrap().is_empty(),

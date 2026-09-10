@@ -245,6 +245,41 @@ impl BindingFieldShape for bindings::parsed_client_command_type::ParsedClientCom
     }
 }
 
+impl Sentinel for bindings::party_partition_state_type::PartyPartitionState {
+    fn sentinel() -> Self {
+        Self::Unknown
+    }
+}
+
+impl BindingFieldShape for bindings::party_partition_state_type::PartyPartitionState {
+    fn binding_field_shape(&self, _ts: &mut RawModuleDefV9Builder) -> AlgebraicType {
+        use bindings::party_partition_state_type::PartyPartitionState;
+
+        match self {
+            PartyPartitionState::Unknown
+            | PartyPartitionState::Known
+            | PartyPartitionState::PendingTransfer => {}
+        }
+        let variants = [
+            ("Unknown", PartyPartitionState::Unknown),
+            ("Known", PartyPartitionState::Known),
+            ("PendingTransfer", PartyPartitionState::PendingTransfer),
+        ];
+        for (tag, (name, value)) in variants.iter().enumerate() {
+            assert_eq!(
+                spacetimedb_lib::bsatn::to_vec(value).expect("party partition state serializes"),
+                [tag as u8],
+                "PartyPartitionState::{name} no longer has its published BSATN tag"
+            );
+        }
+        AlgebraicType::Sum(
+            variants
+                .map(|(name, _)| (name, AlgebraicType::Product(ProductType::unit())))
+                .into(),
+        )
+    }
+}
+
 impl Sentinel for bindings::command_outcome_type::CommandOutcome {
     fn sentinel() -> Self {
         Self::Applied
@@ -579,7 +614,9 @@ parity_test!(parity_game_session, "game_session", lyracore_module::Session, bind
     account_id, session_key, identity, created_at, expires_at,
 });
 parity_test!(parity_game_character_shard, "game_character_shard", lyracore_module::CharacterShard, bindings::character_shard_type::CharacterShard, {
-    character_guid, map_id, instance_id, updated_micros,
+    character_guid, map_id, instance_id, updated_micros, revision, bot_source_identity,
+    bot_transfer_intent_id, bot_controller_generation, transfer_pending, pending_destination_map,
+    pending_destination_instance,
 });
 parity_test!(parity_game_map_region, "game_map_region", lyracore_module::MapRegion, bindings::map_region_type::MapRegion, {
     key, map_id, region_id, gx_min, gx_max, gy_min, gy_max,
@@ -593,8 +630,15 @@ parity_test!(parity_game_region_assignment, "game_region_assignment", lyracore_m
 parity_test!(parity_game_group, "game_group", lyracore_module::Group, bindings::group_type::Group, {
     group_id, leader_guid, loot_method, loot_threshold, rr_cursor, master_looter_guid,
 });
+parity_test!(parity_game_group_roster_revision, "game_group_roster_revision", lyracore_module::GroupRosterRevision, bindings::group_roster_revision_type::GroupRosterRevision, {
+    group_id, revision, active,
+});
 parity_test!(parity_game_group_member, "game_group_member", lyracore_module::GroupMember, bindings::group_member_type::GroupMember, {
     id, group_id, character_guid, owner_identity,
+});
+parity_test!(parity_game_group_member_partition, "game_group_member_partition", lyracore_module::GroupMemberPartition, bindings::group_member_partition_type::GroupMemberPartition, {
+    character_guid, group_id, membership_revision, member_active, map_id, instance_id,
+    locator_revision, state,
 });
 parity_test!(parity_game_creature_quest_tap, "game_creature_quest_tap", lyracore_module::CreatureQuestTap, bindings::creature_quest_tap_type::CreatureQuestTap, {
     creature_guid, character_guid,
@@ -631,6 +675,8 @@ parity_test!(parity_game_bot_invite_intent, "game_bot_invite_intent", lyracore_m
 // `world::transfer::run_bot_transfer` relay — the transfer twin of the row above.
 parity_test!(parity_game_bot_transfer_intent, "game_bot_transfer_intent", lyracore_module::BotTransferIntent, bindings::bot_transfer_intent_type::BotTransferIntent, {
     id, bot_guid, destination_map, destination_instance, reason, created_at,
+    controller_generation, claim_token, claim_until_micros, arrival_ready, source_module_identity,
+    source_map, source_instance, source_locator_revision,
 });
 parity_test!(parity_game_party_command_intent, "game_party_command_intent", lyracore_module::PartyCommandIntent, bindings::party_command_intent_type::PartyCommandIntent, {
     id, source_identity, issuer_guid, reply_identity, issuer_sequence, command, created_micros,
@@ -859,6 +905,14 @@ parity_test!(parity_game_transfer_out, "game_transfer_out", lyracore_module::Tra
     transfer_id, character_guid, dest_map_id, dest_instance_id, dest_x, dest_y, dest_z, dest_o,
     blob, created_micros, cross_database,
 });
+parity_test!(parity_game_transfer_in, "game_transfer_in", lyracore_module::TransferIn, bindings::transfer_in_type::TransferIn, {
+    transfer_id, character_guid, blob, created_micros, bot_intent_id,
+    bot_controller_generation, bot_intent_created_micros, bot_intent_source,
+    source_map_id, source_instance_id, source_locator_revision,
+});
+parity_test!(parity_game_instance, "game_instance", lyracore_module::GameInstance, bindings::game_instance_type::GameInstance, {
+    instance_id, map_id, party_id, created_at, last_empty_at_micros, reset_requested,
+});
 parity_test!(parity_game_spell_chain, "game_spell_chain", lyracore_module::SpellChain, bindings::spell_chain_type::SpellChain, {
     spell_id, prev_spell, first_spell, rank, req_spell,
 });
@@ -1055,7 +1109,9 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_map_region",
     "game_region_assignment",
     "game_group",
+    "game_group_roster_revision",
     "game_group_member",
+    "game_group_member_partition",
     "game_creature_quest_tap",
     "game_creature_quest_tap_member",
     "game_creature_loot_tag_group",
@@ -1111,6 +1167,8 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_player_action",
     "game_trainer_spell",
     "game_transfer_out",
+    "game_transfer_in",
+    "game_instance",
     "game_player_skill",
     "game_gameobject",
     "game_gameobject_template",

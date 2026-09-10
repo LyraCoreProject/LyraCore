@@ -602,6 +602,8 @@ pub(crate) struct CoordinatorInner {
     call_pipe_next: std::sync::atomic::AtomicUsize,
     /// Edge-triggered diagnosis for a persistent Module/Gateway dispatch-lane mismatch.
     pub(crate) party_command_lane_overflow: AtomicBool,
+    /// Edge-triggered diagnosis for a populated Transfer Intent set beyond the current writer Gate.
+    pub(crate) bot_transfer_pending_overflow: AtomicBool,
     /// The per-shard movement batch — the hot path pushes one `GwMove` per inbound
     /// heartbeat and the 40ms flush task sends the whole tick as ONE `gw_movement_batch`
     /// transaction (was: one transaction per heartbeat — ~10k tx/s of per-transaction machinery
@@ -954,6 +956,15 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // cannot brick the restart of a gateway whose module predates multi-database routing. Nothing READS
         // it unsharded (`settle_home_shard` short-circuits on `is_sharded()`).
         "SELECT * FROM game_transfer_out",
+        // The destination fence. A world-entry retry reads its exact presence before doing the
+        // required party synchronization, and the bot driver binds an exact intent identity to it
+        // before release. Like the source escrow, this is private owner-token state. The table
+        // predates the multi-Shard query split, so it stays in the base subscription for older
+        // Modules.
+        "SELECT * FROM game_transfer_in",
+        // The source instance lease owns the admitted map and party during Transfer. This table
+        // predates the Shard split, so the base Coordinator can read that lease.
+        "SELECT * FROM game_instance",
         // ── THE COORDINATOR-RELAY RULE ─────────────────────────────────────────────────────────
         // Every relay whose loss leaves the CLIENT stuck in a wrong state — as opposed to merely
         // late — is subscribed HERE, on the stable coordinator connection, and never on the
@@ -995,8 +1006,8 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // Bot-initiated Shard crossings, here for every reason the invite intent above is: a bot has
         // no session, so no other connection could see the row, and it rides the BASE list because a
         // single-database realm writes the same rows (the relay finds nothing to cross there and
-        // says so). Its relay is `world::transfer::run_bot_transfer`, which drives the SAME
-        // `settle_transfer` a player's `MSG_MOVE_WORLDPORT_ACK` does.
+        // says so). Its durable dispatcher drives the SAME Escrow sequence a player's
+        // `MSG_MOVE_WORLDPORT_ACK` does.
         "SELECT * FROM game_bot_transfer_intent",
         // Addon-bridge messages: the server→client UI stream — coordinator-ridden
         // from day one (the coordinator-relay rule). Any addon UI that streams live state rides
@@ -1200,17 +1211,12 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // own transaction. Private, like game_account/game_session — the owner token reads it, no
         // client ever sees it. Multi-database deployments only (see this function's doc comment).
         queries.push("SELECT * FROM game_character_shard");
-        // Party state (the realm-core group slice). On REALM-CORE these three are the authoritative party
-        // tables the gateway drives and relays from; on a world shard they are that shard's mirror,
-        // which the gateway also reads (a session's own roster at world entry, before it has pushed
-        // anything). Subscribed on every connection in the set for the same reason accounts are:
-        // each handle reads its own database's copy, and the gateway decides which copy
-        // is authoritative.
-        //
-        // `game_group_event` is the relay. The owner-token coordinator reads every player's rows;
-        // shared dispatch selects the recipient by guid. The event and member tables live in the
-        // base list. The group row itself stays sharded-only.
+        // Realm-core owns party membership; each World Shard retains its mirror. World reads need
+        // the roster and member revisions when Transfer replaces local rows. Events and members
+        // already live in the base subscription.
         queries.push("SELECT * FROM game_group");
+        queries.push("SELECT * FROM game_group_roster_revision");
+        queries.push("SELECT * FROM game_group_member_partition");
         // Loot rolls — a DIFFERENT reason than every table above: nothing here is a CLIENT
         // relay (`game_group_event` still carries every wire-visible roll transition, unchanged). The
         // gateway's own loot-roll relay (`world::loot::relay_tick`) needs these two PRIVATE tables to
@@ -1656,6 +1662,8 @@ mod coordinator_query_tests {
         // them on every coordinator (a cache-only subscription with the flag off: the realm
         // relay registers only on multi-database gateways, so there is no double delivery).
         "SELECT * FROM game_group",
+        "SELECT * FROM game_group_roster_revision",
+        "SELECT * FROM game_group_member_partition",
         // The loot-roll pair: both PRIVATE, no per-player subscriber to duplicate — the restart hazard alone is why
         // they belong on this list (a module published before they exist refuses the subscription).
         "SELECT * FROM game_loot_roll",
@@ -2415,6 +2423,7 @@ impl Coordinator {
             call_pipes,
             call_pipe_next: std::sync::atomic::AtomicUsize::new(0),
             party_command_lane_overflow: AtomicBool::new(false),
+            bot_transfer_pending_overflow: AtomicBool::new(false),
             motion_batch: MovementBatch::new(),
             on_reconnect: Mutex::new(Vec::new()),
         });

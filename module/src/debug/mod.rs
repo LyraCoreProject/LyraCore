@@ -104,10 +104,10 @@ pub fn debug_teleport(
 /// The lever exists because the acceptance test for that crossing must NOT need a Package installed.
 /// It calls the same `transfer::emit_bot_transfer_intent` the Package calls, so what it exercises is
 /// the real contract — the placement and the intent row in one transaction, then the Gateway's
-/// `run_bot_transfer` relay — and never a second way to ask for a crossing.
+/// durable Transfer dispatcher, and never a second way to ask for a crossing.
 ///
-/// A character with a live Session will be dragged across the boundary mid-play. That is the point
-/// of a debug lever, and the reason this one is not a Gateway Verb.
+/// The shared writer applies the ordinary session-less ownership Gate, so a Character with a live
+/// Session is refused before placement or intent creation.
 #[reducer]
 #[allow(clippy::too_many_arguments)]
 pub fn debug_bot_transfer(
@@ -142,7 +142,9 @@ pub fn debug_bot_transfer(
             o,
         },
         &reason,
-    );
+        0,
+    )
+    .map_err(|refusal| format!("{:?}: {}", refusal.kind, refusal))?;
     log::info!(
         "debug_bot_transfer: character {character_guid} -> map {map_id} instance {instance_id} \
          ({reason})"
@@ -689,6 +691,36 @@ pub fn debug_enter_areatrigger(
     trigger_id: u32,
 ) -> Result<(), String> {
     crate::quest::apply_enter_areatrigger(ctx, character_guid, trigger_id);
+    Ok(())
+}
+
+/// Replay the Package's session-less AreaTrigger operation through its ordinary Core Gate.
+#[reducer]
+#[allow(clippy::too_many_arguments)] // The expected crossing is the fixture assertion.
+pub fn debug_replay_sessionless_areatrigger(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    trigger_id: u32,
+    expected_map: u32,
+    expected_instance: u64,
+    controller_generation: u64,
+    expected_intent_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let intent_id = crate::quest::enter_sessionless_areatrigger(
+        ctx,
+        character_guid,
+        trigger_id,
+        expected_map,
+        expected_instance,
+        controller_generation,
+    )
+    .map_err(|refusal| format!("{:?}: {}", refusal.kind, refusal))?;
+    if intent_id != expected_intent_id {
+        return Err(format!(
+            "session-less AreaTrigger replay returned intent {intent_id}, expected {expected_intent_id}"
+        ));
+    }
     Ok(())
 }
 

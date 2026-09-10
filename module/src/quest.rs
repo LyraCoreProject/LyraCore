@@ -26,6 +26,7 @@ use std::collections::BTreeSet;
 
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
+use crate::game_area_trigger;
 use crate::game_gameobject; // GAMEOBJECT quest givers (e.g. Wanted Poster, Lost Guards corpses)
 use crate::game_item_instance; // ITEM quest givers (work-item 194: item_template.start_quest)
 use crate::game_item_template;
@@ -2273,6 +2274,238 @@ pub struct AreatriggerTeleport {
     pub name: String,
 }
 
+/// The imported source and destination maps for one portal. Coordinates for the landing stay
+/// private; a Package may choose a source volume, but only [`enter_sessionless_areatrigger`]
+/// resolves and applies its destination.
+#[derive(Clone, Copy)]
+pub(crate) struct AreaTriggerRoute {
+    pub source_map: u32,
+    pub source_x: f32,
+    pub source_y: f32,
+    pub source_z: f32,
+    pub target_map: u32,
+    target_x: f32,
+    target_y: f32,
+    target_z: f32,
+    target_o: f32,
+    volume: AreaTriggerVolume,
+}
+
+impl AreaTriggerRoute {
+    fn valid(self) -> bool {
+        let coordinates = [
+            self.source_x,
+            self.source_y,
+            self.source_z,
+            self.target_x,
+            self.target_y,
+            self.target_z,
+            self.target_o,
+        ];
+        let volume = self.volume;
+        coordinates.into_iter().all(f32::is_finite)
+            && [
+                volume.radius,
+                volume.length,
+                volume.width,
+                volume.height,
+                volume.yaw,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+            && (volume.radius > 0.0
+                || (volume.radius == 0.0
+                    && volume.length > 0.0
+                    && volume.width > 0.0
+                    && volume.height > 0.0))
+    }
+
+    #[cfg_attr(not(has_packages), allow(dead_code))]
+    pub(crate) fn contains(self, x: f32, y: f32, z: f32) -> bool {
+        if !self.valid() || ![x, y, z].into_iter().all(f32::is_finite) {
+            return false;
+        }
+        let (dx, dy, dz) = (x - self.source_x, y - self.source_y, z - self.source_z);
+        let volume = self.volume;
+        if volume.radius > 0.0 {
+            return dx * dx + dy * dy + dz * dz <= volume.radius * volume.radius;
+        }
+        if volume.length <= 0.0 || volume.width <= 0.0 || volume.height <= 0.0 {
+            return false;
+        }
+        let (sin, cos) = volume.yaw.sin_cos();
+        let local_x = dx * cos + dy * sin;
+        let local_y = -dx * sin + dy * cos;
+        local_x.abs() <= volume.length / 2.0
+            && local_y.abs() <= volume.width / 2.0
+            && dz.abs() <= volume.height / 2.0
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AreaTriggerVolume {
+    radius: f32,
+    length: f32,
+    width: f32,
+    height: f32,
+    yaw: f32,
+}
+
+/// Read one named imported portal through exact primary-key lookups.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn area_trigger_route(
+    ctx: &ReducerContext,
+    trigger_id: u32,
+) -> Option<AreaTriggerRoute> {
+    let volume = ctx.db.game_area_trigger().id().find(trigger_id)?;
+    let teleport = ctx
+        .db
+        .game_areatrigger_teleport()
+        .trigger_id()
+        .find(trigger_id)?;
+    let route = AreaTriggerRoute {
+        source_map: volume.map_id,
+        source_x: volume.x,
+        source_y: volume.y,
+        source_z: volume.z,
+        target_map: teleport.target_map,
+        target_x: teleport.x,
+        target_y: teleport.y,
+        target_z: teleport.z,
+        target_o: teleport.o,
+        volume: AreaTriggerVolume {
+            radius: volume.radius,
+            length: volume.box_length,
+            width: volume.box_width,
+            height: volume.box_height,
+            yaw: volume.box_yaw,
+        },
+    };
+    route.valid().then_some(route)
+}
+
+/// Enter an imported portal for a session-less Character. Dungeon entry requires a party member's
+/// certified destination instance. An open-world exit needs no remote member because the imported
+/// route itself fixes instance zero. The operation does not grant explore credit; it applies only
+/// the portal effect.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn enter_sessionless_areatrigger(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    trigger_id: u32,
+    expected_map: u32,
+    expected_instance: u64,
+    controller_generation: u64,
+) -> Result<u64, ActionRefusal> {
+    crate::sessionless::transfer_authority_gate(ctx, character_guid)?;
+    let route = area_trigger_route(ctx, trigger_id).ok_or_else(|| {
+        ActionRefusal::new(
+            ActionRefusalKind::MissingResource,
+            format!("AreaTrigger {trigger_id} has no imported route"),
+        )
+    })?;
+    if route.target_map != expected_map
+        || (crate::instance::is_dungeon_map(expected_map) && expected_instance == 0)
+        || (!crate::instance::is_dungeon_map(expected_map) && expected_instance != 0)
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "AreaTrigger does not enter the expected party partition",
+        ));
+    }
+    let destination = crate::transfer::Destination {
+        map_id: expected_map,
+        instance_id: expected_instance,
+        x: route.target_x,
+        y: route.target_y,
+        z: route.target_z,
+        o: route.target_o,
+    };
+    if let Some(intent_id) = crate::transfer::bot_transfer_intent_gate(
+        ctx,
+        character_guid,
+        destination,
+        controller_generation,
+    )? {
+        return Ok(intent_id);
+    }
+    let entity = crate::helpers::live_entity(ctx, character_guid).map_err(|_| {
+        ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
+    })?;
+    if entity.dead {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::DeadActor,
+            "dead Characters cannot enter an AreaTrigger",
+        ));
+    }
+    if crate::taxi::movement_is_suppressed(ctx, character_guid)
+        || crate::spell::is_action_blocked(ctx, character_guid)
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "Character cannot enter an AreaTrigger",
+        ));
+    }
+    if route.source_map != entity.map_id {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "AreaTrigger is on another map",
+        ));
+    }
+    if !route.contains(entity.x, entity.y, entity.z) {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OutOfRange,
+            "Character is outside the AreaTrigger",
+        ));
+    }
+    if crate::instance::is_dungeon_map(expected_map) {
+        let party_member_at_destination = crate::group::has_known_party_member_in_partition(
+            ctx,
+            character_guid,
+            (expected_map, expected_instance),
+        )
+        .map_err(|_| {
+            ActionRefusal::new(
+                ActionRefusalKind::OtherPartition,
+                "party partition facts are unavailable",
+            )
+        })?;
+        if !party_member_at_destination {
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::OtherPartition,
+                "no party member is certified in the expected partition",
+            ));
+        }
+    }
+    let destination_instance = if crate::instance::is_dungeon_map(expected_map) {
+        crate::instance::admit_existing_party_instance(
+            ctx,
+            character_guid,
+            expected_map,
+            expected_instance,
+        )
+        .map_err(|detail| ActionRefusal::new(ActionRefusalKind::CannotAct, detail))?
+    } else {
+        0
+    };
+    if destination_instance != expected_instance {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "AreaTrigger resolves to a different party instance",
+        ));
+    }
+    crate::transfer::emit_bot_transfer_intent(
+        ctx,
+        character_guid,
+        crate::transfer::Destination {
+            instance_id: destination_instance,
+            ..destination
+        },
+        "sessionless AreaTrigger",
+        controller_generation,
+    )
+}
+
 /// The shared core behind [`enter_areatrigger`] and `debug_enter_areatrigger` (work-item 225). Quest
 /// credit fires FIRST and UNCONDITIONALLY (unchanged from pre-225 behavior), then — iff `trigger_id`
 /// has an imported `game_areatrigger_teleport` row — the player is routed through 224's cross-map
@@ -2517,8 +2750,9 @@ pub(crate) fn apply_abandon_quest(
 #[cfg(test)]
 mod tests {
     use super::{
-        eventai_credit_recipient_set, is_expired, pick_choice_reward, EventAiQuestCreditContext,
-        QuestCreditRecipientPolicy, QUEST_MAX_LEVEL_PAYOUT,
+        eventai_credit_recipient_set, is_expired, pick_choice_reward, AreaTriggerRoute,
+        AreaTriggerVolume, EventAiQuestCreditContext, QuestCreditRecipientPolicy,
+        QUEST_MAX_LEVEL_PAYOUT,
     };
 
     fn quest_credit_context() -> EventAiQuestCreditContext {
@@ -2660,5 +2894,91 @@ mod tests {
     #[test]
     fn quest_max_level_payout_matches_the_vanilla_cap() {
         assert_eq!(QUEST_MAX_LEVEL_PAYOUT, 60);
+    }
+
+    #[test]
+    fn areatrigger_sphere_includes_its_three_dimensional_boundary() {
+        let route = AreaTriggerRoute {
+            source_map: 0,
+            source_x: 10.0,
+            source_y: 20.0,
+            source_z: 30.0,
+            target_map: 36,
+            target_x: 0.0,
+            target_y: 0.0,
+            target_z: 0.0,
+            target_o: 0.0,
+            volume: AreaTriggerVolume {
+                radius: 5.0,
+                length: 0.0,
+                width: 0.0,
+                height: 0.0,
+                yaw: 0.0,
+            },
+        };
+        assert!(route.contains(13.0, 24.0, 30.0));
+        assert!(!route.contains(13.1, 24.0, 30.0));
+        assert!(!route.contains(10.0, 20.0, 35.1));
+    }
+
+    #[test]
+    fn areatrigger_box_applies_yaw_before_its_half_extents() {
+        let route = AreaTriggerRoute {
+            source_map: 0,
+            source_x: 10.0,
+            source_y: 20.0,
+            source_z: 30.0,
+            target_map: 36,
+            target_x: 0.0,
+            target_y: 0.0,
+            target_z: 0.0,
+            target_o: 0.0,
+            volume: AreaTriggerVolume {
+                radius: 0.0,
+                length: 8.0,
+                width: 2.0,
+                height: 4.0,
+                yaw: std::f32::consts::FRAC_PI_2,
+            },
+        };
+        assert!(route.contains(10.5, 24.0, 32.0));
+        assert!(!route.contains(11.1, 24.0, 30.0));
+        assert!(!route.contains(10.0, 20.0, 32.1));
+    }
+
+    #[test]
+    fn areatrigger_route_refuses_non_finite_coordinates_and_invalid_shapes() {
+        let mut route = AreaTriggerRoute {
+            source_map: 0,
+            source_x: 10.0,
+            source_y: 20.0,
+            source_z: 30.0,
+            target_map: 36,
+            target_x: 1.0,
+            target_y: 2.0,
+            target_z: 3.0,
+            target_o: 0.0,
+            volume: AreaTriggerVolume {
+                radius: 5.0,
+                length: 0.0,
+                width: 0.0,
+                height: 0.0,
+                yaw: 0.0,
+            },
+        };
+        assert!(route.valid());
+        route.volume.radius = f32::INFINITY;
+        assert!(!route.valid());
+        route.volume.radius = 0.0;
+        assert!(!route.valid());
+        route.volume.length = 8.0;
+        route.volume.width = 2.0;
+        route.volume.height = 4.0;
+        assert!(route.valid());
+        route.source_x = f32::NAN;
+        assert!(!route.valid());
+        route.source_x = 10.0;
+        route.target_z = f32::INFINITY;
+        assert!(!route.valid());
     }
 }

@@ -425,8 +425,7 @@ mod bot_invite_relay_wiring_tripwire {
         );
         let hook_at = body.find("hook()").expect(
             "the watchdog no longer invokes the `on_reconnect` hook, so every one-shot coordinator \
-             relay (today: the bot-invite and bot-transfer relays) silently dies at the first \
-             reconnect",
+             relay silently dies at the first reconnect",
         );
         assert!(
             replacement_at < hook_at,
@@ -437,10 +436,8 @@ mod bot_invite_relay_wiring_tripwire {
     }
 }
 
-/// The session-less crossing relay, pinned the same four ways as its invite sibling above. The
-/// fifth check — that the watchdog invokes the reconnect hook after the connection swap — is the
-/// same watchdog and the same hook list, so
-/// `the_watchdog_invokes_the_reconnect_hook_after_the_swap` covers both relays.
+/// The session-less crossing dispatcher, pinned from startup through its bounded current-cache
+/// pass. Unlike the Group Intent callback, its thread survives a connection swap.
 #[cfg(test)]
 mod bot_transfer_relay_wiring_tripwire {
     use crate::test_scan::code_of;
@@ -474,40 +471,39 @@ mod bot_transfer_relay_wiring_tripwire {
         );
     }
 
-    /// 3. The consumer: the `on_insert` closure that turns a subscribed row into the actual
-    ///    escrowed transfer. Without it the row reaches the coordinator's cache and nothing acts on
-    ///    it.
+    /// 3. The consumer: the bounded dispatcher that turns a subscribed row into the actual
+    ///    escrowed Transfer.
     #[test]
-    fn the_on_insert_callback_actually_executes_the_intent() {
+    fn the_dispatcher_actually_executes_the_intent() {
         let src = include_str!("stdb/subscriptions.rs");
-        let body = code_of(src, "fn arm_bot_transfer_relay(&self) {");
+        let body = code_of(
+            src,
+            "fn dispatch_bot_transfer_intents(&self, after_id: u64) -> u64 {",
+        );
         assert!(
-            body.contains("crate::world::transfer::run_bot_transfer("),
-            "`arm_bot_transfer_relay`'s `on_insert` callback no longer calls `run_bot_transfer` — a \
-             bot's crossing decision arrives at the gateway and is silently dropped, leaving it \
-             behind on the Shard its party has left. Body was:\n{body}"
+            body.contains("attempt_bot_transfer(self, &intent);")
+                && body.contains("rotate_transfer_work(&mut pending, after_id")
+                && body.contains("next_after = row.id;"),
+            "the bounded bot Transfer dispatcher no longer attempts the subscribed intent. Body \
+             was:\n{body}"
         );
     }
 
-    /// 4. The reconnect re-arm. Armed once at startup, this relay has no per-session login to
-    ///    re-arm it, and the watchdog treats a routine module republish as a reconnect: without the
-    ///    hook, crossings work until the first republish and then stop, with no error anywhere.
-    ///    That is the lesson the invite relay learned live, and it applies here unchanged.
+    /// 4. Every pass reads through the swappable current connection, so reconnect does not strand
+    ///    resident durable rows behind a dead callback.
     #[test]
-    fn spawn_bot_transfer_relay_installs_the_reconnect_hook() {
+    fn spawn_bot_transfer_relay_polls_the_current_connection() {
         let src = include_str!("stdb/subscriptions.rs");
         let body = code_of(src, "pub fn spawn_bot_transfer_relay(&self) {");
         assert!(
-            body.contains("on_reconnect") && body.contains("arm_bot_transfer_relay();"),
-            "`spawn_bot_transfer_relay` no longer installs the per-shard `on_reconnect` re-arm. \
-             Crossings keep working until the first coordinator reconnect and then go permanently \
-             silent — the exact failure the bot-invite relay's own hook exists to prevent. Body \
-             was:\n{body}"
+            body.contains("dispatch_bot_transfer_intents")
+                && body.contains("Duration::from_millis(100)"),
+            "`spawn_bot_transfer_relay` no longer polls each World Shard. Body was:\n{body}"
         );
     }
 }
 
-/// The character-gone relay: the same three-part contract as the transfer relay above.
+/// The character-gone relay: the same connection-callback contract as the Group Intent relay.
 #[cfg(test)]
 mod character_gone_relay_tripwires {
     use crate::test_scan::code_of;

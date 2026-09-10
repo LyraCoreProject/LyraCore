@@ -174,6 +174,36 @@ impl Coordinator {
             .map(|s| (s.map_id, s.instance_id))
     }
 
+    pub(crate) fn realm_character_partition(
+        &self,
+        guid: u64,
+    ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
+        let live = self.0.coord();
+        if !live.is_healthy() {
+            anyhow::bail!(
+                "{} has no healthy Coordinator subscription for the Realm locator",
+                self.shard_name()
+            );
+        }
+        Ok(live
+            .conn
+            .db
+            .game_character_shard()
+            .character_guid()
+            .find(&guid)
+            .map(|row| crate::world::party::RealmCharacterPartition {
+                map_id: row.map_id,
+                instance_id: row.instance_id,
+                revision: row.revision,
+                transfer_pending: row.transfer_pending,
+                pending_destination_map: row.pending_destination_map,
+                pending_destination_instance: row.pending_destination_instance,
+                bot_source_identity: row.bot_source_identity,
+                bot_transfer_intent_id: row.bot_transfer_intent_id,
+                bot_controller_generation: row.bot_controller_generation,
+            }))
+    }
+
     /// The EFFECTIVE armor for `guid` for the character-sheet CREATE (`UNIT_FIELD_RESISTANCES[0]`),
     /// Presence check for the WORLDPORT_ACK gate: is the guid's live entity in the world?
     pub fn entity_in_world(&self, guid: u64) -> bool {

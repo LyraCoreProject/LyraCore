@@ -84,6 +84,9 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
 ///   is exactly the snapshot the interim mirror was (a party SPLIT across the boundary could never
 ///   see itself). The gateway re-pushes realm-core's roster onto the destination at world entry
 ///   (`sync_group_mirror`), so membership crosses by replication rather than by carriage.
+/// - `game_group_member_partition` — the same realm-core roster mirror derives each member's
+///   partition. Carrying a source snapshot would bypass its roster and locator revisions, so the
+///   gateway re-pushes the certified projection with the membership row.
 /// - `game_mail_escrow` — a mail attachment in flight. The fence is a fact about the DATABASE that
 ///   took the value out of a purse, and the drive that settles it addresses that database; carrying
 ///   the claim to the destination would move it away from the ledger holding the value. The
@@ -110,6 +113,7 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_breath_state",
     "game_group_invite",
     "game_group_member",
+    "game_group_member_partition",
     "game_pet_command",
     "game_mail_escrow",
     "game_mail_delivery",

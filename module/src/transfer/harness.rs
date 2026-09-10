@@ -385,6 +385,13 @@ impl ShardLedger for FakeDb {
                 character_guid: *guid,
                 blob: blob.clone(),
                 created_micros: *created,
+                bot_intent_id: 0,
+                bot_controller_generation: 0,
+                bot_intent_created_micros: 0,
+                bot_intent_source: spacetimedb::Identity::ZERO,
+                source_map_id: 0,
+                source_instance_id: 0,
+                source_locator_revision: 0,
             })
     }
     fn file_out_row(&mut self, row: TransferOut) {
@@ -519,6 +526,9 @@ impl ReapSink for FakeDb {
 impl ImportSink for FakeDb {
     fn has_live_entity(&self, guid: u64) -> bool {
         self.live.borrow().contains(&guid)
+    }
+    fn detach_for_transfer(&mut self, guid: u64) {
+        self.group_members.borrow_mut().remove(&guid);
     }
     fn cascade_delete_character(&mut self, guid: u64) {
         self.cascade(guid);
@@ -1155,6 +1165,8 @@ fn a_stale_copy_from_an_earlier_hop_is_wiped_before_the_arrival_lands() {
         slot: 9,
         item: 1,
     }); // the stale loadout
+    dst.group_members.borrow_mut().insert(GUID, 5);
+    dst.group_members.borrow_mut().insert(NEIGHBOUR, 5);
     apply_import_blob(&mut dst, XFER, wire(&blob)).expect("the import commits over the stale copy");
 
     assert_eq!(
@@ -1173,6 +1185,11 @@ fn a_stale_copy_from_an_earlier_hop_is_wiped_before_the_arrival_lands() {
         ],
         "the stale loadout survived alongside the arriving one — two loadouts on one character"
     );
+    assert!(
+        !dst.is_disbanded(5),
+        "destination cleanup treated a Realm-owned mirror as a local party departure"
+    );
+    assert_eq!(dst.party_of(NEIGHBOUR), Some(5));
     assert!(dst.has_in_row(XFER));
 }
 
