@@ -50,6 +50,18 @@ fn stage_navigation(
         .collect()
 }
 
+fn blocked_navigation_keys(map_id: u32, x: f32, y: f32) -> BTreeSet<u64> {
+    let cell_x = lyracore_shared::terrain::cell_index(x).expect("fixture x is on the map");
+    let cell_y = lyracore_shared::terrain::cell_index(y).expect("fixture y is on the map");
+    let mut cells = BTreeSet::new();
+    for x in cell_x.saturating_sub(1)..=cell_x.saturating_add(1).min(1023) {
+        for y in cell_y.saturating_sub(1)..=cell_y.saturating_add(1).min(1023) {
+            cells.insert(lyracore_shared::terrain::cell_key(map_id, x, y));
+        }
+    }
+    cells
+}
+
 fn navigation_keys(evidence: &serde_json::Value) -> BTreeSet<u64> {
     evidence["navigation_chunks"]
         .as_array()
@@ -282,7 +294,7 @@ pub(crate) fn stage_retained_quest(
         &format!("SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {character_guid}"),
     );
     let entity = query_one(&entities, "source Character entity");
-    let expected_navigation = stage_navigation(
+    let mut expected_navigation = stage_navigation(
         topology,
         &topology.source_db,
         &[(
@@ -292,9 +304,83 @@ pub(crate) fn stage_retained_quest(
             number::<f32>(entity, "z"),
         )],
     );
+    let imported_navigation_revision = topology.query(
+        &topology.source_db,
+        "SELECT * FROM game_navigation_revision WHERE id = 0",
+    );
     topology.call(
         &topology.source_db,
         "playerbots_transfer_quest_source_stage",
+        &[&character_guid.to_string()],
+    );
+    let blocked_entities = topology.query(
+        &topology.source_db,
+        &format!("SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {character_guid}"),
+    );
+    let blocked_entity = query_one(&blocked_entities, "blocked source Character entity");
+    let blocked_map = number::<u32>(blocked_entity, "map_id");
+    let blocked_x = number::<f32>(blocked_entity, "x");
+    let blocked_y = number::<f32>(blocked_entity, "y");
+    let blocked_z = number::<f32>(blocked_entity, "z");
+    expected_navigation.extend(blocked_navigation_keys(
+        blocked_map,
+        blocked_x,
+        blocked_y,
+    ));
+    let source_targets = topology.query(
+        &topology.source_db,
+        &format!("SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {SOURCE_TARGET_GUID}"),
+    );
+    let source_target = query_one(&source_targets, "source Quest target");
+    let target_map = number::<u32>(source_target, "map_id");
+    let target_x = number::<f32>(source_target, "x");
+    let target_y = number::<f32>(source_target, "y");
+    let target_z = number::<f32>(source_target, "z");
+    let attempts = source_pass_until(topology, character_guid, source_quest_fight_active);
+    let active = attempts.last().is_some_and(source_quest_fight_active);
+    topology.save(
+        transferred,
+        "quest-source-recovery-attempts",
+        serde_json::json!({
+            "attempts": attempts.clone(),
+            "blocked_source_entity": blocked_entities.clone(),
+            "source_target": source_targets,
+            "expected_navigation": expected_navigation.clone(),
+            "imported_navigation_revision": imported_navigation_revision.clone(),
+        }),
+    );
+    assert!(
+        active,
+        "source Quest did not begin its exact Recovery Fight attempt; saved {} quest-source-recovery-attempts",
+        attempts.len()
+    );
+    assert!(
+        (blocked_map, blocked_y, blocked_z) == (target_map, target_y, target_z)
+            && ((target_x - blocked_x) - 3.0).abs() < 0.001,
+        "source Character was not staged beside the blocked Quest target"
+    );
+    let observed = attempts.last().unwrap();
+    assert_eq!(
+        navigation_keys(observed),
+        expected_navigation,
+        "source Recovery staging changed the declared Navigation Inputs"
+    );
+    let observed_navigation = exactly_one(
+        observed["navigation_revision"].as_array().unwrap(),
+        "observed source Navigation Inputs revision",
+    );
+    let imported_navigation = query_one(
+        &imported_navigation_revision,
+        "imported source Navigation Inputs revision",
+    );
+    assert_eq!(
+        field(observed_navigation, "revision"),
+        imported_navigation["revision"].as_str(),
+        "source Recovery staging changed Navigation Inputs without an import"
+    );
+    topology.call(
+        &topology.source_db,
+        "playerbots_recovery_fixture_exhaust_attempt",
         &[&character_guid.to_string()],
     );
     let staged = source_snapshot(topology, character_guid);
@@ -318,6 +404,9 @@ pub(crate) fn stage_retained_quest(
     let operation = source_snapshot(topology, character_guid);
     let evidence = serde_json::json!({
         "expected_navigation": expected_navigation,
+        "blocked_source_entity": blocked_entities,
+        "imported_navigation_revision": imported_navigation_revision,
+        "attempts": attempts,
         "staged": staged,
         "suspended": suspended,
         "routed": routed,
@@ -645,6 +734,39 @@ fn pass_until(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn source_pass_until(
+    topology: &TransferTopology,
+    guid: u64,
+    ready: impl Fn(&serde_json::Value) -> bool,
+) -> Vec<serde_json::Value> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut observations = Vec::new();
+    loop {
+        topology.call(
+            &topology.source_db,
+            "playerbots_fixture_runner_pass_once",
+            &[&guid.to_string()],
+        );
+        observations.push(source_snapshot(topology, guid));
+        if ready(observations.last().unwrap()) || Instant::now() >= deadline {
+            return observations;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn source_quest_fight_active(snapshot: &serde_json::Value) -> bool {
+    snapshot["runner"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|runner| runner["recovery"].as_str())
+        .is_some_and(|recovery| {
+            recovery.contains(&format!(
+                "active = (some = (fight = {SOURCE_TARGET_GUID}))"
+            ))
+        })
 }
 
 fn assert_arrival_cleared(evidence: &serde_json::Value) {
