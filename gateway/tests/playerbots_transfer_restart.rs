@@ -243,6 +243,25 @@ impl TransferTopology {
         self.capture_transfer(bot);
     }
 
+    fn begin_transfer_authenticated(&self, bot: &mut TransferredBot, actor: &str) {
+        self.call(
+            &self.source_db,
+            "playerbots_transfer_fixture_stage_authenticated",
+            &[
+                &bot.guid.to_string(),
+                &bot.leader_guid.to_string(),
+                "2",
+                actor,
+            ],
+        );
+        self.call(
+            &self.source_db,
+            "playerbots_fixture_runner_pass_once",
+            &[&bot.guid.to_string()],
+        );
+        self.capture_transfer(bot);
+    }
+
     fn capture_transfer(&self, bot: &mut TransferredBot) {
         self.capture_transfer_from(&self.source_db, bot);
     }
@@ -2099,7 +2118,7 @@ fn playerbots_companion_enters_and_exits_deadmines_through_real_gateway_routes()
     assert_follow_order(&initial, "source", &follow.order);
     assert_eq!(initial_runner["generation"], initial_generation.to_string());
 
-    topology.begin_transfer(&mut bot);
+    topology.begin_transfer_authenticated(&mut bot, &follow.actor);
     let entry_generation = bot.generation;
     assert_eq!(entry_generation, initial_generation + 1);
     let entry_ready = topology.save(&bot, "instance-entry-source-ready", serde_json::json!({}));
