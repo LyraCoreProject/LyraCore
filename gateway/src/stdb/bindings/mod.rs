@@ -216,6 +216,7 @@ pub mod debug_repair_after_publish_reducer;
 pub mod debug_repair_item_reducer;
 pub mod debug_replace_definition_then_apply_damage_floor_fixture_reducer;
 pub mod debug_replay_auction_expiry_fixture_reducer;
+pub mod debug_replay_sessionless_areatrigger_reducer;
 pub mod debug_repop_reducer;
 pub mod debug_reseed_skills_reducer;
 pub mod debug_reset_instance_reducer;
@@ -1260,6 +1261,7 @@ pub use debug_repair_after_publish_reducer::debug_repair_after_publish;
 pub use debug_repair_item_reducer::debug_repair_item;
 pub use debug_replace_definition_then_apply_damage_floor_fixture_reducer::debug_replace_definition_then_apply_damage_floor_fixture;
 pub use debug_replay_auction_expiry_fixture_reducer::debug_replay_auction_expiry_fixture;
+pub use debug_replay_sessionless_areatrigger_reducer::debug_replay_sessionless_areatrigger;
 pub use debug_repop_reducer::debug_repop;
 pub use debug_reseed_skills_reducer::debug_reseed_skills;
 pub use debug_reset_instance_reducer::debug_reset_instance;
@@ -2631,6 +2633,14 @@ pub enum Reducer {
         rolled: u32,
     },
     DebugReplayAuctionExpiryFixture,
+    DebugReplaySessionlessAreatrigger {
+        character_guid: u64,
+        trigger_id: u32,
+        expected_map: u32,
+        expected_instance: u64,
+        controller_generation: u64,
+        expected_intent_id: u64,
+    },
     DebugRepop {
         character_guid: u64,
     },
@@ -4077,6 +4087,9 @@ impl __sdk::Reducer for Reducer {
                 "debug_replace_definition_then_apply_damage_floor_fixture"
             }
             Reducer::DebugReplayAuctionExpiryFixture => "debug_replay_auction_expiry_fixture",
+            Reducer::DebugReplaySessionlessAreatrigger { .. } => {
+                "debug_replay_sessionless_areatrigger"
+            }
             Reducer::DebugRepop { .. } => "debug_repop",
             Reducer::DebugReseedSkills { .. } => "debug_reseed_skills",
             Reducer::DebugResetInstance { .. } => "debug_reset_instance",
@@ -5355,7 +5368,22 @@ Reducer::DebugRepairItem{
 }),
             Reducer::DebugReplayAuctionExpiryFixture => __sats::bsatn::to_vec(&debug_replay_auction_expiry_fixture_reducer::DebugReplayAuctionExpiryFixtureArgs {
                 }),
-Reducer::DebugRepop{
+Reducer::DebugReplaySessionlessAreatrigger{
+                character_guid,
+                trigger_id,
+                expected_map,
+                expected_instance,
+                controller_generation,
+                expected_intent_id,
+}             => __sats::bsatn::to_vec(&debug_replay_sessionless_areatrigger_reducer::DebugReplaySessionlessAreatriggerArgs {
+                character_guid: character_guid.clone(),
+                trigger_id: trigger_id.clone(),
+                expected_map: expected_map.clone(),
+                expected_instance: expected_instance.clone(),
+                controller_generation: controller_generation.clone(),
+                expected_intent_id: expected_intent_id.clone(),
+}),
+            Reducer::DebugRepop{
                 character_guid,
 }             => __sats::bsatn::to_vec(&debug_repop_reducer::DebugRepopArgs {
                 character_guid: character_guid.clone(),
