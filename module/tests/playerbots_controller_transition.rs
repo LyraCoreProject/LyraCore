@@ -27,6 +27,18 @@ fn runner(node: &Standalone, guid: &str) -> Vec<BTreeMap<String, String>> {
     ))
 }
 
+fn core_escrow_snapshot(node: &Standalone, guid: &str) -> Value {
+    json!({
+        "bot": bot(node, guid),
+        "runner": runner(node, guid),
+        "intent": node.query_rows(&format!("SELECT * FROM game_bot_transfer_intent WHERE bot_guid = {guid}")),
+        "legacy_goal": node.query_rows(&format!("SELECT kind FROM pkg_playerbots_goal WHERE character_guid = {guid}")),
+        "character": node.query_rows(&format!("SELECT * FROM game_character WHERE guid = {guid}")),
+        "body": node.query_rows(&format!("SELECT * FROM game_world_entity WHERE guid = {guid}")),
+        "escrow": node.query_rows(&format!("SELECT transfer_id, character_guid, dest_map_id, dest_instance_id FROM game_transfer_out WHERE character_guid = {guid}")),
+    })
+}
+
 fn batch(guids: &[String]) -> String {
     format!("[{}]", guids.join(","))
 }
@@ -142,7 +154,19 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
         .expect("PLAYERBOTS_PB011_PRECEDING_WASM must name the accepted PB011 Wasm");
     let manifest_path = std::env::var_os("PLAYERBOTS_PB011_PRECEDING_MANIFEST")
         .expect("PLAYERBOTS_PB011_PRECEDING_MANIFEST must describe the accepted PB011 build");
+    let expected_manifest_sha = std::env::var("PLAYERBOTS_PB011_PRECEDING_MANIFEST_SHA256")
+        .expect("PLAYERBOTS_PB011_PRECEDING_MANIFEST_SHA256 must bind the accepted PB011 build");
+    assert!(
+        expected_manifest_sha.len() == 64
+            && expected_manifest_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "accepted PB011 manifest SHA-256 must be 64 lowercase hexadecimal characters"
+    );
     let preceding_path = std::path::Path::new(&preceding_path);
+    let manifest_path = std::path::Path::new(&manifest_path);
+    let observed_manifest_sha = sha256(manifest_path);
+    assert_eq!(observed_manifest_sha, expected_manifest_sha);
     let manifest: Value = serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
     let preceding = std::fs::read(preceding_path).unwrap();
     assert_eq!(manifest["schema"], "playerbots-build-v1");
@@ -246,6 +270,8 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
     });
     let evidence = json!({
         "preceding_wasm_blake3": blake3::hash(&preceding).to_hex().to_string(),
+        "expected_preceding_manifest_sha256": expected_manifest_sha,
+        "observed_preceding_manifest_sha256": observed_manifest_sha,
         "preceding_build": manifest,
         "current_wasm_blake3": blake3::hash(support::module_bytes()).to_hex().to_string(),
         "preceding": preceding_state,
@@ -327,6 +353,115 @@ fn playerbots_populated_legacy_batches_resume_after_restart_and_replay_idempoten
     );
     assert_eq!(
         evidence["after_idempotent_replay"], evidence["after_restart_and_resume"],
+        "{evidence}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_cutover_leaves_core_escrow_under_legacy_ownership_without_package_transfer_rows() {
+    let (node, guids) = current_fixture("playerbots-controller-core-escrow-fence", "1");
+    let guid = &guids[0];
+    node.assert_call(
+        "playerbots_controller_transition_fixture_stage_legacy",
+        &[guid, "false"],
+    );
+    let before = core_escrow_snapshot(&node, guid);
+    let actor = format!(r#"{{"guid":{guid},"ownership":null}}"#);
+    node.assert_call(
+        "begin_transfer",
+        &[
+            "5091201", &actor, "36", "5098078", "-14.5732", "-385.475", "62.4561", "1.5708", "true",
+        ],
+    );
+    let escrowed = core_escrow_snapshot(&node, guid);
+    node.assert_call("playerbots_migrate_legacy_controllers", &[&batch(&guids)]);
+    let after_batch = core_escrow_snapshot(&node, guid);
+    let evidence = json!({
+        "before": before,
+        "escrowed": escrowed,
+        "after_migration_batch": after_batch,
+    });
+    save(&node, "core-escrow-fence", &evidence);
+
+    assert!(
+        evidence["before"]["bot"]["controller"]
+            .as_str()
+            .unwrap()
+            .contains("legacy"),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["before"]["runner"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert!(
+        evidence["before"]["runner"][0]["transfer_checkpoint"]
+            .as_str()
+            .unwrap()
+            .contains("none"),
+        "{evidence}"
+    );
+    assert!(
+        evidence["before"]["intent"].as_array().unwrap().is_empty(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["before"]["legacy_goal"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["before"]["escrow"].as_array().unwrap().is_empty(),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["before"]["character"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["before"]["body"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["escrowed"]["runner"], evidence["before"]["runner"],
+        "{evidence}"
+    );
+    assert!(
+        evidence["escrowed"]["intent"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{evidence}"
+    );
+    assert!(
+        evidence["escrowed"]["legacy_goal"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["escrowed"]["escrow"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["escrowed"]["character"].as_array().unwrap().len(),
+        1,
+        "{evidence}"
+    );
+    assert!(
+        evidence["escrowed"]["body"].as_array().unwrap().is_empty(),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["after_migration_batch"], evidence["escrowed"],
         "{evidence}"
     );
 }
