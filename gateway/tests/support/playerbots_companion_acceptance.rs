@@ -25,6 +25,7 @@ pub const EXIT_LANDING: (f32, f32, f32) = (-11_208.7, 1_675.9, 24.5733);
 
 const ACCOUNT: &str = "PB011ROUTE";
 const PASSWORD: &str = "PASSWORD";
+const TANK_LEVEL: u32 = 10;
 const POLL: Duration = Duration::from_secs(60);
 // Permanent auras use Timestamp(i64::MAX). SpacetimeDB 2.7.1's text SQL formatter cannot render
 // that value as RFC 3339, so evidence names every other Aura column explicitly.
@@ -245,6 +246,12 @@ impl CompanionTopology {
         for database in [&self.source, &self.destination] {
             self.call(database, "playerbots_fixture_provision_catalog", &[]);
         }
+        // Taunt is the supported threat-recovery tool and requires level 10.
+        self.call(
+            &self.source,
+            "debug_set_level",
+            &[&self.party.warrior.to_string(), &TANK_LEVEL.to_string()],
+        );
         self.call(
             &self.source,
             "playerbots_fixture_roles_prepare_fortitude",
@@ -309,6 +316,7 @@ impl CompanionTopology {
         assert_eq!(enemies.len(), 3, "companion pull roster changed");
         self.party.enemies.copy_from_slice(&enemies);
         let staged = self.save("staged", json!({}));
+        self.assert_tank_toolkit(&staged);
         for guid in self.party.enemies {
             let guid = guid.to_string();
             let enemy = staged["source"]["enemies"]
@@ -330,6 +338,39 @@ impl CompanionTopology {
                 );
             }
         }
+    }
+
+    fn assert_tank_toolkit(&self, staged: &Value) {
+        let warrior = self.party.warrior.to_string();
+        for family in ["characters", "bodies"] {
+            let row = staged["source"][family]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["guid"].as_str() == Some(warrior.as_str()))
+                .expect("staged Warrior missing");
+            assert_eq!(row["level"], TANK_LEVEL.to_string());
+        }
+        let taunt = staged["source"]["spell_headers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["spell_id"] == "355")
+            .expect("Taunt header missing");
+        assert_eq!(taunt["spell_level"], TANK_LEVEL.to_string());
+        assert_eq!(
+            staged["source"]["spellbook"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| {
+                    row["character_guid"].as_str() == Some(warrior.as_str())
+                        && row["spell_id"] == "355"
+                })
+                .count(),
+            1,
+            "ordinary provisioning did not train the tank's Taunt"
+        );
     }
 
     pub fn begin(&self) {
@@ -616,6 +657,9 @@ impl CompanionTopology {
             "bots": self.query(database, "SELECT * FROM pkg_playerbots_bot"),
             "roles": self.query(database, "SELECT character_guid, class, role FROM pkg_playerbots_bot"),
             "rotations": self.query(database, "SELECT * FROM pkg_playerbots_rotation"),
+            "spellbook": self.query(database, &format!("SELECT character_guid, spell_id FROM game_player_spell WHERE {quest_predicate}")),
+            "spell_headers": self.query(database, "SELECT spell_id, spell_level, cost, range_yd FROM game_spell WHERE spell_id = 355 OR spell_id = 7386 OR spell_id = 6673 OR spell_id = 2050 OR spell_id = 1243 OR spell_id = 133"),
+            "threat": self.query(database, "SELECT * FROM game_threat"),
             "orders": self.query(database, "SELECT * FROM pkg_playerbots_companion_order"),
             "runners": self.query(database, "SELECT * FROM pkg_playerbots_runner"),
             "actions": self.query(database, "SELECT * FROM pkg_playerbots_action"),
