@@ -274,6 +274,9 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         "playerbots_fixture_companion_move",
         &[&blocker, "1392", "1200"],
     );
+    let relocated_spawn = node.query_rows(&format!(
+        "SELECT guid, x, y, z FROM game_creature_spawn WHERE guid = {blocker}"
+    ));
     node.assert_call(
         "playerbots_fixture_roles_control",
         &[ally, &blocker, &ROOT.to_string()],
@@ -328,6 +331,7 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
         "start_position": start_position,
         "ally_position": ally_position,
         "blocker_position": blocker_position,
+        "relocated_blocker_spawn": relocated_spawn,
         "ally_start_health": ally_start_health,
         "initial_engagement": initial_engagement,
         "final_position": final_position,
@@ -343,6 +347,17 @@ fn playerbots_recovery_counts_owned_casting_position_progress_for_the_same_heal(
     eprintln!("fixture evidence: {}", path.display());
 
     let samples = evidence["samples"].as_array().unwrap();
+    let spawn = evidence["relocated_blocker_spawn"].as_array().unwrap();
+    assert_eq!(spawn.len(), 1, "{evidence}");
+    assert_eq!(spawn[0]["guid"], blocker, "{evidence}");
+    for (field, expected) in [("x", 1392.0f32), ("y", 1200.0), ("z", 50.0)] {
+        assert_eq!(
+            spawn[0][field].as_str().unwrap().parse::<f32>().unwrap(),
+            expected,
+            "{evidence}"
+        );
+    }
+    assert_eq!(blocker_position, (1392.0, 1200.0), "{evidence}");
     assert!(!movement_failed, "{evidence}");
     assert!(
         samples.last().unwrap()["elapsed_seconds"].as_f64().unwrap() >= 10.0,

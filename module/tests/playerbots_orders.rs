@@ -648,11 +648,18 @@ fn playerbots_stay_blocks_a_recovery_position_selected_after_normal_recovery() {
     );
     pass(node, &fixture.priest);
     let after_stay = runner(node, &fixture.priest);
+    let applied = order(node, &fixture.priest);
     std::thread::sleep(std::time::Duration::from_millis(1_000));
     let after_wait = entity(node, &fixture.priest);
     evidence(&fixture, "stay-blocks-recovery-position");
     assert!(after_stay["chosen"].to_ascii_lowercase().contains("hold"));
-    assert!(after_stay["chosen"].to_ascii_lowercase().contains("stay"));
+    assert_eq!(applied["active"], "true", "{applied:?}");
+    assert!(applied["order"].contains("stay"), "{applied:?}");
+    assert_eq!(after_stay["foreground"], "(none = ())", "{after_stay:?}");
+    assert!(
+        after_stay["recovery"].contains("active = (none"),
+        "{after_stay:?}"
+    );
     assert!(after_stay["recovery"]
         .to_ascii_lowercase()
         .contains("position = (some"));
