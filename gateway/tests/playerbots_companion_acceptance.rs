@@ -925,7 +925,13 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         parse_value_u64(alive, "alive_observed_micros")
             > parse_value_u64(alive, "ghost_observed_micros")
     );
-    let alive_body = value_row_by_guid(&resurrected, "source", "bodies", topology.party.mage_two);
+    let alive_body = value_row_by_guid(
+        &resurrected,
+        "source",
+        "bodies",
+        "guid",
+        topology.party.mage_two,
+    );
     assert_eq!(alive_body["dead"], "false");
     assert!(parse_value_u64(alive_body, "health") > 0);
     assert_eq!(
@@ -1324,7 +1330,7 @@ fn assert_gateway_abort(abort: &Value) {
 }
 
 fn assert_order_in_evidence(evidence: &Value, world: &str, guid: u64, expected: &str) {
-    let order = value_row_by_guid(evidence, world, "orders", guid);
+    let order = value_row_by_guid(evidence, world, "orders", "character_guid", guid);
     assert_eq!(order["active"], "true", "order inactive for {guid}");
     assert_eq!(order["order"], expected, "order changed for {guid}");
 }
@@ -1424,7 +1430,7 @@ fn assert_party_landed(topology: &CompanionTopology, evidence: &Value, world: &s
         );
         assert_eq!(actual["role"], role, "role changed after exit for {guid}");
         assert!(
-            value_row_by_guid(evidence, world, "bots", guid)["controller"]
+            value_row_by_guid(evidence, world, "bots", "character_guid", guid)["controller"]
                 .as_str()
                 .is_some_and(|controller| controller.contains("cohort")),
             "Cohort controller changed after landing for {guid}"
@@ -1490,13 +1496,19 @@ fn canonical_rows(value: &Value, world: &str, table: &str) -> Vec<String> {
     rows
 }
 
-fn value_row_by_guid<'a>(value: &'a Value, world: &str, table: &str, guid: u64) -> &'a Value {
+fn value_row_by_guid<'a>(
+    value: &'a Value,
+    world: &str,
+    table: &str,
+    guid_field: &str,
+    guid: u64,
+) -> &'a Value {
     let expected_guid = guid.to_string();
     value[world][table]
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["character_guid"].as_str() == Some(expected_guid.as_str()))
+        .find(|row| row[guid_field].as_str() == Some(expected_guid.as_str()))
         .unwrap_or_else(|| panic!("{table} row for {guid} missing from {value}"))
 }
 
@@ -1512,8 +1524,8 @@ fn fault_in<'a>(value: &'a Value, world: &str, id: u64) -> &'a Value {
 
 fn assert_mage_recovery_identity(topology: &CompanionTopology, before: &Value, after: &Value) {
     let guid = topology.party.mage_two;
-    let before_bot = value_row_by_guid(before, "source", "bots", guid);
-    let after_bot = value_row_by_guid(after, "source", "bots", guid);
+    let before_bot = value_row_by_guid(before, "source", "bots", "character_guid", guid);
+    let after_bot = value_row_by_guid(after, "source", "bots", "character_guid", guid);
     for field in ["class", "role", "controller"] {
         assert_eq!(
             before_bot[field], after_bot[field],
@@ -1523,8 +1535,8 @@ fn assert_mage_recovery_identity(topology: &CompanionTopology, before: &Value, a
     assert_eq!(after_bot["class"], "8");
     assert_eq!(after_bot["role"], "2");
     assert!(after_bot["controller"].as_str().unwrap().contains("cohort"));
-    let before_order = value_row_by_guid(before, "source", "orders", guid);
-    let after_order = value_row_by_guid(after, "source", "orders", guid);
+    let before_order = value_row_by_guid(before, "source", "orders", "character_guid", guid);
+    let after_order = value_row_by_guid(after, "source", "orders", "character_guid", guid);
     for field in ["issuer_guid", "group_id", "active", "revision", "order"] {
         assert_eq!(
             before_order[field], after_order[field],
@@ -1542,7 +1554,8 @@ fn assert_restart_retained(before: &Value, after: &Value, warrior: u64, leader: 
         .as_array()
         .and_then(|rows| rows.first())
         .expect("restart point Runner missing");
-    let after_runner = value_row_by_guid(after, "destination", "runners", warrior);
+    let after_runner =
+        value_row_by_guid(after, "destination", "runners", "character_guid", warrior);
     assert_ne!(
         before_runner["foreground"], "(none = ())",
         "restart point had no active Follow foreground"
@@ -1629,24 +1642,24 @@ fn assert_distinct_unchanged_command(
     warrior: u64,
     intent_id: u64,
 ) {
-    let before_order = value_row_by_guid(before, "source", "orders", warrior);
-    let after_order = value_row_by_guid(after, "source", "orders", warrior);
+    let before_order = value_row_by_guid(before, "source", "orders", "character_guid", warrior);
+    let after_order = value_row_by_guid(after, "source", "orders", "character_guid", warrior);
     for field in ["issuer_guid", "group_id", "active", "revision", "order"] {
         assert_eq!(
             before_order[field], after_order[field],
             "Unchanged intent B changed Companion Order field {field}"
         );
     }
-    let before_bot = value_row_by_guid(before, "source", "bots", warrior);
-    let after_bot = value_row_by_guid(after, "source", "bots", warrior);
+    let before_bot = value_row_by_guid(before, "source", "bots", "character_guid", warrior);
+    let after_bot = value_row_by_guid(after, "source", "bots", "character_guid", warrior);
     for field in ["controller", "class", "role"] {
         assert_eq!(
             before_bot[field], after_bot[field],
             "Unchanged intent B changed bot field {field}"
         );
     }
-    let before_runner = value_row_by_guid(before, "source", "runners", warrior);
-    let after_runner = value_row_by_guid(after, "source", "runners", warrior);
+    let before_runner = value_row_by_guid(before, "source", "runners", "character_guid", warrior);
+    let after_runner = value_row_by_guid(after, "source", "runners", "character_guid", warrior);
     for field in [
         "generation",
         "objective_sequence",
