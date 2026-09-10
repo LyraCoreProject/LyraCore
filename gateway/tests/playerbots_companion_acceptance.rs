@@ -522,8 +522,35 @@ fn observed_casts(
         .collect()
 }
 
+fn assert_cast_impact_evidence(evidence: &Value, phase: &str) {
+    for shard in ["source", "destination"] {
+        let mut impact_ids = BTreeSet::new();
+        for row in evidence[shard]["cast_receipts"].as_array().unwrap() {
+            assert_eq!(
+                parse_value_u64(row, "impact_failure"),
+                0,
+                "{phase} on {shard}: projectile evidence could not identify one cast: {row}"
+            );
+            let impact = parse_value_u64(row, "impact_event_id");
+            if impact != 0 {
+                assert!(
+                    impact_ids.insert(impact),
+                    "{phase} on {shard}: impact {impact} was counted twice"
+                );
+                assert!(parse_value_u64(row, "source_event_id") > 0);
+                assert!(
+                    parse_value_u64(row, "impact_micros")
+                        >= parse_value_u64(row, "resolved_micros"),
+                    "{phase} on {shard}: projectile impact preceded its cast resolution: {row}"
+                );
+            }
+        }
+    }
+}
+
 fn pull_boundary(topology: &CompanionTopology, phase: &str, prior_target: Option<u64>) -> Value {
     let evidence = topology.save(phase, json!({"prior_target": prior_target}));
+    assert_cast_impact_evidence(&evidence, phase);
     let database = topology.current_world(topology.party.warrior);
     for guid in topology.party.bots() {
         let roles = topology.query(
@@ -887,56 +914,28 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
         "SELECT attacker_guid, target_guid, tank_is_top_threat FROM \
          pkg_playerbots_companion_combat_receipt",
     );
-    let cast_receipts = topology.query(
-        &topology.source,
-        "SELECT * FROM pkg_playerbots_companion_cast_receipt",
-    );
-    std::fs::write(
-        topology
-            .evidence_dir
-            .join("repeated-pull-cast-impacts.json"),
-        serde_json::to_vec_pretty(&cast_receipts).unwrap(),
-    )
-    .expect("retain repeated-pull cast and impact evidence");
-    let mut impact_ids = BTreeSet::new();
-    for row in &cast_receipts {
-        assert_eq!(
-            parse_u64(row, "impact_failure"),
-            0,
-            "projectile evidence could not be associated with one cast: {row:?}"
-        );
-        let impact = parse_u64(row, "impact_event_id");
-        if impact != 0 {
-            assert!(
-                impact_ids.insert(impact),
-                "impact {impact} was counted twice"
-            );
-            assert!(parse_u64(row, "source_event_id") > 0);
-            assert!(
-                parse_u64(row, "impact_micros") >= parse_u64(row, "resolved_micros"),
-                "projectile impact preceded its cast resolution: {row:?}"
-            );
-        }
-    }
+    let cast_receipts = second_boundary["source"]["cast_receipts"]
+        .as_array()
+        .unwrap();
     for mage in [topology.party.mage_one, topology.party.mage_two] {
         assert!(
             cast_receipts.iter().any(|row| {
-                parse_u64(row, "caster_guid") == mage
-                    && [first, second].contains(&parse_u64(row, "target_guid"))
-                    && parse_u64(row, "spell_id") == 133
-                    && parse_u64(row, "impact_event_id") > 0
-                    && parse_u64(row, "damage") > 0
+                parse_value_u64(row, "caster_guid") == mage
+                    && [first, second].contains(&parse_value_u64(row, "target_guid"))
+                    && parse_value_u64(row, "spell_id") == 133
+                    && parse_value_u64(row, "impact_event_id") > 0
+                    && parse_value_u64(row, "damage") > 0
             }),
             "Mage {mage} dealt no recorded damage in the repeated pulls"
         );
     }
     assert!(
         cast_receipts.iter().any(|row| {
-            parse_u64(row, "caster_guid") == topology.party.mage_one
-                && parse_u64(row, "target_guid") == second
-                && parse_u64(row, "spell_id") == 133
-                && parse_u64(row, "impact_event_id") > 0
-                && parse_u64(row, "damage") > 0
+            parse_value_u64(row, "caster_guid") == topology.party.mage_one
+                && parse_value_u64(row, "target_guid") == second
+                && parse_value_u64(row, "spell_id") == 133
+                && parse_value_u64(row, "impact_event_id") > 0
+                && parse_value_u64(row, "damage") > 0
         }),
         "Assist Mage never acted on the named Priest's target"
     );
@@ -1083,7 +1082,9 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
             .any(|row| {
                 row["caster_guid"].as_str() == Some(topology.party.mage_one.to_string().as_str())
                     && row["target_guid"].as_str() == Some(third.to_string().as_str())
-                    && row["damage"].as_str().is_some_and(|value| value != "0")
+                    && parse_value_u64(row, "spell_id") == 133
+                    && parse_value_u64(row, "impact_event_id") > 0
+                    && parse_value_u64(row, "damage") > 0
             }),
         "Assist Mage never acted after the Priest changed target"
     );
