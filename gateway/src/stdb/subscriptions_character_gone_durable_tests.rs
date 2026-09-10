@@ -285,6 +285,11 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
         &["1", "36", "0", "-11208", "1672", "24", "0", "party-test"],
     );
     standalone.assert_output_success(&output, "transfer Character");
+    assert!(
+        poll_until(POLL_TIMEOUT, || world.character_location(1)
+            == Some((36, 0))),
+        "source Coordinator did not observe the staged Transfer destination"
+    );
     crate::world::transfer::run_bot_transfer(&world, 1, 36, 0, "party-test").unwrap();
     assert!(poll_until(POLL_TIMEOUT, || {
         world.character_by_guid(1).unwrap().is_none()
