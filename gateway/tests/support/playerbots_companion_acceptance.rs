@@ -110,6 +110,12 @@ impl CompanionTopology {
         for database in [&self.source, &self.destination, &self.realm] {
             self.call(database, "claim_operator", &[]);
         }
+        // Account ids are local to each Shard. Admission must resolve the authenticated name.
+        self.call(
+            &self.realm,
+            "provision_account",
+            &["\"PB011SPARE\"", "[]", "[]"],
+        );
         let (salt, verifier) = account_material();
         for database in [&self.realm, &self.source] {
             self.call(
@@ -118,6 +124,23 @@ impl CompanionTopology {
                 &[&json!(ACCOUNT).to_string(), &salt, &verifier],
             );
         }
+        let account_query = format!("SELECT id FROM game_account WHERE username = '{ACCOUNT}'");
+        let source_accounts = self.query(&self.source, &account_query);
+        let realm_accounts = self.query(&self.realm, &account_query);
+        fs::write(
+            self.evidence_dir.join("account-identities.json"),
+            serde_json::to_vec_pretty(&json!({
+                "source": source_accounts,
+                "realm": realm_accounts,
+            }))
+            .unwrap(),
+        )
+        .expect("retain distinct World Shard and Realm Account identities");
+        assert_ne!(
+            one(&source_accounts, "source Account")["id"],
+            one(&realm_accounts, "Realm Account")["id"],
+            "the companion route must exercise distinct local Account ids"
+        );
         self.call(&self.source, "install_guid_range", &["1000000"]);
         for (count, class, role) in [("2", "1", "0"), ("1", "5", "1"), ("2", "8", "2")] {
             self.call(
