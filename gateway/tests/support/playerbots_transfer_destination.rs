@@ -117,18 +117,21 @@ fn set_companion_party_membership(
     mode: u8,
 ) {
     let actor = format!(r#"{{"guid":{},"ownership":null}}"#, transferred.leader_guid);
-    topology.call(
-        database,
-        "playerbots_fixture_orders_party_as",
-        &[
-            &transferred.guid.to_string(),
-            &transferred.priest_guid.to_string(),
-            &transferred.mage_guid.to_string(),
-            &transferred.leader_guid.to_string(),
-            &mode.to_string(),
-            &actor,
-        ],
-    );
+    // Keep Realm-core authority and the selected World mirror on the same roster history.
+    for party_store in [topology.realm_db.as_str(), database] {
+        topology.call(
+            party_store,
+            "playerbots_fixture_orders_party_as",
+            &[
+                &transferred.guid.to_string(),
+                &transferred.priest_guid.to_string(),
+                &transferred.mage_guid.to_string(),
+                &transferred.leader_guid.to_string(),
+                &mode.to_string(),
+                &actor,
+            ],
+        );
+    }
 }
 
 fn destination_snapshot(topology: &TransferTopology, guid: u64) -> serde_json::Value {
