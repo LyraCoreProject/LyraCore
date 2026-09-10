@@ -742,7 +742,7 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     .clone();
     let wound_applied_micros = parse_u64(&wound, "applied_micros");
     assert_ne!(wound_applied_micros, 0, "wound fault was not applied");
-    topology.wait_until("Priest did not heal the declared wounds", || {
+    topology.wait_until("Priest healing, Fortitude, or movement timed out", || {
         let leader = topology.query(
             &topology.source,
             &format!(

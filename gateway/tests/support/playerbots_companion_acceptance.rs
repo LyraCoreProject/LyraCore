@@ -213,6 +213,11 @@ impl CompanionTopology {
         for database in [&self.source, &self.destination] {
             self.call(database, "playerbots_fixture_provision_catalog", &[]);
         }
+        self.call(
+            &self.source,
+            "playerbots_fixture_roles_prepare_fortitude",
+            &[&self.party.priest.to_string()],
+        );
         for guid in self.party.bots() {
             self.call(
                 &self.source,
@@ -220,6 +225,11 @@ impl CompanionTopology {
                 &[&guid.to_string(), "64"],
             );
         }
+        self.call(
+            &self.source,
+            "playerbots_fixture_roles_priest_mana",
+            &[&self.party.priest.to_string()],
+        );
         let account = one(
             &self.query(
                 &self.source,
