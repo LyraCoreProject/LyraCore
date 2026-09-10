@@ -60,11 +60,9 @@
 //! spawn-row-less entities). Per-instance GO copies get `0xF110 | bit46 | seq`
 //! ([`GO_COPY_BAND`]) — below `gameobject::POOL_TAG` (bit 47), above every static/debug low.
 //!
-//! Both tables are deliberately **NOT `public` and NOT gateway-subscribed** (checked against
-//! `gateway/src/stdb/connection.rs`'s subscription list): the gateway's relay gates key off
-//! `game_world_entity.instance_id` (slice 1) and the viewer's own entity row — no client or relay
-//! ever reads the instance/binding rows themselves, so no binding files exist for them (the
-//! `game_encounter_state` precedent). [server]
+//! Both tables are private. The Coordinator subscribes to `game_instance` with the Owner Token
+//! so Transfer can read the source lease's admitted map and party. `game_instance_binding`
+//! remains unsubscribed. [server]
 
 use std::collections::{HashMap, HashSet};
 
@@ -244,7 +242,7 @@ const GO_COPY_TYPES: [u8; 4] = [
 ];
 
 // ===========================================================================================
-//  Tables [server] — neither is public/gateway-subscribed (see the module doc)
+//  Private instance tables [server]
 // ===========================================================================================
 
 /// One live dungeon instance. `instance_id` auto_inc from 1 (0 = open world, reserved by
