@@ -242,11 +242,13 @@ fn playerbots_arrival_does_not_settle_recovery_for_a_dead_nearby_member() {
         .unwrap();
     assert_eq!(leader["dead"], "true", "{evidence}");
     assert_eq!(leader["health"], "0", "{evidence}");
-    assert!(
-        !evidence["after"]["runner"][0]["history"]
-            .as_str()
-            .unwrap()
-            .contains("arrived"),
+    assert_eq!(
+        evidence["after"]["runner"][0]["objective"], evidence["staged"]["runner"][0]["objective"],
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["after"]["runner"][0]["recovery"],
+        "(some = (attempts = , active = (none = ()), position_sequence = 0))",
         "{evidence}"
     );
 }
