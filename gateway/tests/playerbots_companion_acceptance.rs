@@ -13,13 +13,11 @@ use lyracore_shared::constants::player_flags::GHOST;
 use serde_json::{json, Value};
 
 fn position(topology: &CompanionTopology, database: &str, guid: u64) -> (f32, f32, f32) {
-    let row = one(
-        &topology.query(
-            database,
-            &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {guid}"),
-        ),
-        "live Character body",
+    let rows = topology.query(
+        database,
+        &format!("SELECT x, y, z FROM game_world_entity WHERE guid = {guid}"),
     );
+    let row = one(&rows, "live Character body");
     (
         row["x"].parse().unwrap(),
         row["y"].parse().unwrap(),
@@ -858,12 +856,12 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     });
     let ghost = topology.save("fixed-released-ghost", json!({}));
     let ghost_fault = fault_in(&ghost, "source", 2);
-    assert!(parse_u64(ghost_fault, "ghost_observed_micros") > 0);
+    assert!(parse_value_u64(ghost_fault, "ghost_observed_micros") > 0);
     assert_mage_recovery_identity(&topology, &before_death, &ghost);
     let ghost_position = (
-        ghost_fault["ghost_x"].parse::<f32>().unwrap(),
-        ghost_fault["ghost_y"].parse::<f32>().unwrap(),
-        ghost_fault["ghost_z"].parse::<f32>().unwrap(),
+        parse_value_f32(ghost_fault, "ghost_x"),
+        parse_value_f32(ghost_fault, "ghost_y"),
+        parse_value_f32(ghost_fault, "ghost_z"),
     );
     wait_until(
         "resurrected Mage did not make physical Follow progress",
@@ -885,7 +883,10 @@ fn playerbots_acceptance_human_and_four_companions_complete_the_fixed_route() {
     );
     let resurrected = topology.save("fixed-resurrected", json!({}));
     let alive = fault_in(&resurrected, "source", 2);
-    assert!(parse_u64(alive, "alive_observed_micros") > parse_u64(alive, "ghost_observed_micros"));
+    assert!(
+        parse_value_u64(alive, "alive_observed_micros")
+            > parse_value_u64(alive, "ghost_observed_micros")
+    );
     let alive_body = value_row_by_guid(&resurrected, "source", "bodies", topology.party.mage_two);
     assert_eq!(alive_body["dead"], "false");
     assert!(parse_value_u64(alive_body, "health") > 0);

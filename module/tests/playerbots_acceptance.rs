@@ -1831,11 +1831,10 @@ fn playerbots_acceptance_level_gap_uses_ordinary_kill_xp() {
     save(&node, "level-gap-across-salt", across_salt);
 
     let progressed = support::poll_until(Duration::from_secs(600), || {
-        node.query_rows(&format!(
+        !node.query_rows(&format!(
             "SELECT level FROM game_world_entity WHERE guid = {guid} AND level >= 7"
         ))
-        .first()
-        .is_some()
+        .is_empty()
             && !node
                 .query_rows(&format!(
                     "SELECT quest_entry FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = {LEVEL_GAP_QUEST}"
@@ -1855,9 +1854,12 @@ fn playerbots_acceptance_level_gap_uses_ordinary_kill_xp() {
     kills.sort_by_key(|kill| kill["ordinal"].as_str().unwrap().parse::<u32>().unwrap());
     assert!(!kills.is_empty(), "{complete}");
     assert!(
-        kills
-            .iter()
-            .all(|kill| kill["victim_entry"] != LEVEL_GAP_END_ONLY_ENTRY.to_string()),
+        kills.iter().all(|kill| kill["victim_entry"]
+            .as_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            != LEVEL_GAP_END_ONLY_ENTRY),
         "{complete}"
     );
     assert_eq!(kills[0]["level_before"], "5", "{complete}");
