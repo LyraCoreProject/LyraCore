@@ -298,6 +298,170 @@ fn playerbots_companion_enters_the_areatrigger_with_normalized_transfer_state() 
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_sessionless_areatrigger_replay_keeps_its_exact_intent_authority() {
+    let fixture = fixture("playerbots-transfer-entry-replay", 2);
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let first = capture(&fixture, "entry-replay-first");
+    let intent = first["intent"]
+        .as_array()
+        .and_then(|intents| intents.first())
+        .unwrap_or_else(|| panic!("initial Transfer Intent absent: {first}"));
+    let intent_id = intent["id"].as_str().unwrap().to_string();
+    let generation = intent["controller_generation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let exact = fixture.node.call(
+        "debug_replay_sessionless_areatrigger",
+        &[
+            &fixture.companion,
+            "78",
+            "36",
+            "5098078",
+            &generation,
+            &intent_id,
+        ],
+    );
+    let replayed = capture(&fixture, "entry-replay-exact");
+
+    fixture.node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.companion, "{\"frozen\":[]}"],
+    );
+    let disabled = fixture.node.call(
+        "debug_replay_sessionless_areatrigger",
+        &[
+            &fixture.companion,
+            "78",
+            "36",
+            "5098078",
+            &generation,
+            &intent_id,
+        ],
+    );
+    fixture.node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.companion, "{\"recordOnly\":[]}"],
+    );
+    let record_only = fixture.node.call(
+        "debug_replay_sessionless_areatrigger",
+        &[
+            &fixture.companion,
+            "78",
+            "36",
+            "5098078",
+            &generation,
+            &intent_id,
+        ],
+    );
+    fixture.node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.companion, "{\"cohort\":[]}"],
+    );
+    let changed_generation = runner(&fixture.node, &fixture.companion)["generation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let changed = fixture.node.call(
+        "debug_replay_sessionless_areatrigger",
+        &[
+            &fixture.companion,
+            "78",
+            "36",
+            "5098078",
+            &changed_generation,
+            &intent_id,
+        ],
+    );
+    let final_state = capture(&fixture, "entry-replay-refusals");
+    let exact_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&exact.stdout),
+        String::from_utf8_lossy(&exact.stderr)
+    );
+    let disabled_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&disabled.stdout),
+        String::from_utf8_lossy(&disabled.stderr)
+    );
+    let record_only_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&record_only.stdout),
+        String::from_utf8_lossy(&record_only.stderr)
+    );
+    let changed_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&changed.stdout),
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    let evidence = serde_json::json!({
+        "first": first,
+        "exact_replay": {
+            "success": exact.status.success(),
+            "output": exact_output,
+            "state": replayed,
+        },
+        "disabled_replay": {
+            "success": disabled.status.success(),
+            "output": disabled_output,
+        },
+        "record_only_replay": {
+            "success": record_only.status.success(),
+            "output": record_only_output,
+        },
+        "changed_generation_replay": {
+            "generation": changed_generation,
+            "success": changed.status.success(),
+            "output": changed_output,
+        },
+        "final": final_state,
+    });
+    let path = support::log_dir().join(format!(
+        "{}-entry-replay-authority.json",
+        fixture.node.shard_name()
+    ));
+    std::fs::write(&path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    eprintln!("fixture evidence: {}", path.display());
+
+    assert!(exact.status.success(), "{evidence}");
+    assert_eq!(
+        evidence["exact_replay"]["state"]["intent"], evidence["first"]["intent"],
+        "an exact replay must retain the sole durable Transfer Intent: {evidence}"
+    );
+    assert!(!disabled.status.success(), "{evidence}");
+    assert!(
+        evidence["disabled_replay"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("session-less Transfer is disabled"),
+        "{evidence}"
+    );
+    assert!(!record_only.status.success(), "{evidence}");
+    assert!(
+        evidence["record_only_replay"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("session-less Transfer is disabled"),
+        "{evidence}"
+    );
+    assert!(!changed.status.success(), "{evidence}");
+    assert!(
+        evidence["changed_generation_replay"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("TransferPending"),
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["final"]["intent"], evidence["first"]["intent"],
+        "refused replays must not replace the admitted Transfer Intent: {evidence}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_companion_uses_the_audited_deadmines_exit_route() {
     let fixture = fixture("playerbots-transfer-deadmines-exit", 3);
     let staged = capture(&fixture, "deadmines-exit-staged");

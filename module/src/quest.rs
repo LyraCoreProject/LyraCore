@@ -2397,7 +2397,38 @@ pub(crate) fn enter_sessionless_areatrigger(
     expected_instance: u64,
     controller_generation: u64,
 ) -> Result<u64, ActionRefusal> {
-    crate::sessionless::action_gate(ctx, character_guid)?;
+    crate::sessionless::transfer_authority_gate(ctx, character_guid)?;
+    let route = area_trigger_route(ctx, trigger_id).ok_or_else(|| {
+        ActionRefusal::new(
+            ActionRefusalKind::MissingResource,
+            format!("AreaTrigger {trigger_id} has no imported route"),
+        )
+    })?;
+    if route.target_map != expected_map
+        || (crate::instance::is_dungeon_map(expected_map) && expected_instance == 0)
+        || (!crate::instance::is_dungeon_map(expected_map) && expected_instance != 0)
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "AreaTrigger does not enter the expected party partition",
+        ));
+    }
+    let destination = crate::transfer::Destination {
+        map_id: expected_map,
+        instance_id: expected_instance,
+        x: route.target_x,
+        y: route.target_y,
+        z: route.target_z,
+        o: route.target_o,
+    };
+    if let Some(intent_id) = crate::transfer::bot_transfer_intent_gate(
+        ctx,
+        character_guid,
+        destination,
+        controller_generation,
+    )? {
+        return Ok(intent_id);
+    }
     let entity = crate::helpers::live_entity(ctx, character_guid).map_err(|_| {
         ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
     })?;
@@ -2415,12 +2446,6 @@ pub(crate) fn enter_sessionless_areatrigger(
             "Character cannot enter an AreaTrigger",
         ));
     }
-    let route = area_trigger_route(ctx, trigger_id).ok_or_else(|| {
-        ActionRefusal::new(
-            ActionRefusalKind::MissingResource,
-            format!("AreaTrigger {trigger_id} has no imported route"),
-        )
-    })?;
     if route.source_map != entity.map_id {
         return Err(ActionRefusal::new(
             ActionRefusalKind::OtherPartition,
@@ -2431,15 +2456,6 @@ pub(crate) fn enter_sessionless_areatrigger(
         return Err(ActionRefusal::new(
             ActionRefusalKind::OutOfRange,
             "Character is outside the AreaTrigger",
-        ));
-    }
-    if route.target_map != expected_map
-        || (crate::instance::is_dungeon_map(expected_map) && expected_instance == 0)
-        || (!crate::instance::is_dungeon_map(expected_map) && expected_instance != 0)
-    {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "AreaTrigger does not enter the expected party partition",
         ));
     }
     if crate::instance::is_dungeon_map(expected_map) {
@@ -2460,22 +2476,6 @@ pub(crate) fn enter_sessionless_areatrigger(
                 "no party member is certified in the expected partition",
             ));
         }
-    }
-    let destination = crate::transfer::Destination {
-        map_id: expected_map,
-        instance_id: expected_instance,
-        x: route.target_x,
-        y: route.target_y,
-        z: route.target_z,
-        o: route.target_o,
-    };
-    if let Some(intent_id) = crate::transfer::bot_transfer_intent_gate(
-        ctx,
-        character_guid,
-        destination,
-        controller_generation,
-    )? {
-        return Ok(intent_id);
     }
     let destination_instance = if crate::instance::is_dungeon_map(expected_map) {
         crate::instance::admit_existing_party_instance(

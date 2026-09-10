@@ -694,6 +694,36 @@ pub fn debug_enter_areatrigger(
     Ok(())
 }
 
+/// Replay the Package's session-less AreaTrigger operation through its ordinary Core Gate.
+#[reducer]
+#[allow(clippy::too_many_arguments)] // The expected crossing is the fixture assertion.
+pub fn debug_replay_sessionless_areatrigger(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    trigger_id: u32,
+    expected_map: u32,
+    expected_instance: u64,
+    controller_generation: u64,
+    expected_intent_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let intent_id = crate::quest::enter_sessionless_areatrigger(
+        ctx,
+        character_guid,
+        trigger_id,
+        expected_map,
+        expected_instance,
+        controller_generation,
+    )
+    .map_err(|refusal| format!("{:?}: {}", refusal.kind, refusal))?;
+    if intent_id != expected_intent_id {
+        return Err(format!(
+            "session-less AreaTrigger replay returned intent {intent_id}, expected {expected_intent_id}"
+        ));
+    }
+    Ok(())
+}
+
 /// Use the gameobject `go_guid` as `character_guid` — drives `use_gameobject` by explicit guid for the
 /// harness (CHEST rolls its loot, GOOBER grants quest credit), via the shared `apply_use_gameobject`.
 #[reducer]

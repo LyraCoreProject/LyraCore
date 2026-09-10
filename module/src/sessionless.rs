@@ -85,6 +85,46 @@ pub(crate) fn action_gate(
     Ok(())
 }
 
+/// Check the authority that may create or replay a session-less Transfer. A matching pending
+/// Transfer Intent is allowed through here so its exact destination and controller generation can
+/// answer the replay; [`action_gate`] remains the stricter Gate for every new action.
+pub(crate) fn transfer_authority_gate(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
+    crate::account_ownership::require_actor(
+        ctx,
+        crate::SessionActor {
+            guid: character_guid,
+            ownership: None,
+        },
+    )
+    .map_err(|detail| ActionRefusal::new(ActionRefusalKind::CannotAct, detail))?;
+    let character = crate::helpers::character_by_guid(ctx, character_guid).ok_or_else(|| {
+        ActionRefusal::new(ActionRefusalKind::MissingActor, "Character unavailable")
+    })?;
+    if character.online {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "Character has a World Session",
+        ));
+    }
+    if ctx
+        .db
+        .game_sessionless_action_consent()
+        .character_guid()
+        .find(character_guid)
+        .is_some_and(|consent| !consent.allowed)
+    {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "session-less Transfer is disabled for this Character",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn group_action_gate(
     ctx: &ReducerContext,
     character_guid: u64,
