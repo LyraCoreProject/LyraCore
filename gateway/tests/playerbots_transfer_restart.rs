@@ -1908,51 +1908,34 @@ fn assert_exit_route_staged(
 fn resume_follow_after_exit(
     topology: &TransferTopology,
     bot: &TransferredBot,
+    mut evidence: serde_json::Value,
 ) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(15);
-    let mut attempts = Vec::new();
+    let mut attempt = 0;
     loop {
+        let foreground = text_field(row(&evidence, &["state", "source", "runner"]), "foreground");
+        if foreground.contains(&format!("action = (move = (entity = {}))", bot.leader_guid))
+            && foreground.contains("reason = (follow = ())")
+            && embedded_u64(foreground, "objective") == Some(bot.objective_identity)
+        {
+            return evidence;
+        }
+        if Instant::now() >= deadline {
+            return evidence;
+        }
+        std::thread::sleep(Duration::from_millis(1_100));
         topology.call(
             &topology.source_db,
             "playerbots_fixture_runner_pass_once",
             &[&bot.guid.to_string()],
         );
-        let runner = topology.query(
-            &topology.source_db,
-            &format!(
-                "SELECT foreground, chosen, transfer_checkpoint FROM pkg_playerbots_runner WHERE character_guid = {}",
-                bot.guid
-            ),
+        attempt += 1;
+        evidence = topology.save(
+            bot,
+            &format!("instance-exit-follow-attempt-{attempt}"),
+            serde_json::json!({ "ordinary_runner_pass": true }),
         );
-        let movement = topology.query(
-            &topology.source_db,
-            &format!(
-                "SELECT * FROM game_creature_spline WHERE guid = {}",
-                bot.guid
-            ),
-        );
-        let selected = runner.first().is_some_and(|runner| {
-            runner["foreground"]
-                .contains(&format!("action = (move = (entity = {}))", bot.leader_guid))
-        }) && movement.len() == 1;
-        attempts.push(serde_json::json!({
-            "runner": runner,
-            "movement": movement,
-            "selected_follow": selected,
-        }));
-        if selected {
-            break;
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1_100));
     }
-    topology.save(
-        bot,
-        "instance-exit-follow-resumed",
-        serde_json::json!({ "attempts": attempts }),
-    )
 }
 
 fn observe_exit_follow_progress(
@@ -2073,26 +2056,51 @@ fn assert_exit_completed(
             && foreground.contains("reason = (follow = ())"),
         "Follow did not resume after exit: {evidence}"
     );
-    let movement = row(queued, &["state", "source", "movement"]);
-    assert_u64_field(movement, "guid", bot.guid);
-    let start = point(movement, ["sx", "sy", "sz"]);
-    let destination = point(movement, ["dx", "dy", "dz"]);
-    let leader_position = point(
-        row(queued, &["state", "source", "leader_live"]),
-        ["x", "y", "z"],
+    assert_eq!(
+        embedded_u64(foreground, "objective"),
+        Some(bot.objective_identity),
+        "Follow lost its retained objective: {queued}"
     );
+    let running = foreground
+        .split_once("running = (movement = (")
+        .expect("Follow has no retained movement")
+        .1;
+    let number = |field: &str| -> f64 {
+        running
+            .split_once(&format!("{field} = "))
+            .unwrap_or_else(|| panic!("missing movement {field}: {queued}"))
+            .1
+            .split([',', ')'])
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let start = tuple64(EXIT_LANDING);
+    let leader = row(queued, &["state", "source", "leader_live"]);
+    assert_eq!(leader["map_id"], "0", "{queued}");
+    assert_eq!(leader["instance_id"], "0", "{queued}");
+    let leader_position = point(leader, ["x", "y", "z"]);
+    assert_eq!(embedded_u64(running, "map_id"), Some(0), "{queued}");
+    assert_eq!(embedded_u64(running, "instance_id"), Some(0), "{queued}");
     assert!(
-        distance(
-            start,
-            (
-                f64::from(EXIT_LANDING.0),
-                f64::from(EXIT_LANDING.1),
-                f64::from(EXIT_LANDING.2),
-            ),
-        ) < 0.01
-            && distance(destination, leader_position) + 0.1 < distance(start, leader_position),
-        "resumed spline is not the retained Follow leg: {queued}"
+        (number("from_x") - start.0).abs() < 0.01
+            && (number("from_y") - start.1).abs() < 0.01
+            && distance((number("x"), number("y"), number("z")), leader_position) < 0.01,
+        "retained movement does not connect the exit landing to the leader: {queued}"
     );
+    let movements = rows(queued, &["state", "source", "movement"]);
+    assert!(movements.len() <= 1, "duplicate Follow splines: {queued}");
+    if let Some(movement) = movements.first() {
+        assert_u64_field(movement, "guid", bot.guid);
+        let spline_start = point(movement, ["sx", "sy", "sz"]);
+        let destination = point(movement, ["dx", "dy", "dz"]);
+        assert!(
+            distance(spline_start, start) < 0.01
+                && distance(destination, leader_position) + 0.1 < distance(start, leader_position),
+            "resumed spline is not the retained Follow leg: {queued}"
+        );
+    }
     assert_eq!(
         evidence["extra"]["progressed_toward_leader"], true,
         "the ordinary Core tick did not execute the Follow leg: {evidence}"
@@ -2189,17 +2197,8 @@ fn playerbots_companion_enters_and_exits_deadmines_through_real_gateway_routes()
         entry_generation + 1,
         "generation did not advance exactly once on exit: {exit_arrived}"
     );
-    let queued = resume_follow_after_exit(&topology, &bot);
-    assert!(
-        queued["extra"]["attempts"]
-            .as_array()
-            .is_some_and(|attempts| attempts
-                .iter()
-                .any(|attempt| attempt["selected_follow"] == true)),
-        "Follow did not resume during the bounded ordinary poll: {queued}"
-    );
-    let movement = row(&queued, &["state", "source", "movement"]);
-    let start = point(movement, ["sx", "sy", "sz"]);
+    let queued = resume_follow_after_exit(&topology, &bot, exit_arrived);
+    let start = tuple64(EXIT_LANDING);
     let leader = point(
         row(&queued, &["state", "source", "leader_live"]),
         ["x", "y", "z"],
