@@ -479,14 +479,13 @@ pub(crate) fn begin_shard_index_transfer<D: RealmDb>(
                 observed.bot_controller_generation,
             ) == (source_identity, intent_id, generation)
         {
-            break;
+            return Ok(observed);
         }
         if std::time::Instant::now() >= deadline {
             anyhow::bail!("Realm pending Transfer phase was not observable within 3s");
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    Ok(locator)
 }
 
 pub(crate) fn finish_player_shard_index_transfer<D: RealmDb>(
