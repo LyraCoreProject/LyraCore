@@ -124,6 +124,11 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     const REALM: &str = "party-cleanup-realm";
     const INSTANCES_SURVIVOR: u64 = 2;
     const OTHER_SURVIVOR: u64 = 1_000_000_001;
+    const PARTY_PARTITIONS: [(u64, u32, u64); 3] = [
+        (1, 0, 0),
+        (INSTANCES_SURVIVOR, 36, 0),
+        (OTHER_SURVIVOR, 1, 0),
+    ];
 
     let mut standalone = Standalone::start("party-cleanup-world");
     standalone.publish_module();
@@ -160,6 +165,27 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
         );
         standalone.assert_output_success(&output, &format!("create {name}"));
     }
+    for (database, guid, map) in [
+        (INSTANCES, INSTANCES_SURVIVOR, 36),
+        (OTHER, OTHER_SURVIVOR, 1),
+    ] {
+        let guid = guid.to_string();
+        let map = map.to_string();
+        let output = cli.call(
+            standalone.server(),
+            database,
+            "debug_spawn_player_entity",
+            &[guid.as_str()],
+        );
+        standalone.assert_output_success(&output, &format!("materialize {guid} on {database}"));
+        let output = cli.call(
+            standalone.server(),
+            database,
+            "debug_teleport",
+            &[guid.as_str(), map.as_str(), "0", "0", "0", "0"],
+        );
+        standalone.assert_output_success(&output, &format!("place {guid} on map {map}"));
+    }
     standalone.assert_call("debug_spawn_player_entity", &["1"]);
 
     let _topology = TopologyEnv::install(&format!("36:*={INSTANCES}, 1:*={OTHER}"), REALM);
@@ -175,6 +201,7 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let world = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
     let instances = world.shard_handle(INSTANCES).unwrap();
+    let other = world.shard_handle(OTHER).unwrap();
     let realm = world.realm_core().unwrap();
     let observer = runtime.block_on(Coordinator::connect(&cfg)).unwrap();
     let observer_instances = observer.shard_handle(INSTANCES).unwrap();
@@ -182,6 +209,23 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
     assert!(poll_until(POLL_TIMEOUT, || reconciliation_is_idle(
         &observer
     )));
+    assert!(poll_until(POLL_TIMEOUT, || world.character_location(1)
+        == Some((0, 0))
+        && instances.character_location(INSTANCES_SURVIVOR)
+            == Some((36, 0))
+        && other.character_location(OTHER_SURVIVOR) == Some((1, 0))));
+
+    for (guid, map, instance) in PARTY_PARTITIONS {
+        realm.set_character_shard(guid, map, instance).unwrap();
+    }
+    assert!(poll_until(POLL_TIMEOUT, || PARTY_PARTITIONS
+        .into_iter()
+        .all(|(guid, map, instance)| realm
+            .realm_character_partition(guid)
+            .unwrap()
+            .is_some_and(
+                |row| (row.map_id, row.instance_id) == (map, instance)
+            ))));
 
     use lyracore_shared::group::realm_op;
     assert_eq!(
