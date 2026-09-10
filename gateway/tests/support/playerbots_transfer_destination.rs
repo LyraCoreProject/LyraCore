@@ -282,6 +282,39 @@ fn embedded_u64(value: &str, name: &str) -> u64 {
         .unwrap_or_else(|| panic!("invalid {name} in {value}"))
 }
 
+fn embedded_optional_i64(value: &str, name: &str) -> Option<i64> {
+    let prefix = format!("{name} = ");
+    let rest = value
+        .split(&prefix)
+        .nth(1)
+        .unwrap_or_else(|| panic!("missing {name} in {value}"));
+    if rest.starts_with("(none = ())") {
+        return None;
+    }
+    Some(
+        rest.strip_prefix("(some = ")
+            .and_then(|some| some.split(')').next())
+            .and_then(|number| number.parse().ok())
+            .unwrap_or_else(|| panic!("invalid {name} in {value}")),
+    )
+}
+
+fn assert_progress_age(runner: &EvidenceRow, evidence: &serde_json::Value) {
+    let observed = field(runner, "observed_micros")
+        .parse::<i64>()
+        .expect("Runner observed_micros is not an i64");
+    let objective = field(runner, "objective");
+    let started = i64::try_from(embedded_u64(objective, "started_micros"))
+        .expect("objective started_micros exceeds i64");
+    let progress =
+        embedded_optional_i64(objective, "last_verified_progress_micros").unwrap_or(started);
+    assert_eq!(
+        field(runner, "progress_age_micros"),
+        format!("(some = {})", observed.saturating_sub(progress)),
+        "retained objective progress age changed: {evidence}"
+    );
+}
+
 /// Stage the real Quest and execute its selected Transfer operation before Gateway crossing.
 pub(crate) fn stage_retained_quest(
     topology: &TransferTopology,
@@ -541,7 +574,6 @@ pub(crate) fn assert_retained_quest_stage(evidence: &serde_json::Value) {
         "movement_progress",
         "combat_progress",
         "cast_progress",
-        "progress_age_micros",
         "last_target_health",
         "defense_target",
         "recovery",
@@ -556,6 +588,7 @@ pub(crate) fn assert_retained_quest_stage(evidence: &serde_json::Value) {
             "Transfer normalization retained {field_name}: {evidence}"
         );
     }
+    assert_progress_age(operation_runner, evidence);
     for field_name in ["candidate_order", "quest_progress", "deferred_destinations"] {
         assert_eq!(
             field(operation_runner, field_name),
@@ -777,7 +810,6 @@ fn assert_arrival_cleared(evidence: &serde_json::Value) {
         "movement_progress",
         "combat_progress",
         "cast_progress",
-        "progress_age_micros",
         "last_target_health",
         "defense_target",
         "recovery",
@@ -788,6 +820,7 @@ fn assert_arrival_cleared(evidence: &serde_json::Value) {
     ] {
         assert_eq!(field(runner, field_name), "(none = ())", "{evidence}");
     }
+    assert_progress_age(runner, evidence);
     for field_name in ["candidate_order", "quest_progress", "deferred_destinations"] {
         assert_eq!(field(runner, field_name), "", "{evidence}");
     }
