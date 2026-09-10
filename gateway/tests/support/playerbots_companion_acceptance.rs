@@ -245,7 +245,28 @@ impl CompanionTopology {
         enemies.sort_unstable();
         assert_eq!(enemies.len(), 3, "companion pull roster changed");
         self.party.enemies.copy_from_slice(&enemies);
-        self.save("staged", json!({}));
+        let staged = self.save("staged", json!({}));
+        for guid in self.party.enemies {
+            let guid = guid.to_string();
+            let enemy = staged["source"]["enemies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["guid"].as_str() == Some(guid.as_str()))
+                .expect("staged pull target missing");
+            let spawn = staged["source"]["enemy_spawns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["guid"].as_str() == Some(guid.as_str()))
+                .expect("staged pull target spawn missing");
+            for field in ["entry", "map_id", "x", "y", "z", "orientation"] {
+                assert_eq!(
+                    enemy[field], spawn[field],
+                    "declared pull target {guid} has a different spawn {field}"
+                );
+            }
+        }
     }
 
     pub fn begin(&self) {
@@ -411,6 +432,13 @@ impl CompanionTopology {
     }
 
     fn world_snapshot(&self, database: &str) -> Value {
+        let enemy_predicate = self
+            .party
+            .enemies
+            .into_iter()
+            .map(|guid| format!("guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
         let guid_predicate = self
             .party
             .all()
@@ -482,6 +510,8 @@ impl CompanionTopology {
         json!({
             "characters": self.query(database, &format!("SELECT * FROM game_character WHERE {guid_predicate}")),
             "bodies": self.query(database, &format!("SELECT * FROM game_world_entity WHERE {guid_predicate}")),
+            "enemies": self.query(database, &format!("SELECT * FROM game_world_entity WHERE {enemy_predicate}")),
+            "enemy_spawns": self.query(database, &format!("SELECT guid, entry, map_id, x, y, z, orientation, life_seq FROM game_creature_spawn WHERE {enemy_predicate}")),
             "bots": self.query(database, "SELECT * FROM pkg_playerbots_bot"),
             "roles": self.query(database, "SELECT character_guid, class, role FROM pkg_playerbots_bot"),
             "rotations": self.query(database, "SELECT * FROM pkg_playerbots_rotation"),
