@@ -392,6 +392,68 @@ fn install_authority(
     }
 }
 
+fn publish_authority_locators(topology: &CommandTopology, coordinator: &Coordinator) {
+    let realm = coordinator.realm_core().unwrap();
+    let members = [
+        (
+            topology.target.as_str(),
+            topology.target_party.warrior,
+            topology.target_party.map_id,
+        ),
+        (
+            topology.target.as_str(),
+            topology.target_party.priest,
+            topology.target_party.map_id,
+        ),
+        (
+            topology.target.as_str(),
+            topology.target_party.mage,
+            topology.target_party.map_id,
+        ),
+        (
+            topology.source(),
+            topology.source_one_party.leader,
+            topology.source_one_party.map_id,
+        ),
+        (
+            topology.source_two.as_str(),
+            topology.source_two_party.leader,
+            topology.source_two_party.map_id,
+        ),
+    ];
+    let mut expected = Vec::new();
+    for (database, guid, declared_map) in members {
+        let body = row(
+            &topology.cli,
+            topology.node.server(),
+            database,
+            &format!("SELECT map_id, instance_id FROM game_world_entity WHERE guid = {guid}"),
+        );
+        let map_id = body["map_id"].parse::<u32>().unwrap();
+        let instance_id = body["instance_id"].parse::<u64>().unwrap();
+        realm
+            .set_character_shard(guid, map_id, instance_id)
+            .unwrap();
+        expected.push((guid, map_id, instance_id, declared_map));
+    }
+    let visible = poll_until(POLL_TIMEOUT, || {
+        expected.iter().all(|(guid, map_id, instance_id, _)| {
+            realm
+                .realm_character_partition(*guid)
+                .unwrap()
+                .is_some_and(|locator| {
+                    (locator.map_id, locator.instance_id) == (*map_id, *instance_id)
+                        && !locator.transfer_pending
+                })
+        })
+    });
+    evidence(topology, "realm-locators-before-transfer");
+    assert!(expected.iter().all(
+        |(_, map_id, instance_id, declared_map)| *map_id == *declared_map && *instance_id == 0
+    ));
+    assert!(visible);
+}
+
 fn source_actor(
     cli: &PrivateCli,
     server: &str,
@@ -725,6 +787,7 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "source_orders": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM pkg_playerbots_companion_order"),
         "realm_groups": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_group"),
         "realm_members": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_group_member"),
+        "realm_character_shards": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_character_shard"),
         "content": {"revision": "playerbots-starter-roles-v1", "imported_content": null},
         "geometry": {"revision": "playerbots-synthetic-nav-v1", "client_geometry": null},
     });
@@ -832,6 +895,7 @@ fn companion_command_receipts_recover_both_gateway_crash_boundaries() {
     let _environment = TopologyEnv::install(&shard_map, &topology.realm);
     let (_runtime, source) = topology.coordinator(topology.source(), "party-command-source-one");
     let target = source.shard_handle(&topology.target).unwrap();
+    publish_authority_locators(&topology, &source);
 
     let claimed = queue(
         &topology.cli,
@@ -1172,6 +1236,7 @@ fn companion_command_issuer_sequence_survives_transfer_and_fences_an_older_sourc
     let _environment = TopologyEnv::install(&shard_map, &topology.realm);
     let (runtime, source) = topology.coordinator(topology.source(), "party-command-old-source");
     let target = source.shard_handle(&topology.target).unwrap();
+    publish_authority_locators(&topology, &source);
 
     let older_id = queue(
         &topology.cli,
@@ -1408,6 +1473,7 @@ fn companion_command_receipt_stays_with_a_same_database_transfer() {
     let (_runtime, source) =
         topology.coordinator(topology.source(), "party-command-same-database-source");
     let target = source.shard_handle(&topology.target).unwrap();
+    publish_authority_locators(&topology, &source);
     let intent_id = queue(
         &topology.cli,
         topology.node.server(),
