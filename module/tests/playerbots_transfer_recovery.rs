@@ -200,11 +200,9 @@ fn playerbots_arrival_settles_recovery_only_after_exact_follow_completion() {
         evidence["after"]["runner"][0]["transfer_checkpoint"], "(none = ())",
         "{evidence}"
     );
-    assert!(
-        evidence["after"]["runner"][0]["recovery"]
-            .as_str()
-            .unwrap()
-            .contains("attempts = []"),
+    assert_eq!(
+        evidence["after"]["runner"][0]["recovery"],
+        "(some = (attempts = , active = (none = ()), position_sequence = 0))",
         "{evidence}"
     );
     assert!(
@@ -273,11 +271,9 @@ fn playerbots_missing_recovery_root_retains_its_exact_transfer_budget() {
         evidence["staged"]["runner"][0]["transfer_checkpoint"],
         "{evidence}"
     );
-    assert!(
-        evidence["after"]["runner"][0]["recovery"]
-            .as_str()
-            .unwrap()
-            .contains("attempts = []"),
+    assert_eq!(
+        evidence["after"]["runner"][0]["recovery"],
+        "(some = (attempts = , active = (none = ()), position_sequence = 0))",
         "{evidence}"
     );
     assert!(
