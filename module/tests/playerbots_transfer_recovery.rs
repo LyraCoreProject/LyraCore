@@ -78,7 +78,7 @@ fn snapshot(fixture: &Fixture) -> Value {
             fixture.companion
         )),
         "entities": sorted(fixture.node.query_rows(&format!(
-            "SELECT guid, map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = {} OR guid = {}",
+            "SELECT guid, map_id, instance_id, x, y, z, health, dead FROM game_world_entity WHERE guid = {} OR guid = {}",
             fixture.companion, fixture.leader
         )), "guid"),
         "actions": fixture.node.query_rows(&format!(
@@ -208,6 +208,42 @@ fn playerbots_arrival_settles_recovery_only_after_exact_follow_completion() {
     );
     assert!(
         evidence["after"]["runner"][0]["history"]
+            .as_str()
+            .unwrap()
+            .contains("arrived"),
+        "{evidence}"
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_arrival_does_not_settle_recovery_for_a_dead_nearby_member() {
+    let fixture = fixture("playerbots-transfer-recovery-dead-member", "1202");
+    let staged = stage_arrival(&fixture);
+    fixture
+        .node
+        .assert_call("playerbots_fixture_provision_dead", &[&fixture.leader]);
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let after = snapshot(&fixture);
+    let evidence = json!({"staged": staged, "after": after});
+    save(&fixture, "dead-member-pending", &evidence);
+    assert_eq!(
+        evidence["after"]["runner"][0]["transfer_checkpoint"],
+        evidence["staged"]["runner"][0]["transfer_checkpoint"],
+        "{evidence}"
+    );
+    let leader = evidence["after"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entity| entity["guid"] == fixture.leader)
+        .unwrap();
+    assert_eq!(leader["dead"], "true", "{evidence}");
+    assert_eq!(leader["health"], "0", "{evidence}");
+    assert!(
+        !evidence["after"]["runner"][0]["history"]
             .as_str()
             .unwrap()
             .contains("arrived"),
