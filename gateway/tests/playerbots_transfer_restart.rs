@@ -765,6 +765,68 @@ fn assert_abort(evidence: &serde_json::Value, step: &str) {
     );
 }
 
+fn assert_certified_party_partition(
+    evidence: &serde_json::Value,
+    world_partition: &serde_json::Value,
+    realm_partition: &serde_json::Value,
+    realm_member: &serde_json::Value,
+    locator_name: &str,
+    character_name: &str,
+) {
+    assert_same_fields(
+        world_partition,
+        realm_partition,
+        &[
+            "character_guid",
+            "group_id",
+            "membership_revision",
+            "member_active",
+        ],
+        evidence,
+    );
+    assert_eq!(
+        world_partition["membership_revision"], realm_member["id"],
+        "{evidence}"
+    );
+    assert_eq!(world_partition["member_active"], "true", "{evidence}");
+    assert_eq!(world_partition["state"], "(known = ())", "{evidence}");
+
+    let locator = row(evidence, &["state", "realm", locator_name]);
+    assert_eq!(locator["transfer_pending"], "false", "{evidence}");
+    assert_eq!(
+        locator["character_guid"], world_partition["character_guid"],
+        "{evidence}"
+    );
+    assert_eq!(world_partition["map_id"], locator["map_id"], "{evidence}");
+    assert_eq!(
+        world_partition["instance_id"], locator["instance_id"],
+        "{evidence}"
+    );
+    assert_eq!(
+        world_partition["locator_revision"], locator["revision"],
+        "{evidence}"
+    );
+    assert!(
+        text_field(locator, "revision").parse::<u64>().unwrap() > 0,
+        "{evidence}"
+    );
+    let holder = if text_field(locator, "map_id").parse::<u32>().unwrap() == DESTINATION_MAP {
+        "destination"
+    } else {
+        "source"
+    };
+    let character = row(evidence, &["state", holder, character_name]);
+    assert_eq!(
+        character["guid"], world_partition["character_guid"],
+        "{evidence}"
+    );
+    assert_eq!(character["map_id"], locator["map_id"], "{evidence}");
+    assert_eq!(
+        character["pending_instance_id"], locator["instance_id"],
+        "{evidence}"
+    );
+}
+
 fn assert_crossing_identity(evidence: &serde_json::Value, position: usize) {
     let intent = row(evidence, &["state", "source", "intent"]);
     let bot = &evidence["state"]["bot"];
@@ -930,16 +992,18 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
             member_keys(realm_members),
             "{evidence}"
         );
-        assert_eq!(
-            sorted_rows(evidence, &["state", shard, "partitions"], "character_guid"),
-            sorted_rows(
-                evidence,
-                &["state", "realm", "partitions"],
-                "character_guid",
-            ),
-            "{evidence}"
-        );
     }
+    let source_partitions = sorted_rows(
+        evidence,
+        &["state", "source", "partitions"],
+        "character_guid",
+    );
+    let destination_partitions = sorted_rows(
+        evidence,
+        &["state", "destination", "partitions"],
+        "character_guid",
+    );
+    assert_eq!(source_partitions, destination_partitions, "{evidence}");
     let realm_group = row(evidence, &["state", "realm", "group"]);
     assert_u64_field(realm_group, "group_id", GROUP);
     assert_u64_field(realm_group, "leader_guid", leader_guid);
@@ -957,6 +1021,7 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
     ];
     expected_guids.sort_unstable();
     assert_eq!(member_guids, expected_guids, "{evidence}");
+    assert_eq!(source_partitions.len(), expected_guids.len(), "{evidence}");
     let partitions = rows(evidence, &["state", "realm", "partitions"]);
     let mut partition_guids: Vec<_> = partitions
         .iter()
@@ -968,50 +1033,69 @@ fn assert_party_mirror(evidence: &serde_json::Value) {
         .collect();
     partition_guids.sort_unstable();
     assert_eq!(partition_guids, expected_guids, "{evidence}");
-    for partition in partitions {
-        let guid = text_field(partition, "character_guid")
-            .parse::<u64>()
-            .unwrap();
-        assert!(expected_guids.contains(&guid), "{evidence}");
-        let member = members
-            .iter()
-            .find(|member| text_field(member, "character_guid").parse::<u64>().unwrap() == guid)
-            .unwrap();
-        assert_eq!(partition["membership_revision"], member["id"], "{evidence}");
-        if guid == bot_guid || guid == leader_guid {
-            assert_u64_field(partition, "map_id", u64::from(DESTINATION_MAP));
-            assert_u64_field(partition, "instance_id", DESTINATION_INSTANCE);
-        } else {
-            assert_u64_field(partition, "map_id", 0);
-            assert_u64_field(partition, "instance_id", 0);
-        }
-    }
-    for (guid, locator_name, character_name) in [
-        (bot_guid, "locator", "character"),
-        (leader_guid, "leader_locator", "leader_character"),
+    for (guid, locator_name, character_name, map_id, instance_id) in [
+        (
+            bot_guid,
+            "locator",
+            "character",
+            DESTINATION_MAP,
+            DESTINATION_INSTANCE,
+        ),
+        (
+            leader_guid,
+            "leader_locator",
+            "leader_character",
+            DESTINATION_MAP,
+            DESTINATION_INSTANCE,
+        ),
         (
             bot["priest_guid"].as_u64().unwrap(),
             "priest_locator",
             "priest_character",
+            0,
+            0,
         ),
         (
             bot["mage_guid"].as_u64().unwrap(),
             "mage_locator",
             "mage_character",
+            0,
+            0,
         ),
     ] {
+        assert!(expected_guids.contains(&guid), "{evidence}");
+        let member = members
+            .iter()
+            .find(|member| text_field(member, "character_guid").parse::<u64>().unwrap() == guid)
+            .unwrap();
+        let realm_partition = partitions
+            .iter()
+            .find(|partition| {
+                text_field(partition, "character_guid")
+                    .parse::<u64>()
+                    .unwrap()
+                    == guid
+            })
+            .unwrap();
+        let world_partition = source_partitions
+            .iter()
+            .find(|partition| {
+                text_field(partition, "character_guid")
+                    .parse::<u64>()
+                    .unwrap()
+                    == guid
+            })
+            .unwrap();
         let locator = row(evidence, &["state", "realm", locator_name]);
-        let holder = if text_field(locator, "map_id").parse::<u32>().unwrap() == DESTINATION_MAP {
-            "destination"
-        } else {
-            "source"
-        };
-        let character = row(evidence, &["state", holder, character_name]);
-        assert_u64_field(character, "guid", guid);
-        assert_eq!(character["map_id"], locator["map_id"], "{evidence}");
-        assert_eq!(
-            character["pending_instance_id"], locator["instance_id"],
-            "{evidence}"
+        assert_u64_field(locator, "map_id", u64::from(map_id));
+        assert_u64_field(locator, "instance_id", instance_id);
+        assert_certified_party_partition(
+            evidence,
+            world_partition,
+            realm_partition,
+            member,
+            locator_name,
+            character_name,
         );
     }
 }
