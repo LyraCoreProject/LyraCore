@@ -531,6 +531,10 @@ fn playerbots_recovery_cancels_an_owned_gameobject_approach_when_the_target_disa
         "playerbots_recovery_fixture_restore_simple_gameobject",
         &[&guid],
     );
+    node.assert_call(
+        "playerbots_recovery_fixture_position_simple_gameobject",
+        &[&guid],
+    );
     std::thread::sleep(PASS_INTERVAL);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
     let resumed = serde_json::json!({

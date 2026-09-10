@@ -711,24 +711,28 @@ fn playerbots_observed_safe_position_is_invalidated_after_a_partition_change() {
         .first()
         .is_some_and(|row| !row["safe_position"].contains("none"))
     });
-    let retained = query_one(
-        &node,
-        &format!("SELECT quest_entry, runner_objective_identity FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-    );
+    let held = quest(&node, &guid, 7).expect("accepted Quest missing");
+    record(&node, "safe-before-partition-change");
 
     node.assert_call("playerbots_quest_loop_fixture_set_partition", &[&guid, "1"]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
-    let changed = query_one(
-        &node,
-        &format!("SELECT quest_entry, runner_objective_identity, safe_position FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"),
-    );
-    assert_eq!(changed["quest_entry"], retained["quest_entry"]);
-    assert_eq!(
-        changed["runner_objective_identity"],
-        retained["runner_objective_identity"]
-    );
-    assert!(changed["safe_position"].contains("none"), "{changed:?}");
     record(&node, "safe-partition-change");
+    let retained = node.query_rows(&format!(
+        "SELECT quest_entry, runner_objective_identity, safe_position FROM pkg_playerbots_quest_objective WHERE character_guid = {guid}"
+    ));
+    let admission = query_one(
+        &node,
+        &format!("SELECT considered_quest, selected_quest, missing_capability FROM pkg_playerbots_quest_admission WHERE character_guid = {guid}"),
+    );
+    let after_quest = quest(&node, &guid, 7);
+    assert!(retained.is_empty(), "{retained:?}");
+    assert_eq!(admission["considered_quest"], "7", "{admission:?}");
+    assert_eq!(admission["selected_quest"], "(none = ())", "{admission:?}");
+    assert_eq!(
+        admission["missing_capability"], "(some = (missingActualEndDestination = ()))",
+        "{admission:?}"
+    );
+    assert_eq!(after_quest, Some(held));
 }
 
 #[test]
