@@ -822,6 +822,96 @@ fn playerbots_assist_uses_only_the_named_members_actual_fight() {
 
 #[test]
 #[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_assist_honors_named_companions_current_target_order() {
+    let fixture = fixture("playerbots-orders-assist-companion-target");
+    let node = &fixture.node;
+    let first = &fixture.enemies[0];
+    let second = &fixture.enemies[1];
+    assert_eq!(entity(node, &fixture.priest)["target_guid"], "0");
+    issue(
+        &fixture,
+        &format!("target|{}|{first}", fixture.priest),
+        &fixture.priest,
+        false,
+    );
+    issue(
+        &fixture,
+        &format!("assist|{}|{}", fixture.mage, fixture.priest),
+        &fixture.mage,
+        true,
+    );
+    let assert_target = |target: &str| {
+        assert_eq!(
+            runner(node, &fixture.mage)["companion_fight_target_guid"],
+            format!("(some = {target})")
+        );
+        assert!(order(node, &fixture.mage)["last_outcome"]
+            .to_ascii_lowercase()
+            .contains("applied"));
+    };
+    assert_target(first);
+    evidence(&fixture, "assist-companion-target-before-attack");
+    issue(
+        &fixture,
+        &format!("target|{}|{second}", fixture.priest),
+        &fixture.priest,
+        false,
+    );
+    pass(node, &fixture.mage);
+    assert_target(second);
+    evidence(&fixture, "assist-companion-target-replaced");
+
+    select_and_engage(node, &fixture.leader, first);
+    let assert_refusal = |outcome: &str| {
+        assert!(order(node, &fixture.mage)["last_outcome"]
+            .to_ascii_lowercase()
+            .contains(outcome));
+        assert_eq!(
+            runner(node, &fixture.mage)["companion_fight_target_guid"],
+            "(none = ())"
+        );
+        assert!(node
+            .query_rows(&format!(
+                "SELECT * FROM game_pending_cast WHERE caster_guid = {}",
+                fixture.mage
+            ))
+            .is_empty());
+        assert!(node
+            .query_rows(&format!(
+                "SELECT * FROM game_melee_attack WHERE attacker_guid = {}",
+                fixture.mage
+            ))
+            .is_empty());
+    };
+    node.assert_call(
+        "playerbots_fixture_roles_control",
+        &[&fixture.leader, second, "50020"],
+    );
+    pass(node, &fixture.mage);
+    assert_refusal("targetcontrolled");
+    node.assert_call(
+        "playerbots_fixture_roles_clear_control",
+        &[&fixture.leader, second],
+    );
+    for (mode, outcome) in [("1", "wrongpartition"), ("0", "targetdead")] {
+        node.assert_call("playerbots_fixture_orders_target_state", &[second, mode]);
+        pass(node, &fixture.mage);
+        assert_refusal(outcome);
+        node.assert_call("playerbots_fixture_orders_target_state", &[second, "2"]);
+    }
+    pass(node, &fixture.mage);
+    assert_target(second);
+    node.assert_call(
+        "playerbots_select_controller",
+        &[&fixture.priest, "{\"recordOnly\":[]}"],
+    );
+    pass(node, &fixture.mage);
+    assert_refusal("targetunavailable");
+    evidence(&fixture, "assist-companion-target-authority-ended");
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
 fn playerbots_target_pulls_only_the_exact_eligible_creature_and_releases_controlled_work() {
     let fixture = fixture("playerbots-orders-target");
     let node = &fixture.node;
