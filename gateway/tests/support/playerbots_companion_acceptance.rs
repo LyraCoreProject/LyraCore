@@ -835,8 +835,7 @@ impl WireControl {
             .directory
             .join(format!("command-{ordinal}.json.pending"));
         let command = self.directory.join(format!("command-{ordinal}.json"));
-        fs::write(&pending, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
-        fs::rename(pending, command).unwrap();
+        let authored_command = write_control_command(&pending, &command, &body);
         let sent = self.directory.join(format!("sent-{ordinal}.json"));
         wait_file(
             &sent,
@@ -844,10 +843,10 @@ impl WireControl {
         );
         let sent_evidence = read_json(&sent);
         assert_eq!(sent_evidence["ordinal"], json!(ordinal));
-        assert_eq!(sent_evidence["command"], body);
+        assert_eq!(sent_evidence["command"], authored_command);
         let mut evidence = json!({
             "ordinal": ordinal,
-            "command": body,
+            "command": authored_command,
             "sent": sent_evidence,
         });
         let waits_for_result = evidence["command"]["kind"] != "addon"
@@ -1063,8 +1062,53 @@ fn wait_file(path: &Path, message: &str) {
     wait_until(message, || path.is_file());
 }
 
+fn write_control_command(pending: &Path, command: &Path, body: &Value) -> Value {
+    let bytes = serde_json::to_vec_pretty(body).unwrap();
+    let authored_command = serde_json::from_slice(&bytes).unwrap();
+    fs::write(pending, bytes).unwrap();
+    fs::rename(pending, command).unwrap();
+    authored_command
+}
+
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+#[test]
+fn serialized_move_command_preserves_requested_f32_coordinates() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "lyracore-companion-command-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let pending = directory.join("command-1.json.pending");
+    let command = directory.join("command-1.json");
+    let from = (3.4267998_f32, -385.475_f32, 62.4561_f32);
+    let to = (from.0 + 18.0, from.1, from.2);
+    let body = json!({"kind": "move", "from": from, "to": to, "speed": 7.0, "ordinal": 1});
+
+    let authored_command = write_control_command(&pending, &command, &body);
+
+    assert_eq!(authored_command, read_json(&command));
+    assert_eq!(
+        fs::read(&command).unwrap(),
+        serde_json::to_vec_pretty(&body).unwrap()
+    );
+    for (field, expected) in [("from", from), ("to", to)] {
+        let actual = authored_command[field].as_array().unwrap();
+        assert_eq!(actual.len(), 3);
+        for (value, expected) in actual.iter().zip([expected.0, expected.1, expected.2]) {
+            assert_eq!(value.as_f64().unwrap() as f32, expected);
+        }
+    }
+    assert_eq!(authored_command["kind"], "move");
+    assert_eq!(authored_command["ordinal"], 1);
+    assert_eq!(authored_command["speed"].as_f64().unwrap() as f32, 7.0);
+    fs::remove_dir_all(directory).unwrap();
 }
 
 fn git(path: &Path, args: &[&str]) -> String {
