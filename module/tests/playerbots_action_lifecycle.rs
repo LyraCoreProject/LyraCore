@@ -16,9 +16,11 @@ struct QuestRoot {
     label: &'static str,
     class: &'static str,
     role: &'static str,
+    quest: u32,
     target: u64,
-    root_shape: &'static str,
+    recovery_shape: &'static str,
     prerequisite: &'static str,
+    cast_spell: Option<u32>,
 }
 
 const QUEST_ROOTS: [QuestRoot; 7] = [
@@ -27,63 +29,77 @@ const QUEST_ROOTS: [QuestRoot; 7] = [
         label: "accept-quest",
         class: "1",
         role: "0",
+        quest: 783,
         target: CREATURE_PREFIX | (823u64 << 24) | 1,
-        root_shape: "acceptQuest = (",
+        recovery_shape: "operation = (accept = ())",
         prerequisite: "entity",
+        cast_spell: None,
     },
     QuestRoot {
         fixture_kind: 1,
         label: "turn-in-quest",
         class: "1",
         role: "0",
+        quest: 783,
         target: CREATURE_PREFIX | (197u64 << 24) | 1,
-        root_shape: "turnInQuest = (",
+        recovery_shape: "operation = (turnIn = ())",
         prerequisite: "entity",
+        cast_spell: None,
     },
     QuestRoot {
         fixture_kind: 2,
         label: "loot-creature",
         class: "1",
         role: "0",
+        quest: 33,
         target: CREATURE_PREFIX | (299u64 << 24) | 1,
-        root_shape: "lootCreature = (",
+        recovery_shape: "operation = (lootCreature = ())",
         prerequisite: "entity",
+        cast_spell: None,
     },
     QuestRoot {
         fixture_kind: 3,
         label: "use-gameobject",
         class: "8",
         role: "2",
+        quest: 3904,
         target: GAMEOBJECT_PREFIX | 161_557,
-        root_shape: "useGameObject = (",
+        recovery_shape: "operation = (useGameObject = ())",
         prerequisite: "gameObject",
+        cast_spell: None,
     },
     QuestRoot {
         fixture_kind: 4,
         label: "loot-gameobject",
         class: "8",
         role: "2",
+        quest: 3904,
         target: GAMEOBJECT_PREFIX | 161_557,
-        root_shape: "lootGameObject = (",
+        recovery_shape: "operation = (lootGameObject = ())",
         prerequisite: "gameObject",
+        cast_spell: None,
     },
     QuestRoot {
         fixture_kind: 5,
         label: "attack",
         class: "1",
         role: "0",
+        quest: 7,
         target: CREATURE_PREFIX | (6u64 << 24) | 1,
-        root_shape: "attack = ",
+        recovery_shape: "fight = ",
         prerequisite: "entity",
+        cast_spell: None,
     },
     QuestRoot {
         fixture_kind: 6,
         label: "quest-cast",
         class: "5",
         role: "1",
+        quest: 7,
         target: CREATURE_PREFIX | (6u64 << 24) | 1,
-        root_shape: "cast = (",
+        recovery_shape: "fight = ",
         prerequisite: "castingPosition",
+        cast_spell: Some(585),
     },
 ];
 
@@ -189,7 +205,10 @@ fn sorted(mut rows: Vec<BTreeMap<String, String>>, key: &str) -> Vec<BTreeMap<St
 fn snapshot(node: &Standalone) -> Value {
     json!({
         "bot": sorted(node.query_rows("SELECT character_guid, controller FROM pkg_playerbots_bot"), "character_guid"),
-        "runner": sorted(node.query_rows("SELECT character_guid, objective_sequence, objective, foreground, chosen, candidate_order, transfer_checkpoint, last_outcome, failures, history FROM pkg_playerbots_runner"), "character_guid"),
+        "runner": sorted(node.query_rows("SELECT character_guid, objective_sequence, objective, foreground, chosen, candidate_order, recovery, transfer_checkpoint, last_outcome, failures, history FROM pkg_playerbots_runner"), "character_guid"),
+        "retained_quests": sorted(node.query_rows("SELECT character_guid, runner_objective_identity, quest_entry, target, destination FROM pkg_playerbots_quest_objective"), "character_guid"),
+        "quest_cast_rotation": sorted(node.query_rows("SELECT class, role, priority, spell_id, condition FROM pkg_playerbots_rotation WHERE class = 5 AND role = 1 AND condition = 0"), "priority"),
+        "quest_cast_spellbook": sorted(node.query_rows("SELECT character_guid, spell_id FROM game_player_spell WHERE spell_id = 585"), "character_guid"),
         "actions": sorted(node.query_rows("SELECT character_guid, kind, target_guid, spell_id, quest_entry, outcome, started_micros, observed_micros FROM pkg_playerbots_action"), "character_guid"),
         "movement": sorted(node.query_rows("SELECT guid, sx, sy, sz, dx, dy, dz, start_micros, dur_ms, run FROM game_creature_spline"), "guid"),
         "characters": sorted(node.query_rows("SELECT guid, map_id, instance_id, x, y, z, dead, player_flags FROM game_world_entity WHERE guid >= 1000000 AND guid < 2000000"), "guid"),
@@ -219,25 +238,17 @@ fn assert_objective_identity(before: &Value, after: &Value) {
 }
 
 fn assert_real_pending_root(evidence: &Value, root: QuestRoot, guid: &str) {
-    assert_eq!(
-        evidence["bot"][0]["controller"], "(cohort = ())",
-        "{evidence}"
-    );
+    assert_real_quest_root(evidence, root, guid);
     let runner = &evidence["runner"][0];
     let order = runner["candidate_order"].as_str().unwrap();
-    assert_eq!(order.matches(root.root_shape).count(), 1, "{evidence}");
+    assert_eq!(order.matches(root.prerequisite).count(), 1, "{evidence}");
     assert!(order.contains(&root.target.to_string()), "{evidence}");
-    assert!(order.contains(root.prerequisite), "{evidence}");
     let chosen = runner["chosen"].as_str().unwrap();
     assert!(chosen.contains(root.prerequisite), "{evidence}");
     assert!(chosen.contains(&root.target.to_string()), "{evidence}");
     let foreground = runner["foreground"].as_str().unwrap();
     assert!(foreground.contains(root.prerequisite), "{evidence}");
     assert!(foreground.contains(&root.target.to_string()), "{evidence}");
-    assert!(
-        runner["objective"].as_str().unwrap().contains("travelling"),
-        "{evidence}"
-    );
     assert_eq!(
         evidence["movement"]
             .as_array()
@@ -248,6 +259,64 @@ fn assert_real_pending_root(evidence: &Value, root: QuestRoot, guid: &str) {
         1,
         "{evidence}"
     );
+}
+
+fn assert_real_quest_root(evidence: &Value, root: QuestRoot, guid: &str) {
+    assert_eq!(
+        evidence["bot"][0]["controller"], "(cohort = ())",
+        "{evidence}"
+    );
+    let runner = &evidence["runner"][0];
+    assert!(
+        runner["objective"]
+            .as_str()
+            .unwrap()
+            .contains("kind = (quest = ())")
+            && runner["objective"].as_str().unwrap().contains("travelling"),
+        "{evidence}"
+    );
+    let recovery = runner["recovery"].as_str().unwrap();
+    assert!(recovery.contains(root.recovery_shape), "{evidence}");
+    assert!(recovery.contains(&root.target.to_string()), "{evidence}");
+    assert!(
+        recovery.contains(&format!(
+            "objective = {}",
+            runner["objective_sequence"].as_str().unwrap()
+        )),
+        "{evidence}"
+    );
+    let retained = evidence["retained_quests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["character_guid"] == guid)
+        .unwrap_or_else(|| panic!("retained Quest missing: {evidence}"));
+    assert_eq!(
+        retained["quest_entry"],
+        root.quest.to_string(),
+        "{evidence}"
+    );
+    assert_eq!(
+        retained["runner_objective_identity"], runner["objective_sequence"],
+        "{evidence}"
+    );
+    assert!(
+        retained["destination"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("guid = {}", root.target)),
+        "{evidence}"
+    );
+    if let Some(spell) = root.cast_spell {
+        let rotations = evidence["quest_cast_rotation"].as_array().unwrap();
+        assert_eq!(rotations.len(), 1, "{evidence}");
+        assert_eq!(rotations[0]["priority"], "10", "{evidence}");
+        assert_eq!(rotations[0]["spell_id"], spell.to_string(), "{evidence}");
+        let spellbook = evidence["quest_cast_spellbook"].as_array().unwrap();
+        assert_eq!(spellbook.len(), 1, "{evidence}");
+        assert_eq!(spellbook[0]["character_guid"], guid, "{evidence}");
+        assert_eq!(spellbook[0]["spell_id"], spell.to_string(), "{evidence}");
+    }
     assert!(
         evidence["transfers"].as_array().unwrap().is_empty(),
         "{evidence}"
@@ -282,6 +351,7 @@ fn structured_number(value: &str, field: &str) -> String {
 fn home_pending(lifecycle: &str) -> (Standalone, String, Value) {
     let (node, bots) = fixture(&format!("playerbots-action-home-{lifecycle}"), 1);
     let guid = bots[0].clone();
+    node.assert_call("playerbots_fixture_provision_steps", &[&guid, "32"]);
     node.assert_call("playerbots_fixture_runner_stage", &[&guid, "false"]);
     node.assert_call("playerbots_fixture_runner_select_cohort", &[&guid]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
@@ -371,6 +441,7 @@ fn playerbots_return_home_expires_its_real_owned_movement() {
 fn playerbots_home_move_records_a_verified_blocked_route() {
     let (node, bots) = fixture("playerbots-action-home-blocked-route", 1);
     let guid = &bots[0];
+    node.assert_call("playerbots_fixture_provision_steps", &[guid, "32"]);
     node.assert_call("playerbots_fixture_blocked_quest", &[guid]);
     node.assert_call("playerbots_fixture_runner_stage", &[guid, "false"]);
     node.assert_call("gw_abandon_quest", &[&support::actor(guid), "50909"]);
@@ -453,10 +524,7 @@ fn playerbots_quest_roots_cancel_their_real_movement_prerequisites() {
         let before = &pending["runner"][0];
         let after = &cancelled["runner"][0];
         assert_objective_identity(before, after);
-        assert!(
-            after["foreground"].as_str().unwrap().contains("none"),
-            "{cancelled}"
-        );
+        assert_eq!(after["foreground"], "(none = ())", "{cancelled}");
         assert!(
             after["last_outcome"].as_str().unwrap().contains("frozen"),
             "{cancelled}"
@@ -510,10 +578,7 @@ fn playerbots_quest_roots_expire_their_real_movement_prerequisites() {
         let before = &pending["runner"][0];
         let after = &expired["runner"][0];
         assert_objective_identity(before, after);
-        assert!(
-            after["foreground"].as_str().unwrap().contains("none"),
-            "{expired}"
-        );
+        assert_eq!(after["foreground"], "(none = ())", "{expired}");
         assert!(
             after["failures"].as_str().unwrap().contains("deadline"),
             "{expired}"
@@ -578,9 +643,10 @@ fn playerbots_quest_move_targets_record_verified_blocked_routes() {
         let (node, guid) = quest_fixture(root, "blocked-route", true);
         let pending = snapshot(&node);
         save(&node, &format!("{}-blocked-first", root.label), &pending);
+        assert_real_quest_root(&pending, root, &guid);
         let runner = &pending["runner"][0];
         let order = runner["candidate_order"].as_str().unwrap();
-        assert_eq!(order.matches(root.root_shape).count(), 1, "{pending}");
+        assert_eq!(order.matches(root.prerequisite).count(), 1, "{pending}");
         assert!(order.contains(root.prerequisite), "{pending}");
         assert!(order.contains(&root.target.to_string()), "{pending}");
         let chosen = runner["chosen"].as_str().unwrap();
@@ -714,6 +780,24 @@ fn playerbots_recovery_position_expires_with_its_retained_quest() {
         1,
         "{pending}"
     );
+    assert!(
+        pending["actions"].as_array().unwrap().iter().any(|action| {
+            action["kind"].as_str().unwrap().contains("move")
+                && action["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .contains("status = (blocked = ())")
+        }),
+        "{pending}"
+    );
+    assert!(
+        pending["movement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["guid"] != guid),
+        "a blocked route must not claim a live spline: {pending}"
+    );
 
     node.assert_call("playerbots_fixture_runner_expire_objective", &[&guid]);
     node.assert_call("playerbots_fixture_runner_pass_once", &[&guid]);
@@ -736,7 +820,15 @@ fn playerbots_recovery_position_expires_with_its_retained_quest() {
             .contains(&format!("recoveryPosition = {position}")),
         "{expired}"
     );
-    assert_stopped_owned_movement(&expired, &guid);
+    assert_eq!(runner["foreground"], "(none = ())", "{expired}");
+    assert!(
+        expired["movement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["guid"] != guid),
+        "expiry of a blocked route must not manufacture a stopped spline: {expired}"
+    );
     assert_eq!(expired["actions"], pending["actions"], "{expired}");
     assert_eq!(expired["quests"], pending["quests"], "{expired}");
 }
@@ -749,12 +841,9 @@ struct TransferFixture {
     leader: String,
 }
 
-fn transfer_party(name: &str, blocked: bool) -> TransferFixture {
+fn spawn_transfer_party(name: &str) -> TransferFixture {
     let mut node = Standalone::start(name);
     node.publish_module();
-    if blocked {
-        remove_builtin_weather_import_stamp(&node);
-    }
     node.assert_call("claim_operator", &[]);
     node.assert_call("install_guid_range", &["1000000"]);
     node.assert_call("playerbots_spawn", &["4", "1200", "1200", "50"]);
@@ -781,14 +870,6 @@ fn transfer_party(name: &str, blocked: bool) -> TransferFixture {
         .find(|bot| bot["class"] == "8" && bot["role"] == "2")
         .unwrap()["character_guid"]
         .clone();
-    node.assert_call("playerbots_fixture_prepare", &[]);
-    node.assert_call(
-        "playerbots_fixture_roles_stage",
-        &[&companion, &priest, &mage, &leader],
-    );
-    for guid in [&companion, &priest, &mage] {
-        node.assert_call("playerbots_fixture_provision_steps", &[guid, "32"]);
-    }
     TransferFixture {
         node,
         companion,
@@ -798,16 +879,46 @@ fn transfer_party(name: &str, blocked: bool) -> TransferFixture {
     }
 }
 
+fn stage_transfer_roles(fixture: &TransferFixture) {
+    let node = &fixture.node;
+    node.assert_call(
+        "playerbots_fixture_roles_stage",
+        &[
+            &fixture.companion,
+            &fixture.priest,
+            &fixture.mage,
+            &fixture.leader,
+        ],
+    );
+    for guid in [&fixture.companion, &fixture.priest, &fixture.mage] {
+        node.assert_call("playerbots_fixture_provision_steps", &[guid, "32"]);
+    }
+}
+
+fn transfer_party(name: &str) -> TransferFixture {
+    let fixture = spawn_transfer_party(name);
+    fixture.node.assert_call("playerbots_fixture_prepare", &[]);
+    stage_transfer_roles(&fixture);
+    fixture
+}
+
 fn transfer_fixture(name: &str, mode: u8, blocked: bool) -> TransferFixture {
-    let fixture = transfer_party(name, blocked);
+    let fixture = if blocked {
+        let fixture = spawn_transfer_party(name);
+        remove_builtin_weather_import_stamp(&fixture.node);
+        fixture
+            .node
+            .assert_call("playerbots_quest_fixture_stage", &[&fixture.companion]);
+        stage_transfer_roles(&fixture);
+        fixture
+    } else {
+        transfer_party(name)
+    };
     fixture.node.assert_call(
         "playerbots_transfer_fixture_stage",
         &[&fixture.companion, &fixture.leader, &mode.to_string()],
     );
     if blocked {
-        fixture
-            .node
-            .assert_call("playerbots_quest_fixture_stage", &[&fixture.companion]);
         fixture.node.assert_call(
             "playerbots_recovery_fixture_block_companion",
             &[&fixture.companion],
@@ -830,14 +941,15 @@ fn set_transfer_party_membership(fixture: &TransferFixture, mode: u8) {
 }
 
 fn quest_transfer_fixture(name: &str, mode: u8) -> (TransferFixture, Value) {
-    let fixture = transfer_party(name, false);
+    let fixture = spawn_transfer_party(name);
     remove_builtin_weather_import_stamp(&fixture.node);
     stage_geometry(&fixture.node);
-    set_transfer_party_membership(&fixture, 1);
     fixture.node.assert_call(
         "playerbots_quest_loop_fixture_stage_named",
         &[&fixture.companion],
     );
+    stage_transfer_roles(&fixture);
+    set_transfer_party_membership(&fixture, 1);
     fixture.node.assert_call(
         "playerbots_action_lifecycle_stage_quest_plan",
         &[
@@ -1264,6 +1376,7 @@ fn playerbots_expired_quest_does_not_preempt_resurrection_or_defense() {
 
     let (defense_node, defense) =
         quest_fixture(QUEST_ROOTS[5], "expired-quest-defense-priority", false);
+    defense_node.assert_call("playerbots_fixture_companion_health", &[&defense, "100"]);
     defense_node.assert_call("playerbots_fixture_runner_expire_objective", &[&defense]);
     let defense_expired = snapshot(&defense_node);
     save(&defense_node, "defense-expired-quest", &defense_expired);
@@ -1350,20 +1463,17 @@ fn playerbots_admitted_transfer_ignores_an_unrelated_expired_objective() {
         .find(|row| row["character_guid"] == fixture.companion)
         .unwrap();
     assert!(
-        !runner["objective"].as_str().unwrap().contains("none"),
+        runner["objective"].as_str().unwrap().starts_with("(some ="),
         "{admitted}"
     );
     assert!(
-        !runner["transfer_checkpoint"]
+        runner["transfer_checkpoint"]
             .as_str()
             .unwrap()
-            .contains("none"),
+            .starts_with("(some ="),
         "{admitted}"
     );
-    assert!(
-        runner["foreground"].as_str().unwrap().contains("none"),
-        "{admitted}"
-    );
+    assert_eq!(runner["foreground"], "(none = ())", "{admitted}");
 
     fixture.node.assert_call(
         "playerbots_fixture_runner_expire_objective",
