@@ -759,6 +759,40 @@ mod runtime_tests {
     }
 
     #[test]
+    fn route_endpoints_on_either_side_of_a_cell_edge_keep_their_walkability() {
+        let mut cell = NavCellData {
+            base_z: 50.0,
+            walk: vec![0xff; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        };
+        walk_set(&mut cell.walk, 0, 18, false);
+        let mut fetch = |x, y| ((x, y) == (470, 476)).then(|| cell.clone());
+        for (start_x, end_x, reachable) in [
+            (1401.0, 1400.0, true),
+            (1401.0, 1400.0_f32.next_down(), false),
+            (1398.5, 1399.4791, false),
+            (1398.5, 1399.4791_f32.next_down(), true),
+        ] {
+            let route = find_leg(&mut fetch, (start_x, 1190.3), (end_x, 1190.3), 0);
+            assert_eq!(route.is_some(), reachable, "endpoint x={end_x:?}");
+        }
+    }
+
+    #[test]
+    fn a_direct_route_cannot_squeeze_between_blocked_corners() {
+        let mut cell = NavCellData {
+            base_z: 50.0,
+            walk: vec![0xff; WALK_BYTES],
+            obs: vec![OBS_NONE; OBS_BYTES],
+        };
+        walk_set(&mut cell.walk, 1, 2, false);
+        let mut fetch = |x, y| ((x, y) == (470, 470)).then(|| cell.clone());
+        let from = sub_center(470, 2, WALK_DIM);
+        let to = sub_center(470, 0, WALK_DIM);
+        assert!(find_leg(&mut fetch, (from, from), (to, to), 0).is_none());
+    }
+
+    #[test]
     fn open_field_fast_path_takes_zero_expansions() {
         // Both points in the clear half of the cell — direct line, no A*.
         let from = at(40, 10);
