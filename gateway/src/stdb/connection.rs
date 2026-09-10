@@ -908,6 +908,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_session",
         "SELECT * FROM game_account_claim",
         "SELECT * FROM game_account_fence",
+        "SELECT * FROM game_account_character_owner",
         "SELECT * FROM game_character",
         "SELECT * FROM game_world_entity",
         // Loot Tag rendering is viewer-relative. These rows let the Gateway project the stored

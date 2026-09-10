@@ -17,6 +17,15 @@ fn claim(shard: &Standalone, nonce: &str) -> String {
         .clone()
 }
 
+fn claim_for(shard: &Standalone, character_guid: &str, nonce: &str) -> (String, String) {
+    shard.assert_call("claim_account", &["1", character_guid, nonce]);
+    let row = &shard.query_rows("SELECT * FROM game_account_claim")[0];
+    (
+        token(row["generation"].parse().unwrap(), nonce.parse().unwrap()),
+        row["expires_micros"].clone(),
+    )
+}
+
 fn fence(shard: &Standalone, token: &str, deadline: &str) {
     shard.assert_call("fence_account", &[token, "\"TEST\"", "1", deadline]);
 }
@@ -32,6 +41,16 @@ fn refused(shard: &Standalone, reducer: &str, args: &[&str], reason: &str) {
         !result.status.success() && output.contains(reason),
         "{reducer}: {output}"
     );
+}
+
+fn make_test_account_shadow(shard: &Standalone) {
+    shard.assert_sql("UPDATE game_account SET username = '#1' WHERE id = 1");
+    shard.assert_call("provision_account", &["\"#1\"", "[]", "[]"]);
+    let account =
+        &shard.query_rows("SELECT username,salt,verifier FROM game_account WHERE id = 1")[0];
+    assert_eq!(account["username"], "#1");
+    assert_eq!(account["salt"], "0x");
+    assert_eq!(account["verifier"], "0x");
 }
 
 #[test]
@@ -249,6 +268,7 @@ fn expired_account_ownership_is_reaped_while_another_gateway_keeps_its_lease_ali
     let first = token(1, 301);
     let deadline = claim(&shard, "301");
     fence(&shard, &first, &deadline);
+    make_test_account_shadow(&shard);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     assert_eq!(
         shard
@@ -281,6 +301,10 @@ fn expired_account_ownership_is_reaped_while_another_gateway_keeps_its_lease_ali
         shard.query_rows("SELECT closed FROM game_account_fence")[0]["closed"],
         "true"
     );
+    let owner = &shard.query_rows("SELECT * FROM game_account_character_owner")[0];
+    assert_eq!(owner["character_guid"], "1");
+    assert_eq!(owner["account_id"], "1");
+    assert_eq!(owner["account_name"], "TEST");
     // Retained, expired generations protect old requests without preventing a fresh admission.
     let second = token(2, 302);
     let deadline = claim(&shard, "302");
@@ -366,12 +390,251 @@ fn first_admission_cleans_each_legacy_character_with_a_shared_identity() {
 
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn account_character_ownership_survives_account_switching() {
+    let mut realm = Standalone::start("account-owner-switch-realm");
+    realm.publish_module();
+    realm.assert_call("claim_operator", &[]);
+    realm.assert_call("install_guid_range", &["0"]);
+    let mut world = Standalone::start("account-owner-switch-world");
+    world.publish_module();
+    world.assert_call("claim_operator", &[]);
+    world.assert_call("install_guid_range", &["0"]);
+    for name in ["Second", "Third"] {
+        world.assert_call(
+            "create_character",
+            &[
+                "1",
+                &format!("\"{name}\""),
+                "1",
+                "1",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+            ],
+        );
+    }
+    let second = world.query_rows("SELECT guid FROM game_character WHERE name = 'Second'")[0]
+        ["guid"]
+        .clone();
+    let third =
+        world.query_rows("SELECT guid FROM game_character WHERE name = 'Third'")[0]["guid"].clone();
+
+    let (first_token, first_deadline) = claim_for(&realm, "1", "601");
+    fence(&world, &first_token, &first_deadline);
+    world.assert_call("close_account_fence", &[&first_token]);
+    realm.assert_call("release_account_claim", &[&first_token]);
+
+    let (second_token, second_deadline) = claim_for(&realm, &second, "602");
+    world.assert_call(
+        "fence_account",
+        &[&second_token, "\"TEST\"", &second, &second_deadline],
+    );
+    world.assert_call("close_account_fence", &[&second_token]);
+    realm.assert_call("release_account_claim", &[&second_token]);
+    let mut owners = world.query_rows("SELECT * FROM game_account_character_owner");
+    owners.sort_by_key(|row| row["character_guid"].parse::<u64>().unwrap());
+    assert_eq!(owners.len(), 2);
+    assert_eq!(owners[0]["character_guid"], "1");
+    assert_eq!(owners[1]["character_guid"], second);
+    assert!(owners
+        .iter()
+        .all(|row| row["account_id"] == "1" && row["account_name"] == "TEST"));
+
+    world.assert_call("provision_account", &["\"OTHER\"", "[]", "[]"]);
+    let other_account =
+        world.query_rows("SELECT id FROM game_account WHERE username = 'OTHER'")[0]["id"].clone();
+    make_test_account_shadow(&world);
+    world.assert_call("debug_spawn_player_entity", &["1"]);
+    world.assert_call("debug_spawn_player_entity", &[&second]);
+    let (third_token, third_deadline) = claim_for(&realm, "1", "603");
+    let durable_before = world.query_rows("SELECT * FROM game_character");
+    let live_before = world.query_rows("SELECT * FROM game_world_entity WHERE account_id = 1");
+    let owners_before = world.query_rows("SELECT * FROM game_account_character_owner");
+    refused(
+        &world,
+        "fence_account",
+        &[&third_token, "\"OTHER\"", "1", &third_deadline],
+        "Account fence name changed",
+    );
+    refused(
+        &world,
+        "fence_account",
+        &[&third_token, "\"TEST\"", &third, &third_deadline],
+        "Character does not belong to Account",
+    );
+    let wrong_account = r#"{"account_id":2,"generation":1,"request_nonce":604}"#;
+    refused(
+        &world,
+        "fence_account",
+        &[wrong_account, "\"TEST\"", "1", &third_deadline],
+        "Character does not belong to Account",
+    );
+    assert_eq!(
+        world.query_rows("SELECT * FROM game_character"),
+        durable_before
+    );
+    assert_eq!(
+        world.query_rows("SELECT * FROM game_world_entity WHERE account_id = 1"),
+        live_before
+    );
+    assert_eq!(
+        world.query_rows("SELECT * FROM game_account_character_owner"),
+        owners_before
+    );
+
+    world.assert_sql(&format!(
+        "UPDATE game_character SET account_id = {other_account} WHERE guid = {second}"
+    ));
+    let reassigned_durable = world.query_rows("SELECT * FROM game_character");
+    refused(
+        &world,
+        "fence_account",
+        &[&third_token, "\"TEST\"", "1", &third_deadline],
+        "Character ownership changed",
+    );
+    assert_eq!(
+        world.query_rows("SELECT * FROM game_character"),
+        reassigned_durable
+    );
+    assert_eq!(
+        world.query_rows("SELECT * FROM game_world_entity WHERE account_id = 1"),
+        live_before
+    );
+    world.assert_sql(&format!(
+        "UPDATE game_character SET account_id = 1 WHERE guid = {second}"
+    ));
+
+    let mut stable_durable_before =
+        world.query_rows("SELECT guid,account_id,owner_identity,name FROM game_character");
+    stable_durable_before.sort_by_key(|row| row["guid"].parse::<u64>().unwrap());
+    let mut persisted_live_before = world.query_rows(
+        "SELECT guid,x,y,z,orientation,health,power FROM game_world_entity WHERE account_id = 1",
+    );
+    persisted_live_before.sort_by_key(|row| row["guid"].parse::<u64>().unwrap());
+    fence(&world, &third_token, &third_deadline);
+    assert!(world
+        .query_rows("SELECT * FROM game_world_entity WHERE account_id = 1")
+        .is_empty());
+    let mut stable_durable_after =
+        world.query_rows("SELECT guid,account_id,owner_identity,name FROM game_character");
+    stable_durable_after.sort_by_key(|row| row["guid"].parse::<u64>().unwrap());
+    assert_eq!(stable_durable_after, stable_durable_before);
+    let mut persisted_durable = world.query_rows(&format!(
+        "SELECT guid,x,y,z,orientation,health,power,online,last_logout_micros FROM game_character WHERE guid = 1 OR guid = {second}"
+    ));
+    persisted_durable.sort_by_key(|row| row["guid"].parse::<u64>().unwrap());
+    assert_eq!(persisted_durable.len(), persisted_live_before.len());
+    for (durable, live) in persisted_durable.iter().zip(&persisted_live_before) {
+        for field in ["guid", "x", "y", "z", "orientation", "health", "power"] {
+            assert_eq!(durable[field], live[field], "persisted field {field}");
+        }
+        assert_eq!(durable["online"], "false");
+    }
+    let logout_micros = persisted_durable[0]["last_logout_micros"]
+        .parse::<u64>()
+        .unwrap();
+    assert!(logout_micros > 0);
+    assert!(persisted_durable
+        .iter()
+        .all(|row| row["last_logout_micros"] == logout_micros.to_string()));
+    assert_eq!(
+        world
+            .query_rows("SELECT * FROM game_account_character_owner")
+            .len(),
+        2
+    );
+
+    world.assert_call("debug_spawn_player_entity", &["1"]);
+    world.assert_sql(&format!(
+        "UPDATE game_character SET account_id = {other_account} WHERE guid = 1"
+    ));
+    refused(
+        &world,
+        "close_account_fence",
+        &[&third_token],
+        "Character ownership changed",
+    );
+    assert_eq!(
+        world
+            .query_rows("SELECT guid FROM game_world_entity WHERE guid = 1")
+            .len(),
+        1
+    );
+    assert_eq!(
+        world.query_rows("SELECT closed FROM game_account_fence")[0]["closed"],
+        "false"
+    );
+    world.assert_sql("UPDATE game_character SET account_id = 1 WHERE guid = 1");
+    world.assert_call("close_account_fence", &[&third_token]);
+    assert!(world
+        .query_rows("SELECT guid FROM game_world_entity WHERE guid = 1")
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn retained_account_ownership_overflow_refuses_without_cleanup() {
+    let mut shard = Standalone::start("account-owner-overflow");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    let first = token(1, 701);
+    let deadline = claim(&shard, "701");
+    fence(&shard, &first, &deadline);
+    shard.assert_sql("UPDATE game_account_fence SET expires_micros = 9223372036854775807");
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let rows: Vec<_> = (2..=4_097)
+        .map(|guid| format!("({guid},1,'TEST')"))
+        .collect();
+    for rows in rows.chunks(128) {
+        shard.assert_sql(&format!(
+            "INSERT INTO game_account_character_owner (character_guid,account_id,account_name) VALUES {}",
+            rows.join(",")
+        ));
+    }
+    shard.assert_sql("UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = 1");
+    let (second, second_deadline) = claim_for(&shard, "1", "702");
+    let owners = shard.query_rows("SELECT * FROM game_account_character_owner");
+    assert_eq!(owners.len(), 4_097);
+    let fence_before = shard.query_rows("SELECT * FROM game_account_fence");
+    let live_before = shard.query_rows("SELECT * FROM game_world_entity WHERE guid = 1");
+    refused(
+        &shard,
+        "fence_account",
+        &[&second, "\"TEST\"", "1", &second_deadline],
+        "Account Character Owner limit exceeded",
+    );
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_account_character_owner"),
+        owners
+    );
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_account_fence"),
+        fence_before
+    );
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_world_entity WHERE guid = 1"),
+        live_before
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn expired_fences_make_progress_in_bounded_batches() {
     let mut shard = Standalone::start("account-fence-batches");
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_call("provision_account", &["\"OTHER\"", "[]", "[]"]);
+    let other_account =
+        shard.query_rows("SELECT id FROM game_account WHERE username = 'OTHER'")[0]["id"].clone();
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET account_id = {other_account} WHERE guid = 1"
+    ));
     let mut rows: Vec<_> = (1..=65)
         .map(|id| format!("({id},'TEST',1,1,{id},0,false)"))
         .collect();
@@ -402,8 +665,16 @@ fn expired_fences_make_progress_in_bounded_batches() {
             .len(),
         65
     );
+    assert_eq!(
+        shard
+            .query_rows("SELECT guid FROM game_world_entity WHERE guid = 1")
+            .len(),
+        1
+    );
     assert!(shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE guid = 1")
+        .query_rows(
+            "SELECT character_guid FROM game_account_character_owner WHERE character_guid = 1"
+        )
         .is_empty());
     assert_eq!(
         shard.query_rows("SELECT account_id FROM game_account_fence WHERE closed = false")[0]

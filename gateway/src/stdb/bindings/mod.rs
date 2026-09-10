@@ -6,6 +6,7 @@
 #![allow(unused, clippy::all)]
 use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 
+pub mod account_character_owner_type;
 pub mod account_claim_type;
 pub mod account_fence_type;
 pub mod account_type;
@@ -333,6 +334,7 @@ pub mod friendly_aura_selection_type;
 pub mod friendly_crowd_control_condition_type;
 pub mod friendly_health_deficit_condition_type;
 pub mod friendly_missing_aura_condition_type;
+pub mod game_account_character_owner_table;
 pub mod game_account_claim_table;
 pub mod game_account_fence_table;
 pub mod game_account_table;
@@ -1051,6 +1053,7 @@ pub mod xp_event_type;
 pub mod zone_weather_chance_type;
 pub mod zone_weather_type;
 
+pub use account_character_owner_type::AccountCharacterOwner;
 pub use account_claim_type::AccountClaim;
 pub use account_fence_type::AccountFence;
 pub use account_type::Account;
@@ -1378,6 +1381,7 @@ pub use friendly_aura_selection_type::FriendlyAuraSelection;
 pub use friendly_crowd_control_condition_type::FriendlyCrowdControlCondition;
 pub use friendly_health_deficit_condition_type::FriendlyHealthDeficitCondition;
 pub use friendly_missing_aura_condition_type::FriendlyMissingAuraCondition;
+pub use game_account_character_owner_table::*;
 pub use game_account_claim_table::*;
 pub use game_account_fence_table::*;
 pub use game_account_table::*;
@@ -7743,6 +7747,7 @@ Reducer::ResumeRelayArrival{
 #[doc(hidden)]
 pub struct DbUpdate {
     game_account: __sdk::TableUpdate<Account>,
+    game_account_character_owner: __sdk::TableUpdate<AccountCharacterOwner>,
     game_account_claim: __sdk::TableUpdate<AccountClaim>,
     game_account_fence: __sdk::TableUpdate<AccountFence>,
     game_active_taxi_flight: __sdk::TableUpdate<ActiveTaxiFlight>,
@@ -8010,6 +8015,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "game_account" => db_update
                     .game_account
                     .append(game_account_table::parse_table_update(table_update)?),
+                "game_account_character_owner" => db_update.game_account_character_owner.append(
+                    game_account_character_owner_table::parse_table_update(table_update)?,
+                ),
                 "game_account_claim" => db_update
                     .game_account_claim
                     .append(game_account_claim_table::parse_table_update(table_update)?),
@@ -8866,6 +8874,12 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.game_account = cache
             .apply_diff_to_table::<Account>("game_account", &self.game_account)
             .with_updates_by_pk(|row| &row.id);
+        diff.game_account_character_owner = cache
+            .apply_diff_to_table::<AccountCharacterOwner>(
+                "game_account_character_owner",
+                &self.game_account_character_owner,
+            )
+            .with_updates_by_pk(|row| &row.character_guid);
         diff.game_account_claim = cache
             .apply_diff_to_table::<AccountClaim>("game_account_claim", &self.game_account_claim)
             .with_updates_by_pk(|row| &row.account_id);
@@ -10031,6 +10045,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "game_account" => db_update
                     .game_account
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "game_account_character_owner" => db_update
+                    .game_account_character_owner
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "game_account_claim" => db_update
                     .game_account_claim
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
@@ -10811,6 +10828,9 @@ impl __sdk::DbUpdate for DbUpdate {
             match &table_rows.table[..] {
                 "game_account" => db_update
                     .game_account
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "game_account_character_owner" => db_update
+                    .game_account_character_owner
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "game_account_claim" => db_update
                     .game_account_claim
@@ -11593,6 +11613,7 @@ impl __sdk::DbUpdate for DbUpdate {
 #[doc(hidden)]
 pub struct AppliedDiff<'r> {
     game_account: __sdk::TableAppliedDiff<'r, Account>,
+    game_account_character_owner: __sdk::TableAppliedDiff<'r, AccountCharacterOwner>,
     game_account_claim: __sdk::TableAppliedDiff<'r, AccountClaim>,
     game_account_fence: __sdk::TableAppliedDiff<'r, AccountFence>,
     game_active_taxi_flight: __sdk::TableAppliedDiff<'r, ActiveTaxiFlight>,
@@ -11865,6 +11886,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks: &mut __sdk::DbCallbacks<RemoteModule>,
     ) {
         callbacks.invoke_table_row_callbacks::<Account>("game_account", &self.game_account, event);
+        callbacks.invoke_table_row_callbacks::<AccountCharacterOwner>(
+            "game_account_character_owner",
+            &self.game_account_character_owner,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<AccountClaim>(
             "game_account_claim",
             &self.game_account_claim,
@@ -13745,6 +13771,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
 
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
         game_account_table::register_table(client_cache);
+        game_account_character_owner_table::register_table(client_cache);
         game_account_claim_table::register_table(client_cache);
         game_account_fence_table::register_table(client_cache);
         game_active_taxi_flight_table::register_table(client_cache);
@@ -14003,6 +14030,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     }
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "game_account",
+        "game_account_character_owner",
         "game_account_claim",
         "game_account_fence",
         "game_active_taxi_flight",

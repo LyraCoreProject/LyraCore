@@ -131,6 +131,10 @@ login. Renewal failure closes the old socket; the Module already refuses expired
 requests, including queued movement, mail, auctions, party operations and Transfer completions.
 Release closes matching Shard fences and removes their Character before closing the Realm-core
 claim. Delayed cleanup cannot close a newer generation. Bound identity remains deterministic.
+Each Shard also retains the exact Realm Account id, Account name and Character guid installed by
+admission. A transferred Character may use that provenance with a local shadow Account. A real
+local Account with another name still refuses admission. The provenance survives logout, Transfer
+and Character deletion because Character guids are never reused.
 
 The Module applies two authority checks. `require_operator(ctx)` authorizes the calling Operator
 through `ctx.sender`. `require_actor(ctx, request_actor)` checks the Character and captured World
@@ -142,8 +146,10 @@ Character-to-Shard index is a hint; fencing only its current answer would leave 
 able to create a second live copy elsewhere. A partial admission starts no renewal. After its claim
 expires, another generation can finish fencing all Shards. Completed fences retain their generation
 so delayed delivery cannot reopen them. The Module's existing Gateway lease schedule closes up to
-64 expired Account Fences and removes their Characters per 15-second pass. A backlog takes additional
-passes; expired tokens are refused even while their entities await cleanup. Gateway routing
+64 expired Account Fences and removes their Characters per 15-second pass. A new generation removes
+every live Character retained for that Realm Account, including Characters behind different shadow
+Accounts. A backlog takes additional passes; expired tokens are refused even while their entities
+await cleanup. Gateway routing
 preserves the bound token across Transfer.
 
 ---

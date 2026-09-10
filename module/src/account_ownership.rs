@@ -2,10 +2,11 @@
 
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
 
-use crate::{game_account, game_character, game_gateway_session, game_world_entity};
+use crate::{game_account, game_character, game_gateway_session, game_world_entity, Account};
 
 const CLAIM_MICROS: i64 = 60_000_000;
 const REAP_LIMIT: usize = 64;
+const ACCOUNT_CHARACTER_OWNER_LIMIT: usize = 4_096;
 const STALE: &str = "STALE_WORLD_SESSION";
 
 #[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +45,85 @@ pub struct AccountFence {
     pub character_guid: u64,
     pub expires_micros: i64,
     pub closed: bool,
+}
+
+/// Retained Realm Account ownership for one globally unique Character guid. Every World Shard
+/// keeps this row across Transfer, logout and Character deletion so a shadow Account never becomes
+/// an ownership authority by itself.
+#[table(
+    accessor = game_account_character_owner,
+    index(accessor = by_account, btree(columns = [account_id]))
+)]
+pub struct AccountCharacterOwner {
+    #[primary_key]
+    pub character_guid: u64,
+    pub account_id: u64,
+    pub account_name: String,
+}
+
+fn shadow_account(account: &Account) -> bool {
+    account.username == format!("#{}", account.id)
+        && account.salt.is_empty()
+        && account.verifier.is_empty()
+}
+
+fn ownership_matches(
+    owner: &AccountCharacterOwner,
+    account_id: u64,
+    account_name: &str,
+    character_guid: u64,
+) -> bool {
+    owner.account_id == account_id
+        && owner.account_name == account_name
+        && owner.character_guid == character_guid
+}
+
+fn remember_character_owner(
+    ctx: &ReducerContext,
+    account_id: u64,
+    account_name: &str,
+    character_guid: u64,
+) -> Result<(), String> {
+    let owners = ctx.db.game_account_character_owner();
+    if let Some(owner) = owners.character_guid().find(character_guid) {
+        return if ownership_matches(&owner, account_id, account_name, character_guid) {
+            Ok(())
+        } else {
+            Err("Character ownership changed".into())
+        };
+    }
+    owners.insert(AccountCharacterOwner {
+        character_guid,
+        account_id,
+        account_name: account_name.to_owned(),
+    });
+    Ok(())
+}
+
+fn character_belongs_to_account(
+    ctx: &ReducerContext,
+    account_id: u64,
+    account_name: &str,
+    character_guid: u64,
+) -> bool {
+    let Some(character) = ctx.db.game_character().guid().find(character_guid) else {
+        return true;
+    };
+    let Some(local_account) = ctx.db.game_account().id().find(character.account_id) else {
+        return false;
+    };
+    if local_account.username == account_name {
+        return true;
+    }
+    shadow_account(&local_account)
+        && ctx
+            .db
+            .game_account_character_owner()
+            .character_guid()
+            .find(character_guid)
+            .is_some_and(|owner| {
+                ownership_matches(&owner, account_id, account_name, character_guid)
+            })
 }
 
 fn same(token: WorldSessionToken, generation: u64, nonce: u128) -> bool {
@@ -170,17 +250,6 @@ pub fn fence_account(
     {
         return Err(STALE.into());
     }
-    if let Some(character) = ctx.db.game_character().guid().find(character_guid) {
-        if ctx
-            .db
-            .game_account()
-            .id()
-            .find(character.account_id)
-            .is_none_or(|account| account.username != account_name)
-        {
-            return Err("Character does not belong to Account".into());
-        }
-    }
     let fences = ctx.db.game_account_fence();
     let prior = fences.account_id().find(token.account_id);
     if let Some(row) = &prior {
@@ -190,6 +259,15 @@ pub fn fence_account(
         if token.generation < row.generation {
             return Err(STALE.into());
         }
+        // This is the only ownership history an upgraded Shard can recover without trusting its
+        // local Account id. Preserve it before a new generation replaces the fence.
+        remember_character_owner(ctx, row.account_id, &row.account_name, row.character_guid)?;
+    }
+    if !character_belongs_to_account(ctx, token.account_id, &account_name, character_guid) {
+        return Err("Character does not belong to Account".into());
+    }
+    remember_character_owner(ctx, token.account_id, &account_name, character_guid)?;
+    if let Some(row) = &prior {
         if token.generation == row.generation {
             return if same(token, row.generation, row.request_nonce)
                 && !row.closed
@@ -203,7 +281,8 @@ pub fn fence_account(
             };
         }
     }
-    remove_account_characters(ctx, &account_name);
+    remove_owned_characters(ctx, token.account_id, &account_name)?;
+    remove_real_account_characters(ctx, token.account_id, &account_name)?;
     let row = AccountFence {
         account_id: token.account_id,
         account_name,
@@ -251,7 +330,8 @@ pub fn close_account_fence(ctx: &ReducerContext, token: WorldSessionToken) -> Re
         .find(token.account_id)
     {
         if same(token, row.generation, row.request_nonce) && !row.closed {
-            remove_character(ctx, row.character_guid, &row.account_name);
+            remember_character_owner(ctx, row.account_id, &row.account_name, row.character_guid)?;
+            remove_retained_character(ctx, row.account_id, &row.account_name, row.character_guid)?;
             row.closed = true;
             ctx.db.game_account_fence().account_id().update(row);
         }
@@ -259,7 +339,91 @@ pub fn close_account_fence(ctx: &ReducerContext, token: WorldSessionToken) -> Re
     Ok(())
 }
 
-fn remove_account_characters(ctx: &ReducerContext, account_name: &str) {
+fn retained_owner_can_remove_character(
+    ctx: &ReducerContext,
+    owner: &AccountCharacterOwner,
+) -> bool {
+    let Some(character) = ctx.db.game_character().guid().find(owner.character_guid) else {
+        return true;
+    };
+    ctx.db
+        .game_account()
+        .id()
+        .find(character.account_id)
+        .is_some_and(|account| account.username == owner.account_name || shadow_account(&account))
+}
+
+fn retained_fence_can_remove_character(
+    ctx: &ReducerContext,
+    account_id: u64,
+    account_name: &str,
+    character_guid: u64,
+) -> bool {
+    let candidate = AccountCharacterOwner {
+        character_guid,
+        account_id,
+        account_name: account_name.to_owned(),
+    };
+    ctx.db
+        .game_account_character_owner()
+        .character_guid()
+        .find(character_guid)
+        .is_none_or(|owner| ownership_matches(&owner, account_id, account_name, character_guid))
+        && retained_owner_can_remove_character(ctx, &candidate)
+}
+
+fn remove_retained_character(
+    ctx: &ReducerContext,
+    account_id: u64,
+    account_name: &str,
+    character_guid: u64,
+) -> Result<(), String> {
+    let owner = ctx
+        .db
+        .game_account_character_owner()
+        .character_guid()
+        .find(character_guid)
+        .filter(|owner| ownership_matches(owner, account_id, account_name, character_guid))
+        .ok_or("Character ownership changed")?;
+    if !retained_owner_can_remove_character(ctx, &owner) {
+        return Err("Character ownership changed".into());
+    }
+    remove_exact_character(ctx, character_guid);
+    Ok(())
+}
+
+fn remove_owned_characters(
+    ctx: &ReducerContext,
+    account_id: u64,
+    account_name: &str,
+) -> Result<(), String> {
+    let owners: Vec<_> = ctx
+        .db
+        .game_account_character_owner()
+        .by_account()
+        .filter(account_id)
+        .take(ACCOUNT_CHARACTER_OWNER_LIMIT + 1)
+        .collect();
+    if owners.len() > ACCOUNT_CHARACTER_OWNER_LIMIT {
+        return Err("Account Character Owner limit exceeded".into());
+    }
+    if !owners.iter().all(|owner| {
+        ownership_matches(owner, account_id, account_name, owner.character_guid)
+            && retained_owner_can_remove_character(ctx, owner)
+    }) {
+        return Err("Character ownership changed".into());
+    }
+    for owner in owners {
+        remove_exact_character(ctx, owner.character_guid);
+    }
+    Ok(())
+}
+
+fn remove_real_account_characters(
+    ctx: &ReducerContext,
+    realm_account_id: u64,
+    account_name: &str,
+) -> Result<(), String> {
     if let Some(account) = ctx
         .db
         .game_account()
@@ -272,35 +436,28 @@ fn remove_account_characters(ctx: &ReducerContext, account_name: &str) {
             .by_account()
             .filter(account.id)
             .map(|character| character.guid)
+            .take(ACCOUNT_CHARACTER_OWNER_LIMIT + 1)
             .collect();
+        if guids.len() > ACCOUNT_CHARACTER_OWNER_LIMIT {
+            return Err("Account Character Owner limit exceeded".into());
+        }
+        let owners = ctx.db.game_account_character_owner();
+        if guids.iter().any(|guid| {
+            owners.character_guid().find(*guid).is_some_and(|owner| {
+                !ownership_matches(&owner, realm_account_id, account_name, *guid)
+            })
+        }) {
+            return Err("Character ownership changed".into());
+        }
         for guid in guids {
-            remove_character(ctx, guid, account_name);
+            remove_exact_character(ctx, guid);
         }
     }
+    Ok(())
 }
 
-fn remove_character(ctx: &ReducerContext, guid: u64, account_name: &str) {
-    if let Some(character) = ctx.db.game_character().guid().find(guid) {
-        if ctx
-            .db
-            .game_account()
-            .id()
-            .find(character.account_id)
-            .is_none_or(|account| account.username != account_name)
-        {
-            return;
-        }
-    }
+fn remove_exact_character(ctx: &ReducerContext, guid: u64) {
     if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
-        if ctx
-            .db
-            .game_account()
-            .id()
-            .find(entity.account_id)
-            .is_none_or(|account| account.username != account_name)
-        {
-            return;
-        }
         crate::world::remove_live_character(ctx, entity);
     }
     ctx.db.game_gateway_session().entity_guid().delete(guid);
@@ -391,7 +548,48 @@ pub(crate) fn reap_account_fences(ctx: &ReducerContext) {
         .take(REAP_LIMIT)
         .collect();
     for mut row in expired {
-        remove_character(ctx, row.character_guid, &row.account_name);
+        if !retained_fence_can_remove_character(
+            ctx,
+            row.account_id,
+            &row.account_name,
+            row.character_guid,
+        ) {
+            spacetimedb::log::error!(
+                "expired Account Fence cleanup ownership changed: account_id={} character_guid={} generation={}",
+                row.account_id,
+                row.character_guid,
+                row.generation
+            );
+            row.closed = true;
+            ctx.db.game_account_fence().account_id().update(row);
+            continue;
+        }
+        if let Err(error) =
+            remember_character_owner(ctx, row.account_id, &row.account_name, row.character_guid)
+        {
+            spacetimedb::log::error!(
+                "expired Account Fence ownership conflict: account_id={} character_guid={} generation={} reason={error}",
+                row.account_id,
+                row.character_guid,
+                row.generation
+            );
+            row.closed = true;
+            ctx.db.game_account_fence().account_id().update(row);
+            continue;
+        }
+        if let Err(error) =
+            remove_retained_character(ctx, row.account_id, &row.account_name, row.character_guid)
+        {
+            spacetimedb::log::error!(
+                "expired Account Fence cleanup conflict: account_id={} character_guid={} generation={} reason={error}",
+                row.account_id,
+                row.character_guid,
+                row.generation
+            );
+            row.closed = true;
+            ctx.db.game_account_fence().account_id().update(row);
+            continue;
+        }
         row.closed = true;
         ctx.db.game_account_fence().account_id().update(row);
     }
