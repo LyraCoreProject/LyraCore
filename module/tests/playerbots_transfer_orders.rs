@@ -549,10 +549,33 @@ fn order_decisions(mode: u8) {
         );
         assert!(target_bot["cast"].as_array().unwrap().is_empty());
         assert!(target_bot["attack"].as_array().unwrap().is_empty());
-        assert!(
-            target_bot["movement"].as_array().unwrap().is_empty(),
+        let stopped = target_bot["movement"].as_array().unwrap();
+        assert_eq!(
+            stopped.len(),
+            1,
+            "expected the Target cancellation stop: {after}"
+        );
+        let stopped = &stopped[0];
+        let target_leg = &before["bots"][&party.bots[3]]["movement"][0];
+        assert_ne!(
+            stopped["spline_id"], target_leg["spline_id"],
             "stale Target leg survived: {after}"
         );
+        assert_eq!(stopped["run"], "false", "{after}");
+        assert_eq!(stopped["dur_ms"], "0", "{after}");
+        let body = &target_bot["entity"][0];
+        assert_eq!(stopped["map_id"], body["map_id"], "{after}");
+        assert_eq!(stopped["instance_id"], body["instance_id"], "{after}");
+        for (leg_field, body_field) in [
+            ("sx", "x"),
+            ("sy", "y"),
+            ("sz", "z"),
+            ("dx", "x"),
+            ("dy", "y"),
+            ("dz", "z"),
+        ] {
+            assert_eq!(stopped[leg_field], body[body_field], "{after}");
+        }
         assert_eq!(target_bot["runner"]["foreground"], "(none = ())", "{after}");
     }
 }

@@ -293,10 +293,22 @@ fn playerbots_transfer_upgrades_populated_predecessor_without_a_checkpoint() {
     assert!(before["runner"]["companion_order_revision"].is_string());
     assert_eq!(before["retained_quest"].as_array().unwrap().len(), 1);
     assert_eq!(before["retained_quest"][0]["quest_entry"], "7");
-    assert_eq!(before["quests"].as_array().unwrap().len(), 1);
-    assert_eq!(before["quests"][0]["quest_entry"], "7");
-    assert_eq!(before["quests"][0]["counts"], "0");
-    assert_eq!(before["quests"][0]["rewarded"], "false");
+    let quests = before["quests"].as_array().unwrap();
+    assert_eq!(quests.len(), 2);
+    let prerequisite = quests
+        .iter()
+        .find(|quest| quest["quest_entry"] == "783")
+        .expect("fixture rewards Quest 783 before admitting Quest 7");
+    assert_eq!(prerequisite["counts"], "");
+    assert_eq!(prerequisite["rewarded"], "true");
+    assert_eq!(prerequisite["failed"], "false");
+    let active = quests
+        .iter()
+        .find(|quest| quest["quest_entry"] == "7")
+        .expect("fixture admits Quest 7");
+    assert_eq!(active["counts"], "0");
+    assert_eq!(active["rewarded"], "false");
+    assert_eq!(active["failed"], "false");
     assert_eq!(before["provisioning"].as_array().unwrap().len(), 1);
     assert!(
         before["provisioning"][0]["action_cursor"]
