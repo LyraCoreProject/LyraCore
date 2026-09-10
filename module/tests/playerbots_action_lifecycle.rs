@@ -9,6 +9,8 @@ use support::Standalone;
 
 const CREATURE_PREFIX: u64 = 0xF130u64 << 48;
 const GAMEOBJECT_PREFIX: u64 = 0xF110u64 << 48;
+const EXIT_TRIGGER: u32 = 119;
+const EXIT_SOURCE: (f32, f32, f32) = (-14.3628, -393.38, 64.5605);
 
 #[derive(Clone, Copy)]
 struct QuestRoot {
@@ -125,6 +127,19 @@ fn stage_geometry(node: &Standalone) {
     for cell_x in x0.min(x1)..=x0.max(x1) {
         for cell_y in y0.min(y1)..=y0.max(y1) {
             rows.push(format!("0,{cell_x},{cell_y},50,,"));
+        }
+    }
+    node.assert_call("import_nav_chunks", &[&rows.join(";")]);
+    node.assert_call("debug_set_nav_enabled", &["true"]);
+}
+
+fn stage_exit_geometry(node: &Standalone) {
+    let cell_x = lyracore_shared::terrain::cell_index(EXIT_SOURCE.0).unwrap();
+    let cell_y = lyracore_shared::terrain::cell_index(EXIT_SOURCE.1).unwrap();
+    let mut rows = Vec::new();
+    for x in cell_x.saturating_sub(2)..=cell_x.saturating_add(2).min(1023) {
+        for y in cell_y.saturating_sub(2)..=cell_y.saturating_add(2).min(1023) {
+            rows.push(format!("36,{x},{y},{},,", EXIT_SOURCE.2));
         }
     }
     node.assert_call("import_nav_chunks", &[&rows.join(";")]);
@@ -1163,44 +1178,264 @@ fn playerbots_transfer_root_cancels_its_real_areatrigger_approach() {
     assert_no_owned_movement(&after_retry, &fixture.companion);
 }
 
-#[test]
-#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
-fn playerbots_transfer_approach_replaces_quest_with_unbounded_companion_purpose() {
-    let (fixture, solo_quest) = quest_transfer_fixture("playerbots-action-transfer-expiry", 1);
+fn return_home_transfer_pending(name: &str, direct_transfer: bool) -> (TransferFixture, Value) {
+    let fixture = spawn_transfer_party(name);
+    remove_builtin_weather_import_stamp(&fixture.node);
+    stage_exit_geometry(&fixture.node);
+    stage_transfer_roles(&fixture);
+    fixture.node.assert_call(
+        "playerbots_transfer_fixture_stage",
+        &[&fixture.companion, &fixture.leader, "3"],
+    );
+    set_transfer_party_membership(&fixture, 1);
+    if direct_transfer {
+        fixture.node.assert_call(
+            "playerbots_select_controller",
+            &[&fixture.companion, "{\"recordOnly\":[]}"],
+        );
+    } else {
+        fixture.node.assert_call(
+            "playerbots_fixture_position",
+            &[&fixture.companion, &(EXIT_SOURCE.0 + 40.0).to_string()],
+        );
+        fixture.node.assert_call(
+            "playerbots_fixture_runner_select_cohort",
+            &[&fixture.companion],
+        );
+    }
     fixture
         .node
         .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
-    let pending = snapshot(&fixture.node);
-    save(&fixture.node, "transfer-approach-unbounded", &pending);
+    let mut pending = snapshot(&fixture.node);
+    pending["return_home_memberships"] = json!(fixture.node.query_rows(&format!(
+        "SELECT group_id FROM game_group_member WHERE character_guid = {}",
+        fixture.companion
+    )));
+    save(&fixture.node, "return-home-transfer-pending", &pending);
     let runner = pending["runner"]
         .as_array()
         .unwrap()
         .iter()
         .find(|row| row["character_guid"] == fixture.companion)
         .unwrap();
-    assert_transfer_root(&pending, &fixture.companion, "areaTrigger = 78");
-    assert_ne!(
-        solo_quest["runner"][0]["objective_sequence"], runner["objective_sequence"],
-        "the party must replace the earlier solo Quest purpose: {pending}"
-    );
+    let objective = runner["objective"].as_str().unwrap();
+    assert!(objective.contains("kind = (returnHome = ())"), "{pending}");
+    assert!(objective.contains("stage = (travelling = ())"), "{pending}");
     assert!(
-        runner["objective"]
-            .as_str()
-            .unwrap()
-            .contains("deadline_micros = 9223372036854775807"),
+        !objective.contains("deadline_micros = 9223372036854775807"),
+        "ReturnHome must retain its finite deadline: {pending}"
+    );
+    let identity = runner["objective_sequence"].as_str().unwrap();
+    assert!(
+        objective.contains(&format!("identity = {identity}")),
         "{pending}"
     );
     assert!(
-        runner["foreground"]
+        pending["return_home_memberships"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "ReturnHome Transfer must be selected outside party control: {pending}"
+    );
+    let body = pending["characters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["guid"] == fixture.companion)
+        .unwrap();
+    assert_eq!(body["map_id"], "36", "{pending}");
+    assert_eq!(body["instance_id"], "5098078", "{pending}");
+    let distance_sq = (body["x"].as_str().unwrap().parse::<f32>().unwrap() - EXIT_SOURCE.0).powi(2)
+        + (body["y"].as_str().unwrap().parse::<f32>().unwrap() - EXIT_SOURCE.1).powi(2)
+        + (body["z"].as_str().unwrap().parse::<f32>().unwrap() - EXIT_SOURCE.2).powi(2);
+    assert_eq!(distance_sq <= 36.0, direct_transfer, "{pending}");
+    let expected_action = if direct_transfer {
+        format!("transfer = (trigger = {EXIT_TRIGGER}")
+    } else {
+        format!("areaTrigger = {EXIT_TRIGGER}")
+    };
+    assert_eq!(
+        runner["candidate_order"]
             .as_str()
             .unwrap()
-            .contains("areaTrigger = 78"),
+            .matches(&expected_action)
+            .count(),
+        1,
         "{pending}"
     );
+    assert!(
+        runner["chosen"]
+            .as_str()
+            .unwrap()
+            .contains(&expected_action),
+        "{pending}"
+    );
+    if direct_transfer {
+        assert_eq!(runner["foreground"], "(none = ())", "{pending}");
+        assert!(
+            pending["actions"].as_array().unwrap().is_empty(),
+            "{pending}"
+        );
+        assert_no_owned_movement(&pending, &fixture.companion);
+    } else {
+        assert!(
+            runner["foreground"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("areaTrigger = {EXIT_TRIGGER}")),
+            "{pending}"
+        );
+        let recovery = runner["recovery"].as_str().unwrap();
+        assert!(
+            recovery.contains(&format!("work = (areaTrigger = {EXIT_TRIGGER})")),
+            "{pending}"
+        );
+        assert!(recovery.contains("reason = (transfer = ())"), "{pending}");
+        assert!(
+            recovery.contains(&format!("objective = {identity}")),
+            "{pending}"
+        );
+        assert_eq!(
+            pending["movement"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| row["guid"] == fixture.companion)
+                .count(),
+            1,
+            "{pending}"
+        );
+    }
     assert!(
         pending["transfers"].as_array().unwrap().is_empty(),
         "{pending}"
     );
+    (fixture, pending)
+}
+
+fn assert_return_home_transfer_expired(
+    fixture: &TransferFixture,
+    pending: &Value,
+    expected_action: &str,
+    direct_transfer: bool,
+    label: &str,
+) {
+    fixture.node.assert_call(
+        "playerbots_fixture_runner_expire_objective",
+        &[&fixture.companion],
+    );
+    fixture
+        .node
+        .assert_call("playerbots_fixture_runner_pass_once", &[&fixture.companion]);
+    let expired = snapshot(&fixture.node);
+    save(&fixture.node, label, &expired);
+    let runner = expired["runner"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["character_guid"] == fixture.companion)
+        .unwrap();
+    let before = pending["runner"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["character_guid"] == fixture.companion)
+        .unwrap();
+    assert_objective_identity(before, runner);
+    let candidate_order = runner["candidate_order"].as_str().unwrap();
+    assert_eq!(
+        candidate_order.matches(expected_action).count(),
+        1,
+        "{expired}"
+    );
+    if direct_transfer {
+        assert!(
+            !candidate_order.contains(&format!("areaTrigger = {EXIT_TRIGGER}")),
+            "the in-volume expiry pass must select Transfer directly: {expired}"
+        );
+    } else {
+        assert!(
+            runner["chosen"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("areaTrigger = {EXIT_TRIGGER}")),
+            "{expired}"
+        );
+    }
+    assert!(
+        runner["failures"].as_str().unwrap().contains("deadline"),
+        "{expired}"
+    );
+    assert!(
+        runner["objective"].as_str().unwrap().contains("deferred"),
+        "{expired}"
+    );
+    assert_no_owned_movement(&expired, &fixture.companion);
+    assert_eq!(expired["actions"], pending["actions"], "{expired}");
+    assert!(
+        expired["transfers"].as_array().unwrap().is_empty(),
+        "{expired}"
+    );
+}
+
+fn run_return_home_transfer_expiry(direct_transfer: bool) {
+    let label = if direct_transfer {
+        "playerbots-action-return-home-transfer-expiry"
+    } else {
+        "playerbots-action-return-home-transfer-position-expiry"
+    };
+    let (fixture, pending) = return_home_transfer_pending(label, direct_transfer);
+    if direct_transfer {
+        fixture.node.assert_call(
+            "playerbots_fixture_runner_select_cohort",
+            &[&fixture.companion],
+        );
+    }
+    let expected_action = if direct_transfer {
+        format!("transfer = (trigger = {EXIT_TRIGGER}")
+    } else {
+        format!("areaTrigger = {EXIT_TRIGGER}")
+    };
+    let evidence_label = if direct_transfer {
+        "return-home-transfer-expired"
+    } else {
+        "return-home-transfer-position-expired"
+    };
+    assert_return_home_transfer_expired(
+        &fixture,
+        &pending,
+        &expected_action,
+        direct_transfer,
+        evidence_label,
+    );
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB, Wasm, and the playerbots Package"]
+fn playerbots_return_home_transfer_roots_expire_before_admission() {
+    let failures: Vec<_> = [false, true]
+        .into_iter()
+        .filter_map(|direct_transfer| {
+            std::panic::catch_unwind(|| run_return_home_transfer_expiry(direct_transfer))
+                .err()
+                .map(|panic| {
+                    let detail = panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("panic without a message");
+                    format!(
+                        "{}: {detail}",
+                        if direct_transfer {
+                            "Transfer"
+                        } else {
+                            "Move.AreaTrigger"
+                        }
+                    )
+                })
+        })
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
