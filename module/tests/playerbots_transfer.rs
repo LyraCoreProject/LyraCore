@@ -360,10 +360,7 @@ fn playerbots_sessionless_areatrigger_replay_keeps_its_exact_intent_authority() 
         "playerbots_select_controller",
         &[&fixture.companion, "{\"cohort\":[]}"],
     );
-    let changed_generation = runner(&fixture.node, &fixture.companion)["generation"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let changed_generation = runner(&fixture.node, &fixture.companion)["generation"].clone();
     let changed = fixture.node.call(
         "debug_replay_sessionless_areatrigger",
         &[
