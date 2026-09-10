@@ -749,7 +749,7 @@ fn evidence(topology: &CommandTopology, case: &str) {
         .parent()
         .unwrap();
     let package = core.join("packages/playerbots");
-    let record = serde_json::json!({
+    let mut record = serde_json::json!({
         "case": case,
         "spacetimedb": "2.7.1",
         "rust": "1.93.0",
@@ -787,10 +787,15 @@ fn evidence(topology: &CommandTopology, case: &str) {
         "source_orders": topology.cli.rows(topology.node.server(), topology.source(), "SELECT * FROM pkg_playerbots_companion_order"),
         "realm_groups": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_group"),
         "realm_members": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_group_member"),
-        "realm_character_shards": topology.cli.rows(topology.node.server(), &topology.realm, "SELECT * FROM game_character_shard"),
         "content": {"revision": "playerbots-starter-roles-v1", "imported_content": null},
         "geometry": {"revision": "playerbots-synthetic-nav-v1", "client_geometry": null},
     });
+    record["realm_character_shards"] = serde_json::to_value(topology.cli.rows(
+        topology.node.server(),
+        &topology.realm,
+        "SELECT * FROM game_character_shard",
+    ))
+    .unwrap();
     let path = crate::durable_test_support::log_dir()
         .join(format!("{}-{case}.json", topology.node.shard_name()));
     std::fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
