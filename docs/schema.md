@@ -273,9 +273,9 @@ the shard-local Account id authoritative. Conflicting real Account names still r
 These rows remain across logout, Transfer and Character deletion. Character guids are globally
 unique and never reused, so retained rows are ownership tombstones rather than live Character state.
 
-The Account Character Owner is an additive table, so it needs no column default. The first admission
-fences and removes any prior live Character of that Account on each World Shard before entering. An
-upgraded Shard can backfill the exact Character named by its current Account Fence; older
+The Account Character Owner is an additive table, so it needs no column default. First admission
+validates ownership before fencing and removing prior live Characters of that Account on each World
+Shard. An upgraded Shard can backfill the exact Character named by its current Account Fence; older
 multi-Character ownership cannot be reconstructed from shard-local Account ids. A shadow Character
 with neither retained ownership nor an exact prior fence continues to refuse admission. There is no
 automatic repair command. Repair requires independently established Realm ownership and a separate
@@ -289,8 +289,9 @@ rows requires a separately reviewed Operator data migration.
 
 Stop serving World Sessions on every Gateway before publishing. Install the matching Module on
 Realm-core and every configured World Shard and Instance Pool, then restart only matching Gateways.
-Existing live Characters have no initial fence; first admission intentionally removes those legacy
-live copies. This schema and reducer ABI change requires human review under `danger-zones.md`.
+Existing live Characters have no initial fence. First admission removes those legacy live copies only
+after their ownership checks pass. This schema and reducer ABI change requires human review under
+`danger-zones.md`.
 
 External Headless Client adapters must send the new `SessionActor` shape too. Cleanup for a running
 fixture Character carries the intended World Session's token. Null ownership deliberately refuses
