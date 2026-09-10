@@ -2058,6 +2058,8 @@ fn the_production_adapter_is_the_pass_through_the_harness_assumes() {
                 "impl ImportSink for CtxShard<'_> {",
                 "{ fn has_live_entity(&self, guid: u64) -> bool { \
                  self.ctx.db.game_world_entity().guid().find(guid).is_some() } fn \
+                 detach_for_transfer(&mut self, guid: u64) { crate::group::detach_for_transfer(self.ctx, \
+                 guid); crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid); } fn \
                  cascade_delete_character(&mut self, guid: u64) { \
                  crate::world::cascade_delete_character(self.ctx, guid); } fn insert_character(&mut self, c: \
                  crate::character::Character) { self.ctx.db.game_character().insert(c); } fn import_rows(&mut \

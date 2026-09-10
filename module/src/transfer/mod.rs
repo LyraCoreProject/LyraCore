@@ -1024,6 +1024,9 @@ pub(crate) trait BeginSink: ShardLedger {
 pub(crate) trait ImportSink: ShardLedger {
     /// Is there a LIVE `game_world_entity` for this guid here?
     fn has_live_entity(&self, guid: u64) -> bool;
+    /// Drop transfer-owned mirror rows before the ordinary Character cascade can apply local
+    /// membership semantics to a Realm-owned party.
+    fn detach_for_transfer(&mut self, guid: u64);
     fn cascade_delete_character(&mut self, guid: u64);
     fn insert_character(&mut self, c: crate::character::Character);
     /// The payload half — [`import_rows`] against this database's transport registry.
@@ -1185,6 +1188,10 @@ impl BeginSink for CtxShard<'_> {
 impl ImportSink for CtxShard<'_> {
     fn has_live_entity(&self, guid: u64) -> bool {
         self.ctx.db.game_world_entity().guid().find(guid).is_some()
+    }
+    fn detach_for_transfer(&mut self, guid: u64) {
+        crate::group::detach_for_transfer(self.ctx, guid);
+        crate::bridge::detach_command_receipts_for_transfer(self.ctx, guid);
     }
     fn cascade_delete_character(&mut self, guid: u64) {
         crate::world::cascade_delete_character(self.ctx, guid);
@@ -1701,8 +1708,11 @@ pub(crate) fn apply_import_blob<S: ImportSink>(
     c.relocate(decoded.destination());
     c.money = decoded.money;
     let account_id = c.account_id;
-    // Remove stale rows for this Character even when its Character row is absent. Item import
-    // separately checks foreign GUID collisions because legacy packing could overlap.
+    // Remove stale rows for this Character even when its Character row is absent. A destination can
+    // already hold its Realm-owned party mirror, so detach that cache row before the ordinary
+    // Character cascade can interpret cleanup as a party departure. Item import separately checks
+    // foreign GUID collisions because legacy packing could overlap.
+    sink.detach_for_transfer(guid);
     sink.cascade_delete_character(guid);
     sink.insert_character(c);
     // AC#3: ratchet this database's guid allocator past `guid` NOW, in the same
