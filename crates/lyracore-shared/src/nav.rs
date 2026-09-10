@@ -267,8 +267,8 @@ pub fn step_hit(
 /// Nav-grid resolution in yards (one walk sub-cell).
 pub const NAV_RES: f32 = CELL_SIZE / WALK_DIM as f32;
 
-/// Global walk-grid coordinate: `cell_index * 64 + sub_index` (counts DOWN from
-/// +MAP_COORD_MAX like everything else). u32 range 0..65536.
+/// Global walk-grid coordinate, counting down from +MAP_COORD_MAX in 0..65536.
+/// Classify the stored world coordinate before f32 rounding can move it across a cell edge.
 fn grid_coord(coord: f32) -> Option<u32> {
     let c = (f64::from(MAP_COORD_MAX) - f64::from(coord)) / f64::from(NAV_RES);
     if !(0.0..(1024 * WALK_DIM) as f64).contains(&c) {
@@ -648,6 +648,27 @@ mod runtime_tests {
         (sub_center(cx, nx, WALK_DIM), sub_center(cy, ny, WALK_DIM))
     }
 
+    fn enters_rectangle(from: (f32, f32), to: (f32, f32), bounds: [(f64, f64); 2]) -> bool {
+        let mut entry = 0.0_f64;
+        let mut exit = 1.0_f64;
+        for ((start, end), (low, high)) in [(from.0, to.0), (from.1, to.1)].into_iter().zip(bounds)
+        {
+            let start = f64::from(start);
+            let delta = f64::from(end) - start;
+            if delta == 0.0 {
+                if start <= low || start >= high {
+                    return false;
+                }
+            } else {
+                let a = (low - start) / delta;
+                let b = (high - start) / delta;
+                entry = entry.max(a.min(b));
+                exit = exit.min(a.max(b));
+            }
+        }
+        entry < exit
+    }
+
     #[test]
     fn los_blocked_by_wall_clear_through_doorway() {
         let z = 80.0;
@@ -733,28 +754,35 @@ mod runtime_tests {
             assert_eq!(path.last(), Some(&to));
             let mut previous = from;
             for point in path {
-                let mut entry = 0.0_f64;
-                let mut exit = 1.0_f64;
-                for ((start, end), (low, high)) in [(previous.0, point.0), (previous.1, point.1)]
-                    .into_iter()
-                    .zip(bounds)
-                {
-                    let start = f64::from(start);
-                    let delta = f64::from(end) - start;
-                    if delta == 0.0 {
-                        if start <= low || start >= high {
-                            exit = -1.0;
-                        }
-                    } else {
-                        let a = (low - start) / delta;
-                        let b = (high - start) / delta;
-                        entry = entry.max(a.min(b));
-                        exit = exit.min(a.max(b));
-                    }
-                }
-                assert!(entry >= exit, "blocked segment {previous:?} -> {point:?}");
+                assert!(
+                    !enters_rectangle(previous, point, bounds),
+                    "blocked segment {previous:?} -> {point:?}"
+                );
                 previous = point;
             }
+        }
+    }
+
+    #[test]
+    fn reaching_the_exact_destination_preserves_a_needed_corner_waypoint() {
+        let from = at(10, 0);
+        let center = at(33, 32);
+        let to = (center.0 - NAV_RES * 0.3, center.1 + NAV_RES * 0.25);
+        let (path, _, complete) = find_leg_ex(&mut fetcher(), from, to, 4096).unwrap();
+        assert!(complete);
+        assert_eq!(path.last(), Some(&to));
+        // This wall cell borders the doorway on the approach to the goal.
+        let bounds = [
+            (-8_917.187_159_836_292, -8_916.666_326_522_827),
+            (-182.291_659_712_791_44, -181.770_826_399_326_32),
+        ];
+        let mut previous = from;
+        for point in path {
+            assert!(
+                !enters_rectangle(previous, point, bounds),
+                "blocked final approach {previous:?} -> {point:?}"
+            );
+            previous = point;
         }
     }
 
