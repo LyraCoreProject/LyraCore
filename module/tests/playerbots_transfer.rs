@@ -260,7 +260,16 @@ fn playerbots_companion_enters_the_areatrigger_with_normalized_transfer_state() 
     assert_eq!(runner["combat_progress"], "(none = ())", "{evidence}");
     assert_eq!(runner["cast_progress"], "(none = ())", "{evidence}");
     assert_eq!(runner["quest_progress"], "", "{evidence}");
-    assert_eq!(runner["progress_age_micros"], "(none = ())", "{evidence}");
+    let observed_micros = runner["observed_micros"].as_str().unwrap();
+    let objective = runner["objective"].as_str().unwrap();
+    assert!(
+        objective.contains("kind = (companion = ())")
+            && objective.contains("stage = (travelling = ())")
+            && objective.contains("last_verified_progress_micros = (none = ())")
+            && objective.contains(&format!("started_micros = {observed_micros},")),
+        "{evidence}"
+    );
+    assert_eq!(runner["progress_age_micros"], "(some = 0)", "{evidence}");
     assert_eq!(runner["last_target_health"], "(none = ())", "{evidence}");
     assert_eq!(runner["defense_target"], "(none = ())", "{evidence}");
     assert_eq!(
