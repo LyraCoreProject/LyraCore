@@ -1931,7 +1931,7 @@ fn assert_inventory_retained(
     }
     let expected_owners: BTreeSet<_> = topology
         .party
-        .bots()
+        .all()
         .into_iter()
         .map(|guid| guid.to_string())
         .collect();
@@ -1941,7 +1941,7 @@ fn assert_inventory_retained(
         .collect();
     assert_eq!(
         equipped_owners, expected_owners,
-        "one or more companions lost all equipped items"
+        "one or more party members lost all equipped items"
     );
     let before_templates = before["source"]["item_templates"].as_array().unwrap();
     let after_templates = after["source"]["item_templates"].as_array().unwrap();
