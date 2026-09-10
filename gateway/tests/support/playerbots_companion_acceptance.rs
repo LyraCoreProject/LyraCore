@@ -1,0 +1,907 @@
+use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::net::{TcpListener, TcpStream};
+use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+use wow_srp::normalized_string::NormalizedString;
+use wow_srp::server::SrpVerifier;
+
+use super::support;
+
+pub const GROUP: u64 = 5_098_000;
+pub const ENTRY_TRIGGER: u32 = 78;
+pub const EXIT_TRIGGER: u32 = 119;
+pub const DUNGEON_MAP: u32 = 36;
+pub const REWARD_QUEST: u32 = 50_910;
+pub const ENTRY_SOURCE: (f32, f32, f32) = (-11_208.5, 1_685.34, 25.7612);
+pub const ENTRY_LANDING: (f32, f32, f32) = (-14.5732, -385.475, 62.4561);
+pub const EXIT_SOURCE: (f32, f32, f32) = (-14.3628, -393.38, 64.5605);
+pub const EXIT_LANDING: (f32, f32, f32) = (-11_208.7, 1_675.9, 24.5733);
+
+const ACCOUNT: &str = "PB011ROUTE";
+const PASSWORD: &str = "PASSWORD";
+const POLL: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Debug)]
+pub struct Party {
+    pub leader: u64,
+    pub warrior: u64,
+    pub priest: u64,
+    pub mage_one: u64,
+    pub mage_two: u64,
+    pub enemies: [u64; 3],
+    pub leader_name: String,
+}
+
+impl Party {
+    pub fn bots(&self) -> [u64; 4] {
+        [self.warrior, self.priest, self.mage_one, self.mage_two]
+    }
+
+    pub fn all(&self) -> [u64; 5] {
+        [
+            self.leader,
+            self.warrior,
+            self.priest,
+            self.mage_one,
+            self.mage_two,
+        ]
+    }
+}
+
+pub struct CompanionTopology {
+    pub node: support::Standalone,
+    pub source: String,
+    pub destination: String,
+    pub realm: String,
+    pub party: Party,
+    pub evidence_dir: PathBuf,
+    logon_port: u16,
+    world_port: u16,
+}
+
+impl CompanionTopology {
+    pub fn stage(name: &str) -> Self {
+        let mut node = support::Standalone::start_persistent(name);
+        let source = node.shard_name().to_owned();
+        let destination = format!("{source}-instances");
+        let realm = format!("{source}-realm");
+        let wasm = support::module_bytes();
+        node.publish_module_bytes(wasm);
+        node.publish_named_module_bytes(&destination, wasm);
+        node.publish_named_module_bytes(&realm, wasm);
+        let evidence_dir = support::log_dir().join(format!("{source}-companion-acceptance"));
+        fs::create_dir_all(&evidence_dir).expect("failed to create companion evidence directory");
+        let mut topology = Self {
+            node,
+            source,
+            destination,
+            realm,
+            party: Party {
+                leader: 0,
+                warrior: 0,
+                priest: 0,
+                mage_one: 0,
+                mage_two: 0,
+                enemies: [0; 3],
+                leader_name: String::new(),
+            },
+            evidence_dir,
+            logon_port: reserve_port(),
+            world_port: reserve_port(),
+        };
+        topology.stage_inputs();
+        topology
+    }
+
+    fn stage_inputs(&mut self) {
+        for database in [&self.source, &self.destination, &self.realm] {
+            self.call(database, "claim_operator", &[]);
+        }
+        let (salt, verifier) = account_material();
+        for database in [&self.realm, &self.source] {
+            self.call(
+                database,
+                "provision_account",
+                &[&json!(ACCOUNT).to_string(), &salt, &verifier],
+            );
+        }
+        self.call(&self.source, "install_guid_range", &["1000000"]);
+        for (count, class, role) in [("2", "1", "0"), ("1", "5", "1"), ("2", "8", "2")] {
+            self.call(
+                &self.source,
+                "playerbots_spawn_class_role",
+                &[count, "1200", "1200", "50", class, role],
+            );
+        }
+        let bots = self.query(
+            &self.source,
+            "SELECT character_guid, class, role FROM pkg_playerbots_bot",
+        );
+        let mut warriors = role_guids(&bots, "1", "0");
+        let priests = role_guids(&bots, "5", "1");
+        let mut mages = role_guids(&bots, "8", "2");
+        warriors.sort_unstable();
+        mages.sort_unstable();
+        assert_eq!((warriors.len(), priests.len(), mages.len()), (2, 1, 2));
+        self.party.warrior = warriors[0];
+        self.party.leader = warriors[1];
+        self.party.priest = priests[0];
+        self.party.mage_one = mages[0];
+        self.party.mage_two = mages[1];
+        self.call(&self.source, "playerbots_fixture_prepare", &[]);
+        let party_args = self.party_args();
+        self.call(
+            &self.source,
+            "playerbots_fixture_interaction_stage",
+            &[&self.party.warrior.to_string(), "false"],
+        );
+        self.call(
+            &self.source,
+            "playerbots_fixture_free_slot",
+            &[&self.party.warrior.to_string()],
+        );
+        self.call(
+            &self.source,
+            "playerbots_fixture_interact",
+            &[&self.party.warrior.to_string(), "false", "0"],
+        );
+        let nav = flat_route_nav();
+        for database in [&self.source, &self.destination] {
+            self.call(database, "import_nav_chunks", &[&nav]);
+            self.call(database, "debug_set_nav_enabled", &["true"]);
+        }
+        self.call(
+            &self.source,
+            "playerbots_companion_acceptance_stage",
+            &[
+                &party_args[0],
+                &party_args[1],
+                &party_args[2],
+                &party_args[3],
+                &party_args[4],
+                &REWARD_QUEST.to_string(),
+            ],
+        );
+        self.call(
+            &self.source,
+            "playerbots_companion_acceptance_accept_retained_quest",
+            &[],
+        );
+        for _ in 0..8 {
+            self.call(
+                &self.source,
+                "playerbots_fixture_free_slot",
+                &[&self.party.warrior.to_string()],
+            );
+        }
+        for guid in self.party.bots() {
+            self.call(
+                &self.source,
+                "playerbots_fixture_provision_steps",
+                &[&guid.to_string(), "64"],
+            );
+        }
+        let account = one(
+            &self.query(
+                &self.source,
+                &format!("SELECT id FROM game_account WHERE username = '{ACCOUNT}'"),
+            ),
+            "source account",
+        )["id"]
+            .clone();
+        self.call(
+            &self.source,
+            "playerbots_fixture_orders_account",
+            &[&self.party.leader.to_string(), &account],
+        );
+        self.party.leader_name = one(
+            &self.query(
+                &self.source,
+                &format!(
+                    "SELECT name FROM game_character WHERE guid = {}",
+                    self.party.leader
+                ),
+            ),
+            "human leader",
+        )["name"]
+            .clone();
+        self.call(
+            &self.realm,
+            "playerbots_companion_acceptance_realm_stage",
+            &[
+                &party_args[0],
+                &party_args[1],
+                &party_args[2],
+                &party_args[3],
+                &party_args[4],
+            ],
+        );
+        self.call(
+            &self.destination,
+            "playerbots_companion_acceptance_destination_stage",
+            &[],
+        );
+        let mut enemies: Vec<_> = self
+            .query(
+                &self.source,
+                "SELECT guid FROM game_world_entity WHERE entry >= 5098001 AND entry <= 5098003",
+            )
+            .into_iter()
+            .map(|row| parse_u64(&row, "guid"))
+            .collect();
+        enemies.sort_unstable();
+        assert_eq!(enemies.len(), 3, "companion pull roster changed");
+        self.party.enemies.copy_from_slice(&enemies);
+        self.save("staged", json!({}));
+    }
+
+    pub fn begin(&self) {
+        self.call(&self.source, "playerbots_companion_acceptance_begin", &[]);
+    }
+
+    pub fn apply_fault_when_due(&self, fault: u8) -> Vec<Value> {
+        let database = self.current_world(self.party.warrior);
+        let mut attempts = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(90);
+        loop {
+            let output = self.node.call_database(
+                &database,
+                "playerbots_companion_acceptance_apply_fault",
+                &[&fault.to_string()],
+            );
+            attempts.push(json!({
+                "success": output.status.success(),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+            }));
+            if output.status.success() {
+                return attempts;
+            }
+            assert!(Instant::now() < deadline, "fault {fault} never became due");
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    pub fn call(&self, database: &str, reducer: &str, args: &[&str]) {
+        self.node.assert_call_database(database, reducer, args);
+    }
+
+    pub fn query(&self, database: &str, sql: &str) -> Vec<BTreeMap<String, String>> {
+        self.node.query_database_rows(database, sql)
+    }
+
+    pub fn current_world(&self, guid: u64) -> String {
+        let locator = one(
+            &self.query(
+                &self.realm,
+                &format!("SELECT map_id FROM game_character_shard WHERE character_guid = {guid}"),
+            ),
+            "Realm Character locator",
+        )
+        .clone();
+        if locator["map_id"] == DUNGEON_MAP.to_string() {
+            self.destination.clone()
+        } else {
+            self.source.clone()
+        }
+    }
+
+    pub fn gateway(&self, command_abort: bool, label: &str) -> GatewayProcess {
+        GatewayProcess::spawn(self, command_abort, label)
+    }
+
+    pub fn wire(&self, label: &str) -> WireControl {
+        WireControl::spawn(self, label)
+    }
+
+    pub fn wait_for_map(&self, map: u32) {
+        wait_until("party did not settle on the expected map", || {
+            self.party.all().into_iter().all(|guid| {
+                self.query(
+                    &self.realm,
+                    &format!(
+                        "SELECT character_guid FROM game_character_shard WHERE character_guid = \
+                         {guid} AND map_id = {map} AND transfer_pending = false"
+                    ),
+                )
+                .len()
+                    == 1
+            })
+        });
+    }
+
+    pub fn restart_module_process(&mut self) -> (u32, u32) {
+        let before = self.node.process_id();
+        self.node.restart_persistent();
+        let after = self.node.process_id();
+        assert_ne!(before, after, "persistent Module process did not change");
+        (before, after)
+    }
+
+    pub fn save(&self, phase: &str, extra: Value) -> Value {
+        let core = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let package = core.join("packages/playerbots");
+        let evidence = json!({
+            "phase": phase,
+            "tested_core": git(core, &["rev-parse", "HEAD"]),
+            "tested_package": git(&package, &["rev-parse", "HEAD"]),
+            "core_dirty": !git(core, &["status", "--porcelain"]).is_empty(),
+            "package_dirty": !git(&package, &["status", "--porcelain"]).is_empty(),
+            "module_wasm_bytes": support::module_bytes().len(),
+            "databases": {"source": self.source, "destination": self.destination, "realm": self.realm},
+            "party": self.party_snapshot(),
+            "source": self.world_snapshot(&self.source),
+            "destination": self.world_snapshot(&self.destination),
+            "realm": {
+                "group": self.query(&self.realm, &format!("SELECT * FROM game_group WHERE group_id = {GROUP}")),
+                "roster": self.query(&self.realm, &format!("SELECT * FROM game_group_roster_revision WHERE group_id = {GROUP}")),
+                "members": self.query(&self.realm, &format!("SELECT * FROM game_group_member WHERE group_id = {GROUP}")),
+                "partitions": self.query(&self.realm, &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}")),
+                "locators": self.query(&self.realm, "SELECT * FROM game_character_shard"),
+            },
+            "extra": extra,
+        });
+        let path = self
+            .evidence_dir
+            .join(format!("{}.json", phase.replace('_', "-")));
+        fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap())
+            .expect("failed to save companion evidence");
+        evidence
+    }
+
+    pub fn save_restart_point(&self, phase: &str, guid: u64, leader_move: Value) -> Value {
+        let evidence = json!({
+            "phase": phase,
+            "leader_move": leader_move,
+            "runner": self.query(
+                &self.destination,
+                &format!("SELECT * FROM pkg_playerbots_runner WHERE character_guid = {guid}"),
+            ),
+            "spline": self.query(
+                &self.destination,
+                &format!("SELECT * FROM game_creature_spline WHERE guid = {guid}"),
+            ),
+            "body": self.query(
+                &self.destination,
+                &format!("SELECT * FROM game_world_entity WHERE guid = {guid}"),
+            ),
+            "leader_body": self.query(
+                &self.destination,
+                &format!("SELECT * FROM game_world_entity WHERE guid = {}", self.party.leader),
+            ),
+            "quest": self.query(
+                &self.destination,
+                &format!(
+                    "SELECT * FROM game_character_quest WHERE character_guid = {guid} AND \
+                     quest_entry = 50911"
+                ),
+            ),
+        });
+        let path = self
+            .evidence_dir
+            .join(format!("{}.json", phase.replace('_', "-")));
+        fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap())
+            .expect("failed to save companion restart evidence");
+        evidence
+    }
+
+    fn party_snapshot(&self) -> Value {
+        json!({
+            "leader": self.party.leader,
+            "warrior": self.party.warrior,
+            "priest": self.party.priest,
+            "mage_one": self.party.mage_one,
+            "mage_two": self.party.mage_two,
+            "enemies": self.party.enemies,
+            "leader_name": self.party.leader_name,
+        })
+    }
+
+    fn world_snapshot(&self, database: &str) -> Value {
+        let guid_predicate = self
+            .party
+            .all()
+            .into_iter()
+            .map(|guid| format!("guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let owner_predicate = self
+            .party
+            .all()
+            .into_iter()
+            .map(|guid| format!("owner_guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let target_predicate = self
+            .party
+            .all()
+            .into_iter()
+            .map(|guid| format!("target_guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let caster_predicate = self
+            .party
+            .all()
+            .into_iter()
+            .map(|guid| format!("caster_guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let attacker_predicate = self
+            .party
+            .all()
+            .into_iter()
+            .map(|guid| format!("attacker_guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let quest_predicate = self
+            .party
+            .all()
+            .into_iter()
+            .map(|guid| format!("character_guid = {guid}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let items = self.query(
+            database,
+            &format!("SELECT * FROM game_item_instance WHERE {owner_predicate}"),
+        );
+        let mut item_entries = items
+            .iter()
+            .filter_map(|row| row.get("entry"))
+            .cloned()
+            .collect::<Vec<_>>();
+        item_entries.sort();
+        item_entries.dedup();
+        let item_templates = if item_entries.is_empty() {
+            Vec::new()
+        } else {
+            let entry_predicate = item_entries
+                .iter()
+                .map(|entry| format!("entry = {entry}"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            self.query(
+                database,
+                &format!(
+                    "SELECT entry, max_durability FROM game_item_template WHERE {entry_predicate}"
+                ),
+            )
+        };
+        json!({
+            "characters": self.query(database, &format!("SELECT * FROM game_character WHERE {guid_predicate}")),
+            "bodies": self.query(database, &format!("SELECT * FROM game_world_entity WHERE {guid_predicate}")),
+            "bots": self.query(database, "SELECT * FROM pkg_playerbots_bot"),
+            "roles": self.query(database, "SELECT character_guid, class, role FROM pkg_playerbots_bot"),
+            "rotations": self.query(database, "SELECT * FROM pkg_playerbots_rotation"),
+            "orders": self.query(database, "SELECT * FROM pkg_playerbots_companion_order"),
+            "runners": self.query(database, "SELECT * FROM pkg_playerbots_runner"),
+            "actions": self.query(database, "SELECT * FROM pkg_playerbots_action"),
+            "splines": self.query(database, &format!("SELECT * FROM game_creature_spline WHERE {guid_predicate}")),
+            "casts": self.query(database, &format!("SELECT * FROM game_pending_cast WHERE {caster_predicate}")),
+            "auras": self.query(database, &format!("SELECT * FROM game_aura WHERE {target_predicate}")),
+            "melee": self.query(database, &format!("SELECT * FROM game_melee_attack WHERE {attacker_predicate}")),
+            "items": items,
+            "item_templates": item_templates,
+            "provisioning": self.query(database, "SELECT * FROM pkg_playerbots_provisioning"),
+            "quests": self.query(database, &format!("SELECT * FROM game_character_quest WHERE {quest_predicate}")),
+            "command_intents": self.query(database, "SELECT * FROM game_party_command_intent"),
+            "command_receipts": self.query(database, "SELECT * FROM game_party_command_receipt"),
+            "addon_results": self.query(database, "SELECT * FROM game_addon_message WHERE cmd = 'playerbots.order.result'"),
+            "group": self.query(database, &format!("SELECT * FROM game_group WHERE group_id = {GROUP}")),
+            "members": self.query(database, &format!("SELECT * FROM game_group_member WHERE group_id = {GROUP}")),
+            "partitions": self.query(database, &format!("SELECT * FROM game_group_member_partition WHERE group_id = {GROUP}")),
+            "faults": self.query(database, "SELECT * FROM pkg_playerbots_companion_fault"),
+            "combat_receipts": self.query(database, "SELECT * FROM pkg_playerbots_companion_combat_receipt"),
+            "cast_receipts": self.query(database, "SELECT * FROM pkg_playerbots_companion_cast_receipt"),
+        })
+    }
+
+    fn party_args(&self) -> [String; 5] {
+        [
+            self.party.leader.to_string(),
+            self.party.warrior.to_string(),
+            self.party.priest.to_string(),
+            self.party.mage_one.to_string(),
+            self.party.mage_two.to_string(),
+        ]
+    }
+}
+
+pub struct GatewayProcess {
+    child: Option<Child>,
+    log_path: PathBuf,
+}
+
+impl GatewayProcess {
+    fn spawn(topology: &CompanionTopology, command_abort: bool, label: &str) -> Self {
+        let log_path = topology.evidence_dir.join(format!("gateway-{label}.log"));
+        let log = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&log_path)
+            .unwrap();
+        let stderr = log.try_clone().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_lyracore-gateway"));
+        command
+            .env("LYRACORE_SPACETIMEDB_URL", topology.node.server())
+            .env("LYRACORE_DATABASE", &topology.source)
+            .env("LYRACORE_REALM_CORE", &topology.realm)
+            .env(
+                "LYRACORE_SHARD_MAP",
+                format!("{DUNGEON_MAP}:*={}", topology.destination),
+            )
+            .env("LYRACORE_COORDINATOR_TOKEN", topology.node.owner_token())
+            .env(
+                "LYRACORE_LOGON_BIND",
+                format!("127.0.0.1:{}", topology.logon_port),
+            )
+            .env(
+                "LYRACORE_WORLD_BIND",
+                format!("127.0.0.1:{}", topology.world_port),
+            )
+            .env(
+                "LYRACORE_REALM_ADDRESS",
+                format!("127.0.0.1:{}", topology.world_port),
+            )
+            .env("LYRACORE_GATEWAY_ID", "pb011-companion-acceptance")
+            .env("RUST_LOG", "info")
+            .env_remove("LYRACORE_SHARD_MAP_FILE")
+            .env_remove("LYRACORE_TRANSFER_ABORT_AFTER")
+            .env_remove("LYRACORE_PARTY_COMMAND_ABORT_AFTER")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(stderr));
+        if command_abort {
+            command.env("LYRACORE_PARTY_COMMAND_ABORT_AFTER", "apply_party_command");
+        }
+        let child = command.spawn().expect("failed to start private Gateway");
+        let process = Self {
+            child: Some(child),
+            log_path,
+        };
+        wait_port(topology.logon_port, "logon");
+        wait_port(topology.world_port, "world");
+        process
+    }
+
+    pub fn wait_for_abort(&mut self) -> Value {
+        let pid = self.child.as_ref().unwrap().id();
+        let deadline = Instant::now() + POLL;
+        let status = loop {
+            if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Gateway did not abort\n{}",
+                self.log()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let success = status.success();
+        let code = status.code();
+        let signal = status.signal();
+        let raw_status = status.into_raw();
+        let result = json!({
+            "pid": pid,
+            "success": success,
+            "code": code,
+            "signal": signal,
+            "raw_status": raw_status,
+            "log": self.log(),
+        });
+        self.child.take();
+        result
+    }
+
+    pub fn log(&self) -> String {
+        fs::read_to_string(&self.log_path).unwrap_or_default()
+    }
+
+    pub fn stop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if child.try_wait().unwrap().is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+    }
+}
+
+impl Drop for GatewayProcess {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if child.try_wait().ok().flatten().is_none() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+    }
+}
+
+pub struct WireControl {
+    child: Option<Child>,
+    directory: PathBuf,
+    next_command: u64,
+}
+
+impl WireControl {
+    fn spawn(topology: &CompanionTopology, label: &str) -> Self {
+        let directory = topology.evidence_dir.join(format!("wire-{label}"));
+        fs::create_dir_all(&directory).unwrap();
+        let log = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(directory.join("wire.log"))
+            .unwrap();
+        let stderr = log.try_clone().unwrap();
+        let wire = std::env::var_os("LYRACORE_WIRE_BIN")
+            .expect("LYRACORE_WIRE_BIN must name the pinned Headless Client");
+        let child = Command::new(wire)
+            .args(["scenario", "addon-control"])
+            .arg(&directory)
+            .arg("1800")
+            .args([
+                "--host",
+                "127.0.0.1",
+                "--logon-port",
+                &topology.logon_port.to_string(),
+                "--world-port",
+                &topology.world_port.to_string(),
+                "--account",
+                ACCOUNT,
+                "--character",
+                &topology.party.leader_name,
+                "--password-stdin",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .expect("failed to start Headless Client control process");
+        let mut control = Self {
+            child: Some(child),
+            directory,
+            next_command: 1,
+        };
+        control
+            .child
+            .as_mut()
+            .unwrap()
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!("{PASSWORD}\n").as_bytes())
+            .unwrap();
+        wait_file(
+            &control.directory.join("ready.json"),
+            "Headless Client did not become ready",
+        );
+        let ready = read_json(&control.directory.join("ready.json"));
+        assert_eq!(
+            ready["character_guid"],
+            json!(topology.party.leader),
+            "Headless Client bound another Character: {ready}"
+        );
+        assert!(
+            control
+                .child
+                .as_mut()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_none(),
+            "Headless Client exited at startup"
+        );
+        control
+    }
+
+    pub fn addon(&mut self, payload: &str, pause_after_send: bool) -> Value {
+        let sequence = self.next_command;
+        let text = format!("STC\tv1|playerbots.order|{sequence}|1/1|{payload}");
+        self.operation(json!({
+            "kind": "addon",
+            "message": text,
+            "reply_prefix": "STC\tv1|playerbots.order.result|",
+            "pause_after_send": pause_after_send,
+        }))
+    }
+
+    pub fn move_to(&mut self, from: (f32, f32, f32), to: (f32, f32, f32)) -> Value {
+        self.operation(json!({"kind": "move", "from": from, "to": to, "speed": 7.0}))
+    }
+
+    pub fn area_trigger(&mut self, trigger: u32) -> Value {
+        self.operation(json!({"kind": "areatrigger", "trigger_id": trigger}))
+    }
+
+    pub fn stop(&mut self) {
+        if self.child.is_none() {
+            return;
+        }
+        let evidence = self.operation(json!({"kind": "stop"}));
+        assert!(
+            evidence["result"]["stopped"].as_bool() == Some(true),
+            "Headless Client did not confirm the stop operation"
+        );
+        let mut child = self.child.take().unwrap();
+        if child.try_wait().unwrap().is_none() {
+            child.kill().unwrap();
+        }
+        let _ = child.wait();
+    }
+
+    pub fn terminate(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if child.try_wait().unwrap().is_none() {
+            child.kill().unwrap();
+        }
+        let _ = child.wait();
+    }
+
+    fn operation(&mut self, mut body: Value) -> Value {
+        let ordinal = self.next_command;
+        self.next_command += 1;
+        body.as_object_mut()
+            .expect("wire command must be a JSON object")
+            .insert("ordinal".to_string(), json!(ordinal));
+        let pending = self
+            .directory
+            .join(format!("command-{ordinal}.json.pending"));
+        let command = self.directory.join(format!("command-{ordinal}.json"));
+        fs::write(&pending, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
+        fs::rename(pending, command).unwrap();
+        let sent = self.directory.join(format!("sent-{ordinal}.json"));
+        wait_file(
+            &sent,
+            "Headless Client did not send the requested operation",
+        );
+        let sent_evidence = read_json(&sent);
+        assert_eq!(sent_evidence["ordinal"], json!(ordinal));
+        assert_eq!(sent_evidence["command"], body);
+        let mut evidence = json!({
+            "ordinal": ordinal,
+            "command": body,
+            "sent": sent_evidence,
+        });
+        let waits_for_result = evidence["command"]["kind"] != "addon"
+            || !evidence["command"]["pause_after_send"]
+                .as_bool()
+                .unwrap_or(false);
+        if waits_for_result {
+            let result = self.directory.join(format!("result-{ordinal}.json"));
+            wait_file(
+                &result,
+                "Headless Client did not retain the operation result",
+            );
+            let result = read_json(&result);
+            assert_eq!(result["ordinal"], json!(ordinal));
+            if matches!(
+                evidence["command"]["kind"].as_str(),
+                Some("move" | "areatrigger")
+            ) {
+                assert!(
+                    result["sent"].as_bool() == Some(true),
+                    "Headless Client did not confirm the sent operation"
+                );
+            }
+            evidence["result"] = result;
+        }
+        evidence
+    }
+}
+
+impl Drop for WireControl {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if child.try_wait().ok().flatten().is_none() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+    }
+}
+
+pub fn one<'a>(rows: &'a [BTreeMap<String, String>], name: &str) -> &'a BTreeMap<String, String> {
+    assert_eq!(rows.len(), 1, "expected one {name}, got {rows:?}");
+    &rows[0]
+}
+
+pub fn parse_u64(row: &BTreeMap<String, String>, field: &str) -> u64 {
+    row[field]
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid {field} in {row:?}"))
+}
+
+pub fn wait_until(description: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + POLL;
+    while !ready() {
+        assert!(Instant::now() < deadline, "{description}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn account_material() -> (String, String) {
+    let username = NormalizedString::new(ACCOUNT).unwrap();
+    let password = NormalizedString::new(PASSWORD).unwrap();
+    let verifier = SrpVerifier::from_username_and_password(username, password);
+    (
+        json!(verifier.salt().to_vec()).to_string(),
+        json!(verifier.password_verifier().to_vec()).to_string(),
+    )
+}
+
+fn role_guids(rows: &[BTreeMap<String, String>], class: &str, role: &str) -> Vec<u64> {
+    rows.iter()
+        .filter(|row| row["class"] == class && row["role"] == role)
+        .map(|row| parse_u64(row, "character_guid"))
+        .collect()
+}
+
+fn flat_route_nav() -> String {
+    let points = [
+        (0, ENTRY_SOURCE),
+        (0, EXIT_LANDING),
+        (DUNGEON_MAP, ENTRY_LANDING),
+        (DUNGEON_MAP, EXIT_SOURCE),
+    ];
+    let mut cells = BTreeMap::new();
+    for (map, (x, y, z)) in points {
+        let cx = lyracore_shared::terrain::cell_index(x).unwrap();
+        let cy = lyracore_shared::terrain::cell_index(y).unwrap();
+        for cell_x in cx - 2..=cx + 2 {
+            for cell_y in cy - 2..=cy + 2 {
+                cells.entry((map, cell_x, cell_y)).or_insert(z);
+            }
+        }
+    }
+    cells
+        .into_iter()
+        .map(|((map, cell_x, cell_y), z)| format!("{map},{cell_x},{cell_y},{z},,"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn reserve_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn wait_port(port: u16, name: &str) {
+    wait_until(&format!("Gateway {name} listener did not start"), || {
+        TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
+}
+
+fn wait_file(path: &Path, message: &str) {
+    wait_until(message, || path.is_file());
+}
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn git(path: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(path)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
