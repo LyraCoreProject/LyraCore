@@ -1721,11 +1721,18 @@ fn assert_exit_source_ready(
             "{evidence}"
         );
     }
-    assert!(
-        rows(evidence, &["state", "destination", "live"]).is_empty(),
-        "exit source body survived Transfer: {evidence}"
-    );
-    let action = row(evidence, &["state", "destination", "actions"]);
+    for table in ["live", "movement", "pending_cast", "melee"] {
+        assert!(
+            rows(evidence, &["state", "destination", table]).is_empty(),
+            "exit source retained {table}: {evidence}"
+        );
+    }
+    let transfer_actions: Vec<_> = rows(evidence, &["state", "destination", "actions"])
+        .iter()
+        .filter(|action| action["kind"] == "(transfer = ())")
+        .collect();
+    assert_eq!(transfer_actions.len(), 1, "{evidence}");
+    let action = transfer_actions[0];
     assert_eq!(action["kind"], "(transfer = ())", "{evidence}");
     assert_eq!(
         action["outcome"],
