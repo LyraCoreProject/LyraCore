@@ -87,10 +87,18 @@ fn parse_value_f32(value: &Value, field: &str) -> f32 {
 
 fn sats_field<'a>(value: &'a str, field: &str) -> &'a str {
     let marker = format!("{field} = ");
-    let tail = value
-        .split_once(&marker)
+    let start = value
+        .match_indices(&marker)
+        .find(|(index, _)| {
+            value[..*index]
+                .trim_end()
+                .as_bytes()
+                .last()
+                .is_none_or(|byte| matches!(byte, b'(' | b','))
+        })
         .unwrap_or_else(|| panic!("missing {field} in {value}"))
-        .1;
+        .0;
+    let tail = &value[start + marker.len()..];
     let mut depth = 0usize;
     for (index, byte) in tail.bytes().enumerate() {
         match byte {
@@ -108,6 +116,32 @@ fn sats_f32(value: &str, field: &str) -> f32 {
     sats_field(value, field)
         .parse()
         .unwrap_or_else(|_| panic!("invalid {field} in {value}"))
+}
+
+#[test]
+fn sats_coordinates_do_not_match_the_order_name() {
+    let order = "(stay = (map_id = 0, instance_id = 0, x = -11192.5, y = 1685.34, z = 25.7612))";
+    assert_eq!(sats_f32(order, "x"), -11192.5);
+    assert_eq!(sats_f32(order, "y"), 1685.34);
+    assert_eq!(sats_f32(order, "z"), 25.7612);
+    assert_eq!(sats_field(order, "map_id"), "0");
+    assert_eq!(sats_field(order, "instance_id"), "0");
+}
+
+#[test]
+fn sats_fields_preserve_nested_values_and_complete_names() {
+    let objective =
+        "(source_identity = 91, identity = 7, target = (entity = (guid = 42, map_id = 0)))";
+    assert_eq!(sats_field(objective, "identity"), "7");
+    assert_eq!(
+        sats_field(objective, "target"),
+        "(entity = (guid = 42, map_id = 0))"
+    );
+    let account = "(some = (__identity__ = 0x594c))";
+    assert_eq!(
+        sats_field(sats_field(account, "some"), "__identity__"),
+        "0x594c"
+    );
 }
 
 fn assert_stable_objective(before: &Value, after: &Value, context: &str) {
