@@ -1458,10 +1458,17 @@ impl Args {
     }
 }
 
-/// One `spacetime call` as the CLI identity (the module owner after a local publish) — the shared
-/// path for every reducer-based loader (spawns, gameobjects, terrain).
+/// One `spacetime call` for a reducer whose only argument is a `String`.
+///
+/// The CLI parses each argument as Sats JSON. Encoding here keeps packed newlines and other control
+/// characters inside that one String instead of letting the CLI parse them as JSON syntax.
 pub(crate) fn call_reducer(args: &Args, reducer: &str, payload: &str) -> Result<()> {
-    call_reducer_args(args, reducer, &[payload])
+    let payload = reducer_string_argument(payload).context("encode reducer String argument")?;
+    call_reducer_args(args, reducer, &[&payload])
+}
+
+fn reducer_string_argument(payload: &str) -> serde_json::Result<String> {
+    serde_json::to_string(payload)
 }
 
 /// Reducer call with separate positional arguments (generation lifecycle reducers carry both
@@ -5760,6 +5767,19 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reducer_string_argument_survives_cli_json_parsing() {
+        let packed = "17|say \"hold\"|C:\\relay\n18|bell:\u{0007}\r\t";
+        let argument = reducer_string_argument(packed).unwrap();
+
+        assert_eq!(
+            argument,
+            r#""17|say \"hold\"|C:\\relay\n18|bell:\u0007\r\t""#
+        );
+        assert_eq!(serde_json::from_str::<String>(&argument).unwrap(), packed);
+        assert!(argument.bytes().all(|byte| byte >= b' '));
+    }
 
     #[test]
     fn parses_quoted_names_with_commas_and_escapes() {
