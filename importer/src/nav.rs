@@ -61,15 +61,6 @@ pub(crate) enum Mesh {
     M2(Vec<Tri>),
 }
 
-impl Mesh {
-    pub(crate) fn len(&self) -> usize {
-        match self {
-            Mesh::Wmo(v) => v.len(),
-            Mesh::M2(v) => v.len(),
-        }
-    }
-}
-
 /// Collidable triangles of one WMO (all groups), model-local coords, tagged with group id + MOGP
 /// flags. MOPY rule (wowdev): collidable = F_COLLISION (0x08) set, OR neither F_DETAIL (0x04) nor
 /// F_NOCAMCOLLIDE (0x02).
@@ -328,14 +319,30 @@ fn calibration(samples: &[(&Placement, Vec<[f32; 3]>)]) -> Result<Calibration> {
 // Tile collection
 // ---------------------------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub(crate) struct Placement {
     pub(crate) name: String,
     pub(crate) is_wmo: bool,
+    pub(crate) unique_id: u32,
     pub(crate) position: [f32; 3],
     pub(crate) rotation: [f32; 3],
     pub(crate) scale: f32,
     pub(crate) bounds_min: Option<[f32; 3]>,
     pub(crate) bounds_max: Option<[f32; 3]>,
+    pub(crate) wmo: Option<WmoPlacement>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct WmoPlacement {
+    pub(crate) flags: u16,
+    pub(crate) doodad_set: u16,
+    pub(crate) name_set: u16,
+}
+
+pub(crate) struct TileSource {
+    pub(crate) path: String,
+    pub(crate) bytes: usize,
+    pub(crate) blake3: String,
 }
 
 fn offset_to_index(names: &[String]) -> BTreeMap<u32, usize> {
@@ -474,6 +481,7 @@ fn rasterize_cell(cell: &crate::terrain::CellRow, tris: &[VmapTri]) -> Option<Na
 pub(crate) struct TileScan {
     pub(crate) cells: Vec<crate::terrain::CellRow>,
     pub(crate) placements: Vec<Placement>,
+    pub(crate) sources: Vec<TileSource>,
     pub(crate) tiles_read: u32,
 }
 
@@ -491,6 +499,7 @@ pub(crate) fn scan_tiles(
 
     let mut cells: Vec<crate::terrain::CellRow> = Vec::new();
     let mut placements: Vec<Placement> = Vec::new();
+    let mut sources = Vec::new();
     let mut seen_ids: HashSet<(bool, u32)> = HashSet::new();
     let mut tiles_read = 0u32;
     for tx in tx_min..=tx_max {
@@ -510,12 +519,19 @@ pub(crate) fn scan_tiles(
                     bail!("{name} is not a root terrain ADT");
                 };
                 if crate::terrain::tile_matches(&root.mcnk_chunks, tx, ty) {
-                    accepted = Some(root);
+                    accepted = Some((name.clone(), bytes, root));
                     break;
                 }
             }
-            let Some(root) = accepted else { continue }; // ocean/empty tiles simply don't exist
+            let Some((source_path, source_bytes, root)) = accepted else {
+                continue;
+            }; // ocean/empty tiles simply don't exist
             tiles_read += 1;
+            sources.push(TileSource {
+                path: source_path,
+                bytes: source_bytes.len(),
+                blake3: blake3::hash(&source_bytes).to_hex().to_string(),
+            });
             crate::terrain::collect_cells(
                 &root.mcnk_chunks,
                 map_id,
@@ -527,11 +543,17 @@ pub(crate) fn scan_tiles(
                     placements.push(Placement {
                         name: resolve(&root.wmos, &root.wmo_indices, p.name_id)?.to_string(),
                         is_wmo: true,
+                        unique_id: p.unique_id,
                         position: p.position,
                         rotation: p.rotation,
                         scale: 1.0,
                         bounds_min: Some(p.extents_min),
                         bounds_max: Some(p.extents_max),
+                        wmo: Some(WmoPlacement {
+                            flags: p.flags,
+                            doodad_set: p.doodad_set,
+                            name_set: p.name_set,
+                        }),
                     });
                 }
             }
@@ -540,11 +562,13 @@ pub(crate) fn scan_tiles(
                     placements.push(Placement {
                         name: resolve(&root.models, &root.model_indices, p.name_id)?.to_string(),
                         is_wmo: false,
+                        unique_id: p.unique_id,
                         position: p.position,
                         rotation: p.rotation,
                         scale: p.scale as f32 / 1024.0,
                         bounds_min: None,
                         bounds_max: None,
+                        wmo: None,
                     });
                 }
             }
@@ -553,6 +577,7 @@ pub(crate) fn scan_tiles(
     Ok(TileScan {
         cells,
         placements,
+        sources,
         tiles_read,
     })
 }

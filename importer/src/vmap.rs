@@ -21,19 +21,20 @@
 //! own cells, batches `prepare_vmap_nav_coverage` calls, and finalizes — resumable by skipping
 //! cells a prior run already covered.
 //!
-//! WMO-only instance maps use an Instance Vmap Slice instead of ADT tiles. The importer reads the
-//! map-wide WDT placement, retains only the route collar, and uses the same triangle transform,
-//! packer, and generation lifecycle as continent geometry. Instance Navigation Coverage remains
-//! unavailable because the current rasterizer represents only one floor per cell.
+//! An Instance Vmap Slice reads only the ADT tiles crossed by its route collar and uses the same
+//! triangle transform, packer, and generation lifecycle as continent geometry. Instance terrain
+//! and Navigation Coverage remain unavailable because their current rows represent one floor per
+//! cell.
 
 use anyhow::{bail, Context, Result};
 use lyracore_shared::terrain::cell_key;
 use lyracore_shared::vmap::{encode, TriClass, VmapTri, HEADER_BYTES, TRI_BYTES};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use wow_dbc::DbcTable;
 use wow_mpq::PatchChain;
 
 use crate::nav::{Mesh, Placement, Tri};
@@ -648,6 +649,17 @@ struct InstanceRouteEvidence {
     violations: Vec<String>,
 }
 
+struct InstanceMapSource {
+    map_id: u32,
+    map_name: String,
+    map_dbc_path: String,
+    map_dbc_bytes: usize,
+    map_dbc_blake3: String,
+    wdt_path: String,
+    wdt_bytes: usize,
+    wdt_blake3: String,
+}
+
 impl InstanceRouteEvidence {
     fn geometry_ready(&self) -> bool {
         self.violations.is_empty()
@@ -855,69 +867,107 @@ fn build_instance_plan(
     let selected_cells = (x0..=x1)
         .flat_map(|cell_x| (y0..=y1).map(move |cell_y| cell_key(slice.map_id, cell_x, cell_y)))
         .collect::<BTreeSet<_>>();
-    let global = crate::instance_vmap::read_global_wmo(data_dir, chain, slice)?;
-    let calibration = crate::nav::calibrate_from_placements_with_evidence(
+    let source = instance_map_source(data_dir, chain, slice.map_id)?;
+    print_instance_map_evidence(&source);
+    let scan = crate::nav::scan_tiles(
         chain,
-        std::slice::from_ref(&global.placement),
-    )?;
-    let doodads = crate::instance_vmap::inspect_relevant_doodads(
-        chain,
+        &source.map_name,
         slice.map_id,
-        &selected_cells,
-        &global,
-        calibration.convention,
+        (i32::from(x0), i32::from(x1), i32::from(y0), i32::from(y1)),
     )?;
-    print_instance_source_evidence(&global, &doodads, &calibration);
-    if !doodads.relevant_refs.is_empty() {
+    print_instance_adt_evidence(&scan.sources);
+    let expected_tiles = usize::from(x1 / 16 - x0 / 16 + 1)
+        .checked_mul(usize::from(y1 / 16 - y0 / 16 + 1))
+        .context("instance tile count overflows")?;
+    if scan.sources.len() != expected_tiles {
         bail!(
-            "Map {} selected WMO groups in {} reference active doodad definitions that the bounded instance extractor cannot yet transform: {}",
-            slice.map_id,
-            global.placement.name,
-            doodads
-                .relevant_refs
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
+            "instance route {} needs {expected_tiles} ADT tiles but found {}",
+            slice.name,
+            scan.sources.len()
         );
     }
-    let mesh = crate::nav::load_mesh(chain, &global.placement)?;
-    if !matches!(&mesh, Mesh::Wmo(_)) {
-        bail!("instance WDT placement did not resolve to a WMO mesh");
+    if scan.placements.is_empty() {
+        bail!("instance route {} has no ADT model placements", slice.name);
+    }
+    let calibration = crate::nav::calibrate_from_placements_with_evidence(chain, &scan.placements)?;
+    let mut inspections = Vec::new();
+    let mut placement_findings = Vec::new();
+    for placement in scan.placements.iter().filter(|placement| placement.is_wmo) {
+        let inspection = crate::instance_vmap::inspect_relevant_doodads(
+            chain,
+            slice.map_id,
+            &selected_cells,
+            placement,
+            calibration.convention,
+        )?;
+        if inspection.touches_selection && inspection.placement_flags & 1 != 0 {
+            placement_findings.push(format!(
+                "Map {} route-relevant WMO {} placement {} is destroyable and cannot be staged as static geometry",
+                slice.map_id,
+                placement.name,
+                inspection.unique_id
+            ));
+        }
+        if !inspection.relevant_refs.is_empty() {
+            placement_findings.push(format!(
+                "Map {} selected WMO groups in {} placement {} reference active doodad definitions that the bounded instance extractor cannot yet transform: {}",
+                slice.map_id,
+                placement.name,
+                inspection.unique_id,
+                inspection
+                    .relevant_refs
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        inspections.push((placement, inspection));
+    }
+    print_instance_placement_evidence(&inspections, &calibration);
+    if !placement_findings.is_empty() {
+        bail!("{}", placement_findings.join(" | "));
     }
     let spool = VmapSpool::new(slice.map_id)?;
     let mut route_tris = HashMap::<(u16, u16), Vec<VmapTri>>::new();
     let mut spool_error = None;
     let mut selected_tri_refs = 0usize;
-    for_each_placement_tri(&global.placement, &mesh, calibration.convention, |tri| {
-        if spool_error.is_some() {
-            return;
-        }
-        let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(&tri) else {
-            return;
-        };
-        for cell_x in cx0..=cx1 {
-            for cell_y in cy0..=cy1 {
-                let key = cell_key(slice.map_id, cell_x, cell_y);
-                if selected_cells.contains(&key) {
-                    selected_tri_refs += 1;
-                    if selected_tri_refs > MAX_INSTANCE_SELECTED_TRI_REFS {
-                        spool_error = Some(anyhow::anyhow!(
-                            "bounded instance slice exceeds the {MAX_INSTANCE_SELECTED_TRI_REFS}-triangle-reference output limit"
-                        ));
-                        return;
+    let mut world_tris = 0usize;
+    let mut wmo_tris = 0usize;
+    for placement in &scan.placements {
+        let mesh = crate::nav::load_mesh(chain, placement)?;
+        for_each_placement_tri(placement, &mesh, calibration.convention, |tri| {
+            if spool_error.is_some() {
+                return;
+            }
+            world_tris += 1;
+            wmo_tris += usize::from(matches!(tri.class, TriClass::Wmo { .. }));
+            let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(&tri) else {
+                return;
+            };
+            for cell_x in cx0..=cx1 {
+                for cell_y in cy0..=cy1 {
+                    let key = cell_key(slice.map_id, cell_x, cell_y);
+                    if selected_cells.contains(&key) {
+                        selected_tri_refs += 1;
+                        if selected_tri_refs > MAX_INSTANCE_SELECTED_TRI_REFS {
+                            spool_error = Some(anyhow::anyhow!(
+                                "bounded instance slice exceeds the {MAX_INSTANCE_SELECTED_TRI_REFS}-triangle-reference output limit"
+                            ));
+                            return;
+                        }
+                        if let Err(error) = spool.append(key, tri) {
+                            spool_error = Some(error);
+                            return;
+                        }
+                        route_tris.entry((cell_x, cell_y)).or_default().push(tri);
                     }
-                    if let Err(error) = spool.append(key, tri) {
-                        spool_error = Some(error);
-                        return;
-                    }
-                    route_tris.entry((cell_x, cell_y)).or_default().push(tri);
                 }
             }
-        }
-    });
+        });
+    }
     if let Some(error) = spool_error {
-        return Err(error).context("spooling bounded instance WMO");
+        return Err(error).context("spooling bounded instance geometry");
     }
     let evidence = instance_route_evidence(
         slice,
@@ -925,14 +975,13 @@ fn build_instance_plan(
         selected_tri_refs,
         &route_tris,
     );
-    let world_tris = mesh.len();
     let mut plan = finish_plan(
         slice.map_id,
         source_identity,
         slice.selection_identity()?,
         spool,
         world_tris,
-        world_tris,
+        wmo_tris,
         VmapOwnership::InstancePool,
     )?;
     plan.route_evidence = Some(evidence);
@@ -1165,47 +1214,118 @@ fn format_hit(value: Option<[f32; 3]>) -> String {
         .unwrap_or_else(|| "clear".to_owned())
 }
 
-fn print_instance_source_evidence(
-    global: &crate::instance_vmap::GlobalWmoPlacement,
-    doodads: &crate::instance_vmap::DoodadInspection,
+fn instance_map_source(
+    data_dir: &Path,
+    chain: &mut PatchChain,
+    map_id: u32,
+) -> Result<InstanceMapSource> {
+    type ClientMap = wow_dbc::vanilla_tables::map::Map;
+    let map_dbc_path = format!("DBFilesClient\\{}", ClientMap::FILENAME);
+    let mut dbc_chain = crate::dbc::open_chain(data_dir)?;
+    let map_dbc = dbc_chain
+        .read_file(&map_dbc_path)
+        .with_context(|| format!("reading {map_dbc_path}"))?;
+    let maps = ClientMap::read(&mut Cursor::new(&map_dbc))
+        .context("parsing Map.dbc for Instance Vmap Slice")?;
+    let mut rows = maps.rows.iter().filter(|row| row.id.id == map_id);
+    let row = rows
+        .next()
+        .with_context(|| format!("Map.dbc has no map {map_id}"))?;
+    if rows.next().is_some() {
+        bail!("Map.dbc has more than one map {map_id}");
+    }
+    if row.internal_name.is_empty()
+        || !row
+            .internal_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        bail!(
+            "Map.dbc map {map_id} has unsafe internal name {:?}",
+            row.internal_name
+        );
+    }
+    let map_name = row.internal_name.clone();
+    let wdt_path = format!("World\\Maps\\{map_name}\\{map_name}.wdt");
+    let wdt = chain
+        .read_file(&wdt_path)
+        .with_context(|| format!("reading instance WDT {wdt_path}"))?;
+    Ok(InstanceMapSource {
+        map_id,
+        map_name,
+        map_dbc_path,
+        map_dbc_bytes: map_dbc.len(),
+        map_dbc_blake3: blake3::hash(&map_dbc).to_hex().to_string(),
+        wdt_path,
+        wdt_bytes: wdt.len(),
+        wdt_blake3: blake3::hash(&wdt).to_hex().to_string(),
+    })
+}
+
+fn print_instance_map_evidence(source: &InstanceMapSource) {
+    println!(
+        "vmap: instance map={} map_name={} map_dbc={} bytes={} blake3={} wdt={} bytes={} blake3={}",
+        source.map_id,
+        source.map_name,
+        source.map_dbc_path,
+        source.map_dbc_bytes,
+        source.map_dbc_blake3,
+        source.wdt_path,
+        source.wdt_bytes,
+        source.wdt_blake3,
+    );
+}
+
+fn print_instance_adt_evidence(adts: &[crate::nav::TileSource]) {
+    println!("vmap: instance ADT count={}", adts.len());
+    for adt in adts {
+        println!(
+            "vmap: instance ADT={} bytes={} blake3={}",
+            adt.path, adt.bytes, adt.blake3
+        );
+    }
+}
+
+fn print_instance_placement_evidence(
+    placements: &[(&Placement, crate::instance_vmap::PlacementInspection)],
     calibration: &crate::nav::Calibration,
 ) {
     println!(
-        "vmap: instance source map={} map_name={} wdt={} bytes={} blake3={}",
-        global.map_id, global.map_name, global.wdt.path, global.wdt.bytes, global.wdt.blake3
+        "vmap: instance convention={:?} calibration_q25_yards={:.4}",
+        calibration.convention, calibration.q25_error_yards,
     );
-    println!(
-        "vmap: instance placement wmo={} unique_id={} position={:?} rotation={:?} bounds_min={:?} bounds_max={:?} flags={} doodad_set={} name_set={} convention={:?} calibration_q25_yards={:.4}",
-        global.placement.name,
-        global.unique_id,
-        global.placement.position,
-        global.placement.rotation,
-        global.placement.bounds_min,
-        global.placement.bounds_max,
-        global.placement_flags,
-        global.doodad_set,
-        global.name_set,
-        calibration.convention,
-        calibration.q25_error_yards,
-    );
-    println!(
-        "vmap: instance WMO root={} bytes={} blake3={} selected_doodads={}..{} relevant_refs={:?}",
-        doodads.root.path,
-        doodads.root.bytes,
-        doodads.root.blake3,
-        doodads.selected_start,
-        doodads.selected_end,
-        doodads.relevant_refs,
-    );
-    for group in &doodads.groups {
+    for (placement, inspection) in placements {
         println!(
-            "vmap: instance WMO group={} bytes={} blake3={} touches_selection={} active_doodad_refs={:?}",
-            group.source.path,
-            group.source.bytes,
-            group.source.blake3,
-            group.touches_selection,
-            group.active_doodad_refs,
+            "vmap: instance placement wmo={} unique_id={} position={:?} rotation={:?} bounds_min={:?} bounds_max={:?} flags={} doodad_set={} name_set={}",
+            placement.name,
+            inspection.unique_id,
+            placement.position,
+            placement.rotation,
+            placement.bounds_min,
+            placement.bounds_max,
+            inspection.placement_flags,
+            inspection.doodad_set,
+            inspection.name_set,
         );
+        println!(
+            "vmap: instance WMO root={} bytes={} blake3={} selected_doodads={}..{} relevant_refs={:?}",
+            inspection.root.path,
+            inspection.root.bytes,
+            inspection.root.blake3,
+            inspection.selected_start,
+            inspection.selected_end,
+            inspection.relevant_refs,
+        );
+        for group in &inspection.groups {
+            println!(
+                "vmap: instance WMO group={} bytes={} blake3={} touches_selection={} active_doodad_refs={:?}",
+                group.source.path,
+                group.source.bytes,
+                group.source.blake3,
+                group.touches_selection,
+                group.active_doodad_refs,
+            );
+        }
     }
 }
 
@@ -1715,21 +1835,19 @@ mod tests {
         let placement = Placement {
             name: "World\\wmo\\test.wmo".to_owned(),
             is_wmo: true,
+            unique_id: 1,
             position: [1.0, 2.0, 3.0],
             rotation: [0.0, 90.0, 0.0],
             scale: 1.0,
             bounds_min: None,
             bounds_max: None,
+            wmo: Some(crate::nav::WmoPlacement {
+                flags: 0,
+                doodad_set: 0,
+                name_set: 0,
+            }),
         };
-        let mut shifted = Placement {
-            name: placement.name.clone(),
-            is_wmo: placement.is_wmo,
-            position: placement.position,
-            rotation: placement.rotation,
-            scale: placement.scale,
-            bounds_min: None,
-            bounds_max: None,
-        };
+        let mut shifted = placement.clone();
 
         assert_eq!(placement_key(&placement), placement_key(&placement));
         shifted.position[0] += 1.0;

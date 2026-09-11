@@ -19,7 +19,8 @@ checking generations. A successful import is data-plane evidence, not permission
   `lyracore-kalimdor` is the contributor-fixture name, not the production Kalimdor World Shard.
 - The `instances` profile owns only the `deadmines-entry-exit` Instance Vmap Slice. Its selection
   must be Map 36 cells x 511 through 513 and y 522 through 524. It supplies no terrain, no
-  open-world navigation and no collision for the rest of Deadmines.
+  Navigation Coverage and no collision for the rest of Deadmines. Its collision geometry comes
+  from the two ADT tiles crossed by that cell collar.
 - Record the deployed module/importer commit, the client-data identity, the approved maintenance
   window, the operator, and the exact importer output for each target.
 - Run the deployed importer's matching profile apply/resume flow against each named production
@@ -46,12 +47,13 @@ checking generations. A successful import is data-plane evidence, not permission
      --server "$SPACETIME_SERVER" --db lyracore-instances
    ```
 
-   The dry run must stop if a selected WMO group references an active doodad. Resolve that format
-   support against the same client archive before applying. Do not omit the doodad or substitute a
-   flat floor. If any static geometry finding remains, stop. The importer enforces the same Gate
-   before staging. After staging, retain a private ordinary-Core route result before the attended
-   client check. Map 36 Navigation Coverage remains unavailable until a multi-floor rasterizer exists
-   for that route.
+   The dry run must record the exact Map.dbc, WDT, two selected ADTs, WMO roots and WMO groups. It
+   stops if a selected WMO group references an active doodad. Resolve that format support against
+   the same client archive before applying. Do not omit the doodad or substitute a flat floor. If
+   any static geometry finding remains, stop. The importer enforces the same Gate before staging.
+   After staging, retain a private ordinary-Core route result before the attended client check.
+   Map 36 terrain and Navigation Coverage remain unavailable until a representation can preserve
+   the route's multiple floors.
 2. Query the active generation on each World Shard and the exact Map 36 generation on the Instance
    Pool. Record each profile, generation id, source and selection identity, chunk count, byte count,
    and digest. The Map 36 selection identity must name `deadmines-entry-exit` and the exact 3 by 3

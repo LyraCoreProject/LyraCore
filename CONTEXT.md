@@ -63,9 +63,9 @@ selection. The anchor is a real ground point on the client heightmap inside the 
 floor; the terrain and navigation self-checks fail before `--apply` when it is not.
 
 **Instance Vmap Slice**:
-A named entry and exit route on a WMO-only instance map, with an exit radius and a cell collar for
-collision rasterization. It owns only the selected vmap cells. It does not claim terrain,
-open-world navigation, or the rest of the instance.
+A named entry and exit route on an ADT-backed instance map, with an exit radius and a cell collar
+for collision extraction. It owns only the selected vmap cells. It does not claim terrain,
+Navigation Coverage, or the rest of the instance.
 
 **Realm-core**:
 The shard that holds realm-wide state, including accounts, sessions, groups, whispers, loot rolls, the character-to-shard index, and shard load samples.

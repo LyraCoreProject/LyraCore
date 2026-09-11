@@ -379,9 +379,8 @@ cargo build -q --bin lyracore-importer || exit 1
 # --include-map 36: the Deadmines interior rides the SAME single clear+reload run as
 # the Elwynn+Westfall box — a WHOLE extra map keyed by id, no geometry (an instance map has no --box
 # worth drawing). Its creatures/GOs/waypoints/loot/quest relations all flow through the same families.
-# NO terrain for map 36 — deliberately. An instance interior is WMO geometry, not ADT floors, so there
-# is no heightmap to sample: the decided design is ground_z None plus the spawn Zs verbatim from the
-# dump, and `terrain::map_dir` hard-refuses map 36 to keep anyone from trying.
+# Map 36 has ADT tiles, but its stacked floors do not fit the single-height terrain rows. The
+# instance profile therefore keeps ground_z absent and retains authored spawn Z values.
 if [ -n "$WORLD_PROFILE" ]; then
   echo "[world] ETL  --world-profile $WORLD_PROFILE  → $DB"
 else
@@ -401,11 +400,11 @@ run_checked_step "world content for $WORLD_PROFILE into $DB" \
 # MAP 1 (Kalimdor) TERRAIN + NAV WORK — verified, not assumed: `terrain::map_dir` maps 1 → "Kalimdor"
 # (the same two-arm continent match that maps 0 → "Azeroth"), so both passes read
 # `World\Maps\Kalimdor\Kalimdor_<a>_<b>.adt` out of the operator's own terrain.MPQ through the same
-# code path, with the same filename-axis arbitration and the same self-checks. This is NOT the map-36
-# situation: 36 is refused outright because a WMO instance has no ADT floors at all. The one extra
+# code path, with the same filename-axis arbitration and the same self-checks. Map 36 remains outside
+# this terrain path because one height per cell cannot represent its stacked floors. The one extra
 # operator obligation on another continent is $CENTER (above) — the self-checks sample it.
 if [ "$WORLD_PROFILE" = instances ]; then
-  echo "[world] terrain heightmap ETL SKIPPED — instances owns only WMO map 36"
+  echo "[world] terrain heightmap ETL SKIPPED — map 36 needs a floor-preserving representation"
 else
   if [ -n "$WORLD_PROFILE" ]; then terrain_scope="--world-profile $WORLD_PROFILE"; else terrain_scope="--map $MAP --box $BOX${CENTER:+  --center $CENTER}"; fi
   echo "[world] terrain heightmap ETL $terrain_scope"
