@@ -44,6 +44,7 @@ fn playerbots_runner_returns_home_with_observed_arrival_and_one_objective() {
     let (node, bots) = fixture("playerbots-runner-home", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
         ["foreground"]
@@ -131,6 +132,7 @@ fn playerbots_runner_retains_a_cast_across_real_pushback_and_resumes_home() {
     let bot = &bots[0];
     node.assert_sql("DELETE FROM game_event_reaper_schedule");
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows("SELECT * FROM game_pending_cast")
@@ -306,6 +308,7 @@ fn playerbots_runner_survival_cancels_cast_before_movement_and_keeps_the_objecti
     let (node, bots) = fixture("playerbots-runner-preempt", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || !node
         .query_rows("SELECT * FROM game_pending_cast")
@@ -344,6 +347,7 @@ fn playerbots_runner_defense_preserves_home_and_accepted_attack_is_not_progress(
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     let waiting = poll_until(POLL_TIMEOUT, || {
         runner(&node, bot)["chosen"].contains("returnHome")
@@ -391,6 +395,7 @@ fn playerbots_runner_defers_a_blocked_destination_with_bounded_failure_memory() 
     node.assert_call("playerbots_fixture_blocked_quest", &[bot]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
     node.assert_call("gw_abandon_quest", &[&support::actor(bot), "50909"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     let deferred = poll_until(Duration::from_secs(38), || {
         !runner(&node, bot)["deferred_destinations"]
@@ -448,6 +453,7 @@ fn playerbots_runner_never_selects_an_unlearned_rotation_spell() {
     node.assert_sql(&format!(
         "DELETE FROM game_player_spell WHERE character_guid = {bot} AND spell_id = 5090100"
     ));
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["objective"]
         .contains("completed")));
@@ -756,6 +762,7 @@ fn playerbots_runner_replaces_a_changed_destination_with_a_new_candidate_identit
     let (node, bots) = fixture("playerbots-runner-destination", "1");
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
         ["foreground"]
@@ -783,6 +790,7 @@ fn playerbots_runner_relinquishes_current_account_ownership_without_cancelling_h
     let bot = &bots[0];
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "true"]);
     node.assert_call("playerbots_fixture_runner_stage", &[bot, "false"]);
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)
         ["foreground"]
@@ -848,6 +856,7 @@ fn playerbots_runner_observes_tactical_movement_without_advancing_the_home_clock
         "UPDATE game_creature_spawn SET x = 1000 WHERE guid = {target}"
     ));
     node.assert_sql("DELETE FROM game_melee_schedule");
+    select(&node, bot, "frozen");
     select(&node, bot, "cohort");
     node.assert_call("playerbots_fixture_runner_damage", &[bot, &target, "1"]);
     assert!(poll_until(POLL_TIMEOUT, || runner(&node, bot)["chosen"]
