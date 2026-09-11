@@ -1893,13 +1893,17 @@ mod tests {
         ]
     }
 
-    fn route_slice(entry_z: f32, exit_z: f32) -> crate::world_import_scope::InstanceVmapSlice {
+    fn route_slice(
+        entry_z: f32,
+        exit_z: f32,
+        exit_radius: f32,
+    ) -> crate::world_import_scope::InstanceVmapSlice {
         crate::world_import_scope::InstanceVmapSlice {
             name: "worked-route".to_owned(),
             map_id: 36,
             entry: [0.0, 0.0, entry_z],
             exit: [5.0, 0.0, exit_z],
-            exit_radius: 0.0,
+            exit_radius,
             collar_cells: 1,
         }
     }
@@ -1928,7 +1932,27 @@ mod tests {
             .collect();
         let selected_tri_refs = cells.values().map(Vec::len).sum();
         instance_route_evidence(
-            &route_slice(entry_z, exit_z),
+            &route_slice(entry_z, exit_z, 0.0),
+            selected_keys,
+            selected_tri_refs,
+            &cells,
+        )
+    }
+
+    fn route_evidence_to_trigger(
+        tris: Vec<VmapTri>,
+        entry_z: f32,
+        exit_z: f32,
+        exit_radius: f32,
+    ) -> InstanceRouteEvidence {
+        let cells = route_cells(&tris);
+        let selected_keys = cells
+            .keys()
+            .map(|&(cell_x, cell_y)| lyracore_shared::terrain::cell_key(36, cell_x, cell_y))
+            .collect();
+        let selected_tri_refs = cells.values().map(Vec::len).sum();
+        instance_route_evidence(
+            &route_slice(entry_z, exit_z, exit_radius),
             selected_keys,
             selected_tri_refs,
             &cells,
@@ -1952,6 +1976,30 @@ mod tests {
             .all(|sample| sample.support_floor.is_some()
                 && sample.headroom_hit.is_none()
                 && sample.step_hit.is_none()));
+    }
+
+    #[test]
+    fn supported_travel_into_the_exit_volume_does_not_require_center_floor() {
+        let evidence = route_evidence_to_trigger(ramp(-1.0, 4.0, 10.0, 10.0), 10.0, 10.0, 1.5);
+        assert!(
+            evidence.geometry_ready(),
+            "violations: {:?}",
+            evidence.violations
+        );
+        assert_eq!(evidence.samples[7].support_floor, Some(10.0));
+        assert_eq!(evidence.samples.last().unwrap().support_floor, None);
+    }
+
+    #[test]
+    fn missing_support_before_the_exit_volume_refuses_the_route() {
+        let mut tris = ramp(-1.0, 2.0, 10.0, 10.0);
+        tris.extend(ramp(3.5, 4.0, 10.0, 10.0));
+        let evidence = route_evidence_to_trigger(tris, 10.0, 10.0, 1.5);
+        assert!(!evidence.geometry_ready());
+        assert!(evidence
+            .violations
+            .iter()
+            .any(|violation| violation.contains("sample 5 has no retained walkable floor")));
     }
 
     #[test]
